@@ -22,12 +22,14 @@ defmodule NativeElixirPdfUtilities.MixProject do
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
-    []
+    [
+      {:ex_doc, "~> 0.37"}
+    ]
   end
 
   defp package do
     [
-      name: "Native Elixir PDF Utilities",
+      name: "native_elixir_pdf_utilities",
       licenses: ["MIT"],
       links: %{"GitHub" => "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"}
     ]
