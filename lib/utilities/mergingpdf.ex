@@ -1,22 +1,3 @@
-defmodule NativeElixirPdfUtilities do
-  @moduledoc """
-  Documentation for `NativeElixirPdfUtilities`.
-  """
-
-  @doc """
-  Hello world.
-
-  ## Examples
-
-      iex> NativeElixirPdfUtilities.hello()
-      :world
-
-  """
-  def hello do
-    :world
-  end
-end
-
 defmodule NativeElixirPdfUtilities.Merge do
   @moduledoc """
   Minimal PDF utilities for merging PDF binaries using the tokenizer.
