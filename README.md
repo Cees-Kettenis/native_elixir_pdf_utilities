@@ -1,61 +1,31 @@
+<p align="center">
+  <img src="assets/readme-banner.svg" alt="Native Elixir PDF Utilities" />
+</p>
+
+<p align="center">
+  <a href="https://hex.pm/packages/native_elixir_pdf_utilities"><img src="https://img.shields.io/hexpm/v/native_elixir_pdf_utilities.svg" alt="Hex.pm" /></a> <a href="https://native-elixir-pdf-utilities.hexdocs.pm/api-reference.html"><img src="https://img.shields.io/badge/hex-docs-blue.svg" alt="HexDocs" /></a> <a href="LICENSE"><img src="https://img.shields.io/hexpm/l/native_elixir_pdf_utilities.svg" alt="License" /></a> <img src="https://img.shields.io/badge/elixir-~%3E%201.18-4B275F.svg" alt="Elixir ~> 1.18" />
+</p>
+
 # Native Elixir PDF Utilities
 
-A small, native Elixir toolkit for working with classic PDFs:
+Native Elixir PDF Utilities is a small library for developers who need practical PDF building blocks without command line tools.
 
-- A fast, pure-Elixir tokenizer that turns a PDF byte stream into tokens.
-- A best-effort embedded text extractor for PDFs with ToUnicode CMaps.
-- A pragmatic PDF merger that renumbers objects, collects pages, and writes a
-  fresh xref/trailer to produce a valid combined PDF.
+PDFs are useful, awkward, and full of edge cases. This project focuses on the common structural work that Elixir applications often need: reading PDF bytes, understanding the object stream, extracting embedded text when it is available, and combining documents in a predictable way.
 
-No NIFs, no ports, no external binaries just Elixir. Targeted at structural tasks
-and best-effort merging for common PDFs.
+The goal is not to be a full PDF engine overnight. It is a steadily improving toolkit, handled by an excited developer who wants this to become a dependable native Elixir option for day-to-day PDF utility work.
 
-## Status
+## Package and Docs
 
-- Elixir: `~> 1.18`
-- Version: `0.1.0` (API may evolve)
+- Package: https://hex.pm/packages/native_elixir_pdf_utilities
+- API docs: https://native-elixir-pdf-utilities.hexdocs.pm/api-reference.html
 
----
+## What It Does
 
-## Features
-
-- Tokenizer:
-
-  - Numbers (integers/reals), names (`/Name` with `#xx` hex escapes), strings (literal and hex).
-  - PDF keywords and punctuation: `obj`, `endobj`, `stream`, `endstream`, `xref`, `trailer`,
-    `startxref`, `R`, `<<`, `>>`, `[`, `]`.
-  - Operators surfaced as `{:op, word}` for content streams.
-  - Stream handling: emits `:stream` then `{:stream_data, binary}` using `/Length` when present,
-    or scans up to `endstream` as fallback. Provides span info via `next_with_span/1`.
-- Text:
-  - Extracts embedded PDF text without OCR or external binaries.
-  - Decodes Flate-compressed content streams.
-  - Applies ToUnicode CMaps for two-byte glyph encoded text.
-  - Reconstructs approximate layout from text matrix coordinates.
-- Merger:
-
-  - Merges multiple PDF binaries: renumbers objects to avoid collisions.
-  - Rewrites indirect references to the new numbering.
-  - Builds a new `Catalog` and `Pages` tree and collects all page objects.
-  - Preserves stream bytes and declared `/Length` (direct or indirect reference hints).
-  - Emits a classic xref table and trailer (not an xref stream).
+1. Tokenizer - turns classic PDF byte streams into structured Elixir tokens.
+2. Merger - combines multiple PDF binaries into a fresh PDF with rewritten object references.
+3. Reader - extracts embedded text from PDFs when the document contains readable text data.
 
 ## Installation
-
-This project is not yet published on Hex. Add it as a local dependency or use a
-Git reference once public.
-
-Local path (for development):
-
-```elixir
-def deps do
-  [
-    {:native_elixir_pdf_utilities, path: "../native_elixir_pdf_utilities"}
-  ]
-end
-```
-
-When the package is published to Hex, it will look like:
 
 ```elixir
 def deps do
@@ -65,153 +35,15 @@ def deps do
 end
 ```
 
----
+## Development
 
-## Quick Start
-
-Interactive shell:
+Run the project checks before contributing:
 
 ```bash
-iex -S mix
+mise exec -- mix test
+MIX_ENV=test mise exec -- mix dialyzer
+mise exec -- mix format
 ```
-
-Tokenize a PDF binary:
-
-```elixir
-alias NativeElixirPdfUtilities.Tokenizer
-
-pdf = File.read!("sample.pdf")
-st = Tokenizer.new(pdf)
-tokens = Tokenizer.tokenize_all(st)
-IO.inspect(tokens, limit: 50)
-```
-
-Merge PDFs:
-
-```elixir
-alias NativeElixirPdfUtilities.Merge
-
-bins = [
-  File.read!("a.pdf"),
-  File.read!("b.pdf")
-]
-
-{:ok, merged} = Merge.merge(bins)
-File.write!("merged.pdf", merged)
-```
-
-Extract embedded text:
-
-```elixir
-alias NativeElixirPdfUtilities.Text
-
-{:ok, text} = Text.extract_file("sample.pdf", layout: true)
-IO.puts(text)
-```
-
----
-
-## Tokenizer API
-
-Module: `NativeElixirPdfUtilities.Tokenizer`
-
-- `new(binary)`: Initialize with a PDF byte stream.
-- `next(t)`: Return `{token, t2}` for the next token; emits `{:eof, nil}` at end.
-- `peek(t)`: Look at the next token without advancing.
-- `next_with_span(t)`: Like `next/1` but also returns byte-span metadata for the token
-  (`%{from: pos, to: pos, stream_mode?: :length | :scanned | nil}`).
-- `tokenize_all(t)`: Tokenize all tokens into a list.
-- `tokenize_all_with_spans(t)`: Tokenize all tokens with spans included.
-- `pending_stream_length(t)`: If just saw `:stream`, returns `{:direct, int}` when `/Length`
-  was a direct int, `{:indirect, {obj, gen}}` for an indirect hint, or `:unknown`.
-
-Token forms include:
-
-- `{:int, integer}` | `{:real, float}` | `{:name, binary}` | `{:string, binary}`
-- `{:hex_string, binary}` | `{:stream_data, binary}` | `{:op, binary}`
-- `:lbracket` | `:rbracket` | `:dict_start` | `:dict_end` | `:R`
-- `:obj` | `:endobj` | `:stream` | `:endstream` | `:xref` | `:trailer` | `:startxref`
-- `:null` | `true` | `false` | `{:eof, nil}`
-
-Notes:
-
-- Whitespace and `%` comments are skipped.
-- Literal strings support escapes (`\n`, `\r`, `\t`, `\b`, `\f`, `\\`, octal) and nested parentheses.
-- Hex strings `<...>` are decoded; odd nibble counts are padded per PDF spec.
-- For streams, one EOL immediately after `stream` is not part of stream data.
-
----
-
-## Text Extraction
-
-Module: `NativeElixirPdfUtilities.Text`
-
-- `extract(pdf_bin, opts \\ []) :: {:ok, text} | {:error, reason}`
-- `extract_file(path, opts \\ []) :: {:ok, text} | {:error, reason}`
-
-Options:
-
-- `layout: true` approximates visible page layout with spaces, line breaks, and form-feed
-  page separators. This is the default.
-
-Behavior and constraints:
-
-- Does not perform OCR. Scanned image-only PDFs will not produce useful text.
-- Supports common classic PDFs with embedded text, Flate-compressed content streams,
-  text-showing operators (`Tj`, `TJ`, `'`, `"`), and ToUnicode CMaps.
-- Layout reconstruction is best-effort; exact table geometry depends on the PDF's text
-  positioning instructions.
-
-## Merging PDFs
-
-Module: `NativeElixirPdfUtilities.Merge`
-
-- `merge([pdf_bin]) :: {:ok, pdf_bin}`
-  - Indexes each input into objects and page ids using the tokenizer.
-  - Assigns non-overlapping id ranges and remaps indirect references.
-  - Builds a fresh `Pages` (object 1) and `Catalog` (object 2) and appends all input objects.
-  - Constructs a classic xref table and trailer pointing to the generated root.
-
-Example:
-
-```elixir
-{:ok, out} = NativeElixirPdfUtilities.Merge.merge([
-  File.read!("doc1.pdf"),
-  File.read!("doc2.pdf"),
-  File.read!("doc3.pdf")
-])
-File.write!("merged.pdf", out)
-```
-
-Behavior and constraints:
-
-- Preserves all object bodies and stream bytes; does not decode or re-encode filters.
-- Uses `/Length` when the value is a direct integer. For indirect lengths, keeps the reference
-  and scans to `endstream` when emitting token streams.
-- Expects classic PDFs (xref tables). PDFs using only xref streams or incremental updates
-  may not be fully handled yet.
-- Rewrites Page dictionaries to ensure a valid tree: sets `Parent`, keeps or injects `Resources`
-  and `MediaBox` when missing; builds a combined `Pages` tree.
-
----
-
-## Running Tests
-
-```bash
-mix test
-```
-
-The test suite exercises the tokenizer (numbers, names, strings, dicts, arrays,
-operators, streams via `/Length` and fallback scanning).
-
----
-
-## Roadmap / Ideas
-
-- Include more PDF utilities as I think of them, or suggested by the community.
-- Make it able to handle more kinds of PDF's.
-
----
 
 ## License
 
