@@ -22,33 +22,36 @@ defmodule NativeElixirPdfUtilities.Text do
       This is currently the only output mode and defaults to true.
   """
   @spec extract(binary(), [extract_option()]) :: {:ok, String.t()} | {:error, atom()}
-  def extract(pdf_binary, opts \\ []) when is_binary(pdf_binary) do
-    layout? = Keyword.get(opts, :layout, true)
-    objects = parse_objects(pdf_binary)
+  def extract(pdf_binary, opts \\ []) do
+    case pdf_binary do
+      pdf_binary when is_binary(pdf_binary) ->
+        layout? = Keyword.get(opts, :layout, true)
+        objects = parse_objects(pdf_binary)
 
-    cmap_by_ref = cmap_by_ref(objects)
-    font_cmap_by_name = font_cmap_by_name(objects, cmap_by_ref)
-    fallback_cmap = merge_cmaps(Map.values(cmap_by_ref))
+        cmap_by_ref = cmap_by_ref(objects)
+        font_cmap_by_name = font_cmap_by_name(objects, cmap_by_ref)
+        fallback_cmap = merge_cmaps(Map.values(cmap_by_ref))
 
-    pages =
-      objects
-      |> decoded_content_streams()
-      |> Enum.map(&extract_page_chunks(&1, font_cmap_by_name, fallback_cmap))
-      |> Enum.reject(&(&1 == []))
+        pages =
+          objects
+          |> decoded_content_streams()
+          |> Enum.map(&extract_page_chunks(&1, font_cmap_by_name, fallback_cmap))
+          |> Enum.reject(&(&1 == []))
 
-    case pages do
-      [] ->
-        {:error, :empty_pdf_text}
+        case pages do
+          [] ->
+            {:error, :empty_pdf_text}
 
-      pages ->
-        text =
-          if layout? do
-            pages |> Enum.map(&layout_page/1) |> Enum.join("\f")
-          else
-            pages |> Enum.map(&plain_page/1) |> Enum.join("\n")
-          end
+          pages ->
+            text =
+              if layout? do
+                pages |> Enum.map(&layout_page/1) |> Enum.join("\f")
+              else
+                pages |> Enum.map(&plain_page/1) |> Enum.join("\n")
+              end
 
-        {:ok, text}
+            {:ok, text}
+        end
     end
   end
 
@@ -57,10 +60,13 @@ defmodule NativeElixirPdfUtilities.Text do
   """
   @spec extract_file(String.t(), [extract_option()]) ::
           {:ok, String.t()} | {:error, atom() | File.posix()}
-  def extract_file(path, opts \\ []) when is_binary(path) do
-    case File.read(path) do
-      {:ok, pdf_binary} -> extract(pdf_binary, opts)
-      {:error, reason} -> {:error, reason}
+  def extract_file(path, opts \\ []) do
+    case path do
+      path when is_binary(path) ->
+        case File.read(path) do
+          {:ok, pdf_binary} -> extract(pdf_binary, opts)
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 
@@ -71,18 +77,27 @@ defmodule NativeElixirPdfUtilities.Text do
     |> do_parse_objects([])
   end
 
-  defp do_parse_objects([], acc), do: Enum.reverse(acc)
+  defp do_parse_objects(tokens, acc) do
+    case tokens do
+      [] ->
+        Enum.reverse(acc)
 
-  defp do_parse_objects([{:int, obj}, {:int, gen}, :obj | rest], acc) do
-    {body, rest} = take_until_endobj(rest, [])
-    do_parse_objects(rest, [%{obj: obj, gen: gen, tokens: body} | acc])
+      [{:int, obj}, {:int, gen}, :obj | rest] ->
+        {body, rest} = take_until_endobj(rest, [])
+        do_parse_objects(rest, [%{obj: obj, gen: gen, tokens: body} | acc])
+
+      [_token | rest] ->
+        do_parse_objects(rest, acc)
+    end
   end
 
-  defp do_parse_objects([_token | rest], acc), do: do_parse_objects(rest, acc)
-
-  defp take_until_endobj([], acc), do: {Enum.reverse(acc), []}
-  defp take_until_endobj([:endobj | rest], acc), do: {Enum.reverse(acc), rest}
-  defp take_until_endobj([token | rest], acc), do: take_until_endobj(rest, [token | acc])
+  defp take_until_endobj(tokens, acc) do
+    case tokens do
+      [] -> {Enum.reverse(acc), []}
+      [:endobj | rest] -> {Enum.reverse(acc), rest}
+      [token | rest] -> take_until_endobj(rest, [token | acc])
+    end
+  end
 
   defp cmap_by_ref(objects) do
     objects
@@ -264,90 +279,74 @@ defmodule NativeElixirPdfUtilities.Text do
     |> Enum.reject(&(String.trim(&1.text) == ""))
   end
 
-  defp handle_operator("Tf", operands, state, chunks, _font_cmap_by_name, _fallback_cmap) do
-    font =
-      operands
-      |> Enum.find_value(fn
-        {:name, font_name} -> font_name
-        _ -> nil
-      end)
+  defp handle_operator(op, operands, state, chunks, font_cmap_by_name, fallback_cmap) do
+    case op do
+      "Tf" ->
+        font =
+          operands
+          |> Enum.find_value(fn
+            {:name, font_name} -> font_name
+            _ -> nil
+          end)
 
-    {chunks, [], %{state | font: font || state.font}}
-  end
+        {chunks, [], %{state | font: font || state.font}}
 
-  defp handle_operator("Tm", operands, state, chunks, _font_cmap_by_name, _fallback_cmap) do
-    numbers = operands |> Enum.reverse() |> Enum.flat_map(&number_value/1)
+      "Tm" ->
+        numbers = operands |> Enum.reverse() |> Enum.flat_map(&number_value/1)
 
-    case numbers do
-      [_a, _b, _c, _d, x, y | _] -> {chunks, [], %{state | x: x, y: y}}
-      _ -> {chunks, [], state}
+        case numbers do
+          [_a, _b, _c, _d, x, y | _] -> {chunks, [], %{state | x: x, y: y}}
+          _ -> {chunks, [], state}
+        end
+
+      op when op in ["Td", "TD"] ->
+        numbers = operands |> Enum.reverse() |> Enum.flat_map(&number_value/1)
+
+        case numbers do
+          [tx, ty | _] -> {chunks, [], %{state | x: state.x + tx, y: state.y + ty}}
+          _ -> {chunks, [], state}
+        end
+
+      "T*" ->
+        {chunks, [], %{state | y: state.y + 12.0}}
+
+      "Tj" ->
+        text =
+          operands
+          |> List.first()
+          |> decode_text_token(cmap_for_font(state.font, font_cmap_by_name, fallback_cmap))
+
+        add_chunk(chunks, state, text)
+
+      "TJ" ->
+        cmap = cmap_for_font(state.font, font_cmap_by_name, fallback_cmap)
+
+        text =
+          operands
+          |> Enum.reverse()
+          |> Enum.filter(fn
+            {:string, _} -> true
+            {:hex_string, _} -> true
+            _ -> false
+          end)
+          |> Enum.map(&decode_text_token(&1, cmap))
+          |> Enum.join("")
+
+        add_chunk(chunks, state, text)
+
+      op when op in ["'", "\""] ->
+        handle_operator(
+          "Tj",
+          operands,
+          %{state | y: state.y + 12.0},
+          chunks,
+          font_cmap_by_name,
+          fallback_cmap
+        )
+
+      _ ->
+        {chunks, [], state}
     end
-  end
-
-  defp handle_operator(op, operands, state, chunks, _font_cmap_by_name, _fallback_cmap)
-       when op in ["Td", "TD"] do
-    numbers = operands |> Enum.reverse() |> Enum.flat_map(&number_value/1)
-
-    case numbers do
-      [tx, ty | _] -> {chunks, [], %{state | x: state.x + tx, y: state.y + ty}}
-      _ -> {chunks, [], state}
-    end
-  end
-
-  defp handle_operator("T*", _operands, state, chunks, _font_cmap_by_name, _fallback_cmap) do
-    {chunks, [], %{state | y: state.y + 12.0}}
-  end
-
-  defp handle_operator("Tj", operands, state, chunks, font_cmap_by_name, fallback_cmap) do
-    text =
-      operands
-      |> List.first()
-      |> decode_text_token(cmap_for_font(state.font, font_cmap_by_name, fallback_cmap))
-
-    add_chunk(chunks, state, text)
-  end
-
-  defp handle_operator("TJ", operands, state, chunks, font_cmap_by_name, fallback_cmap) do
-    cmap = cmap_for_font(state.font, font_cmap_by_name, fallback_cmap)
-
-    text =
-      operands
-      |> Enum.reverse()
-      |> Enum.filter(fn
-        {:string, _} -> true
-        {:hex_string, _} -> true
-        _ -> false
-      end)
-      |> Enum.map(&decode_text_token(&1, cmap))
-      |> Enum.join("")
-
-    add_chunk(chunks, state, text)
-  end
-
-  defp handle_operator("'", operands, state, chunks, font_cmap_by_name, fallback_cmap) do
-    handle_operator(
-      "Tj",
-      operands,
-      %{state | y: state.y + 12.0},
-      chunks,
-      font_cmap_by_name,
-      fallback_cmap
-    )
-  end
-
-  defp handle_operator("\"", operands, state, chunks, font_cmap_by_name, fallback_cmap) do
-    handle_operator(
-      "Tj",
-      operands,
-      %{state | y: state.y + 12.0},
-      chunks,
-      font_cmap_by_name,
-      fallback_cmap
-    )
-  end
-
-  defp handle_operator(_op, _operands, state, chunks, _font_cmap_by_name, _fallback_cmap) do
-    {chunks, [], state}
   end
 
   defp add_chunk(chunks, state, text) do
@@ -359,9 +358,13 @@ defmodule NativeElixirPdfUtilities.Text do
     Map.get(font_cmap_by_name, font, fallback_cmap)
   end
 
-  defp decode_text_token({:string, text}, cmap), do: decode_encoded_text(text, cmap)
-  defp decode_text_token({:hex_string, text}, cmap), do: decode_encoded_text(text, cmap)
-  defp decode_text_token(_token, _cmap), do: ""
+  defp decode_text_token(token, cmap) do
+    case token do
+      {:string, text} -> decode_encoded_text(text, cmap)
+      {:hex_string, text} -> decode_encoded_text(text, cmap)
+      _ -> ""
+    end
+  end
 
   defp decode_encoded_text(text, cmap) do
     cond do
@@ -380,17 +383,19 @@ defmodule NativeElixirPdfUtilities.Text do
     for <<code::16 <- text>>, do: code
   end
 
-  defp fallback_code_to_string(code) when code >= 32 and code <= 126 do
-    <<code>>
+  defp fallback_code_to_string(code) do
+    if code >= 32 and code <= 126 do
+      <<code>>
+    else
+      ""
+    end
   end
-
-  defp fallback_code_to_string(_code), do: ""
 
   defp layout_page(chunks) do
     page_min_x =
       chunks
       |> Enum.map(& &1.x)
-      |> Enum.min(fn -> 0.0 end)
+      |> Enum.min()
 
     chunks
     |> Enum.group_by(fn chunk -> round(chunk.y / 6.0) * 6 end)
@@ -419,9 +424,13 @@ defmodule NativeElixirPdfUtilities.Text do
     |> String.trim_trailing()
   end
 
-  defp number_value({:int, value}), do: [value * 1.0]
-  defp number_value({:real, value}), do: [value]
-  defp number_value(_token), do: []
+  defp number_value(token) do
+    case token do
+      {:int, value} -> [value * 1.0]
+      {:real, value} -> [value]
+      _ -> []
+    end
+  end
 
   defp hex_to_integer(hex) do
     {value, ""} = Integer.parse(hex, 16)

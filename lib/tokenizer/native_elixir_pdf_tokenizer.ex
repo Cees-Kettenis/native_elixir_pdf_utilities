@@ -64,7 +64,11 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
   Initialize the tokenizer from a binary.
   """
   @spec new(binary()) :: t()
-  def new(bin) when is_binary(bin), do: %__MODULE__{bin: bin, pos: 0, size: byte_size(bin)}
+  def new(bin) do
+    case bin do
+      bin when is_binary(bin) -> %__MODULE__{bin: bin, pos: 0, size: byte_size(bin)}
+    end
+  end
 
   @doc """
   Return the next token and updated tokenizer state.
@@ -98,6 +102,9 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
 
           ?] ->
             {:rbracket, bump(st, 1)}
+
+          c when c in [?', ?"] ->
+            {{:op, <<c>>}, bump(st, 1)}
 
           c when (c >= ?0 and c <= ?9) or c == ?+ or c == ?- or c == ?. ->
             parse_number_or_keyword(st)
@@ -203,17 +210,18 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
     do_skip(st)
   end
 
-  # Worker to skip whitespace/comments; fast-path when at or beyond EOF.
-  defp do_skip(%__MODULE__{pos: pos, size: size} = st) when pos >= size, do: st
-
   # skip whitespace and comments
   defp do_skip(%__MODULE__{} = st) do
-    b = byte_at(st)
+    if st.pos >= st.size do
+      st
+    else
+      b = byte_at(st)
 
-    cond do
-      b in @whitespace -> do_skip(bump(st, 1))
-      b == ?% -> do_skip(skip_comment(st))
-      true -> st
+      cond do
+        b in @whitespace -> do_skip(bump(st, 1))
+        b == ?% -> do_skip(skip_comment(st))
+        true -> st
+      end
     end
   end
 
@@ -223,30 +231,39 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
     advance_to_eol(st)
   end
 
-  # Advance until an end-of-line (CR or LF) or EOF.
-  defp advance_to_eol(%__MODULE__{pos: pos, size: size} = st) when pos >= size, do: st
-
   defp advance_to_eol(%__MODULE__{} = st) do
-    case byte_at(st) do
-      # LF
-      10 -> bump(st, 1)
-      # CR
-      13 -> bump(st, 1)
-      _ -> advance_to_eol(bump(st, 1))
+    if st.pos >= st.size do
+      st
+    else
+      case byte_at(st) do
+        # LF
+        10 -> bump(st, 1)
+        # CR
+        13 -> bump(st, 1)
+        _ -> advance_to_eol(bump(st, 1))
+      end
     end
   end
 
   # Increase the position in the underlying binary by n bytes.
-  defp bump(%__MODULE__{pos: pos} = st, n), do: %{st | pos: pos + n}
+  defp bump(%__MODULE__{pos: pos} = st, n) do
+    %{st | pos: pos + n}
+  end
 
   # Read the byte at the current position.
-  defp byte_at(%__MODULE__{bin: bin, pos: pos}), do: :binary.at(bin, pos)
+  defp byte_at(%__MODULE__{bin: bin, pos: pos}) do
+    :binary.at(bin, pos)
+  end
 
   # Slice `len` bytes from the current position.
-  defp slice(%__MODULE__{bin: bin, pos: pos}, len), do: :binary.part(bin, pos, len)
+  defp slice(%__MODULE__{bin: bin, pos: pos}, len) do
+    :binary.part(bin, pos, len)
+  end
 
   # Whether a byte is a delimiter per PDF syntax.
-  defp is_delim?(c) when is_integer(c), do: c in @delims
+  defp is_delim?(c) do
+    c in @delims
+  end
 
   # ===== Name =====
 
@@ -267,43 +284,57 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
     |> IO.iodata_to_binary()
   end
 
-  # Worker for name decoding (accumulates codepoints/bytes in reverse).
-  defp decode_name(<<>>, acc), do: Enum.reverse(acc)
+  defp decode_name(bytes, acc) do
+    case bytes do
+      <<>> ->
+        Enum.reverse(acc)
 
-  defp decode_name(<<?#, a, b, rest::binary>>, acc) do
-    if hex_char?(a) and hex_char?(b) do
-      <<val>> = <<hexval(a) * 16 + hexval(b)>>
-      decode_name(rest, [val | acc])
-    else
-      # not a valid #xx escape; keep '#' literal and continue
-      decode_name(<<a, b, rest::binary>>, [?# | acc])
+      <<?#, a, b, rest::binary>> ->
+        if hex_char?(a) and hex_char?(b) do
+          <<val>> = <<hexval(a) * 16 + hexval(b)>>
+          decode_name(rest, [val | acc])
+        else
+          # not a valid #xx escape; keep '#' literal and continue
+          decode_name(<<a, b, rest::binary>>, [?# | acc])
+        end
+
+      <<c, rest::binary>> ->
+        decode_name(rest, [c | acc])
     end
   end
 
-  defp decode_name(<<c, rest::binary>>, acc), do: decode_name(rest, [c | acc])
-
   # True if byte is a hex digit.
-  defp hex_char?(c),
-    do: (c >= ?0 and c <= ?9) or (c >= ?A and c <= ?F) or (c >= ?a and c <= ?f)
+  defp hex_char?(c) do
+    (c >= ?0 and c <= ?9) or (c >= ?A and c <= ?F) or (c >= ?a and c <= ?f)
+  end
 
   # Convert a hex digit byte to its integer value.
-  defp hexval(c) when c >= ?0 and c <= ?9, do: c - ?0
-  defp hexval(c) when c >= ?A and c <= ?F, do: c - ?A + 10
-  defp hexval(c) when c >= ?a and c <= ?f, do: c - ?a + 10
+  defp hexval(c) do
+    cond do
+      c >= ?0 and c <= ?9 -> c - ?0
+      c >= ?A and c <= ?F -> c - ?A + 10
+      c >= ?a and c <= ?f -> c - ?a + 10
+    end
+  end
 
   # Read bytes until a delimiter or whitespace is reached.
-  defp take_until_delim(%__MODULE__{} = st), do: take_until_delim(st, 0)
-
-  defp take_until_delim(%__MODULE__{pos: pos, size: size} = st, n) when pos + n >= size,
-    do: {slice(st, n), bump(st, n)}
+  defp take_until_delim(%__MODULE__{} = st) do
+    take_until_delim(st, 0)
+  end
 
   defp take_until_delim(%__MODULE__{} = st, n) do
-    c = :binary.at(st.bin, st.pos + n)
-
     cond do
-      c in @whitespace -> {slice(st, n), bump(st, n)}
-      c in @delims -> {slice(st, n), bump(st, n)}
-      true -> take_until_delim(st, n + 1)
+      st.pos + n >= st.size ->
+        {slice(st, n), bump(st, n)}
+
+      :binary.at(st.bin, st.pos + n) in @whitespace ->
+        {slice(st, n), bump(st, n)}
+
+      :binary.at(st.bin, st.pos + n) in @delims ->
+        {slice(st, n), bump(st, n)}
+
+      true ->
+        take_until_delim(st, n + 1)
     end
   end
 
@@ -317,30 +348,29 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
     {{:string, IO.iodata_to_binary(iodata)}, st2}
   end
 
-  # balance is nesting depth of parentheses
-  defp collect_lit(%__MODULE__{pos: pos, size: size} = st, _balance, acc) when pos >= size do
-    {Enum.reverse(acc), st}
-  end
-
   defp collect_lit(%__MODULE__{} = st, balance, acc) do
-    case byte_at(st) do
-      # escape
-      ?\\ ->
-        collect_escape(bump(st, 1), balance, acc)
+    if st.pos >= st.size do
+      {Enum.reverse(acc), st}
+    else
+      case byte_at(st) do
+        # escape
+        ?\\ ->
+          collect_escape(bump(st, 1), balance, acc)
 
-      ?( ->
-        collect_lit(bump(st, 1), balance + 1, [?( | acc])
+        ?( ->
+          collect_lit(bump(st, 1), balance + 1, [?( | acc])
 
-      ?) ->
-        if balance == 0 do
-          # end of string
-          {Enum.reverse(acc), bump(st, 1)}
-        else
-          collect_lit(bump(st, 1), balance - 1, [?) | acc])
-        end
+        ?) ->
+          if balance == 0 do
+            # end of string
+            {Enum.reverse(acc), bump(st, 1)}
+          else
+            collect_lit(bump(st, 1), balance - 1, [?) | acc])
+          end
 
-      c ->
-        collect_lit(bump(st, 1), balance, [c | acc])
+        c ->
+          collect_lit(bump(st, 1), balance, [c | acc])
+      end
     end
   end
 
@@ -394,20 +424,17 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
   end
 
   # Parse up to three octal digits after a backslash escape and emit the byte.
-  defp collect_octal(%__MODULE__{} = st, nread, acc) when nread >= 3 do
-    {<<acc>>, st}
-  end
-
-  defp collect_octal(%__MODULE__{pos: pos, size: size} = st, _nread, acc) when pos >= size do
-    {<<acc>>, st}
-  end
-
   defp collect_octal(%__MODULE__{} = st, nread, acc) do
-    c = byte_at(st)
-
     cond do
-      c >= ?0 and c <= ?7 -> collect_octal(bump(st, 1), nread + 1, acc * 8 + (c - ?0))
-      true -> {<<acc>>, st}
+      nread >= 3 or st.pos >= st.size ->
+        {<<acc>>, st}
+
+      byte_at(st) >= ?0 and byte_at(st) <= ?7 ->
+        c = byte_at(st)
+        collect_octal(bump(st, 1), nread + 1, acc * 8 + (c - ?0))
+
+      true ->
+        {<<acc>>, st}
     end
   end
 
@@ -447,12 +474,15 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
     end
   end
 
-  # Convert a flat list of hex digit bytes to byte values as iodata.
-  defp hex_pairs_to_bin([], acc), do: Enum.reverse(acc)
+  defp hex_pairs_to_bin(hexes, acc) do
+    case hexes do
+      [] ->
+        Enum.reverse(acc)
 
-  defp hex_pairs_to_bin([a, b | rest], acc) do
-    <<val>> = <<hexval(a) * 16 + hexval(b)>>
-    hex_pairs_to_bin(rest, [val | acc])
+      [a, b | rest] ->
+        <<val>> = <<hexval(a) * 16 + hexval(b)>>
+        hex_pairs_to_bin(rest, [val | acc])
+    end
   end
 
   # ===== Dict End or stray '>' =====
@@ -473,20 +503,7 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
   # Parse a number or a keyword that looks like a number prefix.
   defp parse_number_or_keyword(%__MODULE__{} = st) do
     {word, st2} = take_word(st)
-
-    case word do
-      "obj" -> {:obj, st2}
-      "endobj" -> {:endobj, st2}
-      "stream" -> begin_stream(st2)
-      "endstream" -> {:endstream, st2}
-      "xref" -> {:xref, st2}
-      "trailer" -> {:trailer, st2}
-      "startxref" -> {:startxref, st2}
-      "true" -> {true, st2}
-      "false" -> {false, st2}
-      "null" -> {:null, st2}
-      _ -> parse_number_from_word(word, st2)
-    end
+    parse_number_from_word(word, st2)
   end
 
   # Parse a bareword keyword (operators or known symbols like obj/endobj/R/etc.).
@@ -534,18 +551,23 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
   end
 
   # Read a bareword until a delimiter or whitespace.
-  defp take_word(%__MODULE__{} = st), do: take_word(st, 0)
-
-  defp take_word(%__MODULE__{pos: pos, size: size} = st, n) when pos + n >= size,
-    do: {slice(st, n), bump(st, n)}
+  defp take_word(%__MODULE__{} = st) do
+    take_word(st, 0)
+  end
 
   defp take_word(%__MODULE__{} = st, n) do
-    c = :binary.at(st.bin, st.pos + n)
-
     cond do
-      c in @whitespace -> {slice(st, n), bump(st, n)}
-      is_delim?(c) -> {slice(st, n), bump(st, n)}
-      true -> take_word(st, n + 1)
+      st.pos + n >= st.size ->
+        {slice(st, n), bump(st, n)}
+
+      :binary.at(st.bin, st.pos + n) in @whitespace ->
+        {slice(st, n), bump(st, n)}
+
+      is_delim?(:binary.at(st.bin, st.pos + n)) ->
+        {slice(st, n), bump(st, n)}
+
+      true ->
+        take_word(st, n + 1)
     end
   end
 
@@ -683,29 +705,30 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
   end
 
   # Search for 'endstream' starting at `from` with simple pre-check for preceding whitespace.
-  defp find_from(_bin, from) when from < 0, do: nil
-  defp find_from(bin, from) when from >= byte_size(bin), do: nil
-
   defp find_from(bin, from) do
-    case :binary.match(bin, "endstream", scope: {from, byte_size(bin) - from}) do
-      :nomatch ->
+    cond do
+      from >= byte_size(bin) ->
         nil
 
-      {idx, 9} ->
-        # Check that preceding byte (if any) is whitespace/EOL; this reduces false positives
-        prev = if idx == 0, do: nil, else: :binary.at(bin, idx - 1)
+      true ->
+        case :binary.match(bin, "endstream", scope: {from, byte_size(bin) - from}) do
+          :nomatch ->
+            nil
 
-        if prev in [nil, 9, 10, 12, 13, 32] do
-          idx
-        else
-          find_from(bin, idx + 1)
+          {idx, 9} ->
+            # Check that preceding byte (if any) is whitespace/EOL; this reduces false positives
+            prev = if idx == 0, do: nil, else: :binary.at(bin, idx - 1)
+
+            if prev in [nil, 9, 10, 12, 13, 32] do
+              idx
+            else
+              find_from(bin, idx + 1)
+            end
         end
     end
   end
 
   # Drop a single trailing CR, LF or CRLF from a binary, if present.
-  defp drop_trailing_single_eol(<<>>), do: <<>>
-
   defp drop_trailing_single_eol(bin) do
     len = byte_size(bin)
 
@@ -724,9 +747,13 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
   # ===== State helpers =====
 
   # Track nested dictionary depth (used to detect /Length inside dicts).
-  defp inc_dict_depth(%__MODULE__{} = st), do: %{st | dict_depth: st.dict_depth + 1}
+  defp inc_dict_depth(%__MODULE__{} = st) do
+    %{st | dict_depth: st.dict_depth + 1}
+  end
 
-  defp dec_dict_depth(%__MODULE__{} = st), do: %{st | dict_depth: max(st.dict_depth - 1, 0)}
+  defp dec_dict_depth(%__MODULE__{} = st) do
+    %{st | dict_depth: max(st.dict_depth - 1, 0)}
+  end
 
   # Remember the last seen name; special handling for /Length to latch following number/ref.
   defp put_last_name(%__MODULE__{} = st, name) do

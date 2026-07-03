@@ -35,53 +35,60 @@ defmodule NativeElixirPdfUtilities.Merge do
   collects Page objects, and emits a new Catalog/Pages tree that references all pages.
   """
   @spec merge([pdf_bin()]) :: {:ok, pdf_bin()}
-  def merge([]), do: raise(ArgumentError, "merge/1 expects at least one PDF binary")
+  def merge(bins) do
+    case bins do
+      [] ->
+        raise ArgumentError, "merge/1 expects at least one PDF binary"
 
-  def merge(bins) when is_list(bins) do
-    # 1) Index all inputs -> objects and page ids
-    inputs = Enum.map(bins, &index_pdf/1)
+      bins when is_list(bins) ->
+        # 1) Index all inputs -> objects and page ids
+        inputs = Enum.map(bins, &index_pdf/1)
 
-    # 2) Assign id offsets so object ids won't collide; reserve 1,2 for Pages,Catalog
-    {inputs2, _next_id} = assign_offsets(inputs, 3)
+        # 2) Assign id offsets so object ids won't collide; reserve 1,2 for Pages,Catalog
+        {inputs2, _next_id} = assign_offsets(inputs, 3)
 
-    # 3) Collect all page ids in new numbering (flatten Pages)
-    page_ids =
-      inputs2
-      |> Enum.flat_map(fn %{pages: pages, map: map} ->
-        Enum.map(pages, &Map.fetch!(map, &1))
-      end)
-      |> Enum.reduce({[], MapSet.new()}, fn id, {acc, seen} ->
-        if MapSet.member?(seen, id), do: {acc, seen}, else: {[id | acc], MapSet.put(seen, id)}
-      end)
-      |> then(fn {acc, _} -> Enum.reverse(acc) end)
+        # 3) Collect all page ids in new numbering (flatten Pages)
+        page_ids =
+          inputs2
+          |> Enum.flat_map(fn %{pages: pages, map: map} ->
+            Enum.map(pages, &Map.fetch!(map, &1))
+          end)
+          |> Enum.reduce({[], MapSet.new()}, fn id, {acc, seen} ->
+            if MapSet.member?(seen, id), do: {acc, seen}, else: {[id | acc], MapSet.put(seen, id)}
+          end)
+          |> then(fn {acc, _} -> Enum.reverse(acc) end)
 
-    pages_obj_id = 1
-    catalog_obj_id = 2
+        pages_obj_id = 1
+        catalog_obj_id = 2
 
-    # 4) Render all objects with rewritten refs
-    # We'll render: new Pages, new Catalog, then all rewritten input objects
-    {pieces, offsets, pos} = add_piece([], pdf_header(), %{}, 0)
-    render_pages = render_pages_object(pages_obj_id, page_ids)
-    {pieces, offsets, pos} = add_object(pieces, offsets, pos, pages_obj_id, 0, render_pages)
-    render_catalog = render_catalog_object(catalog_obj_id, pages_obj_id)
-    {pieces, offsets, pos} = add_object(pieces, offsets, pos, catalog_obj_id, 0, render_catalog)
+        # 4) Render all objects with rewritten refs
+        # We'll render: new Pages, new Catalog, then all rewritten input objects
+        {pieces, offsets, pos} = add_piece([], pdf_header(), %{}, 0)
+        render_pages = render_pages_object(pages_obj_id, page_ids)
+        {pieces, offsets, pos} = add_object(pieces, offsets, pos, pages_obj_id, 0, render_pages)
+        render_catalog = render_catalog_object(catalog_obj_id, pages_obj_id)
 
-    {pieces, offsets, pos} =
-      Enum.reduce(inputs2, {pieces, offsets, pos}, fn input = %{objects: objs, map: map}, acc ->
-        Enum.reduce(objs, acc, fn obj, {pieces, offsets, pos} ->
-          new_id = Map.fetch!(map, obj.obj)
-          page_ctx = page_injection_ctx(obj.tokens, input, pages_obj_id)
-          body = render_object_body(obj.tokens, map, page_ctx)
-          add_object(pieces, offsets, pos, new_id, obj.gen, body)
-        end)
-      end)
+        {pieces, offsets, pos} =
+          add_object(pieces, offsets, pos, catalog_obj_id, 0, render_catalog)
 
-    # 5) Xref + trailer
-    max_obj_id = Enum.max([catalog_obj_id, pages_obj_id | Map.keys(offsets)])
-    {xref_io, _xref_pos} = xref_and_trailer(offsets, pos, max_obj_id, catalog_obj_id)
+        {pieces, offsets, pos} =
+          Enum.reduce(inputs2, {pieces, offsets, pos}, fn input = %{objects: objs, map: map},
+                                                          acc ->
+            Enum.reduce(objs, acc, fn obj, {pieces, offsets, pos} ->
+              new_id = Map.fetch!(map, obj.obj)
+              page_ctx = page_injection_ctx(obj.tokens, input, pages_obj_id)
+              body = render_object_body(obj.tokens, map, page_ctx)
+              add_object(pieces, offsets, pos, new_id, obj.gen, body)
+            end)
+          end)
 
-    final_io = [Enum.reverse(pieces), xref_io]
-    {:ok, IO.iodata_to_binary(final_io)}
+        # 5) Xref + trailer
+        max_obj_id = Enum.max([catalog_obj_id, pages_obj_id | Map.keys(offsets)])
+        {xref_io, _xref_pos} = xref_and_trailer(offsets, pos, max_obj_id, catalog_obj_id)
+
+        final_io = [Enum.reverse(pieces), xref_io]
+        {:ok, IO.iodata_to_binary(final_io)}
+    end
   end
 
   # === Indexing ===
@@ -175,20 +182,23 @@ defmodule NativeElixirPdfUtilities.Merge do
     end)
   end
 
-  # When there's no root pages id, return empty inherited attributes.
-  defp extract_inherited_from_root_pages(_objects, nil), do: %{resources: nil, mediabox: nil}
-
   # Extract inherited attributes (/Resources and /MediaBox) from the root Pages object.
   defp extract_inherited_from_root_pages(objects, root_pages_id) do
-    case Enum.find(objects, &(&1.obj == root_pages_id)) do
+    case root_pages_id do
       nil ->
         %{resources: nil, mediabox: nil}
 
-      %{tokens: toks} ->
-        %{
-          resources: find_value_after_name(toks, "Resources"),
-          mediabox: find_value_after_name(toks, "MediaBox")
-        }
+      root_pages_id ->
+        case Enum.find(objects, &(&1.obj == root_pages_id)) do
+          nil ->
+            %{resources: nil, mediabox: nil}
+
+          %{tokens: toks} ->
+            %{
+              resources: find_value_after_name(toks, "Resources"),
+              mediabox: find_value_after_name(toks, "MediaBox")
+            }
+        end
     end
   end
 
@@ -207,49 +217,44 @@ defmodule NativeElixirPdfUtilities.Merge do
   end
 
   # Read a single value (dict/array/ref/atom) from a token stream and also return the rest.
-  defp read_value_tokens([:dict_start | rest]),
-    do: take_until_matching_dict_end(rest, 1, [:dict_start])
+  defp read_value_tokens(tokens) do
+    case tokens do
+      [:dict_start | rest] ->
+        take_until_matching(rest, :dict_start, :dict_end, 1, [:dict_start])
 
-  defp read_value_tokens([:lbracket | rest]),
-    do: take_until_matching_bracket(rest, 1, [:lbracket])
+      [:lbracket | rest] ->
+        take_until_matching(rest, :lbracket, :rbracket, 1, [:lbracket])
 
-  defp read_value_tokens([{:int, a}, {:int, b}, :R | rest]),
-    do: {[{:int, a}, {:int, b}, :R], rest}
+      [{:int, a}, {:int, b}, :R | rest] ->
+        {[{:int, a}, {:int, b}, :R], rest}
 
-  defp read_value_tokens([tok | rest]), do: {[tok], rest}
-  defp read_value_tokens([]), do: {[], []}
+      [tok | rest] ->
+        {[tok], rest}
 
-  # Collect tokens until the matching top-level :dict_end while preserving nesting.
-  defp take_until_matching_dict_end(rest, 0, acc), do: {Enum.reverse([:dict_start | acc]), rest}
-  defp take_until_matching_dict_end([], _n, acc), do: {Enum.reverse([:dict_start | acc]), []}
+      [] ->
+        {[], []}
+    end
+  end
 
-  defp take_until_matching_dict_end([:dict_start | r], n, acc),
-    do: take_until_matching_dict_end(r, n + 1, [:dict_start | acc])
+  # Collect a balanced dictionary or array value while preserving nested tokens.
+  defp take_until_matching(tokens, opening, closing, depth, acc) do
+    case tokens do
+      [] ->
+        {Enum.reverse(acc), []}
 
-  defp take_until_matching_dict_end([:dict_end | r], 1, acc),
-    do: {Enum.reverse([:dict_start | acc]) ++ [:dict_end], r}
+      [^opening | rest] ->
+        take_until_matching(rest, opening, closing, depth + 1, [opening | acc])
 
-  defp take_until_matching_dict_end([:dict_end | r], n, acc),
-    do: take_until_matching_dict_end(r, n - 1, [:dict_end | acc])
+      [^closing | rest] when depth == 1 ->
+        {Enum.reverse([closing | acc]), rest}
 
-  defp take_until_matching_dict_end([t | r], n, acc),
-    do: take_until_matching_dict_end(r, n, [t | acc])
+      [^closing | rest] ->
+        take_until_matching(rest, opening, closing, depth - 1, [closing | acc])
 
-  # Collect tokens until the matching top-level :rbracket while preserving nesting.
-  defp take_until_matching_bracket(rest, 0, acc), do: {Enum.reverse([:lbracket | acc]), rest}
-  defp take_until_matching_bracket([], _n, acc), do: {Enum.reverse([:lbracket | acc]), []}
-
-  defp take_until_matching_bracket([:lbracket | r], n, acc),
-    do: take_until_matching_bracket(r, n + 1, [:lbracket | acc])
-
-  defp take_until_matching_bracket([:rbracket | r], 1, acc),
-    do: {Enum.reverse([:lbracket | acc]) ++ [:rbracket], r}
-
-  defp take_until_matching_bracket([:rbracket | r], n, acc),
-    do: take_until_matching_bracket(r, n - 1, [:rbracket | acc])
-
-  defp take_until_matching_bracket([t | r], n, acc),
-    do: take_until_matching_bracket(r, n, [t | acc])
+      [token | rest] ->
+        take_until_matching(rest, opening, closing, depth, [token | acc])
+    end
+  end
 
   # Build a page-rewrite context for Page objects (to set Parent/Resources/MediaBox), else nil.
   defp page_injection_ctx(tokens, %{inherited: inh}, parent_id) do
@@ -337,8 +342,6 @@ defmodule NativeElixirPdfUtilities.Merge do
     render_tokens(tokens2, id_map)
   end
 
-  # Replace your existing rewrite_page_tokens/2 and helpers with this tighter version.
-
   # Rewrite top-level Page dictionary to set Parent, ensure /Type /Page, /Resources and /MediaBox.
   defp rewrite_page_tokens(tokens, %{
          parent_id: parent_id,
@@ -361,20 +364,29 @@ defmodule NativeElixirPdfUtilities.Merge do
   end
 
   # Extract the single top-level dictionary tokens (if present), plus leading/trailing tokens.
-  defp take_top_level_dict([:dict_start | rest]), do: do_take_dict(rest, 1, [], [])
-  defp take_top_level_dict(ts), do: {ts, [], []}
+  defp take_top_level_dict(tokens) do
+    case tokens do
+      [:dict_start | rest] -> do_take_dict(rest, 1, [], [])
+      tokens -> {tokens, [], []}
+    end
+  end
 
   # Worker for top-level dict extraction.
-  defp do_take_dict([:dict_start | r], n, acc, before),
-    do: do_take_dict(r, n + 1, [:dict_start | acc], before)
+  defp do_take_dict(tokens, depth, acc, before) do
+    case tokens do
+      [:dict_start | rest] ->
+        do_take_dict(rest, depth + 1, [:dict_start | acc], before)
 
-  defp do_take_dict([:dict_end | r], 1, acc, before),
-    do: {Enum.reverse(acc), Enum.reverse(before), r}
+      [:dict_end | rest] when depth == 1 ->
+        {Enum.reverse(acc), Enum.reverse(before), rest}
 
-  defp do_take_dict([:dict_end | r], n, acc, before),
-    do: do_take_dict(r, n - 1, [:dict_end | acc], before)
+      [:dict_end | rest] ->
+        do_take_dict(rest, depth - 1, [:dict_end | acc], before)
 
-  defp do_take_dict([t | r], n, acc, before), do: do_take_dict(r, n, [t | acc], before)
+      [token | rest] ->
+        do_take_dict(rest, depth, [token | acc], before)
+    end
+  end
 
   # Drop a key (and its value) from a flat dict token list if present.
   defp drop_key(tokens, name) do
@@ -405,9 +417,11 @@ defmodule NativeElixirPdfUtilities.Merge do
         left ++ [{:name, "Resources"} | val] ++ right
 
       _ ->
-        if is_list(inh_res) and inh_res != [],
-          do: put_key(tokens, "Resources", inh_res),
-          else: tokens
+        if is_list(inh_res) and inh_res != [] do
+          put_key(tokens, "Resources", inh_res)
+        else
+          tokens
+        end
     end
   end
 
@@ -415,9 +429,11 @@ defmodule NativeElixirPdfUtilities.Merge do
   defp ensure_mediabox(tokens, fallback) do
     case split_on_name(tokens, "MediaBox") do
       {:ok, left, val, right} ->
-        if valid_box?(val),
-          do: left ++ [{:name, "MediaBox"} | val] ++ right,
-          else: left ++ [{:name, "MediaBox"} | fallback] ++ right
+        if valid_box?(val) do
+          left ++ [{:name, "MediaBox"} | val] ++ right
+        else
+          left ++ [{:name, "MediaBox"} | fallback] ++ right
+        end
 
       :error ->
         put_key(tokens, "MediaBox", fallback)
@@ -425,15 +441,28 @@ defmodule NativeElixirPdfUtilities.Merge do
   end
 
   # A4
-  defp default_mediabox,
-    do: [:lbracket, {:int, 0}, {:int, 0}, {:int, 595}, {:int, 842}, :rbracket]
+  defp default_mediabox do
+    [:lbracket, {:int, 0}, {:int, 0}, {:int, 595}, {:int, 842}, :rbracket]
+  end
 
   # Validate a box array [a b c d] of numbers.
-  defp valid_box?([:lbracket, a, b, c, d, :rbracket])
-       when is_tuple(a) and is_tuple(b) and is_tuple(c) and is_tuple(d),
-       do: true
+  defp valid_box?(tokens) do
+    case tokens do
+      [:lbracket, a, b, c, d, :rbracket] ->
+        Enum.all?([a, b, c, d], &numeric_token?/1)
 
-  defp valid_box?(_), do: false
+      _ ->
+        false
+    end
+  end
+
+  defp numeric_token?(token) do
+    case token do
+      {:int, _value} -> true
+      {:real, _value} -> true
+      _ -> false
+    end
+  end
 
   # Drop empty [] arrays at the top level in a dict, unless they are a value for a key.
   defp drop_top_level_empty_arrays(tokens) do
@@ -442,25 +471,30 @@ defmodule NativeElixirPdfUtilities.Merge do
   end
 
   # Worker for empty-array dropping.
-  defp do_drop_empty_arrays([], _depth, _after_name?, acc), do: Enum.reverse(acc)
+  defp do_drop_empty_arrays(tokens, depth, after_name?, acc) do
+    case tokens do
+      [] ->
+        Enum.reverse(acc)
 
-  defp do_drop_empty_arrays([:dict_start | r], d, a?, acc),
-    do: do_drop_empty_arrays(r, d + 1, a?, [:dict_start | acc])
+      [:dict_start | rest] ->
+        do_drop_empty_arrays(rest, depth + 1, after_name?, [:dict_start | acc])
 
-  defp do_drop_empty_arrays([:dict_end | r], d, a?, acc),
-    do: do_drop_empty_arrays(r, max(d - 1, 0), a?, [:dict_end | acc])
+      [:dict_end | rest] ->
+        do_drop_empty_arrays(rest, max(depth - 1, 0), after_name?, [:dict_end | acc])
 
-  defp do_drop_empty_arrays([:lbracket, :rbracket | r], 1, false, acc),
-    do: do_drop_empty_arrays(r, 1, false, acc)
+      [:lbracket, :rbracket | rest] when depth == 0 and after_name? == false ->
+        do_drop_empty_arrays(rest, 0, false, acc)
 
-  defp do_drop_empty_arrays([:lbracket, :rbracket | r], d, a?, acc),
-    do: do_drop_empty_arrays(r, d, a?, [:lbracket, :rbracket | acc])
+      [:lbracket, :rbracket | rest] ->
+        do_drop_empty_arrays(rest, depth, after_name?, [:rbracket, :lbracket | acc])
 
-  defp do_drop_empty_arrays([{:name, n} | r], d, _a?, acc),
-    do: do_drop_empty_arrays(r, d, true, [{:name, n} | acc])
+      [{:name, name} | rest] ->
+        do_drop_empty_arrays(rest, depth, true, [{:name, name} | acc])
 
-  defp do_drop_empty_arrays([t | r], d, _a?, acc),
-    do: do_drop_empty_arrays(r, d, false, [t | acc])
+      [token | rest] ->
+        do_drop_empty_arrays(rest, depth, false, [token | acc])
+    end
+  end
 
   # Split a flat dict token list on a name key; returns left, value tokens, right or :error.
   defp split_on_name(tokens, name) do
@@ -475,110 +509,82 @@ defmodule NativeElixirPdfUtilities.Merge do
     end
   end
 
-  # Replace your whole render_tokens/do_render_tokens block with this:
-
   # Render tokens back into iodata while remapping indirect references using id_map.
   defp render_tokens(tokens, id_map) do
     do_render_tokens(tokens, id_map, [], nil) |> Enum.reverse()
   end
 
   # last_name: nil or the most recent name (e.g., "Parent")
-  defp do_render_tokens([], _id_map, acc, _last_name), do: acc
+  defp do_render_tokens(tokens, id_map, acc, last_name) do
+    case tokens do
+      [] ->
+        acc
 
-  defp do_render_tokens([{:name, n} | rest], id_map, acc, _last_name) do
-    do_render_tokens(rest, id_map, [["/", n] | add_sep(acc)], n)
-  end
+      [{:name, name} | rest] ->
+        do_render_tokens(rest, id_map, [["/", name] | add_sep(acc)], name)
 
-  # Indirect ref: don't remap when it's the value of /Parent
-  defp do_render_tokens([{:int, a}, {:int, b}, :R | rest], id_map, acc, last_name) do
-    new_a = if last_name == "Parent", do: a, else: Map.get(id_map, a, a)
-    io = [Integer.to_string(new_a), " ", Integer.to_string(b), " R"]
-    do_render_tokens(rest, id_map, [io | add_sep(acc)], nil)
-  end
+      [{:int, obj}, {:int, gen}, :R | rest] ->
+        new_obj = if last_name == "Parent", do: obj, else: Map.get(id_map, obj, obj)
+        io = [Integer.to_string(new_obj), " ", Integer.to_string(gen), " R"]
+        do_render_tokens(rest, id_map, [io | add_sep(acc)], nil)
 
-  # Tolerant path in case R came through as an operator token
-  defp do_render_tokens([{:int, a}, {:int, b}, {:op, "R"} | rest], id_map, acc, last_name) do
-    new_a = if last_name == "Parent", do: a, else: Map.get(id_map, a, a)
-    io = [Integer.to_string(new_a), " ", Integer.to_string(b), " R"]
-    do_render_tokens(rest, id_map, [io | add_sep(acc)], nil)
-  end
+      [:dict_start | rest] ->
+        do_render_tokens(rest, id_map, ["<<" | add_sep(acc)], nil)
 
-  defp do_render_tokens([:dict_start | rest], id_map, acc, _last_name),
-    do: do_render_tokens(rest, id_map, ["<<" | add_sep(acc)], nil)
+      [:dict_end | rest] ->
+        do_render_tokens(rest, id_map, [">>" | add_sep(acc)], nil)
 
-  defp do_render_tokens([:dict_end | rest], id_map, acc, _last_name),
-    do: do_render_tokens(rest, id_map, [">>" | add_sep(acc)], nil)
+      [:lbracket | rest] ->
+        do_render_tokens(rest, id_map, ["[" | add_sep(acc)], nil)
 
-  defp do_render_tokens([:lbracket | rest], id_map, acc, _last_name),
-    do: do_render_tokens(rest, id_map, ["[" | add_sep(acc)], nil)
+      [:rbracket | rest] ->
+        do_render_tokens(rest, id_map, ["]" | add_sep(acc)], nil)
 
-  defp do_render_tokens([:rbracket | rest], id_map, acc, _last_name),
-    do: do_render_tokens(rest, id_map, ["]" | add_sep(acc)], nil)
+      [:stream, {:stream_data, data}, :endstream | rest] ->
+        do_render_tokens(rest, id_map, [["\nstream\n", data, "\nendstream"] | acc], nil)
 
-  defp do_render_tokens(
-         [:stream, {:stream_data, data}, :endstream | rest],
-         id_map,
-         acc,
-         _last_name
-       ) do
-    io = ["\nstream\n", data, "\nendstream"]
-    do_render_tokens(rest, id_map, [io | acc], nil)
-  end
+      [{:string, string} | rest] ->
+        do_render_tokens(rest, id_map, [["(", escape_literal(string), ")"] | add_sep(acc)], nil)
 
-  defp do_render_tokens([{:string, s} | rest], id_map, acc, _last_name) do
-    do_render_tokens(rest, id_map, [["(", escape_literal(s), ")"] | add_sep(acc)], nil)
-  end
+      [{:hex_string, string} | rest] ->
+        do_render_tokens(rest, id_map, [["<", to_hex(string), ">"] | add_sep(acc)], nil)
 
-  defp do_render_tokens([{:hex_string, s} | rest], id_map, acc, _last_name) do
-    do_render_tokens(rest, id_map, [["<", to_hex(s), ">"] | add_sep(acc)], nil)
-  end
+      [{:int, int} | rest] ->
+        do_render_tokens(rest, id_map, [Integer.to_string(int) | add_sep(acc)], nil)
 
-  defp do_render_tokens([{:int, i} | rest], id_map, acc, _last_name) do
-    do_render_tokens(rest, id_map, [Integer.to_string(i) | add_sep(acc)], nil)
-  end
+      [{:real, real} | rest] ->
+        do_render_tokens(rest, id_map, [format_pdf_real(real) | add_sep(acc)], nil)
 
-  defp do_render_tokens([{:real, f} | rest], id_map, acc, _last_name) do
-    s = format_pdf_real(f)
-    do_render_tokens(rest, id_map, [s | add_sep(acc)], nil)
-  end
+      [:R | rest] ->
+        do_render_tokens(rest, id_map, ["R" | add_sep(acc)], nil)
 
-  defp do_render_tokens([:R | rest], id_map, acc, _last_name),
-    do: do_render_tokens(rest, id_map, ["R" | add_sep(acc)], nil)
+      [token | rest] when token in [:obj, :endobj, :xref, :trailer, :startxref] ->
+        do_render_tokens(rest, id_map, acc, nil)
 
-  defp do_render_tokens([:obj | rest], id_map, acc, _last_name),
-    do: do_render_tokens(rest, id_map, acc, nil)
+      [true | rest] ->
+        do_render_tokens(rest, id_map, ["true" | add_sep(acc)], nil)
 
-  defp do_render_tokens([:endobj | rest], id_map, acc, _last_name),
-    do: do_render_tokens(rest, id_map, acc, nil)
+      [false | rest] ->
+        do_render_tokens(rest, id_map, ["false" | add_sep(acc)], nil)
 
-  defp do_render_tokens([:xref | rest], id_map, acc, _last_name),
-    do: do_render_tokens(rest, id_map, acc, nil)
+      [:null | rest] ->
+        do_render_tokens(rest, id_map, ["null" | add_sep(acc)], nil)
 
-  defp do_render_tokens([:trailer | rest], id_map, acc, _last_name),
-    do: do_render_tokens(rest, id_map, acc, nil)
-
-  defp do_render_tokens([:startxref | rest], id_map, acc, _last_name),
-    do: do_render_tokens(rest, id_map, acc, nil)
-
-  defp do_render_tokens([true | rest], id_map, acc, _last_name),
-    do: do_render_tokens(rest, id_map, ["true" | add_sep(acc)], nil)
-
-  defp do_render_tokens([false | rest], id_map, acc, _last_name),
-    do: do_render_tokens(rest, id_map, ["false" | add_sep(acc)], nil)
-
-  defp do_render_tokens([:null | rest], id_map, acc, _last_name),
-    do: do_render_tokens(rest, id_map, ["null" | add_sep(acc)], nil)
-
-  defp do_render_tokens([{:op, word} | rest], id_map, acc, _last_name) do
-    do_render_tokens(rest, id_map, [word | add_sep(acc)], nil)
+      [{:op, word} | rest] ->
+        do_render_tokens(rest, id_map, [word | add_sep(acc)], nil)
+    end
   end
 
   # Add a separating space in the output unless at the beginning.
-  defp add_sep([]), do: []
-  defp add_sep(acc), do: [" " | acc]
+  defp add_sep(acc) do
+    case acc do
+      [] -> []
+      _ -> [" " | acc]
+    end
+  end
 
   # Ensure reals are rendered as plain decimal (no scientific notation)
-  defp format_pdf_real(f) when is_float(f) do
+  defp format_pdf_real(f) do
     # If the value is essentially an integer, emit as integer
     i = trunc(f)
 
@@ -591,23 +597,14 @@ defmodule NativeElixirPdfUtilities.Merge do
     end
   end
 
-  defp trim_trailing_zeros_and_dot(bin) when is_binary(bin) do
-    case String.split(bin, ".", parts: 2) do
-      [int] ->
-        int
-
-      [int, frac] ->
-        frac2 = String.replace_trailing(frac, "0", "")
-
-        cond do
-          frac2 == "" -> int
-          true -> int <> "." <> frac2
-        end
-    end
+  defp trim_trailing_zeros_and_dot(bin) do
+    bin
+    |> String.replace_trailing("0", "")
+    |> String.replace_trailing(".", "")
   end
 
   # Escape a literal string for inclusion in (...) with PDF-compliant escapes.
-  defp escape_literal(bin) when is_binary(bin) do
+  defp escape_literal(bin) do
     bin
     |> :binary.bin_to_list()
     |> Enum.map(fn
