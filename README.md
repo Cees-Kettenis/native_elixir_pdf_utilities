@@ -30,7 +30,7 @@ The goal is not to be a full PDF engine overnight. It is a steadily improving to
 ```elixir
 def deps do
   [
-    {:native_elixir_pdf_utilities, "~> 0.1.0"}
+    {:native_elixir_pdf_utilities, "~> 0.2.0"}
   ]
 end
 ```
