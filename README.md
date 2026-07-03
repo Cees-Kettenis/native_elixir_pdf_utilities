@@ -3,6 +3,7 @@
 A small, native Elixir toolkit for working with classic PDFs:
 
 - A fast, pure-Elixir tokenizer that turns a PDF byte stream into tokens.
+- A best-effort embedded text extractor for PDFs with ToUnicode CMaps.
 - A pragmatic PDF merger that renumbers objects, collects pages, and writes a
   fresh xref/trailer to produce a valid combined PDF.
 
@@ -26,6 +27,11 @@ and best-effort merging for common PDFs.
   - Operators surfaced as `{:op, word}` for content streams.
   - Stream handling: emits `:stream` then `{:stream_data, binary}` using `/Length` when present,
     or scans up to `endstream` as fallback. Provides span info via `next_with_span/1`.
+- Text:
+  - Extracts embedded PDF text without OCR or external binaries.
+  - Decodes Flate-compressed content streams.
+  - Applies ToUnicode CMaps for two-byte glyph encoded text.
+  - Reconstructs approximate layout from text matrix coordinates.
 - Merger:
 
   - Merges multiple PDF binaries: renumbers objects to avoid collisions.
@@ -94,6 +100,15 @@ bins = [
 File.write!("merged.pdf", merged)
 ```
 
+Extract embedded text:
+
+```elixir
+alias NativeElixirPdfUtilities.Text
+
+{:ok, text} = Text.extract_file("sample.pdf", layout: true)
+IO.puts(text)
+```
+
 ---
 
 ## Tokenizer API
@@ -126,6 +141,26 @@ Notes:
 - For streams, one EOL immediately after `stream` is not part of stream data.
 
 ---
+
+## Text Extraction
+
+Module: `NativeElixirPdfUtilities.Text`
+
+- `extract(pdf_bin, opts \\ []) :: {:ok, text} | {:error, reason}`
+- `extract_file(path, opts \\ []) :: {:ok, text} | {:error, reason}`
+
+Options:
+
+- `layout: true` approximates visible page layout with spaces, line breaks, and form-feed
+  page separators. This is the default.
+
+Behavior and constraints:
+
+- Does not perform OCR. Scanned image-only PDFs will not produce useful text.
+- Supports common classic PDFs with embedded text, Flate-compressed content streams,
+  text-showing operators (`Tj`, `TJ`, `'`, `"`), and ToUnicode CMaps.
+- Layout reconstruction is best-effort; exact table geometry depends on the PDF's text
+  positioning instructions.
 
 ## Merging PDFs
 
