@@ -156,6 +156,102 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert link_text.style.link_url == "mailto:team@example.com"
   end
 
+  test "compute applies table defaults and header cell behavior" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "table",
+          attributes: %{},
+          children: [
+            %{
+              type: :element,
+              tag: "caption",
+              attributes: %{},
+              children: [%{type: :text, text: "Summary"}]
+            },
+            %{
+              type: :element,
+              tag: "thead",
+              attributes: %{},
+              children: [
+                %{
+                  type: :element,
+                  tag: "tr",
+                  attributes: %{},
+                  children: [
+                    %{
+                      type: :element,
+                      tag: "th",
+                      attributes: %{},
+                      children: [%{type: :text, text: "Name"}]
+                    },
+                    %{
+                      type: :element,
+                      tag: "th",
+                      attributes: %{},
+                      children: [%{type: :text, text: "Count"}]
+                    }
+                  ]
+                }
+              ]
+            },
+            %{
+              type: :element,
+              tag: "tbody",
+              attributes: %{},
+              children: [
+                %{
+                  type: :element,
+                  tag: "tr",
+                  attributes: %{},
+                  children: [
+                    %{
+                      type: :element,
+                      tag: "td",
+                      attributes: %{"style" => "padding: 2pt; border: 2pt solid blue"},
+                      children: [%{type: :text, text: "Alpha"}]
+                    },
+                    %{
+                      type: :element,
+                      tag: "td",
+                      attributes: %{},
+                      children: [%{type: :text, text: "2"}]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [table] = styled_tree.children
+    [caption, head, body] = table.children
+    [header_row] = head.children
+    [name, count] = header_row.children
+    [body_row] = body.children
+    [alpha, amount] = body_row.children
+
+    assert table.style.display == :table
+    assert caption.style.display == :table_caption
+    assert caption.style.text_align == :center
+    assert head.style.display == :table_row_group
+    assert head.style.table_section == :head
+    assert body.style.table_section == :body
+    assert name.style.display == :table_cell
+    assert name.style.font_weight == 700
+    assert name.style.text_align == :center
+    assert count.style.background_color == {0.9333333333, 0.9333333333, 0.9333333333}
+    assert alpha.style.padding == %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0}
+    assert alpha.style.border_widths == %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0}
+    assert alpha.style.border_color == {0, 0, 1}
+    assert amount.style.text_align == :left
+  end
+
   test "compute rejects unsupported document trees" do
     assert Style.compute(%{tag: "p"}, []) == {:error, :invalid_document}
 

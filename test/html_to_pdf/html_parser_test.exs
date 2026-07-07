@@ -110,6 +110,116 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
               }}
   end
 
+  test "parse accepts strict table markup" do
+    assert HtmlParser.parse(
+             ~s(<table><caption>Totals</caption><thead><tr><th>Name</th><th>Count</th></tr></thead><tbody><tr><td>Alpha</td><td><a href="https://example.com">2</a></td></tr></tbody><tfoot><tr><td>Total</td><td>2</td></tr></tfoot></table>)
+           ) ==
+             {:ok,
+              %{
+                type: :document,
+                children: [
+                  %{
+                    type: :element,
+                    tag: "table",
+                    attributes: %{},
+                    children: [
+                      %{
+                        type: :element,
+                        tag: "caption",
+                        attributes: %{},
+                        children: [%{type: :text, text: "Totals"}]
+                      },
+                      %{
+                        type: :element,
+                        tag: "thead",
+                        attributes: %{},
+                        children: [
+                          %{
+                            type: :element,
+                            tag: "tr",
+                            attributes: %{},
+                            children: [
+                              %{
+                                type: :element,
+                                tag: "th",
+                                attributes: %{},
+                                children: [%{type: :text, text: "Name"}]
+                              },
+                              %{
+                                type: :element,
+                                tag: "th",
+                                attributes: %{},
+                                children: [%{type: :text, text: "Count"}]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      %{
+                        type: :element,
+                        tag: "tbody",
+                        attributes: %{},
+                        children: [
+                          %{
+                            type: :element,
+                            tag: "tr",
+                            attributes: %{},
+                            children: [
+                              %{
+                                type: :element,
+                                tag: "td",
+                                attributes: %{},
+                                children: [%{type: :text, text: "Alpha"}]
+                              },
+                              %{
+                                type: :element,
+                                tag: "td",
+                                attributes: %{},
+                                children: [
+                                  %{
+                                    type: :element,
+                                    tag: "a",
+                                    attributes: %{"href" => "https://example.com"},
+                                    children: [%{type: :text, text: "2"}]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      %{
+                        type: :element,
+                        tag: "tfoot",
+                        attributes: %{},
+                        children: [
+                          %{
+                            type: :element,
+                            tag: "tr",
+                            attributes: %{},
+                            children: [
+                              %{
+                                type: :element,
+                                tag: "td",
+                                attributes: %{},
+                                children: [%{type: :text, text: "Total"}]
+                              },
+                              %{
+                                type: :element,
+                                tag: "td",
+                                attributes: %{},
+                                children: [%{type: :text, text: "2"}]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }}
+  end
+
   test "parse rejects unsupported markup" do
     assert HtmlParser.parse("<div>Hello</div>") == {:error, :unsupported_html}
     assert HtmlParser.parse(~s(<p class="copy">Hello</p>)) == {:error, :unsupported_html}
@@ -118,6 +228,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
              {:error, :unsupported_html}
 
     assert HtmlParser.parse(~s(<ul><p>No item</p></ul>)) == {:error, :unsupported_html}
+    assert HtmlParser.parse(~s(<table><td>No row</td></table>)) == {:error, :unsupported_html}
+
+    assert HtmlParser.parse(
+             ~s(<table><caption>One</caption><caption>Two</caption><tr><td>Cell</td></tr></table>)
+           ) == {:error, :unsupported_html}
+
+    assert HtmlParser.parse(~s(<table><tbody></tbody></table>)) == {:error, :unsupported_html}
 
     assert HtmlParser.parse(
              ~s(<p><a href="https://example.com"><a href="https://nested.example">Nested</a></a></p>)

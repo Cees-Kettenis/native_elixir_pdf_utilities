@@ -2,9 +2,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @moduledoc """
   Layout engine for the native HTML-to-PDF renderer.
 
-  Milestone 5 lays out block text elements, inline text runs, basic block
-  box styling, lists, and link annotation bounds on one page. Later milestones add richer wrapping, table,
-  flexbox, and grid layout behavior behind this module.
+  Milestone 6 lays out block text elements, inline text runs, basic block
+  box styling, lists, link annotation bounds, and deterministic one-page
+  tables. Later milestones add richer wrapping, pagination, flexbox, and grid
+  layout behavior behind this module.
   """
 
   @type box :: map()
@@ -113,8 +114,235 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       when is_list(children) ->
         layout_list(style, children, x, y, width)
 
+      %{type: :element, style: %{display: :table} = style, children: children}
+      when is_list(children) ->
+        layout_table(style, children, x, y, width)
+
       _ ->
         {:error, :invalid_layout}
+    end
+  end
+
+  defp layout_table(style, children, x, y, width) do
+    margin = Map.get(style, :margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
+    padding = Map.get(style, :padding, edges(0.0))
+    border_widths = Map.get(style, :border_widths, edges(0.0))
+    box_x = x + margin.left
+    box_top = y - margin.top
+    box_width = width - margin.left - margin.right
+    content_x = box_x + border_widths.left + padding.left
+    content_top = box_top - border_widths.top - padding.top
+
+    content_width =
+      box_width - border_widths.left - padding.left - padding.right - border_widths.right
+
+    with {:ok, caption_boxes, rows_top} <-
+           layout_table_caption(children, content_x, content_top, content_width),
+         {:ok, rows} <- table_rows(children),
+         {:ok, row_boxes, content_bottom} <-
+           layout_table_rows(rows, content_x, rows_top, content_width) do
+      content_height = content_top - content_bottom
+
+      box_height =
+        border_widths.top + padding.top + content_height + padding.bottom + border_widths.bottom
+
+      table_box = background_box(style, box_x, box_top - box_height, box_width, box_height)
+      next_y = box_top - box_height - margin.bottom
+      {:ok, table_box ++ caption_boxes ++ row_boxes, next_y}
+    end
+  end
+
+  defp layout_table_caption(children, x, y, width) do
+    case Enum.find(children, &match?(%{style: %{display: :table_caption}}, &1)) do
+      nil ->
+        {:ok, [], y}
+
+      %{style: style, children: caption_children} when is_list(caption_children) ->
+        with {:ok, runs} <- inline_runs(caption_children) do
+          margin =
+            Map.get(style, :margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
+
+          padding = Map.get(style, :padding, edges(0.0))
+          border_widths = Map.get(style, :border_widths, edges(0.0))
+          box_x = x + margin.left
+          box_top = y - margin.top
+          box_width = width - margin.left - margin.right
+          line_height = Map.fetch!(style, :line_height)
+
+          box_height =
+            border_widths.top + padding.top + line_height + padding.bottom + border_widths.bottom
+
+          content_x = box_x + border_widths.left + padding.left
+
+          content_width =
+            box_width - border_widths.left - padding.left - padding.right - border_widths.right
+
+          baseline_y = box_top - border_widths.top - padding.top - Map.fetch!(style, :font_size)
+          start_x = aligned_text_x(runs, style, content_x, content_width)
+
+          background_box =
+            background_box(style, box_x, box_top - box_height, box_width, box_height)
+
+          {text_boxes, _next_x} =
+            Enum.reduce(runs, {[], start_x}, fn run, {acc, current_x} ->
+              box = text_box(run, current_x, baseline_y, content_width)
+              {acc ++ [box], current_x + text_width(run.text, run.style)}
+            end)
+
+          {:ok, background_box ++ text_boxes, box_top - box_height - margin.bottom}
+        end
+
+      _ ->
+        {:error, :invalid_layout}
+    end
+  end
+
+  defp table_rows(children) do
+    result =
+      Enum.reduce(children, {:ok, []}, fn child, acc ->
+        case acc do
+          {:ok, rows} ->
+            case child do
+              %{style: %{display: :table_caption}} ->
+                {:ok, rows}
+
+              %{style: %{display: :table_row}, children: cells} when is_list(cells) ->
+                {:ok, rows ++ [child]}
+
+              %{style: %{display: :table_row_group}, children: group_rows}
+              when is_list(group_rows) ->
+                case Enum.all?(group_rows, &match?(%{style: %{display: :table_row}}, &1)) do
+                  true -> {:ok, rows ++ group_rows}
+                  false -> {:error, :invalid_layout}
+                end
+
+              _ ->
+                {:error, :invalid_layout}
+            end
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end)
+
+    case result do
+      {:ok, rows} when rows != [] -> {:ok, rows}
+      _ -> {:error, :invalid_layout}
+    end
+  end
+
+  defp layout_table_rows(rows, x, y, width) do
+    column_count =
+      rows
+      |> Enum.map(fn %{children: cells} -> length(cells) end)
+      |> Enum.max(fn -> 0 end)
+
+    case column_count do
+      count when count > 0 ->
+        column_width = width / count
+
+        result =
+          Enum.reduce(rows, {:ok, [], y}, fn row, acc ->
+            case acc do
+              {:ok, boxes, current_y} ->
+                case layout_table_row(row, x, current_y, column_width) do
+                  {:ok, row_boxes, next_y} -> {:ok, boxes ++ row_boxes, next_y}
+                  {:error, reason} -> {:error, reason}
+                end
+
+              {:error, reason} ->
+                {:error, reason}
+            end
+          end)
+
+        case result do
+          {:ok, boxes, next_y} -> {:ok, boxes, next_y}
+          {:error, reason} -> {:error, reason}
+        end
+
+      _ ->
+        {:error, :invalid_layout}
+    end
+  end
+
+  defp layout_table_row(row, x, y, column_width) do
+    case row do
+      %{style: %{display: :table_row}, children: cells} when is_list(cells) ->
+        case Enum.all?(cells, &match?(%{style: %{display: :table_cell}}, &1)) do
+          true ->
+            row_height = cells |> Enum.map(&table_cell_height/1) |> Enum.max()
+
+            result =
+              Enum.reduce_while(cells, {:ok, [], 0}, fn cell, {:ok, acc, index} ->
+                cell_x = x + column_width * index
+
+                case layout_table_cell(cell, cell_x, y, column_width, row_height) do
+                  {:ok, cell_boxes} -> {:cont, {:ok, acc ++ cell_boxes, index + 1}}
+                  {:error, reason} -> {:halt, {:error, reason}}
+                end
+              end)
+
+            case result do
+              {:ok, boxes, _index} -> {:ok, boxes, y - row_height}
+              {:error, reason} -> {:error, reason}
+            end
+
+          false ->
+            {:error, :invalid_layout}
+        end
+
+      _ ->
+        {:error, :invalid_layout}
+    end
+  end
+
+  defp layout_table_cell(cell, x, y, width, height) do
+    case cell do
+      %{style: %{display: :table_cell} = style, children: children} when is_list(children) ->
+        with {:ok, runs} <- inline_runs(children) do
+          padding = Map.get(style, :padding, edges(0.0))
+          border_widths = Map.get(style, :border_widths, edges(0.0))
+          content_x = x + border_widths.left + padding.left
+
+          content_width =
+            width - border_widths.left - padding.left - padding.right - border_widths.right
+
+          baseline_y = y - border_widths.top - padding.top - Map.fetch!(style, :font_size)
+          start_x = aligned_text_x(runs, style, content_x, content_width)
+          cell_box = background_box(style, x, y - height, width, height)
+
+          {text_boxes, _next_x} =
+            Enum.reduce(runs, {[], start_x}, fn run, {acc, current_x} ->
+              box = text_box(run, current_x, baseline_y, content_width)
+              {acc ++ [box], current_x + text_width(run.text, run.style)}
+            end)
+
+          {:ok, cell_box ++ text_boxes}
+        end
+
+      _ ->
+        {:error, :invalid_layout}
+    end
+  end
+
+  defp table_cell_height(%{style: style}) do
+    padding = Map.get(style, :padding, edges(0.0))
+    border_widths = Map.get(style, :border_widths, edges(0.0))
+
+    border_widths.top + padding.top + Map.fetch!(style, :line_height) + padding.bottom +
+      border_widths.bottom
+  end
+
+  defp aligned_text_x(runs, style, x, width) do
+    text_width =
+      Enum.reduce(runs, 0.0, fn run, acc ->
+        acc + text_width(run.text, run.style)
+      end)
+
+    case Map.get(style, :text_align, :left) do
+      :center -> x + max((width - text_width) / 2, 0.0)
+      :right -> x + max(width - text_width, 0.0)
+      _ -> x
     end
   end
 

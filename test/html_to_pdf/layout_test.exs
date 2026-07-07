@@ -264,6 +264,122 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert second_text.y < plain.y
   end
 
+  test "layout creates deterministic table columns captions borders and header cells" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "table",
+          attributes: %{},
+          children: [
+            %{
+              type: :element,
+              tag: "caption",
+              attributes: %{},
+              children: [%{type: :text, text: "Summary"}]
+            },
+            %{
+              type: :element,
+              tag: "thead",
+              attributes: %{},
+              children: [
+                %{
+                  type: :element,
+                  tag: "tr",
+                  attributes: %{},
+                  children: [
+                    %{
+                      type: :element,
+                      tag: "th",
+                      attributes: %{},
+                      children: [%{type: :text, text: "Name"}]
+                    },
+                    %{
+                      type: :element,
+                      tag: "th",
+                      attributes: %{},
+                      children: [%{type: :text, text: "Count"}]
+                    }
+                  ]
+                }
+              ]
+            },
+            %{
+              type: :element,
+              tag: "tbody",
+              attributes: %{},
+              children: [
+                %{
+                  type: :element,
+                  tag: "tr",
+                  attributes: %{},
+                  children: [
+                    %{
+                      type: :element,
+                      tag: "td",
+                      attributes: %{},
+                      children: [%{type: :text, text: "Alpha"}]
+                    },
+                    %{
+                      type: :element,
+                      tag: "td",
+                      attributes: %{},
+                      children: [%{type: :text, text: "2"}]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, margin: 10)
+
+    [
+      caption,
+      first_header_cell,
+      first_header_text,
+      second_header_cell,
+      second_header_text,
+      first_data_cell,
+      first_data_text,
+      second_data_cell,
+      second_data_text
+    ] = layout_tree.boxes
+
+    assert caption.text == "Summary"
+    assert_in_delta caption.x, 272.44, 0.0001
+
+    assert first_header_cell.type == :rect
+    assert_in_delta first_header_cell.x, 10.0, 0.0001
+    assert_in_delta first_header_cell.y, 789.09, 0.0001
+    assert_in_delta first_header_cell.width, 287.64, 0.0001
+    assert_in_delta first_header_cell.height, 24.4, 0.0001
+    assert first_header_cell.fill_color == {0.9333333333, 0.9333333333, 0.9333333333}
+    assert first_header_cell.stroke_width == 1.0
+
+    assert first_header_text.text == "Name"
+    assert first_header_text.font == "Helvetica-Bold"
+    assert_in_delta first_header_text.x, 139.42, 0.0001
+    assert_in_delta first_header_text.y, 796.49, 0.0001
+
+    assert_in_delta second_header_cell.x, 297.64, 0.0001
+    assert second_header_text.text == "Count"
+    assert second_header_text.font == "Helvetica-Bold"
+    assert second_header_text.x > second_header_cell.x
+
+    assert_in_delta first_data_cell.y, 764.69, 0.0001
+    assert first_data_text.text == "Alpha"
+    assert_in_delta first_data_text.x, 15.0, 0.0001
+    assert_in_delta first_data_text.y, 772.09, 0.0001
+    assert second_data_cell.x > first_data_cell.x
+    assert second_data_text.text == "2"
+  end
+
   test "layout rejects invalid options and unsupported trees" do
     assert Layout.layout(%{tag: "p", style: %{}}, []) == {:error, :invalid_layout}
 

@@ -2,8 +2,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   @moduledoc """
   Style computation for the native HTML-to-PDF renderer.
 
-  This module applies defaults and inheritance for the milestone 5 text, box,
-  list, and link styling subset.
+  This module applies defaults and inheritance for the milestone 6 text, box,
+  list, link, and table styling subset.
   Later milestones add the broader CSS parser and full cascade behavior.
   """
 
@@ -81,6 +81,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         "ul" -> list_defaults(:disc)
         "ol" -> list_defaults(:decimal)
         "li" -> list_item_defaults()
+        "table" -> table_defaults()
+        "caption" -> table_caption_defaults()
+        "thead" -> table_row_group_defaults(:head)
+        "tbody" -> table_row_group_defaults(:body)
+        "tfoot" -> table_row_group_defaults(:foot)
+        "tr" -> table_row_defaults()
+        "th" -> table_cell_defaults(:header)
+        "td" -> table_cell_defaults(:data)
         "strong" -> %{display: :inline, font_weight: 700}
         "b" -> %{display: :inline, font_weight: 700}
         "em" -> %{display: :inline, font_style: :italic}
@@ -165,6 +173,73 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     }
   end
 
+  defp table_defaults do
+    block_defaults(12.0, 400, 12.0)
+    |> Map.merge(%{
+      display: :table,
+      margin: edges(0.0, 0.0, 12.0, 0.0),
+      padding: edges(0.0)
+    })
+  end
+
+  defp table_caption_defaults do
+    block_defaults(12.0, 700, 4.0)
+    |> Map.merge(%{
+      display: :table_caption,
+      text_align: :center
+    })
+  end
+
+  defp table_row_group_defaults(section) do
+    %{
+      background_color: nil,
+      border_color: {0, 0, 0},
+      border_radius: 0.0,
+      border_widths: edges(0.0),
+      display: :table_row_group,
+      padding: edges(0.0),
+      table_section: section
+    }
+  end
+
+  defp table_row_defaults do
+    %{
+      background_color: nil,
+      border_color: {0, 0, 0},
+      border_radius: 0.0,
+      border_widths: edges(0.0),
+      display: :table_row,
+      padding: edges(0.0)
+    }
+  end
+
+  defp table_cell_defaults(kind) do
+    base = %{
+      background_color: nil,
+      border_color: {0, 0, 0},
+      border_radius: 0.0,
+      border_widths: edges(1.0),
+      display: :table_cell,
+      font_size: 12.0,
+      font_weight: 400,
+      margin: edges(0.0),
+      padding: edges(4.0),
+      text_align: :left
+    }
+
+    case kind do
+      :header ->
+        Map.merge(base, %{
+          background_color: {0.9333333333, 0.9333333333, 0.9333333333},
+          font_weight: 700,
+          text_align: :center
+        })
+
+      :data ->
+        base
+    end
+  end
+
   defp link_defaults(attributes) do
     case Map.get(attributes, "href") do
       nil ->
@@ -242,6 +317,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               case parse_length(value) do
                 {:ok, length} -> {:cont, {:ok, Map.put(acc, :border_radius, length)}}
                 :error -> {:halt, {:error, :invalid_document}}
+              end
+
+            {:ok, property, value} when property == "text-align" ->
+              case value do
+                value when value in ["left", "center", "right"] ->
+                  {:cont, {:ok, Map.put(acc, :text_align, String.to_existing_atom(value))}}
+
+                _ ->
+                  {:halt, {:error, :invalid_document}}
               end
 
             {:ok, property, value} when property == "border" ->

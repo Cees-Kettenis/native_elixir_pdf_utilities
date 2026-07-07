@@ -56,6 +56,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              {:error, :invalid_document}
   end
 
+  test "render converts tables to PDF text boxes and cell borders" do
+    html =
+      ~s(<table><caption>Summary</caption><thead><tr><th>Name</th><th>Docs</th></tr></thead><tbody><tr><td>Alpha</td><td><a href="https://example.com">Link</a></td></tr></tbody></table>)
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert pdf =~ "(Summary) Tj"
+    assert pdf =~ "(Name) Tj"
+    assert pdf =~ "(Docs) Tj"
+    assert pdf =~ "(Alpha) Tj"
+    assert pdf =~ "(Link) Tj"
+    assert pdf =~ "/BaseFont /Helvetica-Bold"
+    assert pdf =~ "0.9333 0.9333 0.9333 rg"
+    assert pdf =~ "0 0 0 RG 1 w"
+    assert pdf =~ "/Subtype /Link"
+    assert pdf =~ "/URI (https://example.com)"
+  end
+
   test "render_file writes a PDF for a supported paragraph" do
     input_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.html")
     output_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.pdf")

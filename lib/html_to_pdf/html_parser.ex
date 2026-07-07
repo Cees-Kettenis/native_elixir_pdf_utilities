@@ -2,9 +2,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   @moduledoc """
   Strict HTML parser for the native HTML-to-PDF renderer.
 
-  Milestone 5 supports a strict subset of text-oriented HTML: paragraphs,
-  headings, inline emphasis/color containers, lists, and links. Unsupported or malformed
-  markup returns an error instead of guessing at browser behavior.
+  Milestone 6 supports a strict subset of document-oriented HTML: paragraphs,
+  headings, inline emphasis/color containers, lists, links, and tables.
+  Unsupported or malformed markup returns an error instead of guessing at
+  browser behavior.
   """
 
   @type text_node :: %{type: :text, text: String.t()}
@@ -16,9 +17,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         }
   @type dom_tree :: %{type: :document, children: [element_node()]}
 
-  @block_tags ~w(p h1 h2 h3 h4 h5 h6 ul ol)
+  @block_tags ~w(p h1 h2 h3 h4 h5 h6 ul ol table)
   @inline_tags ~w(strong b em i span a)
   @list_tags ~w(ul ol)
+  @table_structure_tags ~w(table thead tbody tfoot tr)
+  @table_content_tags ~w(caption th td)
 
   @doc """
   Parses an HTML binary into a renderer DOM tree.
@@ -74,7 +77,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
       String.starts_with?(token, "<") ->
         with {:ok, tag, attributes} <- parse_opening_tag(token),
              true <- allowed_child?(context, tag),
-             {:ok, element_children, rest} <- parse_children(remaining, tag, tag, []) do
+             {:ok, element_children, rest} <- parse_children(remaining, tag, tag, []),
+             true <- valid_element?(tag, element_children) do
           element = %{
             type: :element,
             tag: tag,
@@ -91,6 +95,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         parse_children(remaining, context, closing_tag, children)
 
       context in @list_tags and String.trim(token) == "" ->
+        parse_children(remaining, context, closing_tag, children)
+
+      context in @table_structure_tags and String.trim(token) == "" ->
         parse_children(remaining, context, closing_tag, children)
 
       context == :document ->
@@ -185,8 +192,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
       context in @list_tags ->
         tag == "li"
 
+      context == "table" ->
+        tag in ~w(caption thead tbody tfoot tr)
+
+      context in ~w(thead tbody tfoot) ->
+        tag == "tr"
+
+      context == "tr" ->
+        tag in ~w(th td)
+
       context == "a" ->
         tag in @inline_tags and tag != "a"
+
+      context in @table_content_tags ->
+        tag in @inline_tags
 
       context == "li" or context in @block_tags or context in @inline_tags ->
         tag in @inline_tags
@@ -197,7 +216,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   end
 
   defp supported_tag?(tag) do
-    tag in @block_tags or tag in @inline_tags or tag == "li"
+    tag in @block_tags or tag in @inline_tags or tag == "li" or
+      tag in ~w(caption thead tbody tfoot tr th td)
+  end
+
+  defp valid_element?(tag, children) do
+    case tag do
+      "table" ->
+        caption_count = Enum.count(children, &match?(%{tag: "caption"}, &1))
+        caption_first? = children == [] or hd(children).tag == "caption"
+        caption_count <= 1 and caption_first? and Enum.any?(children, &table_row_container?/1)
+
+      tag when tag in ~w(thead tbody tfoot) ->
+        children != [] and Enum.all?(children, &match?(%{tag: "tr"}, &1))
+
+      "tr" ->
+        children != [] and Enum.all?(children, &match?(%{tag: tag} when tag in ["th", "td"], &1))
+
+      _ ->
+        true
+    end
+  end
+
+  defp table_row_container?(child) do
+    case child do
+      %{tag: tag} when tag in ~w(thead tbody tfoot tr) -> true
+      _ -> false
+    end
   end
 
   defp decode_entities(text) do
