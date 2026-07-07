@@ -339,6 +339,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     File.rm(stylesheet_path)
   end
 
+  test "compute resolves font-family fallback against embedded fonts" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"style" => "font-family: Missing, 'Fixture Sans', Helvetica"},
+          children: [%{type: :text, text: "Hello"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} =
+             Style.compute(dom,
+               fonts: [%{family: "Fixture Sans", path: ttf_font_path!()}],
+               default_font: "Missing, Helvetica"
+             )
+
+    [paragraph] = styled_tree.children
+    [text] = paragraph.children
+
+    assert paragraph.style.font_family == "Fixture Sans"
+    assert paragraph.style.font_families == ["Missing", "Fixture Sans", "Helvetica"]
+    assert paragraph.style.font_face.type == :embedded
+    assert text.style.font_face.id == paragraph.style.font_face.id
+  end
+
   test "compute applies selector specificity before source order" do
     dom = %{
       type: :document,
@@ -781,6 +809,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
              },
              []
            ) == {:error, :invalid_document}
+  end
+
+  defp ttf_font_path! do
+    [
+      "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+      "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+      "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
+    ]
+    |> Enum.find(&File.exists?/1)
+    |> case do
+      nil -> flunk("No local TTF font fixture found")
+      path -> path
+    end
   end
 
   defp png_fixture(width, height) do

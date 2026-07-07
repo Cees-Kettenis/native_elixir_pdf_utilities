@@ -9,6 +9,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font
 
   @type text_node :: %{type: :text, text: String.t(), style: map()}
   @type styled_element :: %{
@@ -27,18 +28,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   def compute(dom, opts \\ []) do
     case {dom, opts} do
       {%{type: :document, children: children}, opts} when is_list(opts) and is_list(children) ->
-        base_style = %{
-          color: {0, 0, 0},
-          font_family: Keyword.get(opts, :default_font, "Helvetica"),
-          font_size: 12.0,
-          font_style: :normal,
-          font_weight: 400,
-          line_height: 14.4
-        }
+        with {:ok, font_registry} <- font_registry(opts),
+             {:ok, font_families, font_face} <-
+               resolve_font(
+                 Keyword.get(opts, :default_font, "Helvetica"),
+                 400,
+                 :normal,
+                 font_registry
+               ),
+             {:ok, rules} <- stylesheet_rules(children, opts) do
+          base_style = %{
+            _font_registry: font_registry,
+            color: {0, 0, 0},
+            font_face: font_face,
+            font_families: font_families,
+            font_family: font_face.family,
+            font_size: 12.0,
+            font_style: :normal,
+            font_weight: 400,
+            line_height: 14.4
+          }
 
-        with {:ok, rules} <- stylesheet_rules(children, opts),
-             {:ok, styled_children} <- style_children(children, base_style, rules, [], opts) do
-          {:ok, %{type: :document, children: styled_children}}
+          with {:ok, styled_children} <- style_children(children, base_style, rules, [], opts) do
+            {:ok, %{type: :document, children: styled_children}}
+          end
         end
 
       _ ->
@@ -172,7 +185,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp text_style(style) do
     Map.take(style, [
+      :_font_registry,
       :color,
+      :font_face,
+      :font_families,
       :font_family,
       :font_size,
       :font_style,
@@ -404,9 +420,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end)
   end
 
+  defp font_registry(opts) do
+    case Font.load_registry(opts) do
+      {:ok, registry} -> {:ok, registry}
+      :error -> {:error, :invalid_document}
+    end
+  end
+
+  defp resolve_font(family_value, weight, style, registry) do
+    case Font.resolve(family_value, weight, style, registry) do
+      {:ok, families, font_face} -> {:ok, families, font_face}
+      :error -> {:error, :invalid_document}
+    end
+  end
+
   defp apply_author_styles(style, node, ancestors, rules) do
     with {:ok, style} <- apply_stylesheet_rules(style, node, ancestors, rules),
-         {:ok, style} <- apply_inline_style(style, Map.get(node.attributes, "style", "")) do
+         {:ok, style} <- apply_inline_style(style, Map.get(node.attributes, "style", "")),
+         {:ok, style} <- put_font_face(style) do
       {:ok, put_line_height(style)}
     end
   end
@@ -1107,15 +1138,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp put_font_family(style, value) do
-    family =
-      value
-      |> String.trim()
-      |> String.trim("\"")
-      |> String.trim("'")
+    with {:ok, families, font_face} <-
+           resolve_font(
+             value,
+             Map.fetch!(style, :font_weight),
+             Map.fetch!(style, :font_style),
+             Map.fetch!(style, :_font_registry)
+           ) do
+      {:ok,
+       style
+       |> Map.put(:font_families, families)
+       |> Map.put(:font_family, font_face.family)
+       |> Map.put(:font_face, font_face)}
+    end
+  end
 
-    case family in ["Helvetica", "Courier", "Times-Roman"] do
-      true -> {:ok, Map.put(style, :font_family, family)}
-      false -> {:error, :invalid_document}
+  defp put_font_face(style) do
+    with {:ok, families, font_face} <-
+           resolve_font(
+             Map.fetch!(style, :font_families),
+             Map.fetch!(style, :font_weight),
+             Map.fetch!(style, :font_style),
+             Map.fetch!(style, :_font_registry)
+           ) do
+      {:ok,
+       style
+       |> Map.put(:font_families, families)
+       |> Map.put(:font_family, font_face.family)
+       |> Map.put(:font_face, font_face)}
     end
   end
 

@@ -154,6 +154,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert italic.x > bold.x
   end
 
+  test "layout measures embedded font text with TTF glyph widths" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"style" => "font-family: 'Fixture Sans'"},
+          children: [
+            %{type: :text, text: "iiii"},
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{},
+              children: [%{type: :text, text: "WWWW"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} =
+             Style.compute(dom, fonts: [%{family: "Fixture Sans", path: ttf_font_path!()}])
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, margin: 10)
+    [narrow, wide] = layout_tree.boxes
+
+    assert narrow.font =~ "Embedded-"
+    assert wide.font == narrow.font
+    assert narrow.annotation_width < wide.annotation_width
+    assert wide.x > narrow.x
+  end
+
   test "layout accounts for margin padding border and background dimensions" do
     styled_tree = %{
       type: :document,
@@ -693,6 +726,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert Layout.layout(%{type: :document, children: []}, page_size: :unknown) ==
              {:error, :invalid_page_size}
+  end
+
+  defp ttf_font_path! do
+    [
+      "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+      "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+      "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
+    ]
+    |> Enum.find(&File.exists?/1)
+    |> case do
+      nil -> flunk("No local TTF font fixture found")
+      path -> path
+    end
   end
 
   defp image_fixture(width, height) do

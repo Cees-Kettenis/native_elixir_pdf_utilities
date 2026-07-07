@@ -133,6 +133,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "/Im1 Do"
   end
 
+  test "render embeds configured TTF fonts for Unicode text" do
+    html = ~s(<p style="font-family: 'Fixture Sans', Helvetica">Café</p>)
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(html, fonts: [%{family: "Fixture Sans", path: ttf_font_path!()}])
+
+    assert pdf =~ "/Subtype /Type0"
+    assert pdf =~ "/Subtype /CIDFontType2"
+    assert pdf =~ "/FontFile2"
+    assert pdf =~ "/ToUnicode"
+    assert pdf =~ "<"
+    refute pdf =~ "(Café) Tj"
+  end
+
   test "render_file writes a PDF for a supported paragraph" do
     input_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.html")
     output_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.pdf")
@@ -159,6 +173,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       png_chunk("IHDR", <<width::32, height::32, 8, 2, 0, 0, 0>>) <>
       png_chunk("IDAT", :zlib.compress(rows)) <>
       png_chunk("IEND", "")
+  end
+
+  defp ttf_font_path! do
+    [
+      "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+      "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+      "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
+    ]
+    |> Enum.find(&File.exists?/1)
+    |> case do
+      nil -> flunk("No local TTF font fixture found")
+      path -> path
+    end
   end
 
   defp png_chunk(type, data) do

@@ -7,6 +7,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   rectangle fills, borders, URI link annotations, and PNG/JPEG image XObjects.
   """
 
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font
+
   @type page :: NativeElixirPdfUtilities.HtmlToPdf.Pagination.page()
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
 
@@ -51,7 +53,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       when is_binary(text) and is_number(x) and is_number(y) and is_number(font_size) and
              font_size > 0 and
              is_binary(font) and is_number(r) and is_number(g) and is_number(b) ->
-        font in built_in_fonts() and valid_link_box?(box)
+        valid_font_box?(box) and valid_link_box?(box)
 
       %{
         type: :rect,
@@ -122,10 +124,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
+  defp valid_font_box?(box) do
+    case Map.get(box, :font_face) do
+      %{
+        type: :embedded,
+        id: id,
+        data: data,
+        units_per_em: units_per_em,
+        widths: widths,
+        cmap: cmap
+      }
+      when is_binary(id) and is_binary(data) and is_integer(units_per_em) and units_per_em > 0 and
+             is_list(widths) and is_map(cmap) ->
+        box.font == Font.pdf_name(box.font_face)
+
+      %{type: :built_in, pdf_name: pdf_name} when is_binary(pdf_name) ->
+        box.font == pdf_name and pdf_name in built_in_fonts()
+
+      nil ->
+        box.font in built_in_fonts()
+
+      _ ->
+        false
+    end
+  end
+
   defp pages_to_pdf(pages) do
-    font_resources = font_resources(pages)
-    image_resources = image_resources(pages, 3 + map_size(font_resources))
-    first_page_object_id = 3 + map_size(font_resources) + map_size(image_resources)
+    {font_resources, next_object_id} = font_resources(pages, 3)
+    image_resources = image_resources(pages, next_object_id)
+    first_page_object_id = next_object_id + map_size(image_resources)
     pages_object_id = 2
 
     {page_entries, _next_object_id} =
@@ -282,7 +309,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   defp text_stream(box, font_resources) do
     {r, g, b} = box.color
-    font_resource = Map.fetch!(font_resources, box.font)
+    font_resource = Map.fetch!(font_resources, font_key(box))
+    text_operator = text_operator(box, font_resource)
 
     [
       "BT",
@@ -303,11 +331,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       " ",
       format_number(box.y),
       " Td",
-      " (",
-      escape_text(box.text),
-      ") Tj",
+      text_operator,
       " ET"
     ]
+  end
+
+  defp text_operator(box, font_resource) do
+    case Map.get(font_resource, :font_face) do
+      %{type: :embedded} = font ->
+        " <" <> Font.encode_embedded_text(box.text, font) <> "> Tj"
+
+      _ ->
+        " (" <> escape_text(box.text) <> ") Tj"
+    end
   end
 
   defp rect_stream(box) do
@@ -406,24 +442,161 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp font_resources(pages) do
+  defp font_resources(pages, first_object_id) do
     pages
     |> Enum.flat_map(& &1.boxes)
     |> Enum.filter(&(&1.type == :text))
-    |> Enum.map(& &1.font)
-    |> Enum.uniq()
-    |> Enum.with_index(3)
-    |> Map.new(fn {font, object_id} ->
-      {font, %{name: "F#{object_id - 2}", object_id: object_id}}
+    |> Enum.reduce(%{}, fn box, acc ->
+      key = font_key(box)
+
+      Map.update(acc, key, font_entry(key, box), fn entry ->
+        update_in(entry.texts, &(&1 ++ [box.text]))
+      end)
     end)
+    |> Map.values()
+    |> Enum.reduce({%{}, first_object_id, 1}, fn entry, {resources, object_id, index} ->
+      resource = font_resource(entry, object_id, index)
+      {Map.put(resources, entry.key, resource), object_id + resource.object_count, index + 1}
+    end)
+    |> case do
+      {resources, next_object_id, _index} -> {resources, next_object_id}
+    end
   end
 
   defp font_objects(font_resources) do
     font_resources
     |> Enum.sort_by(fn {_font, resource} -> resource.object_id end)
-    |> Enum.map(fn {font, resource} ->
-      {resource.object_id, "<< /Type /Font /Subtype /Type1 /BaseFont /#{font} >>"}
+    |> Enum.flat_map(fn {_font, resource} ->
+      case Map.get(resource, :font_face) do
+        %{type: :embedded} = font ->
+          embedded_font_objects(resource, font)
+
+        _ ->
+          [
+            {resource.object_id,
+             "<< /Type /Font /Subtype /Type1 /BaseFont /#{resource.pdf_name} >>"}
+          ]
+      end
     end)
+  end
+
+  defp font_entry(key, box) do
+    font_face =
+      case Map.get(box, :font_face) do
+        nil -> %{type: :built_in, family: box.font, pdf_name: box.font}
+        font_face -> font_face
+      end
+
+    %{key: key, font_face: font_face, texts: [box.text]}
+  end
+
+  defp font_resource(entry, object_id, index) do
+    case entry.font_face do
+      %{type: :embedded} = font ->
+        %{
+          name: "F#{index}",
+          object_id: object_id,
+          descendant_object_id: object_id + 1,
+          descriptor_object_id: object_id + 2,
+          font_file_object_id: object_id + 3,
+          to_unicode_object_id: object_id + 4,
+          object_count: 5,
+          font_face: font,
+          unicode_mappings: Font.unicode_mappings(entry.texts, font),
+          pdf_name: font.pdf_name
+        }
+
+      %{type: :built_in, pdf_name: pdf_name} ->
+        %{
+          name: "F#{index}",
+          object_id: object_id,
+          object_count: 1,
+          font_face: entry.font_face,
+          pdf_name: pdf_name
+        }
+    end
+  end
+
+  defp embedded_font_objects(resource, font) do
+    [
+      {resource.object_id, embedded_type0_font_object(resource, font)},
+      {resource.descendant_object_id, embedded_cid_font_object(resource, font)},
+      {resource.descriptor_object_id, embedded_descriptor_object(resource, font)},
+      {resource.font_file_object_id, stream_object(font.data)},
+      {resource.to_unicode_object_id, to_unicode_object(resource)}
+    ]
+  end
+
+  defp embedded_type0_font_object(resource, font) do
+    "<< /Type /Font /Subtype /Type0 /BaseFont /#{font.pdf_name} /Encoding /Identity-H /DescendantFonts [#{resource.descendant_object_id} 0 R] /ToUnicode #{resource.to_unicode_object_id} 0 R >>"
+  end
+
+  defp embedded_cid_font_object(resource, font) do
+    "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /#{font.pdf_name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor #{resource.descriptor_object_id} 0 R /W #{cid_widths(font)} /CIDToGIDMap /Identity >>"
+  end
+
+  defp embedded_descriptor_object(resource, font) do
+    {x_min, y_min, x_max, y_max} = scale_bbox(font.bbox, font.units_per_em)
+    ascent = scale_metric(font.ascent, font.units_per_em)
+    descent = scale_metric(font.descent, font.units_per_em)
+
+    "<< /Type /FontDescriptor /FontName /#{font.pdf_name} /Flags 4 /FontBBox [#{x_min} #{y_min} #{x_max} #{y_max}] /ItalicAngle 0 /Ascent #{ascent} /Descent #{descent} /CapHeight #{ascent} /StemV 80 /FontFile2 #{resource.font_file_object_id} 0 R >>"
+  end
+
+  defp to_unicode_object(resource) do
+    mappings =
+      resource.unicode_mappings
+      |> Enum.sort_by(fn {glyph_id, _unicode} -> glyph_id end)
+
+    stream =
+      [
+        "/CIDInit /ProcSet findresource begin",
+        "12 dict begin",
+        "begincmap",
+        "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def",
+        "/CMapName /Adobe-Identity-UCS def",
+        "/CMapType 2 def",
+        "1 begincodespacerange",
+        "<0000> <FFFF>",
+        "endcodespacerange",
+        "#{length(mappings)} beginbfchar",
+        Enum.map_join(mappings, "\n", fn {glyph_id, unicode} ->
+          "<#{hex16(glyph_id)}> <#{hex16(unicode)}>"
+        end),
+        "endbfchar",
+        "endcmap",
+        "CMapName currentdict /CMap defineresource pop",
+        "end",
+        "end"
+      ]
+      |> Enum.join("\n")
+
+    stream_object(stream)
+  end
+
+  defp stream_object(data) do
+    "<< /Length #{byte_size(data)} >>\nstream\n" <> data <> "\nendstream"
+  end
+
+  defp cid_widths(font) do
+    widths =
+      font.widths
+      |> Enum.with_index()
+      |> Enum.reject(fn {_width, glyph_id} -> glyph_id == 0 end)
+      |> Enum.map(fn {width, glyph_id} ->
+        "#{glyph_id} [#{scale_metric(width, font.units_per_em)}]"
+      end)
+      |> Enum.join(" ")
+
+    "[" <> widths <> "]"
+  end
+
+  defp font_key(box) do
+    case Map.get(box, :font_face) do
+      %{type: :embedded, id: id} -> {:embedded, id}
+      %{type: :built_in, pdf_name: pdf_name} -> {:built_in, pdf_name}
+      nil -> {:built_in, box.font}
+    end
   end
 
   defp image_resources(pages, first_object_id) do
@@ -501,6 +674,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       :device_rgb -> "/DeviceRGB"
       :device_cmyk -> "/DeviceCMYK"
     end
+  end
+
+  defp scale_bbox({x_min, y_min, x_max, y_max}, units_per_em) do
+    {
+      scale_metric(x_min, units_per_em),
+      scale_metric(y_min, units_per_em),
+      scale_metric(x_max, units_per_em),
+      scale_metric(y_max, units_per_em)
+    }
+  end
+
+  defp scale_metric(value, units_per_em) do
+    value
+    |> Kernel.*(1000)
+    |> Kernel./(units_per_em)
+    |> Float.round()
+    |> trunc()
+  end
+
+  defp hex16(value) do
+    value
+    |> Integer.to_string(16)
+    |> String.pad_leading(4, "0")
+    |> String.upcase()
   end
 
   defp built_in_fonts do

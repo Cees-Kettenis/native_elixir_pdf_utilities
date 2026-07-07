@@ -27,6 +27,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | {:base_url, String.t() | nil}
           | {:stylesheets, [String.t()]}
           | {:default_font, String.t()}
+          | {:fonts, [map() | keyword() | {String.t(), String.t()}]}
   @type error_reason ::
           :invalid_document
           | :invalid_html

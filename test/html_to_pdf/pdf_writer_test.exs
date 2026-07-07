@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
   use ExUnit.Case
 
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font
 
   test "render writes a valid PDF for a text page" do
     pages = [
@@ -208,6 +209,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "q 15 0 0 10 20 30 cm /Im2 Do Q"
   end
 
+  test "render embeds TTF fonts with Type0 Unicode text output" do
+    assert {:ok, registry} = Font.load_registry(fonts: [{"Fixture Sans", ttf_font_path!()}])
+    assert {:ok, _families, font} = Font.resolve("Fixture Sans", 400, :normal, registry)
+
+    pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes: [
+          %{
+            type: :text,
+            text: "Café",
+            x: 10.0,
+            y: 80.0,
+            font: Font.pdf_name(font),
+            font_face: font,
+            font_size: 12.0,
+            color: {0, 0, 0}
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, pdf} = PdfWriter.render(pages, [])
+    assert pdf =~ "/Subtype /Type0"
+    assert pdf =~ "/Subtype /CIDFontType2"
+    assert pdf =~ "/FontFile2"
+    assert pdf =~ "/ToUnicode"
+    assert pdf =~ "/Encoding /Identity-H"
+    assert pdf =~ "BT /F1 12 Tf 0 0 0 rg 10 80 Td <"
+    refute pdf =~ "(Café) Tj"
+  end
+
   test "render rejects unsupported link annotations" do
     pages = [
       %{
@@ -247,6 +280,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
       color_space: color_space,
       bits_per_component: 8
     }
+  end
+
+  defp ttf_font_path! do
+    [
+      "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+      "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+      "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
+    ]
+    |> Enum.find(&File.exists?/1)
+    |> case do
+      nil -> flunk("No local TTF font fixture found")
+      path -> path
+    end
   end
 
   defp jpeg_fixture(width, height) do

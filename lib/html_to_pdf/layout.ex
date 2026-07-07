@@ -8,6 +8,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   pagination metadata.
   """
 
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font
+
   @type box :: map()
   @type layout_tree :: %{
           type: :layout,
@@ -1791,6 +1793,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @spec text_box(%{text: String.t(), style: map()}, number(), number(), number()) :: box()
   defp text_box(run, x, y, width) do
     style = run.style
+    font_face = text_font_face(style)
 
     box = %{
       type: :text,
@@ -1799,12 +1802,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       y: y,
       width: width,
       annotation_width: text_width(run.text, style),
-      font:
-        pdf_font(
-          Map.fetch!(style, :font_family),
-          Map.fetch!(style, :font_weight),
-          Map.fetch!(style, :font_style)
-        ),
+      font: Font.pdf_name(font_face),
+      font_face: font_face,
       font_size: Map.fetch!(style, :font_size),
       line_height: Map.fetch!(style, :line_height),
       color: Map.fetch!(style, :color)
@@ -1856,15 +1855,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   @spec text_width(String.t(), map()) :: number()
   defp text_width(text, style) do
-    text
-    |> String.length()
-    |> Kernel.*(Map.fetch!(style, :font_size))
-    |> Kernel.*(0.6)
+    Font.text_width(text, text_font_face(style), Map.fetch!(style, :font_size))
+  end
+
+  defp text_font_face(style) do
+    case Map.get(style, :font_face) do
+      nil ->
+        {:ok, _families, font_face} =
+          Font.resolve(
+            Map.fetch!(style, :font_family),
+            Map.fetch!(style, :font_weight),
+            Map.fetch!(style, :font_style),
+            %{embedded: []}
+          )
+
+        font_face
+
+      font_face ->
+        font_face
+    end
   end
 
   defp text_style(style) do
     Map.take(style, [
       :color,
+      :font_face,
+      :font_families,
       :font_family,
       :font_size,
       :font_style,
@@ -1877,17 +1893,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     case marker_type do
       :decimal -> "#{index}."
       :disc -> "*"
-    end
-  end
-
-  @spec pdf_font(String.t(), number(), atom()) :: String.t()
-  defp pdf_font(font_family, font_weight, font_style) do
-    case {font_family, font_weight >= 700, font_style} do
-      {"Helvetica", true, :italic} -> "Helvetica-BoldOblique"
-      {"Helvetica", true, _} -> "Helvetica-Bold"
-      {"Helvetica", false, :italic} -> "Helvetica-Oblique"
-      {"Helvetica", false, _} -> "Helvetica"
-      {font_family, _, _} -> font_family
     end
   end
 
