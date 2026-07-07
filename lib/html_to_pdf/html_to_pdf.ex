@@ -10,8 +10,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
     * paginate layout boxes
     * write PDF bytes
 
-  Milestone 1 exposes the API shape and delegates to scaffolded implementation
-  modules. Rendering behavior is added by later milestones.
+  Milestone 2 supports the smallest useful vertical slice:
+  `render("<p>Hello</p>")` returns a valid one-page PDF binary.
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
@@ -27,7 +27,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | {:base_url, String.t() | nil}
           | {:stylesheets, [String.t()]}
           | {:default_font, String.t()}
-  @type error_reason :: :invalid_path | :not_implemented | File.posix()
+  @type error_reason ::
+          :invalid_document
+          | :invalid_html
+          | :invalid_layout
+          | :invalid_margin
+          | :invalid_page_size
+          | :invalid_path
+          | :invalid_pdf_input
+          | :not_implemented
+          | :unsupported_html
+          | File.posix()
 
   @doc """
   Renders an HTML document to a PDF binary.

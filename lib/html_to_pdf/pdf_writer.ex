@@ -2,8 +2,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   @moduledoc """
   PDF writer stage for the native HTML-to-PDF renderer.
 
-  This module will become the low-level PDF byte writer used by the HTML
-  renderer. The milestone 1 scaffold only defines the rendering boundary.
+  This module is the low-level PDF byte writer used by the HTML renderer.
+  Milestone 2 supports one or more pages containing built-in-font text boxes.
   """
 
   @type page :: NativeElixirPdfUtilities.HtmlToPdf.Pagination.page()
@@ -12,20 +12,192 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   @doc """
   Renders paginated drawing instructions to a PDF binary.
   """
-  @spec render([page()], [render_option()]) :: {:ok, binary()} | {:error, :not_implemented}
+  @spec render([page()], [render_option()]) :: {:ok, binary()} | {:error, :invalid_pdf_input}
   def render(pages, opts \\ []) do
     case {pages, opts} do
       {pages, opts} when is_list(pages) and is_list(opts) ->
-        case Application.get_env(:native_elixir_pdf_utilities, __MODULE__) do
-          implementation when is_function(implementation, 2) ->
-            case implementation.(pages, opts) do
-              {:ok, pdf_binary} when is_binary(pdf_binary) -> {:ok, pdf_binary}
-              _ -> {:error, :not_implemented}
-            end
+        build_pdf(pages)
 
-          _ ->
-            {:error, :not_implemented}
-        end
+      _ ->
+        {:error, :invalid_pdf_input}
+    end
+  end
+
+  defp build_pdf(pages) do
+    case pages != [] and Enum.all?(pages, &valid_page?/1) do
+      true ->
+        {:ok, pages_to_pdf(pages)}
+
+      false ->
+        {:error, :invalid_pdf_input}
+    end
+  end
+
+  defp valid_page?(page) do
+    case page do
+      %{size: {width, height}, boxes: boxes}
+      when is_number(width) and is_number(height) and width > 0 and height > 0 and is_list(boxes) ->
+        Enum.all?(boxes, &valid_box?/1)
+
+      _ ->
+        false
+    end
+  end
+
+  defp valid_box?(box) do
+    case box do
+      %{type: :text, text: text, x: x, y: y, font_size: font_size, font: font, color: {r, g, b}}
+      when is_binary(text) and is_number(x) and is_number(y) and is_number(font_size) and
+             font_size > 0 and
+             is_binary(font) and is_number(r) and is_number(g) and is_number(b) ->
+        font in ["Helvetica", "Times-Roman", "Courier"]
+
+      _ ->
+        false
+    end
+  end
+
+  defp pages_to_pdf(pages) do
+    page_count = length(pages)
+    font_object_id = 3
+    first_page_object_id = 4
+    page_object_ids = Enum.map(0..(page_count - 1)//1, &(&1 * 2 + first_page_object_id))
+    pages_object_id = 2
+
+    page_objects =
+      pages
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {page, index} ->
+        page_object_id = Enum.at(page_object_ids, index)
+        content_object_id = page_object_id + 1
+
+        [
+          {page_object_id, page_object(page, pages_object_id, font_object_id, content_object_id)},
+          {content_object_id, content_object(page)}
+        ]
+      end)
+
+    objects =
+      [
+        {1, "<< /Type /Catalog /Pages #{pages_object_id} 0 R >>"},
+        {pages_object_id, pages_object(page_object_ids)},
+        {font_object_id, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"}
+      ] ++ page_objects
+
+    objects_to_pdf(objects)
+  end
+
+  defp pages_object(page_object_ids) do
+    kids = Enum.map_join(page_object_ids, " ", &"#{&1} 0 R")
+
+    "<< /Type /Pages /Kids [#{kids}] /Count #{length(page_object_ids)} >>"
+  end
+
+  defp page_object(page, pages_object_id, font_object_id, content_object_id) do
+    {width, height} = page.size
+
+    """
+    << /Type /Page /Parent #{pages_object_id} 0 R /MediaBox [0 0 #{format_number(width)} #{format_number(height)}] /Resources << /Font << /F1 #{font_object_id} 0 R >> >> /Contents #{content_object_id} 0 R >>
+    """
+    |> String.trim()
+  end
+
+  defp content_object(page) do
+    content = content_stream(page.boxes)
+    length = byte_size(content)
+
+    """
+    << /Length #{length} >>
+    stream
+    #{content}
+    endstream
+    """
+    |> String.trim()
+  end
+
+  defp content_stream(boxes) do
+    Enum.map_join(boxes, "\n", fn box ->
+      {r, g, b} = box.color
+
+      [
+        "BT",
+        " /F1 ",
+        format_number(box.font_size),
+        " Tf",
+        " ",
+        format_number(r),
+        " ",
+        format_number(g),
+        " ",
+        format_number(b),
+        " rg",
+        " ",
+        format_number(box.x),
+        " ",
+        format_number(box.y),
+        " Td",
+        " (",
+        escape_text(box.text),
+        ") Tj",
+        " ET"
+      ]
+    end)
+  end
+
+  defp objects_to_pdf(objects) do
+    header = "%PDF-1.4\n%\xFF\xFF\xFF\xFF\n"
+
+    {body, offsets, _position} =
+      Enum.reduce(objects, {"", [], byte_size(header)}, fn {id, content},
+                                                           {acc, offsets, position} ->
+        object = "#{id} 0 obj\n#{content}\nendobj\n"
+
+        {acc <> object, offsets ++ [position], position + byte_size(object)}
+      end)
+
+    xref_position = byte_size(header <> body)
+    size = length(objects) + 1
+
+    xref_entries =
+      offsets
+      |> Enum.map(&"#{pad_offset(&1)} 00000 n \n")
+      |> Enum.join()
+
+    header <>
+      body <>
+      "xref\n0 #{size}\n0000000000 65535 f \n" <>
+      xref_entries <>
+      "trailer\n<< /Size #{size} /Root 1 0 R >>\nstartxref\n#{xref_position}\n%%EOF\n"
+  end
+
+  defp escape_text(text) do
+    text
+    |> String.replace("\\", "\\\\")
+    |> String.replace("(", "\\(")
+    |> String.replace(")", "\\)")
+    |> String.replace("\r\n", "\\n")
+    |> String.replace("\n", "\\n")
+    |> String.replace("\r", "\\n")
+  end
+
+  defp pad_offset(offset) do
+    offset
+    |> Integer.to_string()
+    |> String.pad_leading(10, "0")
+  end
+
+  defp format_number(number) do
+    rounded = Float.round(number * 1.0, 4)
+
+    case rounded == trunc(rounded) do
+      true ->
+        Integer.to_string(trunc(rounded))
+
+      false ->
+        rounded
+        |> :erlang.float_to_binary(decimals: 4)
+        |> String.trim_trailing("0")
+        |> String.trim_trailing(".")
     end
   end
 end

@@ -2,30 +2,52 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   @moduledoc """
   Style computation for the native HTML-to-PDF renderer.
 
-  This module will apply element defaults, parsed CSS, inline declarations,
-  inheritance, specificity, and source order as the feature is implemented.
+  This module applies the paragraph defaults used by the milestone 2 vertical
+  slice. Later milestones add CSS parsing, inheritance, and cascade behavior.
   """
 
-  @type styled_tree :: term()
+  @type text_node :: %{type: :text, text: String.t()}
+  @type styled_element :: %{
+          type: :element,
+          tag: String.t(),
+          style: map(),
+          children: [text_node()]
+        }
+  @type styled_tree :: %{type: :document, children: [styled_element()]}
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
 
   @doc """
   Computes styles for a parsed HTML document tree.
   """
-  @spec compute(term(), [render_option()]) :: {:ok, styled_tree()} | {:error, :not_implemented}
+  @spec compute(term(), [render_option()]) :: {:ok, styled_tree()} | {:error, :invalid_document}
   def compute(dom, opts \\ []) do
     case {dom, opts} do
-      {dom, opts} when is_list(opts) ->
-        case Application.get_env(:native_elixir_pdf_utilities, __MODULE__) do
-          implementation when is_function(implementation, 2) ->
-            case implementation.(dom, opts) do
-              {:ok, styled_tree} -> {:ok, styled_tree}
-              _ -> {:error, :not_implemented}
-            end
+      {%{type: :document, children: [%{type: :element, tag: "p", children: children}]}, opts}
+      when is_list(opts) and is_list(children) ->
+        font = Keyword.get(opts, :default_font, "Helvetica")
 
-          _ ->
-            {:error, :not_implemented}
-        end
+        {:ok,
+         %{
+           type: :document,
+           children: [
+             %{
+               type: :element,
+               tag: "p",
+               style: %{
+                 display: :block,
+                 color: {0, 0, 0},
+                 font_family: font,
+                 font_size: 12.0,
+                 line_height: 14.4,
+                 margin_after: 12.0
+               },
+               children: children
+             }
+           ]
+         }}
+
+      _ ->
+        {:error, :invalid_document}
     end
   end
 end
