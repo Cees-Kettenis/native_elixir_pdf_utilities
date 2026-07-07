@@ -530,6 +530,63 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert second.style.flex_basis == 10.0
   end
 
+  test "compute applies grid container and item declarations" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{
+            "style" =>
+              "display: grid; grid-template-columns: 30pt 1fr; grid-template-rows: 20pt auto; grid-auto-columns: 12pt; grid-auto-rows: 18pt; gap: 4pt 6pt; justify-items: center; align-items: end; justify-content: space-between; align-content: center"
+          },
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "grid-column: 2 / span 2; grid-row: 1 / 3"},
+              children: [%{type: :text, text: "A"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "grid-area: 2 / 1 / 3 / 2; align-self: start"},
+              children: [%{type: :text, text: "B"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [container] = styled_tree.children
+    [first, second] = container.children
+
+    assert container.style.display == :grid
+    assert container.style.grid_template_columns == [{:length, 30.0}, {:fr, 1.0}]
+    assert container.style.grid_template_rows == [{:length, 20.0}, :auto]
+    assert container.style.grid_auto_columns == {:length, 12.0}
+    assert container.style.grid_auto_rows == {:length, 18.0}
+    assert container.style.row_gap == 4.0
+    assert container.style.column_gap == 6.0
+    assert container.style.justify_items == :center
+    assert container.style.align_items == :flex_end
+    assert container.style.justify_content == :space_between
+    assert container.style.align_content == :center
+
+    assert first.style.grid_column_start == 2
+    assert first.style.grid_column_end == {:span, 2}
+    assert first.style.grid_row_start == 1
+    assert first.style.grid_row_end == 3
+
+    assert second.style.grid_row_start == 2
+    assert second.style.grid_column_start == 1
+    assert second.style.grid_row_end == 3
+    assert second.style.grid_column_end == 2
+    assert second.style.align_self == :flex_start
+  end
+
   test "compute rejects unsupported document trees" do
     assert Style.compute(%{tag: "p"}, []) == {:error, :invalid_document}
 
@@ -614,6 +671,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                    type: :element,
                    tag: "div",
                    attributes: %{"style" => "display: flex; justify-content: baseline"},
+                   children: [%{type: :text, text: "Bad"}]
+                 }
+               ]
+             },
+             []
+           ) == {:error, :invalid_document}
+
+    assert Style.compute(
+             %{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{
+                     "style" => "display: grid; grid-template-columns: repeat(2, 1fr)"
+                   },
                    children: [%{type: :text, text: "Bad"}]
                  }
                ]

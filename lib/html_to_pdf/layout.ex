@@ -2,9 +2,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @moduledoc """
   Layout engine for the native HTML-to-PDF renderer.
 
-  Milestone 9 lays out block text elements, inline text runs, basic block box
+  Milestone 10 lays out block text elements, inline text runs, basic block box
   styling, lists, link annotation bounds, deterministic one-page tables, and a
-  documented single-line-text flexbox subset with pagination metadata.
+  documented single-line-text flexbox and grid subset with pagination metadata.
   """
 
   @type box :: map()
@@ -133,9 +133,574 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       when display in [:flex, :inline_flex] and is_list(children) ->
         layout_flex(style, children, x, y, width)
 
+      %{type: :element, style: %{display: display} = style, children: children}
+      when display in [:grid, :inline_grid] and is_list(children) ->
+        layout_grid(style, children, x, y, width)
+
       _ ->
         {:error, :invalid_layout}
     end
+  end
+
+  defp layout_grid(style, children, x, y, width) do
+    margin = Map.get(style, :margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
+    padding = Map.get(style, :padding, edges(0.0))
+    border_widths = Map.get(style, :border_widths, edges(0.0))
+    available_box_width = width - margin.left - margin.right
+    content_width = Map.get(style, :width, available_box_width - horizontal_box_size(style))
+
+    box_width =
+      content_width + border_widths.left + padding.left + padding.right + border_widths.right
+
+    box_x = x + margin.left
+    box_top = y - margin.top
+    content_x = box_x + border_widths.left + padding.left
+    content_top = box_top - border_widths.top - padding.top
+
+    with {:ok, items} <- grid_items(children) do
+      placed_items = place_grid_items(items, style)
+      column_count = grid_axis_count(placed_items, style, :column)
+      row_count = grid_axis_count(placed_items, style, :row)
+      column_tracks = grid_tracks(style, :column, column_count)
+      row_tracks = grid_tracks(style, :row, row_count)
+      column_intrinsics = grid_column_intrinsics(placed_items, column_count)
+
+      column_sizes =
+        resolve_grid_columns(
+          column_tracks,
+          column_intrinsics,
+          content_width,
+          grid_column_gap(style)
+        )
+
+      row_intrinsics = grid_row_intrinsics(placed_items, row_count)
+
+      row_sizes =
+        resolve_grid_rows(
+          row_tracks,
+          row_intrinsics,
+          grid_row_gap(style),
+          Map.get(style, :height)
+        )
+
+      content_height = Map.get(style, :height, grid_tracks_size(row_sizes, grid_row_gap(style)))
+
+      flow_metadata =
+        style
+        |> break_metadata()
+        |> Map.put(:flow_id, {:grid, box_x, box_top})
+
+      box_height =
+        border_widths.top + padding.top + content_height + padding.bottom +
+          border_widths.bottom
+
+      background_box =
+        style
+        |> background_box(box_x, box_top - box_height, box_width, box_height)
+        |> tag_boxes(flow_metadata)
+
+      item_boxes =
+        grid_item_boxes(
+          placed_items,
+          style,
+          content_x,
+          content_top,
+          content_width,
+          content_height,
+          column_sizes,
+          row_sizes,
+          flow_metadata.flow_id
+        )
+
+      next_y = box_top - box_height - margin.bottom
+      {:ok, background_box ++ item_boxes, next_y}
+    end
+  end
+
+  defp grid_items(children) do
+    children
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {child, index}, {:ok, acc} ->
+      case grid_item(child, index) do
+        {:ok, nil} -> {:cont, {:ok, acc}}
+        {:ok, item} -> {:cont, {:ok, acc ++ [item]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp grid_item(child, index) do
+    case child do
+      %{type: :text, text: text} when is_binary(text) ->
+        case String.trim(text) do
+          "" ->
+            {:ok, nil}
+
+          _ ->
+            style = child.style |> text_style() |> Map.put(:display, :inline)
+            {:ok, build_grid_item(style, [%{text: text, style: child.style}], index)}
+        end
+
+      %{type: :element, style: %{display: :none}} ->
+        {:ok, nil}
+
+      %{type: :element, style: style, children: children} when is_list(children) ->
+        case inline_runs(children) do
+          {:ok, runs} -> {:ok, build_grid_item(style, runs, index)}
+          {:error, reason} -> {:error, reason}
+        end
+
+      _ ->
+        {:error, :invalid_layout}
+    end
+  end
+
+  defp build_grid_item(style, runs, index) do
+    margin = Map.get(style, :margin, edges(0.0))
+    text_width = Enum.reduce(runs, 0.0, fn run, acc -> acc + text_width(run.text, run.style) end)
+    line_height = Map.get(style, :line_height, 14.4)
+
+    content_width = Map.get(style, :width, text_width)
+    content_height = Map.get(style, :height, line_height)
+
+    %{
+      index: index,
+      style: style,
+      runs: runs,
+      intrinsic_width: content_width + horizontal_box_size(style),
+      intrinsic_height: content_height + vertical_box_size(style),
+      margin: margin,
+      row_start: Map.get(style, :grid_row_start, :auto),
+      row_end: Map.get(style, :grid_row_end, :auto),
+      column_start: Map.get(style, :grid_column_start, :auto),
+      column_end: Map.get(style, :grid_column_end, :auto)
+    }
+  end
+
+  defp place_grid_items(items, style) do
+    column_count = style |> Map.get(:grid_template_columns, []) |> length() |> max(1)
+
+    {_occupied, placed} =
+      Enum.reduce(items, {MapSet.new(), []}, fn item, {occupied, acc} ->
+        placement = grid_item_placement(item, column_count, occupied)
+
+        occupied =
+          placement.row_start..(placement.row_end - 1)
+          |> Enum.reduce(occupied, fn row, row_acc ->
+            placement.column_start..(placement.column_end - 1)
+            |> Enum.reduce(row_acc, &MapSet.put(&2, {row, &1}))
+          end)
+
+        {occupied, acc ++ [Map.merge(item, placement)]}
+      end)
+
+    placed
+  end
+
+  defp grid_item_placement(item, column_count, occupied) do
+    column_start = grid_line_start(item.column_start)
+    row_start = grid_line_start(item.row_start)
+    column_span = grid_axis_span(item.column_start, item.column_end)
+    row_span = grid_axis_span(item.row_start, item.row_end)
+
+    case {row_start, column_start} do
+      {row_start, column_start} when is_integer(row_start) and is_integer(column_start) ->
+        grid_placement(row_start, column_start, row_span, column_span)
+
+      {row_start, :auto} when is_integer(row_start) ->
+        column_start = first_free_grid_column(occupied, row_start, column_count, column_span)
+        grid_placement(row_start, column_start, row_span, column_span)
+
+      {:auto, column_start} when is_integer(column_start) ->
+        row_start = first_free_grid_row(occupied, column_start, row_span, column_span)
+        grid_placement(row_start, column_start, row_span, column_span)
+
+      _ ->
+        {row_start, column_start} =
+          first_free_grid_cell(occupied, column_count, row_span, column_span)
+
+        grid_placement(row_start, column_start, row_span, column_span)
+    end
+  end
+
+  defp grid_placement(row_start, column_start, row_span, column_span) do
+    %{
+      row_start: row_start,
+      row_end: row_start + row_span,
+      column_start: column_start,
+      column_end: column_start + column_span
+    }
+  end
+
+  defp grid_line_start(line) do
+    case line do
+      line when is_integer(line) -> line
+      _ -> :auto
+    end
+  end
+
+  defp grid_axis_span(start_line, end_line) do
+    case {start_line, end_line} do
+      {_start_line, {:span, span}} ->
+        span
+
+      {start_line, end_line} when is_integer(start_line) and is_integer(end_line) ->
+        max(end_line - start_line, 1)
+
+      {{:span, span}, _end_line} ->
+        span
+
+      _ ->
+        1
+    end
+  end
+
+  defp first_free_grid_column(occupied, row_start, column_count, column_span) do
+    1..column_count
+    |> Enum.find(&grid_cells_free?(occupied, row_start, &1, 1, column_span))
+    |> case do
+      nil -> column_count + 1
+      column -> column
+    end
+  end
+
+  defp first_free_grid_row(occupied, column_start, row_span, column_span) do
+    1
+    |> Stream.iterate(&(&1 + 1))
+    |> Enum.find(&grid_cells_free?(occupied, &1, column_start, row_span, column_span))
+  end
+
+  defp first_free_grid_cell(occupied, column_count, row_span, column_span) do
+    1
+    |> Stream.iterate(&(&1 + 1))
+    |> Enum.reduce_while(nil, fn row, _acc ->
+      column =
+        1..column_count
+        |> Enum.find(&grid_cells_free?(occupied, row, &1, row_span, column_span))
+
+      case column do
+        nil -> {:cont, nil}
+        column -> {:halt, {row, column}}
+      end
+    end)
+  end
+
+  defp grid_cells_free?(occupied, row_start, column_start, row_span, column_span) do
+    row_start..(row_start + row_span - 1)
+    |> Enum.all?(fn row ->
+      column_start..(column_start + column_span - 1)
+      |> Enum.all?(&(!MapSet.member?(occupied, {row, &1})))
+    end)
+  end
+
+  defp grid_axis_count(items, style, axis) do
+    explicit_count =
+      case axis do
+        :column -> style |> Map.get(:grid_template_columns, []) |> length()
+        :row -> style |> Map.get(:grid_template_rows, []) |> length()
+      end
+
+    item_count =
+      items
+      |> Enum.map(fn item ->
+        case axis do
+          :column -> item.column_end - 1
+          :row -> item.row_end - 1
+        end
+      end)
+      |> Enum.max(fn -> 0 end)
+
+    max(max(explicit_count, item_count), 1)
+  end
+
+  defp grid_tracks(style, axis, count) do
+    {template, auto_track} =
+      case axis do
+        :column ->
+          {Map.get(style, :grid_template_columns, []), Map.get(style, :grid_auto_columns, :auto)}
+
+        :row ->
+          {Map.get(style, :grid_template_rows, []), Map.get(style, :grid_auto_rows, :auto)}
+      end
+
+    missing = max(count - length(template), 0)
+    template ++ List.duplicate(auto_track, missing)
+  end
+
+  defp grid_column_intrinsics(items, column_count) do
+    1..column_count
+    |> Enum.map(fn column ->
+      items
+      |> Enum.filter(&(&1.column_start == column and &1.column_end == column + 1))
+      |> Enum.map(&(&1.intrinsic_width + &1.margin.left + &1.margin.right))
+      |> Enum.max(fn -> 0.0 end)
+    end)
+  end
+
+  defp resolve_grid_columns(tracks, column_intrinsics, available_size, gap) do
+    gap_total = gap * max(length(tracks) - 1, 0)
+
+    fixed_size =
+      tracks
+      |> Enum.with_index()
+      |> Enum.reduce(0.0, fn {track, index}, acc ->
+        case track do
+          {:length, length} -> acc + length
+          :auto -> acc + Enum.at(column_intrinsics, index, 0.0)
+          {:fr, _fraction} -> acc
+        end
+      end)
+
+    total_fraction =
+      Enum.reduce(tracks, 0.0, fn track, acc ->
+        case track do
+          {:fr, fraction} -> acc + fraction
+          _ -> acc
+        end
+      end)
+
+    remaining = max(available_size - fixed_size - gap_total, 0.0)
+
+    tracks
+    |> Enum.with_index()
+    |> Enum.map(fn {track, index} ->
+      case track do
+        {:length, length} -> length
+        {:fr, fraction} when total_fraction > 0 -> remaining * fraction / total_fraction
+        {:fr, _fraction} -> 0.0
+        :auto -> Enum.at(column_intrinsics, index, 0.0)
+      end
+    end)
+  end
+
+  defp grid_row_intrinsics(items, row_count) do
+    1..row_count
+    |> Enum.map(fn row ->
+      items
+      |> Enum.filter(&(&1.row_start == row and &1.row_end == row + 1))
+      |> Enum.map(&(&1.intrinsic_height + &1.margin.top + &1.margin.bottom))
+      |> Enum.max(fn -> 0.0 end)
+    end)
+  end
+
+  defp resolve_grid_rows(tracks, row_intrinsics, gap, available_height) do
+    fraction_total =
+      Enum.reduce(tracks, 0.0, fn track, acc ->
+        case track do
+          {:fr, fraction} -> acc + fraction
+          _ -> acc
+        end
+      end)
+
+    fixed_size =
+      tracks
+      |> Enum.with_index()
+      |> Enum.reduce(0.0, fn {track, index}, acc ->
+        intrinsic = Enum.at(row_intrinsics, index, 0.0)
+
+        case track do
+          {:length, length} -> acc + length
+          :auto -> acc + intrinsic
+          {:fr, _fraction} -> acc
+        end
+      end)
+
+    gap_total = gap * max(length(tracks) - 1, 0)
+    remaining = max((available_height || fixed_size) - fixed_size - gap_total, 0.0)
+
+    tracks
+    |> Enum.with_index()
+    |> Enum.map(fn {track, index} ->
+      intrinsic = Enum.at(row_intrinsics, index, 0.0)
+
+      case track do
+        {:length, length} ->
+          length
+
+        :auto ->
+          intrinsic
+
+        {:fr, fraction} when fraction_total > 0 ->
+          max(intrinsic, remaining * fraction / fraction_total)
+
+        {:fr, _fraction} ->
+          intrinsic
+      end
+    end)
+  end
+
+  defp grid_tracks_size(sizes, gap) do
+    Enum.sum(sizes) + gap * max(length(sizes) - 1, 0)
+  end
+
+  defp grid_item_boxes(
+         items,
+         style,
+         x,
+         y,
+         content_width,
+         content_height,
+         column_sizes,
+         row_sizes,
+         container_flow_id
+       ) do
+    column_gap = grid_column_gap(style)
+    row_gap = grid_row_gap(style)
+    grid_width = grid_tracks_size(column_sizes, column_gap)
+    grid_height = grid_tracks_size(row_sizes, row_gap)
+
+    {content_x, content_gap} =
+      grid_content_distribution(
+        style,
+        :justify_content,
+        content_width,
+        grid_width,
+        column_gap,
+        length(column_sizes)
+      )
+
+    {content_y, row_gap} =
+      grid_content_distribution(
+        style,
+        :align_content,
+        content_height,
+        grid_height,
+        row_gap,
+        length(row_sizes)
+      )
+
+    items
+    |> Enum.flat_map(fn item ->
+      item =
+        position_grid_item(
+          item,
+          style,
+          x + content_x,
+          y - content_y,
+          column_sizes,
+          row_sizes,
+          content_gap,
+          row_gap
+        )
+
+      item
+      |> flex_item_boxes(:row)
+      |> tag_boxes(%{flow_id: {:grid_item, container_flow_id, item.index}})
+    end)
+  end
+
+  defp position_grid_item(
+         item,
+         container_style,
+         x,
+         y,
+         column_sizes,
+         row_sizes,
+         column_gap,
+         row_gap
+       ) do
+    area_x = x + grid_track_offset(column_sizes, column_gap, item.column_start)
+    area_y = y - grid_track_offset(row_sizes, row_gap, item.row_start)
+    area_width = grid_track_span(column_sizes, column_gap, item.column_start, item.column_end)
+    area_height = grid_track_span(row_sizes, row_gap, item.row_start, item.row_end)
+    justify = Map.get(container_style, :justify_items, :stretch)
+    align = grid_item_align(item, container_style)
+    box_width = grid_aligned_box_size(item, :width, justify, area_width)
+    box_height = grid_aligned_box_size(item, :height, align, area_height)
+    x_offset = grid_axis_position(justify, box_width, area_width)
+    y_offset = grid_axis_position(align, box_height, area_height)
+
+    Map.merge(item, %{
+      x: area_x + x_offset + item.margin.left,
+      y: area_y - y_offset - item.margin.top,
+      box_width: box_width,
+      box_height: box_height
+    })
+  end
+
+  defp grid_content_distribution(style, property, container_size, grid_size, gap, count) do
+    free_space = max(container_size - grid_size, 0.0)
+
+    case Map.get(style, property, :flex_start) do
+      :flex_end ->
+        {free_space, gap}
+
+      :center ->
+        {free_space / 2, gap}
+
+      :space_between when count > 1 ->
+        {0.0, gap + free_space / (count - 1)}
+
+      :space_around when count > 0 ->
+        distributed_gap = gap + free_space / count
+        {distributed_gap / 2, distributed_gap}
+
+      :space_evenly when count > 0 ->
+        distributed_gap = gap + free_space / (count + 1)
+        {distributed_gap, distributed_gap}
+
+      _ ->
+        {0.0, gap}
+    end
+  end
+
+  defp grid_track_offset(sizes, gap, start_line) do
+    sizes
+    |> Enum.take(start_line - 1)
+    |> Enum.sum()
+    |> Kernel.+(gap * max(start_line - 1, 0))
+  end
+
+  defp grid_track_span(sizes, gap, start_line, end_line) do
+    span_count = max(end_line - start_line, 1)
+
+    sizes
+    |> Enum.drop(start_line - 1)
+    |> Enum.take(span_count)
+    |> Enum.sum()
+    |> Kernel.+(gap * max(span_count - 1, 0))
+  end
+
+  defp grid_aligned_box_size(item, axis, align, area_size) do
+    margin =
+      case axis do
+        :width -> item.margin.left + item.margin.right
+        :height -> item.margin.top + item.margin.bottom
+      end
+
+    intrinsic =
+      case axis do
+        :width -> item.intrinsic_width
+        :height -> item.intrinsic_height
+      end
+
+    case align do
+      :stretch -> max(area_size - margin, 0.0)
+      _ -> min(intrinsic, max(area_size - margin, 0.0))
+    end
+  end
+
+  defp grid_axis_position(align, box_size, area_size) do
+    case align do
+      :flex_end -> max(area_size - box_size, 0.0)
+      :center -> max((area_size - box_size) / 2, 0.0)
+      _ -> 0.0
+    end
+  end
+
+  defp grid_item_align(item, container_style) do
+    case Map.get(item.style, :align_self, :auto) do
+      :auto -> Map.get(container_style, :align_items, :stretch)
+      align -> align
+    end
+  end
+
+  defp grid_column_gap(style) do
+    Map.get(style, :column_gap, 0.0)
+  end
+
+  defp grid_row_gap(style) do
+    Map.get(style, :row_gap, 0.0)
   end
 
   defp layout_flex(style, children, x, y, width) do
@@ -673,6 +1238,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     padding = Map.get(style, :padding, edges(0.0))
     border_widths = Map.get(style, :border_widths, edges(0.0))
     padding.left + padding.right + border_widths.left + border_widths.right
+  end
+
+  defp vertical_box_size(style) do
+    padding = Map.get(style, :padding, edges(0.0))
+    border_widths = Map.get(style, :border_widths, edges(0.0))
+    padding.top + padding.bottom + border_widths.top + border_widths.bottom
   end
 
   defp layout_table(style, children, x, y, width) do

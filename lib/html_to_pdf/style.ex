@@ -3,7 +3,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   Style computation for the native HTML-to-PDF renderer.
 
   This module applies defaults, inheritance, and the CSS cascade for the text,
-  box, list, link, table, page-break, and milestone 9 flexbox styling subset.
+  box, list, link, table, page-break, flexbox, and milestone 10 grid styling subset.
   Unsupported properties or invalid values fail the render instead of being
   ignored.
   """
@@ -600,6 +600,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       "flex" ->
         put_flex(style, value)
 
+      property when property in ["grid-template-columns", "grid-template-rows"] ->
+        with {:ok, tracks} <- parse_grid_tracks(value) do
+          {:ok, Map.put(style, grid_template_property(property), tracks)}
+        end
+
+      property when property in ["grid-auto-columns", "grid-auto-rows"] ->
+        with {:ok, track} <- parse_grid_track(value) do
+          {:ok, Map.put(style, grid_auto_property(property), track)}
+        end
+
+      property
+      when property in [
+             "grid-column",
+             "grid-row",
+             "grid-column-start",
+             "grid-column-end",
+             "grid-row-start",
+             "grid-row-end",
+             "grid-area"
+           ] ->
+        put_grid_placement(style, property, value)
+
+      "justify-items" ->
+        put_grid_alignment(style, :justify_items, value)
+
+      "align-content" ->
+        put_justify_content(style, value, :align_content)
+
       _ ->
         {:error, :invalid_document}
     end
@@ -622,6 +650,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       "inline-flex" ->
         {:ok, style |> flex_container_defaults() |> Map.put(:display, :inline_flex)}
 
+      "grid" ->
+        {:ok, style |> grid_container_defaults() |> Map.put(:display, :grid)}
+
+      "inline-grid" ->
+        {:ok, style |> grid_container_defaults() |> Map.put(:display, :inline_grid)}
+
       _ ->
         {:error, :invalid_document}
     end
@@ -635,6 +669,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     |> Map.put_new(:column_gap, 0.0)
     |> Map.put_new(:justify_content, :flex_start)
     |> Map.put_new(:align_items, :stretch)
+  end
+
+  defp grid_container_defaults(style) do
+    style
+    |> Map.put_new(:grid_template_columns, [])
+    |> Map.put_new(:grid_template_rows, [])
+    |> Map.put_new(:grid_auto_columns, :auto)
+    |> Map.put_new(:grid_auto_rows, :auto)
+    |> Map.put_new(:row_gap, 0.0)
+    |> Map.put_new(:column_gap, 0.0)
+    |> Map.put_new(:justify_items, :stretch)
+    |> Map.put_new(:align_items, :stretch)
+    |> Map.put_new(:justify_content, :flex_start)
+    |> Map.put_new(:align_content, :flex_start)
   end
 
   defp put_flex_direction(style, value) do
@@ -656,34 +704,69 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp put_justify_content(style, value) do
+    put_justify_content(style, value, :justify_content)
+  end
+
+  defp put_justify_content(style, value, property) do
     case value |> String.trim() |> String.downcase() do
-      "flex-start" -> {:ok, Map.put(style, :justify_content, :flex_start)}
-      "flex-end" -> {:ok, Map.put(style, :justify_content, :flex_end)}
-      "center" -> {:ok, Map.put(style, :justify_content, :center)}
-      "space-between" -> {:ok, Map.put(style, :justify_content, :space_between)}
-      "space-around" -> {:ok, Map.put(style, :justify_content, :space_around)}
-      "space-evenly" -> {:ok, Map.put(style, :justify_content, :space_evenly)}
+      value when value in ["start", "flex-start"] -> {:ok, Map.put(style, property, :flex_start)}
+      value when value in ["end", "flex-end"] -> {:ok, Map.put(style, property, :flex_end)}
+      "center" -> {:ok, Map.put(style, property, :center)}
+      "stretch" -> {:ok, Map.put(style, property, :stretch)}
+      "space-between" -> {:ok, Map.put(style, property, :space_between)}
+      "space-around" -> {:ok, Map.put(style, property, :space_around)}
+      "space-evenly" -> {:ok, Map.put(style, property, :space_evenly)}
       _ -> {:error, :invalid_document}
     end
   end
 
   defp put_align_items(style, value) do
     case value |> String.trim() |> String.downcase() do
-      "stretch" -> {:ok, Map.put(style, :align_items, :stretch)}
-      "flex-start" -> {:ok, Map.put(style, :align_items, :flex_start)}
-      "flex-end" -> {:ok, Map.put(style, :align_items, :flex_end)}
-      "center" -> {:ok, Map.put(style, :align_items, :center)}
-      _ -> {:error, :invalid_document}
+      "stretch" ->
+        {:ok, Map.put(style, :align_items, :stretch)}
+
+      value when value in ["start", "flex-start"] ->
+        {:ok, Map.put(style, :align_items, :flex_start)}
+
+      value when value in ["end", "flex-end"] ->
+        {:ok, Map.put(style, :align_items, :flex_end)}
+
+      "center" ->
+        {:ok, Map.put(style, :align_items, :center)}
+
+      _ ->
+        {:error, :invalid_document}
     end
   end
 
   defp put_align_self(style, value) do
     case value |> String.trim() |> String.downcase() do
-      "auto" -> {:ok, Map.put(style, :align_self, :auto)}
-      "stretch" -> {:ok, Map.put(style, :align_self, :stretch)}
-      "flex-start" -> {:ok, Map.put(style, :align_self, :flex_start)}
-      "flex-end" -> {:ok, Map.put(style, :align_self, :flex_end)}
-      "center" -> {:ok, Map.put(style, :align_self, :center)}
+      "auto" ->
+        {:ok, Map.put(style, :align_self, :auto)}
+
+      "stretch" ->
+        {:ok, Map.put(style, :align_self, :stretch)}
+
+      value when value in ["start", "flex-start"] ->
+        {:ok, Map.put(style, :align_self, :flex_start)}
+
+      value when value in ["end", "flex-end"] ->
+        {:ok, Map.put(style, :align_self, :flex_end)}
+
+      "center" ->
+        {:ok, Map.put(style, :align_self, :center)}
+
+      _ ->
+        {:error, :invalid_document}
+    end
+  end
+
+  defp put_grid_alignment(style, property, value) do
+    case value |> String.trim() |> String.downcase() do
+      "stretch" -> {:ok, Map.put(style, property, :stretch)}
+      value when value in ["start", "flex-start"] -> {:ok, Map.put(style, property, :flex_start)}
+      value when value in ["end", "flex-end"] -> {:ok, Map.put(style, property, :flex_end)}
+      "center" -> {:ok, Map.put(style, property, :center)}
       _ -> {:error, :invalid_document}
     end
   end
@@ -790,6 +873,164 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     case value do
       "auto" -> {:ok, :auto}
       value -> parse_length(value)
+    end
+  end
+
+  defp parse_grid_tracks(value) do
+    tracks =
+      value
+      |> String.trim()
+      |> String.downcase()
+      |> String.split(~r/\s+/u, trim: true)
+      |> Enum.map(&parse_grid_track/1)
+
+    case tracks do
+      [] ->
+        :error
+
+      tracks ->
+        case Enum.all?(tracks, &match?({:ok, _track}, &1)) do
+          true -> {:ok, Enum.map(tracks, fn {:ok, track} -> track end)}
+          false -> :error
+        end
+    end
+  end
+
+  defp parse_grid_track(value) do
+    normalized = value |> String.trim() |> String.downcase()
+
+    cond do
+      normalized == "auto" ->
+        {:ok, :auto}
+
+      Regex.match?(~r/^\d+(?:\.\d+)?fr$/u, normalized) ->
+        {number, "fr"} = Float.parse(normalized)
+        {:ok, {:fr, number}}
+
+      true ->
+        with {:ok, length} <- parse_length(normalized), do: {:ok, {:length, length}}
+    end
+  end
+
+  defp put_grid_placement(style, property, value) do
+    case property do
+      property when property in ["grid-column-start", "grid-column-end"] ->
+        with {:ok, placement} <- parse_grid_line(value) do
+          {:ok, Map.put(style, grid_line_property(property), placement)}
+        end
+
+      property when property in ["grid-row-start", "grid-row-end"] ->
+        with {:ok, placement} <- parse_grid_line(value) do
+          {:ok, Map.put(style, grid_line_property(property), placement)}
+        end
+
+      "grid-column" ->
+        with {:ok, start_line, end_line} <- parse_grid_axis(value) do
+          {:ok,
+           style
+           |> Map.put(:grid_column_start, start_line)
+           |> Map.put(:grid_column_end, end_line)}
+        end
+
+      "grid-row" ->
+        with {:ok, start_line, end_line} <- parse_grid_axis(value) do
+          {:ok,
+           style
+           |> Map.put(:grid_row_start, start_line)
+           |> Map.put(:grid_row_end, end_line)}
+        end
+
+      "grid-area" ->
+        with {:ok, row_start, column_start, row_end, column_end} <- parse_grid_area(value) do
+          {:ok,
+           style
+           |> Map.put(:grid_row_start, row_start)
+           |> Map.put(:grid_column_start, column_start)
+           |> Map.put(:grid_row_end, row_end)
+           |> Map.put(:grid_column_end, column_end)}
+        end
+    end
+  end
+
+  defp parse_grid_axis(value) do
+    case value |> String.trim() |> String.downcase() |> String.split("/", trim: true) do
+      [start_line] ->
+        with {:ok, start_line} <- parse_grid_line(start_line), do: {:ok, start_line, :auto}
+
+      [start_line, end_line] ->
+        with {:ok, start_line} <- parse_grid_line(start_line),
+             {:ok, end_line} <- parse_grid_line(end_line) do
+          {:ok, start_line, end_line}
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp parse_grid_area(value) do
+    case value |> String.trim() |> String.downcase() |> String.split("/", trim: true) do
+      [row_start, column_start, row_end, column_end] ->
+        with {:ok, row_start} <- parse_grid_line(row_start),
+             {:ok, column_start} <- parse_grid_line(column_start),
+             {:ok, row_end} <- parse_grid_line(row_end),
+             {:ok, column_end} <- parse_grid_line(column_end) do
+          {:ok, row_start, column_start, row_end, column_end}
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp parse_grid_line(value) do
+    normalized = value |> String.trim() |> String.downcase()
+
+    case normalized do
+      "auto" ->
+        {:ok, :auto}
+
+      _ ->
+        parse_grid_number_or_span(normalized)
+    end
+  end
+
+  defp parse_grid_number_or_span(value) do
+    cond do
+      Regex.match?(~r/^span\s+[1-9]\d*$/u, value) ->
+        ["span", count] = String.split(value, ~r/\s+/u, trim: true)
+        {count, ""} = Integer.parse(count)
+        {:ok, {:span, count}}
+
+      Regex.match?(~r/^[1-9]\d*$/u, value) ->
+        {line, ""} = Integer.parse(value)
+        {:ok, line}
+
+      true ->
+        :error
+    end
+  end
+
+  defp grid_template_property(property) do
+    case property do
+      "grid-template-columns" -> :grid_template_columns
+      "grid-template-rows" -> :grid_template_rows
+    end
+  end
+
+  defp grid_auto_property(property) do
+    case property do
+      "grid-auto-columns" -> :grid_auto_columns
+      "grid-auto-rows" -> :grid_auto_rows
+    end
+  end
+
+  defp grid_line_property(property) do
+    case property do
+      "grid-column-start" -> :grid_column_start
+      "grid-column-end" -> :grid_column_end
+      "grid-row-start" -> :grid_row_start
+      "grid-row-end" -> :grid_row_end
     end
   end
 

@@ -541,6 +541,105 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert second.y < first.y
   end
 
+  test "layout positions grid items with explicit placement gaps and alignment" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{
+            "style" =>
+              "display: grid; width: 120pt; height: 60pt; grid-template-columns: 30pt 30pt; grid-template-rows: 20pt 20pt; gap: 10pt; justify-content: center; align-content: center; justify-items: center; align-items: end"
+          },
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "grid-column: 2 / 3; grid-row: 1 / 2"},
+              children: [%{type: :text, text: "A"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "grid-area: 2 / 1 / 3 / 2; align-self: start"},
+              children: [%{type: :text, text: "B"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 120}, margin: 10)
+
+    [first, second] = layout_tree.boxes
+
+    assert first.text == "A"
+    assert second.text == "B"
+    assert_in_delta first.x, 86.4, 0.0001
+    assert_in_delta first.y, 87.4, 0.0001
+    assert_in_delta second.x, 46.4, 0.0001
+    assert_in_delta second.y, 63.0, 0.0001
+  end
+
+  test "layout auto places grid items and adds implicit tracks deterministically" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{
+            "style" =>
+              "display: grid; width: 80pt; grid-template-columns: 20pt 20pt; grid-auto-columns: 15pt; grid-auto-rows: 15pt; gap: 5pt"
+          },
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{},
+              children: [%{type: :text, text: "A"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{},
+              children: [%{type: :text, text: "B"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "grid-column: 3 / 4"},
+              children: [%{type: :text, text: "C"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{},
+              children: [%{type: :text, text: "D"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 120}, margin: 10)
+
+    [a, b, c, d] = layout_tree.boxes
+
+    assert a.text == "A"
+    assert b.text == "B"
+    assert c.text == "C"
+    assert d.text == "D"
+    assert_in_delta a.x, 10.0, 0.0001
+    assert_in_delta b.x, 35.0, 0.0001
+    assert_in_delta c.x, 60.0, 0.0001
+    assert_in_delta d.x, 10.0, 0.0001
+    assert d.y < a.y
+  end
+
   test "layout rejects invalid options and unsupported trees" do
     assert Layout.layout(%{tag: "p", style: %{}}, []) == {:error, :invalid_layout}
 
