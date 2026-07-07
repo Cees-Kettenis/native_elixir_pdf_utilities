@@ -2,10 +2,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   @moduledoc """
   Style computation for the native HTML-to-PDF renderer.
 
-  This module applies defaults, inheritance, and the CSS cascade for the text,
-  box, list, link, table, page-break, flexbox, grid, and milestone 11 image styling subset.
-  Unsupported properties or invalid values fail the render instead of being
-  ignored.
+  This module applies defaults, inheritance, font resolution, and the CSS
+  cascade for the supported text, box, list, link, table, page-break, flexbox,
+  grid, image, and embedded-font styling subset. Unsupported properties or
+  invalid values fail the render instead of being ignored.
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser

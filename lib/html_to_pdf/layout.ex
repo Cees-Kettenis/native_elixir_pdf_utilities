@@ -2,10 +2,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @moduledoc """
   Layout engine for the native HTML-to-PDF renderer.
 
-  Milestone 11 lays out block text elements, inline text runs, basic block box
-  styling, lists, link annotation bounds, deterministic one-page tables, and a
-  documented single-line-text flexbox and grid subset with image boxes and
-  pagination metadata.
+  Lays out block text elements, inline text runs, box styling, lists, link
+  annotation bounds, deterministic tables, a documented flexbox/grid subset,
+  image boxes, embedded-font text metrics, and pagination metadata.
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Font

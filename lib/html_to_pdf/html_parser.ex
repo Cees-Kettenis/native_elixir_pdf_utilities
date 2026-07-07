@@ -2,11 +2,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   @moduledoc """
   Strict HTML parser for the native HTML-to-PDF renderer.
 
-  Milestone 11 supports a strict subset of document-oriented HTML: structural
+  Supports a strict subset of document-oriented HTML: structural
   html/head/body/style tags, paragraphs, headings, inline emphasis/color
   containers, div containers for flex/grid layouts, lists, links, tables,
-  images, and CSS-targeting attributes. Unsupported or malformed markup returns an error instead of
-  guessing at browser behavior.
+  images, and CSS-targeting attributes. Unsupported or malformed markup returns
+  an error instead of guessing at browser behavior.
   """
 
   @type text_node :: %{type: :text, text: String.t()}

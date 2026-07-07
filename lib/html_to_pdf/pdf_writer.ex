@@ -3,8 +3,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   PDF writer stage for the native HTML-to-PDF renderer.
 
   This module is the low-level PDF byte writer used by the HTML renderer. It
-  supports one or more pages containing built-in-font text boxes, simple
-  rectangle fills, borders, URI link annotations, and PNG/JPEG image XObjects.
+  supports one or more pages containing built-in or embedded-font text boxes,
+  simple rectangle fills, borders, URI link annotations, and PNG/JPEG image
+  XObjects.
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Font

@@ -10,8 +10,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
     * paginate layout boxes
     * write PDF bytes
 
-  Milestone 2 supports the smallest useful vertical slice:
-  `render("<p>Hello</p>")` returns a valid one-page PDF binary.
+  The supported surface is a strict, document-oriented HTML/CSS subset. Invalid
+  or unsupported input returns an error instead of falling back to browser-like
+  guessing. See the README support matrix for the current element, CSS, layout,
+  image, and font support.
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
@@ -22,8 +24,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
 
   @type page_size :: :a4 | atom()
   @type render_option ::
-          {:page_size, page_size()}
-          | {:margin, String.t()}
+          {:page_size, page_size() | {number(), number()}}
+          | {:margin, String.t() | number()}
           | {:base_url, String.t() | nil}
           | {:stylesheets, [String.t()]}
           | {:default_font, String.t()}
@@ -45,6 +47,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
 
   Returns `{:ok, pdf_binary}` when rendering succeeds or `{:error, reason}` when
   parsing, styling, layout, pagination, or PDF writing cannot be completed.
+
+  Supported options include `:page_size`, `:margin`, `:base_url`,
+  `:stylesheets`, `:default_font`, and explicit TTF `:fonts`.
   """
   @spec render(String.t(), [render_option()]) :: {:ok, binary()} | {:error, error_reason()}
   def render(html, opts \\ []) do
@@ -61,7 +66,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   Reads an HTML file, renders it to PDF, and writes the PDF to `output_path`.
 
   Returns `:ok` after writing the output file or `{:error, reason}` if reading,
-  rendering, or writing fails.
+  rendering, or writing fails. Rendering options are the same as `render/2`.
   """
   @spec render_file(String.t(), String.t(), [render_option()]) ::
           :ok | {:error, error_reason()}
