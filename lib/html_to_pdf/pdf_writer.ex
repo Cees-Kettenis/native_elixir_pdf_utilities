@@ -3,7 +3,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   PDF writer stage for the native HTML-to-PDF renderer.
 
   This module is the low-level PDF byte writer used by the HTML renderer. It
-  supports one or more pages containing built-in-font text boxes.
+  supports one or more pages containing built-in-font text boxes and simple
+  rectangle fills and borders.
   """
 
   @type page :: NativeElixirPdfUtilities.HtmlToPdf.Pagination.page()
@@ -52,8 +53,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
              is_binary(font) and is_number(r) and is_number(g) and is_number(b) ->
         font in built_in_fonts()
 
+      %{
+        type: :rect,
+        x: x,
+        y: y,
+        width: width,
+        height: height,
+        fill_color: fill_color,
+        stroke_color: stroke_color,
+        stroke_width: stroke_width,
+        border_radius: border_radius
+      }
+      when is_number(x) and is_number(y) and is_number(width) and is_number(height) and
+             width > 0 and height > 0 and is_number(stroke_width) and stroke_width >= 0 and
+             is_number(border_radius) and border_radius >= 0 ->
+        valid_optional_color?(fill_color) and valid_optional_color?(stroke_color) and
+          (not is_nil(fill_color) or stroke_width > 0)
+
       _ ->
         false
+    end
+  end
+
+  defp valid_optional_color?(color) do
+    case color do
+      nil -> true
+      {r, g, b} when is_number(r) and is_number(g) and is_number(b) -> true
+      _ -> false
     end
   end
 
@@ -117,39 +143,128 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   defp content_stream(boxes, font_resources) do
     Enum.map_join(boxes, "\n", fn box ->
-      {r, g, b} = box.color
-      font_resource = Map.fetch!(font_resources, box.font)
+      case box.type do
+        :text ->
+          text_stream(box, font_resources)
 
-      [
-        "BT",
-        " /",
-        font_resource.name,
-        " ",
-        format_number(box.font_size),
-        " Tf",
-        " ",
-        format_number(r),
-        " ",
-        format_number(g),
-        " ",
-        format_number(b),
-        " rg",
-        " ",
-        format_number(box.x),
-        " ",
-        format_number(box.y),
-        " Td",
-        " (",
-        escape_text(box.text),
-        ") Tj",
-        " ET"
-      ]
+        :rect ->
+          rect_stream(box)
+      end
     end)
+  end
+
+  defp text_stream(box, font_resources) do
+    {r, g, b} = box.color
+    font_resource = Map.fetch!(font_resources, box.font)
+
+    [
+      "BT",
+      " /",
+      font_resource.name,
+      " ",
+      format_number(box.font_size),
+      " Tf",
+      " ",
+      format_number(r),
+      " ",
+      format_number(g),
+      " ",
+      format_number(b),
+      " rg",
+      " ",
+      format_number(box.x),
+      " ",
+      format_number(box.y),
+      " Td",
+      " (",
+      escape_text(box.text),
+      ") Tj",
+      " ET"
+    ]
+  end
+
+  defp rect_stream(box) do
+    graphics_state =
+      ["q"]
+      |> put_fill_color(box.fill_color)
+      |> put_stroke_color(box.stroke_color, box.stroke_width)
+      |> Kernel.++([rect_path(box), paint_operator(box), "Q"])
+
+    Enum.join(graphics_state, " ")
+  end
+
+  defp put_fill_color(parts, color) do
+    case color do
+      {r, g, b} ->
+        parts ++ [format_number(r), format_number(g), format_number(b), "rg"]
+
+      nil ->
+        parts
+    end
+  end
+
+  defp put_stroke_color(parts, color, stroke_width) do
+    case {color, stroke_width > 0} do
+      {{r, g, b}, true} ->
+        parts ++
+          [
+            format_number(r),
+            format_number(g),
+            format_number(b),
+            "RG",
+            format_number(stroke_width),
+            "w"
+          ]
+
+      _ ->
+        parts
+    end
+  end
+
+  defp rect_path(box) do
+    radius = min(box.border_radius, min(box.width, box.height) / 2)
+
+    case radius > 0 do
+      true ->
+        rounded_rect_path(box.x, box.y, box.width, box.height, radius)
+
+      false ->
+        "#{format_number(box.x)} #{format_number(box.y)} #{format_number(box.width)} #{format_number(box.height)} re"
+    end
+  end
+
+  defp rounded_rect_path(x, y, width, height, radius) do
+    right = x + width
+    top = y + height
+    control = radius * 0.552_284_7498
+
+    [
+      "#{format_number(x + radius)} #{format_number(y)} m",
+      "#{format_number(right - radius)} #{format_number(y)} l",
+      "#{format_number(right - radius + control)} #{format_number(y)} #{format_number(right)} #{format_number(y + radius - control)} #{format_number(right)} #{format_number(y + radius)} c",
+      "#{format_number(right)} #{format_number(top - radius)} l",
+      "#{format_number(right)} #{format_number(top - radius + control)} #{format_number(right - radius + control)} #{format_number(top)} #{format_number(right - radius)} #{format_number(top)} c",
+      "#{format_number(x + radius)} #{format_number(top)} l",
+      "#{format_number(x + radius - control)} #{format_number(top)} #{format_number(x)} #{format_number(top - radius + control)} #{format_number(x)} #{format_number(top - radius)} c",
+      "#{format_number(x)} #{format_number(y + radius)} l",
+      "#{format_number(x)} #{format_number(y + radius - control)} #{format_number(x + radius - control)} #{format_number(y)} #{format_number(x + radius)} #{format_number(y)} c",
+      "h"
+    ]
+    |> Enum.join(" ")
+  end
+
+  defp paint_operator(box) do
+    case {box.fill_color, box.stroke_width > 0} do
+      {nil, true} -> "S"
+      {_, true} -> "B"
+      {_, false} -> "f"
+    end
   end
 
   defp font_resources(pages) do
     pages
     |> Enum.flat_map(& &1.boxes)
+    |> Enum.filter(&(&1.type == :text))
     |> Enum.map(& &1.font)
     |> Enum.uniq()
     |> Enum.with_index(3)

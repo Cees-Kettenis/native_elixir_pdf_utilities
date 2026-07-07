@@ -153,6 +153,65 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert italic.x > bold.x
   end
 
+  test "layout accounts for margin padding border and background dimensions" do
+    styled_tree = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "p",
+          style: %{
+            background_color: {0.9, 0.9, 0.9},
+            border_color: {1, 0, 0},
+            border_radius: 2.0,
+            border_widths: %{top: 1.0, right: 1.0, bottom: 1.0, left: 1.0},
+            color: {0, 0, 0},
+            display: :block,
+            font_family: "Helvetica",
+            font_size: 12.0,
+            font_style: :normal,
+            font_weight: 400,
+            line_height: 14.4,
+            margin: %{top: 2.0, right: 4.0, bottom: 6.0, left: 8.0},
+            padding: %{top: 3.0, right: 5.0, bottom: 3.0, left: 5.0}
+          },
+          children: [
+            %{
+              type: :text,
+              text: "Boxed",
+              style: %{
+                color: {0, 0, 0},
+                font_family: "Helvetica",
+                font_size: 12.0,
+                font_style: :normal,
+                font_weight: 400,
+                line_height: 14.4
+              }
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, margin: 10)
+    [background, text] = layout_tree.boxes
+
+    assert background.type == :rect
+    assert_in_delta background.x, 18.0, 0.0001
+    assert_in_delta background.y, 807.49, 0.0001
+    assert_in_delta background.width, 563.28, 0.0001
+    assert_in_delta background.height, 22.4, 0.0001
+    assert background.fill_color == {0.9, 0.9, 0.9}
+    assert background.stroke_color == {1, 0, 0}
+    assert background.stroke_width == 1.0
+    assert background.border_radius == 2.0
+
+    assert text.type == :text
+    assert_in_delta text.x, 24.0, 0.0001
+    assert_in_delta text.y, 813.89, 0.0001
+    assert_in_delta text.width, 551.28, 0.0001
+  end
+
   test "layout rejects invalid options and unsupported trees" do
     assert Layout.layout(%{tag: "p", style: %{}}, []) == {:error, :invalid_layout}
 

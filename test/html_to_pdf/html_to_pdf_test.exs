@@ -30,6 +30,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "0 0 1 rg"
   end
 
+  test "render converts block box styling to PDF drawing commands" do
+    html =
+      ~s(<p style="margin: 2pt; padding: 3pt; border: 1pt solid red; border-radius: 2pt; background-color: #eeeeee">Boxed</p>)
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert pdf =~ "0.9333 0.9333 0.9333 rg"
+    assert pdf =~ "1 0 0 RG 1 w"
+    assert pdf =~ "(Boxed) Tj"
+  end
+
   test "render_file writes a PDF for a supported paragraph" do
     input_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.html")
     output_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.pdf")

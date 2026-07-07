@@ -2,9 +2,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @moduledoc """
   Layout engine for the native HTML-to-PDF renderer.
 
-  Milestone 3 lays out block text elements and inline text runs on one page.
-  Later milestones add richer wrapping, list, table, flexbox, and grid layout
-  behavior behind this module.
+  Milestone 4 lays out block text elements, inline text runs, and basic block
+  box styling on one page. Later milestones add richer wrapping, list, table,
+  flexbox, and grid layout behavior behind this module.
   """
 
   @type box :: map()
@@ -77,15 +77,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       %{type: :element, style: %{display: :block} = style, children: children}
       when is_list(children) ->
         with {:ok, runs} <- inline_runs(children) do
-          baseline_y = y - Map.fetch!(style, :font_size)
+          margin =
+            Map.get(style, :margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
+
+          padding = Map.get(style, :padding, edges(0.0))
+          border_widths = Map.get(style, :border_widths, edges(0.0))
+          box_x = x + margin.left
+          box_top = y - margin.top
+          box_width = width - margin.left - margin.right
+          line_height = Map.fetch!(style, :line_height)
+
+          box_height =
+            border_widths.top + padding.top + line_height + padding.bottom + border_widths.bottom
+
+          baseline_y = box_top - border_widths.top - padding.top - Map.fetch!(style, :font_size)
+          content_x = box_x + border_widths.left + padding.left
+
+          content_width =
+            box_width - border_widths.left - padding.left - padding.right - border_widths.right
+
+          background_box =
+            background_box(style, box_x, box_top - box_height, box_width, box_height)
 
           {boxes, _next_x} =
-            Enum.reduce(runs, {[], x}, fn run, {acc, current_x} ->
-              box = text_box(run, current_x, baseline_y, width)
+            Enum.reduce(runs, {background_box, content_x}, fn run, {acc, current_x} ->
+              box = text_box(run, current_x, baseline_y, content_width)
               {acc ++ [box], current_x + text_width(run.text, run.style)}
             end)
 
-          next_y = y - Map.fetch!(style, :line_height) - Map.fetch!(style, :margin_after)
+          next_y = box_top - box_height - margin.bottom
           {:ok, boxes, next_y}
         end
 
@@ -147,6 +167,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     }
   end
 
+  @spec background_box(map(), number(), number(), number(), number()) :: [box()]
+  defp background_box(style, x, y, width, height) do
+    border_widths = Map.get(style, :border_widths, edges(0.0))
+    stroke_width = Enum.max(Map.values(border_widths))
+    fill_color = Map.get(style, :background_color)
+
+    case {fill_color, stroke_width > 0} do
+      {nil, false} ->
+        []
+
+      _ ->
+        [
+          %{
+            type: :rect,
+            x: x,
+            y: y,
+            width: width,
+            height: height,
+            fill_color: fill_color,
+            stroke_color: Map.get(style, :border_color, {0, 0, 0}),
+            stroke_width: stroke_width,
+            border_radius: Map.get(style, :border_radius, 0.0)
+          }
+        ]
+    end
+  end
+
   @spec text_width(String.t(), map()) :: number()
   defp text_width(text, style) do
     text
@@ -164,6 +211,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       {"Helvetica", false, _} -> "Helvetica"
       {font_family, _, _} -> font_family
     end
+  end
+
+  defp edges(value) do
+    edges(value, value, value, value)
+  end
+
+  defp edges(top, right, bottom, left) do
+    %{top: top, right: right, bottom: bottom, left: left}
   end
 
   defp page_size(page_size) do

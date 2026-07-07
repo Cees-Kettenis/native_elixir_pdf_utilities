@@ -85,6 +85,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert italic.style.font_style == :italic
   end
 
+  test "compute applies block box styles from inline declarations" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{
+            "style" =>
+              "margin: 2pt 4pt 6pt 8pt; padding: 3pt 5pt; border: 1pt solid #336699; border-radius: 2pt; background-color: #eeeeee"
+          },
+          children: [%{type: :text, text: "Boxed"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [paragraph] = styled_tree.children
+
+    assert paragraph.style.margin == %{top: 2.0, right: 4.0, bottom: 6.0, left: 8.0}
+    assert paragraph.style.margin_after == 6.0
+    assert paragraph.style.padding == %{top: 3.0, right: 5.0, bottom: 3.0, left: 5.0}
+    assert paragraph.style.border_widths == %{top: 1.0, right: 1.0, bottom: 1.0, left: 1.0}
+    assert paragraph.style.border_color == {0.2, 0.4, 0.6}
+    assert paragraph.style.border_radius == 2.0
+    assert_in_delta elem(paragraph.style.background_color, 0), 0.9333, 0.0001
+  end
+
   test "compute rejects unsupported document trees" do
     assert Style.compute(%{tag: "p"}, []) == {:error, :invalid_document}
 
@@ -96,6 +124,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                    type: :element,
                    tag: "p",
                    attributes: %{"style" => "background: red"},
+                   children: [%{type: :text, text: "Hello"}]
+                 }
+               ]
+             },
+             []
+           ) == {:error, :invalid_document}
+
+    assert Style.compute(
+             %{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "p",
+                   attributes: %{"style" => "border: 1pt dashed red"},
                    children: [%{type: :text, text: "Hello"}]
                  }
                ]
