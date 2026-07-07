@@ -2,8 +2,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @moduledoc """
   Layout engine for the native HTML-to-PDF renderer.
 
-  Milestone 4 lays out block text elements, inline text runs, and basic block
-  box styling on one page. Later milestones add richer wrapping, list, table,
+  Milestone 5 lays out block text elements, inline text runs, basic block
+  box styling, lists, and link annotation bounds on one page. Later milestones add richer wrapping, table,
   flexbox, and grid layout behavior behind this module.
   """
 
@@ -109,6 +109,99 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {:ok, boxes, next_y}
         end
 
+      %{type: :element, style: %{display: :list} = style, children: children}
+      when is_list(children) ->
+        layout_list(style, children, x, y, width)
+
+      _ ->
+        {:error, :invalid_layout}
+    end
+  end
+
+  defp layout_list(style, children, x, y, width) do
+    margin = Map.get(style, :margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
+    padding = Map.get(style, :padding, edges(0.0))
+    border_widths = Map.get(style, :border_widths, edges(0.0))
+    box_x = x + margin.left
+    box_top = y - margin.top
+    box_width = width - margin.left - margin.right
+    content_x = box_x + border_widths.left + padding.left
+    content_top = box_top - border_widths.top - padding.top
+
+    content_width =
+      box_width - border_widths.left - padding.left - padding.right - border_widths.right
+
+    case layout_list_items(
+           children,
+           Map.fetch!(style, :list_marker_type),
+           content_x,
+           content_top,
+           content_width
+         ) do
+      {:ok, item_boxes, content_bottom} ->
+        content_height = content_top - content_bottom
+
+        box_height =
+          border_widths.top + padding.top + content_height + padding.bottom + border_widths.bottom
+
+        background_box = background_box(style, box_x, box_top - box_height, box_width, box_height)
+        next_y = box_top - box_height - margin.bottom
+        {:ok, background_box ++ item_boxes, next_y}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp layout_list_items(children, marker_type, x, y, width) do
+    result =
+      children
+      |> Enum.with_index(1)
+      |> Enum.reduce({:ok, [], y}, fn {child, index}, acc ->
+        case acc do
+          {:ok, boxes, current_y} ->
+            case layout_list_item(child, marker_type, index, x, current_y, width) do
+              {:ok, item_boxes, next_y} -> {:ok, boxes ++ item_boxes, next_y}
+              {:error, reason} -> {:error, reason}
+            end
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end)
+
+    case result do
+      {:ok, boxes, next_y} -> {:ok, boxes, next_y}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp layout_list_item(item, marker_type, index, x, y, width) do
+    case item do
+      %{type: :element, style: %{display: :list_item} = style, children: children}
+      when is_list(children) ->
+        with {:ok, runs} <- inline_runs(children) do
+          marker_gap = 18.0
+          marker = list_marker(marker_type, index)
+          marker_style = text_style(style)
+          baseline_y = y - Map.fetch!(style, :font_size)
+          text_x = x + marker_gap
+          text_width = width - marker_gap
+          marker_box = text_box(%{text: marker, style: marker_style}, x, baseline_y, marker_gap)
+
+          {text_boxes, _next_x} =
+            Enum.reduce(runs, {[], text_x}, fn run, {acc, current_x} ->
+              box = text_box(run, current_x, baseline_y, text_width)
+              {acc ++ [box], current_x + text_width(run.text, run.style)}
+            end)
+
+          margin =
+            Map.get(style, :margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
+
+          next_y = y - Map.fetch!(style, :line_height) - margin.bottom
+          {:ok, [marker_box] ++ text_boxes, next_y}
+        end
+
       _ ->
         {:error, :invalid_layout}
     end
@@ -149,12 +242,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp text_box(run, x, y, width) do
     style = run.style
 
-    %{
+    box = %{
       type: :text,
       text: run.text,
       x: x,
       y: y,
       width: width,
+      annotation_width: text_width(run.text, style),
       font:
         pdf_font(
           Map.fetch!(style, :font_family),
@@ -165,6 +259,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       line_height: Map.fetch!(style, :line_height),
       color: Map.fetch!(style, :color)
     }
+
+    case Map.get(style, :link_url) do
+      link_url when is_binary(link_url) -> Map.put(box, :link_url, link_url)
+      _ -> box
+    end
   end
 
   @spec background_box(map(), number(), number(), number(), number()) :: [box()]
@@ -200,6 +299,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     |> String.length()
     |> Kernel.*(Map.fetch!(style, :font_size))
     |> Kernel.*(0.6)
+  end
+
+  defp text_style(style) do
+    Map.take(style, [
+      :color,
+      :font_family,
+      :font_size,
+      :font_style,
+      :font_weight,
+      :line_height
+    ])
+  end
+
+  defp list_marker(marker_type, index) do
+    case marker_type do
+      :decimal -> "#{index}."
+      :disc -> "*"
+    end
   end
 
   @spec pdf_font(String.t(), number(), atom()) :: String.t()

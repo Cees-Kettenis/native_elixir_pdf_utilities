@@ -40,6 +40,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "(Boxed) Tj"
   end
 
+  test "render converts lists and links to PDF text and annotations" do
+    html =
+      ~s(<ul><li>Read <a href="https://example.com">docs</a></li><li>Ship</li></ul>)
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert pdf =~ "(*) Tj"
+    assert pdf =~ "(Read ) Tj"
+    assert pdf =~ "(docs) Tj"
+    assert pdf =~ "(Ship) Tj"
+    assert pdf =~ "/Subtype /Link"
+    assert pdf =~ "/URI (https://example.com)"
+
+    assert HtmlToPdf.render(~s[<p><a href="javascript:alert(1)">bad</a></p>]) ==
+             {:error, :invalid_document}
+  end
+
   test "render_file writes a PDF for a supported paragraph" do
     input_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.html")
     output_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.pdf")

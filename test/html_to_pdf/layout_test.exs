@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   use ExUnit.Case
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
+  alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
   test "layout positions a paragraph text box on the first page" do
     styled_tree = %{
@@ -210,6 +211,57 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert_in_delta text.x, 24.0, 0.0001
     assert_in_delta text.y, 813.89, 0.0001
     assert_in_delta text.width, 551.28, 0.0001
+  end
+
+  test "layout creates list markers and link annotation bounds" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "ol",
+          attributes: %{},
+          children: [
+            %{
+              type: :element,
+              tag: "li",
+              attributes: %{},
+              children: [
+                %{type: :text, text: "Read "},
+                %{
+                  type: :element,
+                  tag: "a",
+                  attributes: %{"href" => "https://example.com"},
+                  children: [%{type: :text, text: "docs"}]
+                }
+              ]
+            },
+            %{
+              type: :element,
+              tag: "li",
+              attributes: %{},
+              children: [%{type: :text, text: "Ship"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, margin: 10)
+    [first_marker, plain, link, second_marker, second_text] = layout_tree.boxes
+
+    assert first_marker.text == "1."
+    assert_in_delta first_marker.x, 34.0, 0.0001
+    assert plain.text == "Read "
+    assert_in_delta plain.x, 52.0, 0.0001
+    assert link.text == "docs"
+    assert link.link_url == "https://example.com"
+    assert_in_delta link.x, 88.0, 0.0001
+    assert_in_delta link.annotation_width, 28.8, 0.0001
+    assert second_marker.text == "2."
+    assert second_text.text == "Ship"
+    assert second_text.y < plain.y
   end
 
   test "layout rejects invalid options and unsupported trees" do

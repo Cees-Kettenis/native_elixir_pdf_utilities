@@ -4,7 +4,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   This module is the low-level PDF byte writer used by the HTML renderer. It
   supports one or more pages containing built-in-font text boxes and simple
-  rectangle fills and borders.
+  rectangle fills, borders, and URI link annotations.
   """
 
   @type page :: NativeElixirPdfUtilities.HtmlToPdf.Pagination.page()
@@ -51,7 +51,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       when is_binary(text) and is_number(x) and is_number(y) and is_number(font_size) and
              font_size > 0 and
              is_binary(font) and is_number(r) and is_number(g) and is_number(b) ->
-        font in built_in_fonts()
+        font in built_in_fonts() and valid_link_box?(box)
 
       %{
         type: :rect,
@@ -83,24 +83,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
+  defp valid_link_box?(box) do
+    case Map.get(box, :link_url) do
+      nil ->
+        true
+
+      link_url when is_binary(link_url) ->
+        width = Map.get(box, :annotation_width, Map.get(box, :width))
+        is_number(width) and width > 0 and valid_uri?(link_url)
+
+      _ ->
+        false
+    end
+  end
+
   defp pages_to_pdf(pages) do
-    page_count = length(pages)
     font_resources = font_resources(pages)
     first_page_object_id = 3 + map_size(font_resources)
-    page_object_ids = Enum.map(0..(page_count - 1)//1, &(&1 * 2 + first_page_object_id))
     pages_object_id = 2
 
-    page_objects =
-      pages
-      |> Enum.with_index()
-      |> Enum.flat_map(fn {page, index} ->
-        page_object_id = Enum.at(page_object_ids, index)
-        content_object_id = page_object_id + 1
+    {page_entries, _next_object_id} =
+      page_entries(pages, pages_object_id, font_resources, first_page_object_id)
 
+    page_object_ids = Enum.map(page_entries, & &1.page_object_id)
+
+    page_objects =
+      Enum.flat_map(page_entries, fn entry ->
         [
-          {page_object_id, page_object(page, pages_object_id, font_resources, content_object_id)},
-          {content_object_id, content_object(page, font_resources)}
-        ]
+          {entry.page_object_id,
+           page_object(
+             entry.page,
+             pages_object_id,
+             font_resources,
+             entry.content_object_id,
+             Enum.map(entry.annotation_objects, fn {object_id, _annotation} -> object_id end)
+           )},
+          {entry.content_object_id, content_object(entry.page, font_resources)}
+        ] ++ annotation_objects(entry.annotation_objects)
       end)
 
     objects =
@@ -118,14 +137,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     "<< /Type /Pages /Kids [#{kids}] /Count #{length(page_object_ids)} >>"
   end
 
-  defp page_object(page, pages_object_id, font_resources, content_object_id) do
+  defp page_entries(pages, pages_object_id, font_resources, first_page_object_id) do
+    Enum.reduce(pages, {[], first_page_object_id}, fn page, {entries, next_object_id} ->
+      annotations = link_annotations(page)
+
+      annotation_objects =
+        annotations
+        |> Enum.with_index(next_object_id + 2)
+        |> Enum.map(fn {annotation, object_id} -> {object_id, annotation} end)
+
+      entry = %{
+        page: page,
+        page_object_id: next_object_id,
+        content_object_id: next_object_id + 1,
+        pages_object_id: pages_object_id,
+        font_resources: font_resources,
+        annotation_objects: annotation_objects
+      }
+
+      {entries ++ [entry], next_object_id + 2 + length(annotation_objects)}
+    end)
+  end
+
+  defp page_object(
+         page,
+         pages_object_id,
+         font_resources,
+         content_object_id,
+         annotation_object_ids
+       ) do
     {width, height} = page.size
     fonts = font_resource_dictionary(font_resources)
+    annotations = annotation_dictionary(annotation_object_ids)
 
     """
-    << /Type /Page /Parent #{pages_object_id} 0 R /MediaBox [0 0 #{format_number(width)} #{format_number(height)}] /Resources << /Font << #{fonts} >> >> /Contents #{content_object_id} 0 R >>
+    << /Type /Page /Parent #{pages_object_id} 0 R /MediaBox [0 0 #{format_number(width)} #{format_number(height)}] /Resources << /Font << #{fonts} >> >> /Contents #{content_object_id} 0 R#{annotations} >>
     """
     |> String.trim()
+  end
+
+  defp annotation_dictionary(annotation_object_ids) do
+    case annotation_object_ids do
+      [] ->
+        ""
+
+      annotation_object_ids ->
+        annotations = Enum.map_join(annotation_object_ids, " ", &"#{&1} 0 R")
+        " /Annots [#{annotations}]"
+    end
   end
 
   defp content_object(page, font_resources) do
@@ -151,6 +210,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           rect_stream(box)
       end
     end)
+  end
+
+  defp link_annotations(page) do
+    page.boxes
+    |> Enum.filter(&(&1.type == :text and is_binary(Map.get(&1, :link_url))))
+    |> Enum.map(fn box ->
+      width = Map.get(box, :annotation_width, Map.get(box, :width))
+      height = Map.get(box, :line_height, box.font_size * 1.2)
+
+      %{
+        url: box.link_url,
+        rect: {box.x, box.y, box.x + width, box.y + height}
+      }
+    end)
+  end
+
+  defp annotation_objects(annotation_objects) do
+    Enum.map(annotation_objects, fn {object_id, annotation} ->
+      {object_id, annotation_object(annotation)}
+    end)
+  end
+
+  defp annotation_object(annotation) do
+    {left, bottom, right, top} = annotation.rect
+
+    """
+    << /Type /Annot /Subtype /Link /Rect [#{format_number(left)} #{format_number(bottom)} #{format_number(right)} #{format_number(top)}] /Border [0 0 0] /A << /S /URI /URI (#{escape_text(annotation.url)}) >> >>
+    """
+    |> String.trim()
   end
 
   defp text_stream(box, font_resources) do
@@ -304,6 +392,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       "Times-Italic",
       "Times-BoldItalic"
     ]
+  end
+
+  defp valid_uri?(uri) do
+    Regex.match?(~r/^(https?:\/\/[^\s<>]+|mailto:[^\s<>@]+@[^\s<>@]+)$/iu, uri)
   end
 
   defp objects_to_pdf(objects) do

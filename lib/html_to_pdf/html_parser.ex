@@ -2,8 +2,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   @moduledoc """
   Strict HTML parser for the native HTML-to-PDF renderer.
 
-  Milestone 3 supports a strict subset of text-oriented HTML: paragraphs,
-  headings, and inline emphasis/color containers. Unsupported or malformed
+  Milestone 5 supports a strict subset of text-oriented HTML: paragraphs,
+  headings, inline emphasis/color containers, lists, and links. Unsupported or malformed
   markup returns an error instead of guessing at browser behavior.
   """
 
@@ -16,8 +16,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         }
   @type dom_tree :: %{type: :document, children: [element_node()]}
 
-  @block_tags ~w(p h1 h2 h3 h4 h5 h6)
-  @inline_tags ~w(strong b em i span)
+  @block_tags ~w(p h1 h2 h3 h4 h5 h6 ul ol)
+  @inline_tags ~w(strong b em i span a)
+  @list_tags ~w(ul ol)
 
   @doc """
   Parses an HTML binary into a renderer DOM tree.
@@ -89,6 +90,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
       context == :document and String.trim(token) == "" ->
         parse_children(remaining, context, closing_tag, children)
 
+      context in @list_tags and String.trim(token) == "" ->
+        parse_children(remaining, context, closing_tag, children)
+
       context == :document ->
         {:error, :unsupported_html}
 
@@ -114,7 +118,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         tag = String.downcase(tag)
 
         with true <- supported_tag?(tag),
-             {:ok, attributes} <- parse_attributes(attributes) do
+             {:ok, attributes} <- parse_attributes(attributes, tag) do
           {:ok, tag, attributes}
         else
           _ -> {:error, :unsupported_html}
@@ -140,7 +144,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
     end
   end
 
-  defp parse_attributes(attributes) do
+  defp parse_attributes(attributes, tag) do
     case String.trim(attributes) do
       "" ->
         {:ok, %{}}
@@ -152,7 +156,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         parsed_source = captures |> Enum.map_join("", &List.first/1) |> String.trim()
 
         with true <- parsed_source == attributes,
-             {:ok, parsed} <- attributes_to_map(captures) do
+             {:ok, parsed} <- attributes_to_map(captures, tag) do
           {:ok, parsed}
         else
           _ -> {:error, :unsupported_html}
@@ -160,13 +164,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
     end
   end
 
-  defp attributes_to_map(captures) do
+  defp attributes_to_map(captures, tag) do
     Enum.reduce_while(captures, {:ok, %{}}, fn [_, name, quoted_value], {:ok, acc} ->
       name = String.downcase(name)
       value = quoted_value |> String.slice(1..-2//1) |> decode_entities()
 
-      case {name, Map.has_key?(acc, name)} do
-        {"style", false} -> {:cont, {:ok, Map.put(acc, name, value)}}
+      case {name, tag, Map.has_key?(acc, name)} do
+        {"style", _, false} -> {:cont, {:ok, Map.put(acc, name, value)}}
+        {"href", "a", false} -> {:cont, {:ok, Map.put(acc, name, value)}}
         _ -> {:halt, {:error, :unsupported_html}}
       end
     end)
@@ -177,7 +182,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
       context == :document ->
         tag in @block_tags
 
-      context in @block_tags or context in @inline_tags ->
+      context in @list_tags ->
+        tag == "li"
+
+      context == "a" ->
+        tag in @inline_tags and tag != "a"
+
+      context == "li" or context in @block_tags or context in @inline_tags ->
         tag in @inline_tags
 
       true ->
@@ -186,7 +197,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   end
 
   defp supported_tag?(tag) do
-    tag in @block_tags or tag in @inline_tags
+    tag in @block_tags or tag in @inline_tags or tag == "li"
   end
 
   defp decode_entities(text) do

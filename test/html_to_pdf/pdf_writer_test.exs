@@ -145,6 +145,59 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ " h S Q"
   end
 
+  test "render writes URI link annotations for linked text boxes" do
+    pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes: [
+          %{
+            type: :text,
+            text: "Docs",
+            x: 10.0,
+            y: 20.0,
+            width: 60.0,
+            annotation_width: 28.8,
+            line_height: 14.4,
+            font: "Helvetica",
+            font_size: 12.0,
+            color: {0, 0, 1},
+            link_url: "https://example.com"
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, pdf} = PdfWriter.render(pages, [])
+    assert pdf =~ "/Annots [6 0 R]"
+    assert pdf =~ "/Subtype /Link"
+    assert pdf =~ "/Rect [10 20 38.8 34.4]"
+    assert pdf =~ "/A << /S /URI /URI (https://example.com) >>"
+  end
+
+  test "render rejects unsupported link annotations" do
+    pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes: [
+          %{
+            type: :text,
+            text: "Bad",
+            x: 10.0,
+            y: 20.0,
+            width: 60.0,
+            annotation_width: 21.6,
+            font: "Helvetica",
+            font_size: 12.0,
+            color: {0, 0, 1},
+            link_url: "javascript:alert(1)"
+          }
+        ]
+      }
+    ]
+
+    assert PdfWriter.render(pages, []) == {:error, :invalid_pdf_input}
+  end
+
   test "render rejects invalid page data" do
     assert PdfWriter.render([], []) == {:error, :invalid_pdf_input}
   end

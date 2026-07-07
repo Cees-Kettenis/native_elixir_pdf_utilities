@@ -58,9 +58,72 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
               }}
   end
 
+  test "parse accepts strict lists and link href attributes" do
+    assert HtmlParser.parse(
+             ~s(<ul><li>Read <a href="https://example.com">docs</a></li><li>Ship</li></ul><ol><li>First</li></ol>)
+           ) ==
+             {:ok,
+              %{
+                type: :document,
+                children: [
+                  %{
+                    type: :element,
+                    tag: "ul",
+                    attributes: %{},
+                    children: [
+                      %{
+                        type: :element,
+                        tag: "li",
+                        attributes: %{},
+                        children: [
+                          %{type: :text, text: "Read "},
+                          %{
+                            type: :element,
+                            tag: "a",
+                            attributes: %{"href" => "https://example.com"},
+                            children: [%{type: :text, text: "docs"}]
+                          }
+                        ]
+                      },
+                      %{
+                        type: :element,
+                        tag: "li",
+                        attributes: %{},
+                        children: [%{type: :text, text: "Ship"}]
+                      }
+                    ]
+                  },
+                  %{
+                    type: :element,
+                    tag: "ol",
+                    attributes: %{},
+                    children: [
+                      %{
+                        type: :element,
+                        tag: "li",
+                        attributes: %{},
+                        children: [%{type: :text, text: "First"}]
+                      }
+                    ]
+                  }
+                ]
+              }}
+  end
+
   test "parse rejects unsupported markup" do
     assert HtmlParser.parse("<div>Hello</div>") == {:error, :unsupported_html}
     assert HtmlParser.parse(~s(<p class="copy">Hello</p>)) == {:error, :unsupported_html}
+
+    assert HtmlParser.parse(~s(<a href="https://example.com">No block</a>)) ==
+             {:error, :unsupported_html}
+
+    assert HtmlParser.parse(~s(<ul><p>No item</p></ul>)) == {:error, :unsupported_html}
+
+    assert HtmlParser.parse(
+             ~s(<p><a href="https://example.com"><a href="https://nested.example">Nested</a></a></p>)
+           ) ==
+             {:error, :unsupported_html}
+
     assert HtmlParser.parse("<p>Hello</strong></p>") == {:error, :unsupported_html}
     assert HtmlParser.parse(:not_html) == {:error, :invalid_html}
   end

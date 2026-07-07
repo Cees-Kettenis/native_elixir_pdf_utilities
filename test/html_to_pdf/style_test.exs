@@ -113,6 +113,49 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert_in_delta elem(paragraph.style.background_color, 0), 0.9333, 0.0001
   end
 
+  test "compute applies list defaults and propagates link URLs to text" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "ol",
+          attributes: %{},
+          children: [
+            %{
+              type: :element,
+              tag: "li",
+              attributes: %{},
+              children: [
+                %{type: :text, text: "Read "},
+                %{
+                  type: :element,
+                  tag: "a",
+                  attributes: %{"href" => "mailto:team@example.com"},
+                  children: [%{type: :text, text: "email"}]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [list] = styled_tree.children
+    [item] = list.children
+    [_plain, link] = item.children
+    [link_text] = link.children
+
+    assert list.style.display == :list
+    assert list.style.list_marker_type == :decimal
+    assert item.style.display == :list_item
+    assert link.style.display == :inline
+    assert link.style.color == {0, 0, 1}
+    assert link.style.link_url == "mailto:team@example.com"
+    assert link_text.style.link_url == "mailto:team@example.com"
+  end
+
   test "compute rejects unsupported document trees" do
     assert Style.compute(%{tag: "p"}, []) == {:error, :invalid_document}
 
@@ -140,6 +183,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                    tag: "p",
                    attributes: %{"style" => "border: 1pt dashed red"},
                    children: [%{type: :text, text: "Hello"}]
+                 }
+               ]
+             },
+             []
+           ) == {:error, :invalid_document}
+
+    assert Style.compute(
+             %{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "p",
+                   attributes: %{},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "a",
+                       attributes: %{"href" => "javascript:alert(1)"},
+                       children: [%{type: :text, text: "bad"}]
+                     }
+                   ]
                  }
                ]
              },

@@ -2,8 +2,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   @moduledoc """
   Style computation for the native HTML-to-PDF renderer.
 
-  This module applies defaults and inheritance for the milestone 4 text and
-  box styling subset.
+  This module applies defaults and inheritance for the milestone 5 text, box,
+  list, and link styling subset.
   Later milestones add the broader CSS parser and full cascade behavior.
   """
 
@@ -78,15 +78,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         "h4" -> block_defaults(14.0, 700, 10.0)
         "h5" -> block_defaults(12.0, 700, 8.0)
         "h6" -> block_defaults(10.0, 700, 8.0)
+        "ul" -> list_defaults(:disc)
+        "ol" -> list_defaults(:decimal)
+        "li" -> list_item_defaults()
         "strong" -> %{display: :inline, font_weight: 700}
         "b" -> %{display: :inline, font_weight: 700}
         "em" -> %{display: :inline, font_style: :italic}
         "i" -> %{display: :inline, font_style: :italic}
         "span" -> %{display: :inline}
+        "a" -> link_defaults(attributes)
         _ -> :invalid
       end
 
     case defaults do
+      {:ok, defaults} ->
+        style =
+          inherited_style
+          |> text_style()
+          |> Map.merge(defaults)
+          |> put_line_height()
+
+        apply_inline_style(style, Map.get(attributes, "style", ""))
+
       :invalid ->
         {:error, :invalid_document}
 
@@ -112,7 +125,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       :font_size,
       :font_style,
       :font_weight,
-      :line_height
+      :line_height,
+      :link_url
     ])
   end
 
@@ -129,6 +143,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       margin_after: margin_bottom,
       padding: edges(0.0)
     }
+  end
+
+  defp list_defaults(marker_type) do
+    block_defaults(12.0, 400, 12.0)
+    |> Map.merge(%{
+      display: :list,
+      list_marker_type: marker_type,
+      margin: edges(0.0, 0.0, 12.0, 0.0),
+      padding: edges(0.0, 0.0, 0.0, 24.0)
+    })
+  end
+
+  defp list_item_defaults do
+    %{
+      display: :list_item,
+      font_size: 12.0,
+      font_weight: 400,
+      margin: edges(0.0, 0.0, 4.0, 0.0),
+      margin_after: 4.0
+    }
+  end
+
+  defp link_defaults(attributes) do
+    case Map.get(attributes, "href") do
+      nil ->
+        {:ok, %{display: :inline, color: {0, 0, 1}}}
+
+      href ->
+        case valid_link_url?(href) do
+          true -> {:ok, %{display: :inline, color: {0, 0, 1}, link_url: href}}
+          false -> :invalid
+        end
+    end
   end
 
   defp edges(value) do
@@ -361,6 +408,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       "red" => {1, 0, 0},
       "white" => {1, 1, 1}
     }
+  end
+
+  defp valid_link_url?(href) do
+    case href do
+      href when is_binary(href) ->
+        Regex.match?(~r/^(https?:\/\/[^\s<>]+|mailto:[^\s<>@]+@[^\s<>@]+)$/iu, href)
+
+      _ ->
+        false
+    end
   end
 
   defp hex_to_pdf_color(hex) do
