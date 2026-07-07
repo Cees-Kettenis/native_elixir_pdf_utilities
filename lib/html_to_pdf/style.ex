@@ -76,7 +76,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       %{type: :element, tag: tag, attributes: attributes, children: children}
       when is_binary(tag) and is_map(attributes) and is_list(children) ->
         case tag do
-          "style" ->
+          tag when tag in ["style", "meta", "title"] ->
             {:ok, []}
 
           "head" ->
@@ -124,37 +124,99 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
          ancestors,
          opts
        ) do
+    inherited_font_size = Map.fetch!(inherited_style, :font_size)
+
     defaults =
       case tag do
-        "html" -> %{display: :block}
-        "body" -> block_defaults(12.0, 400, 0.0)
-        "div" -> block_defaults(12.0, 400, 0.0)
-        "p" -> block_defaults(12.0, 400, 12.0)
-        "h1" -> block_defaults(24.0, 700, 16.0)
-        "h2" -> block_defaults(20.0, 700, 14.0)
-        "h3" -> block_defaults(16.0, 700, 12.0)
-        "h4" -> block_defaults(14.0, 700, 10.0)
-        "h5" -> block_defaults(12.0, 700, 8.0)
-        "h6" -> block_defaults(10.0, 700, 8.0)
-        "ul" -> list_defaults(:disc)
-        "ol" -> list_defaults(:decimal)
-        "li" -> list_item_defaults()
-        "table" -> table_defaults()
-        "caption" -> table_caption_defaults()
-        "thead" -> table_row_group_defaults(:head)
-        "tbody" -> table_row_group_defaults(:body)
-        "tfoot" -> table_row_group_defaults(:foot)
-        "tr" -> table_row_defaults()
-        "th" -> table_cell_defaults(:header)
-        "td" -> table_cell_defaults(:data)
-        "strong" -> %{display: :inline, font_weight: 700}
-        "b" -> %{display: :inline, font_weight: 700}
-        "em" -> %{display: :inline, font_style: :italic}
-        "i" -> %{display: :inline, font_style: :italic}
-        "span" -> %{display: :inline}
-        "a" -> link_defaults(attributes)
-        "img" -> image_defaults(attributes, opts)
-        _ -> :invalid
+        "html" ->
+          %{display: :block}
+
+        "body" ->
+          block_defaults(inherited_font_size, 400, 0.0)
+
+        "div" ->
+          block_defaults(inherited_font_size, 400, 0.0)
+
+        "p" ->
+          block_defaults(inherited_font_size, 400, inherited_font_size)
+
+        "h1" ->
+          block_defaults(inherited_font_size * 2.0, 700, inherited_font_size * 1.3333333333)
+
+        "h2" ->
+          block_defaults(inherited_font_size * 1.5, 700, inherited_font_size * 1.1666666667)
+
+        "h3" ->
+          block_defaults(inherited_font_size * 1.17, 700, inherited_font_size)
+
+        "h4" ->
+          block_defaults(inherited_font_size, 700, inherited_font_size * 0.8333333333)
+
+        "h5" ->
+          block_defaults(inherited_font_size * 0.83, 700, inherited_font_size * 0.6666666667)
+
+        "h6" ->
+          block_defaults(inherited_font_size * 0.67, 700, inherited_font_size * 0.6666666667)
+
+        "ul" ->
+          list_defaults(:disc, inherited_font_size)
+
+        "ol" ->
+          list_defaults(:decimal, inherited_font_size)
+
+        "li" ->
+          list_item_defaults(inherited_font_size)
+
+        "table" ->
+          table_defaults(inherited_font_size)
+
+        "caption" ->
+          table_caption_defaults(inherited_font_size)
+
+        "thead" ->
+          table_row_group_defaults(:head)
+
+        "tbody" ->
+          table_row_group_defaults(:body)
+
+        "tfoot" ->
+          table_row_group_defaults(:foot)
+
+        "tr" ->
+          table_row_defaults()
+
+        "th" ->
+          table_cell_defaults(:header, attributes, inherited_font_size)
+
+        "td" ->
+          table_cell_defaults(:data, attributes, inherited_font_size)
+
+        "strong" ->
+          %{display: :inline, font_weight: 700}
+
+        "b" ->
+          %{display: :inline, font_weight: 700}
+
+        "em" ->
+          %{display: :inline, font_style: :italic}
+
+        "i" ->
+          %{display: :inline, font_style: :italic}
+
+        "span" ->
+          %{display: :inline}
+
+        "a" ->
+          link_defaults(attributes)
+
+        "br" ->
+          %{display: :line_break}
+
+        "img" ->
+          image_defaults(attributes, opts, inherited_font_size)
+
+        _ ->
+          :invalid
       end
 
     case defaults do
@@ -180,7 +242,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp put_line_height(style) do
-    Map.put(style, :line_height, Map.fetch!(style, :font_size) * 1.2)
+    case Map.get(style, :line_height_multiplier) do
+      multiplier when is_number(multiplier) ->
+        style
+        |> Map.put(:line_height, Map.fetch!(style, :font_size) * multiplier)
+        |> Map.delete(:line_height_multiplier)
+        |> Map.delete(:line_height_explicit)
+
+      _ ->
+        case Map.get(style, :line_height_explicit, false) do
+          true -> Map.delete(style, :line_height_explicit)
+          false -> Map.put(style, :line_height, Map.fetch!(style, :font_size) * 1.2)
+        end
+    end
   end
 
   defp text_style(style) do
@@ -213,37 +287,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     }
   end
 
-  defp list_defaults(marker_type) do
-    block_defaults(12.0, 400, 12.0)
+  defp list_defaults(marker_type, font_size) do
+    block_defaults(font_size, 400, font_size)
     |> Map.merge(%{
       display: :list,
       list_marker_type: marker_type,
-      margin: edges(0.0, 0.0, 12.0, 0.0),
+      margin: edges(0.0, 0.0, font_size, 0.0),
       padding: edges(0.0, 0.0, 0.0, 24.0)
     })
   end
 
-  defp list_item_defaults do
+  defp list_item_defaults(font_size) do
     %{
       display: :list_item,
-      font_size: 12.0,
+      font_size: font_size,
       font_weight: 400,
       margin: edges(0.0, 0.0, 4.0, 0.0),
       margin_after: 4.0
     }
   end
 
-  defp table_defaults do
-    block_defaults(12.0, 400, 12.0)
+  defp table_defaults(font_size) do
+    block_defaults(font_size, 400, 0.0)
     |> Map.merge(%{
       display: :table,
-      margin: edges(0.0, 0.0, 12.0, 0.0),
+      border_collapse: :separate,
+      margin: edges(0.0),
       padding: edges(0.0)
     })
   end
 
-  defp table_caption_defaults do
-    block_defaults(12.0, 700, 4.0)
+  defp table_caption_defaults(font_size) do
+    block_defaults(font_size, 700, 4.0)
     |> Map.merge(%{
       display: :table_caption,
       text_align: :center
@@ -273,30 +348,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     }
   end
 
-  defp table_cell_defaults(kind) do
+  defp table_cell_defaults(kind, attributes, font_size) do
     base = %{
       background_color: nil,
       border_color: {0, 0, 0},
       border_radius: 0.0,
       border_widths: edges(1.0),
+      colspan: 1,
       display: :table_cell,
-      font_size: 12.0,
+      font_size: font_size,
       font_weight: 400,
       margin: edges(0.0),
       padding: edges(4.0),
+      rowspan: 1,
       text_align: :left
     }
 
-    case kind do
-      :header ->
-        Map.merge(base, %{
-          background_color: {0.9333333333, 0.9333333333, 0.9333333333},
-          font_weight: 700,
-          text_align: :center
-        })
-
-      :data ->
+    with {:ok, colspan} <- positive_attribute(attributes, "colspan"),
+         {:ok, rowspan} <- positive_attribute(attributes, "rowspan") do
+      cell =
         base
+        |> Map.put(:colspan, colspan)
+        |> Map.put(:rowspan, rowspan)
+
+      case kind do
+        :header ->
+          {:ok,
+           Map.merge(cell, %{
+             background_color: {0.9333333333, 0.9333333333, 0.9333333333},
+             font_weight: 700,
+             text_align: :center
+           })}
+
+        :data ->
+          {:ok, cell}
+      end
+    else
+      _ -> :invalid
     end
   end
 
@@ -313,19 +401,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp image_defaults(attributes, opts) do
+  defp image_defaults(attributes, opts, font_size) do
     with src when is_binary(src) <- Map.get(attributes, "src"),
          {:ok, image} <- load_image(src, opts) do
       {:ok,
-       block_defaults(12.0, 400, 12.0)
+       block_defaults(font_size, 400, font_size)
        |> Map.merge(%{
          display: :image,
          image: image,
-         margin: edges(0.0, 0.0, 12.0, 0.0),
+         margin: edges(0.0, 0.0, font_size, 0.0),
          padding: edges(0.0)
        })}
     else
       _ -> :invalid
+    end
+  end
+
+  defp positive_attribute(attributes, name) do
+    case Map.get(attributes, name) do
+      nil ->
+        {:ok, 1}
+
+      value when is_binary(value) ->
+        case Integer.parse(String.trim(value)) do
+          {integer, ""} when integer >= 1 -> {:ok, integer}
+          _ -> :error
+        end
+
+      _ ->
+        :error
     end
   end
 
@@ -490,10 +594,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp match_selector_parts(parts, node, ancestors) do
     case parts do
       [part] ->
-        matches_simple_selector?(part, node)
+        matches_simple_selector?(part, node, ancestors)
 
       [part, left_part | remaining] ->
-        case matches_simple_selector?(part, node) do
+        case matches_simple_selector?(part, node, ancestors) do
           true -> matches_ancestor_selector?(part.combinator, left_part, remaining, ancestors)
           false -> false
         end
@@ -518,7 +622,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp matches_simple_selector?(part, node) do
+  defp matches_simple_selector?(part, node, ancestors) do
     attributes = Map.get(node, :attributes, %{})
     classes = attributes |> Map.get("class", "") |> String.split(~r/\s+/u, trim: true)
 
@@ -526,7 +630,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     id_matches? = is_nil(part.id) or Map.get(attributes, "id") == part.id
     classes_match? = Enum.all?(part.classes, &(&1 in classes))
 
-    tag_matches? and id_matches? and classes_match?
+    pseudo_classes_match? =
+      Enum.all?(part.pseudo_classes, &pseudo_class_matches?(&1, node, ancestors))
+
+    tag_matches? and id_matches? and classes_match? and pseudo_classes_match?
+  end
+
+  defp pseudo_class_matches?(pseudo_class, node, ancestors) do
+    case pseudo_class do
+      :first_child ->
+        case ancestors do
+          [%{children: children} | _rest] when is_list(children) ->
+            children
+            |> Enum.filter(&match?(%{type: :element}, &1))
+            |> List.first()
+            |> Kernel.==(node)
+
+          _ ->
+            false
+        end
+    end
   end
 
   defp apply_inline_style(style, inline_style) do
@@ -555,27 +678,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         with {:ok, color} <- parse_color(value),
              do: {:ok, Map.put(style, :background_color, color)}
 
-      property when property in ["margin", "padding", "border-width"] ->
+      "margin" ->
+        with {:ok, lengths} <- parse_box_lengths(value, :margin),
+             do: {:ok, put_box_lengths(style, "margin", lengths)}
+
+      property when property in ["padding", "border-width"] ->
         with {:ok, lengths} <- parse_box_lengths(value),
              do: {:ok, put_box_lengths(style, property, lengths)}
 
+      property when property in ["margin-top", "margin-right", "margin-bottom", "margin-left"] ->
+        with {:ok, length} <- parse_length(value, :margin),
+             do: {:ok, put_edge_length(style, property, length)}
+
       property
-      when property in [
-             "margin-top",
-             "margin-right",
-             "margin-bottom",
-             "margin-left",
-             "padding-top",
-             "padding-right",
-             "padding-bottom",
-             "padding-left"
-           ] ->
+      when property in ["padding-top", "padding-right", "padding-bottom", "padding-left"] ->
         with {:ok, length} <- parse_length(value),
              do: {:ok, put_edge_length(style, property, length)}
 
       "border-color" ->
         with {:ok, color} <- parse_color(value),
              do: {:ok, Map.put(style, :border_color, color)}
+
+      property when property in ["border-top", "border-right", "border-bottom", "border-left"] ->
+        with {:ok, width, color} <- parse_border_edge(value, Map.fetch!(style, :color)) do
+          style = put_border_edge_width(style, property, width)
+
+          case color do
+            nil -> {:ok, style}
+            color -> {:ok, Map.put(style, :border_color, color)}
+          end
+        end
 
       "border-radius" ->
         with {:ok, length} <- parse_length(value),
@@ -605,6 +737,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       "font-size" ->
         with {:ok, length} <- parse_length(value), do: {:ok, Map.put(style, :font_size, length)}
 
+      "line-height" ->
+        case parse_line_height(value) do
+          {:ok, {:multiplier, multiplier}} ->
+            {:ok,
+             style
+             |> Map.put(:line_height_multiplier, multiplier)
+             |> Map.put(:line_height_explicit, true)}
+
+          {:ok, line_height} ->
+            {:ok,
+             style
+             |> Map.put(:line_height, line_height)
+             |> Map.delete(:line_height_multiplier)
+             |> Map.put(:line_height_explicit, true)}
+
+          :error ->
+            :error
+        end
+
       "font-weight" ->
         put_font_weight(style, value)
 
@@ -618,8 +769,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         put_display(style, value)
 
       property when property in ["width", "height"] ->
-        with {:ok, length} <- parse_length(value),
-             do: {:ok, Map.put(style, length_property(property), length)}
+        with {:ok, size} <- parse_size(value),
+             do: {:ok, Map.put(style, length_property(property), size)}
+
+      "aspect-ratio" ->
+        with {:ok, aspect_ratio} <- parse_aspect_ratio(value),
+             do: {:ok, Map.put(style, :aspect_ratio, aspect_ratio)}
+
+      "border-collapse" ->
+        put_border_collapse(style, value)
 
       "flex-direction" ->
         put_flex_direction(style, value)
@@ -827,6 +985,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       value when value in ["start", "flex-start"] -> {:ok, Map.put(style, property, :flex_start)}
       value when value in ["end", "flex-end"] -> {:ok, Map.put(style, property, :flex_end)}
       "center" -> {:ok, Map.put(style, property, :center)}
+      _ -> {:error, :invalid_document}
+    end
+  end
+
+  defp put_border_collapse(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      "collapse" -> {:ok, Map.put(style, :border_collapse, :collapse)}
+      "separate" -> {:ok, Map.put(style, :border_collapse, :separate)}
       _ -> {:error, :invalid_document}
     end
   end
@@ -1167,6 +1333,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         <<"#", red::binary-size(2), green::binary-size(2), blue::binary-size(2)>> = normalized
         {:ok, {hex_to_pdf_color(red), hex_to_pdf_color(green), hex_to_pdf_color(blue)}}
 
+      Regex.match?(~r/^#[0-9a-f]{8}$/u, normalized) ->
+        <<"#", red::binary-size(2), green::binary-size(2), blue::binary-size(2),
+          _alpha::binary-size(2)>> = normalized
+
+        {:ok, {hex_to_pdf_color(red), hex_to_pdf_color(green), hex_to_pdf_color(blue)}}
+
       Regex.match?(~r/^#[0-9a-f]{3}$/u, normalized) ->
         <<"#", red::binary-size(1), green::binary-size(1), blue::binary-size(1)>> = normalized
 
@@ -1180,10 +1352,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp parse_box_lengths(value) do
+    parse_box_lengths(value, :nonnegative)
+  end
+
+  defp parse_box_lengths(value, length_context) do
     lengths =
       value
       |> String.split(~r/\s+/u, trim: true)
-      |> Enum.map(&parse_length/1)
+      |> Enum.map(&parse_length(&1, length_context))
 
     case lengths do
       [{:ok, all}] ->
@@ -1217,18 +1393,86 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp parse_length(value) do
+    parse_length(value, :nonnegative)
+  end
+
+  defp parse_size(value) do
     normalized = String.trim(value)
 
-    case Regex.run(~r/^(?:(0)|(\d+(?:\.\d+)?)(pt|px|mm|cm|in))$/u, normalized) do
+    cond do
+      Regex.match?(~r/^\d+(?:\.\d+)?%$/u, normalized) ->
+        {number, "%"} = Float.parse(normalized)
+        {:ok, {:percent, number / 100}}
+
+      true ->
+        parse_length(value)
+    end
+  end
+
+  defp parse_length(value, length_context) do
+    normalized = String.trim(value)
+
+    case Regex.run(~r/^(?:(0)|(-?\d+(?:\.\d+)?)(pt|px|mm|cm|in))$/u, normalized) do
       [_, "0"] ->
         {:ok, 0.0}
 
       [_, "", value, unit] ->
         {number, ""} = Float.parse(value)
-        {:ok, number * points_per_unit(unit)}
+
+        case length_context == :margin or number >= 0 do
+          true -> {:ok, number * points_per_unit(unit)}
+          false -> :error
+        end
 
       _ ->
         :error
+    end
+  end
+
+  defp parse_aspect_ratio(value) do
+    tokens =
+      value
+      |> String.trim()
+      |> String.downcase()
+      |> String.split("/", trim: true)
+      |> Enum.map(&String.trim/1)
+
+    case tokens do
+      [ratio] ->
+        with {:ok, number} <- parse_positive_number(ratio), do: {:ok, number}
+
+      [width, height] ->
+        with {:ok, width} <- parse_positive_number(width),
+             {:ok, height} <- parse_positive_number(height) do
+          {:ok, width / height}
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp parse_line_height(value) do
+    normalized = value |> String.trim() |> String.downcase()
+
+    cond do
+      normalized == "normal" ->
+        {:ok, {:multiplier, 1.2}}
+
+      match?({:ok, _length}, parse_length(normalized)) ->
+        parse_length(normalized)
+
+      true ->
+        with {:ok, multiplier} <- parse_nonnegative_number(normalized) do
+          {:ok, {:multiplier, multiplier}}
+        end
+    end
+  end
+
+  defp parse_positive_number(value) do
+    case Float.parse(String.trim(value)) do
+      {number, ""} when number > 0 -> {:ok, number}
+      _ -> :error
     end
   end
 
@@ -1265,6 +1509,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       "margin-bottom" -> Map.put(style, :margin_after, length)
       _ -> style
     end
+  end
+
+  defp put_border_edge_width(style, property, width) do
+    edge =
+      property
+      |> String.replace_prefix("border-", "")
+      |> String.to_existing_atom()
+
+    Map.update!(style, :border_widths, &Map.put(&1, edge, width))
   end
 
   defp parse_border(value, current_color) do
@@ -1304,6 +1557,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
+  defp parse_border_edge(value, current_color) do
+    case value |> String.trim() |> String.downcase() do
+      "none" ->
+        {:ok, 0.0, nil}
+
+      _ ->
+        with {:ok, border_widths, border_color} <- parse_border(value, current_color) do
+          {:ok, Enum.max(Map.values(border_widths)), border_color}
+        end
+    end
+  end
+
   defp page_break_value(value) do
     case String.downcase(String.trim(value)) do
       "auto" -> {:ok, :auto}
@@ -1314,12 +1579,62 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp load_image(src, opts) do
-    with {:ok, data, expected_format} <- image_source(src, Keyword.get(opts, :base_url)),
-         {:ok, image} <- decode_image(data) do
-      case is_nil(expected_format) or image.format == expected_format do
-        true -> {:ok, image}
-        false -> :error
-      end
+    case image_source(src, Keyword.get(opts, :base_url)) do
+      {:ok, data, expected_format} ->
+        with {:ok, image} <- decode_image(data) do
+          case is_nil(expected_format) or image.format == expected_format do
+            true -> {:ok, image}
+            false -> :error
+          end
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp data_uri_image_source(src) do
+    case Regex.run(~r/^data:image\/svg\+xml;base64,([A-Za-z0-9+\/=\r\n]+)$/u, src) do
+      [_, encoded] ->
+        with {:ok, svg} <- Base.decode64(String.replace(encoded, ~r/\s/u, "")),
+             {:ok, png} <- rasterize_svg(svg) do
+          {:ok, png, :png}
+        end
+
+      _ ->
+        case Regex.run(~r/^data:(image\/(?:png|jpeg));base64,([A-Za-z0-9+\/=\r\n]+)$/u, src) do
+          [_, mime_type, encoded] ->
+            with {:ok, data} <- Base.decode64(String.replace(encoded, ~r/\s/u, "")) do
+              {:ok, data, data_uri_format(mime_type)}
+            end
+
+          _ ->
+            :error
+        end
+    end
+  end
+
+  defp rasterize_svg(svg) do
+    case String.valid?(svg) do
+      true ->
+        sanitized_svg =
+          svg
+          |> String.replace(~r/<\?xml[^>]*>/iu, "")
+          |> String.replace(~r/<!DOCTYPE[^>]*(?:\[[\s\S]*?\]\s*)?>/iu, "")
+
+        case Resvg.svg_string_to_png_buffer(sanitized_svg,
+               resources_dir: System.tmp_dir!(),
+               shape_rendering: :optimize_speed,
+               text_rendering: :optimize_speed,
+               image_rendering: :optimize_speed,
+               skip_system_fonts: true
+             ) do
+          {:ok, png} -> {:ok, IO.iodata_to_binary(png)}
+          {:error, _reason} -> :error
+        end
+
+      false ->
+        :error
     end
   end
 
@@ -1338,18 +1653,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         end
 
       true ->
-        :error
-    end
-  end
-
-  defp data_uri_image_source(src) do
-    case Regex.run(~r/^data:(image\/(?:png|jpeg));base64,([A-Za-z0-9+\/=\r\n]+)$/u, src) do
-      [_, mime_type, encoded] ->
-        with {:ok, data} <- Base.decode64(String.replace(encoded, ~r/\s/u, "")) do
-          {:ok, data, data_uri_format(mime_type)}
-        end
-
-      _ ->
         :error
     end
   end
@@ -1417,18 +1720,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
          }
          when width > 0 and height > 0 and color_type in [2, 6] <- parsed,
          {:ok, inflated} <- png_inflate(Enum.join(idat, "")),
-         {:ok, rgb_data} <- png_rgb_data(inflated, width, height, color_type) do
+         {:ok, rgb_data, alpha_data} <- png_image_data(inflated, width, height, color_type) do
+      image = %{
+        format: :png,
+        data: rgb_data,
+        width_px: width,
+        height_px: height,
+        width: width * 0.75,
+        height: height * 0.75,
+        color_space: :device_rgb,
+        bits_per_component: 8
+      }
+
       {:ok,
-       %{
-         format: :png,
-         data: rgb_data,
-         width_px: width,
-         height_px: height,
-         width: width * 0.75,
-         height: height * 0.75,
-         color_space: :device_rgb,
-         bits_per_component: 8
-       }}
+       case alpha_data do
+         nil -> image
+         alpha_data -> Map.put(image, :alpha_data, alpha_data)
+       end}
     else
       _ -> :error
     end
@@ -1485,7 +1793,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp png_rgb_data(data, width, height, color_type) do
+  defp png_image_data(data, width, height, color_type) do
     bytes_per_pixel =
       case color_type do
         2 -> 3
@@ -1496,20 +1804,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
     case png_rows(data, width, height, bytes_per_pixel, row_size, [], "") do
       {:ok, rows} ->
-        rgb =
-          rows
-          |> Enum.map(fn row ->
-            case color_type do
-              2 -> row
-              6 -> strip_png_alpha(row)
-            end
-          end)
-          |> Enum.join("")
+        {rgb, alpha} = split_png_rows(rows, color_type)
 
-        {:ok, rgb}
+        {:ok, rgb, alpha}
 
       :error ->
         :error
+    end
+  end
+
+  defp split_png_rows(rows, color_type) do
+    case color_type do
+      2 ->
+        {Enum.join(rows, ""), nil}
+
+      6 ->
+        {rgb_rows, alpha_rows} =
+          Enum.map(rows, &split_png_rgba/1)
+          |> Enum.unzip()
+
+        alpha = Enum.join(alpha_rows, "")
+
+        case alpha == :binary.copy(<<255>>, byte_size(alpha)) do
+          true -> {Enum.join(rgb_rows, ""), nil}
+          false -> {Enum.join(rgb_rows, ""), alpha}
+        end
     end
   end
 
@@ -1534,41 +1853,78 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp png_unfilter_row(filter, row, previous, bytes_per_pixel) do
-    row_bytes = :binary.bin_to_list(row)
-    previous_bytes = :binary.bin_to_list(previous)
+    case filter do
+      0 ->
+        {:ok, row}
 
-    decoded =
-      row_bytes
-      |> Enum.with_index()
-      |> Enum.reduce_while([], fn {byte, index}, acc ->
-        left = if index >= bytes_per_pixel, do: Enum.at(acc, bytes_per_pixel - 1), else: 0
-        up = Enum.at(previous_bytes, index, 0)
-
-        up_left =
-          case index >= bytes_per_pixel do
-            true -> Enum.at(previous_bytes, index - bytes_per_pixel, 0)
-            false -> 0
+      filter when filter in [1, 2, 3, 4] ->
+        previous =
+          case previous do
+            "" -> :binary.copy(<<0>>, byte_size(row))
+            previous -> previous
           end
 
-        predictor =
-          case filter do
-            0 -> 0
-            1 -> left
-            2 -> up
-            3 -> div(left + up, 2)
-            4 -> png_paeth(left, up, up_left)
-            _ -> :error
-          end
+        {:ok, png_unfilter_bytes(filter, row, previous, bytes_per_pixel, 0, [], [], [])}
 
-        case predictor do
-          :error -> {:halt, :error}
-          predictor -> {:cont, [rem(byte + predictor, 256) | acc]}
-        end
-      end)
+      _ ->
+        :error
+    end
+  end
 
-    case decoded do
-      :error -> :error
-      decoded -> {:ok, decoded |> Enum.reverse() |> :binary.list_to_bin()}
+  defp png_unfilter_bytes(
+         _filter,
+         "",
+         "",
+         _bytes_per_pixel,
+         _index,
+         _left_window,
+         _up_left_window,
+         acc
+       ) do
+    acc
+    |> Enum.reverse()
+    |> :binary.list_to_bin()
+  end
+
+  defp png_unfilter_bytes(
+         filter,
+         <<byte, row_rest::binary>>,
+         <<up, previous_rest::binary>>,
+         bytes_per_pixel,
+         index,
+         left_window,
+         up_left_window,
+         acc
+       ) do
+    left = if index >= bytes_per_pixel, do: hd(left_window), else: 0
+    up_left = if index >= bytes_per_pixel, do: hd(up_left_window), else: 0
+
+    predictor =
+      case filter do
+        1 -> left
+        2 -> up
+        3 -> div(left + up, 2)
+        4 -> png_paeth(left, up, up_left)
+      end
+
+    decoded = rem(byte + predictor, 256)
+
+    png_unfilter_bytes(
+      filter,
+      row_rest,
+      previous_rest,
+      bytes_per_pixel,
+      index + 1,
+      png_window_push(left_window, decoded, bytes_per_pixel),
+      png_window_push(up_left_window, up, bytes_per_pixel),
+      [decoded | acc]
+    )
+  end
+
+  defp png_window_push(window, byte, bytes_per_pixel) do
+    case length(window) < bytes_per_pixel do
+      true -> window ++ [byte]
+      false -> tl(window) ++ [byte]
     end
   end
 
@@ -1585,8 +1941,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp strip_png_alpha(row) do
-    for <<red, green, blue, _alpha <- row>>, into: "", do: <<red, green, blue>>
+  defp split_png_rgba(row) do
+    row
+    |> :binary.bin_to_list()
+    |> Enum.chunk_every(4)
+    |> Enum.reduce({"", ""}, fn [red, green, blue, alpha], {rgb, mask} ->
+      {rgb <> <<red, green, blue>>, mask <> <<alpha>>}
+    end)
   end
 
   defp decode_jpeg(data) do

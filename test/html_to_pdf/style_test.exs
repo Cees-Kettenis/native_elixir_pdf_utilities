@@ -44,6 +44,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert title.style.color == {0.2, 0.4, 0.6}
   end
 
+  test "compute applies explicit line-height declarations" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"style" => "font-size: 10pt; line-height: 12px"},
+          children: [%{type: :text, text: "Absolute"}]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"style" => "line-height: 1.5; font-size: 10pt"},
+          children: [%{type: :text, text: "Unitless"}]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"style" => "font-size: 10pt; line-height: normal"},
+          children: [%{type: :text, text: "Normal"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [absolute, unitless, normal] = styled_tree.children
+
+    assert absolute.style.line_height == 9.0
+    assert unitless.style.line_height == 15.0
+    assert normal.style.line_height == 12.0
+
+    assert Style.compute(
+             %{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "p",
+                   attributes: %{"style" => "line-height: tight"},
+                   children: [%{type: :text, text: "Invalid"}]
+                 }
+               ]
+             },
+             []
+           ) == {:error, :invalid_document}
+  end
+
   test "compute applies inline bold italic and inherited color" do
     dom = %{
       type: :document,
@@ -245,7 +293,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                     %{
                       type: :element,
                       tag: "td",
-                      attributes: %{"style" => "padding: 2pt; border: 2pt solid blue"},
+                      attributes: %{
+                        "colspan" => "2",
+                        "rowspan" => "3",
+                        "style" => "padding: 2pt; border: 2pt solid blue"
+                      },
                       children: [%{type: :text, text: "Alpha"}]
                     },
                     %{
@@ -285,6 +337,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert alpha.style.border_widths == %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0}
     assert alpha.style.border_color == {0, 0, 1}
     assert amount.style.text_align == :left
+    assert alpha.style.colspan == 2
+    assert alpha.style.rowspan == 3
   end
 
   test "compute applies configured stylesheets before style tag rules" do
@@ -501,6 +555,103 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert paragraph.style.color == {0, 0, 0}
   end
 
+  test "compute applies first-child pseudo selectors" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [%{type: :text, text: "div p:first-child { color: red; }"}]
+        },
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{},
+          children: [
+            %{
+              type: :element,
+              tag: "p",
+              attributes: %{},
+              children: [%{type: :text, text: "First"}]
+            },
+            %{
+              type: :element,
+              tag: "p",
+              attributes: %{},
+              children: [%{type: :text, text: "Second"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [container] = styled_tree.children
+    [first, second] = container.children
+
+    assert first.style.color == {1, 0, 0}
+    assert second.style.color == {0, 0, 0}
+  end
+
+  test "compute applies child selectors with first-child pseudo classes" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [
+            %{
+              type: :text,
+              text:
+                ".address-section > .section { color: #336699; } .address-section > .section p { margin-top: 4pt; } .address-section > .section p:first-child { margin-top: 0; color: red; }"
+            }
+          ]
+        },
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{"class" => "address-section"},
+          children: [
+            %{
+              type: :element,
+              tag: "div",
+              attributes: %{"class" => "section"},
+              children: [
+                %{
+                  type: :element,
+                  tag: "p",
+                  attributes: %{},
+                  children: [%{type: :text, text: "First"}]
+                },
+                %{
+                  type: :element,
+                  tag: "p",
+                  attributes: %{},
+                  children: [%{type: :text, text: "Second"}]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [section_wrapper] = styled_tree.children
+    [section] = section_wrapper.children
+    [first, second] = section.children
+
+    assert section.style.color == {0.2, 0.4, 0.6}
+    assert first.style.color == {1, 0, 0}
+    assert first.style.margin.top == 0.0
+    assert second.style.margin.top == 4.0
+    assert second.style.color == {0.2, 0.4, 0.6}
+  end
+
   test "compute gives inline style declarations the highest priority" do
     dom = %{
       type: :document,
@@ -701,9 +852,67 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                children: [
                  %{
                    type: :element,
+                   tag: "table",
+                   attributes: %{},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"colspan" => 2},
+                           children: [%{type: :text, text: "Bad span shape"}]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             },
+             []
+           ) == {:error, :invalid_document}
+
+    assert Style.compute(
+             %{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
                    tag: "img",
                    attributes: %{"src" => "data:image/gif;base64,R0lGODlhAQABAAAAACw="},
                    children: []
+                 }
+               ]
+             },
+             []
+           ) == {:error, :invalid_document}
+
+    assert Style.compute(
+             %{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"colspan" => "0"},
+                           children: [%{type: :text, text: "Bad span"}]
+                         }
+                       ]
+                     }
+                   ]
                  }
                ]
              },
@@ -903,12 +1112,103 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     paragraph = Enum.at(styled_tree.children, 5)
     table = Enum.at(styled_tree.children, 6)
 
-    assert Enum.map(headings, & &1.style.font_size) == [20.0, 16.0, 14.0, 12.0, 10.0]
+    assert Enum.map(headings, & &1.style.font_size) == [
+             18.0,
+             14.04,
+             12.0,
+             9.959999999999999,
+             8.040000000000001
+           ]
+
     [bold, italic] = paragraph.children
     assert bold.style.font_weight == 700
     assert italic.style.font_style == :italic
     [foot] = table.children
     assert foot.style.table_section == :foot
+  end
+
+  test "compute inherits body font size into document blocks tables and headings" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "html",
+          attributes: %{},
+          children: [
+            %{
+              type: :element,
+              tag: "head",
+              attributes: %{},
+              children: [
+                %{
+                  type: :element,
+                  tag: "style",
+                  attributes: %{},
+                  children: [%{type: :text, text: "body { font-size: 10px; }"}]
+                }
+              ]
+            },
+            %{
+              type: :element,
+              tag: "body",
+              attributes: %{},
+              children: [
+                %{
+                  type: :element,
+                  tag: "p",
+                  attributes: %{},
+                  children: [%{type: :text, text: "P"}]
+                },
+                %{
+                  type: :element,
+                  tag: "h2",
+                  attributes: %{},
+                  children: [%{type: :text, text: "H2"}]
+                },
+                %{
+                  type: :element,
+                  tag: "h4",
+                  attributes: %{},
+                  children: [%{type: :text, text: "H4"}]
+                },
+                %{
+                  type: :element,
+                  tag: "table",
+                  attributes: %{},
+                  children: [
+                    %{
+                      type: :element,
+                      tag: "tr",
+                      attributes: %{},
+                      children: [
+                        %{
+                          type: :element,
+                          tag: "td",
+                          attributes: %{},
+                          children: [%{type: :text, text: "Cell"}]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom)
+    [paragraph, h2, h4, table] = styled_tree.children
+    [row] = table.children
+    [cell] = row.children
+
+    assert paragraph.style.font_size == 7.5
+    assert h2.style.font_size == 11.25
+    assert h4.style.font_size == 7.5
+    assert table.style.font_size == 7.5
+    assert cell.style.font_size == 7.5
   end
 
   test "compute accepts supported display and box value variants" do
@@ -926,12 +1226,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       {"margin-left: 2pt", :margin, %{top: 0.0, right: 0.0, bottom: 12.0, left: 2.0}},
       {"border-width: 2pt", :border_widths, %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0}},
       {"border: none", :border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}},
+      {"border-right: none", :border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}},
+      {"border-left: 2pt solid red", :border_widths,
+       %{top: 0.0, right: 0.0, bottom: 0.0, left: 2.0}},
       {"color: #abc", :color, {0.6666666667, 0.7333333333, 0.8}},
+      {"color: #00000070", :color, {0, 0, 0}},
+      {"background-color: #33669980", :background_color, {0.2, 0.4, 0.6}},
       {"font-size: 10px", :font_size, 7.5},
       {"width: 10mm", :width, 72.0 / 25.4 * 10},
+      {"width: 100%", :width, {:percent, 1.0}},
       {"height: 1cm", :height, 72.0 / 2.54},
+      {"height: 25%", :height, {:percent, 0.25}},
       {"width: 1in", :width, 72.0},
       {"height: 0", :height, 0.0},
+      {"aspect-ratio: 16 / 9", :aspect_ratio, 16 / 9},
       {"text-align: left", :text_align, :left},
       {"text-align: center", :text_align, :center},
       {"text-align: right", :text_align, :right},
@@ -940,13 +1248,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       {"font-style: normal", :font_style, :normal},
       {"font-style: italic", :font_style, :italic},
       {"border-color: red", :border_color, {1, 0, 0}},
-      {"margin-bottom: 5pt", :margin_after, 5.0}
+      {"border-collapse: collapse", :border_collapse, :collapse},
+      {"border-collapse: separate", :border_collapse, :separate},
+      {"aspect-ratio: 1.5", :aspect_ratio, 1.5},
+      {"margin-bottom: 5pt", :margin_after, 5.0},
+      {"margin-top: -2pt", :margin, %{top: -2.0, right: 0.0, bottom: 12.0, left: 0.0}}
     ]
 
     Enum.each(assertions, fn {style, key, expected} ->
       assert {:ok, computed} = style_for("p", style)
       assert_style_value(Map.fetch!(computed, key), expected)
     end)
+  end
+
+  test "side border none keeps the existing border color" do
+    assert {:ok, style} = style_for("td", "border: 1px solid #ccc; border-right: none")
+
+    assert style.border_widths == %{top: 0.75, right: 0.0, bottom: 0.75, left: 0.75}
+    assert_style_value(style.border_color, {0.8, 0.8, 0.8})
   end
 
   test "compute accepts supported flex and grid value variants" do
@@ -1010,7 +1329,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "font-style: oblique",
       "gap: 1pt 2pt 3pt",
       "padding: 1pt 2pt 3pt 4pt 5pt",
+      "padding-top: -1pt",
       "width: 2em",
+      "width: -10%",
+      "height: -1pt",
+      "color: #0000007",
+      "aspect-ratio: 0 / 1",
+      "aspect-ratio: 1 / 2 / 3",
+      "border-collapse: maybe",
       "border: nonsense"
     ]
 
@@ -1043,6 +1369,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert {:ok, png_style} = image_style(png_path, [])
     assert png_style.image.format == :png
     assert png_style.image.data == <<255, 0, 0>>
+    refute Map.has_key?(png_style.image, :alpha_data)
+
+    transparent_png_path = Path.join(base_dir, "transparent.png")
+    File.write!(transparent_png_path, png_rgba_fixture(1, 1, 0, <<0, 0, 0, 0>>))
+
+    assert {:ok, transparent_png_style} = image_style(transparent_png_path, [])
+    assert transparent_png_style.image.data == <<0, 0, 0>>
+    assert transparent_png_style.image.alpha_data == <<0>>
 
     assert {:ok, jpeg_style} = image_style("photo.jpg", base_url: "file://" <> base_dir)
     assert jpeg_style.image.format == :jpeg
@@ -1080,7 +1414,46 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert {:ok, restart_jpeg_style} = image_style(restart_jpeg_src, [])
     assert restart_jpeg_style.image.format == :jpeg
 
+    svg_src =
+      "data:image/svg+xml;base64," <>
+        Base.encode64(
+          ~s(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"><rect width="2" height="1" fill="red"/></svg>)
+        )
+
+    assert {:ok, svg_style} = image_style(svg_src, [])
+    assert svg_style.display == :image
+    assert svg_style.image.format == :png
+    assert svg_style.image.width_px == 2
+    assert svg_style.image.height_px == 1
+
+    transparent_svg_src =
+      "data:image/svg+xml;base64," <>
+        Base.encode64(
+          ~s(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"><rect width="1" height="1" fill="red"/></svg>)
+        )
+
+    assert {:ok, transparent_svg_style} = image_style(transparent_svg_src, [])
+    assert byte_size(transparent_svg_style.image.alpha_data) == 2
+
+    doctype_svg_src =
+      "data:image/svg+xml;base64," <>
+        Base.encode64("""
+        <?xml version="1.0" standalone="no"?>
+        <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 20010904//EN"
+          "http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd">
+        <svg version="1.0" xmlns="http://www.w3.org/2000/svg" width="3" height="2">
+          <path d="M0 0h3v2H0z" fill="#b9251b"/>
+        </svg>
+        """)
+
+    assert {:ok, doctype_svg_style} = image_style(doctype_svg_src, [])
+    assert doctype_svg_style.image.format == :png
+    assert doctype_svg_style.image.width_px == 3
+    assert doctype_svg_style.image.height_px == 2
+
     malformed_sources = [
+      {"data:image/svg+xml;base64,#{Base.encode64("<svg></svg>")}"},
+      {"data:image/svg+xml;base64,#{Base.encode64(<<255>>)}"},
       {"data:image/png;base64,%%%"},
       {"data:image/png;base64,#{Base.encode64(jpeg_fixture(1, 1))}"},
       {"data:image/png;base64,#{Base.encode64("not png")}"},
@@ -1276,6 +1649,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     png_fixture(width, height, 6, filter)
   end
 
+  defp png_rgba_fixture(width, height, filter, pixel) do
+    png_fixture(width, height, 6, filter, pixel)
+  end
+
   defp png_fixture(width, height, color_type, filter) do
     pixel =
       case color_type do
@@ -1283,6 +1660,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
         6 -> <<255, 0, 0, 255>>
       end
 
+    png_fixture(width, height, color_type, filter, pixel)
+  end
+
+  defp png_fixture(width, height, color_type, filter, pixel) do
     row = :binary.copy(pixel, width)
     rows = Enum.map_join(1..height, "", fn _index -> <<filter>> <> row end)
 

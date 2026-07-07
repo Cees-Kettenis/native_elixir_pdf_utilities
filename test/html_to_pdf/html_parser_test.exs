@@ -98,6 +98,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert paragraph.tag == "p"
   end
 
+  test "parse accepts document metadata void tags and line breaks" do
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               ~s(<!DOCTYPE html><html lang="en"><meta charset="utf-8" /><title>PO</title><body><p>One<br />Two<br>Three</p><img src="logo.png" /></body></html>)
+             )
+
+    [html] = dom.children
+    [meta, title, body] = html.children
+    [paragraph, image] = body.children
+
+    assert html.attributes == %{"lang" => "en"}
+    assert meta.tag == "meta"
+    assert meta.attributes == %{"charset" => "utf-8"}
+    assert title.children == [%{type: :text, text: "PO"}]
+
+    assert Enum.map(paragraph.children, &Map.get(&1, :tag, :text)) == [
+             :text,
+             "br",
+             :text,
+             "br",
+             :text
+           ]
+
+    assert image.children == []
+  end
+
   test "parse ignores structural whitespace and decodes supported entities" do
     assert {:ok, dom} =
              HtmlParser.parse("""
@@ -330,6 +356,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
                   }
                 ]
               }}
+  end
+
+  test "parse accepts cell spans and block table children inside cells" do
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               ~s(<table><tr><td colspan="2" rowspan="3"><p>Address</p><table><tr><td>Nested</td></tr></table></td></tr></table>)
+             )
+
+    [table] = dom.children
+    [row] = table.children
+    [cell] = row.children
+    [paragraph, nested_table] = cell.children
+
+    assert cell.attributes == %{"colspan" => "2", "rowspan" => "3"}
+    assert paragraph.tag == "p"
+    assert nested_table.tag == "table"
   end
 
   test "parse accepts a table without a caption" do

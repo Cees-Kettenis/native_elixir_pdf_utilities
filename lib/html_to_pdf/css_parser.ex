@@ -13,6 +13,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           tag: String.t() | nil,
           id: String.t() | nil,
           classes: [String.t()],
+          pseudo_classes: [:first_child],
           combinator: nil | :descendant | :child
         }
   @type selector :: %{
@@ -185,18 +186,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   defp parse_simple_selector(selector) do
     captures =
       Regex.named_captures(
-        ~r/^(?<tag>[a-zA-Z][a-zA-Z0-9]*)?(?<modifiers>(?:[#.][a-zA-Z_-][a-zA-Z0-9_-]*)*)$/u,
+        ~r/^(?<tag>[a-zA-Z][a-zA-Z0-9]*)?(?<modifiers>(?:[#.][a-zA-Z_-][a-zA-Z0-9_-]*)*)(?<pseudo>:(?:first-child))?$/u,
         selector
       )
 
     case captures do
-      %{"tag" => tag, "modifiers" => modifiers} ->
-        parse_selector_modifiers(modifiers, %{
+      %{"tag" => tag, "modifiers" => modifiers, "pseudo" => pseudo} ->
+        part = %{
           tag: tag_name(tag),
           id: nil,
           classes: [],
+          pseudo_classes: pseudo_classes(pseudo),
           combinator: nil
-        })
+        }
+
+        parse_selector_modifiers(modifiers, part)
 
       _ ->
         {:error, :invalid_css}
@@ -224,8 +228,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     Enum.reduce(parts, {0, 0, 0}, fn part, {ids, classes, elements} ->
       id_count = if is_nil(part.id), do: 0, else: 1
       element_count = if is_nil(part.tag), do: 0, else: 1
-      {ids + id_count, classes + length(part.classes), elements + element_count}
+      class_count = length(part.classes) + length(part.pseudo_classes)
+      {ids + id_count, classes + class_count, elements + element_count}
     end)
+  end
+
+  defp pseudo_classes(pseudo) do
+    case pseudo do
+      ":first-child" -> [:first_child]
+      _ -> []
+    end
   end
 
   defp tag_name("") do

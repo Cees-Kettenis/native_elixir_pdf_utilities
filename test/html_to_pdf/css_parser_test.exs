@@ -29,6 +29,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
            ]
   end
 
+  test "parse accepts first-child pseudo selectors" do
+    assert {:ok, [rule]} =
+             CssParser.parse(".address-section > .section p:first-child { margin-top: 0; }")
+
+    [selector] = rule.selectors
+
+    assert selector.specificity == {0, 3, 1}
+
+    assert Enum.map(selector.parts, &{&1.tag, &1.classes, &1.pseudo_classes, &1.combinator}) == [
+             {nil, ["address-section"], [], nil},
+             {nil, ["section"], [], :child},
+             {"p", [], [:first_child], :descendant}
+           ]
+  end
+
   test "parse_declarations normalizes inline declaration blocks" do
     assert CssParser.parse_declarations(" COLOR : #336699 ; font-weight: bold ") ==
              {:ok, [{"color", "#336699"}, {"font-weight", "bold"}]}

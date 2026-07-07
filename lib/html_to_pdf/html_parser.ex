@@ -18,12 +18,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         }
   @type dom_tree :: %{type: :document, children: [element_node()]}
 
-  @structural_tags ~w(html head body style)
+  @structural_tags ~w(html head body style title meta)
   @block_tags ~w(div p h1 h2 h3 h4 h5 h6 ul ol table img)
-  @inline_tags ~w(strong b em i span a)
+  @inline_tags ~w(strong b em i span a br)
   @list_tags ~w(ul ol)
   @table_structure_tags ~w(table thead tbody tfoot tr)
   @table_content_tags ~w(caption th td)
+  @void_tags ~w(meta br img)
 
   @doc """
   Parses an HTML binary into a renderer DOM tree.
@@ -70,6 +71,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
   defp parse_child(token, remaining, context, closing_tag, children) do
     cond do
+      context == :document and doctype_token?(token) ->
+        parse_children(remaining, context, closing_tag, children)
+
       String.starts_with?(token, "</") ->
         case parse_closing_tag(token) do
           {:ok, tag} when tag == closing_tag -> {:ok, children, remaining}
@@ -77,9 +81,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         end
 
       String.starts_with?(token, "<") ->
-        with {:ok, tag, attributes} <- parse_opening_tag(token),
+        with {:ok, tag, attributes, self_closing?} <- parse_opening_tag(token),
              true <- allowed_child?(context, tag),
-             {:ok, element_children, rest} <- element_children(tag, remaining),
+             {:ok, element_children, rest} <- element_children(tag, remaining, self_closing?),
              true <- valid_element?(tag, element_children) do
           element = %{
             type: :element,
@@ -121,17 +125,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   defp parse_opening_tag(token) do
     captures =
       Regex.named_captures(
-        ~r/^<\s*(?<tag>[a-zA-Z][a-zA-Z0-9]*)\s*(?<attributes>[^<>]*?)\s*>$/u,
+        ~r/^<\s*(?<tag>[a-zA-Z][a-zA-Z0-9]*)\s*(?<attributes>[^<>]*?)(?<self_closing>\/?)\s*>$/u,
         token
       )
 
     case captures do
-      %{"tag" => tag, "attributes" => attributes} ->
+      %{"tag" => tag, "attributes" => attributes, "self_closing" => self_closing} ->
         tag = String.downcase(tag)
 
         with true <- supported_tag?(tag),
              {:ok, attributes} <- parse_attributes(attributes, tag) do
-          {:ok, tag, attributes}
+          {:ok, tag, attributes, self_closing == "/" or tag in @void_tags}
         else
           _ -> {:error, :unsupported_html}
         end
@@ -182,41 +186,64 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
       value = quoted_value |> String.slice(1..-2//1) |> decode_entities()
 
       case {name, tag, Map.has_key?(acc, name)} do
-        {"style", _, false} -> {:cont, {:ok, Map.put(acc, name, value)}}
-        {"id", _, false} -> {:cont, {:ok, Map.put(acc, name, value)}}
-        {"class", _, false} -> {:cont, {:ok, Map.put(acc, name, value)}}
-        {"href", "a", false} -> {:cont, {:ok, Map.put(acc, name, value)}}
-        {"src", "img", false} -> {:cont, {:ok, Map.put(acc, name, value)}}
-        _ -> {:halt, {:error, :unsupported_html}}
+        {"style", _, false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"id", _, false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"class", _, false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"lang", "html", false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"href", "a", false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"src", "img", false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "meta", false} when name in ~w(charset content http-equiv name property) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, tag, false} when tag in ~w(td th) and name in ~w(colspan rowspan) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        _ ->
+          {:halt, {:error, :unsupported_html}}
       end
     end)
   end
 
-  defp element_children(tag, remaining) do
-    case tag do
-      "img" -> {:ok, [], remaining}
-      _ -> parse_children(remaining, tag, tag, [])
+  defp element_children(tag, remaining, self_closing?) do
+    case self_closing? do
+      true -> {:ok, [], remaining}
+      false -> parse_children(remaining, tag, tag, [])
     end
   end
 
   defp allowed_child?(context, tag) do
     cond do
       context == :document ->
-        tag in @block_tags or tag in ~w(html head body style)
+        tag in @block_tags or tag in ~w(html head body style meta title)
 
       context == "html" ->
-        tag in ~w(head body style)
+        tag in @block_tags or tag in ~w(head body style meta title)
 
       context == "head" ->
-        tag == "style"
+        tag in ~w(style meta title)
 
       context == "body" ->
-        tag in @block_tags or tag == "style"
+        tag in @block_tags or tag in ~w(style meta title)
 
       context in @list_tags ->
         tag == "li"
 
       context == "style" ->
+        false
+
+      context == "title" ->
         false
 
       context == "table" ->
@@ -232,7 +259,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         tag in @inline_tags and tag != "a"
 
       context in @table_content_tags ->
-        tag in @inline_tags
+        tag in @inline_tags or tag in @block_tags
 
       context == "div" ->
         tag in @block_tags or tag in @inline_tags
@@ -250,12 +277,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   defp valid_element?(tag, children) do
     case tag do
       "head" ->
-        Enum.all?(children, &match?(%{tag: "style"}, &1))
+        Enum.all?(children, &match?(%{tag: tag} when tag in ["style", "meta", "title"], &1))
 
       "style" ->
         Enum.all?(children, &match?(%{type: :text}, &1))
 
-      "img" ->
+      "title" ->
+        Enum.all?(children, &match?(%{type: :text}, &1))
+
+      tag when tag in @void_tags ->
         children == []
 
       "table" ->
@@ -279,6 +309,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
       %{tag: tag} when tag in ~w(thead tbody tfoot tr) -> true
       _ -> false
     end
+  end
+
+  defp doctype_token?(token) do
+    Regex.match?(~r/^<!doctype\s+html\s*>$/iu, token)
   end
 
   defp decode_entities(text) do
