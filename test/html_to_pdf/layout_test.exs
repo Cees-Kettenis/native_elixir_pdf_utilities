@@ -187,6 +187,83 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert wide.x > narrow.x
   end
 
+  test "layout flows block children inside block containers" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{"style" => "padding: 2pt; border: 1pt solid #336699"},
+          children: [
+            %{type: :text, text: "Lead"},
+            %{type: :text, text: " \n "},
+            %{
+              type: :element,
+              tag: "p",
+              attributes: %{},
+              children: [%{type: :text, text: "Intro"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{},
+              children: [%{type: :text, text: "Inline"}]
+            },
+            %{
+              type: :element,
+              tag: "h4",
+              attributes: %{},
+              children: [%{type: :text, text: "Heading"}]
+            },
+            %{
+              type: :element,
+              tag: "div",
+              attributes: %{},
+              children: [%{type: :text, text: "Nested"}]
+            },
+            %{
+              type: :element,
+              tag: "table",
+              attributes: %{},
+              children: [
+                %{
+                  type: :element,
+                  tag: "tr",
+                  attributes: %{},
+                  children: [
+                    %{
+                      type: :element,
+                      tag: "td",
+                      attributes: %{},
+                      children: [%{type: :text, text: "Cell"}]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {220, 180}, margin: 10)
+
+    text_boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
+
+    assert Enum.map(text_boxes, & &1.text) == [
+             "Lead",
+             "Intro",
+             "Inline",
+             "Heading",
+             "Nested",
+             "Cell"
+           ]
+
+    assert Enum.map(text_boxes, & &1.y) == text_boxes |> Enum.map(& &1.y) |> Enum.sort(:desc)
+  end
+
   test "layout accounts for margin padding border and background dimensions" do
     styled_tree = %{
       type: :document,
@@ -413,6 +490,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert second_data_text.text == "2"
   end
 
+  test "layout resolves percentage table widths against available content width" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{"style" => "width: 100%; border: 1pt solid red"},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [%{type: :text, text: "Full"}]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 120}, margin: 10)
+    [table_box | _boxes] = layout_tree.boxes
+
+    assert table_box.type == :rect
+    assert_in_delta table_box.width, 180.0, 0.0001
+    assert table_box.stroke_color == {1, 0, 0}
+  end
+
   test "layout positions row flex items with order gap justify-content and align-items" do
     dom = %{
       type: :document,
@@ -453,6 +566,56 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert_in_delta second.x, 75.0, 0.0001
     assert_in_delta first.y, 68.0, 0.0001
     assert_in_delta second.y, 68.0, 0.0001
+  end
+
+  test "layout sizes bordered flex inline items to wrapped content height" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{"style" => "display: flex; width: 120pt"},
+          children: [
+            %{
+              type: :element,
+              tag: "p",
+              attributes: %{
+                "style" => "width: 70pt; border: 1pt solid #ccc; padding: 2pt; font-size: 8pt"
+              },
+              children: [
+                %{
+                  type: :text,
+                  text: "Remarks line one line two line three line four"
+                }
+              ]
+            },
+            %{
+              type: :element,
+              tag: "p",
+              attributes: %{
+                "style" => "width: 30pt; border: 1pt solid #ccc; padding: 2pt; font-size: 8pt"
+              },
+              children: [%{type: :text, text: "Ship"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {180, 160}, margin: 10)
+
+    remarks_box =
+      layout_tree.boxes
+      |> Enum.filter(&(&1.type == :rect))
+      |> Enum.find(&(&1.width > 70.0))
+
+    text_boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
+
+    assert length(text_boxes) > 2
+    assert remarks_box.height > 30.0
+    assert remarks_box.y < Enum.min(Enum.map(text_boxes, & &1.y))
   end
 
   test "layout grows flex items and wraps rows deterministically" do
@@ -1180,6 +1343,84 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert Enum.map(no_shrink_layout.boxes, & &1.text) == ["A", "B"]
   end
 
+  test "layout flexes block items with mixed block content" do
+    image = image_fixture(4, 2)
+
+    mixed_item = %{
+      type: :element,
+      style: block_style(),
+      children: [
+        %{type: :text, text: "Lead", style: text_style()},
+        %{type: :element, style: %{display: :none}, children: []},
+        %{type: :element, style: image_style(image), children: []},
+        paragraph("Visible"),
+        %{
+          type: :element,
+          style: block_style(),
+          children: [paragraph("Nested")]
+        }
+      ]
+    }
+
+    row_flex = %{
+      type: :element,
+      style:
+        Map.merge(block_style(), %{
+          display: :flex,
+          width: 120.0,
+          flex_direction: :row,
+          flex_wrap: :wrap,
+          column_gap: 0.0,
+          row_gap: 0.0,
+          justify_content: :flex_start,
+          align_items: :stretch
+        }),
+      children: [mixed_item]
+    }
+
+    assert {:ok, row_layout} =
+             Layout.layout(document([row_flex]), page_size: {180, 160}, margin: 10)
+
+    assert Enum.map(Enum.filter(row_layout.boxes, &(&1.type == :text)), & &1.text) == [
+             "Lead",
+             "Visible",
+             "Nested"
+           ]
+
+    assert Enum.any?(row_layout.boxes, &(&1.type == :image))
+
+    column_flex = %{
+      row_flex
+      | style: Map.put(row_flex.style, :flex_direction, :column),
+        children: [
+          %{
+            type: :element,
+            style: Map.put(block_style(), :width, {:percent, 0.5}),
+            children: [paragraph("Column")]
+          }
+        ]
+    }
+
+    assert {:ok, column_layout} =
+             Layout.layout(document([column_flex]), page_size: {180, 160}, margin: 10)
+
+    assert Enum.any?(column_layout.boxes, &(&1.type == :text and &1.text == "Column"))
+
+    invalid_flex = %{
+      row_flex
+      | children: [
+          %{
+            type: :element,
+            style: block_style(),
+            children: [%{type: :invalid}]
+          }
+        ]
+    }
+
+    assert Layout.layout(document([invalid_flex]), page_size: {180, 160}, margin: 10) ==
+             {:error, :invalid_layout}
+  end
+
   test "layout rejects invalid nested structures through containers" do
     bad_inline = %{
       type: :element,
@@ -1385,6 +1626,624 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     [_cell, text] = layout_tree.boxes
     assert text.text == "R"
     assert text.x > 10.0
+  end
+
+  test "layout supports line breaks colspan and nested tables in cells" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "p",
+                   attributes: %{},
+                   children: [
+                     %{type: :text, text: "Line 1"},
+                     %{type: :element, tag: "br", attributes: %{}, children: []},
+                     %{type: :text, text: "Line 2"}
+                   ]
+                 },
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"colspan" => "2"},
+                           children: [
+                             %{
+                               type: :element,
+                               tag: "p",
+                               attributes: %{},
+                               children: [%{type: :text, text: "Outer"}]
+                             },
+                             %{
+                               type: :element,
+                               tag: "table",
+                               attributes: %{},
+                               children: [
+                                 %{
+                                   type: :element,
+                                   tag: "tr",
+                                   attributes: %{},
+                                   children: [
+                                     %{
+                                       type: :element,
+                                       tag: "td",
+                                       attributes: %{},
+                                       children: [%{type: :text, text: "Nested"}]
+                                     }
+                                   ]
+                                 }
+                               ]
+                             }
+                           ]
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [%{type: :text, text: "Tail"}]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {240, 240}, margin: 10)
+    text_boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
+
+    assert Enum.map(text_boxes, & &1.text) == ["Line 1", "Line 2", "Outer", "Nested", "Tail"]
+
+    line_1 = Enum.find(text_boxes, &(&1.text == "Line 1"))
+    line_2 = Enum.find(text_boxes, &(&1.text == "Line 2"))
+    outer = Enum.find(text_boxes, &(&1.text == "Outer"))
+    nested = Enum.find(text_boxes, &(&1.text == "Nested"))
+    tail = Enum.find(text_boxes, &(&1.text == "Tail"))
+
+    assert line_2.y < line_1.y
+    assert nested.y < outer.y
+    assert tail.x > outer.x
+  end
+
+  test "layout skips display none table rows row groups and cells" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "caption",
+                       attributes: %{"style" => "display: none"},
+                       children: [%{type: :text, text: "Hidden caption"}]
+                     },
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{"style" => "display: none"},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [
+                             %{type: :text, text: "Hidden row"},
+                             %{
+                               type: :element,
+                               tag: "table",
+                               attributes: %{"style" => "display: none"},
+                               children: [
+                                 %{
+                                   type: :element,
+                                   tag: "tr",
+                                   attributes: %{},
+                                   children: [
+                                     %{
+                                       type: :element,
+                                       tag: "td",
+                                       attributes: %{},
+                                       children: [%{type: :text, text: "Hidden nested"}]
+                                     }
+                                   ]
+                                 }
+                               ]
+                             }
+                           ]
+                         }
+                       ]
+                     },
+                     %{
+                       type: :element,
+                       tag: "tbody",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "tr",
+                           attributes: %{},
+                           children: [
+                             %{
+                               type: :element,
+                               tag: "td",
+                               attributes: %{"style" => "display: none"},
+                               children: [%{type: :text, text: "Hidden cell"}]
+                             },
+                             %{
+                               type: :element,
+                               tag: "td",
+                               attributes: %{},
+                               children: [%{type: :text, text: "Visible cell"}]
+                             }
+                           ]
+                         },
+                         %{
+                           type: :element,
+                           tag: "tr",
+                           attributes: %{"style" => "display: none"},
+                           children: [
+                             %{
+                               type: :element,
+                               tag: "td",
+                               attributes: %{},
+                               children: [%{type: :text, text: "Hidden group row"}]
+                             }
+                           ]
+                         },
+                         %{
+                           type: :element,
+                           tag: "tr",
+                           attributes: %{},
+                           children: [
+                             %{
+                               type: :element,
+                               tag: "td",
+                               attributes: %{"style" => "display: none"},
+                               children: [%{type: :text, text: "Hidden only row"}]
+                             }
+                           ]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {240, 240}, margin: 10)
+    text = layout_tree.boxes |> Enum.filter(&(&1.type == :text)) |> Enum.map(& &1.text)
+
+    assert text == ["Visible cell"]
+  end
+
+  test "layout gives single-cell nested table rows the full table width" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{"style" => "width: 100%"},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"colspan" => "6", "style" => "padding: 0; border: none"},
+                           children: [
+                             %{
+                               type: :element,
+                               tag: "table",
+                               attributes: %{"style" => "width: 100%"},
+                               children: [
+                                 %{
+                                   type: :element,
+                                   tag: "tr",
+                                   attributes: %{},
+                                   children: [
+                                     %{
+                                       type: :element,
+                                       tag: "td",
+                                       attributes: %{},
+                                       children: [%{type: :text, text: "Nested full width"}]
+                                     }
+                                   ]
+                                 }
+                               ]
+                             }
+                           ]
+                         }
+                       ]
+                     },
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children:
+                         Enum.map(1..11, fn index ->
+                           %{
+                             type: :element,
+                             tag: "td",
+                             attributes: %{},
+                             children: [%{type: :text, text: to_string(index)}]
+                           }
+                         end)
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {220, 140}, margin: 10)
+
+    nested_text =
+      Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "Nested full width"))
+
+    assert nested_text.width > 180.0
+  end
+
+  test "layout derives table column widths from cell width styles" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{"style" => "width: 200pt"},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "width: 30%; padding: 0; border: none"},
+                           children: [%{type: :text, text: "A"}]
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "width: 70%; padding: 0; border: none"},
+                           children: [%{type: :text, text: "B"}]
+                         }
+                       ]
+                     },
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"colspan" => "2", "style" => "padding: 0; border: none"},
+                           children: [%{type: :text, text: "Wide"}]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {240, 120}, margin: 10)
+    a = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "A"))
+    b = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "B"))
+    wide = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "Wide"))
+
+    assert_in_delta b.x - a.x, 60.0, 0.1
+    assert wide.width > 20.0
+  end
+
+  test "layout does not inflate table rows for empty inline cells" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{"style" => "width: 120pt"},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "padding: 2pt; border: 1pt solid #ccc"},
+                           children: []
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "padding: 2pt; border: 1pt solid #ccc"},
+                           children: []
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {180, 120}, margin: 10)
+
+    cell_boxes =
+      layout_tree.boxes
+      |> Enum.filter(&(&1.type == :rect))
+      |> Enum.filter(&(&1.stroke_width > 0))
+
+    assert Enum.all?(cell_boxes, &(&1.height < 10.0))
+  end
+
+  test "layout distributes mixed fixed flexible and overflowing table widths" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{"style" => "width: 100pt"},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "width: 120pt; padding: 0; border: none"},
+                           children: [%{type: :text, text: "A"}]
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "width: 80pt; padding: 0; border: none"},
+                           children: [%{type: :text, text: "B"}]
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "padding: 0; border: none"},
+                           children: [%{type: :text, text: "C"}]
+                         }
+                       ]
+                     }
+                   ]
+                 },
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{"style" => "width: 100pt"},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "width: 30pt; padding: 0; border: none"},
+                           children: [%{type: :text, text: "D"}]
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "padding: 0; border: none"},
+                           children: [%{type: :text, text: "E"}]
+                         }
+                       ]
+                     },
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "width: 50pt; padding: 0; border: none"},
+                           children: [%{type: :text, text: "F"}]
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "padding: 0; border: none"},
+                           children: [%{type: :text, text: "G"}]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {140, 140}, margin: 10)
+
+    a = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "A"))
+    b = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "B"))
+    c = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "C"))
+    d = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "D"))
+    e = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "E"))
+    f = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "F"))
+    g = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "G"))
+
+    assert_in_delta b.x - a.x, 55.56, 0.1
+    assert_in_delta c.x - b.x, 44.44, 0.1
+    assert_in_delta e.x - d.x, 50.0, 0.1
+    assert_in_delta g.x - f.x, 50.0, 0.1
+  end
+
+  test "layout supports mixed text and inline children in block table cells" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [
+                             %{type: :text, text: "  \n  "},
+                             %{type: :text, text: "Intro"},
+                             %{
+                               type: :element,
+                               tag: "p",
+                               attributes: %{},
+                               children: [%{type: :text, text: "Block"}]
+                             },
+                             %{
+                               type: :element,
+                               tag: "span",
+                               attributes: %{},
+                               children: [%{type: :text, text: "Inline"}]
+                             }
+                           ]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {180, 180}, margin: 10)
+    text_boxes = layout_tree.boxes |> Enum.filter(&(&1.type == :text)) |> Enum.map(& &1.text)
+
+    assert text_boxes == ["Intro", "Block", "Inline"]
+  end
+
+  test "layout wraps long inline text to the available width" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{"style" => "width: 60pt"},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [
+                             %{
+                               type: :text,
+                               text: "Alpha beta gamma delta epsilon"
+                             }
+                           ]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {120, 120}, margin: 10)
+
+    text_boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
+
+    assert length(text_boxes) > 1
+    assert Enum.map(text_boxes, & &1.y) == Enum.sort(Enum.map(text_boxes, & &1.y), :desc)
+  end
+
+  test "layout drops leading whitespace when wrapping inline text" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "p",
+                   attributes: %{"style" => "width: 30pt"},
+                   children: [%{type: :text, text: "   Alpha beta"}]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {80, 120}, margin: 10)
+
+    text_boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
+
+    assert Enum.all?(text_boxes, &(not String.starts_with?(&1.text, " ")))
+  end
+
+  test "layout collapses template whitespace but keeps explicit line breaks" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "p",
+                   attributes: %{},
+                   children: [
+                     %{type: :text, text: "\n    "},
+                     %{
+                       type: :element,
+                       tag: "span",
+                       attributes: %{},
+                       children: [%{type: :text, text: "Alpha"}]
+                     },
+                     %{type: :text, text: "\n    Beta\n    "},
+                     %{type: :element, tag: "br", attributes: %{}, children: []},
+                     %{type: :text, text: "\n    Gamma"}
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {180, 120}, margin: 10)
+
+    text_boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
+
+    assert Enum.map(text_boxes, &String.trim(&1.text)) == ["Alpha", "Beta", "Gamma"]
+    assert Enum.at(text_boxes, 1).y == Enum.at(text_boxes, 0).y
+    assert Enum.at(text_boxes, 2).y < Enum.at(text_boxes, 0).y
   end
 
   test "layout rejects invalid options and unsupported trees" do
