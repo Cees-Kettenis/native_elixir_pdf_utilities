@@ -96,13 +96,13 @@ Render local or data URI images:
 
 | Area | Supported |
 | --- | --- |
-| Document wrappers | `html`, `head`, `body`, `style` |
+| Document wrappers | `doctype html`, `html`, `head`, `body`, `style`, `meta`, `title` |
 | Blocks | `div`, `p`, `h1` through `h6` |
-| Inline text | `span`, `strong`, `b`, `em`, `i`, `a` |
+| Inline text | `span`, `strong`, `b`, `em`, `i`, `a`, `br` |
 | Lists | `ul`, `ol`, `li` |
 | Tables | `table`, `caption`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td` |
 | Images | Strict `img` with required `src` |
-| Attributes | `id`, `class`, `style`, `href` on links, `src` on images |
+| Attributes | `id`, `class`, `style`, `lang` on `html`, metadata attributes on `meta`, `href` on links, `src` on images, `colspan`/`rowspan` on cells |
 | Links | `https://`, `http://`, and `mailto:` URI annotations |
 
 Unsupported HTML returns `{:error, :unsupported_html}` or `{:error, :invalid_document}` instead of being silently approximated.
@@ -111,12 +111,12 @@ Unsupported HTML returns `{:error, :unsupported_html}` or `{:error, :invalid_doc
 
 | Area | Supported |
 | --- | --- |
-| Selectors | Element, `.class`, `#id`, `element.class`, descendant, direct child, comma groups |
+| Selectors | Element, `.class`, `#id`, `element.class`, descendant, direct child, comma groups, `:first-child` |
 | Cascade | Specificity, source order, inline style priority, inheritance for text styles |
-| Units | `pt`, `px`, `mm`, `cm`, `in`, and unitless `0` |
+| Units | `pt`, `px`, `mm`, `cm`, `in`, percentages for `width`/`height`, and unitless `0` |
 | Display | `block`, `inline`, `none`, `flex`, `inline-flex`, `grid`, `inline-grid` |
-| Box model | `width`, `height`, `margin`, `padding`, side-specific margin/padding, `border`, `border-width`, `border-color`, `border-radius`, `background-color` |
-| Text | `color`, `font-family`, `font-size`, `font-weight`, `font-style`, `text-align` |
+| Box model | `width`, `height`, `aspect-ratio`, `margin`, negative margins, `padding`, side-specific margin/padding, `border`, side-specific `border-*`, `border-width`, `border-color`, `border-radius`, `border-collapse`, `background-color` |
+| Text | `color`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `text-align`; `#RRGGBBAA` colors are accepted with alpha ignored |
 | Page breaks | `break-before`, `break-after`, `page-break-before`, `page-break-after` with `auto`, `page`, or `always` |
 | Flexbox subset | `flex-direction`, `flex-wrap`, `gap`, `row-gap`, `column-gap`, `justify-content`, `align-items`, `align-self`, `order`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex` |
 | Grid subset | `grid-template-columns`, `grid-template-rows`, `grid-auto-columns`, `grid-auto-rows`, `grid-column`, `grid-column-start`, `grid-column-end`, `grid-row`, `grid-row-start`, `grid-row-end`, `grid-area`, `gap`, `row-gap`, `column-gap`, `justify-items`, `align-items`, `justify-content`, `align-content` |
@@ -129,7 +129,7 @@ Block, list, table, flexbox, and grid layout are deterministic and intentionally
 
 Pagination supports automatic page breaks, manual page breaks, page margins, basic keep-together behavior for emitted flow units, and repeated table headers when table bodies continue across pages.
 
-Images support PNG and JPEG from data URIs, absolute local paths, and `base_url`-relative paths. SVG, remote URLs, and unsafe relative paths are rejected.
+Images support PNG, JPEG, and SVG data URIs, plus PNG/JPEG from absolute local paths and `base_url`-relative paths. SVG data URIs are rasterized to PNG with the lightweight `resvg` NIF using local in-process rendering; remote URLs and unsafe relative paths are rejected.
 
 Fonts support built-in PDF fonts (`Helvetica`, `Courier`, `Times-Roman` and their bold/italic variants) plus explicit TTF embedding. Embedded fonts use TTF glyph widths, Type0/CID PDF resources, and basic Unicode mapping. Complex shaping for Arabic, Indic scripts, Thai, emoji sequences, and other advanced typography is not supported.
 
@@ -141,7 +141,6 @@ These features are intentionally outside the current renderer boundary:
 - `script`, `canvas`, `video`, `audio`, `iframe`, and interactive form behavior.
 - Remote asset fetching.
 - CSS floats, absolute/fixed positioning, transforms, animations, media queries, pseudo-elements, and pseudo-classes.
-- SVG rendering.
 - Full browser-compatible table, flexbox, and grid algorithms.
 - Complex text shaping and bidirectional layout.
 
