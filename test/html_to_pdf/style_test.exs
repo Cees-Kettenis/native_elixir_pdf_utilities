@@ -474,6 +474,62 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert paragraph.style.color == {1, 0, 0}
   end
 
+  test "compute applies flex container and item declarations" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{
+            "style" =>
+              "display: flex; flex-direction: row-reverse; flex-wrap: wrap; gap: 6pt; justify-content: space-between; align-items: center"
+          },
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{
+                "style" =>
+                  "order: 2; flex-grow: 1; flex-shrink: 0; flex-basis: 20pt; align-self: flex-end"
+              },
+              children: [%{type: :text, text: "A"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "order: 1; flex: 2 1 10pt"},
+              children: [%{type: :text, text: "B"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [container] = styled_tree.children
+    [first, second] = container.children
+
+    assert container.style.display == :flex
+    assert container.style.flex_direction == :row_reverse
+    assert container.style.flex_wrap == :wrap
+    assert container.style.row_gap == 6.0
+    assert container.style.column_gap == 6.0
+    assert container.style.justify_content == :space_between
+    assert container.style.align_items == :center
+
+    assert first.style.order == 2
+    assert first.style.flex_grow == 1.0
+    assert first.style.flex_shrink == 0.0
+    assert first.style.flex_basis == 20.0
+    assert first.style.align_self == :flex_end
+
+    assert second.style.order == 1
+    assert second.style.flex_grow == 2.0
+    assert second.style.flex_shrink == 1.0
+    assert second.style.flex_basis == 10.0
+  end
+
   test "compute rejects unsupported document trees" do
     assert Style.compute(%{tag: "p"}, []) == {:error, :invalid_document}
 
@@ -544,6 +600,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                        children: [%{type: :text, text: "bad"}]
                      }
                    ]
+                 }
+               ]
+             },
+             []
+           ) == {:error, :invalid_document}
+
+    assert Style.compute(
+             %{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{"style" => "display: flex; justify-content: baseline"},
+                   children: [%{type: :text, text: "Bad"}]
                  }
                ]
              },

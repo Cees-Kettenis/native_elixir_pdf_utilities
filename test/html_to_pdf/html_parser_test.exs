@@ -98,6 +98,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert paragraph.tag == "p"
   end
 
+  test "parse accepts div containers for flex layouts" do
+    assert {:ok, dom} =
+             HtmlParser.parse(~s(<div class="row"><div>A</div><span>B</span></div>))
+
+    [container] = dom.children
+    [first, second] = container.children
+
+    assert container.tag == "div"
+    assert container.attributes == %{"class" => "row"}
+    assert first.tag == "div"
+    assert second.tag == "span"
+  end
+
   test "parse accepts strict lists and link href attributes" do
     assert HtmlParser.parse(
              ~s(<ul><li>Read <a href="https://example.com">docs</a></li><li>Ship</li></ul><ol><li>First</li></ol>)
@@ -274,7 +287,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
   end
 
   test "parse rejects unsupported markup" do
-    assert HtmlParser.parse("<div>Hello</div>") == {:error, :unsupported_html}
     assert HtmlParser.parse(~s(<p data-copy="yes">Hello</p>)) == {:error, :unsupported_html}
 
     assert HtmlParser.parse(~s(<a href="https://example.com">No block</a>)) ==

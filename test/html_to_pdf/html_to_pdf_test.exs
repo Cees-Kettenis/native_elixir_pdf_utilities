@@ -102,6 +102,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "(Alpha 3) Tj"
   end
 
+  test "render converts a flex layout subset to PDF text boxes" do
+    html =
+      ~s(<div style="display: flex; width: 80pt; gap: 8pt"><span style="order: 2">Second</span><span style="order: 1">First</span></div>)
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert pdf =~ "(First) Tj"
+    assert pdf =~ "(Second) Tj"
+  end
+
   test "render_file writes a PDF for a supported paragraph" do
     input_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.html")
     output_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.pdf")

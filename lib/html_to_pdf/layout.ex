@@ -2,10 +2,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @moduledoc """
   Layout engine for the native HTML-to-PDF renderer.
 
-  Milestone 7 lays out block text elements, inline text runs, basic block
-  box styling, lists, link annotation bounds, and deterministic one-page
-  tables with pagination metadata. Later milestones add richer wrapping,
-  flexbox, and grid layout behavior behind this module.
+  Milestone 9 lays out block text elements, inline text runs, basic block box
+  styling, lists, link annotation bounds, deterministic one-page tables, and a
+  documented single-line-text flexbox subset with pagination metadata.
   """
 
   @type box :: map()
@@ -75,6 +74,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {:ok, [box()], number()} | {:error, :invalid_layout}
   defp layout_block(block, x, y, width) do
     case block do
+      %{type: :element, style: %{display: :none}} ->
+        {:ok, [], y}
+
       %{type: :element, style: %{display: :block} = style, children: children}
       when is_list(children) ->
         with {:ok, runs} <- inline_runs(children) do
@@ -127,9 +129,550 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       when is_list(children) ->
         layout_table(style, children, x, y, width)
 
+      %{type: :element, style: %{display: display} = style, children: children}
+      when display in [:flex, :inline_flex] and is_list(children) ->
+        layout_flex(style, children, x, y, width)
+
       _ ->
         {:error, :invalid_layout}
     end
+  end
+
+  defp layout_flex(style, children, x, y, width) do
+    margin = Map.get(style, :margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
+    padding = Map.get(style, :padding, edges(0.0))
+    border_widths = Map.get(style, :border_widths, edges(0.0))
+    available_box_width = width - margin.left - margin.right
+    content_width = Map.get(style, :width, available_box_width - horizontal_box_size(style))
+
+    box_width =
+      content_width + border_widths.left + padding.left + padding.right + border_widths.right
+
+    box_x = x + margin.left
+    box_top = y - margin.top
+    content_x = box_x + border_widths.left + padding.left
+    content_top = box_top - border_widths.top - padding.top
+
+    with {:ok, items} <- flex_items(children, flex_main_axis(style)) do
+      case items do
+        [] ->
+          box_height = border_widths.top + padding.top + padding.bottom + border_widths.bottom
+
+          background_box =
+            background_box(style, box_x, box_top - box_height, box_width, box_height)
+
+          {:ok, tag_boxes(background_box, break_metadata(style)),
+           box_top - box_height - margin.bottom}
+
+        items ->
+          lines = flex_lines(items, style, content_width)
+          content_height = flex_content_height(lines, style)
+
+          box_height =
+            border_widths.top + padding.top + content_height + padding.bottom +
+              border_widths.bottom
+
+          flow_metadata =
+            style
+            |> break_metadata()
+            |> Map.put(:flow_id, {:flex, box_x, box_top})
+
+          background_box =
+            style
+            |> background_box(box_x, box_top - box_height, box_width, box_height)
+            |> tag_boxes(flow_metadata)
+
+          item_boxes =
+            flex_line_boxes(
+              lines,
+              style,
+              content_x,
+              content_top,
+              content_width,
+              content_height,
+              flow_metadata.flow_id
+            )
+
+          next_y = box_top - box_height - margin.bottom
+          {:ok, background_box ++ item_boxes, next_y}
+      end
+    end
+  end
+
+  defp flex_items(children, main_axis) do
+    children
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {child, index}, {:ok, acc} ->
+      case flex_item(child, index, main_axis) do
+        {:ok, nil} -> {:cont, {:ok, acc}}
+        {:ok, item} -> {:cont, {:ok, acc ++ [item]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, items} -> {:ok, Enum.sort_by(items, &{&1.order, &1.index})}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp flex_item(child, index, main_axis) do
+    case child do
+      %{type: :text, text: text} when is_binary(text) ->
+        case String.trim(text) do
+          "" ->
+            {:ok, nil}
+
+          _ ->
+            style = child.style |> text_style() |> Map.put(:display, :inline)
+            runs = [%{text: text, style: child.style}]
+            {:ok, build_flex_item(style, runs, index, main_axis)}
+        end
+
+      %{type: :element, style: %{display: :none}} ->
+        {:ok, nil}
+
+      %{type: :element, style: style, children: children} when is_list(children) ->
+        case inline_runs(children) do
+          {:ok, runs} -> {:ok, build_flex_item(style, runs, index, main_axis)}
+          {:error, reason} -> {:error, reason}
+        end
+
+      _ ->
+        {:error, :invalid_layout}
+    end
+  end
+
+  defp build_flex_item(style, runs, index, main_axis) do
+    margin = Map.get(style, :margin, edges(0.0))
+    text_width = Enum.reduce(runs, 0.0, fn run, acc -> acc + text_width(run.text, run.style) end)
+    line_height = Map.get(style, :line_height, 14.4)
+
+    {content_main, content_cross} =
+      case main_axis do
+        :row ->
+          {flex_basis(style, :width, text_width), Map.get(style, :height, line_height)}
+
+        :column ->
+          {flex_basis(style, :height, line_height), Map.get(style, :width, text_width)}
+      end
+
+    main_box = content_main + flex_main_box_size(style, main_axis)
+    cross_box = content_cross + flex_cross_box_size(style, main_axis)
+
+    %{
+      index: index,
+      style: style,
+      runs: runs,
+      order: Map.get(style, :order, 0),
+      flex_grow: Map.get(style, :flex_grow, 0.0),
+      flex_shrink: Map.get(style, :flex_shrink, 1.0),
+      main_axis: main_axis,
+      main_box: main_box,
+      cross_box: cross_box,
+      outer_main: main_box + flex_main_margin_size(margin, main_axis),
+      outer_cross: cross_box + flex_cross_margin_size(margin, main_axis),
+      margin: margin
+    }
+  end
+
+  defp flex_basis(style, size_property, intrinsic_size) do
+    case Map.get(style, :flex_basis, :auto) do
+      :auto -> Map.get(style, size_property, intrinsic_size)
+      basis when is_number(basis) -> basis
+    end
+  end
+
+  defp flex_lines(items, style, content_width) do
+    main_axis = flex_main_axis(style)
+    gap = flex_main_gap(style)
+    available_main = flex_available_main(style, main_axis, content_width, items, gap)
+    wrap = Map.get(style, :flex_wrap, :nowrap)
+
+    lines =
+      Enum.reduce(items, [], fn item, lines ->
+        append_flex_item_to_lines(lines, item, wrap, available_main, gap)
+      end)
+
+    lines
+    |> Enum.map(&resolve_flex_line(&1, available_main, gap))
+  end
+
+  defp append_flex_item_to_lines([], item, _wrap, _available_main, _gap) do
+    [%{items: [item], base_main: item.outer_main}]
+  end
+
+  defp append_flex_item_to_lines(lines, item, wrap, available_main, gap) do
+    [line | previous] = Enum.reverse(lines)
+    next_base = line.base_main + gap + item.outer_main
+
+    case wrap == :wrap and line.items != [] and next_base > available_main do
+      true ->
+        Enum.reverse(previous) ++ [line, %{items: [item], base_main: item.outer_main}]
+
+      false ->
+        Enum.reverse(previous) ++ [%{line | items: line.items ++ [item], base_main: next_base}]
+    end
+  end
+
+  defp resolve_flex_line(line, available_main, gap) do
+    item_gap_total = gap * max(length(line.items) - 1, 0)
+    base_without_gap = Enum.reduce(line.items, 0.0, &(&1.outer_main + &2))
+
+    available_main =
+      flex_resolved_available_main(available_main, base_without_gap, item_gap_total)
+
+    free_space = available_main - base_without_gap - item_gap_total
+    items = resolve_flex_item_sizes(line.items, free_space)
+    outer_main = Enum.reduce(items, 0.0, &(&1.outer_main + &2)) + item_gap_total
+    cross = items |> Enum.map(& &1.outer_cross) |> Enum.max(fn -> 0.0 end)
+
+    %{items: items, main: outer_main, cross: cross}
+  end
+
+  defp resolve_flex_item_sizes(items, free_space) do
+    cond do
+      free_space > 0 ->
+        total_grow = Enum.reduce(items, 0.0, &(&1.flex_grow + &2))
+
+        case total_grow > 0 do
+          true ->
+            Enum.map(items, fn item ->
+              extra = free_space * item.flex_grow / total_grow
+              resize_flex_item(item, item.main_box + extra)
+            end)
+
+          false ->
+            items
+        end
+
+      free_space < 0 ->
+        scaled_shrink = Enum.reduce(items, 0.0, &(&1.flex_shrink * &1.main_box + &2))
+
+        case scaled_shrink > 0 do
+          true ->
+            Enum.map(items, fn item ->
+              reduction = abs(free_space) * item.flex_shrink * item.main_box / scaled_shrink
+              resize_flex_item(item, max(item.main_box - reduction, 0.0))
+            end)
+
+          false ->
+            items
+        end
+
+      true ->
+        items
+    end
+  end
+
+  defp resize_flex_item(item, main_box) do
+    outer_main = main_box + flex_main_margin_size(item.margin, item.main_axis)
+    %{item | main_box: main_box, outer_main: outer_main}
+  end
+
+  defp flex_line_boxes(lines, style, x, y, content_width, content_height, container_flow_id) do
+    main_axis = flex_main_axis(style)
+    cross_gap = flex_cross_gap(style)
+
+    {lines, _cross_offset} =
+      Enum.reduce(lines, {[], 0.0}, fn line, {acc, cross_offset} ->
+        line_cross = flex_line_cross(line, style, length(lines))
+
+        positioned =
+          flex_position_line(
+            line,
+            style,
+            x,
+            y,
+            content_width,
+            content_height,
+            cross_offset,
+            line_cross
+          )
+
+        {acc ++ positioned, cross_offset + line_cross + cross_gap}
+      end)
+
+    lines
+    |> Enum.flat_map(fn item ->
+      item
+      |> flex_item_boxes(main_axis)
+      |> tag_boxes(%{flow_id: {:flex_item, container_flow_id, item.index}})
+    end)
+  end
+
+  defp flex_position_line(
+         line,
+         style,
+         x,
+         y,
+         content_width,
+         content_height,
+         cross_offset,
+         line_cross
+       ) do
+    main_axis = flex_main_axis(style)
+    available_main = flex_position_available_main(main_axis, content_width, content_height)
+    gap = flex_main_gap(style)
+    items = flex_direction_items(line.items, style)
+    {main_offset, item_gap} = flex_main_distribution(style, line, available_main, gap)
+
+    items
+    |> Enum.reduce({[], main_offset}, fn item, {acc, main_offset} ->
+      item =
+        position_flex_item(
+          item,
+          style,
+          x,
+          y,
+          content_width,
+          cross_offset,
+          line_cross,
+          main_offset
+        )
+
+      {acc ++ [item], main_offset + item.outer_main + item_gap}
+    end)
+    |> elem(0)
+  end
+
+  defp position_flex_item(item, style, x, y, content_width, cross_offset, line_cross, main_offset) do
+    main_axis = flex_main_axis(style)
+    align = flex_item_align(item, style)
+    cross_position = flex_cross_position(align, item.outer_cross, line_cross)
+
+    case main_axis do
+      :row ->
+        box_width = item.main_box
+        box_height = flex_aligned_cross_box(item, align, line_cross, :row)
+
+        Map.merge(item, %{
+          x: x + main_offset + item.margin.left,
+          y: y - cross_offset - cross_position - item.margin.top,
+          box_width: box_width,
+          box_height: box_height
+        })
+
+      :column ->
+        box_width = flex_aligned_cross_box(item, align, content_width, :column)
+        box_height = item.main_box
+
+        Map.merge(item, %{
+          x: x + cross_position + item.margin.left,
+          y: y - main_offset - item.margin.top,
+          box_width: box_width,
+          box_height: box_height
+        })
+    end
+  end
+
+  defp flex_item_boxes(item, main_axis) do
+    style = item.style
+    padding = Map.get(style, :padding, edges(0.0))
+    border_widths = Map.get(style, :border_widths, edges(0.0))
+    baseline_y = item.y - border_widths.top - padding.top - Map.fetch!(style, :font_size)
+    content_x = item.x + border_widths.left + padding.left
+
+    content_width =
+      item.box_width - border_widths.left - padding.left - padding.right - border_widths.right
+
+    start_x = aligned_text_x(item.runs, style, content_x, max(content_width, 0.0))
+
+    background_boxes =
+      background_box(style, item.x, item.y - item.box_height, item.box_width, item.box_height)
+
+    {text_boxes, _next_x} =
+      Enum.reduce(item.runs, {[], start_x}, fn run, {acc, current_x} ->
+        box = text_box(run, current_x, baseline_y, max(content_width, 0.0))
+        {acc ++ [box], current_x + text_width(run.text, run.style)}
+      end)
+
+    case main_axis do
+      :row -> background_boxes ++ text_boxes
+      :column -> background_boxes ++ text_boxes
+    end
+  end
+
+  defp flex_content_height(lines, style) do
+    main_axis = flex_main_axis(style)
+
+    case {main_axis, Map.get(style, :height)} do
+      {:row, height} when is_number(height) ->
+        height
+
+      {:row, _height} ->
+        cross_gap = flex_cross_gap(style)
+        Enum.reduce(lines, 0.0, &(&1.cross + &2)) + cross_gap * max(length(lines) - 1, 0)
+
+      {:column, height} when is_number(height) ->
+        height
+
+      {:column, _height} ->
+        case lines do
+          [line] -> line.main
+          _ -> Enum.map(lines, & &1.main) |> Enum.max(fn -> 0.0 end)
+        end
+    end
+  end
+
+  defp flex_line_cross(line, style, line_count) do
+    case {flex_main_axis(style), Map.get(style, :height), line_count} do
+      {:row, height, 1} when is_number(height) -> height
+      {:row, _height, _line_count} -> line.cross
+      {:column, _height, _line_count} -> Map.get(style, :width, line.cross)
+    end
+  end
+
+  defp flex_position_available_main(main_axis, content_width, content_height) do
+    case main_axis do
+      :row -> content_width
+      :column -> content_height
+    end
+  end
+
+  defp flex_main_distribution(style, line, available_main, gap) do
+    free_space = max(available_main - line.main, 0.0)
+    count = length(line.items)
+
+    case Map.get(style, :justify_content, :flex_start) do
+      :flex_end ->
+        {free_space, gap}
+
+      :center ->
+        {free_space / 2, gap}
+
+      :space_between when count > 1 ->
+        {0.0, gap + free_space / (count - 1)}
+
+      :space_around when count > 0 ->
+        item_gap = gap + free_space / count
+        {item_gap / 2, item_gap}
+
+      :space_evenly when count > 0 ->
+        item_gap = gap + free_space / (count + 1)
+        {item_gap, item_gap}
+
+      _ ->
+        {0.0, gap}
+    end
+  end
+
+  defp flex_cross_position(align, item_outer_cross, line_cross) do
+    case align do
+      :flex_end -> max(line_cross - item_outer_cross, 0.0)
+      :center -> max((line_cross - item_outer_cross) / 2, 0.0)
+      _ -> 0.0
+    end
+  end
+
+  defp flex_aligned_cross_box(item, align, line_cross, main_axis) do
+    case {align, main_axis} do
+      {:stretch, :row} ->
+        max(line_cross - item.margin.top - item.margin.bottom, 0.0)
+
+      {:stretch, :column} ->
+        max(line_cross - item.margin.left - item.margin.right, 0.0)
+
+      {_align, :row} ->
+        item.cross_box
+
+      {_align, :column} ->
+        item.cross_box
+    end
+  end
+
+  defp flex_item_align(item, container_style) do
+    case Map.get(item.style, :align_self, :auto) do
+      :auto -> Map.get(container_style, :align_items, :stretch)
+      align -> align
+    end
+  end
+
+  defp flex_direction_items(items, style) do
+    case Map.get(style, :flex_direction, :row) do
+      direction when direction in [:row_reverse, :column_reverse] -> Enum.reverse(items)
+      _ -> items
+    end
+  end
+
+  defp flex_available_main(style, main_axis, content_width, items, gap) do
+    case main_axis do
+      :row ->
+        content_width
+
+      :column ->
+        case Map.get(style, :height) do
+          height when is_number(height) ->
+            height
+
+          _ ->
+            Enum.reduce(items, 0.0, &(&1.outer_main + &2)) + gap * max(length(items) - 1, 0)
+        end
+    end
+  end
+
+  defp flex_resolved_available_main(available_main, base_without_gap, item_gap_total) do
+    max(available_main, base_without_gap + item_gap_total)
+  end
+
+  defp flex_main_axis(style) do
+    case Map.get(style, :flex_direction, :row) do
+      direction when direction in [:column, :column_reverse] -> :column
+      _ -> :row
+    end
+  end
+
+  defp flex_main_gap(style) do
+    case flex_main_axis(style) do
+      :row -> Map.get(style, :column_gap, 0.0)
+      :column -> Map.get(style, :row_gap, 0.0)
+    end
+  end
+
+  defp flex_cross_gap(style) do
+    case flex_main_axis(style) do
+      :row -> Map.get(style, :row_gap, 0.0)
+      :column -> Map.get(style, :column_gap, 0.0)
+    end
+  end
+
+  defp flex_main_box_size(style, main_axis) do
+    padding = Map.get(style, :padding, edges(0.0))
+    border_widths = Map.get(style, :border_widths, edges(0.0))
+
+    case main_axis do
+      :row -> padding.left + padding.right + border_widths.left + border_widths.right
+      :column -> padding.top + padding.bottom + border_widths.top + border_widths.bottom
+    end
+  end
+
+  defp flex_cross_box_size(style, main_axis) do
+    padding = Map.get(style, :padding, edges(0.0))
+    border_widths = Map.get(style, :border_widths, edges(0.0))
+
+    case main_axis do
+      :row -> padding.top + padding.bottom + border_widths.top + border_widths.bottom
+      :column -> padding.left + padding.right + border_widths.left + border_widths.right
+    end
+  end
+
+  defp flex_main_margin_size(margin, main_axis) do
+    case main_axis do
+      :row -> margin.left + margin.right
+      :column -> margin.top + margin.bottom
+    end
+  end
+
+  defp flex_cross_margin_size(margin, main_axis) do
+    case main_axis do
+      :row -> margin.top + margin.bottom
+      :column -> margin.left + margin.right
+    end
+  end
+
+  defp horizontal_box_size(style) do
+    padding = Map.get(style, :padding, edges(0.0))
+    border_widths = Map.get(style, :border_widths, edges(0.0))
+    padding.left + padding.right + border_widths.left + border_widths.right
   end
 
   defp layout_table(style, children, x, y, width) do

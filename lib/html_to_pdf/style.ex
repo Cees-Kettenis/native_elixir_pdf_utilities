@@ -2,8 +2,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   @moduledoc """
   Style computation for the native HTML-to-PDF renderer.
 
-  This module applies defaults, inheritance, and the milestone 8 CSS cascade
-  for the text, box, list, link, table, and page-break styling subset.
+  This module applies defaults, inheritance, and the CSS cascade for the text,
+  box, list, link, table, page-break, and milestone 9 flexbox styling subset.
   Unsupported properties or invalid values fail the render instead of being
   ignored.
   """
@@ -100,6 +100,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       case tag do
         "html" -> %{display: :block}
         "body" -> block_defaults(12.0, 400, 0.0)
+        "div" -> block_defaults(12.0, 400, 0.0)
         "p" -> block_defaults(12.0, 400, 12.0)
         "h1" -> block_defaults(24.0, 700, 16.0)
         "h2" -> block_defaults(20.0, 700, 14.0)
@@ -553,8 +554,242 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       "font-family" ->
         put_font_family(style, value)
 
+      "display" ->
+        put_display(style, value)
+
+      property when property in ["width", "height"] ->
+        with {:ok, length} <- parse_length(value),
+             do: {:ok, Map.put(style, length_property(property), length)}
+
+      "flex-direction" ->
+        put_flex_direction(style, value)
+
+      "flex-wrap" ->
+        put_flex_wrap(style, value)
+
+      "gap" ->
+        with {:ok, row_gap, column_gap} <- parse_gap(value) do
+          {:ok, style |> Map.put(:row_gap, row_gap) |> Map.put(:column_gap, column_gap)}
+        end
+
+      property when property in ["row-gap", "column-gap"] ->
+        with {:ok, length} <- parse_length(value),
+             do: {:ok, Map.put(style, gap_property(property), length)}
+
+      "justify-content" ->
+        put_justify_content(style, value)
+
+      "align-items" ->
+        put_align_items(style, value)
+
+      "align-self" ->
+        put_align_self(style, value)
+
+      "order" ->
+        put_order(style, value)
+
+      "flex-grow" ->
+        put_nonnegative_number(style, :flex_grow, value)
+
+      "flex-shrink" ->
+        put_nonnegative_number(style, :flex_shrink, value)
+
+      "flex-basis" ->
+        put_flex_basis(style, value)
+
+      "flex" ->
+        put_flex(style, value)
+
       _ ->
         {:error, :invalid_document}
+    end
+  end
+
+  defp put_display(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      "block" ->
+        {:ok, Map.put(style, :display, :block)}
+
+      "inline" ->
+        {:ok, Map.put(style, :display, :inline)}
+
+      "none" ->
+        {:ok, Map.put(style, :display, :none)}
+
+      "flex" ->
+        {:ok, style |> flex_container_defaults() |> Map.put(:display, :flex)}
+
+      "inline-flex" ->
+        {:ok, style |> flex_container_defaults() |> Map.put(:display, :inline_flex)}
+
+      _ ->
+        {:error, :invalid_document}
+    end
+  end
+
+  defp flex_container_defaults(style) do
+    style
+    |> Map.put_new(:flex_direction, :row)
+    |> Map.put_new(:flex_wrap, :nowrap)
+    |> Map.put_new(:row_gap, 0.0)
+    |> Map.put_new(:column_gap, 0.0)
+    |> Map.put_new(:justify_content, :flex_start)
+    |> Map.put_new(:align_items, :stretch)
+  end
+
+  defp put_flex_direction(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      "row" -> {:ok, Map.put(style, :flex_direction, :row)}
+      "row-reverse" -> {:ok, Map.put(style, :flex_direction, :row_reverse)}
+      "column" -> {:ok, Map.put(style, :flex_direction, :column)}
+      "column-reverse" -> {:ok, Map.put(style, :flex_direction, :column_reverse)}
+      _ -> {:error, :invalid_document}
+    end
+  end
+
+  defp put_flex_wrap(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      "nowrap" -> {:ok, Map.put(style, :flex_wrap, :nowrap)}
+      "wrap" -> {:ok, Map.put(style, :flex_wrap, :wrap)}
+      _ -> {:error, :invalid_document}
+    end
+  end
+
+  defp put_justify_content(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      "flex-start" -> {:ok, Map.put(style, :justify_content, :flex_start)}
+      "flex-end" -> {:ok, Map.put(style, :justify_content, :flex_end)}
+      "center" -> {:ok, Map.put(style, :justify_content, :center)}
+      "space-between" -> {:ok, Map.put(style, :justify_content, :space_between)}
+      "space-around" -> {:ok, Map.put(style, :justify_content, :space_around)}
+      "space-evenly" -> {:ok, Map.put(style, :justify_content, :space_evenly)}
+      _ -> {:error, :invalid_document}
+    end
+  end
+
+  defp put_align_items(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      "stretch" -> {:ok, Map.put(style, :align_items, :stretch)}
+      "flex-start" -> {:ok, Map.put(style, :align_items, :flex_start)}
+      "flex-end" -> {:ok, Map.put(style, :align_items, :flex_end)}
+      "center" -> {:ok, Map.put(style, :align_items, :center)}
+      _ -> {:error, :invalid_document}
+    end
+  end
+
+  defp put_align_self(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      "auto" -> {:ok, Map.put(style, :align_self, :auto)}
+      "stretch" -> {:ok, Map.put(style, :align_self, :stretch)}
+      "flex-start" -> {:ok, Map.put(style, :align_self, :flex_start)}
+      "flex-end" -> {:ok, Map.put(style, :align_self, :flex_end)}
+      "center" -> {:ok, Map.put(style, :align_self, :center)}
+      _ -> {:error, :invalid_document}
+    end
+  end
+
+  defp put_order(style, value) do
+    case Integer.parse(String.trim(value)) do
+      {order, ""} -> {:ok, Map.put(style, :order, order)}
+      _ -> {:error, :invalid_document}
+    end
+  end
+
+  defp put_nonnegative_number(style, key, value) do
+    case parse_nonnegative_number(value) do
+      {:ok, number} -> {:ok, Map.put(style, key, number)}
+      :error -> {:error, :invalid_document}
+    end
+  end
+
+  defp put_flex_basis(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      "auto" ->
+        {:ok, Map.put(style, :flex_basis, :auto)}
+
+      _ ->
+        with {:ok, length} <- parse_length(value), do: {:ok, Map.put(style, :flex_basis, length)}
+    end
+  end
+
+  defp put_flex(style, value) do
+    tokens = value |> String.trim() |> String.downcase() |> String.split(~r/\s+/u, trim: true)
+
+    case tokens do
+      ["none"] ->
+        {:ok,
+         style
+         |> Map.put(:flex_grow, 0.0)
+         |> Map.put(:flex_shrink, 0.0)
+         |> Map.put(:flex_basis, :auto)}
+
+      ["auto"] ->
+        {:ok,
+         style
+         |> Map.put(:flex_grow, 1.0)
+         |> Map.put(:flex_shrink, 1.0)
+         |> Map.put(:flex_basis, :auto)}
+
+      ["initial"] ->
+        {:ok,
+         style
+         |> Map.put(:flex_grow, 0.0)
+         |> Map.put(:flex_shrink, 1.0)
+         |> Map.put(:flex_basis, :auto)}
+
+      [grow] ->
+        with {:ok, grow} <- parse_nonnegative_number(grow) do
+          {:ok,
+           style
+           |> Map.put(:flex_grow, grow)
+           |> Map.put_new(:flex_shrink, 1.0)
+           |> Map.put_new(:flex_basis, 0.0)}
+        end
+
+      [grow, shrink] ->
+        with {:ok, grow} <- parse_nonnegative_number(grow),
+             {:ok, shrink} <- parse_nonnegative_number(shrink) do
+          {:ok,
+           style
+           |> Map.put(:flex_grow, grow)
+           |> Map.put(:flex_shrink, shrink)
+           |> Map.put_new(:flex_basis, 0.0)}
+        end
+
+      [grow, shrink, basis] ->
+        with {:ok, grow} <- parse_nonnegative_number(grow),
+             {:ok, shrink} <- parse_nonnegative_number(shrink),
+             {:ok, basis} <- flex_basis_value(basis) do
+          {:ok,
+           style
+           |> Map.put(:flex_grow, grow)
+           |> Map.put(:flex_shrink, shrink)
+           |> Map.put(:flex_basis, basis)}
+        end
+
+      _ ->
+        {:error, :invalid_document}
+    end
+  end
+
+  defp length_property(property) do
+    case property do
+      "width" -> :width
+      "height" -> :height
+    end
+  end
+
+  defp gap_property(property) do
+    case property do
+      "row-gap" -> :row_gap
+      "column-gap" -> :column_gap
+    end
+  end
+
+  defp flex_basis_value(value) do
+    case value do
+      "auto" -> {:ok, :auto}
+      value -> parse_length(value)
     end
   end
 
@@ -658,6 +893,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
+  defp parse_gap(value) do
+    gaps =
+      value
+      |> String.split(~r/\s+/u, trim: true)
+      |> Enum.map(&parse_length/1)
+
+    case gaps do
+      [{:ok, both}] -> {:ok, both, both}
+      [{:ok, row_gap}, {:ok, column_gap}] -> {:ok, row_gap, column_gap}
+      _ -> :error
+    end
+  end
+
   defp parse_length(value) do
     normalized = String.trim(value)
 
@@ -671,6 +919,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       _ ->
         :error
+    end
+  end
+
+  defp parse_nonnegative_number(value) do
+    case Float.parse(String.trim(value)) do
+      {number, ""} when number >= 0 -> {:ok, number}
+      _ -> :error
     end
   end
 

@@ -380,6 +380,167 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert second_data_text.text == "2"
   end
 
+  test "layout positions row flex items with order gap justify-content and align-items" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{
+            "style" =>
+              "display: flex; width: 120pt; height: 40pt; gap: 10pt; justify-content: center; align-items: center"
+          },
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "order: 2; width: 20pt; height: 20pt"},
+              children: [%{type: :text, text: "A"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "order: 1; width: 20pt; height: 20pt"},
+              children: [%{type: :text, text: "B"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 100}, margin: 10)
+
+    [first, second] = layout_tree.boxes
+
+    assert first.text == "B"
+    assert second.text == "A"
+    assert_in_delta first.x, 45.0, 0.0001
+    assert_in_delta second.x, 75.0, 0.0001
+    assert_in_delta first.y, 68.0, 0.0001
+    assert_in_delta second.y, 68.0, 0.0001
+  end
+
+  test "layout grows flex items and wraps rows deterministically" do
+    grow_dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{"style" => "display: flex; width: 90pt; gap: 10pt"},
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "flex: 1 1 20pt"},
+              children: [%{type: :text, text: "A"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "flex: 2 1 20pt"},
+              children: [%{type: :text, text: "B"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, grow_tree} = Style.compute(grow_dom, [])
+    assert {:ok, grow_layout} = Layout.layout(grow_tree, page_size: {200, 100}, margin: 10)
+    [first, second] = grow_layout.boxes
+
+    assert_in_delta first.width, 33.3333, 0.0001
+    assert_in_delta second.x, 53.3333, 0.0001
+    assert_in_delta second.width, 46.6667, 0.0001
+
+    wrap_dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{"style" => "display: flex; flex-wrap: wrap; width: 50pt; gap: 10pt 5pt"},
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "width: 20pt"},
+              children: [%{type: :text, text: "A"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "width: 20pt"},
+              children: [%{type: :text, text: "B"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "width: 20pt"},
+              children: [%{type: :text, text: "C"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, wrap_tree} = Style.compute(wrap_dom, [])
+    assert {:ok, wrap_layout} = Layout.layout(wrap_tree, page_size: {200, 100}, margin: 10)
+    [a, b, c] = wrap_layout.boxes
+
+    assert a.text == "A"
+    assert b.text == "B"
+    assert c.text == "C"
+    assert_in_delta a.x, 10.0, 0.0001
+    assert_in_delta b.x, 35.0, 0.0001
+    assert_in_delta c.x, 10.0, 0.0001
+    assert c.y < a.y
+  end
+
+  test "layout positions column flex items with cross-axis alignment" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{
+            "style" =>
+              "display: flex; flex-direction: column; width: 60pt; gap: 4pt; align-items: flex-end"
+          },
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "width: 20pt; height: 20pt"},
+              children: [%{type: :text, text: "A"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "width: 30pt; height: 20pt; align-self: center"},
+              children: [%{type: :text, text: "B"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 100}, margin: 10)
+
+    [first, second] = layout_tree.boxes
+
+    assert first.text == "A"
+    assert second.text == "B"
+    assert_in_delta first.x, 50.0, 0.0001
+    assert_in_delta second.x, 25.0, 0.0001
+    assert second.y < first.y
+  end
+
   test "layout rejects invalid options and unsupported trees" do
     assert Layout.layout(%{tag: "p", style: %{}}, []) == {:error, :invalid_layout}
 

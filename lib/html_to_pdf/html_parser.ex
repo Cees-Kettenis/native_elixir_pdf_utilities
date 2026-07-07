@@ -2,10 +2,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   @moduledoc """
   Strict HTML parser for the native HTML-to-PDF renderer.
 
-  Milestone 8 supports a strict subset of document-oriented HTML: structural
+  Milestone 9 supports a strict subset of document-oriented HTML: structural
   html/head/body/style tags, paragraphs, headings, inline emphasis/color
-  containers, lists, links, tables, and CSS-targeting attributes. Unsupported
-  or malformed markup returns an error instead of guessing at browser behavior.
+  containers, div containers, lists, links, tables, and CSS-targeting
+  attributes. Unsupported or malformed markup returns an error instead of
+  guessing at browser behavior.
   """
 
   @type text_node :: %{type: :text, text: String.t()}
@@ -18,7 +19,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   @type dom_tree :: %{type: :document, children: [element_node()]}
 
   @structural_tags ~w(html head body style)
-  @block_tags ~w(p h1 h2 h3 h4 h5 h6 ul ol table)
+  @block_tags ~w(div p h1 h2 h3 h4 h5 h6 ul ol table)
   @inline_tags ~w(strong b em i span a)
   @list_tags ~w(ul ol)
   @table_structure_tags ~w(table thead tbody tfoot tr)
@@ -224,6 +225,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
       context in @table_content_tags ->
         tag in @inline_tags
+
+      context == "div" ->
+        tag in @block_tags or tag in @inline_tags
 
       context == "li" or context in @block_tags or context in @inline_tags ->
         tag in @inline_tags
