@@ -51,5 +51,6 @@ All changes must pass the following commands so execute them:
 - `mise exec -- mix test`
 - `MIX_ENV=test mise exec -- mix dialyzer`
 - `mise exec -- mix format`
+- `mise exec -- mix test --cover` should be at 100% for this library
 
 If warnings or errors are introduced, they must be resolved before considering the work complete.

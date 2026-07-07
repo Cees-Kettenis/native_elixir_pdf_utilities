@@ -98,7 +98,7 @@ Render local or data URI images:
 | --- | --- |
 | Document wrappers | `doctype html`, `html`, `head`, `body`, `style`, `meta`, `title` |
 | Blocks | `div`, `p`, `h1` through `h6` |
-| Inline text | `span`, `strong`, `b`, `em`, `i`, `a`, `br` |
+| Inline text | `span`, `strong`, `b`, `em`, `i`, `a`, `br`; common named and numeric HTML entities are decoded |
 | Lists | `ul`, `ol`, `li` |
 | Tables | `table`, `caption`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td` |
 | Images | Strict `img` with required `src` |
@@ -111,12 +111,12 @@ Unsupported HTML returns `{:error, :unsupported_html}` or `{:error, :invalid_doc
 
 | Area | Supported |
 | --- | --- |
-| Selectors | Element, `.class`, `#id`, `element.class`, descendant, direct child, comma groups, `:first-child` |
-| Cascade | Specificity, source order, inline style priority, inheritance for text styles |
-| Units | `pt`, `px`, `mm`, `cm`, `in`, percentages for `width`/`height`, and unitless `0` |
+| Selectors | Element, `.class`, `#id`, `element.class`, descendant, direct child, comma groups, `:root`, `:first-child` |
+| Cascade | Specificity, source order, inline style priority, `!important`, inheritance for text styles, and CSS custom properties via `var(--name)` |
+| Units | `pt`, `px`, `rem`, `mm`, `cm`, `in`, percentages for `width`/`height`/`min-height`, and unitless `0` |
 | Display | `block`, `inline`, `none`, `flex`, `inline-flex`, `grid`, `inline-grid` |
-| Box model | `width`, `height`, `aspect-ratio`, `margin`, negative margins, `padding`, side-specific margin/padding, `border`, side-specific `border-*`, `border-width`, `border-color`, `border-radius`, `border-collapse`, `background-color` |
-| Text | `color`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `text-align`; `#RRGGBBAA` colors are accepted with alpha ignored |
+| Box model | `width`, `height`, `min-height`, `aspect-ratio`, `margin`, negative margins, `padding`, side-specific margin/padding, `border`, side-specific `border-*`, `border-width`, `border-color`, `border-radius`, `border-collapse`, `background-color` |
+| Text | `color`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `text-align`, `vertical-align`, `line-break`; `#RRGGBBAA` colors are accepted with alpha ignored |
 | Page breaks | `break-before`, `break-after`, `page-break-before`, `page-break-after` with `auto`, `page`, or `always` |
 | Flexbox subset | `flex-direction`, `flex-wrap`, `gap`, `row-gap`, `column-gap`, `justify-content`, `align-items`, `align-self`, `order`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex` |
 | Grid subset | `grid-template-columns`, `grid-template-rows`, `grid-auto-columns`, `grid-auto-rows`, `grid-column`, `grid-column-start`, `grid-column-end`, `grid-row`, `grid-row-start`, `grid-row-end`, `grid-area`, `gap`, `row-gap`, `column-gap`, `justify-items`, `align-items`, `justify-content`, `align-content` |
@@ -125,7 +125,7 @@ Unsupported CSS properties or invalid values return `{:error, :invalid_document}
 
 ### Layout Details
 
-Block, list, table, flexbox, and grid layout are deterministic and intentionally narrower than browser layout. Tables use deterministic equal-width columns. Flexbox and grid support document-oriented single-line text and image items, not the full browser algorithms.
+Block, list, table, flexbox, and grid layout are deterministic and intentionally narrower than browser layout. Tables use deterministic column sizing based on declared widths, available table width, and intrinsic unbreakable content, with support for collapsed borders, cell backgrounds, `colspan`, repeated headers, and missing trailing cells in shorter rows. Flexbox and grid support document-oriented single-line text and image items, not the full browser algorithms.
 
 Pagination supports automatic page breaks, manual page breaks, page margins, basic keep-together behavior for emitted flow units, and repeated table headers when table bodies continue across pages.
 
