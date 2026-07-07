@@ -98,6 +98,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert paragraph.tag == "p"
   end
 
+  test "parse ignores structural whitespace and decodes supported entities" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+
+             <html>
+               <head>
+                 <style>p::before { content: &quot;x&quot;; }</style>
+               </head>
+               <body>
+                 <ul>
+                   <li>&lt;One&gt; &apos;Two&apos; &#39;Three&#39;</li>
+                 </ul>
+                 <table>
+                   <tr><td>A</td></tr>
+                 </table>
+               </body>
+             </html>
+             """)
+
+    [html] = dom.children
+    [_head, body] = html.children
+    [list, table] = body.children
+    [item] = list.children
+    [text] = item.children
+    [row] = table.children
+
+    assert text.text == "<One> 'Two' 'Three'"
+    assert row.tag == "tr"
+  end
+
   test "parse accepts div containers for flex layouts" do
     assert {:ok, dom} =
              HtmlParser.parse(~s(<div class="row"><div>A</div><span>B</span></div>))
@@ -316,6 +346,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
   end
 
   test "parse rejects unsupported markup" do
+    assert HtmlParser.parse("") == {:error, :unsupported_html}
+    assert HtmlParser.parse("<>") == {:error, :unsupported_html}
+    assert HtmlParser.parse("<p>Hello") == {:error, :unsupported_html}
+    assert HtmlParser.parse("<script></script>") == {:error, :unsupported_html}
+    assert HtmlParser.parse("<p>Hello</script></p>") == {:error, :unsupported_html}
+    assert HtmlParser.parse("<p>Hello</>") == {:error, :unsupported_html}
+    assert HtmlParser.parse("<p style=color:red>Hello</p>") == {:error, :unsupported_html}
+    assert HtmlParser.parse(~s(<p style="a" style="b">Hello</p>)) == {:error, :unsupported_html}
     assert HtmlParser.parse(~s(<p data-copy="yes">Hello</p>)) == {:error, :unsupported_html}
 
     assert HtmlParser.parse(~s(<a href="https://example.com">No block</a>)) ==
@@ -323,12 +361,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
 
     assert HtmlParser.parse(~s(<ul><p>No item</p></ul>)) == {:error, :unsupported_html}
     assert HtmlParser.parse(~s(<table><td>No row</td></table>)) == {:error, :unsupported_html}
+    assert HtmlParser.parse(~s(<head><p>No paragraph</p></head>)) == {:error, :unsupported_html}
+
+    assert HtmlParser.parse(~s(<style><span>No element</span></style>)) ==
+             {:error, :unsupported_html}
 
     assert HtmlParser.parse(
              ~s(<table><caption>One</caption><caption>Two</caption><tr><td>Cell</td></tr></table>)
            ) == {:error, :unsupported_html}
 
+    assert HtmlParser.parse(~s(<table><caption>Late</caption></table>)) ==
+             {:error, :unsupported_html}
+
     assert HtmlParser.parse(~s(<table><tbody></tbody></table>)) == {:error, :unsupported_html}
+
+    assert HtmlParser.parse(~s(<table><tbody><td>No row</td></tbody></table>)) ==
+             {:error, :unsupported_html}
+
+    assert HtmlParser.parse(~s(<table><tbody><tr></tr></tbody></table>)) ==
+             {:error, :unsupported_html}
 
     assert HtmlParser.parse(
              ~s(<p><a href="https://example.com"><a href="https://nested.example">Nested</a></a></p>)

@@ -239,9 +239,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
       context == "li" or context in @block_tags or context in @inline_tags ->
         tag in @inline_tags
-
-      true ->
-        false
     end
   end
 

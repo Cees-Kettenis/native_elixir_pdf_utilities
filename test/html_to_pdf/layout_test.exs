@@ -721,11 +721,689 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert d.y < a.y
   end
 
+  test "layout supports default options letter pages and margin units" do
+    assert {:ok, default_layout} = Layout.layout(document([paragraph("Default")]))
+    assert default_layout.page_size == {595.28, 841.89}
+
+    assert {:ok, letter_layout} =
+             Layout.layout(document([paragraph("Letter")]), page_size: :letter, margin: "10px")
+
+    assert letter_layout.page_size == {612.0, 792.0}
+    assert_in_delta letter_layout.margin, 7.5, 0.0001
+
+    assert {:ok, cm_layout} =
+             Layout.layout(document([paragraph("Centimeter")]),
+               page_size: {100, 80},
+               margin: "1cm"
+             )
+
+    assert cm_layout.page_size == {100.0, 80.0}
+    assert_in_delta cm_layout.margin, 72.0 / 2.54, 0.0001
+
+    assert {:ok, in_layout} =
+             Layout.layout(document([paragraph("Inch")]), page_size: {100, 80}, margin: "1in")
+
+    assert_in_delta in_layout.margin, 72.0, 0.0001
+  end
+
+  test "layout handles image sizing variants and display none blocks" do
+    base_style = image_style(image_fixture(20.0, 10.0))
+
+    assert {:ok, both_layout} =
+             Layout.layout(
+               document([
+                 %{type: :element, style: Map.merge(base_style, %{width: 8.0, height: 6.0})}
+               ]),
+               page_size: {100, 100},
+               margin: 10
+             )
+
+    assert [%{type: :image, width: 8.0, height: 6.0}] = both_layout.boxes
+
+    assert {:ok, height_layout} =
+             Layout.layout(
+               document([%{type: :element, style: Map.merge(base_style, %{height: 5.0})}]),
+               page_size: {100, 100},
+               margin: 10
+             )
+
+    assert [%{type: :image, width: 10.0, height: 5.0}] = height_layout.boxes
+
+    assert {:ok, natural_layout} =
+             Layout.layout(
+               document([
+                 %{type: :element, style: %{display: :none}},
+                 %{type: :element, style: base_style}
+               ]),
+               page_size: {100, 100},
+               margin: 10
+             )
+
+    assert [%{type: :image, width: 20.0, height: 10.0}] = natural_layout.boxes
+  end
+
+  test "layout covers flex empty skipped image shrink and distribution branches" do
+    assert {:ok, empty_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{"style" => "display: flex; width: 40pt; background-color: red"},
+                   children: []
+                 }
+               ]
+             })
+
+    assert {:ok, empty_layout} = Layout.layout(empty_tree, page_size: {100, 100}, margin: 10)
+    assert [%{type: :rect, height: height}] = empty_layout.boxes
+    assert_in_delta height, 0.0, 0.0001
+
+    assert {:ok, shrink_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{
+                     "style" =>
+                       "display: flex; width: 30pt; gap: 2pt; justify-content: flex-end; align-items: stretch"
+                   },
+                   children: [
+                     %{type: :text, text: " "},
+                     %{
+                       type: :element,
+                       tag: "span",
+                       attributes: %{"style" => "display: none"},
+                       children: [%{type: :text, text: "Hidden"}]
+                     },
+                     %{
+                       type: :element,
+                       tag: "span",
+                       attributes: %{"style" => "width: 40pt; flex-shrink: 1"},
+                       children: [%{type: :text, text: "Wide"}]
+                     },
+                     %{
+                       type: :element,
+                       tag: "img",
+                       attributes: %{
+                         "src" => "data:image/png;base64,#{Base.encode64(png_fixture())}",
+                         "style" => "width: 12pt"
+                       },
+                       children: []
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, shrink_layout} = Layout.layout(shrink_tree, page_size: {100, 100}, margin: 10)
+    assert Enum.any?(shrink_layout.boxes, &(&1.type == :image))
+    assert Enum.any?(shrink_layout.boxes, &(&1.type == :text and &1.text == "Wide"))
+
+    for justify <- ["space-around", "space-evenly"] do
+      assert {:ok, tree} =
+               Style.compute(%{
+                 type: :document,
+                 children: [
+                   %{
+                     type: :element,
+                     tag: "div",
+                     attributes: %{
+                       "style" => "display: flex; width: 120pt; justify-content: #{justify}"
+                     },
+                     children: [
+                       %{type: :text, text: "A"},
+                       %{type: :text, text: "B"}
+                     ]
+                   }
+                 ]
+               })
+
+      assert {:ok, layout} = Layout.layout(tree, page_size: {160, 100}, margin: 10)
+      assert Enum.map(layout.boxes, & &1.text) == ["A", "B"]
+    end
+  end
+
+  test "layout covers grid text image skipped placement and distribution branches" do
+    assert {:ok, tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{
+                     "style" =>
+                       "display: grid; width: 140pt; height: 70pt; grid-template-columns: auto 1fr; grid-template-rows: auto 1fr; grid-auto-columns: 10pt; gap: 4pt; justify-content: space-around; align-content: space-evenly; justify-items: end; align-items: center"
+                   },
+                   children: [
+                     %{type: :text, text: " "},
+                     %{type: :text, text: "A"},
+                     %{
+                       type: :element,
+                       tag: "span",
+                       attributes: %{"style" => "display: none"},
+                       children: [%{type: :text, text: "Hidden"}]
+                     },
+                     %{
+                       type: :element,
+                       tag: "span",
+                       attributes: %{"style" => "grid-row: 2; grid-column: 2"},
+                       children: [%{type: :text, text: "B"}]
+                     },
+                     %{
+                       type: :element,
+                       tag: "span",
+                       attributes: %{"style" => "grid-row: 2; grid-column: span 2"},
+                       children: [%{type: :text, text: "C"}]
+                     },
+                     %{
+                       type: :element,
+                       tag: "img",
+                       attributes: %{
+                         "src" => "data:image/png;base64,#{Base.encode64(png_fixture())}",
+                         "style" => "grid-column: 1 / span 2; width: 8pt; height: 8pt"
+                       },
+                       children: []
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout} = Layout.layout(tree, page_size: {180, 120}, margin: 10)
+    assert Enum.any?(layout.boxes, &(&1.type == :image))
+
+    assert Enum.filter(layout.boxes, &(&1.type == :text)) |> Enum.map(& &1.text) == [
+             "A",
+             "B",
+             "C"
+           ]
+
+    for justify <- ["flex-end", "space-between", "space-evenly"] do
+      assert {:ok, distribution_tree} =
+               Style.compute(%{
+                 type: :document,
+                 children: [
+                   %{
+                     type: :element,
+                     tag: "div",
+                     attributes: %{
+                       "style" =>
+                         "display: grid; width: 100pt; grid-template-columns: 10pt 10pt; justify-content: #{justify}"
+                     },
+                     children: [%{type: :text, text: "A"}, %{type: :text, text: "B"}]
+                   }
+                 ]
+               })
+
+      assert {:ok, distribution_layout} =
+               Layout.layout(distribution_tree, page_size: {140, 100}, margin: 10)
+
+      assert Enum.map(distribution_layout.boxes, & &1.text) == ["A", "B"]
+    end
+  end
+
+  test "layout covers remaining grid sizing and invalid item branches" do
+    assert {:ok, empty_grid_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{
+                     "style" =>
+                       "display: grid; width: 40pt; height: 20pt; grid-template-columns: 0fr; grid-template-rows: 0fr; background-color: red"
+                   },
+                   children: []
+                 }
+               ]
+             })
+
+    assert {:ok, empty_grid_layout} =
+             Layout.layout(empty_grid_tree, page_size: {100, 100}, margin: 10)
+
+    assert [%{type: :rect}] = empty_grid_layout.boxes
+
+    assert {:ok, auto_column_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{
+                     "style" =>
+                       "display: grid; width: 80pt; grid-template-columns: 20pt 20pt; gap: 5pt"
+                   },
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "span",
+                       attributes: %{"style" => "grid-row: 1; grid-column: 1"},
+                       children: [%{type: :text, text: "A"}]
+                     },
+                     %{
+                       type: :element,
+                       tag: "span",
+                       attributes: %{"style" => "grid-row: 1"},
+                       children: [%{type: :text, text: "B"}]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, auto_column_layout} =
+             Layout.layout(auto_column_tree, page_size: {120, 100}, margin: 10)
+
+    [a, b] = auto_column_layout.boxes
+    assert a.text == "A"
+    assert b.text == "B"
+    assert b.x > a.x
+
+    invalid_grid = %{
+      type: :element,
+      style: %{display: :grid},
+      children: [%{type: :invalid}]
+    }
+
+    assert Layout.layout(document([invalid_grid]), []) == {:error, :invalid_layout}
+
+    invalid_inline_grid = %{
+      type: :element,
+      style: %{display: :grid},
+      children: [
+        %{
+          type: :element,
+          style: block_style(),
+          children: [%{type: :element, style: %{display: :block}, children: []}]
+        }
+      ]
+    }
+
+    assert Layout.layout(document([invalid_inline_grid]), []) == {:error, :invalid_layout}
+  end
+
+  test "layout covers remaining flex column image shrink and ordering branches" do
+    assert {:ok, column_image_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{
+                     "style" =>
+                       "display: flex; flex-direction: column-reverse; width: 50pt; height: 80pt; justify-content: space-between; align-items: stretch"
+                   },
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "img",
+                       attributes: %{
+                         "src" => "data:image/png;base64,#{Base.encode64(png_fixture())}",
+                         "style" => "width: 10pt; height: 10pt"
+                       },
+                       children: []
+                     },
+                     %{
+                       type: :element,
+                       tag: "span",
+                       attributes: %{"style" => "width: 10pt; height: 10pt"},
+                       children: [%{type: :text, text: "B"}]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, column_image_layout} =
+             Layout.layout(column_image_tree, page_size: {120, 120}, margin: 10)
+
+    assert Enum.any?(column_image_layout.boxes, &(&1.type == :image))
+    assert Enum.any?(column_image_layout.boxes, &(&1.type == :text and &1.text == "B"))
+
+    assert {:ok, shrink_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{"style" => "display: flex; width: 30pt"},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "span",
+                       attributes: %{"style" => "width: 40pt; flex-shrink: 1"},
+                       children: [%{type: :text, text: "A"}]
+                     },
+                     %{
+                       type: :element,
+                       tag: "span",
+                       attributes: %{"style" => "width: 40pt; flex-shrink: 1"},
+                       children: [%{type: :text, text: "B"}]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, shrink_layout} = Layout.layout(shrink_tree, page_size: {100, 100}, margin: 10)
+    [a, b] = shrink_layout.boxes
+    assert a.text == "A"
+    assert b.text == "B"
+    assert b.x > a.x
+
+    invalid_flex = %{
+      type: :element,
+      style: %{display: :flex},
+      children: [%{type: :invalid}]
+    }
+
+    assert Layout.layout(document([invalid_flex]), []) == {:error, :invalid_layout}
+
+    invalid_inline_flex = %{
+      type: :element,
+      style: %{display: :flex},
+      children: [
+        %{
+          type: :element,
+          style: block_style(),
+          children: [%{type: :element, style: %{display: :block}, children: []}]
+        }
+      ]
+    }
+
+    assert Layout.layout(document([invalid_inline_flex]), []) == {:error, :invalid_layout}
+
+    forced_shrink = %{
+      type: :element,
+      style:
+        Map.merge(block_style(), %{
+          display: :flex,
+          width: 30.0,
+          flex_direction: :row,
+          flex_wrap: :nowrap,
+          column_gap: 0.0,
+          row_gap: 0.0,
+          justify_content: :flex_start,
+          align_items: :stretch
+        }),
+      children: [
+        %{
+          type: :element,
+          style:
+            Map.merge(text_style(), %{
+              display: :inline,
+              width: 40.0,
+              flex_basis: 40.0,
+              flex_shrink: 1.0
+            }),
+          children: [%{type: :text, text: "A", style: text_style()}]
+        },
+        %{
+          type: :element,
+          style:
+            Map.merge(text_style(), %{
+              display: :inline,
+              width: 40.0,
+              flex_basis: 40.0,
+              flex_shrink: 1.0
+            }),
+          children: [%{type: :text, text: "B", style: text_style()}]
+        }
+      ]
+    }
+
+    assert {:ok, forced_shrink_layout} =
+             Layout.layout(document([forced_shrink]), page_size: {100, 100}, margin: 10)
+
+    assert Enum.map(forced_shrink_layout.boxes, & &1.text) == ["A", "B"]
+
+    no_shrink = %{
+      forced_shrink
+      | children:
+          Enum.map(forced_shrink.children, fn child ->
+            put_in(child.style.flex_shrink, 0.0)
+          end)
+    }
+
+    assert {:ok, no_shrink_layout} =
+             Layout.layout(document([no_shrink]), page_size: {100, 100}, margin: 10)
+
+    assert Enum.map(no_shrink_layout.boxes, & &1.text) == ["A", "B"]
+  end
+
+  test "layout rejects invalid nested structures through containers" do
+    bad_inline = %{
+      type: :element,
+      style: block_style(),
+      children: [%{type: :element, style: %{display: :block}, children: []}]
+    }
+
+    assert Layout.layout(document([bad_inline]), []) == {:error, :invalid_layout}
+
+    bad_nested_inline = %{
+      type: :element,
+      style: block_style(),
+      children: [
+        %{
+          type: :element,
+          style: Map.merge(text_style(), %{display: :inline}),
+          children: [%{type: :element, style: %{display: :block}, children: []}]
+        }
+      ]
+    }
+
+    assert Layout.layout(document([bad_nested_inline]), []) == {:error, :invalid_layout}
+
+    bad_list = %{
+      type: :element,
+      style: %{display: :list, list_marker_type: :disc},
+      children: [%{type: :element, style: %{display: :block}, children: []}]
+    }
+
+    assert Layout.layout(document([bad_list]), []) == {:error, :invalid_layout}
+
+    bad_table = %{
+      type: :element,
+      style: table_style(),
+      children: [%{type: :element, style: %{display: :block}, children: []}]
+    }
+
+    assert Layout.layout(document([bad_table]), []) == {:error, :invalid_layout}
+
+    bad_row_group = %{
+      type: :element,
+      style: table_style(),
+      children: [
+        %{
+          type: :element,
+          style: %{display: :table_row_group, table_section: :body},
+          children: [%{type: :element, style: %{display: :block}, children: []}]
+        }
+      ]
+    }
+
+    assert Layout.layout(document([bad_row_group]), []) == {:error, :invalid_layout}
+
+    bad_row = %{
+      type: :element,
+      style: table_style(),
+      children: [
+        %{
+          type: :element,
+          style: %{display: :table_row},
+          children: [%{type: :element, style: %{display: :block}, children: []}]
+        }
+      ]
+    }
+
+    assert Layout.layout(document([bad_row]), []) == {:error, :invalid_layout}
+
+    empty_table = %{
+      type: :element,
+      style: table_style(),
+      children: [
+        %{
+          type: :element,
+          style: %{display: :table_row},
+          children: []
+        }
+      ]
+    }
+
+    assert Layout.layout(document([empty_table]), []) == {:error, :invalid_layout}
+
+    bad_caption = %{
+      type: :element,
+      style: table_style(),
+      children: [
+        %{type: :element, style: %{display: :table_caption}, children: :bad},
+        %{
+          type: :element,
+          style: %{display: :table_row},
+          children: [
+            %{
+              type: :element,
+              style: table_cell_style(),
+              children: [%{type: :text, text: "x", style: text_style()}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert Layout.layout(document([bad_caption]), []) == {:error, :invalid_layout}
+
+    bad_row_shape = %{
+      type: :element,
+      style: table_style(),
+      children: [
+        %{
+          type: :element,
+          style: %{display: :table_row_group},
+          children: [%{type: :element, style: %{display: :table_row}, children: :bad}]
+        }
+      ]
+    }
+
+    assert Layout.layout(document([bad_row_shape]), []) == {:error, :invalid_layout}
+
+    bad_cell_shape = %{
+      type: :element,
+      style: table_style(),
+      children: [
+        %{
+          type: :element,
+          style: %{display: :table_row},
+          children: [%{type: :element, style: table_cell_style(), children: :bad}]
+        }
+      ]
+    }
+
+    assert Layout.layout(document([bad_cell_shape]), []) == {:error, :invalid_layout}
+
+    bad_cell_inline = %{
+      type: :element,
+      style: table_style(),
+      children: [
+        %{
+          type: :element,
+          style: %{display: :table_row},
+          children: [
+            %{
+              type: :element,
+              style: table_cell_style(),
+              children: [%{type: :element, style: %{display: :block}, children: []}]
+            }
+          ]
+        },
+        %{
+          type: :element,
+          style: %{display: :table_row},
+          children: [
+            %{
+              type: :element,
+              style: table_cell_style(),
+              children: [%{type: :text, text: "x", style: text_style()}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert Layout.layout(document([bad_cell_inline]), []) == {:error, :invalid_layout}
+
+    bad_table_after_error = %{
+      type: :element,
+      style: table_style(),
+      children: [
+        %{type: :element, style: %{display: :block}, children: []},
+        %{type: :element, style: %{display: :table_row}, children: []}
+      ]
+    }
+
+    assert Layout.layout(document([bad_table_after_error]), []) == {:error, :invalid_layout}
+  end
+
+  test "layout positions right-aligned table cell text" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "text-align: right"},
+                           children: [%{type: :text, text: "R"}]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {100, 100}, margin: 10)
+    [_cell, text] = layout_tree.boxes
+    assert text.text == "R"
+    assert text.x > 10.0
+  end
+
   test "layout rejects invalid options and unsupported trees" do
     assert Layout.layout(%{tag: "p", style: %{}}, []) == {:error, :invalid_layout}
 
+    assert Layout.layout(document([%{type: :invalid}, paragraph("After")]), []) ==
+             {:error, :invalid_layout}
+
     assert Layout.layout(%{type: :document, children: []}, page_size: :unknown) ==
              {:error, :invalid_page_size}
+
+    assert Layout.layout(%{type: :document, children: []}, margin: -1) ==
+             {:error, :invalid_margin}
+
+    assert Layout.layout(%{type: :document, children: []}, margin: "1em") ==
+             {:error, :invalid_margin}
+
+    assert {:ok, pt_margin_layout} = Layout.layout(document([paragraph("pt")]), margin: "10pt")
+    assert_in_delta pt_margin_layout.margin, 10.0, 0.0001
   end
 
   defp ttf_font_path! do
@@ -752,5 +1430,77 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       color_space: :device_rgb,
       bits_per_component: 8
     }
+  end
+
+  defp document(children) do
+    %{type: :document, children: children}
+  end
+
+  defp paragraph(text) do
+    %{
+      type: :element,
+      style: block_style(),
+      children: [
+        %{
+          type: :text,
+          text: text,
+          style: text_style()
+        }
+      ]
+    }
+  end
+
+  defp block_style do
+    Map.merge(text_style(), %{
+      display: :block,
+      line_height: 14.4,
+      margin_after: 12.0
+    })
+  end
+
+  defp image_style(image) do
+    Map.merge(text_style(), %{
+      display: :image,
+      image: image,
+      margin_after: 0.0
+    })
+  end
+
+  defp table_style do
+    Map.merge(text_style(), %{display: :table, margin_after: 0.0})
+  end
+
+  defp table_cell_style do
+    Map.merge(text_style(), %{
+      display: :table_cell,
+      line_height: 14.4,
+      padding: %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0},
+      border_widths: %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+    })
+  end
+
+  defp text_style do
+    %{
+      color: {0, 0, 0},
+      font_family: "Helvetica",
+      font_size: 12.0,
+      font_style: :normal,
+      font_weight: 400,
+      line_height: 14.4
+    }
+  end
+
+  defp png_fixture do
+    row = <<0, 255, 0, 0>>
+
+    <<137, 80, 78, 71, 13, 10, 26, 10>> <>
+      png_chunk("IHDR", <<1::32, 1::32, 8, 2, 0, 0, 0>>) <>
+      png_chunk("IDAT", :zlib.compress(row)) <>
+      png_chunk("IEND", "")
+  end
+
+  defp png_chunk(type, data) do
+    crc = :erlang.crc32(type <> data)
+    <<byte_size(data)::32, type::binary, data::binary, crc::32>>
   end
 end

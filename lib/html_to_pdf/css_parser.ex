@@ -107,19 +107,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         source
       )
 
-    case captures do
-      %{"selectors" => selector_source, "declarations" => declaration_source} ->
-        with {:ok, selectors} <- parse_selectors(selector_source),
-             true <- selectors != [],
-             {:ok, declarations} <- parse_declarations(declaration_source),
-             true <- declarations != [] do
-          {:ok, %{selectors: selectors, declarations: declarations, order: order}}
-        else
-          _ -> {:error, :invalid_css}
-        end
+    %{"selectors" => selector_source, "declarations" => declaration_source} = captures
 
-      _ ->
-        {:error, :invalid_css}
+    with {:ok, selectors} <- parse_selectors(selector_source),
+         true <- selectors != [],
+         {:ok, declarations} <- parse_declarations(declaration_source),
+         true <- declarations != [] do
+      {:ok, %{selectors: selectors, declarations: declarations, order: order}}
+    else
+      _ -> {:error, :invalid_css}
     end
   end
 
@@ -194,9 +190,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       )
 
     case captures do
-      %{"tag" => "", "modifiers" => ""} ->
-        {:error, :invalid_css}
-
       %{"tag" => tag, "modifiers" => modifiers} ->
         parse_selector_modifiers(modifiers, %{
           tag: tag_name(tag),
@@ -214,12 +207,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   defp parse_selector_modifiers(modifiers, part) do
     captures = Regex.scan(~r/([#.])([a-zA-Z_-][a-zA-Z0-9_-]*)/u, modifiers)
-    parsed_source = Enum.map_join(captures, "", &List.first/1)
-
-    case parsed_source == modifiers do
-      true -> modifier_captures_to_part(captures, part)
-      false -> {:error, :invalid_css}
-    end
+    modifier_captures_to_part(captures, part)
   end
 
   defp modifier_captures_to_part(captures, part) do

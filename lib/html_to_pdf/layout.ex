@@ -1000,9 +1000,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     item_gap_total = gap * max(length(line.items) - 1, 0)
     base_without_gap = Enum.reduce(line.items, 0.0, &(&1.outer_main + &2))
 
-    available_main =
-      flex_resolved_available_main(available_main, base_without_gap, item_gap_total)
-
     free_space = available_main - base_without_gap - item_gap_total
     items = resolve_flex_item_sizes(line.items, free_space)
     outer_main = Enum.reduce(items, 0.0, &(&1.outer_main + &2)) + item_gap_total
@@ -1227,10 +1224,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         height
 
       {:column, _height} ->
-        case lines do
-          [line] -> line.main
-          _ -> Enum.map(lines, & &1.main) |> Enum.max(fn -> 0.0 end)
-        end
+        [line] = lines
+        line.main
     end
   end
 
@@ -1328,10 +1323,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             Enum.reduce(items, 0.0, &(&1.outer_main + &2)) + gap * max(length(items) - 1, 0)
         end
     end
-  end
-
-  defp flex_resolved_available_main(available_main, base_without_gap, item_gap_total) do
-    max(available_main, base_without_gap + item_gap_total)
   end
 
   defp flex_main_axis(style) do
@@ -1490,34 +1481,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp table_rows(children) do
     result =
-      Enum.reduce(children, {:ok, []}, fn child, acc ->
-        case acc do
-          {:ok, rows} ->
-            case child do
-              %{style: %{display: :table_caption}} ->
-                {:ok, rows}
+      Enum.reduce_while(children, {:ok, []}, fn child, {:ok, rows} ->
+        case child do
+          %{style: %{display: :table_caption}} ->
+            {:cont, {:ok, rows}}
 
-              %{style: %{display: :table_row}, children: cells} when is_list(cells) ->
-                {:ok, rows ++ [%{row: child, section: :body}]}
+          %{style: %{display: :table_row}, children: cells} when is_list(cells) ->
+            {:cont, {:ok, rows ++ [%{row: child, section: :body}]}}
 
-              %{style: %{display: :table_row_group}, children: group_rows}
-              when is_list(group_rows) ->
-                case Enum.all?(group_rows, &match?(%{style: %{display: :table_row}}, &1)) do
-                  true ->
-                    section = child.style |> Map.get(:table_section, :body)
-                    table_rows = Enum.map(group_rows, &%{row: &1, section: section})
-                    {:ok, rows ++ table_rows}
+          %{style: %{display: :table_row_group}, children: group_rows}
+          when is_list(group_rows) ->
+            case Enum.all?(
+                   group_rows,
+                   &match?(
+                     %{style: %{display: :table_row}, children: rows} when is_list(rows),
+                     &1
+                   )
+                 ) do
+              true ->
+                section = child.style |> Map.get(:table_section, :body)
+                table_rows = Enum.map(group_rows, &%{row: &1, section: section})
+                {:cont, {:ok, rows ++ table_rows}}
 
-                  false ->
-                    {:error, :invalid_layout}
-                end
-
-              _ ->
-                {:error, :invalid_layout}
+              false ->
+                {:halt, {:error, :invalid_layout}}
             end
 
-          {:error, reason} ->
-            {:error, reason}
+          _ ->
+            {:halt, {:error, :invalid_layout}}
         end
       end)
 
@@ -1531,7 +1522,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     column_count =
       rows
       |> Enum.map(fn %{row: %{children: cells}} -> length(cells) end)
-      |> Enum.max(fn -> 0 end)
+      |> Enum.max()
 
     case column_count do
       count when count > 0 ->
@@ -1540,16 +1531,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         result =
           rows
           |> Enum.with_index()
-          |> Enum.reduce({:ok, [], y}, fn {%{row: row, section: section}, index}, acc ->
-            case acc do
-              {:ok, boxes, current_y} ->
-                case layout_table_row(row, section, table_id, index, x, current_y, column_width) do
-                  {:ok, row_boxes, next_y} -> {:ok, boxes ++ row_boxes, next_y}
-                  {:error, reason} -> {:error, reason}
-                end
-
-              {:error, reason} ->
-                {:error, reason}
+          |> Enum.reduce_while({:ok, [], y}, fn {%{row: row, section: section}, index},
+                                                {:ok, boxes, current_y} ->
+            case layout_table_row(row, section, table_id, index, x, current_y, column_width) do
+              {:ok, row_boxes, next_y} -> {:cont, {:ok, boxes ++ row_boxes, next_y}}
+              {:error, reason} -> {:halt, {:error, reason}}
             end
           end)
 
@@ -1563,34 +1549,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp layout_table_row(row, section, table_id, index, x, y, column_width) do
-    case row do
-      %{style: %{display: :table_row}, children: cells} when is_list(cells) ->
-        case Enum.all?(cells, &match?(%{style: %{display: :table_cell}}, &1)) do
-          true ->
-            row_height = cells |> Enum.map(&table_cell_height/1) |> Enum.max()
-            row_metadata = table_row_metadata(table_id, section, index)
+  defp layout_table_row(
+         %{style: %{display: :table_row}, children: cells},
+         section,
+         table_id,
+         index,
+         x,
+         y,
+         column_width
+       )
+       when is_list(cells) do
+    case Enum.all?(cells, &match?(%{style: %{display: :table_cell}}, &1)) do
+      true ->
+        row_height = cells |> Enum.map(&table_cell_height/1) |> Enum.max()
+        row_metadata = table_row_metadata(table_id, section, index)
 
-            result =
-              Enum.reduce_while(cells, {:ok, [], 0}, fn cell, {:ok, acc, index} ->
-                cell_x = x + column_width * index
+        result =
+          Enum.reduce_while(cells, {:ok, [], 0}, fn cell, {:ok, acc, index} ->
+            cell_x = x + column_width * index
 
-                case layout_table_cell(cell, cell_x, y, column_width, row_height, row_metadata) do
-                  {:ok, cell_boxes} -> {:cont, {:ok, acc ++ cell_boxes, index + 1}}
-                  {:error, reason} -> {:halt, {:error, reason}}
-                end
-              end)
-
-            case result do
-              {:ok, boxes, _index} -> {:ok, boxes, y - row_height}
-              {:error, reason} -> {:error, reason}
+            case layout_table_cell(cell, cell_x, y, column_width, row_height, row_metadata) do
+              {:ok, cell_boxes} -> {:cont, {:ok, acc ++ cell_boxes, index + 1}}
+              {:error, reason} -> {:halt, {:error, reason}}
             end
+          end)
 
-          false ->
-            {:error, :invalid_layout}
+        case result do
+          {:ok, boxes, _index} -> {:ok, boxes, y - row_height}
+          {:error, reason} -> {:error, reason}
         end
 
-      _ ->
+      false ->
         {:error, :invalid_layout}
     end
   end
@@ -1703,16 +1692,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     result =
       children
       |> Enum.with_index(1)
-      |> Enum.reduce({:ok, [], y}, fn {child, index}, acc ->
-        case acc do
-          {:ok, boxes, current_y} ->
-            case layout_list_item(child, marker_type, index, x, current_y, width) do
-              {:ok, item_boxes, next_y} -> {:ok, boxes ++ item_boxes, next_y}
-              {:error, reason} -> {:error, reason}
-            end
-
-          {:error, reason} ->
-            {:error, reason}
+      |> Enum.reduce_while({:ok, [], y}, fn {child, index}, {:ok, boxes, current_y} ->
+        case layout_list_item(child, marker_type, index, x, current_y, width) do
+          {:ok, item_boxes, next_y} -> {:cont, {:ok, boxes ++ item_boxes, next_y}}
+          {:error, reason} -> {:halt, {:error, reason}}
         end
       end)
 
@@ -1761,13 +1744,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @spec inline_runs([term()]) ::
           {:ok, [%{text: String.t(), style: map()}]} | {:error, :invalid_layout}
   defp inline_runs(children) do
-    Enum.reduce(children, {:ok, []}, fn child, acc ->
-      case acc do
-        {:ok, runs} ->
-          append_inline_run(child, runs)
-
-        {:error, reason} ->
-          {:error, reason}
+    Enum.reduce_while(children, {:ok, []}, fn child, {:ok, runs} ->
+      case append_inline_run(child, runs) do
+        {:ok, runs} -> {:cont, {:ok, runs}}
+        {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end

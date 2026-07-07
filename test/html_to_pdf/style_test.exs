@@ -477,6 +477,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert text.style.font_size == 16.0
   end
 
+  test "compute ignores child selectors when the required parent is absent" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [%{type: :text, text: "div > p { color: red; }"}]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{},
+          children: [%{type: :text, text: "No parent"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [paragraph] = styled_tree.children
+    assert paragraph.style.color == {0, 0, 0}
+  end
+
   test "compute gives inline style declarations the highest priority" do
     dom = %{
       type: :document,
@@ -811,6 +835,368 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
            ) == {:error, :invalid_document}
   end
 
+  test "compute accepts wrapper elements heading levels and inline aliases" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "html",
+          attributes: %{},
+          children: [
+            %{type: :element, tag: "head", attributes: %{}, children: []},
+            %{
+              type: :element,
+              tag: "body",
+              attributes: %{},
+              children:
+                Enum.map(["h2", "h3", "h4", "h5", "h6"], fn tag ->
+                  %{
+                    type: :element,
+                    tag: tag,
+                    attributes: %{},
+                    children: [%{type: :text, text: tag}]
+                  }
+                end) ++
+                  [
+                    %{
+                      type: :element,
+                      tag: "p",
+                      attributes: %{},
+                      children: [
+                        %{
+                          type: :element,
+                          tag: "b",
+                          attributes: %{},
+                          children: [%{type: :text, text: "bold"}]
+                        },
+                        %{
+                          type: :element,
+                          tag: "i",
+                          attributes: %{},
+                          children: [%{type: :text, text: "italic"}]
+                        }
+                      ]
+                    },
+                    %{
+                      type: :element,
+                      tag: "table",
+                      attributes: %{},
+                      children: [
+                        %{
+                          type: :element,
+                          tag: "tfoot",
+                          attributes: %{},
+                          children: []
+                        }
+                      ]
+                    }
+                  ]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom)
+    headings = Enum.take(styled_tree.children, 5)
+    paragraph = Enum.at(styled_tree.children, 5)
+    table = Enum.at(styled_tree.children, 6)
+
+    assert Enum.map(headings, & &1.style.font_size) == [20.0, 16.0, 14.0, 12.0, 10.0]
+    [bold, italic] = paragraph.children
+    assert bold.style.font_weight == 700
+    assert italic.style.font_style == :italic
+    [foot] = table.children
+    assert foot.style.table_section == :foot
+  end
+
+  test "compute accepts supported display and box value variants" do
+    assertions = [
+      {"display: block", :display, :block},
+      {"display: inline", :display, :inline},
+      {"display: none", :display, :none},
+      {"display: inline-flex", :display, :inline_flex},
+      {"display: inline-grid", :display, :inline_grid},
+      {"margin: 1pt 2pt 3pt", :margin, %{top: 1.0, right: 2.0, bottom: 3.0, left: 2.0}},
+      {"padding-top: 2pt", :padding, %{top: 2.0, right: 0.0, bottom: 0.0, left: 0.0}},
+      {"padding-right: 2pt", :padding, %{top: 0.0, right: 2.0, bottom: 0.0, left: 0.0}},
+      {"padding-bottom: 2pt", :padding, %{top: 0.0, right: 0.0, bottom: 2.0, left: 0.0}},
+      {"padding-left: 2pt", :padding, %{top: 0.0, right: 0.0, bottom: 0.0, left: 2.0}},
+      {"margin-left: 2pt", :margin, %{top: 0.0, right: 0.0, bottom: 12.0, left: 2.0}},
+      {"border-width: 2pt", :border_widths, %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0}},
+      {"border: none", :border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}},
+      {"color: #abc", :color, {0.6666666667, 0.7333333333, 0.8}},
+      {"font-size: 10px", :font_size, 7.5},
+      {"width: 10mm", :width, 72.0 / 25.4 * 10},
+      {"height: 1cm", :height, 72.0 / 2.54},
+      {"width: 1in", :width, 72.0},
+      {"height: 0", :height, 0.0},
+      {"text-align: left", :text_align, :left},
+      {"text-align: center", :text_align, :center},
+      {"text-align: right", :text_align, :right},
+      {"font-weight: normal", :font_weight, 400},
+      {"font-weight: 900", :font_weight, 900},
+      {"font-style: normal", :font_style, :normal},
+      {"font-style: italic", :font_style, :italic},
+      {"border-color: red", :border_color, {1, 0, 0}},
+      {"margin-bottom: 5pt", :margin_after, 5.0}
+    ]
+
+    Enum.each(assertions, fn {style, key, expected} ->
+      assert {:ok, computed} = style_for("p", style)
+      assert_style_value(Map.fetch!(computed, key), expected)
+    end)
+  end
+
+  test "compute accepts supported flex and grid value variants" do
+    assertions = [
+      {"display: flex; flex-direction: row", :flex_direction, :row},
+      {"display: flex; flex-direction: column-reverse", :flex_direction, :column_reverse},
+      {"display: flex; flex-wrap: nowrap", :flex_wrap, :nowrap},
+      {"display: flex; justify-content: start", :justify_content, :flex_start},
+      {"display: flex; justify-content: end", :justify_content, :flex_end},
+      {"display: flex; justify-content: stretch", :justify_content, :stretch},
+      {"display: flex; justify-content: space-around", :justify_content, :space_around},
+      {"display: flex; justify-content: space-evenly", :justify_content, :space_evenly},
+      {"display: flex; align-items: stretch", :align_items, :stretch},
+      {"display: flex; align-items: start", :align_items, :flex_start},
+      {"display: flex; align-self: auto", :align_self, :auto},
+      {"display: flex; align-self: stretch", :align_self, :stretch},
+      {"display: flex; align-self: start", :align_self, :flex_start},
+      {"display: flex; align-self: end", :align_self, :flex_end},
+      {"display: flex; flex-basis: auto", :flex_basis, :auto},
+      {"display: flex; flex: none", :flex_grow, 0.0},
+      {"display: flex; flex: auto", :flex_grow, 1.0},
+      {"display: flex; flex: initial", :flex_grow, 0.0},
+      {"display: flex; flex: 2", :flex_grow, 2.0},
+      {"display: flex; flex: 2 0", :flex_shrink, 0.0},
+      {"display: flex; row-gap: 2pt", :row_gap, 2.0},
+      {"display: flex; column-gap: 3pt", :column_gap, 3.0},
+      {"display: grid; grid-template-columns: auto", :grid_template_columns, [:auto]},
+      {"display: grid; grid-column-start: auto", :grid_column_start, :auto},
+      {"display: grid; grid-column-end: span 2", :grid_column_end, {:span, 2}},
+      {"display: grid; grid-row-start: 2", :grid_row_start, 2},
+      {"display: grid; grid-row-end: 3", :grid_row_end, 3},
+      {"display: grid; grid-column: 2", :grid_column_start, 2},
+      {"display: grid; justify-items: stretch", :justify_items, :stretch},
+      {"display: grid; justify-items: start", :justify_items, :flex_start},
+      {"display: grid; justify-items: end", :justify_items, :flex_end}
+    ]
+
+    Enum.each(assertions, fn {style, key, expected} ->
+      assert {:ok, computed} = style_for("div", style)
+      assert_style_value(Map.fetch!(computed, key), expected)
+    end)
+  end
+
+  test "compute rejects invalid style branches" do
+    invalid_styles = [
+      "display: contents",
+      "flex-direction: sideways",
+      "flex-wrap: reverse",
+      "align-items: baseline",
+      "align-self: baseline",
+      "justify-items: baseline",
+      "order: first",
+      "flex-grow: -1",
+      "flex: 1 1 1pt extra",
+      "grid-template-columns: bad",
+      "grid-column: 1 / 2 / 3",
+      "grid-area: 1 / 2 / 3",
+      "text-align: justify",
+      "font-weight: 1000",
+      "font-weight: heavy",
+      "font-style: oblique",
+      "gap: 1pt 2pt 3pt",
+      "padding: 1pt 2pt 3pt 4pt 5pt",
+      "width: 2em",
+      "border: nonsense"
+    ]
+
+    Enum.each(invalid_styles, fn style ->
+      assert style_for("div", style) == {:error, :invalid_document}
+    end)
+
+    assert style_for("div", "break-before: auto") ==
+             {:ok, style_for!("div", "break-before: auto")}
+
+    assert style_for("div", "flex: 1 1 auto") == {:ok, style_for!("div", "flex: 1 1 auto")}
+    assert style_for("div", "grid-template-columns: ") == {:error, :invalid_document}
+    assert style_for("div", "grid-column: x") == {:error, :invalid_document}
+    assert style_for("div", "font-family: Missing") == {:error, :invalid_document}
+    assert style_for("div", "background-color: nope") == {:error, :invalid_document}
+  end
+
+  test "compute loads file URI and absolute images and rejects malformed image sources" do
+    base_dir = Path.join(System.tmp_dir!(), "native-elixir-pdf-image-style-branches")
+    File.mkdir_p!(base_dir)
+    png_path = Path.join(base_dir, "photo.png")
+    jpg_path = Path.join(base_dir, "photo.jpg")
+    File.write!(png_path, png_rgba_fixture(1, 1, 4))
+    File.write!(jpg_path, jpeg_fixture(4, 3, 1))
+    cmyk_path = Path.join(base_dir, "cmyk.jpg")
+    File.write!(cmyk_path, jpeg_fixture(2, 2, 4))
+    chunked_png_path = Path.join(base_dir, "chunked.png")
+    File.write!(chunked_png_path, png_with_extra_chunk_fixture())
+
+    assert {:ok, png_style} = image_style(png_path, [])
+    assert png_style.image.format == :png
+    assert png_style.image.data == <<255, 0, 0>>
+
+    assert {:ok, jpeg_style} = image_style("photo.jpg", base_url: "file://" <> base_dir)
+    assert jpeg_style.image.format == :jpeg
+    assert jpeg_style.image.color_space == :device_gray
+
+    assert {:ok, cmyk_style} = image_style("cmyk.jpg", base_url: base_dir)
+    assert cmyk_style.image.color_space == :device_cmyk
+
+    assert {:ok, chunked_png_style} = image_style("chunked.png", base_url: base_dir)
+    assert chunked_png_style.image.format == :png
+
+    for filter <- [1, 2, 3] do
+      filter_path = Path.join(base_dir, "filter-#{filter}.png")
+      File.write!(filter_path, png_rgba_fixture(1, 2, filter))
+
+      assert {:ok, filter_style} = image_style("filter-#{filter}.png", base_url: base_dir)
+      assert filter_style.image.format == :png
+    end
+
+    for {name, fixture} <- [
+          {"paeth-up.png", paeth_up_png_fixture()},
+          {"paeth-up-left.png", paeth_up_left_png_fixture()}
+        ] do
+      File.write!(Path.join(base_dir, name), fixture)
+
+      assert {:ok, paeth_style} = image_style(name, base_url: base_dir)
+      assert paeth_style.image.format == :png
+    end
+
+    data_jpeg_src = "data:image/jpeg;base64,#{Base.encode64(jpeg_fixture(1, 1))}"
+    assert {:ok, data_jpeg_style} = image_style(data_jpeg_src, [])
+    assert data_jpeg_style.image.format == :jpeg
+
+    restart_jpeg_src = "data:image/jpeg;base64,#{Base.encode64(restart_jpeg_fixture())}"
+    assert {:ok, restart_jpeg_style} = image_style(restart_jpeg_src, [])
+    assert restart_jpeg_style.image.format == :jpeg
+
+    malformed_sources = [
+      {"data:image/png;base64,%%%"},
+      {"data:image/png;base64,#{Base.encode64(jpeg_fixture(1, 1))}"},
+      {"data:image/png;base64,#{Base.encode64("not png")}"},
+      {"data:image/png;base64,#{Base.encode64(<<137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3>>)}"},
+      {"data:image/png;base64,#{Base.encode64(bad_idat_png_fixture())}"},
+      {"data:image/png;base64,#{Base.encode64(malformed_png_fixture())}"},
+      {"data:image/png;base64,#{Base.encode64(short_row_png_fixture())}"},
+      {"data:image/png;base64,#{Base.encode64(invalid_filter_png_fixture())}"},
+      {"data:image/png;base64,#{Base.encode64(trailing_png_fixture())}"},
+      {"data:image/jpeg;base64,#{Base.encode64(<<1, 2, 3>>)}"},
+      {"data:image/jpeg;base64,#{Base.encode64(<<255, 216, 255, 192, 0, 17, 7, 0, 1, 0, 1, 3>>)}"},
+      {"data:image/jpeg;base64,#{Base.encode64(<<255, 216, 255, 217>>)}"},
+      {"missing.png"},
+      {"bad\u0000name.png"}
+    ]
+
+    Enum.each(malformed_sources, fn {src} ->
+      assert image_style(src, base_url: base_dir) == {:error, :invalid_document}
+    end)
+
+    assert image_style("relative.png", []) == {:error, :invalid_document}
+
+    assert image_style("photo.jpg", base_url: "https://example.com") ==
+             {:error, :invalid_document}
+  after
+    base_dir = Path.join(System.tmp_dir!(), "native-elixir-pdf-image-style-branches")
+    File.rm_rf(base_dir)
+  end
+
+  test "compute rejects malformed document children and stylesheet options" do
+    assert Style.compute(%{type: :document, children: [%{type: :bogus}]}, []) ==
+             {:error, :invalid_document}
+
+    assert Style.compute(
+             %{
+               type: :document,
+               children: [
+                 %{type: :element, tag: "unknown", attributes: %{}, children: []}
+               ]
+             },
+             []
+           ) == {:error, :invalid_document}
+
+    assert {:ok, link_tree} =
+             Style.compute(
+               %{
+                 type: :document,
+                 children: [
+                   %{
+                     type: :element,
+                     tag: "a",
+                     attributes: %{},
+                     children: [%{type: :text, text: "x"}]
+                   }
+                 ]
+               },
+               []
+             )
+
+    [link] = link_tree.children
+    assert link.style.display == :inline
+    assert link.style.color == {0, 0, 1}
+    refute Map.has_key?(link.style, :link_url)
+
+    assert Style.compute(%{type: :document, children: []}, stylesheets: :bad) ==
+             {:error, :invalid_document}
+
+    assert Style.compute(%{type: :document, children: []}, stylesheets: ["missing-file.css"]) ==
+             {:error, :invalid_document}
+
+    assert Style.compute(%{type: :document, children: []}, stylesheets: [123]) ==
+             {:error, :invalid_document}
+
+    assert Style.compute(%{type: :document, children: []}, fonts: :bad) ==
+             {:error, :invalid_document}
+
+    assert Style.compute(
+             %{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "a",
+                   attributes: %{"href" => 123},
+                   children: [%{type: :text, text: "bad"}]
+                 }
+               ]
+             },
+             []
+           ) == {:error, :invalid_document}
+
+    assert Style.compute(%{type: :document, children: []}, default_font: "Missing") ==
+             {:error, :invalid_document}
+
+    assert Style.compute(
+             %{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "style",
+                   attributes: %{},
+                   children: [%{type: :element, tag: "span", attributes: %{}, children: []}]
+                 },
+                 %{
+                   type: :element,
+                   tag: "p",
+                   attributes: %{"style" => ":"},
+                   children: [%{type: :text, text: "Bad inline"}]
+                 }
+               ]
+             },
+             stylesheets: ["aside { color: red; }"]
+           ) == {:error, :invalid_document}
+  end
+
   defp ttf_font_path! do
     [
       "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -824,12 +1210,84 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     end
   end
 
+  defp style_for(tag, style) do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: tag,
+          attributes: %{"style" => style},
+          children: [%{type: :text, text: "Styled"}]
+        }
+      ]
+    }
+
+    case Style.compute(dom, []) do
+      {:ok, styled_tree} ->
+        [element] = styled_tree.children
+        {:ok, element.style}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp style_for!(tag, style) do
+    assert {:ok, computed} = style_for(tag, style)
+    computed
+  end
+
+  defp image_style(src, opts) do
+    dom = %{
+      type: :document,
+      children: [
+        %{type: :element, tag: "img", attributes: %{"src" => src}, children: []}
+      ]
+    }
+
+    case Style.compute(dom, opts) do
+      {:ok, styled_tree} ->
+        [image] = styled_tree.children
+        {:ok, image.style}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp assert_style_value(actual, expected) do
+    case {actual, expected} do
+      {{a, b, c}, {x, y, z}} ->
+        assert_in_delta a, x, 0.0001
+        assert_in_delta b, y, 0.0001
+        assert_in_delta c, z, 0.0001
+
+      _ ->
+        assert actual == expected
+    end
+  end
+
   defp png_fixture(width, height) do
-    row = :binary.copy(<<255, 0, 0>>, width)
-    rows = Enum.map_join(1..height, "", fn _index -> <<0>> <> row end)
+    png_fixture(width, height, 2, 0)
+  end
+
+  defp png_rgba_fixture(width, height, filter) do
+    png_fixture(width, height, 6, filter)
+  end
+
+  defp png_fixture(width, height, color_type, filter) do
+    pixel =
+      case color_type do
+        2 -> <<255, 0, 0>>
+        6 -> <<255, 0, 0, 255>>
+      end
+
+    row = :binary.copy(pixel, width)
+    rows = Enum.map_join(1..height, "", fn _index -> <<filter>> <> row end)
 
     <<137, 80, 78, 71, 13, 10, 26, 10>> <>
-      png_chunk("IHDR", <<width::32, height::32, 8, 2, 0, 0, 0>>) <>
+      png_chunk("IHDR", <<width::32, height::32, 8, color_type, 0, 0, 0>>) <>
       png_chunk("IDAT", :zlib.compress(rows)) <>
       png_chunk("IEND", "")
   end
@@ -839,8 +1297,82 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     <<byte_size(data)::32, type::binary, data::binary, crc::32>>
   end
 
+  defp png_with_extra_chunk_fixture do
+    row = <<0, 255, 0, 0>>
+
+    <<137, 80, 78, 71, 13, 10, 26, 10>> <>
+      png_chunk("IHDR", <<1::32, 1::32, 8, 2, 0, 0, 0>>) <>
+      png_chunk("tEXt", "ignored") <>
+      png_chunk("IDAT", :zlib.compress(row)) <>
+      png_chunk("IEND", "")
+  end
+
+  defp malformed_png_fixture do
+    <<137, 80, 78, 71, 13, 10, 26, 10>> <>
+      <<1::32, "IHDR", 0, 0, 0, 0, 0::32>>
+  end
+
+  defp invalid_filter_png_fixture do
+    <<137, 80, 78, 71, 13, 10, 26, 10>> <>
+      png_chunk("IHDR", <<1::32, 1::32, 8, 2, 0, 0, 0>>) <>
+      png_chunk("IDAT", :zlib.compress(<<9, 255, 0, 0>>)) <>
+      png_chunk("IEND", "")
+  end
+
+  defp short_row_png_fixture do
+    <<137, 80, 78, 71, 13, 10, 26, 10>> <>
+      png_chunk("IHDR", <<2::32, 1::32, 8, 2, 0, 0, 0>>) <>
+      png_chunk("IDAT", :zlib.compress(<<0, 255, 0, 0>>)) <>
+      png_chunk("IEND", "")
+  end
+
+  defp paeth_up_png_fixture do
+    rows =
+      <<0, 100, 0, 0>> <>
+        <<4, 0, 0, 0>>
+
+    <<137, 80, 78, 71, 13, 10, 26, 10>> <>
+      png_chunk("IHDR", <<1::32, 2::32, 8, 2, 0, 0, 0>>) <>
+      png_chunk("IDAT", :zlib.compress(rows)) <>
+      png_chunk("IEND", "")
+  end
+
+  defp paeth_up_left_png_fixture do
+    rows =
+      <<0, 25, 0, 0, 50, 0, 0>> <>
+        <<4, 231, 0, 0, 0, 0, 0>>
+
+    <<137, 80, 78, 71, 13, 10, 26, 10>> <>
+      png_chunk("IHDR", <<2::32, 2::32, 8, 2, 0, 0, 0>>) <>
+      png_chunk("IDAT", :zlib.compress(rows)) <>
+      png_chunk("IEND", "")
+  end
+
+  defp bad_idat_png_fixture do
+    <<137, 80, 78, 71, 13, 10, 26, 10>> <>
+      png_chunk("IHDR", <<1::32, 1::32, 8, 2, 0, 0, 0>>) <>
+      png_chunk("IDAT", "not zlib") <>
+      png_chunk("IEND", "")
+  end
+
+  defp trailing_png_fixture do
+    <<137, 80, 78, 71, 13, 10, 26, 10>> <>
+      png_chunk("IHDR", <<1::32, 1::32, 8, 2, 0, 0, 0>>) <>
+      png_chunk("IDAT", :zlib.compress(<<0, 255, 0, 0, 1>>)) <>
+      png_chunk("IEND", "")
+  end
+
   defp jpeg_fixture(width, height) do
+    jpeg_fixture(width, height, 3)
+  end
+
+  defp jpeg_fixture(width, height, components) do
     <<255, 216, 255, 224, 0, 16, "JFIF", 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 255, 192, 0, 17, 8,
-      height::16, width::16, 3, 1, 17, 0, 2, 17, 0, 3, 17, 0, 255, 217>>
+      height::16, width::16, components, 1, 17, 0, 2, 17, 0, 3, 17, 0, 255, 217>>
+  end
+
+  defp restart_jpeg_fixture do
+    <<255, 216, 255, 208, 255, 192, 0, 17, 8, 1::16, 1::16, 3, 1, 17, 0, 2, 17, 0, 3, 17, 0, 255,
+      217>>
   end
 end

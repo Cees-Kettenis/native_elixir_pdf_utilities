@@ -22,7 +22,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
       }
     ]
 
-    assert {:ok, pdf} = PdfWriter.render(pages, [])
+    assert {:ok, pdf} = PdfWriter.render(pages)
     assert String.starts_with?(pdf, "%PDF-1.4")
     assert pdf =~ "/MediaBox [0 0 595.28 841.89]"
     assert pdf =~ "BT /F1 12 Tf 0 0 0 rg 56.69 773.2 Td (Hello) Tj ET"
@@ -119,6 +119,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "BT /F1 12 Tf 0 0 0 rg 15 35 Td (Boxed) Tj ET"
   end
 
+  test "render writes fill-only and stroke-only rectangle boxes" do
+    pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes: [
+          %{
+            type: :rect,
+            x: 10.0,
+            y: 20.0,
+            width: 40.0,
+            height: 30.0,
+            fill_color: {0.9, 0.9, 0.9},
+            stroke_color: nil,
+            stroke_width: 0.0,
+            border_radius: 0.0
+          },
+          %{
+            type: :rect,
+            x: 10.0,
+            y: 60.0,
+            width: 40.0,
+            height: 20.0,
+            fill_color: nil,
+            stroke_color: {0, 0, 1},
+            stroke_width: 1.0,
+            border_radius: 0.0
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, pdf} = PdfWriter.render(pages, [])
+    assert pdf =~ "q 0.9 0.9 0.9 rg 10 20 40 30 re f Q"
+    assert pdf =~ "q 0 0 1 RG 1 w 10 60 40 20 re S Q"
+  end
+
   test "render writes rounded rectangle paths when radius is set" do
     pages = [
       %{
@@ -209,6 +245,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "q 15 0 0 10 20 30 cm /Im2 Do Q"
   end
 
+  test "render writes gray and CMYK image color spaces" do
+    pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes: [
+          %{
+            type: :image,
+            x: 5.0,
+            y: 6.0,
+            width: 10.0,
+            height: 20.0,
+            image: image_fixture(:jpeg, jpeg_fixture(1, 1), 1, 1, :device_gray)
+          },
+          %{
+            type: :image,
+            x: 20.0,
+            y: 30.0,
+            width: 15.0,
+            height: 10.0,
+            image: image_fixture(:jpeg, jpeg_fixture(2, 1), 2, 1, :device_cmyk)
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, pdf} = PdfWriter.render(pages, [])
+    assert pdf =~ "/ColorSpace /DeviceGray"
+    assert pdf =~ "/ColorSpace /DeviceCMYK"
+  end
+
   test "render embeds TTF fonts with Type0 Unicode text output" do
     assert {:ok, registry} = Font.load_registry(fonts: [{"Fixture Sans", ttf_font_path!()}])
     assert {:ok, _families, font} = Font.resolve("Fixture Sans", 400, :normal, registry)
@@ -267,6 +333,81 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
   test "render rejects invalid page data" do
     assert PdfWriter.render([], []) == {:error, :invalid_pdf_input}
+    assert PdfWriter.render(:not_pages, []) == {:error, :invalid_pdf_input}
+    assert PdfWriter.render([%{size: {0, 100}, boxes: []}], []) == {:error, :invalid_pdf_input}
+
+    invalid_boxes = [
+      %{type: :text, text: "Bad", x: 1, y: 1, font: "Helvetica", font_size: -1, color: {0, 0, 0}},
+      %{type: :text, text: "Bad", x: 1, y: 1, font: "Helvetica", font_size: 12, color: :red},
+      %{
+        type: :text,
+        text: "Bad",
+        x: 1,
+        y: 1,
+        font: "Helvetica",
+        font_face: %{type: :built_in, pdf_name: "BadFont"},
+        font_size: 12,
+        color: {0, 0, 0}
+      },
+      %{
+        type: :text,
+        text: "Bad",
+        x: 1,
+        y: 1,
+        font: "Helvetica",
+        font_face: %{type: :unknown},
+        font_size: 12,
+        color: {0, 0, 0}
+      },
+      %{
+        type: :text,
+        text: "Bad",
+        x: 1,
+        y: 1,
+        width: 10,
+        annotation_width: 10,
+        font: "Helvetica",
+        font_size: 12,
+        color: {0, 0, 0},
+        link_url: 123
+      },
+      %{
+        type: :rect,
+        x: 1,
+        y: 1,
+        width: 10,
+        height: 10,
+        fill_color: nil,
+        stroke_color: nil,
+        stroke_width: 0,
+        border_radius: 0
+      },
+      %{
+        type: :rect,
+        x: 1,
+        y: 1,
+        width: 10,
+        height: 10,
+        fill_color: :red,
+        stroke_color: nil,
+        stroke_width: 0,
+        border_radius: 0
+      },
+      %{
+        type: :image,
+        x: 1,
+        y: 1,
+        width: 10,
+        height: 10,
+        image: image_fixture(:gif, "bad", 1, 1, :device_rgb)
+      },
+      %{type: :unknown}
+    ]
+
+    Enum.each(invalid_boxes, fn box ->
+      assert PdfWriter.render([%{size: {100.0, 100.0}, boxes: [box]}], []) ==
+               {:error, :invalid_pdf_input}
+    end)
   end
 
   defp image_fixture(format, data, width, height, color_space) do

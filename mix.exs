@@ -10,7 +10,8 @@ defmodule NativeElixirPdfUtilities.MixProject do
       description: "A PDF tokenizer and utilities in pure Elixir.",
       deps: deps(),
       package: package(),
-      docs: docs()
+      docs: docs(),
+      test_coverage: [summary: [threshold: 100]]
     ]
   end
 

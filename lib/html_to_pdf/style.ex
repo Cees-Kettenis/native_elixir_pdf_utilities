@@ -497,9 +497,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           true -> matches_ancestor_selector?(part.combinator, left_part, remaining, ancestors)
           false -> false
         end
-
-      _ ->
-        false
     end
   end
 
@@ -947,15 +944,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       |> String.split(~r/\s+/u, trim: true)
       |> Enum.map(&parse_grid_track/1)
 
-    case tracks do
-      [] ->
-        :error
-
-      tracks ->
-        case Enum.all?(tracks, &match?({:ok, _track}, &1)) do
-          true -> {:ok, Enum.map(tracks, fn {:ok, track} -> track end)}
-          false -> :error
-        end
+    case Enum.all?(tracks, &match?({:ok, _track}, &1)) do
+      true -> {:ok, Enum.map(tracks, fn {:ok, track} -> track end)}
+      false -> :error
     end
   end
 
@@ -1118,11 +1109,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       Regex.match?(~r/^[1-9]00$/u, normalized) ->
         {weight, ""} = Integer.parse(normalized)
-
-        case weight <= 900 do
-          true -> {:ok, Map.put(style, :font_weight, weight)}
-          false -> {:error, :invalid_document}
-        end
+        {:ok, Map.put(style, :font_weight, weight)}
 
       true ->
         {:error, :invalid_document}
@@ -1447,10 +1434,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp decode_png(_data) do
-    :error
-  end
-
   defp png_chunks(chunks, acc) do
     case chunks do
       <<0::32, "IEND", _crc::32>> ->
@@ -1624,10 +1607,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp jpeg_dimensions(<<255, 216, rest::binary>>) do
     jpeg_marker_dimensions(rest)
-  end
-
-  defp jpeg_dimensions(_data) do
-    :error
   end
 
   defp jpeg_marker_dimensions(data) do

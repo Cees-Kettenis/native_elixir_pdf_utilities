@@ -36,8 +36,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
 
   test "parse rejects malformed CSS" do
     assert CssParser.parse("p color: red;") == {:error, :invalid_css}
+    assert CssParser.parse("p { color: red; } dangling") == {:error, :invalid_css}
+    assert CssParser.parse("{}") == {:error, :invalid_css}
+    assert CssParser.parse("p, { color: red; }") == {:error, :invalid_css}
+    assert CssParser.parse("> p { color: red; }") == {:error, :invalid_css}
     assert CssParser.parse("p > { color: red; }") == {:error, :invalid_css}
+    assert CssParser.parse("p > span > { color: red; }") == {:error, :invalid_css}
+    assert CssParser.parse("p > { color: red; }") == {:error, :invalid_css}
+    assert CssParser.parse("123 { color: red; }") == {:error, :invalid_css}
+    assert CssParser.parse("p#one#two { color: red; }") == {:error, :invalid_css}
+    assert CssParser.parse("p:active { color: red; }") == {:error, :invalid_css}
+    assert CssParser.parse("p { : red; }") == {:error, :invalid_css}
+    assert CssParser.parse("p { color: ; }") == {:error, :invalid_css}
     assert CssParser.parse("p { color }") == {:error, :invalid_css}
+    assert CssParser.parse("") == {:ok, []}
     assert CssParser.parse(:not_css) == {:error, :invalid_css}
+    assert CssParser.parse_declarations(:not_css) == {:error, :invalid_css}
   end
 end
