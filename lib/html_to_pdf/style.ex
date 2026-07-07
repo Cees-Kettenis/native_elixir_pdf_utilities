@@ -2,8 +2,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   @moduledoc """
   Style computation for the native HTML-to-PDF renderer.
 
-  This module applies defaults and inheritance for the milestone 6 text, box,
-  list, link, and table styling subset.
+  This module applies defaults and inheritance for the milestone 7 text, box,
+  list, link, table, and page-break styling subset.
   Later milestones add the broader CSS parser and full cascade behavior.
   """
 
@@ -328,6 +328,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                   {:halt, {:error, :invalid_document}}
               end
 
+            {:ok, property, value}
+            when property in ["break-before", "page-break-before"] ->
+              case page_break_value(value) do
+                {:ok, break_value} -> {:cont, {:ok, Map.put(acc, :break_before, break_value)}}
+                :error -> {:halt, {:error, :invalid_document}}
+              end
+
+            {:ok, property, value} when property in ["break-after", "page-break-after"] ->
+              case page_break_value(value) do
+                {:ok, break_value} -> {:cont, {:ok, Map.put(acc, :break_after, break_value)}}
+                :error -> {:halt, {:error, :invalid_document}}
+              end
+
             {:ok, property, value} when property == "border" ->
               case parse_border(value, Map.fetch!(acc, :color)) do
                 {:ok, border_widths, border_color} ->
@@ -481,6 +494,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           _ ->
             :error
         end
+    end
+  end
+
+  defp page_break_value(value) do
+    case String.downcase(String.trim(value)) do
+      "auto" -> {:ok, :auto}
+      "always" -> {:ok, :page}
+      "page" -> {:ok, :page}
+      _ -> :error
     end
   end
 

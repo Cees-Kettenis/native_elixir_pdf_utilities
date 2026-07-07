@@ -224,7 +224,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
     case tag do
       "table" ->
         caption_count = Enum.count(children, &match?(%{tag: "caption"}, &1))
-        caption_first? = children == [] or hd(children).tag == "caption"
+        caption_first? = caption_count == 0 or hd(children).tag == "caption"
         caption_count <= 1 and caption_first? and Enum.any?(children, &table_row_container?/1)
 
       tag when tag in ~w(thead tbody tfoot) ->

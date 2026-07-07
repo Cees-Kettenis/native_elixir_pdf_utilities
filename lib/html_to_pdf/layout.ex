@@ -2,10 +2,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @moduledoc """
   Layout engine for the native HTML-to-PDF renderer.
 
-  Milestone 6 lays out block text elements, inline text runs, basic block
+  Milestone 7 lays out block text elements, inline text runs, basic block
   box styling, lists, link annotation bounds, and deterministic one-page
-  tables. Later milestones add richer wrapping, pagination, flexbox, and grid
-  layout behavior behind this module.
+  tables with pagination metadata. Later milestones add richer wrapping,
+  flexbox, and grid layout behavior behind this module.
   """
 
   @type box :: map()
@@ -97,12 +97,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           content_width =
             box_width - border_widths.left - padding.left - padding.right - border_widths.right
 
+          flow_metadata =
+            style
+            |> break_metadata()
+            |> Map.put(:flow_id, {:block, box_x, box_top})
+
           background_box =
-            background_box(style, box_x, box_top - box_height, box_width, box_height)
+            style
+            |> background_box(box_x, box_top - box_height, box_width, box_height)
+            |> tag_boxes(flow_metadata)
 
           {boxes, _next_x} =
             Enum.reduce(runs, {background_box, content_x}, fn run, {acc, current_x} ->
-              box = text_box(run, current_x, baseline_y, content_width)
+              box =
+                run |> text_box(current_x, baseline_y, content_width) |> Map.merge(flow_metadata)
+
               {acc ++ [box], current_x + text_width(run.text, run.style)}
             end)
 
@@ -136,23 +145,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     content_width =
       box_width - border_widths.left - padding.left - padding.right - border_widths.right
 
+    table_id = {:table, content_x, content_top}
+    table_metadata = break_metadata(style)
+
     with {:ok, caption_boxes, rows_top} <-
-           layout_table_caption(children, content_x, content_top, content_width),
+           layout_table_caption(children, content_x, content_top, content_width, table_id),
          {:ok, rows} <- table_rows(children),
          {:ok, row_boxes, content_bottom} <-
-           layout_table_rows(rows, content_x, rows_top, content_width) do
+           layout_table_rows(rows, content_x, rows_top, content_width, table_id) do
       content_height = content_top - content_bottom
 
       box_height =
         border_widths.top + padding.top + content_height + padding.bottom + border_widths.bottom
 
-      table_box = background_box(style, box_x, box_top - box_height, box_width, box_height)
+      table_box =
+        style
+        |> background_box(box_x, box_top - box_height, box_width, box_height)
+        |> tag_boxes(Map.merge(table_metadata, %{flow_id: table_id, table_id: table_id}))
+
       next_y = box_top - box_height - margin.bottom
       {:ok, table_box ++ caption_boxes ++ row_boxes, next_y}
     end
   end
 
-  defp layout_table_caption(children, x, y, width) do
+  defp layout_table_caption(children, x, y, width, table_id) do
     case Enum.find(children, &match?(%{style: %{display: :table_caption}}, &1)) do
       nil ->
         {:ok, [], y}
@@ -180,12 +196,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           baseline_y = box_top - border_widths.top - padding.top - Map.fetch!(style, :font_size)
           start_x = aligned_text_x(runs, style, content_x, content_width)
 
+          flow_metadata = %{flow_id: {:table_caption, table_id}, table_id: table_id}
+
           background_box =
-            background_box(style, box_x, box_top - box_height, box_width, box_height)
+            style
+            |> background_box(box_x, box_top - box_height, box_width, box_height)
+            |> tag_boxes(flow_metadata)
 
           {text_boxes, _next_x} =
             Enum.reduce(runs, {[], start_x}, fn run, {acc, current_x} ->
-              box = text_box(run, current_x, baseline_y, content_width)
+              box =
+                run |> text_box(current_x, baseline_y, content_width) |> Map.merge(flow_metadata)
+
               {acc ++ [box], current_x + text_width(run.text, run.style)}
             end)
 
@@ -207,13 +229,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 {:ok, rows}
 
               %{style: %{display: :table_row}, children: cells} when is_list(cells) ->
-                {:ok, rows ++ [child]}
+                {:ok, rows ++ [%{row: child, section: :body}]}
 
               %{style: %{display: :table_row_group}, children: group_rows}
               when is_list(group_rows) ->
                 case Enum.all?(group_rows, &match?(%{style: %{display: :table_row}}, &1)) do
-                  true -> {:ok, rows ++ group_rows}
-                  false -> {:error, :invalid_layout}
+                  true ->
+                    section = child.style |> Map.get(:table_section, :body)
+                    table_rows = Enum.map(group_rows, &%{row: &1, section: section})
+                    {:ok, rows ++ table_rows}
+
+                  false ->
+                    {:error, :invalid_layout}
                 end
 
               _ ->
@@ -231,10 +258,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp layout_table_rows(rows, x, y, width) do
+  defp layout_table_rows(rows, x, y, width, table_id) do
     column_count =
       rows
-      |> Enum.map(fn %{children: cells} -> length(cells) end)
+      |> Enum.map(fn %{row: %{children: cells}} -> length(cells) end)
       |> Enum.max(fn -> 0 end)
 
     case column_count do
@@ -242,10 +269,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         column_width = width / count
 
         result =
-          Enum.reduce(rows, {:ok, [], y}, fn row, acc ->
+          rows
+          |> Enum.with_index()
+          |> Enum.reduce({:ok, [], y}, fn {%{row: row, section: section}, index}, acc ->
             case acc do
               {:ok, boxes, current_y} ->
-                case layout_table_row(row, x, current_y, column_width) do
+                case layout_table_row(row, section, table_id, index, x, current_y, column_width) do
                   {:ok, row_boxes, next_y} -> {:ok, boxes ++ row_boxes, next_y}
                   {:error, reason} -> {:error, reason}
                 end
@@ -265,18 +294,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp layout_table_row(row, x, y, column_width) do
+  defp layout_table_row(row, section, table_id, index, x, y, column_width) do
     case row do
       %{style: %{display: :table_row}, children: cells} when is_list(cells) ->
         case Enum.all?(cells, &match?(%{style: %{display: :table_cell}}, &1)) do
           true ->
             row_height = cells |> Enum.map(&table_cell_height/1) |> Enum.max()
+            row_metadata = table_row_metadata(table_id, section, index)
 
             result =
               Enum.reduce_while(cells, {:ok, [], 0}, fn cell, {:ok, acc, index} ->
                 cell_x = x + column_width * index
 
-                case layout_table_cell(cell, cell_x, y, column_width, row_height) do
+                case layout_table_cell(cell, cell_x, y, column_width, row_height, row_metadata) do
                   {:ok, cell_boxes} -> {:cont, {:ok, acc ++ cell_boxes, index + 1}}
                   {:error, reason} -> {:halt, {:error, reason}}
                 end
@@ -296,7 +326,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp layout_table_cell(cell, x, y, width, height) do
+  defp layout_table_cell(cell, x, y, width, height, row_metadata) do
     case cell do
       %{style: %{display: :table_cell} = style, children: children} when is_list(children) ->
         with {:ok, runs} <- inline_runs(children) do
@@ -309,11 +339,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
           baseline_y = y - border_widths.top - padding.top - Map.fetch!(style, :font_size)
           start_x = aligned_text_x(runs, style, content_x, content_width)
-          cell_box = background_box(style, x, y - height, width, height)
+
+          cell_box =
+            style
+            |> background_box(x, y - height, width, height)
+            |> tag_boxes(row_metadata)
 
           {text_boxes, _next_x} =
             Enum.reduce(runs, {[], start_x}, fn run, {acc, current_x} ->
-              box = text_box(run, current_x, baseline_y, content_width)
+              box =
+                run |> text_box(current_x, baseline_y, content_width) |> Map.merge(row_metadata)
+
               {acc ++ [box], current_x + text_width(run.text, run.style)}
             end)
 
@@ -331,6 +367,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     border_widths.top + padding.top + Map.fetch!(style, :line_height) + padding.bottom +
       border_widths.bottom
+  end
+
+  defp table_row_metadata(table_id, section, index) do
+    metadata = %{
+      flow_id: {:table_row, table_id, index},
+      table_id: table_id,
+      table_section: section
+    }
+
+    case section do
+      :head -> Map.put(metadata, :repeat_table_header, true)
+      _ -> metadata
+    end
   end
 
   defp aligned_text_x(runs, style, x, width) do
@@ -415,11 +464,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           baseline_y = y - Map.fetch!(style, :font_size)
           text_x = x + marker_gap
           text_width = width - marker_gap
-          marker_box = text_box(%{text: marker, style: marker_style}, x, baseline_y, marker_gap)
+          flow_metadata = %{flow_id: {:list_item, x, y, index}}
+
+          marker_box =
+            %{text: marker, style: marker_style}
+            |> text_box(x, baseline_y, marker_gap)
+            |> Map.merge(flow_metadata)
 
           {text_boxes, _next_x} =
             Enum.reduce(runs, {[], text_x}, fn run, {acc, current_x} ->
-              box = text_box(run, current_x, baseline_y, text_width)
+              box = run |> text_box(current_x, baseline_y, text_width) |> Map.merge(flow_metadata)
               {acc ++ [box], current_x + text_width(run.text, run.style)}
             end)
 
@@ -519,6 +573,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           }
         ]
     end
+  end
+
+  defp tag_boxes(boxes, metadata) do
+    Enum.map(boxes, &Map.merge(&1, metadata))
+  end
+
+  defp break_metadata(style) do
+    %{
+      break_before: Map.get(style, :break_before, :auto),
+      break_after: Map.get(style, :break_after, :auto)
+    }
   end
 
   @spec text_width(String.t(), map()) :: number()

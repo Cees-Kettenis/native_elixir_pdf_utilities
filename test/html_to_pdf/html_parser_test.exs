@@ -220,6 +220,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
               }}
   end
 
+  test "parse accepts a table without a caption" do
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               ~s(<table><thead><tr><th>Name</th></tr></thead><tbody><tr><td>Alpha</td></tr></tbody></table>)
+             )
+
+    [table] = dom.children
+    [head, body] = table.children
+
+    assert head.tag == "thead"
+    assert body.tag == "tbody"
+  end
+
   test "parse rejects unsupported markup" do
     assert HtmlParser.parse("<div>Hello</div>") == {:error, :unsupported_html}
     assert HtmlParser.parse(~s(<p class="copy">Hello</p>)) == {:error, :unsupported_html}

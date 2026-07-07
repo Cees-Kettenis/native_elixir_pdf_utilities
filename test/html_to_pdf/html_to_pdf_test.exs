@@ -73,6 +73,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "/URI (https://example.com)"
   end
 
+  test "render paginates overflowing content into multiple PDF pages" do
+    rows =
+      1..3
+      |> Enum.map(fn index ->
+        "<tr><td>Alpha #{index}</td><td>#{index}</td></tr>"
+      end)
+      |> Enum.join()
+
+    html =
+      "<table><thead><tr><th>Name</th><th>Count</th></tr></thead><tbody>" <>
+        rows <> "</tbody></table>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {200, 100}, margin: 10)
+    assert pdf =~ "/Type /Pages"
+    assert pdf =~ "/Count 2"
+    assert length(String.split(pdf, "(Name) Tj")) == 3
+    assert pdf =~ "(Alpha 3) Tj"
+  end
+
   test "render_file writes a PDF for a supported paragraph" do
     input_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.html")
     output_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.pdf")

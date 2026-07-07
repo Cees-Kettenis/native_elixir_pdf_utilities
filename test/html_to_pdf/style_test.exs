@@ -113,6 +113,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert_in_delta elem(paragraph.style.background_color, 0), 0.9333, 0.0001
   end
 
+  test "compute applies manual page break declarations" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"style" => "break-before: page; page-break-after: always"},
+          children: [%{type: :text, text: "Break"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [paragraph] = styled_tree.children
+
+    assert paragraph.style.break_before == :page
+    assert paragraph.style.break_after == :page
+
+    assert Style.compute(
+             %{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "p",
+                   attributes: %{"style" => "break-before: left"},
+                   children: [%{type: :text, text: "Bad"}]
+                 }
+               ]
+             },
+             []
+           ) == {:error, :invalid_document}
+  end
+
   test "compute applies list defaults and propagates link URLs to text" do
     dom = %{
       type: :document,
