@@ -102,6 +102,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "(Alpha 3) Tj"
   end
 
+  test "render honors an empty manual page break element" do
+    html = ~s(<p>First</p><div style="page-break-after: always"></div><p>Second</p>)
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {200, 100}, margin: 10)
+    assert pdf =~ "/Count 2"
+    assert pdf =~ "(First) Tj"
+    assert pdf =~ "(Second) Tj"
+
+    html = ~s(<p>First</p><div style="page-break-before: always"></div><p>Second</p>)
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {200, 100}, margin: 10)
+    assert pdf =~ "/Count 2"
+    assert pdf =~ "(First) Tj"
+    assert pdf =~ "(Second) Tj"
+  end
+
   test "render converts a flex layout subset to PDF text boxes" do
     html =
       ~s(<div style="display: flex; width: 80pt; gap: 8pt"><span style="order: 2">Second</span><span style="order: 1">First</span></div>)

@@ -449,17 +449,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert {:ok, styled_tree} = Style.compute(dom, [])
     assert {:ok, layout_tree} = Layout.layout(styled_tree, margin: 10)
 
-    [
-      caption,
-      first_header_cell,
-      first_header_text,
-      second_header_cell,
-      second_header_text,
-      first_data_cell,
-      first_data_text,
-      second_data_cell,
-      second_data_text
-    ] = layout_tree.boxes
+    [caption | row_boxes] = layout_tree.boxes
+
+    [first_header_cell, second_header_cell, first_data_cell, second_data_cell] =
+      Enum.filter(row_boxes, &(&1.type == :rect))
+
+    [first_header_text, second_header_text, first_data_text, second_data_text] =
+      Enum.filter(row_boxes, &(&1.type == :text))
 
     assert caption.text == "Summary"
     assert_in_delta caption.x, 272.44, 0.0001
@@ -1628,6 +1624,405 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert text.x > 10.0
   end
 
+  test "layout vertically aligns table cell content within taller rows" do
+    assert {:ok, middle_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [
+                             %{type: :text, text: "A"},
+                             %{type: :element, tag: "br", attributes: %{}, children: []},
+                             %{type: :text, text: "B"}
+                           ]
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [%{type: :text, text: "C"}]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, middle_layout} = Layout.layout(middle_tree, page_size: {120, 120}, margin: 10)
+    a = Enum.find(middle_layout.boxes, &(&1.type == :text and &1.text == "A"))
+    b = Enum.find(middle_layout.boxes, &(&1.type == :text and &1.text == "B"))
+    centered = Enum.find(middle_layout.boxes, &(&1.type == :text and &1.text == "C"))
+
+    assert centered.y < a.y
+    assert centered.y > b.y
+
+    assert {:ok, top_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [
+                             %{type: :text, text: "A"},
+                             %{type: :element, tag: "br", attributes: %{}, children: []},
+                             %{type: :text, text: "B"}
+                           ]
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "vertical-align: top"},
+                           children: [%{type: :text, text: "C"}]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, top_layout} = Layout.layout(top_tree, page_size: {120, 120}, margin: 10)
+    top_a = Enum.find(top_layout.boxes, &(&1.type == :text and &1.text == "A"))
+    top_c = Enum.find(top_layout.boxes, &(&1.type == :text and &1.text == "C"))
+
+    assert_in_delta top_c.y, top_a.y, 0.0001
+
+    assert {:ok, bottom_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [
+                             %{type: :text, text: "A"},
+                             %{type: :element, tag: "br", attributes: %{}, children: []},
+                             %{type: :text, text: "B"}
+                           ]
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "vertical-align: bottom"},
+                           children: [%{type: :text, text: "C"}]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, bottom_layout} = Layout.layout(bottom_tree, page_size: {120, 120}, margin: 10)
+    bottom_b = Enum.find(bottom_layout.boxes, &(&1.type == :text and &1.text == "B"))
+    bottom_c = Enum.find(bottom_layout.boxes, &(&1.type == :text and &1.text == "C"))
+
+    assert_in_delta bottom_c.y, bottom_b.y, 0.0001
+  end
+
+  test "layout paints table cell backgrounds before row text" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [%{type: :text, text: "Wide text"}]
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [%{type: :text, text: "Next"}]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {120, 120}, margin: 10)
+    row_boxes = Enum.take(layout_tree.boxes, 4)
+
+    assert Enum.map(row_boxes, & &1.type) == [:rect, :rect, :text, :text]
+  end
+
+  test "layout paints collapsed table borders as a separate grid" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{"style" => "border-collapse: collapse"},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "background-color: #f4f4f4"},
+                           children: [%{type: :text, text: "A"}]
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [%{type: :text, text: "B"}]
+                         }
+                       ]
+                     },
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [%{type: :text, text: "C"}]
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [%{type: :text, text: "D"}]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {120, 120}, margin: 10)
+
+    border_boxes = Enum.filter(layout_tree.boxes, &(Map.get(&1, :role) == :table_border))
+
+    background_boxes =
+      Enum.filter(layout_tree.boxes, &(Map.get(&1, :role) == :table_cell_background))
+
+    text_boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
+
+    assert length(border_boxes) == 4
+    assert [%{fill_color: {red, green, blue}, stroke_width: stroke_width}] = background_boxes
+    assert_in_delta red, 0.9569, 0.0001
+    assert_in_delta green, 0.9569, 0.0001
+    assert_in_delta blue, 0.9569, 0.0001
+    assert_in_delta stroke_width, 0.0, 0.0001
+
+    assert Enum.all?(border_boxes, &is_nil(&1.fill_color))
+
+    assert Enum.all?(text_boxes, fn text_box ->
+             Enum.find_index(layout_tree.boxes, &(&1 == text_box)) >
+               Enum.find_index(layout_tree.boxes, &(Map.get(&1, :role) == :table_border))
+           end)
+  end
+
+  test "layout skips collapsed table border boxes when cell borders are none" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{"style" => "border-collapse: collapse"},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "border: none"},
+                           children: [%{type: :text, text: "No border"}]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {120, 120}, margin: 10)
+
+    refute Enum.any?(layout_tree.boxes, &(Map.get(&1, :role) == :table_border))
+  end
+
+  test "layout fills collapsed table borders for rows with missing trailing cells" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{"style" => "width: 100pt; border-collapse: collapse"},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "width: 40%"},
+                           children: [%{type: :text, text: "A"}]
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "width: 30%"},
+                           children: [%{type: :text, text: "B"}]
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "width: 30%"},
+                           children: [%{type: :text, text: "C"}]
+                         }
+                       ]
+                     },
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "width: 40%"},
+                           children: [%{type: :text, text: "D"}]
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "width: 30%"},
+                           children: [%{type: :text, text: "E"}]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {140, 120}, margin: 10)
+
+    border_boxes = Enum.filter(layout_tree.boxes, &(Map.get(&1, :role) == :table_border))
+    [last_declared, filler] = Enum.take(border_boxes, -2)
+
+    assert length(border_boxes) == 6
+    assert filler.x > last_declared.x
+    assert filler.width > 0.0
+  end
+
+  test "layout inherits text alignment through nested flex block content" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{"style" => "display: flex; width: 100pt"},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "div",
+                       attributes: %{"style" => "width: 80pt"},
+                       children: [%{type: :text, text: "Left"}]
+                     },
+                     %{
+                       type: :element,
+                       tag: "div",
+                       attributes: %{"style" => "width: 20pt"},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "div",
+                           attributes: %{"style" => "text-align: right"},
+                           children: [
+                             %{
+                               type: :element,
+                               tag: "p",
+                               attributes: %{},
+                               children: [%{type: :text, text: "PO"}]
+                             }
+                           ]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {140, 100}, margin: 10)
+    po_text = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "PO"))
+
+    assert po_text.x > 90.0
+  end
+
   test "layout supports line breaks colspan and nested tables in cells" do
     assert {:ok, styled_tree} =
              Style.compute(%{
@@ -2000,6 +2395,106 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert Enum.all?(cell_boxes, &(&1.height < 10.0))
   end
 
+  test "layout honors table cell height from custom property values" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "html",
+                   attributes: %{},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "style",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :text,
+                           text:
+                             ":root { --row-height: 40pt; } .item-row td { height: var(--row-height); min-height: var(--row-height); }"
+                         }
+                       ]
+                     },
+                     %{
+                       type: :element,
+                       tag: "body",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "table",
+                           attributes: %{"style" => "width: 120pt"},
+                           children: [
+                             %{
+                               type: :element,
+                               tag: "tr",
+                               attributes: %{"class" => "item-row"},
+                               children: [
+                                 %{
+                                   type: :element,
+                                   tag: "td",
+                                   attributes: %{},
+                                   children: [%{type: :text, text: "A"}]
+                                 }
+                               ]
+                             }
+                           ]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {180, 120}, margin: 10)
+
+    cell_box =
+      layout_tree.boxes
+      |> Enum.filter(&(&1.type == :rect))
+      |> Enum.find(&(&1.stroke_width > 0))
+
+    assert_in_delta cell_box.height, 40.0, 0.0001
+  end
+
+  test "layout wraps anywhere when line-break allows it" do
+    assert {:ok, normal_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "p",
+                   attributes: %{"style" => "width: 30pt; font-size: 10pt"},
+                   children: [%{type: :text, text: "ABCDEFGHIJK"}]
+                 }
+               ]
+             })
+
+    assert {:ok, anywhere_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "p",
+                   attributes: %{"style" => "width: 30pt; font-size: 10pt; line-break: anywhere"},
+                   children: [%{type: :text, text: "ABCDEFGHIJK"}]
+                 }
+               ]
+             })
+
+    assert {:ok, normal_layout} = Layout.layout(normal_tree, page_size: {120, 120}, margin: 10)
+
+    assert {:ok, anywhere_layout} =
+             Layout.layout(anywhere_tree, page_size: {120, 120}, margin: 10)
+
+    assert length(Enum.filter(normal_layout.boxes, &(&1.type == :text))) == 1
+    assert length(Enum.filter(anywhere_layout.boxes, &(&1.type == :text))) > 1
+  end
+
   test "layout distributes mixed fixed flexible and overflowing table widths" do
     assert {:ok, styled_tree} =
              Style.compute(%{
@@ -2099,6 +2594,72 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert_in_delta c.x - b.x, 44.44, 0.1
     assert_in_delta e.x - d.x, 50.0, 0.1
     assert_in_delta g.x - f.x, 50.0, 0.1
+  end
+
+  test "layout preserves intrinsic widths when percentage table columns exceed the table width" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{"style" => "width: 780pt"},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         po_width_cell("4%", "#"),
+                         po_width_cell("10%", "Job No."),
+                         po_width_cell("6%", "Style No."),
+                         po_width_cell("4%", "Clw"),
+                         po_width_cell("10%", "Category"),
+                         po_width_cell("12%", "Colour"),
+                         po_width_cell("10%", "Quantity (PCS)"),
+                         po_width_cell("7%", "Price (USD)"),
+                         po_width_cell("9%", "Amount (USD)"),
+                         po_width_cell("6%", "ETC Date"),
+                         po_width_cell("30%", "Item Instructions")
+                       ]
+                     },
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         po_width_cell("4%", "1"),
+                         po_width_cell("10%", "GGPHJ5376SU27"),
+                         po_width_cell("6%", "HJ5376"),
+                         po_width_cell("4%", "POV"),
+                         po_width_cell("10%", "WOMEN RUNNING"),
+                         po_width_cell("12%", "40Y - POLAR"),
+                         po_width_cell("10%", "50.00"),
+                         po_width_cell("7%", "1.1412"),
+                         po_width_cell("9%", "57.06"),
+                         po_width_cell("6%", "10/04/2026"),
+                         po_width_cell("30%", "SIZE: 57CM TOGETHER WITH 1037116")
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {820, 160}, margin: 10)
+
+    row_cells =
+      layout_tree.boxes
+      |> Enum.filter(&(&1.type == :rect))
+      |> Enum.drop(11)
+      |> Enum.take(11)
+
+    date_cell = Enum.at(row_cells, 9)
+    instructions_cell = Enum.at(row_cells, 10)
+
+    assert date_cell.width > 780.0 * 0.06 / 1.08
+    assert instructions_cell.width < 780.0 * 0.30 / 1.08
   end
 
   test "layout supports mixed text and inline children in block table cells" do
@@ -2293,6 +2854,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
   defp document(children) do
     %{type: :document, children: children}
+  end
+
+  defp po_width_cell(width, text) do
+    %{
+      type: :element,
+      tag: "td",
+      attributes: %{"style" => "width: #{width}; padding: 5pt; border: 1pt solid #ccc"},
+      children: [%{type: :text, text: text}]
+    }
   end
 
   defp paragraph(text) do

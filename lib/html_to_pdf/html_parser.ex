@@ -318,6 +318,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   defp decode_entities(text) do
     text
     |> String.replace("&amp;", "&")
+    |> String.replace("&nbsp;", " ")
     |> String.replace("&lt;", "<")
     |> String.replace("&gt;", ">")
     |> String.replace("&quot;", "\"")

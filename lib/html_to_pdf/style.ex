@@ -38,6 +38,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                ),
              {:ok, rules} <- stylesheet_rules(children, opts) do
           base_style = %{
+            _custom_properties: %{},
             _font_registry: font_registry,
             color: {0, 0, 0},
             font_face: font_face,
@@ -46,7 +47,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             font_size: 12.0,
             font_style: :normal,
             font_weight: 400,
-            line_height: 14.4
+            line_height: 14.4,
+            text_align: :left
           }
 
           with {:ok, styled_children} <- style_children(children, base_style, rules, [], opts) do
@@ -281,14 +283,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       _ ->
         case Map.get(style, :line_height_explicit, false) do
-          true -> Map.delete(style, :line_height_explicit)
-          false -> Map.put(style, :line_height, Map.fetch!(style, :font_size) * 1.2)
+          true ->
+            case Map.get(style, :line_height_normal, false) do
+              true ->
+                style
+                |> Map.put(:line_height, normal_line_height(style))
+                |> Map.delete(:line_height_normal)
+                |> Map.delete(:line_height_explicit)
+
+              false ->
+                Map.delete(style, :line_height_explicit)
+            end
+
+          false ->
+            Map.put(style, :line_height, normal_line_height(style))
         end
+    end
+  end
+
+  defp normal_line_height(style) do
+    font_size = Map.fetch!(style, :font_size)
+
+    case Map.get(style, :font_face) do
+      %{type: :embedded, ascent: ascent, descent: descent, units_per_em: units_per_em}
+      when is_number(ascent) and is_number(descent) and is_number(units_per_em) and
+             units_per_em > 0 ->
+        max((ascent - descent) / units_per_em * font_size, font_size)
+
+      _ ->
+        font_size * 1.2
     end
   end
 
   defp text_style(style) do
     Map.take(style, [
+      :_custom_properties,
       :_font_registry,
       :color,
       :font_face,
@@ -297,8 +326,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       :font_size,
       :font_style,
       :font_weight,
+      :line_break,
       :line_height,
-      :link_url
+      :link_url,
+      :text_align
     ])
   end
 
@@ -391,7 +422,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       margin: edges(0.0),
       padding: edges(4.0),
       rowspan: 1,
-      text_align: :left
+      text_align: :left,
+      vertical_align: :middle
     }
 
     with {:ok, colspan} <- positive_attribute(attributes, "colspan"),
@@ -596,6 +628,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           |> Enum.map(fn {declaration, declaration_index} ->
             %{
               declaration: declaration,
+              important: important_declaration?(declaration),
               specificity: specificity,
               order: rule.order,
               declaration_index: declaration_index
@@ -604,7 +637,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       end
     end)
     |> Enum.sort_by(fn matched ->
-      {matched.specificity, matched.order, matched.declaration_index}
+      {matched.important, matched.specificity, matched.order, matched.declaration_index}
     end)
   end
 
@@ -668,6 +701,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp pseudo_class_matches?(pseudo_class, node, ancestors) do
     case pseudo_class do
+      :root ->
+        Map.get(node, :tag) == "html" and ancestors == []
+
       :first_child ->
         case ancestors do
           [%{children: children} | _rest] when is_list(children) ->
@@ -699,8 +735,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end)
   end
 
-  defp apply_declaration(style, {property, value}) do
+  defp important_declaration?(declaration) do
+    case declaration do
+      {_property, _value, :important} -> true
+      _ -> false
+    end
+  end
+
+  defp apply_declaration(style, declaration) do
+    case declaration do
+      {property, value} -> apply_declaration_value(style, property, value)
+      {property, value, :important} -> apply_declaration_value(style, property, value)
+    end
+  end
+
+  defp apply_declaration_value(style, property, value) do
     case property do
+      "--" <> _custom_property when is_binary(value) ->
+        custom_properties =
+          style
+          |> Map.get(:_custom_properties, %{})
+          |> Map.put(property, String.trim(value))
+
+        {:ok, Map.put(style, :_custom_properties, custom_properties)}
+
       "color" ->
         with {:ok, color} <- parse_color(value), do: {:ok, Map.put(style, :color, color)}
 
@@ -754,6 +812,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         with {:ok, break_value} <- page_break_value(value),
              do: {:ok, Map.put(style, :break_after, break_value)}
 
+      "line-break" ->
+        put_line_break(style, value)
+
+      "vertical-align" ->
+        put_vertical_align(style, value)
+
+      "min-height" ->
+        put_min_height(style, value)
+
       "border" ->
         with {:ok, border_widths, border_color} <- parse_border(value, Map.fetch!(style, :color)) do
           style =
@@ -773,6 +840,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             {:ok,
              style
              |> Map.put(:line_height_multiplier, multiplier)
+             |> Map.put(:line_height_explicit, true)}
+
+          {:ok, :normal} ->
+            {:ok,
+             style
+             |> Map.put(:line_height_normal, true)
+             |> Map.delete(:line_height_multiplier)
              |> Map.put(:line_height_explicit, true)}
 
           {:ok, line_height} ->
@@ -799,8 +873,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         put_display(style, value)
 
       property when property in ["width", "height"] ->
-        with {:ok, size} <- parse_size(value),
-             do: {:ok, Map.put(style, length_property(property), size)}
+        put_size(style, length_property(property), value)
 
       "aspect-ratio" ->
         with {:ok, aspect_ratio} <- parse_aspect_ratio(value),
@@ -906,6 +979,59 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       _ ->
         {:error, :invalid_document}
+    end
+  end
+
+  defp put_size(style, property, value) do
+    case resolved_css_value(style, value) do
+      {:ok, value} ->
+        with {:ok, size} <- parse_size(value), do: {:ok, Map.put(style, property, size)}
+
+      :error ->
+        {:error, :invalid_document}
+    end
+  end
+
+  defp put_min_height(style, value) do
+    case resolved_css_value(style, value) do
+      {:ok, value} ->
+        with {:ok, length} <- parse_length(value), do: {:ok, Map.put(style, :min_height, length)}
+
+      :error ->
+        {:error, :invalid_document}
+    end
+  end
+
+  defp put_vertical_align(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      "baseline" -> {:ok, Map.put(style, :vertical_align, :baseline)}
+      "top" -> {:ok, Map.put(style, :vertical_align, :top)}
+      "middle" -> {:ok, Map.put(style, :vertical_align, :middle)}
+      "bottom" -> {:ok, Map.put(style, :vertical_align, :bottom)}
+      _ -> {:error, :invalid_document}
+    end
+  end
+
+  defp put_line_break(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      value when value in ["auto", "normal"] -> {:ok, Map.put(style, :line_break, :normal)}
+      "anywhere" -> {:ok, Map.put(style, :line_break, :anywhere)}
+      _ -> {:error, :invalid_document}
+    end
+  end
+
+  defp resolved_css_value(style, value) do
+    normalized = String.trim(value)
+
+    case Regex.named_captures(~r/^var\((?<name>--[a-zA-Z_][a-zA-Z0-9_-]*)\)$/u, normalized) do
+      %{"name" => name} ->
+        case Map.get(Map.get(style, :_custom_properties, %{}), name) do
+          value when is_binary(value) -> {:ok, value}
+          _ -> :error
+        end
+
+      _ ->
+        {:ok, normalized}
     end
   end
 
@@ -1442,7 +1568,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp parse_length(value, length_context) do
     normalized = String.trim(value)
 
-    case Regex.run(~r/^(?:(0)|(-?\d+(?:\.\d+)?)(pt|px|mm|cm|in))$/u, normalized) do
+    case Regex.run(~r/^(?:(0)|(-?\d+(?:\.\d+)?)(pt|px|mm|cm|in|rem))$/u, normalized) do
       [_, "0"] ->
         {:ok, 0.0}
 
@@ -1487,7 +1613,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
     cond do
       normalized == "normal" ->
-        {:ok, {:multiplier, 1.2}}
+        {:ok, :normal}
 
       match?({:ok, _length}, parse_length(normalized)) ->
         parse_length(normalized)
@@ -2116,6 +2242,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       "mm" -> 72.0 / 25.4
       "cm" -> 72.0 / 2.54
       "in" -> 72.0
+      "rem" -> 12.0
     end
   end
 end

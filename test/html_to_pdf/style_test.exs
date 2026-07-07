@@ -92,6 +92,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
            ) == {:error, :invalid_document}
   end
 
+  test "compute derives normal line-height from embedded font metrics" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{
+            "style" => "font-family: 'Fixture Sans'; font-size: 10pt; line-height: normal"
+          },
+          children: [%{type: :text, text: "Metric"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} =
+             Style.compute(dom, fonts: [%{family: "Fixture Sans", path: ttf_font_path!()}])
+
+    [paragraph] = styled_tree.children
+    %{ascent: ascent, descent: descent, units_per_em: units_per_em} = paragraph.style.font_face
+    expected_line_height = (ascent - descent) / units_per_em * 10.0
+
+    assert_in_delta paragraph.style.line_height, expected_line_height, 0.0001
+  end
+
+  test "compute accepts normal line-break declarations" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"style" => "line-break: normal"},
+          children: [%{type: :text, text: "Normal break"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [paragraph] = styled_tree.children
+
+    assert paragraph.style.line_break == :normal
+  end
+
   test "compute applies inline bold italic and inherited color" do
     dom = %{
       type: :document,
@@ -593,6 +637,79 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     assert first.style.color == {1, 0, 0}
     assert second.style.color == {0, 0, 0}
+  end
+
+  test "compute accepts root custom properties and table cell layout hints" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "html",
+          attributes: %{},
+          children: [
+            %{
+              type: :element,
+              tag: "style",
+              attributes: %{},
+              children: [
+                %{
+                  type: :text,
+                  text:
+                    ":root { --row-height: 8rem; } .none { display: none !important; } .approval-section { display: flex; } td { line-break: anywhere; vertical-align: top; } .item-row td { min-height: var(--row-height); height: var(--row-height); }"
+                }
+              ]
+            },
+            %{
+              type: :element,
+              tag: "body",
+              attributes: %{},
+              children: [
+                %{
+                  type: :element,
+                  tag: "div",
+                  attributes: %{"class" => "none approval-section"},
+                  children: [%{type: :text, text: "Hidden"}]
+                },
+                %{
+                  type: :element,
+                  tag: "table",
+                  attributes: %{},
+                  children: [
+                    %{
+                      type: :element,
+                      tag: "tr",
+                      attributes: %{"class" => "item-row"},
+                      children: [
+                        %{
+                          type: :element,
+                          tag: "td",
+                          attributes: %{},
+                          children: [%{type: :text, text: "Cell"}]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    hidden = Enum.find(styled_tree.children, &match?(%{tag: "div"}, &1))
+    table = Enum.find(styled_tree.children, &match?(%{tag: "table"}, &1))
+    [row] = table.children
+    [cell] = row.children
+
+    assert hidden.style.display == :none
+    assert table.style.display == :table
+    assert cell.style.display == :table_cell
+    assert cell.style.height == 96.0
+    assert cell.style.line_break == :anywhere
+    assert cell.style.min_height == 96.0
   end
 
   test "compute applies child selectors with first-child pseudo classes" do
@@ -1243,11 +1360,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       {"text-align: left", :text_align, :left},
       {"text-align: center", :text_align, :center},
       {"text-align: right", :text_align, :right},
+      {"vertical-align: baseline", :vertical_align, :baseline},
+      {"vertical-align: top", :vertical_align, :top},
+      {"vertical-align: middle", :vertical_align, :middle},
+      {"vertical-align: bottom", :vertical_align, :bottom},
       {"font-weight: normal", :font_weight, 400},
       {"font-weight: 900", :font_weight, 900},
       {"font-style: normal", :font_style, :normal},
       {"font-style: italic", :font_style, :italic},
       {"border-color: red", :border_color, {1, 0, 0}},
+      {"border-top: 2pt solid red", :border_color, {1, 0, 0}},
       {"border-collapse: collapse", :border_collapse, :collapse},
       {"border-collapse: separate", :border_collapse, :separate},
       {"aspect-ratio: 1.5", :aspect_ratio, 1.5},
@@ -1266,6 +1388,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     assert style.border_widths == %{top: 0.75, right: 0.0, bottom: 0.75, left: 0.75}
     assert_style_value(style.border_color, {0.8, 0.8, 0.8})
+  end
+
+  test "table cells default to browser middle vertical alignment" do
+    assert {:ok, style} = style_for("td", "")
+
+    assert style.vertical_align == :middle
   end
 
   test "compute accepts supported flex and grid value variants" do
@@ -1333,6 +1461,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "width: 2em",
       "width: -10%",
       "height: -1pt",
+      "height: var(--missing)",
+      "min-height: var(--missing)",
+      "min-height: nope",
+      "vertical-align: super",
+      "line-break: strict",
       "color: #0000007",
       "aspect-ratio: 0 / 1",
       "aspect-ratio: 1 / 2 / 3",
@@ -1474,6 +1607,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert sized_svg.style.image.format == :png
     assert sized_svg.style.image.width_px == 10
     assert sized_svg.style.image.height_px == 10
+
+    height_sized_svg_dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "img",
+          attributes: %{"src" => sized_svg_src, "style" => "height: 10px; aspect-ratio: 2"},
+          children: []
+        }
+      ]
+    }
+
+    assert {:ok, height_sized_svg_tree} = Style.compute(height_sized_svg_dom, [])
+    [height_sized_svg] = height_sized_svg_tree.children
+    assert height_sized_svg.style.image.format == :png
+    assert height_sized_svg.style.aspect_ratio == 2.0
+    assert height_sized_svg.style.height == 7.5
+    assert height_sized_svg.style.image.width_px == 10
+    assert height_sized_svg.style.image.height_px == 10
 
     malformed_sources = [
       {"data:image/svg+xml;base64,#{Base.encode64("<svg></svg>")}"},

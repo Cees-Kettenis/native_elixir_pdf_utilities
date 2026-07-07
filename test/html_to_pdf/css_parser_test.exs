@@ -44,9 +44,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
            ]
   end
 
+  test "parse accepts root custom properties and important declarations" do
+    assert {:ok, [root_rule, hidden_rule]} =
+             CssParser.parse("""
+             :root { --row-height: 8rem; }
+             .none { display: none !important; }
+             """)
+
+    [root_selector] = root_rule.selectors
+    assert root_rule.declarations == [{"--row-height", "8rem"}]
+    assert hd(root_selector.parts).pseudo_classes == [:root]
+
+    assert hidden_rule.declarations == [{"display", "none", :important}]
+  end
+
   test "parse_declarations normalizes inline declaration blocks" do
     assert CssParser.parse_declarations(" COLOR : #336699 ; font-weight: bold ") ==
              {:ok, [{"color", "#336699"}, {"font-weight", "bold"}]}
+
+    assert CssParser.parse_declarations("display: none !important") ==
+             {:ok, [{"display", "none", :important}]}
   end
 
   test "parse rejects malformed CSS" do

@@ -134,7 +134,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
                </head>
                <body>
                  <ul>
-                   <li>&lt;One&gt; &apos;Two&apos; &#39;Three&#39;</li>
+                   <li>&lt;One&gt; &apos;Two&apos; &#39;Three&#39;&nbsp;Four</li>
                  </ul>
                  <table>
                    <tr><td>A</td></tr>
@@ -150,7 +150,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     [text] = item.children
     [row] = table.children
 
-    assert text.text == "<One> 'Two' 'Three'"
+    assert text.text == "<One> 'Two' 'Three' Four"
     assert row.tag == "tr"
   end
 

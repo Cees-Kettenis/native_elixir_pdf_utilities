@@ -90,14 +90,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       end
 
     target_top = state.current_y
-    shifted_boxes = shift_boxes(group.boxes, target_top - group.top)
 
-    state = %{
-      state
-      | current_boxes: state.current_boxes ++ shifted_boxes,
-        current_y: target_top - group.height,
-        previous_bottom: group.bottom
-    }
+    shifted_boxes =
+      group.boxes
+      |> Enum.reject(&page_break_box?/1)
+      |> shift_boxes(target_top - group.top)
+
+    state =
+      case shifted_boxes do
+        [] ->
+          state
+
+        _ ->
+          %{
+            state
+            | current_boxes: state.current_boxes ++ shifted_boxes,
+              current_y: target_top - group.height,
+              previous_bottom: group.bottom
+          }
+      end
 
     case Map.get(group, :break_after) do
       :page -> page_break(state, page_size, margin)
@@ -200,8 +211,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       when is_number(y) and is_number(line_height) ->
         {y + line_height, y}
 
+      %{type: :page_break, y: y} when is_number(y) ->
+        {y, y}
+
       _ ->
         {0.0, 0.0}
+    end
+  end
+
+  defp page_break_box?(box) do
+    case box do
+      %{type: :page_break} -> true
+      _ -> false
     end
   end
 

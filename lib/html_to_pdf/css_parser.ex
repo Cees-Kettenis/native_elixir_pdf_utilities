@@ -8,12 +8,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   layer can validate values against the renderer's supported property set.
   """
 
-  @type declaration :: {String.t(), String.t()}
+  @type declaration :: {String.t(), String.t()} | {String.t(), String.t(), :important}
   @type selector_part :: %{
           tag: String.t() | nil,
           id: String.t() | nil,
           classes: [String.t()],
-          pseudo_classes: [:first_child],
+          pseudo_classes: [:first_child | :root],
           combinator: nil | :descendant | :child
         }
   @type selector :: %{
@@ -186,7 +186,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   defp parse_simple_selector(selector) do
     captures =
       Regex.named_captures(
-        ~r/^(?<tag>[a-zA-Z][a-zA-Z0-9]*)?(?<modifiers>(?:[#.][a-zA-Z_-][a-zA-Z0-9_-]*)*)(?<pseudo>:(?:first-child))?$/u,
+        ~r/^(?<tag>[a-zA-Z][a-zA-Z0-9]*)?(?<modifiers>(?:[#.][a-zA-Z_-][a-zA-Z0-9_-]*)*)(?<pseudo>:(?:first-child|root))?$/u,
         selector
       )
 
@@ -236,6 +236,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   defp pseudo_classes(pseudo) do
     case pseudo do
       ":first-child" -> [:first_child]
+      ":root" -> [:root]
       _ -> []
     end
   end
@@ -253,14 +254,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       [property, value] ->
         property = property |> String.trim() |> String.downcase()
         value = String.trim(value)
+        important? = String.match?(value, ~r/\s*!important\s*$/iu)
 
-        case Regex.match?(~r/^[a-z][a-z-]*$/u, property) and value != "" do
-          true -> {:ok, {property, value}}
-          false -> {:error, :invalid_css}
+        value =
+          value
+          |> String.replace(~r/\s*!important\s*$/iu, "")
+          |> String.trim()
+
+        case valid_property?(property) and value != "" do
+          true ->
+            case important? do
+              true -> {:ok, {property, value, :important}}
+              false -> {:ok, {property, value}}
+            end
+
+          false ->
+            {:error, :invalid_css}
         end
 
       _ ->
         {:error, :invalid_css}
     end
+  end
+
+  defp valid_property?(property) do
+    Regex.match?(~r/^[a-z][a-z-]*$/u, property) or
+      Regex.match?(~r/^--[a-zA-Z_][a-zA-Z0-9_-]*$/u, property)
   end
 end

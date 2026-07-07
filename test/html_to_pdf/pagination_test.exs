@@ -84,6 +84,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
     assert only.text == "Only"
   end
 
+  test "paginate consumes empty manual page-break markers" do
+    boxes = [
+      text_box("First", 78.0, {:block, 1}),
+      %{
+        type: :page_break,
+        x: 10.0,
+        y: 63.6,
+        width: 180.0,
+        height: 0.0,
+        flow_id: {:block, 2},
+        break_before: :auto,
+        break_after: :page
+      },
+      text_box("Second", 63.6, {:block, 3})
+    ]
+
+    layout_tree = %{type: :layout, page_size: {200.0, 100.0}, margin: 10.0, boxes: boxes}
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+    assert Enum.map(first_page.boxes, & &1.text) == ["First"]
+    assert Enum.map(second_page.boxes, & &1.text) == ["Second"]
+    refute Enum.any?(first_page.boxes ++ second_page.boxes, &match?(%{type: :page_break}, &1))
+  end
+
   test "paginate handles non-text bounds and boxes without y coordinates" do
     boxes = [
       %{
