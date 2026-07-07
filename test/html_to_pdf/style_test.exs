@@ -20,7 +20,87 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert paragraph.style.color == {0, 0, 0}
   end
 
+  test "compute applies heading defaults and inline style colors" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "h1",
+          attributes: %{"style" => "color: #336699"},
+          children: [%{type: :text, text: "Title"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [heading] = styled_tree.children
+    [title] = heading.children
+
+    assert heading.style.display == :block
+    assert heading.style.font_size == 24.0
+    assert heading.style.font_weight == 700
+    assert heading.style.color == {0.2, 0.4, 0.6}
+    assert title.style.color == {0.2, 0.4, 0.6}
+  end
+
+  test "compute applies inline bold italic and inherited color" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"style" => "color: red"},
+          children: [
+            %{type: :text, text: "Hello "},
+            %{
+              type: :element,
+              tag: "strong",
+              attributes: %{},
+              children: [%{type: :text, text: "bold"}]
+            },
+            %{
+              type: :element,
+              tag: "em",
+              attributes: %{},
+              children: [%{type: :text, text: "italic"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [paragraph] = styled_tree.children
+    [plain, strong, em] = paragraph.children
+    [bold] = strong.children
+    [italic] = em.children
+
+    assert plain.style.color == {1, 0, 0}
+    assert strong.style.font_weight == 700
+    assert bold.style.font_weight == 700
+    assert bold.style.color == {1, 0, 0}
+    assert em.style.font_style == :italic
+    assert italic.style.font_style == :italic
+  end
+
   test "compute rejects unsupported document trees" do
     assert Style.compute(%{tag: "p"}, []) == {:error, :invalid_document}
+
+    assert Style.compute(
+             %{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "p",
+                   attributes: %{"style" => "background: red"},
+                   children: [%{type: :text, text: "Hello"}]
+                 }
+               ]
+             },
+             []
+           ) == {:error, :invalid_document}
   end
 end

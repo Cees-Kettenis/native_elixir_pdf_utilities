@@ -49,7 +49,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   def render(html, opts \\ []) do
     with {:ok, dom} <- HtmlParser.parse(html),
          {:ok, styled_tree} <- Style.compute(dom, opts),
-         {:ok, layout_tree} <- Layout.layout(styled_tree, opts),
+         {:ok, layout_tree} <- layout_document(styled_tree, opts),
          {:ok, pages} <- Pagination.paginate(layout_tree, opts),
          {:ok, pdf_binary} <- PdfWriter.render(pages, opts) do
       {:ok, pdf_binary}
@@ -76,5 +76,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
       _ ->
         {:error, :invalid_path}
     end
+  end
+
+  @spec layout_document(term(), [render_option()]) ::
+          {:ok, term()} | {:error, :invalid_layout | :invalid_margin | :invalid_page_size}
+  defp layout_document(styled_tree, opts) do
+    apply(Layout, :layout, [styled_tree, opts])
   end
 end

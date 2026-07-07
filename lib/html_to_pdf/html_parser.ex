@@ -2,8 +2,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   @moduledoc """
   Strict HTML parser for the native HTML-to-PDF renderer.
 
-  Milestone 2 intentionally supports only a strict paragraph document. Unsupported
-  or malformed markup returns an error instead of guessing at browser behavior.
+  Milestone 3 supports a strict subset of text-oriented HTML: paragraphs,
+  headings, and inline emphasis/color containers. Unsupported or malformed
+  markup returns an error instead of guessing at browser behavior.
   """
 
   @type text_node :: %{type: :text, text: String.t()}
@@ -11,9 +12,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
           type: :element,
           tag: String.t(),
           attributes: map(),
-          children: [text_node()]
+          children: [text_node() | element_node()]
         }
   @type dom_tree :: %{type: :document, children: [element_node()]}
+
+  @block_tags ~w(p h1 h2 h3 h4 h5 h6)
+  @inline_tags ~w(strong b em i span)
 
   @doc """
   Parses an HTML binary into a renderer DOM tree.
@@ -22,30 +26,167 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   def parse(html) do
     case html do
       html when is_binary(html) ->
-        captures = Regex.named_captures(~r/^\s*<p>(?<text>[^<>]*)<\/p>\s*$/u, html)
-
-        case captures do
-          %{"text" => text} ->
-            {:ok,
-             %{
-               type: :document,
-               children: [
-                 %{
-                   type: :element,
-                   tag: "p",
-                   attributes: %{},
-                   children: [%{type: :text, text: decode_entities(text)}]
-                 }
-               ]
-             }}
-
-          _ ->
-            {:error, :unsupported_html}
-        end
+        parse_document(html)
 
       _ ->
         {:error, :invalid_html}
     end
+  end
+
+  defp parse_document(html) do
+    tokens = html |> tokenize() |> List.flatten()
+
+    with true <- Enum.join(tokens) == html,
+         {:ok, children, []} <- parse_children(tokens, :document, nil, []),
+         true <- children != [] do
+      {:ok, %{type: :document, children: children}}
+    else
+      _ -> {:error, :unsupported_html}
+    end
+  end
+
+  defp tokenize(html) do
+    Regex.scan(~r/<[^>]*>|[^<]+/u, html)
+  end
+
+  defp parse_children(tokens, context, closing_tag, children) do
+    case tokens do
+      [] when is_nil(closing_tag) ->
+        {:ok, children, []}
+
+      [] ->
+        {:error, :unsupported_html}
+
+      [token | remaining] ->
+        parse_child(token, remaining, context, closing_tag, children)
+    end
+  end
+
+  defp parse_child(token, remaining, context, closing_tag, children) do
+    cond do
+      String.starts_with?(token, "</") ->
+        case parse_closing_tag(token) do
+          {:ok, tag} when tag == closing_tag -> {:ok, children, remaining}
+          _ -> {:error, :unsupported_html}
+        end
+
+      String.starts_with?(token, "<") ->
+        with {:ok, tag, attributes} <- parse_opening_tag(token),
+             true <- allowed_child?(context, tag),
+             {:ok, element_children, rest} <- parse_children(remaining, tag, tag, []) do
+          element = %{
+            type: :element,
+            tag: tag,
+            attributes: attributes,
+            children: element_children
+          }
+
+          parse_children(rest, context, closing_tag, children ++ [element])
+        else
+          _ -> {:error, :unsupported_html}
+        end
+
+      context == :document and String.trim(token) == "" ->
+        parse_children(remaining, context, closing_tag, children)
+
+      context == :document ->
+        {:error, :unsupported_html}
+
+      true ->
+        parse_children(
+          remaining,
+          context,
+          closing_tag,
+          children ++ [%{type: :text, text: decode_entities(token)}]
+        )
+    end
+  end
+
+  defp parse_opening_tag(token) do
+    captures =
+      Regex.named_captures(
+        ~r/^<\s*(?<tag>[a-zA-Z][a-zA-Z0-9]*)\s*(?<attributes>[^<>]*?)\s*>$/u,
+        token
+      )
+
+    case captures do
+      %{"tag" => tag, "attributes" => attributes} ->
+        tag = String.downcase(tag)
+
+        with true <- supported_tag?(tag),
+             {:ok, attributes} <- parse_attributes(attributes) do
+          {:ok, tag, attributes}
+        else
+          _ -> {:error, :unsupported_html}
+        end
+
+      _ ->
+        {:error, :unsupported_html}
+    end
+  end
+
+  defp parse_closing_tag(token) do
+    case Regex.named_captures(~r/^<\/\s*(?<tag>[a-zA-Z][a-zA-Z0-9]*)\s*>$/u, token) do
+      %{"tag" => tag} ->
+        tag = String.downcase(tag)
+
+        case supported_tag?(tag) do
+          true -> {:ok, tag}
+          false -> {:error, :unsupported_html}
+        end
+
+      _ ->
+        {:error, :unsupported_html}
+    end
+  end
+
+  defp parse_attributes(attributes) do
+    case String.trim(attributes) do
+      "" ->
+        {:ok, %{}}
+
+      attributes ->
+        captures =
+          Regex.scan(~r/\s*([a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*("[^"]*"|'[^']*')/u, attributes)
+
+        parsed_source = captures |> Enum.map_join("", &List.first/1) |> String.trim()
+
+        with true <- parsed_source == attributes,
+             {:ok, parsed} <- attributes_to_map(captures) do
+          {:ok, parsed}
+        else
+          _ -> {:error, :unsupported_html}
+        end
+    end
+  end
+
+  defp attributes_to_map(captures) do
+    Enum.reduce_while(captures, {:ok, %{}}, fn [_, name, quoted_value], {:ok, acc} ->
+      name = String.downcase(name)
+      value = quoted_value |> String.slice(1..-2//1) |> decode_entities()
+
+      case {name, Map.has_key?(acc, name)} do
+        {"style", false} -> {:cont, {:ok, Map.put(acc, name, value)}}
+        _ -> {:halt, {:error, :unsupported_html}}
+      end
+    end)
+  end
+
+  defp allowed_child?(context, tag) do
+    cond do
+      context == :document ->
+        tag in @block_tags
+
+      context in @block_tags or context in @inline_tags ->
+        tag in @inline_tags
+
+      true ->
+        false
+    end
+  end
+
+  defp supported_tag?(tag) do
+    tag in @block_tags or tag in @inline_tags
   end
 
   defp decode_entities(text) do

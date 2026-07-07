@@ -19,8 +19,49 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
               }}
   end
 
+  test "parse accepts headings and inline text elements with style attributes" do
+    assert HtmlParser.parse(
+             ~s(<h1 style="color: #336699">Title</h1><p>Hello <strong>bold</strong> and <em>italic</em></p>)
+           ) ==
+             {:ok,
+              %{
+                type: :document,
+                children: [
+                  %{
+                    type: :element,
+                    tag: "h1",
+                    attributes: %{"style" => "color: #336699"},
+                    children: [%{type: :text, text: "Title"}]
+                  },
+                  %{
+                    type: :element,
+                    tag: "p",
+                    attributes: %{},
+                    children: [
+                      %{type: :text, text: "Hello "},
+                      %{
+                        type: :element,
+                        tag: "strong",
+                        attributes: %{},
+                        children: [%{type: :text, text: "bold"}]
+                      },
+                      %{type: :text, text: " and "},
+                      %{
+                        type: :element,
+                        tag: "em",
+                        attributes: %{},
+                        children: [%{type: :text, text: "italic"}]
+                      }
+                    ]
+                  }
+                ]
+              }}
+  end
+
   test "parse rejects unsupported markup" do
     assert HtmlParser.parse("<div>Hello</div>") == {:error, :unsupported_html}
+    assert HtmlParser.parse(~s(<p class="copy">Hello</p>)) == {:error, :unsupported_html}
+    assert HtmlParser.parse("<p>Hello</strong></p>") == {:error, :unsupported_html}
     assert HtmlParser.parse(:not_html) == {:error, :invalid_html}
   end
 end

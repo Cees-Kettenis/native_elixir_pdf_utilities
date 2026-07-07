@@ -2,8 +2,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   @moduledoc """
   PDF writer stage for the native HTML-to-PDF renderer.
 
-  This module is the low-level PDF byte writer used by the HTML renderer.
-  Milestone 2 supports one or more pages containing built-in-font text boxes.
+  This module is the low-level PDF byte writer used by the HTML renderer. It
+  supports one or more pages containing built-in-font text boxes.
   """
 
   @type page :: NativeElixirPdfUtilities.HtmlToPdf.Pagination.page()
@@ -50,7 +50,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       when is_binary(text) and is_number(x) and is_number(y) and is_number(font_size) and
              font_size > 0 and
              is_binary(font) and is_number(r) and is_number(g) and is_number(b) ->
-        font in ["Helvetica", "Times-Roman", "Courier"]
+        font in built_in_fonts()
 
       _ ->
         false
@@ -59,8 +59,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   defp pages_to_pdf(pages) do
     page_count = length(pages)
-    font_object_id = 3
-    first_page_object_id = 4
+    font_resources = font_resources(pages)
+    first_page_object_id = 3 + map_size(font_resources)
     page_object_ids = Enum.map(0..(page_count - 1)//1, &(&1 * 2 + first_page_object_id))
     pages_object_id = 2
 
@@ -72,17 +72,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         content_object_id = page_object_id + 1
 
         [
-          {page_object_id, page_object(page, pages_object_id, font_object_id, content_object_id)},
-          {content_object_id, content_object(page)}
+          {page_object_id, page_object(page, pages_object_id, font_resources, content_object_id)},
+          {content_object_id, content_object(page, font_resources)}
         ]
       end)
 
     objects =
       [
         {1, "<< /Type /Catalog /Pages #{pages_object_id} 0 R >>"},
-        {pages_object_id, pages_object(page_object_ids)},
-        {font_object_id, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"}
-      ] ++ page_objects
+        {pages_object_id, pages_object(page_object_ids)}
+      ] ++ font_objects(font_resources) ++ page_objects
 
     objects_to_pdf(objects)
   end
@@ -93,17 +92,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     "<< /Type /Pages /Kids [#{kids}] /Count #{length(page_object_ids)} >>"
   end
 
-  defp page_object(page, pages_object_id, font_object_id, content_object_id) do
+  defp page_object(page, pages_object_id, font_resources, content_object_id) do
     {width, height} = page.size
+    fonts = font_resource_dictionary(font_resources)
 
     """
-    << /Type /Page /Parent #{pages_object_id} 0 R /MediaBox [0 0 #{format_number(width)} #{format_number(height)}] /Resources << /Font << /F1 #{font_object_id} 0 R >> >> /Contents #{content_object_id} 0 R >>
+    << /Type /Page /Parent #{pages_object_id} 0 R /MediaBox [0 0 #{format_number(width)} #{format_number(height)}] /Resources << /Font << #{fonts} >> >> /Contents #{content_object_id} 0 R >>
     """
     |> String.trim()
   end
 
-  defp content_object(page) do
-    content = content_stream(page.boxes)
+  defp content_object(page, font_resources) do
+    content = content_stream(page.boxes, font_resources)
     length = byte_size(content)
 
     """
@@ -115,13 +115,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     |> String.trim()
   end
 
-  defp content_stream(boxes) do
+  defp content_stream(boxes, font_resources) do
     Enum.map_join(boxes, "\n", fn box ->
       {r, g, b} = box.color
+      font_resource = Map.fetch!(font_resources, box.font)
 
       [
         "BT",
-        " /F1 ",
+        " /",
+        font_resource.name,
+        " ",
         format_number(box.font_size),
         " Tf",
         " ",
@@ -142,6 +145,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         " ET"
       ]
     end)
+  end
+
+  defp font_resources(pages) do
+    pages
+    |> Enum.flat_map(& &1.boxes)
+    |> Enum.map(& &1.font)
+    |> Enum.uniq()
+    |> Enum.with_index(3)
+    |> Map.new(fn {font, object_id} ->
+      {font, %{name: "F#{object_id - 2}", object_id: object_id}}
+    end)
+  end
+
+  defp font_objects(font_resources) do
+    font_resources
+    |> Enum.sort_by(fn {_font, resource} -> resource.object_id end)
+    |> Enum.map(fn {font, resource} ->
+      {resource.object_id, "<< /Type /Font /Subtype /Type1 /BaseFont /#{font} >>"}
+    end)
+  end
+
+  defp font_resource_dictionary(font_resources) do
+    font_resources
+    |> Enum.sort_by(fn {_font, resource} -> resource.object_id end)
+    |> Enum.map_join(" ", fn {_font, resource} ->
+      "/#{resource.name} #{resource.object_id} 0 R"
+    end)
+  end
+
+  defp built_in_fonts do
+    [
+      "Courier",
+      "Courier-Bold",
+      "Courier-Oblique",
+      "Courier-BoldOblique",
+      "Helvetica",
+      "Helvetica-Bold",
+      "Helvetica-Oblique",
+      "Helvetica-BoldOblique",
+      "Times-Roman",
+      "Times-Bold",
+      "Times-Italic",
+      "Times-BoldItalic"
+    ]
   end
 
   defp objects_to_pdf(objects) do
