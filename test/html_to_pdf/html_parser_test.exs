@@ -111,6 +111,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert second.tag == "span"
   end
 
+  test "parse accepts strict image source attributes" do
+    assert HtmlParser.parse(~s(<img src="photo.png"><div><img src='nested.jpg'></div>)) ==
+             {:ok,
+              %{
+                type: :document,
+                children: [
+                  %{
+                    type: :element,
+                    tag: "img",
+                    attributes: %{"src" => "photo.png"},
+                    children: []
+                  },
+                  %{
+                    type: :element,
+                    tag: "div",
+                    attributes: %{},
+                    children: [
+                      %{
+                        type: :element,
+                        tag: "img",
+                        attributes: %{"src" => "nested.jpg"},
+                        children: []
+                      }
+                    ]
+                  }
+                ]
+              }}
+  end
+
   test "parse accepts strict lists and link href attributes" do
     assert HtmlParser.parse(
              ~s(<ul><li>Read <a href="https://example.com">docs</a></li><li>Ship</li></ul><ol><li>First</li></ol>)

@@ -587,6 +587,93 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert second.style.align_self == :flex_start
   end
 
+  test "compute loads data URI PNG and base_url relative JPEG images" do
+    base_dir = Path.join(System.tmp_dir!(), "native-elixir-pdf-image-style-test")
+    File.mkdir_p!(base_dir)
+    File.write!(Path.join(base_dir, "photo.jpg"), jpeg_fixture(3, 2))
+
+    png_src = "data:image/png;base64,#{Base.encode64(png_fixture(2, 1))}"
+
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "img",
+          attributes: %{"src" => png_src, "style" => "width: 20pt"},
+          children: []
+        },
+        %{
+          type: :element,
+          tag: "img",
+          attributes: %{"src" => "photo.jpg", "style" => "height: 12pt"},
+          children: []
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, base_url: base_dir)
+    [png, jpeg] = styled_tree.children
+
+    assert png.style.display == :image
+    assert png.style.width == 20.0
+    assert png.style.image.format == :png
+    assert png.style.image.width_px == 2
+    assert png.style.image.height_px == 1
+    assert png.style.image.color_space == :device_rgb
+
+    assert jpeg.style.display == :image
+    assert jpeg.style.height == 12.0
+    assert jpeg.style.image.format == :jpeg
+    assert jpeg.style.image.width_px == 3
+    assert jpeg.style.image.height_px == 2
+  after
+    base_dir = Path.join(System.tmp_dir!(), "native-elixir-pdf-image-style-test")
+    File.rm_rf(base_dir)
+  end
+
+  test "compute rejects missing sources unsupported formats and unsafe relative images" do
+    assert Style.compute(
+             %{
+               type: :document,
+               children: [
+                 %{type: :element, tag: "img", attributes: %{}, children: []}
+               ]
+             },
+             []
+           ) == {:error, :invalid_document}
+
+    assert Style.compute(
+             %{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "img",
+                   attributes: %{"src" => "data:image/gif;base64,R0lGODlhAQABAAAAACw="},
+                   children: []
+                 }
+               ]
+             },
+             []
+           ) == {:error, :invalid_document}
+
+    assert Style.compute(
+             %{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "img",
+                   attributes: %{"src" => "../photo.png"},
+                   children: []
+                 }
+               ]
+             },
+             base_url: System.tmp_dir!()
+           ) == {:error, :invalid_document}
+  end
+
   test "compute rejects unsupported document trees" do
     assert Style.compute(%{tag: "p"}, []) == {:error, :invalid_document}
 
@@ -694,5 +781,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
              },
              []
            ) == {:error, :invalid_document}
+  end
+
+  defp png_fixture(width, height) do
+    row = :binary.copy(<<255, 0, 0>>, width)
+    rows = Enum.map_join(1..height, "", fn _index -> <<0>> <> row end)
+
+    <<137, 80, 78, 71, 13, 10, 26, 10>> <>
+      png_chunk("IHDR", <<width::32, height::32, 8, 2, 0, 0, 0>>) <>
+      png_chunk("IDAT", :zlib.compress(rows)) <>
+      png_chunk("IEND", "")
+  end
+
+  defp png_chunk(type, data) do
+    crc = :erlang.crc32(type <> data)
+    <<byte_size(data)::32, type::binary, data::binary, crc::32>>
+  end
+
+  defp jpeg_fixture(width, height) do
+    <<255, 216, 255, 224, 0, 16, "JFIF", 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 255, 192, 0, 17, 8,
+      height::16, width::16, 3, 1, 17, 0, 2, 17, 0, 3, 17, 0, 255, 217>>
   end
 end

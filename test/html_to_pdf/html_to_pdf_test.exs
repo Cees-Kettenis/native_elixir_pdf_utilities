@@ -120,6 +120,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "(Second) Tj"
   end
 
+  test "render converts a PNG data URI image to a PDF image object" do
+    src = "data:image/png;base64,#{Base.encode64(png_fixture(2, 1))}"
+    html = ~s(<img src="#{src}" style="width: 20pt">)
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert pdf =~ "/Subtype /Image"
+    assert pdf =~ "/Width 2"
+    assert pdf =~ "/Height 1"
+    assert pdf =~ "/ColorSpace /DeviceRGB"
+    assert pdf =~ "/Filter /FlateDecode"
+    assert pdf =~ "/Im1 Do"
+  end
+
   test "render_file writes a PDF for a supported paragraph" do
     input_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.html")
     output_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.pdf")
@@ -136,5 +149,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     File.rm(input_path)
     File.rm(output_path)
+  end
+
+  defp png_fixture(width, height) do
+    row = :binary.copy(<<255, 0, 0>>, width)
+    rows = Enum.map_join(1..height, "", fn _index -> <<0>> <> row end)
+
+    <<137, 80, 78, 71, 13, 10, 26, 10>> <>
+      png_chunk("IHDR", <<width::32, height::32, 8, 2, 0, 0, 0>>) <>
+      png_chunk("IDAT", :zlib.compress(rows)) <>
+      png_chunk("IEND", "")
+  end
+
+  defp png_chunk(type, data) do
+    crc = :erlang.crc32(type <> data)
+    <<byte_size(data)::32, type::binary, data::binary, crc::32>>
   end
 end

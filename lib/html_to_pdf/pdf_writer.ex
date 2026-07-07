@@ -3,8 +3,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   PDF writer stage for the native HTML-to-PDF renderer.
 
   This module is the low-level PDF byte writer used by the HTML renderer. It
-  supports one or more pages containing built-in-font text boxes and simple
-  rectangle fills, borders, and URI link annotations.
+  supports one or more pages containing built-in-font text boxes, simple
+  rectangle fills, borders, URI link annotations, and PNG/JPEG image XObjects.
   """
 
   @type page :: NativeElixirPdfUtilities.HtmlToPdf.Pagination.page()
@@ -70,6 +70,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         valid_optional_color?(fill_color) and valid_optional_color?(stroke_color) and
           (not is_nil(fill_color) or stroke_width > 0)
 
+      %{type: :image, x: x, y: y, width: width, height: height, image: image}
+      when is_number(x) and is_number(y) and is_number(width) and is_number(height) and
+             width > 0 and height > 0 ->
+        valid_image?(image)
+
+      _ ->
+        false
+    end
+  end
+
+  defp valid_image?(image) do
+    case image do
+      %{
+        format: format,
+        data: data,
+        width_px: width_px,
+        height_px: height_px,
+        color_space: color_space,
+        bits_per_component: 8
+      }
+      when format in [:png, :jpeg] and is_binary(data) and is_integer(width_px) and
+             is_integer(height_px) and width_px > 0 and height_px > 0 and
+             color_space in [:device_gray, :device_rgb, :device_cmyk] ->
+        true
+
       _ ->
         false
     end
@@ -99,11 +124,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   defp pages_to_pdf(pages) do
     font_resources = font_resources(pages)
-    first_page_object_id = 3 + map_size(font_resources)
+    image_resources = image_resources(pages, 3 + map_size(font_resources))
+    first_page_object_id = 3 + map_size(font_resources) + map_size(image_resources)
     pages_object_id = 2
 
     {page_entries, _next_object_id} =
-      page_entries(pages, pages_object_id, font_resources, first_page_object_id)
+      page_entries(pages, pages_object_id, font_resources, image_resources, first_page_object_id)
 
     page_object_ids = Enum.map(page_entries, & &1.page_object_id)
 
@@ -115,10 +141,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
              entry.page,
              pages_object_id,
              font_resources,
+             image_resources,
              entry.content_object_id,
              Enum.map(entry.annotation_objects, fn {object_id, _annotation} -> object_id end)
            )},
-          {entry.content_object_id, content_object(entry.page, font_resources)}
+          {entry.content_object_id, content_object(entry.page, font_resources, image_resources)}
         ] ++ annotation_objects(entry.annotation_objects)
       end)
 
@@ -126,7 +153,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       [
         {1, "<< /Type /Catalog /Pages #{pages_object_id} 0 R >>"},
         {pages_object_id, pages_object(page_object_ids)}
-      ] ++ font_objects(font_resources) ++ page_objects
+      ] ++ font_objects(font_resources) ++ image_objects(image_resources) ++ page_objects
 
     objects_to_pdf(objects)
   end
@@ -137,7 +164,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     "<< /Type /Pages /Kids [#{kids}] /Count #{length(page_object_ids)} >>"
   end
 
-  defp page_entries(pages, pages_object_id, font_resources, first_page_object_id) do
+  defp page_entries(
+         pages,
+         pages_object_id,
+         font_resources,
+         image_resources,
+         first_page_object_id
+       ) do
     Enum.reduce(pages, {[], first_page_object_id}, fn page, {entries, next_object_id} ->
       annotations = link_annotations(page)
 
@@ -152,6 +185,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         content_object_id: next_object_id + 1,
         pages_object_id: pages_object_id,
         font_resources: font_resources,
+        image_resources: image_resources,
         annotation_objects: annotation_objects
       }
 
@@ -163,15 +197,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
          page,
          pages_object_id,
          font_resources,
+         image_resources,
          content_object_id,
          annotation_object_ids
        ) do
     {width, height} = page.size
     fonts = font_resource_dictionary(font_resources)
+    xobjects = xobject_resource_dictionary(image_resources)
     annotations = annotation_dictionary(annotation_object_ids)
 
     """
-    << /Type /Page /Parent #{pages_object_id} 0 R /MediaBox [0 0 #{format_number(width)} #{format_number(height)}] /Resources << /Font << #{fonts} >> >> /Contents #{content_object_id} 0 R#{annotations} >>
+    << /Type /Page /Parent #{pages_object_id} 0 R /MediaBox [0 0 #{format_number(width)} #{format_number(height)}] /Resources << /Font << #{fonts} >>#{xobjects} >> /Contents #{content_object_id} 0 R#{annotations} >>
     """
     |> String.trim()
   end
@@ -187,8 +223,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp content_object(page, font_resources) do
-    content = content_stream(page.boxes, font_resources)
+  defp content_object(page, font_resources, image_resources) do
+    content = content_stream(page.boxes, font_resources, image_resources)
     length = byte_size(content)
 
     """
@@ -200,7 +236,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     |> String.trim()
   end
 
-  defp content_stream(boxes, font_resources) do
+  defp content_stream(boxes, font_resources, image_resources) do
     Enum.map_join(boxes, "\n", fn box ->
       case box.type do
         :text ->
@@ -208,6 +244,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
         :rect ->
           rect_stream(box)
+
+        :image ->
+          image_stream(box, image_resources)
       end
     end)
   end
@@ -279,6 +318,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       |> Kernel.++([rect_path(box), paint_operator(box), "Q"])
 
     Enum.join(graphics_state, " ")
+  end
+
+  defp image_stream(box, image_resources) do
+    image_resource = Map.fetch!(image_resources, image_key(box.image))
+
+    [
+      "q ",
+      format_number(box.width),
+      " 0 0 ",
+      format_number(box.height),
+      " ",
+      format_number(box.x),
+      " ",
+      format_number(box.y),
+      " cm /",
+      image_resource.name,
+      " Do Q"
+    ]
   end
 
   defp put_fill_color(parts, color) do
@@ -369,12 +426,81 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end)
   end
 
+  defp image_resources(pages, first_object_id) do
+    pages
+    |> Enum.flat_map(& &1.boxes)
+    |> Enum.filter(&(&1.type == :image))
+    |> Enum.map(& &1.image)
+    |> Enum.uniq_by(&image_key/1)
+    |> Enum.with_index(first_object_id)
+    |> Map.new(fn {image, object_id} ->
+      key = image_key(image)
+      index = object_id - first_object_id + 1
+      {key, %{name: "Im#{index}", object_id: object_id, image: image}}
+    end)
+  end
+
+  defp image_objects(image_resources) do
+    image_resources
+    |> Enum.sort_by(fn {_key, resource} -> resource.object_id end)
+    |> Enum.map(fn {_key, resource} ->
+      {resource.object_id, image_object(resource.image)}
+    end)
+  end
+
+  defp image_object(image) do
+    data =
+      case image.format do
+        :png -> :zlib.compress(image.data)
+        :jpeg -> image.data
+      end
+
+    filter =
+      case image.format do
+        :png -> "/FlateDecode"
+        :jpeg -> "/DCTDecode"
+      end
+
+    "<< /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace #{pdf_color_space(image.color_space)} /BitsPerComponent #{image.bits_per_component} /Filter #{filter} /Length #{byte_size(data)} >>\nstream\n" <>
+      data <> "\nendstream"
+  end
+
   defp font_resource_dictionary(font_resources) do
     font_resources
     |> Enum.sort_by(fn {_font, resource} -> resource.object_id end)
     |> Enum.map_join(" ", fn {_font, resource} ->
       "/#{resource.name} #{resource.object_id} 0 R"
     end)
+  end
+
+  defp xobject_resource_dictionary(image_resources) do
+    case map_size(image_resources) do
+      0 ->
+        ""
+
+      _ ->
+        resources =
+          image_resources
+          |> Enum.sort_by(fn {_key, resource} -> resource.object_id end)
+          |> Enum.map_join(" ", fn {_key, resource} ->
+            "/#{resource.name} #{resource.object_id} 0 R"
+          end)
+
+        " /XObject << #{resources} >>"
+    end
+  end
+
+  defp image_key(image) do
+    :crypto.hash(:sha256, [Atom.to_string(image.format), image.data])
+    |> Base.encode16(case: :lower)
+  end
+
+  defp pdf_color_space(color_space) do
+    case color_space do
+      :device_gray -> "/DeviceGray"
+      :device_rgb -> "/DeviceRGB"
+      :device_cmyk -> "/DeviceCMYK"
+    end
   end
 
   defp built_in_fonts do

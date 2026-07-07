@@ -541,6 +541,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert second.y < first.y
   end
 
+  test "layout sizes and positions image boxes with CSS dimensions" do
+    styled_tree = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "img",
+          style: %{
+            background_color: {0.9, 0.9, 0.9},
+            border_color: {0, 0, 1},
+            border_radius: 0.0,
+            border_widths: %{top: 1.0, right: 1.0, bottom: 1.0, left: 1.0},
+            color: {0, 0, 0},
+            display: :image,
+            font_family: "Helvetica",
+            font_size: 12.0,
+            font_style: :normal,
+            font_weight: 400,
+            image: image_fixture(20.0, 10.0),
+            line_height: 14.4,
+            margin: %{top: 2.0, right: 0.0, bottom: 4.0, left: 3.0},
+            padding: %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0},
+            width: 30.0
+          },
+          children: []
+        }
+      ]
+    }
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {100, 100}, margin: 10)
+    [background, image] = layout_tree.boxes
+
+    assert background.type == :rect
+    assert_in_delta background.x, 13.0, 0.0001
+    assert_in_delta background.y, 67.0, 0.0001
+    assert_in_delta background.width, 36.0, 0.0001
+    assert_in_delta background.height, 21.0, 0.0001
+    assert background.fill_color == {0.9, 0.9, 0.9}
+    assert background.stroke_color == {0, 0, 1}
+
+    assert image.type == :image
+    assert_in_delta image.x, 16.0, 0.0001
+    assert_in_delta image.y, 70.0, 0.0001
+    assert_in_delta image.width, 30.0, 0.0001
+    assert_in_delta image.height, 15.0, 0.0001
+    assert image.image.format == :png
+  end
+
   test "layout positions grid items with explicit placement gaps and alignment" do
     dom = %{
       type: :document,
@@ -645,5 +693,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert Layout.layout(%{type: :document, children: []}, page_size: :unknown) ==
              {:error, :invalid_page_size}
+  end
+
+  defp image_fixture(width, height) do
+    %{
+      format: :png,
+      data: <<255, 0, 0>>,
+      width_px: round(width / 0.75),
+      height_px: round(height / 0.75),
+      width: width,
+      height: height,
+      color_space: :device_rgb,
+      bits_per_component: 8
+    }
   end
 end

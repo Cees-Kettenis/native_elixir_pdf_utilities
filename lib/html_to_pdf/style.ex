@@ -3,7 +3,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   Style computation for the native HTML-to-PDF renderer.
 
   This module applies defaults, inheritance, and the CSS cascade for the text,
-  box, list, link, table, page-break, flexbox, and milestone 10 grid styling subset.
+  box, list, link, table, page-break, flexbox, grid, and milestone 11 image styling subset.
   Unsupported properties or invalid values fail the render instead of being
   ignored.
   """
@@ -37,7 +37,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         }
 
         with {:ok, rules} <- stylesheet_rules(children, opts),
-             {:ok, styled_children} <- style_children(children, base_style, rules, []) do
+             {:ok, styled_children} <- style_children(children, base_style, rules, [], opts) do
           {:ok, %{type: :document, children: styled_children}}
         end
 
@@ -46,16 +46,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp style_children(children, inherited_style, rules, ancestors) do
+  defp style_children(children, inherited_style, rules, ancestors, opts) do
     Enum.reduce_while(children, {:ok, []}, fn child, {:ok, acc} ->
-      case style_node(child, inherited_style, rules, ancestors) do
+      case style_node(child, inherited_style, rules, ancestors, opts) do
         {:ok, styled_children} -> {:cont, {:ok, acc ++ styled_children}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp style_node(node, inherited_style, rules, ancestors) do
+  defp style_node(node, inherited_style, rules, ancestors, opts) do
     case node do
       %{type: :text, text: text} when is_binary(text) ->
         {:ok, [%{type: :text, text: text, style: text_style(inherited_style)}]}
@@ -70,16 +70,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             {:ok, []}
 
           tag when tag in ["html", "body"] ->
-            with {:ok, element_style} <- element_style(node, inherited_style, rules, ancestors),
+            with {:ok, element_style} <-
+                   element_style(node, inherited_style, rules, ancestors, opts),
                  {:ok, styled_children} <-
-                   style_children(children, text_style(element_style), rules, [node | ancestors]) do
+                   style_children(
+                     children,
+                     text_style(element_style),
+                     rules,
+                     [node | ancestors],
+                     opts
+                   ) do
               {:ok, styled_children}
             end
 
           _ ->
-            with {:ok, element_style} <- element_style(node, inherited_style, rules, ancestors),
+            with {:ok, element_style} <-
+                   element_style(node, inherited_style, rules, ancestors, opts),
                  {:ok, styled_children} <-
-                   style_children(children, text_style(element_style), rules, [node | ancestors]) do
+                   style_children(
+                     children,
+                     text_style(element_style),
+                     rules,
+                     [node | ancestors],
+                     opts
+                   ) do
               {:ok,
                [%{type: :element, tag: tag, style: element_style, children: styled_children}]}
             end
@@ -94,7 +108,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
          %{tag: tag, attributes: attributes} = node,
          inherited_style,
          rules,
-         ancestors
+         ancestors,
+         opts
        ) do
     defaults =
       case tag do
@@ -125,6 +140,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         "i" -> %{display: :inline, font_style: :italic}
         "span" -> %{display: :inline}
         "a" -> link_defaults(attributes)
+        "img" -> image_defaults(attributes, opts)
         _ -> :invalid
       end
 
@@ -278,6 +294,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           true -> {:ok, %{display: :inline, color: {0, 0, 1}, link_url: href}}
           false -> :invalid
         end
+    end
+  end
+
+  defp image_defaults(attributes, opts) do
+    with src when is_binary(src) <- Map.get(attributes, "src"),
+         {:ok, image} <- load_image(src, opts) do
+      {:ok,
+       block_defaults(12.0, 400, 12.0)
+       |> Map.merge(%{
+         display: :image,
+         image: image,
+         margin: edges(0.0, 0.0, 12.0, 0.0),
+         padding: edges(0.0)
+       })}
+    else
+      _ -> :invalid
     end
   end
 
@@ -1241,6 +1273,345 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       "always" -> {:ok, :page}
       "page" -> {:ok, :page}
       _ -> :error
+    end
+  end
+
+  defp load_image(src, opts) do
+    with {:ok, data, expected_format} <- image_source(src, Keyword.get(opts, :base_url)),
+         {:ok, image} <- decode_image(data) do
+      case is_nil(expected_format) or image.format == expected_format do
+        true -> {:ok, image}
+        false -> :error
+      end
+    end
+  end
+
+  defp image_source(src, base_url) do
+    cond do
+      String.starts_with?(src, "data:") ->
+        data_uri_image_source(src)
+
+      Path.type(src) == :absolute ->
+        with {:ok, data} <- File.read(src), do: {:ok, data, nil}
+
+      is_binary(base_url) ->
+        with {:ok, path} <- relative_image_path(src, base_url),
+             {:ok, data} <- File.read(path) do
+          {:ok, data, nil}
+        end
+
+      true ->
+        :error
+    end
+  end
+
+  defp data_uri_image_source(src) do
+    case Regex.run(~r/^data:(image\/(?:png|jpeg));base64,([A-Za-z0-9+\/=\r\n]+)$/u, src) do
+      [_, mime_type, encoded] ->
+        with {:ok, data} <- Base.decode64(String.replace(encoded, ~r/\s/u, "")) do
+          {:ok, data, data_uri_format(mime_type)}
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp data_uri_format(mime_type) do
+    case mime_type do
+      "image/png" -> :png
+      "image/jpeg" -> :jpeg
+    end
+  end
+
+  defp relative_image_path(src, base_url) do
+    case String.contains?(src, ["\0", "://"]) do
+      true ->
+        :error
+
+      false ->
+        base_path =
+          case URI.parse(base_url) do
+            %URI{scheme: nil, path: path} when is_binary(path) -> path
+            %URI{scheme: "file", path: path} when is_binary(path) -> path
+            _ -> nil
+          end
+
+        case base_path do
+          nil ->
+            :error
+
+          base_path ->
+            expanded_base = Path.expand(base_path)
+            path = Path.expand(src, expanded_base)
+
+            case path == expanded_base or String.starts_with?(path, expanded_base <> "/") do
+              true -> {:ok, path}
+              false -> :error
+            end
+        end
+    end
+  end
+
+  defp decode_image(data) do
+    cond do
+      String.starts_with?(data, <<137, 80, 78, 71, 13, 10, 26, 10>>) ->
+        decode_png(data)
+
+      String.starts_with?(data, <<255, 216>>) ->
+        decode_jpeg(data)
+
+      true ->
+        :error
+    end
+  end
+
+  defp decode_png(<<137, 80, 78, 71, 13, 10, 26, 10, chunks::binary>>) do
+    with {:ok, parsed} <- png_chunks(chunks, %{idat: []}),
+         %{
+           width_px: width,
+           height_px: height,
+           bit_depth: 8,
+           color_type: color_type,
+           compression: 0,
+           filter: 0,
+           interlace: 0,
+           idat: idat
+         }
+         when width > 0 and height > 0 and color_type in [2, 6] <- parsed,
+         {:ok, inflated} <- png_inflate(Enum.join(idat, "")),
+         {:ok, rgb_data} <- png_rgb_data(inflated, width, height, color_type) do
+      {:ok,
+       %{
+         format: :png,
+         data: rgb_data,
+         width_px: width,
+         height_px: height,
+         width: width * 0.75,
+         height: height * 0.75,
+         color_space: :device_rgb,
+         bits_per_component: 8
+       }}
+    else
+      _ -> :error
+    end
+  end
+
+  defp decode_png(_data) do
+    :error
+  end
+
+  defp png_chunks(chunks, acc) do
+    case chunks do
+      <<0::32, "IEND", _crc::32>> ->
+        {:ok, acc}
+
+      <<length::32, type::binary-size(4), data::binary-size(length), _crc::32, rest::binary>> ->
+        png_chunk(type, data, rest, acc)
+
+      _ ->
+        :error
+    end
+  end
+
+  defp png_chunk(type, data, rest, acc) do
+    case type do
+      "IHDR" ->
+        case data do
+          <<width::32, height::32, bit_depth, color_type, compression, filter, interlace>> ->
+            png_chunks(
+              rest,
+              Map.merge(acc, %{
+                width_px: width,
+                height_px: height,
+                bit_depth: bit_depth,
+                color_type: color_type,
+                compression: compression,
+                filter: filter,
+                interlace: interlace
+              })
+            )
+
+          _ ->
+            :error
+        end
+
+      "IDAT" ->
+        png_chunks(rest, Map.update!(acc, :idat, &(&1 ++ [data])))
+
+      _ ->
+        png_chunks(rest, acc)
+    end
+  end
+
+  defp png_inflate(data) do
+    try do
+      {:ok, :zlib.uncompress(data)}
+    rescue
+      ErlangError -> :error
+    end
+  end
+
+  defp png_rgb_data(data, width, height, color_type) do
+    bytes_per_pixel =
+      case color_type do
+        2 -> 3
+        6 -> 4
+      end
+
+    row_size = width * bytes_per_pixel
+
+    case png_rows(data, width, height, bytes_per_pixel, row_size, [], "") do
+      {:ok, rows} ->
+        rgb =
+          rows
+          |> Enum.map(fn row ->
+            case color_type do
+              2 -> row
+              6 -> strip_png_alpha(row)
+            end
+          end)
+          |> Enum.join("")
+
+        {:ok, rgb}
+
+      :error ->
+        :error
+    end
+  end
+
+  defp png_rows(data, _width, height, _bytes_per_pixel, _row_size, rows, _previous)
+       when length(rows) == height do
+    case data do
+      "" -> {:ok, Enum.reverse(rows)}
+      _ -> :error
+    end
+  end
+
+  defp png_rows(data, width, height, bytes_per_pixel, row_size, rows, previous) do
+    case data do
+      <<filter, row::binary-size(row_size), rest::binary>> ->
+        with {:ok, decoded} <- png_unfilter_row(filter, row, previous, bytes_per_pixel) do
+          png_rows(rest, width, height, bytes_per_pixel, row_size, [decoded | rows], decoded)
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp png_unfilter_row(filter, row, previous, bytes_per_pixel) do
+    row_bytes = :binary.bin_to_list(row)
+    previous_bytes = :binary.bin_to_list(previous)
+
+    decoded =
+      row_bytes
+      |> Enum.with_index()
+      |> Enum.reduce_while([], fn {byte, index}, acc ->
+        left = if index >= bytes_per_pixel, do: Enum.at(acc, bytes_per_pixel - 1), else: 0
+        up = Enum.at(previous_bytes, index, 0)
+
+        up_left =
+          case index >= bytes_per_pixel do
+            true -> Enum.at(previous_bytes, index - bytes_per_pixel, 0)
+            false -> 0
+          end
+
+        predictor =
+          case filter do
+            0 -> 0
+            1 -> left
+            2 -> up
+            3 -> div(left + up, 2)
+            4 -> png_paeth(left, up, up_left)
+            _ -> :error
+          end
+
+        case predictor do
+          :error -> {:halt, :error}
+          predictor -> {:cont, [rem(byte + predictor, 256) | acc]}
+        end
+      end)
+
+    case decoded do
+      :error -> :error
+      decoded -> {:ok, decoded |> Enum.reverse() |> :binary.list_to_bin()}
+    end
+  end
+
+  defp png_paeth(left, up, up_left) do
+    estimate = left + up - up_left
+    left_distance = abs(estimate - left)
+    up_distance = abs(estimate - up)
+    up_left_distance = abs(estimate - up_left)
+
+    cond do
+      left_distance <= up_distance and left_distance <= up_left_distance -> left
+      up_distance <= up_left_distance -> up
+      true -> up_left
+    end
+  end
+
+  defp strip_png_alpha(row) do
+    for <<red, green, blue, _alpha <- row>>, into: "", do: <<red, green, blue>>
+  end
+
+  defp decode_jpeg(data) do
+    with {:ok, width, height, color_space} <- jpeg_dimensions(data) do
+      {:ok,
+       %{
+         format: :jpeg,
+         data: data,
+         width_px: width,
+         height_px: height,
+         width: width * 0.75,
+         height: height * 0.75,
+         color_space: color_space,
+         bits_per_component: 8
+       }}
+    end
+  end
+
+  defp jpeg_dimensions(<<255, 216, rest::binary>>) do
+    jpeg_marker_dimensions(rest)
+  end
+
+  defp jpeg_dimensions(_data) do
+    :error
+  end
+
+  defp jpeg_marker_dimensions(data) do
+    case data do
+      <<255, marker, rest::binary>> when marker in [192, 194] ->
+        case rest do
+          <<_length::16, 8, height::16, width::16, components, _component_data::binary>>
+          when width > 0 and height > 0 and components in [1, 3, 4] ->
+            {:ok, width, height, jpeg_color_space(components)}
+
+          _ ->
+            :error
+        end
+
+      <<255, marker, rest::binary>> when marker in [216, 217] ->
+        jpeg_marker_dimensions(rest)
+
+      <<255, marker, rest::binary>> when marker >= 208 and marker <= 215 ->
+        jpeg_marker_dimensions(rest)
+
+      <<255, _marker, length::16, _segment::binary-size(length - 2), rest::binary>>
+      when length >= 2 ->
+        jpeg_marker_dimensions(rest)
+
+      _ ->
+        :error
+    end
+  end
+
+  defp jpeg_color_space(components) do
+    case components do
+      1 -> :device_gray
+      3 -> :device_rgb
+      4 -> :device_cmyk
     end
   end
 

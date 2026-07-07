@@ -174,6 +174,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "/A << /S /URI /URI (https://example.com) >>"
   end
 
+  test "render writes PNG and JPEG image XObjects" do
+    pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes: [
+          %{
+            type: :image,
+            x: 5.0,
+            y: 6.0,
+            width: 10.0,
+            height: 20.0,
+            image: image_fixture(:png, <<255, 0, 0>>, 1, 1, :device_rgb)
+          },
+          %{
+            type: :image,
+            x: 20.0,
+            y: 30.0,
+            width: 15.0,
+            height: 10.0,
+            image: image_fixture(:jpeg, jpeg_fixture(2, 1), 2, 1, :device_rgb)
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, pdf} = PdfWriter.render(pages, [])
+    assert pdf =~ "/XObject << /Im1 3 0 R /Im2 4 0 R >>"
+    assert pdf =~ "/Subtype /Image"
+    assert pdf =~ "/Filter /FlateDecode"
+    assert pdf =~ "/Filter /DCTDecode"
+    assert pdf =~ "q 10 0 0 20 5 6 cm /Im1 Do Q"
+    assert pdf =~ "q 15 0 0 10 20 30 cm /Im2 Do Q"
+  end
+
   test "render rejects unsupported link annotations" do
     pages = [
       %{
@@ -200,5 +234,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
   test "render rejects invalid page data" do
     assert PdfWriter.render([], []) == {:error, :invalid_pdf_input}
+  end
+
+  defp image_fixture(format, data, width, height, color_space) do
+    %{
+      format: format,
+      data: data,
+      width_px: width,
+      height_px: height,
+      width: width * 0.75,
+      height: height * 0.75,
+      color_space: color_space,
+      bits_per_component: 8
+    }
+  end
+
+  defp jpeg_fixture(width, height) do
+    <<255, 216, 255, 224, 0, 16, "JFIF", 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 255, 192, 0, 17, 8,
+      height::16, width::16, 3, 1, 17, 0, 2, 17, 0, 3, 17, 0, 255, 217>>
   end
 end

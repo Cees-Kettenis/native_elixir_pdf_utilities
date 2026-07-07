@@ -2,9 +2,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @moduledoc """
   Layout engine for the native HTML-to-PDF renderer.
 
-  Milestone 10 lays out block text elements, inline text runs, basic block box
+  Milestone 11 lays out block text elements, inline text runs, basic block box
   styling, lists, link annotation bounds, deterministic one-page tables, and a
-  documented single-line-text flexbox and grid subset with pagination metadata.
+  documented single-line-text flexbox and grid subset with image boxes and
+  pagination metadata.
   """
 
   @type box :: map()
@@ -121,6 +122,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {:ok, boxes, next_y}
         end
 
+      %{type: :element, style: %{display: :image} = style} ->
+        layout_image(style, x, y, width)
+
       %{type: :element, style: %{display: :list} = style, children: children}
       when is_list(children) ->
         layout_list(style, children, x, y, width)
@@ -139,6 +143,65 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       _ ->
         {:error, :invalid_layout}
+    end
+  end
+
+  defp layout_image(style, x, y, _width) do
+    margin = Map.get(style, :margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
+    padding = Map.get(style, :padding, edges(0.0))
+    border_widths = Map.get(style, :border_widths, edges(0.0))
+    {content_width, content_height} = image_content_size(style)
+    box_x = x + margin.left
+    box_top = y - margin.top
+
+    box_width =
+      content_width + border_widths.left + padding.left + padding.right + border_widths.right
+
+    box_height =
+      border_widths.top + padding.top + content_height + padding.bottom + border_widths.bottom
+
+    flow_metadata =
+      style
+      |> break_metadata()
+      |> Map.put(:flow_id, {:image, box_x, box_top})
+
+    background_box =
+      style
+      |> background_box(box_x, box_top - box_height, box_width, box_height)
+      |> tag_boxes(flow_metadata)
+
+    image_box =
+      %{
+        type: :image,
+        x: box_x + border_widths.left + padding.left,
+        y: box_top - border_widths.top - padding.top - content_height,
+        width: content_width,
+        height: content_height,
+        image: Map.fetch!(style, :image)
+      }
+      |> Map.merge(flow_metadata)
+
+    next_y = box_top - box_height - margin.bottom
+    {:ok, background_box ++ [image_box], next_y}
+  end
+
+  defp image_content_size(style) do
+    image = Map.fetch!(style, :image)
+    natural_width = Map.fetch!(image, :width)
+    natural_height = Map.fetch!(image, :height)
+
+    case {Map.get(style, :width), Map.get(style, :height)} do
+      {width, height} when is_number(width) and is_number(height) ->
+        {width, height}
+
+      {width, _height} when is_number(width) ->
+        {width, width * natural_height / natural_width}
+
+      {_width, height} when is_number(height) ->
+        {height * natural_width / natural_height, height}
+
+      _ ->
+        {natural_width, natural_height}
     end
   end
 
@@ -244,6 +307,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       %{type: :element, style: %{display: :none}} ->
         {:ok, nil}
 
+      %{type: :element, style: %{display: :image} = style} ->
+        {:ok, build_grid_image_item(style, index)}
+
       %{type: :element, style: style, children: children} when is_list(children) ->
         case inline_runs(children) do
           {:ok, runs} -> {:ok, build_grid_item(style, runs, index)}
@@ -267,6 +333,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       index: index,
       style: style,
       runs: runs,
+      intrinsic_width: content_width + horizontal_box_size(style),
+      intrinsic_height: content_height + vertical_box_size(style),
+      margin: margin,
+      row_start: Map.get(style, :grid_row_start, :auto),
+      row_end: Map.get(style, :grid_row_end, :auto),
+      column_start: Map.get(style, :grid_column_start, :auto),
+      column_end: Map.get(style, :grid_column_end, :auto)
+    }
+  end
+
+  defp build_grid_image_item(style, index) do
+    margin = Map.get(style, :margin, edges(0.0))
+    {content_width, content_height} = image_content_size(style)
+
+    %{
+      index: index,
+      style: style,
+      image: Map.fetch!(style, :image),
       intrinsic_width: content_width + horizontal_box_size(style),
       intrinsic_height: content_height + vertical_box_size(style),
       margin: margin,
@@ -796,6 +880,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       %{type: :element, style: %{display: :none}} ->
         {:ok, nil}
 
+      %{type: :element, style: %{display: :image} = style} ->
+        {:ok, build_flex_image_item(style, index, main_axis)}
+
       %{type: :element, style: style, children: children} when is_list(children) ->
         case inline_runs(children) do
           {:ok, runs} -> {:ok, build_flex_item(style, runs, index, main_axis)}
@@ -828,6 +915,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       index: index,
       style: style,
       runs: runs,
+      order: Map.get(style, :order, 0),
+      flex_grow: Map.get(style, :flex_grow, 0.0),
+      flex_shrink: Map.get(style, :flex_shrink, 1.0),
+      main_axis: main_axis,
+      main_box: main_box,
+      cross_box: cross_box,
+      outer_main: main_box + flex_main_margin_size(margin, main_axis),
+      outer_cross: cross_box + flex_cross_margin_size(margin, main_axis),
+      margin: margin
+    }
+  end
+
+  defp build_flex_image_item(style, index, main_axis) do
+    margin = Map.get(style, :margin, edges(0.0))
+    {content_width, content_height} = image_content_size(style)
+
+    {content_main, content_cross} =
+      case main_axis do
+        :row -> {content_width, content_height}
+        :column -> {content_height, content_width}
+      end
+
+    main_box = content_main + flex_main_box_size(style, main_axis)
+    cross_box = content_cross + flex_cross_box_size(style, main_axis)
+
+    %{
+      index: index,
+      style: style,
+      image: Map.fetch!(style, :image),
       order: Map.get(style, :order, 0),
       flex_grow: Map.get(style, :flex_grow, 0.0),
       flex_shrink: Map.get(style, :flex_shrink, 1.0),
@@ -1034,6 +1150,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     style = item.style
     padding = Map.get(style, :padding, edges(0.0))
     border_widths = Map.get(style, :border_widths, edges(0.0))
+
+    case Map.get(item, :image) do
+      nil ->
+        flex_text_item_boxes(item, main_axis, style, padding, border_widths)
+
+      image ->
+        flex_image_item_boxes(item, main_axis, style, padding, border_widths, image)
+    end
+  end
+
+  defp flex_text_item_boxes(item, main_axis, style, padding, border_widths) do
     baseline_y = item.y - border_widths.top - padding.top - Map.fetch!(style, :font_size)
     content_x = item.x + border_widths.left + padding.left
 
@@ -1054,6 +1181,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     case main_axis do
       :row -> background_boxes ++ text_boxes
       :column -> background_boxes ++ text_boxes
+    end
+  end
+
+  defp flex_image_item_boxes(item, main_axis, style, padding, border_widths, image) do
+    content_x = item.x + border_widths.left + padding.left
+
+    content_width =
+      item.box_width - border_widths.left - padding.left - padding.right - border_widths.right
+
+    content_height =
+      item.box_height - border_widths.top - padding.top - padding.bottom - border_widths.bottom
+
+    image_box = %{
+      type: :image,
+      x: content_x,
+      y: item.y - border_widths.top - padding.top - max(content_height, 0.0),
+      width: max(content_width, 0.0),
+      height: max(content_height, 0.0),
+      image: image
+    }
+
+    background_boxes =
+      background_box(style, item.x, item.y - item.box_height, item.box_width, item.box_height)
+
+    case main_axis do
+      :row -> background_boxes ++ [image_box]
+      :column -> background_boxes ++ [image_box]
     end
   end
 

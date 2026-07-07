@@ -190,6 +190,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       %{type: :rect, y: y, height: height} when is_number(y) and is_number(height) ->
         {y + height, y}
 
+      %{type: :image, y: y, height: height} when is_number(y) and is_number(height) ->
+        {y + height, y}
+
       %{type: :text, y: y, font_size: font_size} when is_number(y) and is_number(font_size) ->
         {y + font_size, y}
 
