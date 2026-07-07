@@ -1451,6 +1451,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert doctype_svg_style.image.width_px == 3
     assert doctype_svg_style.image.height_px == 2
 
+    sized_svg_src =
+      "data:image/svg+xml;base64," <>
+        Base.encode64(
+          ~s(<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000"><rect width="1000" height="1000" fill="red"/></svg>)
+        )
+
+    sized_svg_dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "img",
+          attributes: %{"src" => sized_svg_src, "style" => "width: 10px; aspect-ratio: 1"},
+          children: []
+        }
+      ]
+    }
+
+    assert {:ok, sized_svg_tree} = Style.compute(sized_svg_dom, [])
+    [sized_svg] = sized_svg_tree.children
+    assert sized_svg.style.image.format == :png
+    assert sized_svg.style.image.width_px == 10
+    assert sized_svg.style.image.height_px == 10
+
     malformed_sources = [
       {"data:image/svg+xml;base64,#{Base.encode64("<svg></svg>")}"},
       {"data:image/svg+xml;base64,#{Base.encode64(<<255>>)}"},

@@ -226,7 +226,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           |> text_style()
           |> Map.merge(defaults)
 
-        apply_author_styles(style, node, ancestors, rules)
+        tag
+        |> finalize_element_style(apply_author_styles(style, node, ancestors, rules))
 
       :invalid ->
         {:error, :invalid_document}
@@ -237,7 +238,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           |> text_style()
           |> Map.merge(defaults)
 
-        apply_author_styles(style, node, ancestors, rules)
+        tag
+        |> finalize_element_style(apply_author_styles(style, node, ancestors, rules))
+    end
+  end
+
+  defp finalize_element_style(tag, result) do
+    case {tag, result} do
+      {"img", {:ok, style}} ->
+        finalize_image_style(style)
+
+      {_tag, result} ->
+        result
+    end
+  end
+
+  defp finalize_image_style(style) do
+    case {Map.get(style, :display), Map.get(style, :image), Map.get(style, :svg_image)} do
+      {:image, nil, svg} when is_binary(svg) ->
+        with {:ok, png} <- rasterize_svg(svg, svg_raster_options(style)),
+             {:ok, image} <- decode_image(png) do
+          {:ok,
+           style
+           |> Map.put(:image, image)
+           |> Map.delete(:svg_image)}
+        else
+          _ -> {:error, :invalid_document}
+        end
+
+      _ ->
+        {:ok, Map.delete(style, :svg_image)}
     end
   end
 
@@ -403,15 +433,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp image_defaults(attributes, opts, font_size) do
     with src when is_binary(src) <- Map.get(attributes, "src"),
-         {:ok, image} <- load_image(src, opts) do
+         {:ok, image_style} <- load_image_style(src, opts) do
       {:ok,
        block_defaults(font_size, 400, font_size)
        |> Map.merge(%{
          display: :image,
-         image: image,
          margin: edges(0.0, 0.0, font_size, 0.0),
          padding: edges(0.0)
-       })}
+       })
+       |> Map.merge(image_style)}
     else
       _ -> :invalid
     end
@@ -1578,12 +1608,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp load_image(src, opts) do
+  defp load_image_style(src, opts) do
     case image_source(src, Keyword.get(opts, :base_url)) do
+      {:ok, svg, :svg} ->
+        {:ok, %{svg_image: svg}}
+
       {:ok, data, expected_format} ->
         with {:ok, image} <- decode_image(data) do
           case is_nil(expected_format) or image.format == expected_format do
-            true -> {:ok, image}
+            true -> {:ok, %{image: image}}
             false -> :error
           end
         end
@@ -1596,9 +1629,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp data_uri_image_source(src) do
     case Regex.run(~r/^data:image\/svg\+xml;base64,([A-Za-z0-9+\/=\r\n]+)$/u, src) do
       [_, encoded] ->
-        with {:ok, svg} <- Base.decode64(String.replace(encoded, ~r/\s/u, "")),
-             {:ok, png} <- rasterize_svg(svg) do
-          {:ok, png, :png}
+        with {:ok, svg} <- Base.decode64(String.replace(encoded, ~r/\s/u, "")) do
+          {:ok, svg, :svg}
         end
 
       _ ->
@@ -1614,7 +1646,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp rasterize_svg(svg) do
+  defp rasterize_svg(svg, raster_options) do
     case String.valid?(svg) do
       true ->
         sanitized_svg =
@@ -1622,12 +1654,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           |> String.replace(~r/<\?xml[^>]*>/iu, "")
           |> String.replace(~r/<!DOCTYPE[^>]*(?:\[[\s\S]*?\]\s*)?>/iu, "")
 
-        case Resvg.svg_string_to_png_buffer(sanitized_svg,
-               resources_dir: System.tmp_dir!(),
-               shape_rendering: :optimize_speed,
-               text_rendering: :optimize_speed,
-               image_rendering: :optimize_speed,
-               skip_system_fonts: true
+        case Resvg.svg_string_to_png_buffer(
+               sanitized_svg,
+               [
+                 resources_dir: System.tmp_dir!(),
+                 shape_rendering: :optimize_speed,
+                 text_rendering: :optimize_speed,
+                 image_rendering: :optimize_speed,
+                 skip_system_fonts: true
+               ] ++ raster_options
              ) do
           {:ok, png} -> {:ok, IO.iodata_to_binary(png)}
           {:error, _reason} -> :error
@@ -1635,6 +1670,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       false ->
         :error
+    end
+  end
+
+  defp svg_raster_options(style) do
+    dimensions =
+      [
+        width: style |> target_image_width() |> points_to_pixels(),
+        height: style |> target_image_height() |> points_to_pixels()
+      ]
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+    dimensions
+  end
+
+  defp target_image_width(style) do
+    case {Map.get(style, :width), Map.get(style, :height), Map.get(style, :aspect_ratio)} do
+      {width, _height, _ratio} when is_number(width) ->
+        width
+
+      {_width, height, ratio} when is_number(height) and is_number(ratio) ->
+        height * ratio
+
+      _ ->
+        nil
+    end
+  end
+
+  defp target_image_height(style) do
+    case {Map.get(style, :height), Map.get(style, :width), Map.get(style, :aspect_ratio)} do
+      {height, _width, _ratio} when is_number(height) ->
+        height
+
+      {_height, width, ratio} when is_number(width) and is_number(ratio) ->
+        width / ratio
+
+      _ ->
+        nil
+    end
+  end
+
+  defp points_to_pixels(points) do
+    case points do
+      points when is_number(points) -> max(round(points / 0.75), 1)
+      _ -> nil
     end
   end
 
