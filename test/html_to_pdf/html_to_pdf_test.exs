@@ -111,6 +111,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "(Second) Tj"
   end
 
+  test "render converts row flex items with block children and percentage widths" do
+    html = """
+    <html>
+      <head>
+        <style>
+          .header { display: flex; }
+          .address-section {
+            display: flex;
+            width: 100%;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div style="width: 80%"><p>Left</p></div>
+          <div style="width: 20%"><p>Right</p></div>
+        </div>
+        <div class="address-section">
+          <div class="section"><h4>Supplier Address</h4><p>Supplier</p></div>
+          <div class="section"><h4>Buyer Address</h4><p>Buyer</p></div>
+          <div class="section"><h4>Consignee Address</h4><p>Consignee</p></div>
+        </div>
+      </body>
+    </html>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, page_size: :a4)
+    assert pdf =~ "(Left) Tj"
+    assert pdf =~ "(Right) Tj"
+    assert pdf =~ "(Supplier Address) Tj"
+    assert pdf =~ "(Buyer Address) Tj"
+    assert pdf =~ "(Consignee"
+  end
+
   test "render converts a grid layout subset to PDF text boxes" do
     html =
       ~s(<div style="display: grid; width: 80pt; grid-template-columns: 30pt 30pt; gap: 8pt"><span style="grid-column: 2 / 3">Second</span><span style="grid-column: 1 / 2">First</span></div>)
@@ -131,6 +168,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "/ColorSpace /DeviceRGB"
     assert pdf =~ "/Filter /FlateDecode"
     assert pdf =~ "/Im1 Do"
+  end
+
+  test "render rasterizes an SVG data URI image to a PDF image object" do
+    svg =
+      ~s(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"><rect width="2" height="1" fill="red"/></svg>)
+
+    src = "data:image/svg+xml;base64,#{Base.encode64(svg)}"
+    html = ~s(<img src="#{src}" style="width: 20pt">)
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert pdf =~ "/Subtype /Image"
+    assert pdf =~ "/Width 2"
+    assert pdf =~ "/Height 1"
+    assert pdf =~ "/ColorSpace /DeviceRGB"
+    assert pdf =~ "/Filter /FlateDecode"
   end
 
   test "render embeds configured TTF fonts for Unicode text" do

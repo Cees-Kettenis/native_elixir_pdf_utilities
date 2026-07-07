@@ -71,6 +71,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
              width > 0 and height > 0 and is_number(stroke_width) and stroke_width >= 0 and
              is_number(border_radius) and border_radius >= 0 ->
         valid_optional_color?(fill_color) and valid_optional_color?(stroke_color) and
+          valid_border_widths?(Map.get(box, :border_widths)) and
           (not is_nil(fill_color) or stroke_width > 0)
 
       %{type: :image, x: x, y: y, width: width, height: height, image: image}
@@ -96,7 +97,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       when format in [:png, :jpeg] and is_binary(data) and is_integer(width_px) and
              is_integer(height_px) and width_px > 0 and height_px > 0 and
              color_space in [:device_gray, :device_rgb, :device_cmyk] ->
-        true
+        valid_image_alpha?(image)
 
       _ ->
         false
@@ -108,6 +109,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       nil -> true
       {r, g, b} when is_number(r) and is_number(g) and is_number(b) -> true
       _ -> false
+    end
+  end
+
+  defp valid_image_alpha?(image) do
+    case Map.get(image, :alpha_data) do
+      nil ->
+        true
+
+      alpha_data when is_binary(alpha_data) ->
+        image.format == :png and byte_size(alpha_data) == image.width_px * image.height_px
+
+      _ ->
+        false
+    end
+  end
+
+  defp valid_border_widths?(border_widths) do
+    case border_widths do
+      nil ->
+        true
+
+      %{top: top, right: right, bottom: bottom, left: left} ->
+        Enum.all?([top, right, bottom, left], &(is_number(&1) and &1 >= 0))
+
+      _ ->
+        false
     end
   end
 
@@ -153,7 +180,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp pages_to_pdf(pages) do
     {font_resources, next_object_id} = font_resources(pages, 3)
     image_resources = image_resources(pages, next_object_id)
-    first_page_object_id = next_object_id + map_size(image_resources)
+    first_page_object_id = next_object_id + image_object_count(image_resources)
     pages_object_id = 2
 
     {page_entries, _next_object_id} =
@@ -348,13 +375,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp rect_stream(box) do
-    graphics_state =
-      ["q"]
-      |> put_fill_color(box.fill_color)
-      |> put_stroke_color(box.stroke_color, box.stroke_width)
-      |> Kernel.++([rect_path(box), paint_operator(box), "Q"])
+    case side_specific_border?(box) do
+      true ->
+        side_specific_rect_stream(box)
 
-    Enum.join(graphics_state, " ")
+      false ->
+        graphics_state =
+          ["q"]
+          |> put_fill_color(box.fill_color)
+          |> put_stroke_color(box.stroke_color, box.stroke_width)
+          |> Kernel.++([rect_path(box), paint_operator(box), "Q"])
+
+        Enum.join(graphics_state, " ")
+    end
   end
 
   defp image_stream(box, image_resources) do
@@ -433,6 +466,67 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       "h"
     ]
     |> Enum.join(" ")
+  end
+
+  defp side_specific_border?(box) do
+    case Map.get(box, :border_widths) do
+      %{top: top, right: right, bottom: bottom, left: left}
+      when box.stroke_width > 0 and box.border_radius == 0 ->
+        Enum.uniq([top, right, bottom, left]) |> length() > 1
+
+      _ ->
+        false
+    end
+  end
+
+  defp side_specific_rect_stream(box) do
+    fill_parts =
+      case box.fill_color do
+        nil ->
+          []
+
+        _ ->
+          ["q"]
+          |> put_fill_color(box.fill_color)
+          |> Kernel.++([rect_path(box), "f", "Q"])
+      end
+
+    stroke_parts =
+      box.border_widths
+      |> Enum.flat_map(fn {side, stroke_width} ->
+        case stroke_width > 0 do
+          true ->
+            ["q"]
+            |> put_stroke_color(box.stroke_color, stroke_width)
+            |> Kernel.++([border_side_path(box, side), "S", "Q"])
+
+          false ->
+            []
+        end
+      end)
+
+    Enum.join(fill_parts ++ stroke_parts, " ")
+  end
+
+  defp border_side_path(box, side) do
+    left = box.x
+    right = box.x + box.width
+    bottom = box.y
+    top = box.y + box.height
+
+    case side do
+      :top ->
+        "#{format_number(left)} #{format_number(top)} m #{format_number(right)} #{format_number(top)} l"
+
+      :right ->
+        "#{format_number(right)} #{format_number(bottom)} m #{format_number(right)} #{format_number(top)} l"
+
+      :bottom ->
+        "#{format_number(left)} #{format_number(bottom)} m #{format_number(right)} #{format_number(bottom)} l"
+
+      :left ->
+        "#{format_number(left)} #{format_number(bottom)} m #{format_number(left)} #{format_number(top)} l"
+    end
   end
 
   defp paint_operator(box) do
@@ -606,23 +700,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     |> Enum.filter(&(&1.type == :image))
     |> Enum.map(& &1.image)
     |> Enum.uniq_by(&image_key/1)
-    |> Enum.with_index(first_object_id)
-    |> Map.new(fn {image, object_id} ->
+    |> Enum.reduce({%{}, first_object_id, 1}, fn image, {resources, object_id, index} ->
       key = image_key(image)
-      index = object_id - first_object_id + 1
-      {key, %{name: "Im#{index}", object_id: object_id, image: image}}
+      mask_object_id = if Map.has_key?(image, :alpha_data), do: object_id + 1
+      object_count = if is_nil(mask_object_id), do: 1, else: 2
+
+      resource = %{
+        name: "Im#{index}",
+        object_id: object_id,
+        mask_object_id: mask_object_id,
+        image: image
+      }
+
+      {Map.put(resources, key, resource), object_id + object_count, index + 1}
+    end)
+    |> elem(0)
+  end
+
+  defp image_object_count(image_resources) do
+    image_resources
+    |> Map.values()
+    |> Enum.reduce(0, fn resource, count ->
+      case resource.mask_object_id do
+        nil -> count + 1
+        _ -> count + 2
+      end
     end)
   end
 
   defp image_objects(image_resources) do
     image_resources
     |> Enum.sort_by(fn {_key, resource} -> resource.object_id end)
-    |> Enum.map(fn {_key, resource} ->
-      {resource.object_id, image_object(resource.image)}
+    |> Enum.flat_map(fn {_key, resource} ->
+      image_objects_for_resource(resource)
     end)
   end
 
-  defp image_object(image) do
+  defp image_objects_for_resource(resource) do
+    image_object = {resource.object_id, image_object(resource)}
+
+    case resource.mask_object_id do
+      nil -> [image_object]
+      mask_object_id -> [image_object, {mask_object_id, image_mask_object(resource.image)}]
+    end
+  end
+
+  defp image_object(resource) do
+    image = resource.image
+
     data =
       case image.format do
         :png -> :zlib.compress(image.data)
@@ -635,7 +760,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         :jpeg -> "/DCTDecode"
       end
 
-    "<< /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace #{pdf_color_space(image.color_space)} /BitsPerComponent #{image.bits_per_component} /Filter #{filter} /Length #{byte_size(data)} >>\nstream\n" <>
+    smask =
+      case resource.mask_object_id do
+        nil -> ""
+        mask_object_id -> " /SMask #{mask_object_id} 0 R"
+      end
+
+    "<< /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace #{pdf_color_space(image.color_space)} /BitsPerComponent #{image.bits_per_component} /Filter #{filter}#{smask} /Length #{byte_size(data)} >>\nstream\n" <>
+      data <> "\nendstream"
+  end
+
+  defp image_mask_object(image) do
+    data = :zlib.compress(Map.fetch!(image, :alpha_data))
+
+    "<< /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length #{byte_size(data)} >>\nstream\n" <>
       data <> "\nendstream"
   end
 
@@ -665,7 +803,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp image_key(image) do
-    :crypto.hash(:sha256, [Atom.to_string(image.format), image.data])
+    :crypto.hash(:sha256, [
+      Atom.to_string(image.format),
+      image.data,
+      Map.get(image, :alpha_data, "")
+    ])
     |> Base.encode16(case: :lower)
   end
 

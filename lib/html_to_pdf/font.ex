@@ -2,8 +2,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   @moduledoc """
   Font loading, fallback resolution, text measurement, and PDF text encoding.
 
-  The renderer keeps font discovery explicit. Embedded fonts must be provided
-  with the `:fonts` render option; no system font lookup is performed.
+  The renderer loads explicitly configured fonts and also discovers a small set
+  of common system sans-serif fonts when they are available.
   """
 
   @type font_style :: :normal | :italic
@@ -28,6 +28,68 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   @type font_face :: built_in_font() | embedded_font()
 
   @built_in_families ["Courier", "Helvetica", "Times-Roman"]
+  @system_font_candidates [
+    %{
+      family: "Liberation Sans",
+      path: "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+      weight: 400,
+      style: :normal
+    },
+    %{
+      family: "Liberation Sans",
+      path: "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+      weight: 700,
+      style: :normal
+    },
+    %{
+      family: "Liberation Sans",
+      path: "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
+      weight: 400,
+      style: :italic
+    },
+    %{
+      family: "Liberation Sans",
+      path: "/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf",
+      weight: 700,
+      style: :italic
+    },
+    %{
+      family: "DejaVu Sans",
+      path: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+      weight: 400,
+      style: :normal
+    },
+    %{
+      family: "DejaVu Sans",
+      path: "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+      weight: 700,
+      style: :normal
+    },
+    %{
+      family: "DejaVu Sans",
+      path: "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
+      weight: 400,
+      style: :italic
+    },
+    %{
+      family: "DejaVu Sans",
+      path: "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf",
+      weight: 700,
+      style: :italic
+    },
+    %{
+      family: "Noto Sans",
+      path: "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+      weight: 400,
+      style: :normal
+    },
+    %{
+      family: "Noto Sans",
+      path: "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+      weight: 700,
+      style: :normal
+    }
+  ]
 
   @doc """
   Loads explicit TTF font options into a registry.
@@ -47,7 +109,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
           end
         end)
         |> case do
-          {:ok, embedded} -> {:ok, %{embedded: embedded}}
+          {:ok, embedded} -> {:ok, %{embedded: embedded ++ system_fonts(embedded)}}
           :error -> :error
         end
 
@@ -162,6 +224,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     else
       _ -> :error
     end
+  end
+
+  defp system_fonts(explicit_fonts) do
+    explicit_keys =
+      explicit_fonts
+      |> Enum.map(&{String.downcase(&1.family), &1.weight, &1.style})
+      |> MapSet.new()
+
+    @system_font_candidates
+    |> Enum.reject(fn font ->
+      MapSet.member?(explicit_keys, {String.downcase(font.family), font.weight, font.style}) or
+        not File.regular?(font.path)
+    end)
+    |> Enum.reduce([], fn font, acc ->
+      loaded = load_font(font)
+      if match?({:ok, _loaded}, loaded), do: acc ++ [elem(loaded, 1)], else: acc
+    end)
   end
 
   defp font_config(font) do
@@ -292,8 +371,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   end
 
   defp embedded_family(family, weight, style, registry) do
+    normalized_family = String.downcase(family)
+
     registry.embedded
-    |> Enum.filter(&(&1.family == family))
+    |> Enum.filter(&(String.downcase(&1.family) == normalized_family))
     |> case do
       [] ->
         nil

@@ -155,6 +155,58 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "q 0 0 1 RG 1 w 10 60 40 20 re S Q"
   end
 
+  test "render writes side-specific rectangle borders" do
+    pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes: [
+          %{
+            type: :rect,
+            x: 10.0,
+            y: 20.0,
+            width: 40.0,
+            height: 30.0,
+            fill_color: {0.9, 0.9, 0.9},
+            stroke_color: {0, 0, 0},
+            stroke_width: 1.0,
+            border_widths: %{top: 1.0, right: 0.0, bottom: 1.0, left: 1.0},
+            border_radius: 0.0
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, pdf} = PdfWriter.render(pages, [])
+    assert pdf =~ "10 50 m 50 50 l S"
+    refute pdf =~ "50 20 m 50 50 l S"
+    assert pdf =~ "10 20 m 50 20 l S"
+    assert pdf =~ "10 20 m 10 50 l S"
+
+    stroke_only_pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes: [
+          %{
+            type: :rect,
+            x: 10.0,
+            y: 20.0,
+            width: 40.0,
+            height: 30.0,
+            fill_color: nil,
+            stroke_color: {0, 0, 0},
+            stroke_width: 1.0,
+            border_widths: %{top: 0.0, right: 1.0, bottom: 0.0, left: 0.0},
+            border_radius: 0.0
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, stroke_only_pdf} = PdfWriter.render(stroke_only_pages, [])
+    assert stroke_only_pdf =~ "50 20 m 50 50 l S"
+    refute stroke_only_pdf =~ "10 20 40 30 re f"
+  end
+
   test "render writes rounded rectangle paths when radius is set" do
     pages = [
       %{
@@ -243,6 +295,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "/Filter /DCTDecode"
     assert pdf =~ "q 10 0 0 20 5 6 cm /Im1 Do Q"
     assert pdf =~ "q 15 0 0 10 20 30 cm /Im2 Do Q"
+  end
+
+  test "render writes PNG alpha as a soft mask XObject" do
+    pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes: [
+          %{
+            type: :image,
+            x: 5.0,
+            y: 6.0,
+            width: 10.0,
+            height: 20.0,
+            image:
+              image_fixture(:png, <<0, 0, 0, 255, 0, 0>>, 2, 1, :device_rgb)
+              |> Map.put(:alpha_data, <<0, 255>>)
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, pdf} = PdfWriter.render(pages, [])
+    assert pdf =~ "/XObject << /Im1 3 0 R >>"
+    assert pdf =~ "/SMask 4 0 R"
+    assert pdf =~ "/ColorSpace /DeviceGray"
+    assert pdf =~ "q 10 0 0 20 5 6 cm /Im1 Do Q"
   end
 
   test "render writes gray and CMYK image color spaces" do
@@ -388,6 +466,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
         y: 1,
         width: 10,
         height: 10,
+        fill_color: nil,
+        stroke_color: {0, 0, 0},
+        stroke_width: 1,
+        border_widths: :bad,
+        border_radius: 0
+      },
+      %{
+        type: :rect,
+        x: 1,
+        y: 1,
+        width: 10,
+        height: 10,
         fill_color: :red,
         stroke_color: nil,
         stroke_width: 0,
@@ -400,6 +490,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
         width: 10,
         height: 10,
         image: image_fixture(:gif, "bad", 1, 1, :device_rgb)
+      },
+      %{
+        type: :image,
+        x: 1,
+        y: 1,
+        width: 10,
+        height: 10,
+        image:
+          image_fixture(:png, <<0, 0, 0>>, 1, 1, :device_rgb)
+          |> Map.put(:alpha_data, <<0, 255>>)
+      },
+      %{
+        type: :image,
+        x: 1,
+        y: 1,
+        width: 10,
+        height: 10,
+        image:
+          image_fixture(:png, <<0, 0, 0>>, 1, 1, :device_rgb)
+          |> Map.put(:alpha_data, :bad)
       },
       %{type: :unknown}
     ]

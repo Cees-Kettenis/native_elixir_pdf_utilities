@@ -118,6 +118,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert times.pdf_name == "Times-Roman"
   end
 
+  test "load_registry discovers common system fonts when present" do
+    assert {:ok, registry} = Font.load_registry([])
+
+    system_font =
+      [
+        {"Liberation Sans", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"},
+        {"DejaVu Sans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"},
+        {"Noto Sans", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"}
+      ]
+      |> Enum.find(fn {_family, path} -> File.regular?(path) end)
+
+    case system_font do
+      {family, _path} ->
+        assert {:ok, [^family], font} = Font.resolve(family, 400, :normal, registry)
+        assert font.type == :embedded
+        assert font.family == family
+
+      nil ->
+        assert registry.embedded == []
+    end
+  end
+
   test "text_width and embedded text encoding use TTF cmap and hmtx data" do
     font_path = ttf_font_path!()
 
