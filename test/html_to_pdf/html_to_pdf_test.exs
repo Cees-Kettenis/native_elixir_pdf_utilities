@@ -40,6 +40,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "(Boxed) Tj"
   end
 
+  test "render applies configured and embedded CSS before writing PDF output" do
+    html =
+      ~s(<style>p.notice { color: #336699; font-weight: bold; }</style><p class="notice">Styled</p>)
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, stylesheets: ["p { color: red; }"])
+    assert pdf =~ "(Styled) Tj"
+    assert pdf =~ "/BaseFont /Helvetica-Bold"
+    assert pdf =~ "0.2 0.4 0.6 rg"
+  end
+
   test "render converts lists and links to PDF text and annotations" do
     html =
       ~s(<ul><li>Read <a href="https://example.com">docs</a></li><li>Ship</li></ul>)

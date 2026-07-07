@@ -2,10 +2,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   @moduledoc """
   Strict HTML parser for the native HTML-to-PDF renderer.
 
-  Milestone 6 supports a strict subset of document-oriented HTML: paragraphs,
-  headings, inline emphasis/color containers, lists, links, and tables.
-  Unsupported or malformed markup returns an error instead of guessing at
-  browser behavior.
+  Milestone 8 supports a strict subset of document-oriented HTML: structural
+  html/head/body/style tags, paragraphs, headings, inline emphasis/color
+  containers, lists, links, tables, and CSS-targeting attributes. Unsupported
+  or malformed markup returns an error instead of guessing at browser behavior.
   """
 
   @type text_node :: %{type: :text, text: String.t()}
@@ -17,6 +17,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         }
   @type dom_tree :: %{type: :document, children: [element_node()]}
 
+  @structural_tags ~w(html head body style)
   @block_tags ~w(p h1 h2 h3 h4 h5 h6 ul ol table)
   @inline_tags ~w(strong b em i span a)
   @list_tags ~w(ul ol)
@@ -100,6 +101,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
       context in @table_structure_tags and String.trim(token) == "" ->
         parse_children(remaining, context, closing_tag, children)
 
+      context in ~w(html head body) and String.trim(token) == "" ->
+        parse_children(remaining, context, closing_tag, children)
+
       context == :document ->
         {:error, :unsupported_html}
 
@@ -178,6 +182,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
       case {name, tag, Map.has_key?(acc, name)} do
         {"style", _, false} -> {:cont, {:ok, Map.put(acc, name, value)}}
+        {"id", _, false} -> {:cont, {:ok, Map.put(acc, name, value)}}
+        {"class", _, false} -> {:cont, {:ok, Map.put(acc, name, value)}}
         {"href", "a", false} -> {:cont, {:ok, Map.put(acc, name, value)}}
         _ -> {:halt, {:error, :unsupported_html}}
       end
@@ -187,10 +193,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   defp allowed_child?(context, tag) do
     cond do
       context == :document ->
-        tag in @block_tags
+        tag in @block_tags or tag in ~w(html head body style)
+
+      context == "html" ->
+        tag in ~w(head body style)
+
+      context == "head" ->
+        tag == "style"
+
+      context == "body" ->
+        tag in @block_tags or tag == "style"
 
       context in @list_tags ->
         tag == "li"
+
+      context == "style" ->
+        false
 
       context == "table" ->
         tag in ~w(caption thead tbody tfoot tr)
@@ -216,12 +234,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   end
 
   defp supported_tag?(tag) do
-    tag in @block_tags or tag in @inline_tags or tag == "li" or
+    tag in @structural_tags or tag in @block_tags or tag in @inline_tags or tag == "li" or
       tag in ~w(caption thead tbody tfoot tr th td)
   end
 
   defp valid_element?(tag, children) do
     case tag do
+      "head" ->
+        Enum.all?(children, &match?(%{tag: "style"}, &1))
+
+      "style" ->
+        Enum.all?(children, &match?(%{type: :text}, &1))
+
       "table" ->
         caption_count = Enum.count(children, &match?(%{tag: "caption"}, &1))
         caption_first? = caption_count == 0 or hd(children).tag == "caption"

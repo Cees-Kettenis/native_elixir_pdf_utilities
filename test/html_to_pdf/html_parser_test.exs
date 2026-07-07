@@ -58,6 +58,46 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
               }}
   end
 
+  test "parse accepts style tags and CSS targeting attributes" do
+    assert HtmlParser.parse(
+             ~s(<style>p.copy { color: red; }</style><p id="intro" class="copy lead">Hello</p>)
+           ) ==
+             {:ok,
+              %{
+                type: :document,
+                children: [
+                  %{
+                    type: :element,
+                    tag: "style",
+                    attributes: %{},
+                    children: [%{type: :text, text: "p.copy { color: red; }"}]
+                  },
+                  %{
+                    type: :element,
+                    tag: "p",
+                    attributes: %{"id" => "intro", "class" => "copy lead"},
+                    children: [%{type: :text, text: "Hello"}]
+                  }
+                ]
+              }}
+  end
+
+  test "parse accepts structural html head and body tags" do
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               ~s(<html><head><style>p { color: blue; }</style></head><body><p>Hello</p></body></html>)
+             )
+
+    [html] = dom.children
+    [head, body] = html.children
+    [style] = head.children
+    [paragraph] = body.children
+
+    assert html.tag == "html"
+    assert style.tag == "style"
+    assert paragraph.tag == "p"
+  end
+
   test "parse accepts strict lists and link href attributes" do
     assert HtmlParser.parse(
              ~s(<ul><li>Read <a href="https://example.com">docs</a></li><li>Ship</li></ul><ol><li>First</li></ol>)
@@ -235,7 +275,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
 
   test "parse rejects unsupported markup" do
     assert HtmlParser.parse("<div>Hello</div>") == {:error, :unsupported_html}
-    assert HtmlParser.parse(~s(<p class="copy">Hello</p>)) == {:error, :unsupported_html}
+    assert HtmlParser.parse(~s(<p data-copy="yes">Hello</p>)) == {:error, :unsupported_html}
 
     assert HtmlParser.parse(~s(<a href="https://example.com">No block</a>)) ==
              {:error, :unsupported_html}

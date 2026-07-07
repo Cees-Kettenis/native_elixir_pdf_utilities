@@ -287,6 +287,193 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert amount.style.text_align == :left
   end
 
+  test "compute applies configured stylesheets before style tag rules" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [%{type: :text, text: "p { color: green; }"}]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{},
+          children: [%{type: :text, text: "Hello"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, stylesheets: ["p { color: red; }"])
+    [paragraph] = styled_tree.children
+    [text] = paragraph.children
+
+    assert paragraph.style.color == {0, 0.5019607843, 0}
+    assert text.style.color == {0, 0.5019607843, 0}
+  end
+
+  test "compute applies configured stylesheet files" do
+    stylesheet_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-style-test.css")
+    File.write!(stylesheet_path, "p { color: #336699; }")
+
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{},
+          children: [%{type: :text, text: "Hello"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, stylesheets: [stylesheet_path])
+    [paragraph] = styled_tree.children
+
+    assert paragraph.style.color == {0.2, 0.4, 0.6}
+  after
+    stylesheet_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-style-test.css")
+    File.rm(stylesheet_path)
+  end
+
+  test "compute applies selector specificity before source order" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [
+            %{
+              type: :text,
+              text: """
+              #intro { color: blue; }
+              p.copy { color: green; }
+              p { color: red; }
+              """
+            }
+          ]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"id" => "intro", "class" => "copy"},
+          children: [%{type: :text, text: "Specific"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [paragraph] = styled_tree.children
+
+    assert paragraph.style.color == {0, 0, 1}
+  end
+
+  test "compute applies source order when specificity matches" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [%{type: :text, text: "p { color: red; } p { color: blue; }"}]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{},
+          children: [%{type: :text, text: "Later wins"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [paragraph] = styled_tree.children
+
+    assert paragraph.style.color == {0, 0, 1}
+  end
+
+  test "compute applies descendant and child selectors with inheritance" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [
+            %{
+              type: :text,
+              text: "body > p .note { color: #336699; font-size: 16pt; font-weight: bold; }"
+            }
+          ]
+        },
+        %{
+          type: :element,
+          tag: "body",
+          attributes: %{},
+          children: [
+            %{
+              type: :element,
+              tag: "p",
+              attributes: %{},
+              children: [
+                %{
+                  type: :element,
+                  tag: "span",
+                  attributes: %{"class" => "note"},
+                  children: [%{type: :text, text: "Inherited"}]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [paragraph] = styled_tree.children
+    [span] = paragraph.children
+    [text] = span.children
+
+    assert span.style.color == {0.2, 0.4, 0.6}
+    assert span.style.font_size == 16.0
+    assert span.style.font_weight == 700
+    assert span.style.line_height == 19.2
+    assert text.style.color == {0.2, 0.4, 0.6}
+    assert text.style.font_size == 16.0
+  end
+
+  test "compute gives inline style declarations the highest priority" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [%{type: :text, text: "#intro { color: blue; }"}]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"id" => "intro", "style" => "color: red"},
+          children: [%{type: :text, text: "Inline"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [paragraph] = styled_tree.children
+
+    assert paragraph.style.color == {1, 0, 0}
+  end
+
   test "compute rejects unsupported document trees" do
     assert Style.compute(%{tag: "p"}, []) == {:error, :invalid_document}
 
@@ -298,6 +485,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                    type: :element,
                    tag: "p",
                    attributes: %{"style" => "background: red"},
+                   children: [%{type: :text, text: "Hello"}]
+                 }
+               ]
+             },
+             []
+           ) == {:error, :invalid_document}
+
+    assert Style.compute(
+             %{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "style",
+                   attributes: %{},
+                   children: [%{type: :text, text: "p { background: red; }"}]
+                 },
+                 %{
+                   type: :element,
+                   tag: "p",
+                   attributes: %{},
                    children: [%{type: :text, text: "Hello"}]
                  }
                ]
