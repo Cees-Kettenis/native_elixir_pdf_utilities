@@ -41,6 +41,12 @@ Thanks for contributing to Native Elixir PDF Utilities.
 - Prefer inline code when a private function is used only once and does not make the caller easier to understand.
 - Do not duplicate shared helpers for common concerns already handled elsewhere.
 
+## AI-Assisted Development
+
+AI tools such as OpenAI Codex may be used to assist with development, testing, documentation, and debugging.
+
+Contributors are responsible for understanding, reviewing, and validating any AI-assisted code before submitting it.
+
 ## Reporting Issues
 
 Use GitHub Issues for bugs and feature requests:
