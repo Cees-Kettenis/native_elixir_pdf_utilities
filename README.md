@@ -39,7 +39,7 @@ For HtmlToPdf options, supported HTML elements, CSS rules, layout behavior, and 
 ```elixir
 def deps do
   [
-    {:native_elixir_pdf_utilities, "~> 0.2.0"}
+    {:native_elixir_pdf_utilities, "~> 0.3.0"}
   ]
 end
 ```
