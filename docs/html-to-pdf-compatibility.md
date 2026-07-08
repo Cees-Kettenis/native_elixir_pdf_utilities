@@ -2,7 +2,24 @@
 
 `NativeElixirPdfUtilities.HtmlToPdf` is a native document renderer for predictable server-side PDFs such as reports, invoices, labels, statements, and simple generated documents. It is not a browser engine and does not claim full browser compatibility.
 
-Unsupported HTML returns `{:error, :unsupported_html}` or `{:error, :invalid_document}` instead of being silently approximated. Unsupported CSS properties or invalid values return `{:error, :invalid_document}`. The renderer does not ignore unknown declarations.
+For runnable templates, styling patterns, and caller-side error handling examples, see [HTML to PDF Examples](html-to-pdf-exmaples.md).
+
+Unsupported or malformed input is rejected instead of being silently approximated. Rendering failures return a broad reason with diagnostic detail, for example:
+
+```elixir
+{:error,
+ {:invalid_css,
+  %{
+    stage: :css,
+    reason: :invalid_css,
+    message: ~s(line 18: selector "li >" is invalid or unsupported),
+    line: 18,
+    column: 1,
+    source: "li >"
+  }}}
+```
+
+The detail map always includes `:stage`, `:reason`, and `:message`. It includes `:line`, `:column`, and `:source` when the renderer can locate the source snippet. CSS is strict: unknown declarations and unsupported values fail with `:invalid_css` rather than being ignored.
 
 ## HtmlToPdf Options
 
