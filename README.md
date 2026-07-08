@@ -34,6 +34,8 @@ For runnable render examples, styling patterns, file/image/font examples, and di
 
 For HtmlToPdf options, supported HTML elements, CSS rules, layout behavior, and known renderer boundaries, see [HTML to PDF Compatibility](docs/html-to-pdf-compatibility.md).
 
+For planned improvements and useful future features, see [Roadmap](ROADMAP.md).
+
 ## Installation
 
 ```elixir
