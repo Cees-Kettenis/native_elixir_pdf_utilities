@@ -196,7 +196,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         "body" ->
           block_defaults(inherited_font_size, 400, 0.0)
 
-        tag when tag in ["article", "div", "section"] ->
+        tag
+        when tag in ["article", "aside", "div", "footer", "header", "main", "nav", "section"] ->
           block_defaults(inherited_font_size, 400, 0.0)
 
         "p" ->
@@ -850,11 +851,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, Map.put(style, :_custom_properties, custom_properties)}
 
       "color" ->
-        with {:ok, color} <- parse_color(value), do: {:ok, Map.put(style, :color, color)}
+        with {:ok, color} <- parse_color(value, Map.fetch!(style, :color)) do
+          case color do
+            :transparent -> {:ok, style}
+            color -> {:ok, Map.put(style, :color, color)}
+          end
+        end
 
       "background-color" ->
-        with {:ok, color} <- parse_color(value),
-             do: {:ok, Map.put(style, :background_color, color)}
+        with {:ok, color} <- parse_color(value, Map.fetch!(style, :color)) do
+          {:ok, Map.put(style, :background_color, transparent_color_to_nil(color))}
+        end
 
       "background" ->
         put_background(style, value)
@@ -880,10 +887,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
              do: {:ok, put_edge_length(style, property, length)}
 
       "border-color" ->
-        with {:ok, color} <- parse_color(value),
-             do:
-               {:ok,
-                style |> Map.put(:border_color, color) |> Map.put(:border_colors, edges(color))}
+        with {:ok, color} <- parse_color(value, Map.fetch!(style, :color)) do
+          case color do
+            :transparent ->
+              {:ok, style}
+
+            color ->
+              {:ok,
+               style |> Map.put(:border_color, color) |> Map.put(:border_colors, edges(color))}
+          end
+        end
 
       property when property in ["border-top", "border-right", "border-bottom", "border-left"] ->
         with {:ok, width, color} <- parse_border_edge(value, Map.fetch!(style, :color)) do
@@ -894,6 +907,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             color -> {:ok, put_border_edge_color(style, property, color)}
           end
         end
+
+      property
+      when property in [
+             "border-top-width",
+             "border-right-width",
+             "border-bottom-width",
+             "border-left-width"
+           ] ->
+        with {:ok, width} <- parse_length(value) do
+          {:ok, put_border_edge_width(style, border_edge_property(property), width)}
+        end
+
+      property
+      when property in [
+             "border-top-color",
+             "border-right-color",
+             "border-bottom-color",
+             "border-left-color"
+           ] ->
+        with {:ok, color} <- parse_color(value, Map.fetch!(style, :color)) do
+          case color do
+            :transparent -> {:ok, style}
+            color -> {:ok, put_border_edge_color(style, border_edge_property(property), color)}
+          end
+        end
+
+      property
+      when property in [
+             "border-style",
+             "border-top-style",
+             "border-right-style",
+             "border-bottom-style",
+             "border-left-style"
+           ] ->
+        put_border_style(style, property, value)
 
       "border-radius" ->
         with {:ok, length} <- parse_length(value),
@@ -929,7 +977,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         put_vertical_align(style, value)
 
       "min-height" ->
-        put_min_height(style, value)
+        put_size(style, :min_height, value)
+
+      property when property in ["min-width", "max-width", "max-height"] ->
+        put_size(style, length_property(property), value)
 
       "border" ->
         with {:ok, border_widths, border_color} <- parse_border(value, Map.fetch!(style, :color)) do
@@ -985,6 +1036,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       property when property in ["width", "height"] ->
         put_size(style, length_property(property), value)
+
+      "position" ->
+        put_position(style, value)
+
+      "overflow" ->
+        put_overflow(style, value)
 
       "aspect-ratio" ->
         with {:ok, aspect_ratio} <- parse_aspect_ratio(value),
@@ -1076,6 +1133,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       "inline" ->
         {:ok, Map.put(style, :display, :inline)}
 
+      "inline-block" ->
+        {:ok, style |> ensure_box_style() |> Map.put(:display, :block)}
+
       "none" ->
         {:ok, Map.put(style, :display, :none)}
 
@@ -1128,16 +1188,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp put_min_height(style, value) do
-    case resolved_css_value(style, value) do
-      {:ok, value} ->
-        with {:ok, size} <- parse_size(value), do: {:ok, Map.put(style, :min_height, size)}
-
-      :error ->
-        {:error, :invalid_document}
-    end
-  end
-
   defp put_vertical_align(style, value) do
     case value |> String.trim() |> String.downcase() do
       "baseline" -> {:ok, Map.put(style, :vertical_align, :baseline)}
@@ -1162,8 +1212,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, Map.put(style, :background_color, nil)}
 
       value ->
-        with {:ok, color} <- parse_color(value),
-             do: {:ok, Map.put(style, :background_color, color)}
+        with {:ok, color} <- parse_color(value, Map.fetch!(style, :color)) do
+          {:ok, Map.put(style, :background_color, transparent_color_to_nil(color))}
+        end
+    end
+  end
+
+  defp put_position(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      value when value in ["static", "relative"] -> {:ok, style}
+      _ -> {:error, :invalid_document}
+    end
+  end
+
+  defp put_overflow(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      "visible" -> {:ok, Map.put(style, :overflow, :visible)}
+      "hidden" -> {:ok, Map.put(style, :overflow, :hidden)}
+      _ -> {:error, :invalid_document}
+    end
+  end
+
+  defp put_border_style(style, property, value) do
+    normalized = value |> String.trim() |> String.downcase()
+
+    cond do
+      normalized in ["solid", "dashed"] ->
+        {:ok, style}
+
+      normalized == "none" and property == "border-style" ->
+        {:ok, Map.put(style, :border_widths, edges(0.0))}
+
+      normalized == "none" ->
+        {:ok, put_border_edge_width(style, border_edge_property(property), 0.0)}
+
+      true ->
+        {:error, :invalid_document}
     end
   end
 
@@ -1459,6 +1543,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     case property do
       "width" -> :width
       "height" -> :height
+      "min-width" -> :min_width
+      "max-width" -> :max_width
+      "max-height" -> :max_height
     end
   end
 
@@ -1769,10 +1856,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp parse_color(value) do
+  defp parse_color(value, current_color) do
     normalized = value |> String.trim() |> String.downcase()
 
     cond do
+      normalized == "currentcolor" and not is_nil(current_color) ->
+        {:ok, current_color}
+
+      normalized == "transparent" ->
+        {:ok, :transparent}
+
       Map.has_key?(named_colors(), normalized) ->
         {:ok, Map.fetch!(named_colors(), normalized)}
 
@@ -1793,8 +1886,56 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
          {hex_to_pdf_color(red <> red), hex_to_pdf_color(green <> green),
           hex_to_pdf_color(blue <> blue)}}
 
+      String.starts_with?(normalized, "rgb(") or String.starts_with?(normalized, "rgba(") ->
+        parse_rgb_color(normalized)
+
       true ->
         :error
+    end
+  end
+
+  defp parse_rgb_color(value) do
+    case Regex.named_captures(~r/^rgba?\((?<channels>.+)\)$/u, value) do
+      %{"channels" => channels} ->
+        channels = split_css_comma(channels)
+
+        case channels do
+          [red, green, blue] ->
+            parse_rgb_channels(red, green, blue)
+
+          [red, green, blue, _alpha] ->
+            parse_rgb_channels(red, green, blue)
+
+          _ ->
+            :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp parse_rgb_channels(red, green, blue) do
+    with {:ok, red} <- parse_rgb_channel(red),
+         {:ok, green} <- parse_rgb_channel(green),
+         {:ok, blue} <- parse_rgb_channel(blue) do
+      {:ok, {red, green, blue}}
+    end
+  end
+
+  defp parse_rgb_channel(channel) do
+    normalized = String.trim(channel)
+
+    cond do
+      Regex.match?(~r/^\d+(?:\.\d+)?%$/u, normalized) ->
+        {number, "%"} = Float.parse(normalized)
+        {:ok, number |> max(0.0) |> min(100.0) |> Kernel./(100.0)}
+
+      true ->
+        case Float.parse(normalized) do
+          {number, ""} -> {:ok, number |> max(0.0) |> min(255.0) |> Kernel./(255.0)}
+          _ -> :error
+        end
     end
   end
 
@@ -2023,6 +2164,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     |> Map.put(:border_color, color)
   end
 
+  defp border_edge_property(property) do
+    property
+    |> String.replace_suffix("-width", "")
+    |> String.replace_suffix("-color", "")
+    |> String.replace_suffix("-style", "")
+  end
+
   defp parse_border(value, current_color) do
     tokens = String.split(value, ~r/\s+/u, trim: true)
 
@@ -2044,8 +2192,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                 {:ok, width} = parse_length(token)
                 {:cont, %{acc | width: width}}
 
-              is_nil(acc.color) and match?({:ok, _}, parse_color(token)) ->
-                {:ok, color} = parse_color(token)
+              is_nil(acc.color) and match?({:ok, _}, parse_color(token, current_color)) ->
+                {:ok, color} = parse_color(token, current_color)
                 {:cont, %{acc | color: color}}
 
               true ->
@@ -2056,7 +2204,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         case parsed do
           %{width: width, style: style, color: color}
           when is_number(width) and style in [:solid, :dashed] ->
-            {:ok, edges(width), color || current_color}
+            border_color =
+              case color do
+                nil -> current_color
+                :transparent -> current_color
+                color -> color
+              end
+
+            {:ok, edges(width), border_color}
 
           _ ->
             :error
@@ -2076,6 +2231,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         with {:ok, border_widths, border_color} <- parse_border(value, current_color) do
           {:ok, Enum.max(Map.values(border_widths)), border_color}
         end
+    end
+  end
+
+  defp transparent_color_to_nil(color) do
+    case color do
+      :transparent -> nil
+      color -> color
     end
   end
 
@@ -2568,7 +2730,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     %{
       "black" => {0, 0, 0},
       "blue" => {0, 0, 1},
+      "gray" => {0.5019607843, 0.5019607843, 0.5019607843},
       "green" => {0, 0.5019607843, 0},
+      "grey" => {0.5019607843, 0.5019607843, 0.5019607843},
       "red" => {1, 0, 0},
       "white" => {1, 1, 1}
     }

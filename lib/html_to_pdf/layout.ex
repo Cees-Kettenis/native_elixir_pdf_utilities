@@ -122,8 +122,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                  flow_metadata
                ) do
             {:ok, content_boxes, content_height} ->
+              content_box_height = resolved_size(style, :height, nil, content_height)
+
               box_height =
-                border_widths.top + padding.top + content_height + padding.bottom +
+                border_widths.top + padding.top + content_box_height + padding.bottom +
                   border_widths.bottom
 
               background_box =
@@ -293,19 +295,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     width = resolved_size(style, :width, available_width, nil)
     height = resolved_size(style, :height, available_height, nil)
 
-    case {width, height} do
-      {width, height} when is_number(width) and is_number(height) ->
-        {width, height}
+    {content_width, content_height} =
+      case {width, height} do
+        {width, height} when is_number(width) and is_number(height) ->
+          {width, height}
 
-      {width, _height} when is_number(width) ->
-        {width, width / ratio}
+        {width, _height} when is_number(width) ->
+          {width, width / ratio}
 
-      {_width, height} when is_number(height) ->
-        {height * ratio, height}
+        {_width, height} when is_number(height) ->
+          {height * ratio, height}
 
-      _ ->
-        {natural_width, natural_height}
-    end
+        _ ->
+          {natural_width, natural_height}
+      end
+
+    apply_image_size_constraints(
+      style,
+      content_width,
+      content_height,
+      ratio,
+      available_width,
+      available_height,
+      is_number(width) and is_number(height)
+    )
   end
 
   defp layout_grid(style, children, x, y, width) do
@@ -1820,22 +1833,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp resolved_size(style, property, available_size, default) do
-    case Map.get(style, property) do
-      {:min, sizes} when is_list(sizes) ->
-        sizes
-        |> Enum.map(&resolve_size_value(&1, available_size))
-        |> Enum.reject(&is_nil/1)
-        |> Enum.min(fn -> default end)
+    size =
+      case Map.get(style, property) do
+        {:min, sizes} when is_list(sizes) ->
+          sizes
+          |> Enum.map(&resolve_size_value(&1, available_size))
+          |> Enum.reject(&is_nil/1)
+          |> Enum.min(fn -> default end)
 
-      {:percent, ratio} when is_number(available_size) ->
-        max(available_size * ratio, 0.0)
+        {:percent, ratio} when is_number(available_size) ->
+          max(available_size * ratio, 0.0)
 
-      value when is_number(value) ->
-        value
+        value when is_number(value) ->
+          value
 
-      _ ->
-        default
-    end
+        _ ->
+          default
+      end
+
+    apply_size_constraints(style, property, size, available_size)
   end
 
   defp resolve_size_value(value, available_size) do
@@ -1843,6 +1859,112 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       {:percent, ratio} when is_number(available_size) -> max(available_size * ratio, 0.0)
       value when is_number(value) -> value
       _ -> nil
+    end
+  end
+
+  defp apply_size_constraints(style, property, size, available_size) do
+    case {property, size} do
+      {:width, size} when is_number(size) ->
+        size
+        |> apply_min_size(style, :min_width, available_size)
+        |> apply_max_size(style, :max_width, available_size)
+
+      {:height, size} when is_number(size) ->
+        size
+        |> apply_min_size(style, :min_height, available_size)
+        |> apply_max_size(style, :max_height, available_size)
+
+      _ ->
+        size
+    end
+  end
+
+  defp apply_min_size(size, style, property, available_size) do
+    case resolved_constraint_size(style, property, available_size) do
+      constraint when is_number(constraint) -> max(size, constraint)
+      _ -> size
+    end
+  end
+
+  defp apply_max_size(size, style, property, available_size) do
+    case resolved_constraint_size(style, property, available_size) do
+      constraint when is_number(constraint) -> min(size, constraint)
+      _ -> size
+    end
+  end
+
+  defp resolved_constraint_size(style, property, available_size) do
+    style
+    |> Map.get(property)
+    |> resolve_size_value(available_size)
+  end
+
+  defp apply_image_size_constraints(
+         style,
+         width,
+         height,
+         ratio,
+         available_width,
+         available_height,
+         explicit_dimensions?
+       ) do
+    case explicit_dimensions? do
+      true ->
+        {
+          apply_size_constraints(style, :width, width, available_width),
+          apply_size_constraints(style, :height, height, available_height)
+        }
+
+      false ->
+        {width, height}
+        |> scale_image_down_to_max(style, ratio, available_width, available_height)
+        |> scale_image_up_to_min(style, ratio, available_width, available_height)
+    end
+  end
+
+  defp scale_image_down_to_max({width, height}, style, ratio, available_width, available_height) do
+    max_width = resolved_constraint_size(style, :max_width, available_width)
+    max_height = resolved_constraint_size(style, :max_height, available_height)
+
+    scale =
+      [max_image_scale(width, max_width), max_image_scale(height, max_height)]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.min(fn -> 1.0 end)
+      |> min(1.0)
+
+    {width * scale, width * scale / ratio}
+  end
+
+  defp scale_image_up_to_min({width, height}, style, ratio, available_width, available_height) do
+    min_width = resolved_constraint_size(style, :min_width, available_width)
+    min_height = resolved_constraint_size(style, :min_height, available_height)
+
+    scale =
+      [min_image_scale(width, min_width), min_image_scale(height, min_height)]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.max(fn -> 1.0 end)
+      |> max(1.0)
+
+    {width * scale, width * scale / ratio}
+  end
+
+  defp max_image_scale(size, constraint) do
+    case {size, constraint} do
+      {size, constraint} when is_number(size) and size > 0 and is_number(constraint) ->
+        constraint / size
+
+      _ ->
+        nil
+    end
+  end
+
+  defp min_image_scale(size, constraint) do
+    case {size, constraint} do
+      {size, constraint} when is_number(size) and size > 0 and is_number(constraint) ->
+        constraint / size
+
+      _ ->
+        nil
     end
   end
 

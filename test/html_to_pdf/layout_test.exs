@@ -815,6 +815,60 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert image.image.format == :png
   end
 
+  test "layout applies min and max size constraints" do
+    styled_tree = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "img",
+          style:
+            image_style(image_fixture(40.0, 20.0))
+            |> Map.merge(%{max_width: 20.0, max_height: 6.0}),
+          children: []
+        },
+        %{
+          type: :element,
+          tag: "img",
+          style:
+            image_style(image_fixture(40.0, 20.0))
+            |> Map.merge(%{min_width: 80.0}),
+          children: []
+        },
+        %{
+          type: :element,
+          tag: "div",
+          style:
+            block_style()
+            |> Map.merge(%{
+              background_color: {1, 0, 0},
+              margin_after: 0.0,
+              max_width: 30.0,
+              min_height: 20.0,
+              padding: %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0},
+              border_widths: %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+            }),
+          children: []
+        }
+      ]
+    }
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {100, 100}, margin: 10)
+    [max_image, min_image, block_background] = layout_tree.boxes
+
+    assert max_image.type == :image
+    assert_in_delta max_image.width, 12.0, 0.0001
+    assert_in_delta max_image.height, 6.0, 0.0001
+
+    assert min_image.type == :image
+    assert_in_delta min_image.width, 80.0, 0.0001
+    assert_in_delta min_image.height, 40.0, 0.0001
+
+    assert block_background.type == :rect
+    assert_in_delta block_background.width, 30.0, 0.0001
+    assert_in_delta block_background.height, 20.0, 0.0001
+  end
+
   test "layout positions grid items with explicit placement gaps and alignment" do
     dom = %{
       type: :document,

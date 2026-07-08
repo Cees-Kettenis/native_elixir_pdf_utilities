@@ -98,6 +98,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert paragraph.tag == "p"
   end
 
+  test "parse accepts semantic block containers" do
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               ~s(<main><header><p>Head</p></header><nav><p>Nav</p></nav><aside><p>Side</p></aside><footer><p>Foot</p></footer></main>)
+             )
+
+    [main] = dom.children
+    assert main.tag == "main"
+    assert Enum.map(main.children, & &1.tag) == ["header", "nav", "aside", "footer"]
+  end
+
   test "parse accepts document metadata void tags and line breaks" do
     assert {:ok, dom} =
              HtmlParser.parse(

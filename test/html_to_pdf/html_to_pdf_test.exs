@@ -56,11 +56,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, css_pdf} = HtmlToPdf.render(html)
     assert css_pdf =~ "/MediaBox [0 0 841.89 595.28]"
-    assert css_pdf =~ "19.8425 559.0375 802.205 16.4 re"
+    assert css_pdf =~ "19.8425 563.4375 802.205 12 re"
 
     assert {:ok, override_pdf} = HtmlToPdf.render(html, page_size: {200, 100}, margin: 0)
     assert override_pdf =~ "/MediaBox [0 0 200 100]"
-    assert override_pdf =~ "0 83.6 200 16.4 re"
+    assert override_pdf =~ "0 88 200 12 re"
   end
 
   test "render lays out grid containers nested inside flex items" do

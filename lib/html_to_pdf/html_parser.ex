@@ -19,7 +19,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   @type dom_tree :: %{type: :document, children: [element_node()]}
 
   @structural_tags ~w(html head body style title meta)
-  @block_tags ~w(article div p h1 h2 h3 h4 h5 h6 section ul ol table img)
+  @block_tags ~w(article aside div footer header main nav p h1 h2 h3 h4 h5 h6 section ul ol table img)
   @inline_tags ~w(strong b em i span a br)
   @list_tags ~w(ul ol)
   @table_structure_tags ~w(table thead tbody tfoot tr)
@@ -264,7 +264,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
       context in @table_content_tags ->
         tag in @inline_tags or tag in @block_tags
 
-      context in ~w(article div section) ->
+      context in ~w(article aside div footer header main nav section) ->
         tag in @block_tags or tag in @inline_tags or tag == "style"
 
       context == "li" or context in @block_tags or context in @inline_tags ->
