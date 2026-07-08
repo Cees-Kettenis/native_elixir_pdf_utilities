@@ -4,8 +4,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   The parser accepts the document-oriented selector subset used by the style
   cascade: element, class, id, element.class, descendant, child, and comma
-  groups. Declarations are kept as normalized property/value pairs so the style
-  layer can validate values against the renderer's supported property set.
+  groups. Simple `@page` rules are accepted outside the style cascade so the
+  renderer can use page size and margin defaults. Declarations are kept as
+  normalized property/value pairs so the style layer can validate values against
+  the renderer's supported property set.
   """
 
   @type declaration :: {String.t(), String.t()} | {String.t(), String.t(), :important}
@@ -13,7 +15,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           tag: String.t() | nil,
           id: String.t() | nil,
           classes: [String.t()],
-          pseudo_classes: [:first_child | :root],
+          pseudo_classes: [:first_child | :last_child | :root | {:nth_child, pos_integer()}],
           combinator: nil | :descendant | :child
         }
   @type selector :: %{
@@ -26,6 +28,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           order: non_neg_integer()
         }
   @type stylesheet :: [rule()]
+  @type page_option ::
+          {:page_size, :a4 | :letter | {number(), number()}} | {:margin, String.t() | number()}
 
   @doc """
   Parses a CSS stylesheet into strict renderer rules.
@@ -36,7 +40,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       css when is_binary(css) ->
         css
         |> strip_comments()
+        |> strip_page_rules()
         |> parse_rules()
+
+      _ ->
+        {:error, :invalid_css}
+    end
+  end
+
+  @doc """
+  Extracts renderer page defaults from simple `@page` rules.
+
+  Supported declarations are single-value `margin` lengths and common
+  `size` values such as `A4`, `A4 landscape`, `letter`, and
+  `letter landscape`. Unsupported page declarations are ignored so normal CSS
+  parsing remains strict for the supported style cascade.
+  """
+  @spec page_options(String.t()) :: {:ok, [page_option()]} | {:error, :invalid_css}
+  def page_options(css) do
+    case css do
+      css when is_binary(css) ->
+        css
+        |> strip_comments()
+        |> page_rule_blocks()
+        |> Enum.reduce({:ok, []}, fn block, {:ok, acc} ->
+          case parse_declarations(block) do
+            {:ok, declarations} -> {:ok, Keyword.merge(acc, page_options_from(declarations))}
+            {:error, _reason} -> {:ok, acc}
+          end
+        end)
 
       _ ->
         {:error, :invalid_css}
@@ -72,6 +104,70 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   defp strip_comments(css) do
     Regex.replace(~r/\/\*.*?\*\//us, css, "")
+  end
+
+  defp strip_page_rules(css) do
+    Regex.replace(~r/@page\s*(?:[^{]*)\{[^{}]*\}/ui, css, "")
+  end
+
+  defp page_rule_blocks(css) do
+    ~r/@page\s*(?:[^{]*)\{(?<declarations>[^{}]*)\}/ui
+    |> Regex.scan(css, capture: ["declarations"])
+    |> List.flatten()
+  end
+
+  defp page_options_from(declarations) do
+    Enum.reduce(declarations, [], fn declaration, acc ->
+      case declaration do
+        {"size", value} ->
+          case page_size_option(value) do
+            nil -> acc
+            page_size -> Keyword.put(acc, :page_size, page_size)
+          end
+
+        {"margin", value} ->
+          case page_margin_option(value) do
+            nil -> acc
+            margin -> Keyword.put(acc, :margin, margin)
+          end
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  defp page_size_option(value) do
+    tokens = value |> String.trim() |> String.downcase() |> String.split(~r/\s+/u, trim: true)
+
+    case tokens do
+      ["a4"] -> :a4
+      ["a4", "portrait"] -> :a4
+      ["portrait", "a4"] -> :a4
+      ["a4", "landscape"] -> {841.89, 595.28}
+      ["landscape", "a4"] -> {841.89, 595.28}
+      ["letter"] -> :letter
+      ["letter", "portrait"] -> :letter
+      ["portrait", "letter"] -> :letter
+      ["letter", "landscape"] -> {792.0, 612.0}
+      ["landscape", "letter"] -> {792.0, 612.0}
+      _ -> nil
+    end
+  end
+
+  defp page_margin_option(value) do
+    normalized = String.trim(value)
+
+    cond do
+      normalized == "0" ->
+        0.0
+
+      String.match?(normalized, ~r/^\d+(?:\.\d+)?(?:pt|px|mm|cm|in)$/u) ->
+        normalized
+
+      true ->
+        nil
+    end
   end
 
   defp parse_rules(css) do
@@ -186,7 +282,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   defp parse_simple_selector(selector) do
     captures =
       Regex.named_captures(
-        ~r/^(?<tag>[a-zA-Z][a-zA-Z0-9]*)?(?<modifiers>(?:[#.][a-zA-Z_-][a-zA-Z0-9_-]*)*)(?<pseudo>:(?:first-child|root))?$/u,
+        ~r/^(?<tag>\*|[a-zA-Z][a-zA-Z0-9]*)?(?<modifiers>(?:[#.][a-zA-Z_-][a-zA-Z0-9_-]*)*)(?<pseudo>:(?:first-child|last-child|root|nth-child\([1-9]\d*\)))?$/u,
         selector
       )
 
@@ -235,13 +331,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   defp pseudo_classes(pseudo) do
     case pseudo do
-      ":first-child" -> [:first_child]
-      ":root" -> [:root]
-      _ -> []
+      ":first-child" ->
+        [:first_child]
+
+      ":last-child" ->
+        [:last_child]
+
+      ":root" ->
+        [:root]
+
+      pseudo ->
+        case Regex.named_captures(~r/^:nth-child\((?<index>[1-9]\d*)\)$/u, pseudo || "") do
+          %{"index" => index} ->
+            {index, ""} = Integer.parse(index)
+            [{:nth_child, index}]
+
+          _ ->
+            []
+        end
     end
   end
 
   defp tag_name("") do
+    nil
+  end
+
+  defp tag_name("*") do
     nil
   end
 

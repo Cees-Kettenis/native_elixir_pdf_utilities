@@ -365,12 +365,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp text_operator(box, font_resource) do
-    case Map.get(font_resource, :font_face) do
-      %{type: :embedded} = font ->
-        " <" <> Font.encode_embedded_text(box.text, font) <> "> Tj"
+    operator =
+      case Map.get(font_resource, :font_face) do
+        %{type: :embedded} = font ->
+          " <" <> Font.encode_embedded_text(box.text, font) <> "> Tj"
+
+        _ ->
+          " (" <> escape_text(box.text) <> ") Tj"
+      end
+
+    case Map.get(box, :letter_spacing, 0.0) do
+      letter_spacing when is_number(letter_spacing) and letter_spacing != 0.0 ->
+        " " <> format_number(letter_spacing) <> " Tc" <> operator <> " 0 Tc"
 
       _ ->
-        " (" <> escape_text(box.text) <> ") Tj"
+        operator
     end
   end
 

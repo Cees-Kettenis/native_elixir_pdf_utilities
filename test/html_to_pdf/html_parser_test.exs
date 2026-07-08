@@ -167,8 +167,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert second.tag == "span"
   end
 
+  test "parse accepts semantic section and article block containers" do
+    assert {:ok, dom} =
+             HtmlParser.parse(~s(<section class="sheet"><article><p>Trim</p></article></section>))
+
+    [section] = dom.children
+    [article] = section.children
+    [paragraph] = article.children
+
+    assert section.tag == "section"
+    assert article.tag == "article"
+    assert paragraph.tag == "p"
+  end
+
   test "parse accepts strict image source attributes" do
-    assert HtmlParser.parse(~s(<img src="photo.png"><div><img src='nested.jpg'></div>)) ==
+    assert HtmlParser.parse(
+             ~s(<img src="photo.png" alt="Product photo"><div><img src='nested.jpg'></div>)
+           ) ==
              {:ok,
               %{
                 type: :document,
@@ -176,7 +191,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
                   %{
                     type: :element,
                     tag: "img",
-                    attributes: %{"src" => "photo.png"},
+                    attributes: %{"alt" => "Product photo", "src" => "photo.png"},
                     children: []
                   },
                   %{

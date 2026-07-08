@@ -16,13 +16,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   image, and font support.
   """
 
+  alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
   alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
-  @type page_size :: :a4 | atom()
+  @type page_size :: :a4 | :letter | {number(), number()}
   @type render_option ::
           {:page_size, page_size() | {number(), number()}}
           | {:margin, String.t() | number()}
@@ -50,14 +51,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
 
   Supported options include `:page_size`, `:margin`, `:base_url`,
   `:stylesheets`, `:default_font`, and explicit TTF `:fonts`.
+
+  `:page_size` accepts `:a4`, `:letter`, or a positive `{width, height}` tuple.
+  Tuple values up to `20 x 20` are interpreted as inches for compatibility with
+  ChromicPDF-style custom label sizes; larger tuples are interpreted as PDF
+  points.
   """
   @spec render(String.t(), [render_option()]) :: {:ok, binary()} | {:error, error_reason()}
   def render(html, opts \\ []) do
     with {:ok, dom} <- HtmlParser.parse(html),
-         {:ok, styled_tree} <- Style.compute(dom, opts),
-         {:ok, layout_tree} <- layout_document(styled_tree, opts),
-         {:ok, pages} <- Pagination.paginate(layout_tree, opts),
-         {:ok, pdf_binary} <- PdfWriter.render(pages, opts) do
+         {:ok, effective_opts} <- effective_render_options(dom, opts),
+         {:ok, styled_tree} <- Style.compute(dom, effective_opts),
+         {:ok, layout_tree} <- layout_document(styled_tree, effective_opts),
+         {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
+         {:ok, pdf_binary} <- PdfWriter.render(pages, effective_opts) do
       {:ok, pdf_binary}
     end
   end
@@ -88,5 +95,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           {:ok, term()} | {:error, :invalid_layout | :invalid_margin | :invalid_page_size}
   defp layout_document(styled_tree, opts) do
     apply(Layout, :layout, [styled_tree, opts])
+  end
+
+  defp effective_render_options(dom, opts) do
+    with {:ok, page_options} <-
+           dom |> stylesheet_sources() |> Enum.join("\n") |> CssParser.page_options() do
+      {:ok, Keyword.merge(page_options, opts)}
+    end
+  end
+
+  defp stylesheet_sources(node) do
+    stylesheet_sources(node, false)
+  end
+
+  defp stylesheet_sources(node, in_style?) do
+    case node do
+      %{type: :document, children: children} ->
+        Enum.flat_map(children, &stylesheet_sources(&1, in_style?))
+
+      %{type: :element, tag: "style", children: children} ->
+        Enum.flat_map(children, &stylesheet_sources(&1, true))
+
+      %{type: :element, children: children} ->
+        Enum.flat_map(children, &stylesheet_sources(&1, in_style?))
+
+      %{type: :text, text: text} when is_binary(text) ->
+        case in_style? do
+          true -> [text]
+          false -> []
+        end
+    end
   end
 end

@@ -51,6 +51,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "(A \\(B\\) \\\\ C) Tj"
   end
 
+  test "render writes character spacing for spaced text" do
+    pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes: [
+          %{
+            type: :text,
+            text: "DATE",
+            x: 10.0,
+            y: 20.0,
+            font: "Helvetica",
+            font_size: 8.0,
+            letter_spacing: 0.64,
+            color: {0, 0, 0}
+          },
+          %{
+            type: :text,
+            text: "Value",
+            x: 10.0,
+            y: 10.0,
+            font: "Helvetica",
+            font_size: 8.0,
+            color: {0, 0, 0}
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, pdf} = PdfWriter.render(pages, [])
+    assert pdf =~ "0.64 Tc (DATE) Tj 0 Tc"
+    assert pdf =~ "(Value) Tj"
+  end
+
   test "render writes font resources for bold italic and colored runs" do
     pages = [
       %{

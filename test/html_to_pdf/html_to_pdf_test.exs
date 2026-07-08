@@ -40,6 +40,48 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "(Boxed) Tj"
   end
 
+  test "render accepts print template semantics and inch page sizes" do
+    html =
+      ~s(<section class="sheet"><style>@page { size: A4 landscape; margin: 7mm; }.sheet { height: 196mm; }</style><article><img src="data:image/png;base64,#{png_fixture_base64()}" alt="QR Code"><p>Sticker</p></article></section>)
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {4.92126, 1.49606})
+    assert pdf =~ "/MediaBox [0 0 354.3307 107.7163]"
+    assert pdf =~ "(Sticker) Tj"
+    assert pdf =~ "/Subtype /Image"
+  end
+
+  test "render uses page CSS defaults unless caller overrides them" do
+    html =
+      ~s(<style>@page { size: A4 landscape; margin: 7mm; }</style><div style="height: 10pt; border: 1pt solid #000000">Page CSS</div>)
+
+    assert {:ok, css_pdf} = HtmlToPdf.render(html)
+    assert css_pdf =~ "/MediaBox [0 0 841.89 595.28]"
+    assert css_pdf =~ "19.8425 559.0375 802.205 16.4 re"
+
+    assert {:ok, override_pdf} = HtmlToPdf.render(html, page_size: {200, 100}, margin: 0)
+    assert override_pdf =~ "/MediaBox [0 0 200 100]"
+    assert override_pdf =~ "0 83.6 200 16.4 re"
+  end
+
+  test "render lays out grid containers nested inside flex items" do
+    html = """
+    <section style="display: flex; flex-direction: column; width: 400pt">
+      <div>Header</div>
+      <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; flex: 1">
+        <article style="display: flex; flex-direction: column; border: 1px solid #ccd6e1">
+          <div style="display: block; text-transform: uppercase">thread</div>
+          <div>AGSYIKOFP1</div>
+        </article>
+      </div>
+    </section>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {600, 300})
+    assert pdf =~ "(Header) Tj"
+    assert pdf =~ "(THREAD) Tj"
+    assert pdf =~ "(AGSYIKOFP1) Tj"
+  end
+
   test "render applies configured and embedded CSS before writing PDF output" do
     html =
       ~s(<style>p.notice { color: #336699; font-weight: bold; }</style><p class="notice">Styled</p>)
@@ -241,6 +283,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       png_chunk("IHDR", <<width::32, height::32, 8, 2, 0, 0, 0>>) <>
       png_chunk("IDAT", :zlib.compress(rows)) <>
       png_chunk("IEND", "")
+  end
+
+  defp png_fixture_base64 do
+    1
+    |> png_fixture(1)
+    |> Base.encode64()
   end
 
   defp ttf_font_path! do

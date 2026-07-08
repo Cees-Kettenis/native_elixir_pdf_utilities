@@ -20,6 +20,256 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert paragraph.style.color == {0, 0, 0}
   end
 
+  test "compute treats section and article as block containers" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "section",
+          attributes: %{"style" => "display: flex"},
+          children: [
+            %{
+              type: :element,
+              tag: "article",
+              attributes: %{},
+              children: [%{type: :text, text: "Trim"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [section] = styled_tree.children
+    [article] = section.children
+
+    assert section.style.display == :flex
+    assert article.style.display == :block
+  end
+
+  test "compute applies body inherited styles to document fragments" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [
+            %{
+              type: :text,
+              text: "body { font-family: 'Fixture Sans', Helvetica; color: #102038; }"
+            }
+          ]
+        },
+        %{
+          type: :element,
+          tag: "section",
+          attributes: %{},
+          children: [%{type: :text, text: "Fragment"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} =
+             Style.compute(dom, fonts: [%{family: "Fixture Sans", path: ttf_font_path!()}])
+
+    [section] = styled_tree.children
+    [text] = section.children
+
+    assert section.style.font_family == "Fixture Sans"
+    assert text.style.font_face.id == section.style.font_face.id
+    assert section.style.color == {0.06274509803921569, 0.12549019607843137, 0.2196078431372549}
+  end
+
+  test "compute honors display none on implicit fragment body" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [%{type: :text, text: "body { display: none; }"}]
+        },
+        %{
+          type: :element,
+          tag: "section",
+          attributes: %{},
+          children: [%{type: :text, text: "Hidden"}]
+        }
+      ]
+    }
+
+    assert {:ok, %{children: []}} = Style.compute(dom, [])
+  end
+
+  test "compute accepts print CSS properties and transformed text" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "section",
+          attributes: %{},
+          children: [
+            %{
+              type: :element,
+              tag: "style",
+              attributes: %{},
+              children: [
+                %{
+                  type: :text,
+                  text:
+                    "* { box-sizing: border-box; } .label:last-child { page-break-after: auto; } .label span:nth-child(2) { display: block; margin-bottom: 2px; }"
+                }
+              ]
+            },
+            %{
+              type: :element,
+              tag: "div",
+              attributes: %{
+                "class" => "label",
+                "style" =>
+                  "background: #ffffff; border: 1px dashed #ccd6e1; width: min(100%, 360px); word-break: break-word; white-space: pre-line; letter-spacing: 0.05em; page-break-inside: avoid; text-transform: uppercase"
+              },
+              children: [
+                %{
+                  type: :element,
+                  tag: "span",
+                  attributes: %{},
+                  children: [%{type: :text, text: "one"}]
+                },
+                %{
+                  type: :element,
+                  tag: "span",
+                  attributes: %{},
+                  children: [%{type: :text, text: "two"}]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [section] = styled_tree.children
+    [label] = section.children
+    [first, second] = label.children
+    [first_text] = first.children
+
+    assert label.style.background_color == {1.0, 1.0, 1.0}
+    assert label.style.border_widths == %{top: 0.75, right: 0.75, bottom: 0.75, left: 0.75}
+    assert label.style.break_after == :auto
+    assert label.style.line_break == :break_word
+    assert label.style.width == {:min, [{:percent, 1.0}, 270.0]}
+    assert first_text.text == "ONE"
+    assert second.style.display == :block
+    assert second.style.margin_after == 1.5
+  end
+
+  test "compute skips descendants for display none elements" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [
+            %{type: :text, text: ".hidden { display: none; }"}
+          ]
+        },
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{"class" => "hidden"},
+          children: [
+            %{
+              type: :element,
+              tag: "img",
+              attributes: %{"src" => "data:image/png;base64,#RIGHTITEMQRCODE#"},
+              children: []
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [hidden] = styled_tree.children
+
+    assert hidden.style.display == :none
+    assert hidden.children == []
+
+    hidden_body_dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "body",
+          attributes: %{"style" => "display: none"},
+          children: [
+            %{
+              type: :element,
+              tag: "img",
+              attributes: %{"src" => "data:image/png;base64,#RIGHTITEMQRCODE#"},
+              children: []
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, %{children: []}} = Style.compute(hidden_body_dom, [])
+  end
+
+  test "compute covers print CSS alternate values and invalid branches" do
+    assert style_for!("div", "background: none").background_color == nil
+    assert style_for!("div", "display: grid; justify-self: center").justify_self == :center
+    assert style_for!("div", "letter-spacing: normal").letter_spacing == 0.0
+    assert style_for!("div", "letter-spacing: 0").letter_spacing == 0.0
+    assert style_for!("div", "letter-spacing: 2px").letter_spacing == 1.5
+    assert style_for!("div", "font-size: 10pt; letter-spacing: 0.05em").letter_spacing == 0.5
+    assert style_for!("div", "white-space: nowrap").line_break == :normal
+    assert style_for!("div", "word-wrap: normal").line_break == :normal
+    assert style_for!("div", "overflow-wrap: anywhere").line_break == :anywhere
+    assert style_for!("div", "border: 0").border_widths == edges(0.0)
+    assert style_for!("div", "border-right: 0").border_widths.right == 0.0
+    assert style_for!("div", "display: grid; grid-template-columns: 1fr  auto").display == :grid
+
+    assert style_for!("div", "width: min(100%, min(10px, 20px))").width ==
+             {:min, [{:percent, 1.0}, {:min, [7.5, 15.0]}]}
+
+    lowercase = text_for_style("text-transform: lowercase", "MiXeD")
+    capitalized = text_for_style("text-transform: capitalize", "hello world")
+    unchanged = text_for_style("text-transform: none", "MiXeD")
+
+    assert lowercase == "mixed"
+    assert capitalized == "Hello World"
+    assert unchanged == "MiXeD"
+
+    invalid_styles = [
+      "box-sizing: padding-box",
+      "text-transform: sideways",
+      "letter-spacing: wide",
+      "white-space: pre-wrap",
+      "page-break-inside: always",
+      "float: left",
+      "display: grid; grid-template-columns: minmax()",
+      "width: min(100%, nope)",
+      "width: min()",
+      "width: min",
+      "background: linear-gradient(red, blue)"
+    ]
+
+    for style <- invalid_styles do
+      assert style_for("div", style) == {:error, :invalid_document}
+    end
+  end
+
   test "compute applies heading defaults and inline style colors" do
     dom = %{
       type: :document,
@@ -1062,7 +1312,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                  %{
                    type: :element,
                    tag: "p",
-                   attributes: %{"style" => "background: red"},
+                   attributes: %{"style" => "background: linear-gradient(red, blue)"},
                    children: [%{type: :text, text: "Hello"}]
                  }
                ]
@@ -1078,7 +1328,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                    type: :element,
                    tag: "style",
                    attributes: %{},
-                   children: [%{type: :text, text: "p { background: red; }"}]
+                   children: [
+                     %{type: :text, text: "p { background: linear-gradient(red, blue); }"}
+                   ]
                  },
                  %{
                    type: :element,
@@ -1098,7 +1350,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                  %{
                    type: :element,
                    tag: "p",
-                   attributes: %{"style" => "border: 1pt dashed red"},
+                   attributes: %{"style" => "border: 1pt double red"},
                    children: [%{type: :text, text: "Hello"}]
                  }
                ]
@@ -1151,7 +1403,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                    type: :element,
                    tag: "div",
                    attributes: %{
-                     "style" => "display: grid; grid-template-columns: repeat(2, 1fr)"
+                     "style" => "display: grid; grid-template-columns: repeat(0, 1fr)"
                    },
                    children: [%{type: :text, text: "Bad"}]
                  }
@@ -1781,6 +2033,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp text_for_style(style, text) do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{"style" => style},
+          children: [%{type: :text, text: text}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [element] = styled_tree.children
+    [text_node] = element.children
+    text_node.text
+  end
+
+  defp edges(value) do
+    %{top: value, right: value, bottom: value, left: value}
   end
 
   defp style_for!(tag, style) do

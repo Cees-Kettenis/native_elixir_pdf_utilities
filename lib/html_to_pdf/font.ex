@@ -30,6 +30,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   @built_in_families ["Courier", "Helvetica", "Times-Roman"]
   @system_font_candidates [
     %{
+      family: "Arial",
+      path: "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf",
+      weight: 400,
+      style: :normal
+    },
+    %{
+      family: "Arial",
+      path: "/usr/share/fonts/truetype/msttcorefonts/Arial_Bold.ttf",
+      weight: 700,
+      style: :normal
+    },
+    %{
+      family: "Arial",
+      path: "/usr/share/fonts/truetype/msttcorefonts/Arial_Italic.ttf",
+      weight: 400,
+      style: :italic
+    },
+    %{
+      family: "Arial",
+      path: "/usr/share/fonts/truetype/msttcorefonts/Arial_Bold_Italic.ttf",
+      weight: 700,
+      style: :italic
+    },
+    %{
       family: "Liberation Sans",
       path: "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
       weight: 400,
@@ -232,15 +256,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       |> Enum.map(&{String.downcase(&1.family), &1.weight, &1.style})
       |> MapSet.new()
 
-    @system_font_candidates
+    system_font_candidates()
     |> Enum.reject(fn font ->
       MapSet.member?(explicit_keys, {String.downcase(font.family), font.weight, font.style}) or
         not File.regular?(font.path)
     end)
+    |> Enum.uniq_by(&{String.downcase(&1.family), &1.weight, &1.style})
     |> Enum.reduce([], fn font, acc ->
       loaded = load_font(font)
       if match?({:ok, _loaded}, loaded), do: acc ++ [elem(loaded, 1)], else: acc
     end)
+  end
+
+  defp system_font_candidates do
+    @system_font_candidates ++ user_arial_font_candidates()
+  end
+
+  defp user_arial_font_candidates do
+    with {:ok, home} <- System.fetch_env("HOME") do
+      [
+        %{
+          family: "Arial",
+          path: Path.join(home, ".local/share/fonts/Monotype/TrueType/Arial/Arial_Regular.ttf"),
+          weight: 400,
+          style: :normal
+        },
+        %{
+          family: "Arial",
+          path: Path.join(home, ".local/share/fonts/Monotype/TrueType/Arial/Arial_Bold.ttf"),
+          weight: 700,
+          style: :normal
+        },
+        %{
+          family: "Arial",
+          path: Path.join(home, ".local/share/fonts/Monotype/TrueType/Arial/Arial_Italic.ttf"),
+          weight: 400,
+          style: :italic
+        },
+        %{
+          family: "Arial",
+          path:
+            Path.join(home, ".local/share/fonts/Monotype/TrueType/Arial/Arial_Bold_Italic.ttf"),
+          weight: 700,
+          style: :italic
+        }
+      ]
+    else
+      _ -> []
+    end
   end
 
   defp font_config(font) do
