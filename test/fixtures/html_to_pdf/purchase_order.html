@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Scrubbed Purchase Order</title>
+    <style>
+      body {
+        font-family: "Liberation Sans", sans-serif;
+        margin: 0;
+        padding: 0;
+        font-size: 10px;
+        background-color: white;
+      }
+      p,
+      h2,
+      h4 {
+        margin: 0;
+      }
+      .container {
+        padding: 10px;
+      }
+      .header {
+        display: flex;
+      }
+      .header-left {
+        width: 80%;
+      }
+      .header-right {
+        width: 20%;
+      }
+      .header-image-container {
+        padding-top: 10px;
+        width: 100%;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .header-image-container img {
+        width: 55px;
+        aspect-ratio: 1;
+      }
+      .header-title {
+        font-size: 20px;
+      }
+      .header-image-container-text {
+        width: 80%;
+        padding-left: 15px;
+        line-height: 12px;
+        font-size: 10px;
+      }
+      .address-section {
+        display: flex;
+        width: 100%;
+        justify-content: space-between;
+        margin-top: 5px;
+        margin-bottom: 10px;
+      }
+      .address-section > .section {
+        line-height: 12px;
+        width: 100%;
+      }
+      .address-section > .section p {
+        padding-left: 5px;
+        margin: 0;
+      }
+      .address-section > .section p:first-child {
+        padding-top: 5px;
+      }
+      .terms-section {
+        display: flex;
+        margin-bottom: 10px;
+      }
+      .section h4 {
+        padding: 5px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      table th,
+      table td {
+        border: 1px solid #ccc;
+        padding: 5px;
+        text-align: left;
+        font-size: 8px;
+      }
+      table th {
+        background-color: #f4f4f4;
+      }
+      .text-right {
+        text-align: right;
+      }
+      .totals td {
+        font-weight: bold;
+      }
+      .remarks-section {
+        margin-top: 5px;
+        display: flex;
+        justify-content: space-between;
+      }
+      .remarks-section p {
+        border: 1px solid #ccc;
+        padding: 5px;
+        font-size: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <div class="header-left">
+          <div class="header-image-container">
+            <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSIjYjkyNTFiIi8+PHRleHQgeD0iMTIiIHk9IjUyIiBmb250LXNpemU9IjMyIiBmaWxsPSJ3aGl0ZSI+U0c8L3RleHQ+PC9zdmc+" alt="Company logo" />
+            <p class="header-image-container-text">
+              <span class="header-title">NORTH POINT GARMENT SDN. BHD.</span> (GST NO: 009988776655)
+              <br />
+              NO. 12, JALAN TEKSTIL 4 KAWASAN PERINDUSTRIAN UTAMA <br />
+              13600 PERAI PULAU PINANG MALAYSIA (Company No: 202601002601)<br />
+              TEL NO: +60 43097827 FAX NO: +60 43097828<br />
+            </p>
+          </div>
+        </div>
+        <div class="header-right">
+          <div class="text-right">
+            <h2>PURCHASE ORDER</h2>
+            <p>No: PO-X-0726-00421</p>
+            <p>Type: CM, GGP</p>
+            <p>Date: 08/07/2026</p>
+            <p>Ref: RFQ-ALPHA-18</p>
+            <p>Prepared By: Alex Tan</p>
+            <p>Checked By: CK LEE</p>
+            <p><b>Page 1 of 1</b></p>
+          </div>
+        </div>
+      </div>
+
+      <div class="address-section">
+        <div class="section">
+          <h4>Supplier Address</h4>
+          <p>KAI FIBRE ENTERPRISE CO., LTD</p>
+          <p>8F-1, NO. 83, SEC. 4</p>
+          <p>CHENGDE RD.</p>
+          <p>111 TAIPEI</p>
+          <p>TAIWAN</p>
+        </div>
+        <div class="section">
+          <h4>Buyer Address</h4>
+          <p>NORTH POINT GARMENT SDN. BHD.</p>
+          <p>NO. 12, JALAN TEKSTIL 4</p>
+          <p>KAWASAN PERINDUSTRIAN UTAMA</p>
+          <p>13600 PERAI</p>
+          <p>PULAU PINANG MALAYSIA</p>
+        </div>
+        <div class="section">
+          <h4>Consignee Address</h4>
+          <p>NORTH POINT GARMENT SDN. BHD.</p>
+          <p>NO. 12, JALAN TEKSTIL 4</p>
+          <p>KAWASAN PERINDUSTRIAN UTAMA</p>
+          <p>13600 PERAI</p>
+          <p>PULAU PINANG MALAYSIA</p>
+        </div>
+      </div>
+
+      <div class="terms-section">
+        <p style="width: 20%"><b>Payment Terms:</b> TT 30D</p>
+        <p style="width: 20%"><b>Delivery Terms:</b> FOB</p>
+        <p style="width: 20%"><b>Shipping Method:</b> Air</p>
+        <p style="width: 20%"><b>Buy:</b> Regular</p>
+        <p style="width: 20%"><b>Season:</b> SU27</p>
+      </div>
+
+      <table>
+        <tr>
+          <th style="width: 20%">Item Number</th>
+          <th style="width: 80%">Item Description</th>
+        </tr>
+        <tr>
+          <td>103469</td>
+          <td>SP25 Woven Run Div 5CM DC Elastic w/ Bottom Y Front DC Exit No DC; ELASTIC; Y Elastic; Primary SM: Yes; 59% Nylon, 29% Polyester, 12% Elastane.</td>
+        </tr>
+      </table>
+
+      <table>
+        <tr>
+          <th style="width: 4%; text-align: center">#</th>
+          <th style="width: 10%">Job No.</th>
+          <th style="width: 6%">Style No.</th>
+          <th style="width: 4%">Clw</th>
+          <th style="width: 13%">Category</th>
+          <th style="width: 13%">Colour</th>
+          <th style="width: 10%" class="text-right">Quantity (PCS)</th>
+          <th style="width: 7%" class="text-right">Price (USD)</th>
+          <th style="width: 9%" class="text-right">Amount (USD)</th>
+          <th style="width: 6%">ETC Date</th>
+          <th style="width: 30%">Item Instructions</th>
+        </tr>
+        <tr>
+          <td style="text-align: center">1</td>
+          <td>GGPHJ5376SU27</td>
+          <td>HJ5376</td>
+          <td>POV</td>
+          <td>WOMEN RUNNING</td>
+          <td>40Y - POLAR</td>
+          <td class="text-right">50.00</td>
+          <td class="text-right">1.1412</td>
+          <td class="text-right">57.06</td>
+          <td>10/04/2026</td>
+          <td>SIZE: 57CM<br />TOGETHER WITH 1037116</td>
+        </tr>
+        <tr>
+          <td style="text-align: center">2</td>
+          <td>GGPHQ0638SU27</td>
+          <td>HQ0638</td>
+          <td>PRO</td>
+          <td>WOMEN RUNNING</td>
+          <td>40Y - POLAR</td>
+          <td class="text-right">50.00</td>
+          <td class="text-right">1.1412</td>
+          <td class="text-right">57.06</td>
+          <td>10/04/2026</td>
+          <td>SIZE: 57CM<br />TOGETHER WITH 1037116</td>
+        </tr>
+        <tr class="totals">
+          <td colspan="5" class="text-right">Total: 40Y - POLAR</td>
+          <td></td>
+          <td class="text-right">100.00</td>
+          <td colspan="4"></td>
+        </tr>
+      </table>
+
+      <div class="remarks-section">
+        <p style="width: 80%">
+          <b>Remarks:</b><br />
+          Scrubbed fixture data for browser-like PDF rendering.
+        </p>
+        <p style="width: 19%">
+          <b>Grand total</b><br />
+          USD 114.12
+        </p>
+      </div>
+    </div>
+  </body>
+</html>

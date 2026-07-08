@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Scrubbed Material Requisition</title>
+    <style>
+      :root {
+        --mr-item-row-min-height: 8rem;
+      }
+      .none {
+        display: none !important;
+      }
+      body {
+        font-family: "Liberation Sans", sans-serif;
+        margin: 0;
+        padding: 0;
+        font-size: 10px;
+      }
+      p,
+      h2 {
+        margin: 0;
+      }
+      .container {
+        padding: 10px;
+      }
+      .header {
+        display: flex;
+      }
+      .header-image-container {
+        padding-top: 10px;
+        width: 100%;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .header-image-container img {
+        width: 55px;
+        aspect-ratio: 1;
+      }
+      .header-title {
+        font-size: 20px;
+      }
+      .header-image-container-text {
+        width: 85%;
+        padding-left: 15px;
+        line-height: 12px;
+        font-size: 10px;
+      }
+      .document-info-section {
+        display: flex;
+        width: 100%;
+        margin-bottom: 10px;
+        margin-top: 10px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 10px;
+      }
+      table th,
+      table td {
+        border: 1px solid #ccc;
+        padding: 5px;
+        text-align: left;
+        font-size: 9px;
+        line-break: anywhere;
+      }
+      table td {
+        vertical-align: top;
+      }
+      table th {
+        background-color: #f4f4f4;
+      }
+      .item-row td {
+        min-height: var(--mr-item-row-min-height);
+        height: var(--mr-item-row-min-height);
+      }
+      .text-right {
+        text-align: right;
+      }
+      .approval-section {
+        width: 100%;
+        margin-top: 10px;
+        display: flex;
+        justify-content: space-between;
+      }
+      .approval-section div {
+        width: 20%;
+        border-bottom: 1px solid #ccc;
+        line-height: 18px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <div style="width: 77%">
+          <div class="header-image-container">
+            <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSIjYjkyNTFiIi8+PHRleHQgeD0iMTIiIHk9IjUyIiBmb250LXNpemU9IjMyIiBmaWxsPSJ3aGl0ZSI+U0c8L3RleHQ+PC9zdmc+" alt="Company logo" />
+            <p class="header-image-container-text">
+              <span class="header-title">NORTH POINT GARMENT SDN. BHD.</span> (GST NO: 009988776655)
+              <br />
+              NO. 12, JALAN TEKSTIL 4 KAWASAN PERINDUSTRIAN UTAMA <br />
+              13600 PERAI PULAU PINANG MALAYSIA (Company No: 202601002601)<br />
+              TEL NO: +60 43097827 FAX NO: +60 43097828<br />
+            </p>
+          </div>
+        </div>
+        <div style="width: 23%">
+          <div class="text-right">
+            <h2>MATERIAL REQUISITION</h2>
+            <p><b>Page 1 of 3</b></p>
+          </div>
+        </div>
+      </div>
+
+      <div class="document-info-section">
+        <div style="width: 20%">
+          <b>Reference Number:</b> <br />
+          MR-A-0726-0001
+        </div>
+        <div style="width: 20%">
+          <b>Job Number:</b> <br />
+          GGPF2821SU27
+        </div>
+        <div style="width: 30%">
+          <b>Subject:</b> <br />
+          IF2821-GGP-LJ
+        </div>
+        <div style="width: 30%">
+          <b>Deliver To:</b> <br />
+          SAMPLE MATERIAL
+        </div>
+      </div>
+
+      <table>
+        <tr>
+          <th style="width: 3%; text-align: center">#</th>
+          <th style="width: 10%">Item Number</th>
+          <th style="width: 25%">Item Description</th>
+          <th style="width: 10%">Colour Code</th>
+          <th style="width: 5%">Size</th>
+          <th style="width: 11%">PO Number</th>
+          <th style="width: 7%">Loc #</th>
+          <th style="width: 7%; text-align: right">Qty Req</th>
+          <th style="width: 7%; text-align: right">Qty Iss</th>
+          <th style="width: 15%">Remarks</th>
+        </tr>
+        <tr class="item-row">
+          <td style="text-align: center">1</td>
+          <td>AGS-NB0100</td>
+          <td>BY100/D NYLON YARN 100D/2 100% NYLON YARN BULK YARN 10000M/CN 250GM</td>
+          <td>07W - GYSRGY</td>
+          <td></td>
+          <td>PO-0326-00199</td>
+          <td></td>
+          <td class="text-right">2.00 CNS</td>
+          <td class="text-right">0.00 CNS</td>
+          <td>For approved sample sewing trial.</td>
+        </tr>
+        <tr class="item-row">
+          <td style="text-align: center">2</td>
+          <td>654222</td>
+          <td>Non-Branded 9MM EYELET; EYELET; Approved; Trim-Hardware; Vendor #: 77816.</td>
+          <td>00A - BLACK</td>
+          <td></td>
+          <td>PO-0326-00134</td>
+          <td></td>
+          <td class="text-right">80.00 SET</td>
+          <td class="text-right">0.00 SET</td>
+          <td>Issue to sample room.</td>
+        </tr>
+        <tr class="item-row">
+          <td style="text-align: center">3</td>
+          <td>ZIP-NY050</td>
+          <td>Coil zipper tape with matte puller; approved for pilot sample run.</td>
+          <td>00A - BLACK</td>
+          <td>50CM</td>
+          <td>PO-0426-00210</td>
+          <td>10A</td>
+          <td class="text-right">24.00 PCS</td>
+          <td class="text-right">0.00 PCS</td>
+          <td>Send together with marker set.</td>
+        </tr>
+        <tr class="item-row">
+          <td style="text-align: center">4</td>
+          <td>LBL-WV221</td>
+          <td>Woven size label, black ground with white text; folded end finish.</td>
+          <td>00A - BLACK</td>
+          <td>M</td>
+          <td>PO-0426-00211</td>
+          <td>12B</td>
+          <td class="text-right">120.00 PCS</td>
+          <td class="text-right">0.00 PCS</td>
+          <td>Keep balance in sample cabinet.</td>
+        </tr>
+        <tr class="item-row">
+          <td style="text-align: center">5</td>
+          <td>THR-POLY40</td>
+          <td>100% spun polyester sewing thread 5000M/CN for contrast top stitch.</td>
+          <td>09R - STONE</td>
+          <td></td>
+          <td>PO-0526-00014</td>
+          <td>08C</td>
+          <td class="text-right">6.00 CNS</td>
+          <td class="text-right">0.00 CNS</td>
+          <td>Urgent issue for development line.</td>
+        </tr>
+        <tr class="item-row">
+          <td style="text-align: center">6</td>
+          <td>BTN-RSN18</td>
+          <td>Resin button, four-hole, soft matte finish, approved shade band B.</td>
+          <td>64U - RIO</td>
+          <td>18L</td>
+          <td>PO-0526-00018</td>
+          <td>06D</td>
+          <td class="text-right">60.00 PCS</td>
+          <td class="text-right">0.00 PCS</td>
+          <td>Attach inspection tag after issue.</td>
+        </tr>
+      </table>
+
+      <div style="page-break-after: always"></div>
+
+      <div class="approval-section">
+        <div>
+          <b>Requested By:</b> <br />
+          Desmond - 08/07/2026 &nbsp;
+        </div>
+        <div>
+          <b>Issued By:</b> <br />
+          &nbsp;
+        </div>
+        <div>
+          <b>Received By:</b> <br />
+          &nbsp;
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

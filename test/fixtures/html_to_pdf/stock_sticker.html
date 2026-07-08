@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Scrubbed Stock In Sticker</title>
+    <style>
+      html,
+      body {
+        font-family: "Liberation Sans", sans-serif;
+        box-sizing: border-box;
+        height: 100%;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+      }
+      .container {
+        break-after: always;
+        height: 100%;
+        display: flex;
+        justify-items: center;
+        justify-content: space-between;
+      }
+      .left-side,
+      .right-side {
+        width: 50%;
+        word-wrap: break-word;
+        font-size: 9px;
+        padding: 5px;
+      }
+      .left-side div:nth-child(2),
+      .right-side div:nth-child(2) {
+        display: flex;
+        flex-direction: column;
+      }
+      .qr-code-container {
+        display: flex;
+      }
+      .qr-code-container img {
+        width: 30%;
+        aspect-ratio: 1;
+      }
+      .qr-code-container > div {
+        width: 70%;
+        flex-direction: column;
+      }
+      .none {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="left-side">
+        <div class="qr-code-container">
+          <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABUAAAAVCAIAAAAmdTLBAAAAcklEQVR4nKVTwRYAEAjr/3+aEy+11rBTsi0FM4SxEGKMcaLKwLztPR9DI8hk+uBypyddAH3VfxUf/YsTlajVQUpO5t0tH2XuUj6K86eiLL+KRz1E3wK81Mf5BapU3B8jk7gL00vza+urTyAbKy7Np2pdJk+JaMLEisNJAAAAAElFTkSuQmCC" alt="QR Code" />
+          <div>
+            Quantity: 10.00 YD<br />
+            Batch No: B0726-0002 <br />
+            Product colour: DEFAULT <br />
+            Location: 10A
+          </div>
+        </div>
+        <div>
+          Product Item: 001764<br />
+          Transaction Date: 08/07/2026 07:25 <br />
+          Size: 57CM <br />
+          PO Number: PO-X-0726-00421 <br />
+          Job Number: GGPF2821SU27 <br />
+          GRN Number: GRN-A-0726-0008
+        </div>
+      </div>
+
+      <div class="right-side none">
+        <div class="qr-code-container">
+          <img src="data:image/png;base64,#RIGHTITEMQRCODE#" alt="Hidden placeholder QR Code" />
+          <div>
+            Quantity: #RIGHTITEMQUANTITY# #RIGHTITEMUOM#<br />
+            Batch No: #RIGHTITEMBATCHNO# <br />
+            Product colour: #RIGHTITEMCOLOUR# <br />
+            Location: #RIGHTITEMLOCATION#
+          </div>
+        </div>
+        <div>
+          Product Item: #RIGHTITEMPRODUCT_NUMBER#<br />
+          Transaction Date: #RIGHTITEMTRANSACTIONDATE# <br />
+          Size: #RIGHTITEMSIZE# <br />
+          PO Number: #RIGHTITEMPONUMBER# <br />
+          Job Number: #RIGHTITEMJOBNUMBER# <br />
+          GRN Number: #RIGHTITEMGRNNUMBER#
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

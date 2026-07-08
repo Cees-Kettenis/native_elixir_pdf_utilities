@@ -1,0 +1,204 @@
+<section class="sheet">
+  <style>
+    @page { size: A4 landscape; margin: 7mm; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      color: #102038;
+      background: #ffffff;
+    }
+    .sheet {
+      height: 196mm;
+      padding: 8px 10px;
+      border: 1px solid #cdd7e2;
+      display: flex;
+      flex-direction: column;
+      page-break-after: always;
+      background: #fff;
+    }
+    .header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #26364d;
+    }
+    .header__left {
+      display: grid;
+      gap: 3px;
+    }
+    .header__right {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4px 14px;
+      text-align: right;
+      justify-items: end;
+      align-content: start;
+      justify-self: end;
+      width: min(100%, 360px);
+    }
+    .header__row span {
+      display: block;
+      font-size: 8px;
+      line-height: 1.05;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #61728b;
+      margin-bottom: 2px;
+      font-weight: 700;
+    }
+    .header__row strong {
+      display: block;
+      font-size: 14px;
+      line-height: 1.12;
+      font-weight: 700;
+      word-break: break-word;
+    }
+    .header__center {
+      text-align: center;
+      padding-top: 1px;
+      justify-self: center;
+    }
+    .header__eyebrow {
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: #576a83;
+      font-weight: 700;
+    }
+    .header__title {
+      font-size: 23px;
+      line-height: 1;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 7px;
+      flex: 1;
+      min-height: 0;
+      padding-top: 8px;
+      align-items: stretch;
+    }
+    .trim-card-item {
+      border: 1px solid #ccd6e1;
+      display: flex;
+      flex-direction: column;
+      min-height: 100%;
+      background: #ffffff;
+      page-break-inside: avoid;
+    }
+    .trim-card-item__head {
+      padding: 6px 7px 5px;
+      border-top: 4px solid #22344a;
+      border-bottom: 1px solid #d7dfe9;
+    }
+    .trim-card-item__shell {
+      font-size: 9px;
+      line-height: 1.2;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #4f627b;
+      word-break: break-word;
+    }
+    .trim-card-item__number {
+      font-size: 14px;
+      line-height: 1.1;
+      font-weight: 700;
+      margin-top: 5px;
+      word-break: break-word;
+    }
+    .trim-card-item__description {
+      margin-top: 5px;
+      font-size: 11px;
+      line-height: 1.2;
+      color: #1f3149;
+      white-space: pre-line;
+      word-break: break-word;
+      min-height: 62px;
+    }
+    .trim-card-item__usage-block {
+      padding: 6px 7px 4px;
+      border-top: 1px solid #dde4ec;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .trim-card-item__metric {
+      padding-right: 6px;
+      border-right: 1px solid #dde4ec;
+    }
+    .trim-card-item__metric:last-child {
+      padding-right: 0;
+      padding-left: 8px;
+      border-right: 0;
+    }
+    .trim-card-item__metric-label,
+    .trim-card-item__colour-label {
+      font-size: 7px;
+      line-height: 1.15;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #6a7c95;
+      word-break: break-word;
+    }
+    .trim-card-item__metric-value,
+    .trim-card-item__colour-value {
+      margin-top: 2px;
+      font-size: 11px;
+      line-height: 1.2;
+      font-weight: 700;
+      color: #22354d;
+      word-break: break-word;
+    }
+    .trim-card-item__colour-block {
+      padding: 6px 7px 4px;
+      border-top: 1px solid #dde4ec;
+      border-bottom: 1px solid #dde4ec;
+    }
+  </style>
+
+  <div class="header">
+    <div class="header__left">
+      <div class="header__row"><span>Job Number</span><strong>GGPIX7736FA27</strong></div>
+    </div>
+    <div class="header__center">
+      <div class="header__eyebrow">South Island Garment Sdn. Bhd</div>
+      <div class="header__title">Master Trimcard</div>
+    </div>
+    <div class="header__right">
+      <div class="header__row"><span>Date</span><strong>08/07/2026 07:55</strong></div>
+      <div class="header__row"><span>Style</span><strong>M ACG DF SCND SNRSE PANT</strong></div>
+      <div class="header__row"><span>Order Qty</span><strong>1 EA</strong></div>
+      <div class="header__row"><span>Season</span><strong>FA27</strong></div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <article class="trim-card-item">
+      <div class="trim-card-item__head">
+        <div class="trim-card-item__shell">TRIM (1066261)</div>
+        <div class="trim-card-item__number">1066261</div>
+        <div class="trim-card-item__description">Elastic waistband tape for scrubbed trim-card fixture.</div>
+      </div>
+      <div class="trim-card-item__usage-block">
+        <div class="trim-card-item__metric">
+          <div class="trim-card-item__metric-label">M. Used</div>
+          <div class="trim-card-item__metric-value">1.20</div>
+        </div>
+        <div class="trim-card-item__metric">
+          <div class="trim-card-item__metric-label">Weight (G/M2)</div>
+          <div class="trim-card-item__metric-value"></div>
+        </div>
+      </div>
+      <div class="trim-card-item__colour-block">
+        <div class="trim-card-item__colour-label">Colour</div>
+        <div class="trim-card-item__colour-value">40Y - POLAR</div>
+      </div>
+    </article>
+  </div>
+</section>
