@@ -451,8 +451,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert paragraph.style.padding == %{top: 3.0, right: 5.0, bottom: 3.0, left: 5.0}
     assert paragraph.style.border_widths == %{top: 1.0, right: 1.0, bottom: 1.0, left: 1.0}
     assert paragraph.style.border_color == {0.2, 0.4, 0.6}
+    assert paragraph.style.border_colors == edges({0.2, 0.4, 0.6})
     assert paragraph.style.border_radius == 2.0
     assert_in_delta elem(paragraph.style.background_color, 0), 0.9333, 0.0001
+  end
+
+  test "compute preserves side-specific border colors" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{
+            "style" => "border-top: 4px solid #22344a; border-bottom: 1px solid #d7dfe9"
+          },
+          children: [%{type: :text, text: "Head"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [element] = styled_tree.children
+
+    assert element.style.border_widths == %{top: 3.0, right: 0.0, bottom: 0.75, left: 0.0}
+
+    assert element.style.border_colors.top ==
+             {0.13333333333333333, 0.20392156862745098, 0.2901960784313726}
+
+    assert element.style.border_colors.bottom ==
+             {0.8431372549019608, 0.8745098039215686, 0.9137254901960784}
   end
 
   test "compute applies manual page break declarations" do

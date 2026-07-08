@@ -300,6 +300,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
           style: %{
             background_color: {0.9, 0.9, 0.9},
             border_color: {1, 0, 0},
+            border_colors: %{
+              top: {1, 0, 0},
+              right: {0, 1, 0},
+              bottom: {0, 0, 1},
+              left: {1, 0, 0}
+            },
             border_radius: 2.0,
             border_widths: %{top: 1.0, right: 1.0, bottom: 1.0, left: 1.0},
             color: {0, 0, 0},
@@ -340,6 +346,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert_in_delta background.height, 22.4, 0.0001
     assert background.fill_color == {0.9, 0.9, 0.9}
     assert background.stroke_color == {1, 0, 0}
+    assert background.border_colors.right == {0, 1, 0}
+    assert background.border_colors.bottom == {0, 0, 1}
     assert background.stroke_width == 1.0
     assert background.border_radius == 2.0
 

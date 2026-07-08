@@ -72,6 +72,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
              is_number(border_radius) and border_radius >= 0 ->
         valid_optional_color?(fill_color) and valid_optional_color?(stroke_color) and
           valid_border_widths?(Map.get(box, :border_widths)) and
+          valid_border_colors?(Map.get(box, :border_colors)) and
           (not is_nil(fill_color) or stroke_width > 0)
 
       %{type: :image, x: x, y: y, width: width, height: height, image: image}
@@ -132,6 +133,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
       %{top: top, right: right, bottom: bottom, left: left} ->
         Enum.all?([top, right, bottom, left], &(is_number(&1) and &1 >= 0))
+
+      _ ->
+        false
+    end
+  end
+
+  defp valid_border_colors?(border_colors) do
+    case border_colors do
+      nil ->
+        true
+
+      %{top: top, right: right, bottom: bottom, left: left} ->
+        Enum.all?([top, right, bottom, left], &valid_optional_color?/1)
 
       _ ->
         false
@@ -478,10 +492,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp side_specific_border?(box) do
-    case Map.get(box, :border_widths) do
-      %{top: top, right: right, bottom: bottom, left: left}
+    case {Map.get(box, :border_widths), Map.get(box, :border_colors)} do
+      {%{top: top, right: right, bottom: bottom, left: left}, border_colors}
       when box.stroke_width > 0 and box.border_radius == 0 ->
-        Enum.uniq([top, right, bottom, left]) |> length() > 1
+        Enum.uniq([top, right, bottom, left]) |> length() > 1 or
+          side_specific_border_colors?(border_colors, box.stroke_color)
+
+      _ ->
+        false
+    end
+  end
+
+  defp side_specific_border_colors?(border_colors, fallback_color) do
+    case border_colors do
+      %{top: top, right: right, bottom: bottom, left: left} ->
+        Enum.uniq([top, right, bottom, left, fallback_color]) |> length() > 1
 
       _ ->
         false
@@ -506,7 +531,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         case stroke_width > 0 do
           true ->
             ["q"]
-            |> put_stroke_color(box.stroke_color, stroke_width)
+            |> put_stroke_color(border_side_color(box, side), stroke_width)
             |> Kernel.++([border_side_path(box, side), "S", "Q"])
 
           false ->
@@ -515,6 +540,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       end)
 
     Enum.join(fill_parts ++ stroke_parts, " ")
+  end
+
+  defp border_side_color(box, side) do
+    case Map.get(box, :border_colors) do
+      %{^side => color} -> color
+      _ -> box.stroke_color
+    end
   end
 
   defp border_side_path(box, side) do

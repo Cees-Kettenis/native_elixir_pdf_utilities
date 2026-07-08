@@ -2946,6 +2946,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             stroke_color: Map.get(style, :border_color, {0, 0, 0}),
             stroke_width: stroke_width,
             border_widths: border_widths,
+            border_colors:
+              Map.get(style, :border_colors, edges(Map.get(style, :border_color, {0, 0, 0}))),
             border_radius: Map.get(style, :border_radius, 0.0)
           }
         ]

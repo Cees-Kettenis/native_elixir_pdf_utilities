@@ -203,6 +203,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
             stroke_color: {0, 0, 0},
             stroke_width: 1.0,
             border_widths: %{top: 1.0, right: 0.0, bottom: 1.0, left: 1.0},
+            border_colors: %{
+              top: {0.1, 0.2, 0.3},
+              right: {0, 0, 0},
+              bottom: {0.8, 0.9, 1.0},
+              left: {0, 0, 0}
+            },
             border_radius: 0.0
           }
         ]
@@ -210,8 +216,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     ]
 
     assert {:ok, pdf} = PdfWriter.render(pages, [])
+    assert pdf =~ "q 0.1 0.2 0.3 RG 1 w 10 50 m 50 50 l S Q"
     assert pdf =~ "10 50 m 50 50 l S"
     refute pdf =~ "50 20 m 50 50 l S"
+    assert pdf =~ "q 0.8 0.9 1 RG 1 w 10 20 m 50 20 l S Q"
     assert pdf =~ "10 20 m 50 20 l S"
     assert pdf =~ "10 20 m 10 50 l S"
 
@@ -503,6 +511,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
         stroke_color: {0, 0, 0},
         stroke_width: 1,
         border_widths: :bad,
+        border_radius: 0
+      },
+      %{
+        type: :rect,
+        x: 1,
+        y: 1,
+        width: 10,
+        height: 10,
+        fill_color: nil,
+        stroke_color: {0, 0, 0},
+        stroke_width: 1,
+        border_widths: %{top: 1, right: 1, bottom: 1, left: 1},
+        border_colors: :bad,
         border_radius: 0
       },
       %{

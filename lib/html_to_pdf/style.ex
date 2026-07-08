@@ -399,6 +399,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     %{
       background_color: nil,
       border_color: {0, 0, 0},
+      border_colors: edges({0, 0, 0}),
       border_radius: 0.0,
       border_widths: edges(0.0),
       display: :block,
@@ -452,6 +453,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     %{
       background_color: nil,
       border_color: {0, 0, 0},
+      border_colors: edges({0, 0, 0}),
       border_radius: 0.0,
       border_widths: edges(0.0),
       display: :table_row_group,
@@ -464,6 +466,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     %{
       background_color: nil,
       border_color: {0, 0, 0},
+      border_colors: edges({0, 0, 0}),
       border_radius: 0.0,
       border_widths: edges(0.0),
       display: :table_row,
@@ -475,6 +478,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     base = %{
       background_color: nil,
       border_color: {0, 0, 0},
+      border_colors: edges({0, 0, 0}),
       border_radius: 0.0,
       border_widths: edges(1.0),
       colspan: 1,
@@ -877,7 +881,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       "border-color" ->
         with {:ok, color} <- parse_color(value),
-             do: {:ok, Map.put(style, :border_color, color)}
+             do:
+               {:ok,
+                style |> Map.put(:border_color, color) |> Map.put(:border_colors, edges(color))}
 
       property when property in ["border-top", "border-right", "border-bottom", "border-left"] ->
         with {:ok, width, color} <- parse_border_edge(value, Map.fetch!(style, :color)) do
@@ -885,7 +891,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
           case color do
             nil -> {:ok, style}
-            color -> {:ok, Map.put(style, :border_color, color)}
+            color -> {:ok, put_border_edge_color(style, property, color)}
           end
         end
 
@@ -931,6 +937,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             style
             |> Map.put(:border_widths, border_widths)
             |> Map.put(:border_color, border_color)
+            |> Map.put(:border_colors, edges(border_color))
 
           {:ok, style}
         end
@@ -1103,6 +1110,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     style
     |> Map.put_new(:background_color, nil)
     |> Map.put_new(:border_color, {0, 0, 0})
+    |> Map.put_new(:border_colors, edges(Map.get(style, :border_color, {0, 0, 0})))
     |> Map.put_new(:border_radius, 0.0)
     |> Map.put_new(:border_widths, edges(0.0))
     |> Map.put_new(:margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
@@ -1998,6 +2006,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       |> String.to_existing_atom()
 
     Map.update!(style, :border_widths, &Map.put(&1, edge, width))
+  end
+
+  defp put_border_edge_color(style, property, color) do
+    edge =
+      property
+      |> String.replace_prefix("border-", "")
+      |> String.to_existing_atom()
+
+    style
+    |> Map.update(
+      :border_colors,
+      edges(Map.get(style, :border_color, {0, 0, 0})),
+      &Map.put(&1, edge, color)
+    )
+    |> Map.put(:border_color, color)
   end
 
   defp parse_border(value, current_color) do

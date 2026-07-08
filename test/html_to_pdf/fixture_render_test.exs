@@ -128,6 +128,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
 
     assert head_box
     assert head_box.y < last_description_line.y
+
+    header_border_box =
+      layout_tree.boxes
+      |> Enum.filter(&(&1.type == :rect))
+      |> Enum.find(&(&1.border_widths == %{top: 3.0, right: 0.0, bottom: 0.75, left: 0.0}))
+
+    assert header_border_box
+
+    assert header_border_box.border_colors.top ==
+             {0.13333333333333333, 0.20392156862745098, 0.2901960784313726}
+
+    assert header_border_box.border_colors.bottom ==
+             {0.8431372549019608, 0.8745098039215686, 0.9137254901960784}
   end
 
   defp fixture_html(name) do
