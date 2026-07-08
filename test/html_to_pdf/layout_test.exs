@@ -50,6 +50,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert box.font == "Helvetica"
   end
 
+  test "layout includes letter spacing in text measurements" do
+    styled_tree = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "p",
+          style: Map.merge(text_style(), %{display: :block, margin_after: 0.0}),
+          children: [
+            %{
+              type: :text,
+              text: "DATE",
+              style: Map.merge(text_style(), %{letter_spacing: 1.0})
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, margin: 0)
+    [box] = layout_tree.boxes
+
+    assert box.letter_spacing == 1.0
+    assert_in_delta box.annotation_width, 31.8, 0.0001
+  end
+
   test "layout creates separate text boxes for inline styles" do
     styled_tree = %{
       type: :document,
@@ -899,6 +925,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert cm_layout.page_size == {100.0, 80.0}
     assert_in_delta cm_layout.margin, 72.0 / 2.54, 0.0001
 
+    assert {:ok, inch_page_layout} =
+             Layout.layout(document([paragraph("Sticker")]), page_size: {4.92126, 1.49606})
+
+    assert_in_delta elem(inch_page_layout.page_size, 0), 354.33072, 0.0001
+    assert_in_delta elem(inch_page_layout.page_size, 1), 107.71632, 0.0001
+
     assert {:ok, in_layout} =
              Layout.layout(document([paragraph("Inch")]), page_size: {100, 80}, margin: "1in")
 
@@ -939,6 +971,78 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
              )
 
     assert [%{type: :image, width: 20.0, height: 10.0}] = natural_layout.boxes
+  end
+
+  test "layout resolves percentage image widths inside flex rows" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{"style" => "display: flex; width: 100pt"},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "img",
+                       attributes: %{
+                         "src" => "data:image/png;base64,#{Base.encode64(png_fixture())}",
+                         "style" => "width: 30%; aspect-ratio: 1"
+                       },
+                       children: []
+                     },
+                     %{
+                       type: :element,
+                       tag: "span",
+                       attributes: %{"style" => "width: 70%"},
+                       children: [%{type: :text, text: "Quantity"}]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {140, 120}, margin: 10)
+    [image | _rest] = Enum.filter(layout_tree.boxes, &(&1.type == :image))
+
+    assert_in_delta image.width, 30.0, 0.0001
+    assert_in_delta image.height, 30.0, 0.0001
+  end
+
+  test "layout collapses indented text and skips direct line breaks in column flex" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{"style" => "display: flex; flex-direction: column"},
+                   children: [
+                     %{type: :text, text: "\n      Product Item: 001764"},
+                     %{type: :element, tag: "br", attributes: %{}, children: []},
+                     %{type: :text, text: "\n      Transaction Date: 08/07/2026 07:25 "},
+                     %{type: :element, tag: "br", attributes: %{}, children: []},
+                     %{type: :text, text: "\n      Size:  \n    "}
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {420, 120}, margin: 10)
+    text_boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
+
+    assert Enum.map(text_boxes, & &1.text) == [
+             "Product Item: 001764",
+             "Transaction Date: 08/07/2026 07:25",
+             "Size:"
+           ]
+
+    [first, second, third] = text_boxes
+
+    assert_in_delta first.y - second.y, first.line_height, 0.0001
+    assert_in_delta second.y - third.y, second.line_height, 0.0001
   end
 
   test "layout covers flex empty skipped image shrink and distribution branches" do
@@ -1106,6 +1210,135 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     end
   end
 
+  test "layout sizes grid rows after wrapped item widths are resolved" do
+    assert {:ok, tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{
+                     "style" =>
+                       "display: grid; width: 160pt; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4pt 10pt; align-items: start; justify-items: end"
+                   },
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "div",
+                       attributes: %{"style" => "text-align: right"},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "span",
+                           attributes: %{"style" => "display: block; font-size: 8pt"},
+                           children: [%{type: :text, text: "Date"}]
+                         },
+                         %{
+                           type: :element,
+                           tag: "strong",
+                           attributes: %{"style" => "display: block; font-size: 14pt"},
+                           children: [%{type: :text, text: "08/07/2026 07:55"}]
+                         }
+                       ]
+                     },
+                     %{
+                       type: :element,
+                       tag: "div",
+                       attributes: %{"style" => "text-align: right"},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "span",
+                           attributes: %{"style" => "display: block; font-size: 8pt"},
+                           children: [%{type: :text, text: "Style"}]
+                         },
+                         %{
+                           type: :element,
+                           tag: "strong",
+                           attributes: %{
+                             "style" => "display: block; font-size: 14pt; word-break: break-word"
+                           },
+                           children: [%{type: :text, text: "M ACG DF SCND SNRSE PANT"}]
+                         }
+                       ]
+                     },
+                     %{
+                       type: :element,
+                       tag: "div",
+                       attributes: %{"style" => "text-align: right"},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "span",
+                           attributes: %{"style" => "display: block; font-size: 8pt"},
+                           children: [%{type: :text, text: "Order Qty"}]
+                         },
+                         %{
+                           type: :element,
+                           tag: "strong",
+                           attributes: %{"style" => "display: block; font-size: 14pt"},
+                           children: [%{type: :text, text: "1 EA"}]
+                         }
+                       ]
+                     },
+                     %{
+                       type: :element,
+                       tag: "div",
+                       attributes: %{"style" => "text-align: right"},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "span",
+                           attributes: %{"style" => "display: block; font-size: 8pt"},
+                           children: [%{type: :text, text: "Season"}]
+                         },
+                         %{
+                           type: :element,
+                           tag: "strong",
+                           attributes: %{"style" => "display: block; font-size: 14pt"},
+                           children: [%{type: :text, text: "FA27"}]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout} = Layout.layout(tree, page_size: {220, 160}, margin: 10)
+    texts = Enum.filter(layout.boxes, &(&1.type == :text))
+    style_tail = Enum.find(texts, &String.contains?(&1.text, "PANT"))
+    order_qty = Enum.find(texts, &(&1.text == "Order Qty"))
+    season = Enum.find(texts, &(&1.text == "Season"))
+
+    assert style_tail
+    assert order_qty
+    assert season
+    assert order_qty.y < style_tail.y - order_qty.font_size
+    assert season.y < style_tail.y - season.font_size
+  end
+
+  test "layout stretches only auto grid rows when fixed rows are present" do
+    html = """
+    <div style="display: grid; width: 120pt; height: 100pt; grid-template-columns: 1fr; grid-template-rows: auto 20pt; align-content: stretch">
+      <div style="border: 1pt solid #000000">Auto</div>
+      <div style="border: 1pt solid #000000">Fixed</div>
+    </div>
+    """
+
+    assert {:ok, dom} = NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 160}, margin: 0)
+
+    rects = Enum.filter(layout_tree.boxes, &(&1.type == :rect))
+    auto_row = Enum.find(rects, &(&1.height > 70.0 and &1.width == 120.0))
+    fixed_row = Enum.find(rects, &(&1.height < 25.0 and &1.width == 120.0))
+
+    assert auto_row
+    assert fixed_row
+  end
+
   test "layout covers remaining grid sizing and invalid item branches" do
     assert {:ok, empty_grid_tree} =
              Style.compute(%{
@@ -1164,6 +1397,59 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert a.text == "A"
     assert b.text == "B"
     assert b.x > a.x
+
+    assert {:ok, justified_min_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{
+                     "style" =>
+                       "display: grid; width: 120pt; grid-template-columns: 1fr; justify-items: start"
+                   },
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "span",
+                       attributes: %{
+                         "style" => "display: block; width: min(100%, 40pt); justify-self: center"
+                       },
+                       children: [%{type: :text, text: "Centered"}]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, justified_min_layout} =
+             Layout.layout(justified_min_tree, page_size: {180, 120}, margin: 10)
+
+    [centered] = justified_min_layout.boxes
+    assert centered.text == "Centered"
+    assert centered.x > 10.0
+
+    assert {:ok, percent_min_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{
+                     "style" => "width: min(50%, 40pt); background-color: #eeeeee"
+                   },
+                   children: [%{type: :text, text: "Min"}]
+                 }
+               ]
+             })
+
+    assert {:ok, percent_min_layout} =
+             Layout.layout(percent_min_tree, page_size: {120, 120}, margin: 10)
+
+    [percent_min_background | _boxes] = percent_min_layout.boxes
+    assert_in_delta percent_min_background.width, 40.0, 0.0001
 
     invalid_grid = %{
       type: :element,
@@ -2493,6 +2779,56 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert length(Enum.filter(normal_layout.boxes, &(&1.type == :text))) == 1
     assert length(Enum.filter(anywhere_layout.boxes, &(&1.type == :text))) > 1
+  end
+
+  test "layout treats break-word as emergency wrapping after normal word breaks" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "p",
+                   attributes: %{
+                     "style" => "width: 120pt; font-size: 10pt; word-break: break-word"
+                   },
+                   children: [
+                     %{
+                       type: :text,
+                       text: "SP27-ACG-#3 CE REVERSE COIL ZIPPER-AUTOLOCKING WITH PULLER"
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {180, 140}, margin: 10)
+
+    lines = layout_tree.boxes |> Enum.filter(&(&1.type == :text)) |> Enum.map(& &1.text)
+
+    assert "ZIPPER-AUTOLOCKING " in lines
+    refute Enum.any?(lines, &String.starts_with?(&1, "PPER-"))
+    refute "R-AUTOLOCKING " in lines
+
+    assert {:ok, emergency_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "p",
+                   attributes: %{
+                     "style" => "width: 30pt; font-size: 10pt; word-break: break-word"
+                   },
+                   children: [%{type: :text, text: "SUPERCALIFRAGILISTIC"}]
+                 }
+               ]
+             })
+
+    assert {:ok, emergency_layout} =
+             Layout.layout(emergency_tree, page_size: {120, 120}, margin: 10)
+
+    assert length(Enum.filter(emergency_layout.boxes, &(&1.type == :text))) > 1
   end
 
   test "layout distributes mixed fixed flexible and overflowing table widths" do
