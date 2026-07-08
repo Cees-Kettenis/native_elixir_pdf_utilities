@@ -346,3 +346,34 @@ would still be useful to callers.
 
 This sequence improves common user-facing document workflows first, then grows
 the package into a stronger general-purpose PDF utility library.
+
+## Versioning Path
+
+The project follows a SemVer-style release policy once the public API is stable:
+
+- `1.0.0` is the first stable release and defines the supported public API.
+- `1.1.0` is a backwards-compatible minor release with new capabilities or
+  improvements.
+- `1.1.1` is a patch release for bug fixes.
+- `2.0.0` is required after `1.0.0` when a release intentionally breaks the
+  public API.
+
+Before `1.0.0`, the package remains in initial development. Breaking public API
+changes can still happen in `0.x` releases, but they should be called out
+clearly in the changelog.
+
+Feature completion alone does not decide `1.0.0`; API stability does. A stable
+release is reasonable once the core rendering, merge, text extraction, and
+tokenizer APIs feel settled, the supported HTML/CSS surface is documented,
+diagnostics and error shapes are unlikely to change casually, and realistic
+fixtures cover the workflows the project promises.
+
+A practical path is:
+
+1. `0.4.0` - finish must-have renderer improvements such as CSS font loading,
+   running headers and footers, page numbers, and print CSS polish.
+2. `0.5.0` to `0.8.0` - continue roadmap features, document behavior, and clean
+   up naming, options, return values, and diagnostics.
+3. `0.9.0` - release candidate and API freeze, except for bug fixes and final
+   documentation corrections.
+4. `1.0.0` - stable public API that users can depend on.

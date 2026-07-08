@@ -32,6 +32,37 @@ Thanks for contributing to Native Elixir PDF Utilities.
 - Update `README.md` when public behavior, options, or examples change.
 - Ensure tests, 100% coverage, Dialyzer, and formatting pass before opening a PR.
 
+## Versioning Guidelines
+
+This project uses SemVer-style versioning to describe the public API promise:
+
+- `1.0.0` is the first stable release. It means the public API is defined and
+  should not be broken casually.
+- `1.1.0` is a backwards-compatible minor release. Use this for new features,
+  new options, new modules, or behavior improvements that do not break existing
+  callers.
+- `1.1.1` is a patch release. Use this for bug fixes, documentation fixes, and
+  small internal corrections that preserve public behavior.
+- `2.0.0` is a major release. After `1.0.0`, use this when changing, removing,
+  renaming, or moving public API in a way that can break existing users.
+
+While the package is still `0.x`, breaking public API changes should bump the
+minor version, such as `0.3.0` to `0.4.0`, and must be documented clearly in the
+changelog.
+
+Examples of breaking public API changes include:
+
+- renaming a public function or module
+- changing return values, such as `{:ok, pdf_binary}` to
+  `{:ok, %{pdf: pdf_binary, diagnostics: diagnostics}}`
+- changing option names or option shapes
+- removing a public function
+- changing documented behavior in a way that can break caller code
+
+Before proposing `1.0.0`, make sure the main modules, function names, return
+values, options, diagnostics, supported HTML/CSS behavior, and documented
+examples are stable enough to support as the public API.
+
 ## Coding Guidelines
 
 - Follow existing Elixir patterns in `lib/` and tests in `test/`.
