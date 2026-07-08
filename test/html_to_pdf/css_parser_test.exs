@@ -153,4 +153,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert CssParser.parse(:not_css) == {:error, :invalid_css}
     assert CssParser.parse_declarations(:not_css) == {:error, :invalid_css}
   end
+
+  test "parse_detailed returns source details for malformed CSS" do
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               line: 1,
+               column: 1,
+               source: "",
+               message: ~s(line 1: declaration "" is invalid or unsupported)
+             }}} = CssParser.parse_detailed("p {}")
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               line: 1,
+               source: "",
+               message: ~s(line 1: declaration "" is invalid or unsupported)
+             }}} = CssParser.parse_detailed("p { color: red; } div {}")
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               message: "CSS input must be a string"
+             }}} = CssParser.parse_detailed(:not_css)
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               message: "CSS declaration input must be a string"
+             }}} = CssParser.parse_declarations_detailed(:not_css)
+  end
 end

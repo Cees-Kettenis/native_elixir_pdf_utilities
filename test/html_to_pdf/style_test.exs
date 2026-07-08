@@ -1441,6 +1441,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
            ) == {:error, :invalid_document}
   end
 
+  test "compute_detailed returns document diagnostics" do
+    assert {:error,
+            {:invalid_document,
+             %{
+               stage: :style,
+               reason: :invalid_document,
+               message: "document tree must be a parsed HTML document"
+             }}} = Style.compute_detailed(%{tag: "p"})
+
+    assert {:ok, %{type: :document}} =
+             Style.compute_detailed(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "p",
+                   attributes: %{},
+                   children: [%{type: :text, text: "Detailed"}]
+                 }
+               ]
+             })
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               source: "display: table-row-group"
+             }}} =
+             Style.compute_detailed(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "style",
+                   attributes: %{},
+                   children: [%{type: :text, text: "body { display: table-row-group; }"}]
+                 },
+                 %{
+                   type: :element,
+                   tag: "p",
+                   attributes: %{},
+                   children: [%{type: :text, text: "Detailed"}]
+                 }
+               ]
+             })
+  end
+
   test "compute accepts wrapper elements heading levels and inline aliases" do
     dom = %{
       type: :document,

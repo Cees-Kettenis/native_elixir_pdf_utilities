@@ -33,6 +33,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | {:fonts, [map() | keyword() | {String.t(), String.t()}]}
   @type error_reason ::
           :invalid_document
+          | :invalid_css
           | :invalid_html
           | :invalid_layout
           | :invalid_margin
@@ -42,12 +43,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | :not_implemented
           | :unsupported_html
           | File.posix()
+  @type error_detail :: %{
+          required(:stage) => atom(),
+          required(:reason) => atom(),
+          required(:message) => String.t(),
+          optional(:line) => pos_integer(),
+          optional(:column) => pos_integer(),
+          optional(:source) => String.t()
+        }
+  @type detailed_error_reason ::
+          {:invalid_css
+           | :invalid_document
+           | :invalid_html
+           | :invalid_layout
+           | :invalid_margin
+           | :invalid_page_size
+           | :invalid_pdf_input
+           | :unsupported_html, error_detail()}
 
   @doc """
   Renders an HTML document to a PDF binary.
 
   Returns `{:ok, pdf_binary}` when rendering succeeds or `{:error, reason}` when
   parsing, styling, layout, pagination, or PDF writing cannot be completed.
+  Rendering failures include a broad reason and diagnostic detail, for example
+  `{:error, {:invalid_css, %{message: "...", line: 18, source: "..."}}}`.
 
   Supported options include `:page_size`, `:margin`, `:base_url`,
   `:stylesheets`, `:default_font`, and explicit TTF `:fonts`.
@@ -57,11 +77,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   ChromicPDF-style custom label sizes; larger tuples are interpreted as PDF
   points.
   """
-  @spec render(String.t(), [render_option()]) :: {:ok, binary()} | {:error, error_reason()}
+  @spec render(String.t(), [render_option()]) ::
+          {:ok, binary()} | {:error, error_reason() | detailed_error_reason()}
   def render(html, opts \\ []) do
-    with {:ok, dom} <- HtmlParser.parse(html),
-         {:ok, effective_opts} <- effective_render_options(dom, opts),
-         {:ok, styled_tree} <- Style.compute(dom, effective_opts),
+    with {:ok, dom} <- HtmlParser.parse_detailed(html),
+         {:ok, effective_opts} <- effective_render_options_detailed(dom, opts),
+         {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts),
          {:ok, layout_tree} <- layout_document(styled_tree, effective_opts),
          {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
          {:ok, pdf_binary} <- PdfWriter.render(pages, effective_opts) do
@@ -76,7 +97,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   rendering, or writing fails. Rendering options are the same as `render/2`.
   """
   @spec render_file(String.t(), String.t(), [render_option()]) ::
-          :ok | {:error, error_reason()}
+          :ok | {:error, error_reason() | detailed_error_reason()}
   def render_file(input_path, output_path, opts \\ []) do
     case {input_path, output_path} do
       {input_path, output_path} when is_binary(input_path) and is_binary(output_path) ->
@@ -91,17 +112,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
     end
   end
 
-  @spec layout_document(term(), [render_option()]) ::
-          {:ok, term()} | {:error, :invalid_layout | :invalid_margin | :invalid_page_size}
   defp layout_document(styled_tree, opts) do
-    apply(Layout, :layout, [styled_tree, opts])
+    case apply(Layout, :layout, [styled_tree, opts]) do
+      {:ok, layout_tree} ->
+        {:ok, layout_tree}
+
+      {:error, reason} ->
+        {:error, {reason, stage_detail(:layout, reason, layout_message(reason))}}
+    end
   end
 
-  defp effective_render_options(dom, opts) do
+  defp effective_render_options_detailed(dom, opts) do
     with {:ok, page_options} <-
            dom |> stylesheet_sources() |> Enum.join("\n") |> CssParser.page_options() do
       {:ok, Keyword.merge(page_options, opts)}
     end
+  end
+
+  defp layout_message(reason) do
+    "layout failed: #{reason}"
+  end
+
+  defp stage_detail(stage, reason, message) do
+    %{
+      stage: stage,
+      reason: reason,
+      message: message
+    }
   end
 
   defp stylesheet_sources(node) do

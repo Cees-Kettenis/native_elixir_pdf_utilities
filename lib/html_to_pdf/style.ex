@@ -26,6 +26,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   """
   @spec compute(term(), [render_option()]) :: {:ok, styled_tree()} | {:error, :invalid_document}
   def compute(dom, opts \\ []) do
+    case compute_detailed(dom, opts) do
+      {:ok, styled_tree} -> {:ok, styled_tree}
+      {:error, {_reason, _detail}} -> {:error, :invalid_document}
+    end
+  end
+
+  @doc """
+  Computes styles and returns detailed CSS/document diagnostics when validation fails.
+  """
+  @spec compute_detailed(term(), [render_option()]) ::
+          {:ok, styled_tree()} | {:error, {:invalid_css | :invalid_document, map()}}
+  def compute_detailed(dom, opts \\ []) do
     case {dom, opts} do
       {%{type: :document, children: children}, opts} when is_list(opts) and is_list(children) ->
         with {:ok, font_registry} <- font_registry(opts),
@@ -53,22 +65,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             text_transform: :none
           }
 
-          with {:ok, root_style} <- fragment_root_style(children, base_style, rules, opts) do
-            case root_style do
-              nil ->
+          result =
+            case fragment_root_style(children, base_style, rules, opts) do
+              {:ok, nil} ->
                 {:ok, %{type: :document, children: []}}
 
-              root_style ->
+              {:ok, root_style} ->
                 with {:ok, styled_children} <-
                        style_children(children, root_style, rules, [], opts) do
                   {:ok, %{type: :document, children: styled_children}}
                 end
+
+              {:error, reason} ->
+                {:error, reason}
             end
+
+          case result do
+            {:ok, styled_tree} ->
+              {:ok, styled_tree}
+
+            {:error, :invalid_document} ->
+              {:error, style_error_detail(dom, opts)}
           end
+        else
+          {:error, :invalid_document} ->
+            {:error, style_error_detail(dom, opts)}
         end
 
       _ ->
-        {:error, :invalid_document}
+        {:error,
+         {:invalid_document,
+          %{
+            stage: :style,
+            reason: :invalid_document,
+            message: "document tree must be a parsed HTML document"
+          }}}
     end
   end
 
@@ -658,6 +689,200 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       {:ok, registry} -> {:ok, registry}
       :error -> {:error, :invalid_document}
     end
+  end
+
+  defp style_error_detail(dom, opts) do
+    case first_author_css_error(dom, opts) do
+      nil ->
+        {:invalid_document,
+         %{
+           stage: :style,
+           reason: :invalid_document,
+           message:
+             "document style validation failed; check fonts, images, attributes, and supported CSS values"
+         }}
+
+      css_error ->
+        css_error
+    end
+  end
+
+  defp first_author_css_error(dom, opts) do
+    stylesheet_diagnostic_error(dom, opts) || inline_style_diagnostic_error(dom, opts)
+  end
+
+  defp stylesheet_diagnostic_error(dom, opts) do
+    case stylesheet_diagnostic_sources(dom, opts) do
+      {:ok, sources} ->
+        Enum.find_value(sources, fn {_label, source} ->
+          case CssParser.parse_detailed(source) do
+            {:ok, _rules} ->
+              invalid_declaration_detail(source, stylesheet_declaration_sources(source))
+
+            {:error, error} ->
+              error
+          end
+        end)
+
+      {:error, error} ->
+        error
+    end
+  end
+
+  defp stylesheet_diagnostic_sources(dom, opts) do
+    with {:ok, configured} <- configured_stylesheet_sources(Keyword.get(opts, :stylesheets, [])),
+         {:ok, embedded} <- embedded_stylesheet_sources(dom) do
+      {:ok, configured ++ embedded}
+    end
+  end
+
+  defp configured_stylesheet_sources(stylesheets) do
+    case stylesheets do
+      stylesheets when is_list(stylesheets) ->
+        Enum.reduce_while(stylesheets, {:ok, []}, fn stylesheet, {:ok, acc} ->
+          case stylesheet_source(stylesheet) do
+            {:ok, source} ->
+              {:cont, {:ok, acc ++ [{:configured, source}]}}
+
+            {:error, :invalid_document} ->
+              {:halt,
+               {:error,
+                {:invalid_document,
+                 %{
+                   stage: :style,
+                   reason: :invalid_document,
+                   message: "configured stylesheet must be inline CSS or a readable file path"
+                 }}}}
+          end
+        end)
+
+      _ ->
+        {:error,
+         {:invalid_document,
+          %{
+            stage: :style,
+            reason: :invalid_document,
+            message: "stylesheets option must be a list"
+          }}}
+    end
+  end
+
+  defp embedded_stylesheet_sources(dom) do
+    %{type: :document, children: children} = dom
+    {:ok, Enum.map(style_sources(children), &{:embedded, &1})}
+  end
+
+  defp stylesheet_declaration_sources(css) do
+    ~r/[^{}]+\{(?<declarations>[^{}]*)\}/u
+    |> Regex.scan(css, capture: ["declarations"])
+    |> List.flatten()
+    |> Enum.flat_map(fn declarations ->
+      declarations
+      |> String.split(";")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+    end)
+  end
+
+  defp inline_style_diagnostic_error(dom, opts) do
+    Enum.find_value(inline_style_sources(dom), &inline_style_error(&1, opts))
+  end
+
+  defp inline_style_error(style_source, _opts) do
+    case CssParser.parse_declarations_detailed(style_source) do
+      {:ok, _declarations} ->
+        invalid_declaration_detail(style_source, inline_declaration_sources(style_source))
+
+      {:error, error} ->
+        error
+    end
+  end
+
+  defp inline_style_sources(node) do
+    case node do
+      %{type: :document, children: children} ->
+        Enum.flat_map(children, &inline_style_sources/1)
+
+      %{type: :element, attributes: attributes, children: children} ->
+        own =
+          case Map.get(attributes, "style") do
+            style when is_binary(style) -> [style]
+            _ -> []
+          end
+
+        own ++ Enum.flat_map(children, &inline_style_sources/1)
+
+      _ ->
+        []
+    end
+  end
+
+  defp inline_declaration_sources(style_source) do
+    style_source
+    |> String.split(";")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp invalid_declaration_detail(css_source, declaration_sources) do
+    Enum.find_value(declaration_sources, fn declaration_source ->
+      with {:ok, [declaration]} <- CssParser.parse_declarations(declaration_source),
+           {:ok, style} <- diagnostic_style(),
+           {:ok, _style} <- apply_declaration(style, declaration) do
+        nil
+      else
+        _ -> {:invalid_css, declaration_detail(css_source, declaration_source)}
+      end
+    end)
+  end
+
+  defp diagnostic_style do
+    with {:ok, registry} <- font_registry([]),
+         {:ok, families, font_face} <- resolve_font("Helvetica", 400, :normal, registry) do
+      {:ok,
+       12.0
+       |> block_defaults(400, 0.0)
+       |> flex_container_defaults()
+       |> grid_container_defaults()
+       |> Map.merge(%{
+         _custom_properties: %{},
+         _font_registry: registry,
+         color: {0, 0, 0},
+         font_face: font_face,
+         font_families: families,
+         font_family: font_face.family,
+         font_size: 12.0,
+         font_style: :normal,
+         font_weight: 400,
+         letter_spacing: 0.0,
+         line_height: 14.4,
+         text_align: :left,
+         text_transform: :none
+       })}
+    end
+  end
+
+  defp declaration_detail(css_source, declaration_source) do
+    source = String.trim(declaration_source)
+    {line, column} = source_location(css_source, source)
+
+    %{
+      stage: :css,
+      reason: :invalid_css,
+      message: ~s(line #{line}: declaration "#{source}" is invalid or unsupported),
+      line: line,
+      column: column,
+      source: source
+    }
+  end
+
+  defp source_location(source, snippet) do
+    {index, _length} = :binary.match(source, snippet)
+    prefix = binary_part(source, 0, index)
+    lines = String.split(prefix, "\n", trim: false)
+    line = length(lines)
+    column = String.length(List.last(lines) || "") + 1
+    {line, column}
   end
 
   defp resolve_font(family_value, weight, style, registry) do

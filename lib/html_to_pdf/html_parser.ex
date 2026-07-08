@@ -31,12 +31,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   """
   @spec parse(String.t()) :: {:ok, dom_tree()} | {:error, :invalid_html | :unsupported_html}
   def parse(html) do
+    case parse_detailed(html) do
+      {:ok, dom} -> {:ok, dom}
+      {:error, {reason, _detail}} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Parses an HTML binary and returns source-location details when parsing fails.
+  """
+  @spec parse_detailed(String.t()) ::
+          {:ok, dom_tree()} | {:error, {:invalid_html | :unsupported_html, map()}}
+  def parse_detailed(html) do
     case html do
       html when is_binary(html) ->
-        parse_document(html)
+        case parse_document(html) do
+          {:ok, dom} -> {:ok, dom}
+          {:error, reason} -> {:error, {reason, html_error_detail(reason, html)}}
+        end
 
       _ ->
-        {:error, :invalid_html}
+        {:error,
+         {:invalid_html,
+          %{
+            stage: :html,
+            reason: :invalid_html,
+            message: "HTML input must be a string"
+          }}}
     end
   end
 
@@ -316,6 +337,114 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
   defp doctype_token?(token) do
     Regex.match?(~r/^<!doctype\s+html\s*>$/iu, token)
+  end
+
+  defp html_error_detail(reason, html) do
+    source = html_error_source(html)
+    {line, column} = source_location(html, source)
+
+    %{
+      stage: :html,
+      reason: reason,
+      message: html_error_message(reason, line, source, html),
+      line: line,
+      column: column,
+      source: source
+    }
+  end
+
+  defp html_error_source(html) do
+    cond do
+      String.trim(html) == "" ->
+        ""
+
+      malformed_tag = malformed_tag_source(html) ->
+        malformed_tag
+
+      unsupported = unsupported_tag_source(html) ->
+        unsupported
+
+      invalid_attribute = invalid_attribute_source(html) ->
+        invalid_attribute
+
+      true ->
+        html |> String.split("\n") |> Enum.find(&(String.trim(&1) != "")) |> Kernel.||("")
+    end
+    |> String.trim()
+  end
+
+  defp malformed_tag_source(html) do
+    html
+    |> String.split("\n")
+    |> Enum.find(fn line ->
+      String.contains?(line, "<") and not Regex.match?(~r/<[^>]*>/u, line)
+    end)
+  end
+
+  defp unsupported_tag_source(html) do
+    Regex.scan(~r/<\/?\s*([a-zA-Z][a-zA-Z0-9]*)[^>]*>/u, html)
+    |> Enum.find_value(fn [source, tag] ->
+      case supported_tag?(String.downcase(tag)) do
+        true -> nil
+        false -> source
+      end
+    end)
+  end
+
+  defp invalid_attribute_source(html) do
+    Regex.scan(~r/<\s*([a-zA-Z][a-zA-Z0-9]*)\s*([^<>]*?)(?:\/?)\s*>/u, html)
+    |> Enum.find_value(fn [source, tag, attributes] ->
+      tag = String.downcase(tag)
+
+      case supported_tag?(tag) and String.trim(attributes) != "" and
+             parse_attributes(attributes, tag) != {:ok, attribute_map(source)} do
+        true -> source
+        false -> nil
+      end
+    end)
+  end
+
+  defp attribute_map(source) do
+    ~r/\s+([a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*("[^"]*"|'[^']*')/u
+    |> Regex.scan(source)
+    |> Enum.reduce(%{}, fn [_, name, quoted_value], acc ->
+      Map.put(
+        acc,
+        String.downcase(name),
+        quoted_value |> String.slice(1..-2//1) |> decode_entities()
+      )
+    end)
+  end
+
+  defp html_error_message(_reason, line, source, html) do
+    cond do
+      String.trim(html) == "" ->
+        "line 1: document is empty"
+
+      unsupported_tag_source(source) ->
+        ~s(line #{line}: HTML tag "#{source}" is unsupported)
+
+      invalid_attribute_source(source) ->
+        ~s(line #{line}: HTML tag "#{source}" has invalid, duplicate, or unsupported attributes)
+
+      true ->
+        ~s(line #{line}: HTML source "#{source}" is unsupported or malformed)
+    end
+  end
+
+  defp source_location(source, snippet) do
+    case snippet == "" do
+      true ->
+        {1, 1}
+
+      false ->
+        {index, _length} = :binary.match(source, snippet)
+        prefix = binary_part(source, 0, index)
+        lines = String.split(prefix, "\n", trim: false)
+        line = length(lines)
+        column = String.length(List.last(lines) || "") + 1
+        {line, column}
+    end
   end
 
   defp decode_entities(text) do

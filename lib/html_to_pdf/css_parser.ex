@@ -36,15 +36,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   """
   @spec parse(String.t()) :: {:ok, stylesheet()} | {:error, :invalid_css}
   def parse(css) do
+    case parse_detailed(css) do
+      {:ok, stylesheet} -> {:ok, stylesheet}
+      {:error, {:invalid_css, _detail}} -> {:error, :invalid_css}
+    end
+  end
+
+  @doc """
+  Parses a CSS stylesheet and returns source-location details when parsing fails.
+  """
+  @spec parse_detailed(String.t()) ::
+          {:ok, stylesheet()} | {:error, {:invalid_css, map()}}
+  def parse_detailed(css) do
     case css do
       css when is_binary(css) ->
-        css
-        |> strip_comments()
-        |> strip_page_rules()
-        |> parse_rules()
+        parsed_css = css |> strip_comments() |> strip_page_rules()
+
+        case parse_rules(parsed_css) do
+          {:ok, stylesheet} -> {:ok, stylesheet}
+          {:error, :invalid_css} -> {:error, {:invalid_css, css_error_detail(css, parsed_css)}}
+        end
 
       _ ->
-        {:error, :invalid_css}
+        {:error,
+         {:invalid_css,
+          %{
+            stage: :css,
+            reason: :invalid_css,
+            message: "CSS input must be a string"
+          }}}
     end
   end
 
@@ -82,6 +102,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   """
   @spec parse_declarations(String.t()) :: {:ok, [declaration()]} | {:error, :invalid_css}
   def parse_declarations(css) do
+    case parse_declarations_detailed(css) do
+      {:ok, declarations} -> {:ok, declarations}
+      {:error, {:invalid_css, _detail}} -> {:error, :invalid_css}
+    end
+  end
+
+  @doc """
+  Parses a CSS declaration block and returns source-location details on failure.
+  """
+  @spec parse_declarations_detailed(String.t()) ::
+          {:ok, [declaration()]} | {:error, {:invalid_css, map()}}
+  def parse_declarations_detailed(css) do
     case css do
       css when is_binary(css) ->
         declarations =
@@ -92,13 +124,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
         Enum.reduce_while(declarations, {:ok, []}, fn declaration, {:ok, acc} ->
           case parse_declaration(declaration) do
-            {:ok, parsed} -> {:cont, {:ok, acc ++ [parsed]}}
-            {:error, reason} -> {:halt, {:error, reason}}
+            {:ok, parsed} ->
+              {:cont, {:ok, acc ++ [parsed]}}
+
+            {:error, :invalid_css} ->
+              {:halt, {:error, {:invalid_css, declaration_error_detail(css, declaration)}}}
           end
         end)
 
       _ ->
-        {:error, :invalid_css}
+        {:error,
+         {:invalid_css,
+          %{
+            stage: :css,
+            reason: :invalid_css,
+            message: "CSS declaration input must be a string"
+          }}}
     end
   end
 
@@ -395,5 +436,123 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   defp valid_property?(property) do
     Regex.match?(~r/^[a-z][a-z-]*$/u, property) or
       Regex.match?(~r/^--[a-zA-Z_][a-zA-Z0-9_-]*$/u, property)
+  end
+
+  defp css_error_detail(original_css, parsed_css) do
+    parsed_css
+    |> first_css_issue()
+    |> css_issue_to_detail(original_css)
+  end
+
+  defp first_css_issue(css) do
+    rule_sources = Regex.scan(~r/[^{}]+\{[^{}]*\}/u, css) |> Enum.map(&List.first/1)
+    unparsed = Regex.replace(~r/[^{}]+\{[^{}]*\}/u, css, "")
+
+    case String.trim(unparsed) do
+      "" ->
+        Enum.find_value(rule_sources, {:stylesheet, String.trim(css)}, &rule_issue/1)
+
+      unparsed ->
+        {:stylesheet, String.trim(unparsed)}
+    end
+  end
+
+  defp rule_issue(rule_source) do
+    %{"selectors" => selectors, "declarations" => declarations} =
+      Regex.named_captures(
+        ~r/^\s*(?<selectors>[^{}]+)\{(?<declarations>[^{}]*)\}\s*$/u,
+        rule_source
+      )
+
+    cond do
+      invalid_selector(selectors) ->
+        {:selector, invalid_selector(selectors)}
+
+      invalid_declaration(declarations) ->
+        {:declaration, invalid_declaration(declarations)}
+
+      true ->
+        nil
+    end
+  end
+
+  defp invalid_selector(selectors) do
+    selectors
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.find(fn selector ->
+      selector == "" or match?({:error, :invalid_css}, parse_selector(selector))
+    end)
+  end
+
+  defp invalid_declaration(declarations) do
+    declarations
+    |> String.split(";")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.find(fn declaration ->
+      match?({:error, :invalid_css}, parse_declaration(declaration))
+    end)
+    |> case do
+      nil ->
+        case String.trim(declarations) do
+          "" -> declarations
+          _ -> nil
+        end
+
+      declaration ->
+        declaration
+    end
+  end
+
+  defp css_issue_to_detail({kind, source}, css) do
+    source = String.trim(source)
+    {line, column} = source_location(css, source)
+
+    %{
+      stage: :css,
+      reason: :invalid_css,
+      message: css_issue_message(kind, line, source),
+      line: line,
+      column: column,
+      source: source
+    }
+  end
+
+  defp css_issue_message(kind, line, source) do
+    case kind do
+      :selector -> ~s(line #{line}: selector "#{source}" is invalid or unsupported)
+      :declaration -> ~s(line #{line}: declaration "#{source}" is invalid or unsupported)
+      :stylesheet -> ~s(line #{line}: CSS source "#{source}" is invalid)
+    end
+  end
+
+  defp declaration_error_detail(css, declaration) do
+    source = String.trim(declaration)
+    {line, column} = source_location(css, source)
+
+    %{
+      stage: :css,
+      reason: :invalid_css,
+      message: ~s(line #{line}: declaration "#{source}" is invalid or unsupported),
+      line: line,
+      column: column,
+      source: source
+    }
+  end
+
+  defp source_location(source, snippet) do
+    case snippet == "" do
+      true ->
+        {1, 1}
+
+      false ->
+        {index, _length} = :binary.match(source, snippet)
+        prefix = binary_part(source, 0, index)
+        lines = String.split(prefix, "\n", trim: false)
+        line = length(lines)
+        column = String.length(List.last(lines) || "") + 1
+        {line, column}
+    end
   end
 end

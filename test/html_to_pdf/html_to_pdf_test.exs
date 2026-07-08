@@ -104,8 +104,154 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "/Subtype /Link"
     assert pdf =~ "/URI (https://example.com)"
 
-    assert HtmlToPdf.render(~s[<p><a href="javascript:alert(1)">bad</a></p>]) ==
-             {:error, :invalid_document}
+    assert {:error,
+            {:invalid_document,
+             %{
+               stage: :style,
+               reason: :invalid_document,
+               message: message
+             }}} = HtmlToPdf.render(~s[<p><a href="javascript:alert(1)">bad</a></p>])
+
+    assert message =~ "document style validation failed"
+  end
+
+  test "render returns detailed unsupported HTML diagnostics" do
+    html = """
+    <p>Before</p>
+    <script>alert("bad")</script>
+    """
+
+    assert {:error,
+            {:unsupported_html,
+             %{
+               stage: :html,
+               reason: :unsupported_html,
+               line: 2,
+               source: ~s(<script>),
+               message: message
+             }}} = HtmlToPdf.render(html)
+
+    assert message == ~s(line 2: HTML tag "<script>" is unsupported)
+  end
+
+  test "render returns detailed invalid selector diagnostics" do
+    html = """
+    <style>
+    p > { color: red; }
+    </style>
+    <p>Hello</p>
+    """
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               line: 2,
+               source: "p >",
+               message: message
+             }}} = HtmlToPdf.render(html)
+
+    assert message == ~s(line 2: selector "p >" is invalid or unsupported)
+  end
+
+  test "render returns detailed inline CSS diagnostics" do
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               line: 1,
+               source: "display: table-row-group",
+               message: message
+             }}} = HtmlToPdf.render(~s(<p style="display: table-row-group">Bad</p>))
+
+    assert message == ~s(line 1: declaration "display: table-row-group" is invalid or unsupported)
+  end
+
+  test "render returns detailed layout option diagnostics" do
+    assert {:error,
+            {:invalid_page_size,
+             %{
+               stage: :layout,
+               reason: :invalid_page_size,
+               message: "layout failed: invalid_page_size"
+             }}} = HtmlToPdf.render("<p>Hello</p>", page_size: {0, 100})
+
+    assert {:error,
+            {:invalid_margin,
+             %{
+               stage: :layout,
+               reason: :invalid_margin,
+               message: "layout failed: invalid_margin"
+             }}} = HtmlToPdf.render("<p>Hello</p>", margin: -1)
+  end
+
+  test "render asserts detailed failure shapes for public error categories" do
+    assert {:error,
+            {:invalid_html,
+             %{
+               stage: :html,
+               reason: :invalid_html,
+               message: "HTML input must be a string"
+             }}} = HtmlToPdf.render(:not_html)
+
+    assert {:error,
+            {:unsupported_html,
+             %{
+               stage: :html,
+               reason: :unsupported_html,
+               line: 1,
+               column: 1,
+               source: "<canvas>",
+               message: ~s(line 1: HTML tag "<canvas>" is unsupported)
+             }}} = HtmlToPdf.render("<canvas></canvas>")
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               line: 1,
+               column: 1,
+               source: "color",
+               message: ~s(line 1: declaration "color" is invalid or unsupported)
+             }}} = HtmlToPdf.render(~s(<p style="color">Bad CSS</p>))
+
+    bad_background_html = """
+    <style>p { background: linear-gradient(red, blue); }</style>
+    <p>Bad CSS value</p>
+    """
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               line: 1,
+               column: 5,
+               source: "background: linear-gradient(red, blue)",
+               message:
+                 ~S|line 1: declaration "background: linear-gradient(red, blue)" is invalid or unsupported|
+             }}} =
+             HtmlToPdf.render(bad_background_html)
+
+    assert {:error,
+            {:invalid_document,
+             %{
+               stage: :style,
+               reason: :invalid_document,
+               message: "configured stylesheet must be inline CSS or a readable file path"
+             }}} = HtmlToPdf.render("<p>Hello</p>", stylesheets: [:not_css])
+
+    assert {:error, :invalid_path} =
+             HtmlToPdf.render_file(:not_a_path, "/tmp/native-elixir-pdf-failure.pdf")
+
+    assert {:error, :enoent} =
+             HtmlToPdf.render_file(
+               "/tmp/native-elixir-pdf-missing-input.html",
+               "/tmp/native-elixir-pdf-failure.pdf"
+             )
   end
 
   test "render converts tables to PDF text boxes and cell borders" do

@@ -457,4 +457,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert HtmlParser.parse("<p>Hello</strong></p>") == {:error, :unsupported_html}
     assert HtmlParser.parse(:not_html) == {:error, :invalid_html}
   end
+
+  test "parse_detailed returns source details for malformed tags" do
+    assert {:error,
+            {:unsupported_html,
+             %{
+               stage: :html,
+               reason: :unsupported_html,
+               line: 1,
+               column: 1,
+               source: "<p>Hello",
+               message: ~s(line 1: HTML source "<p>Hello" is unsupported or malformed)
+             }}} = HtmlParser.parse_detailed("<p>Hello")
+
+    assert {:error,
+            {:unsupported_html,
+             %{
+               stage: :html,
+               reason: :unsupported_html,
+               line: 1,
+               column: 1,
+               source: "<p Hello",
+               message: ~s(line 1: HTML source "<p Hello" is unsupported or malformed)
+             }}} = HtmlParser.parse_detailed("<p Hello")
+  end
 end
