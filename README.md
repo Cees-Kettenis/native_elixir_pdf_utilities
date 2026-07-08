@@ -85,7 +85,7 @@ Render local or data URI images:
 
 | Option | Supported values | Notes |
 | --- | --- | --- |
-| `:page_size` | `:a4` or `{width, height}` in points | Custom page sizes must be positive numbers. |
+| `:page_size` | `:a4`, `:letter`, or `{width, height}` | Custom page sizes must be positive numbers. Tuples up to `20 x 20` are treated as inches for ChromicPDF-compatible label sizes; larger tuples are treated as PDF points. |
 | `:margin` | Number of points or CSS length string | Examples: `24`, `"20mm"`, `"0.5in"`. |
 | `:base_url` | Local path or `file://` URL | Used for relative image paths. Remote HTTP fetching is not supported. |
 | `:stylesheets` | CSS strings or local CSS file paths | Configured stylesheets load before embedded `<style>` tags. |
@@ -97,12 +97,12 @@ Render local or data URI images:
 | Area | Supported |
 | --- | --- |
 | Document wrappers | `doctype html`, `html`, `head`, `body`, `style`, `meta`, `title` |
-| Blocks | `div`, `p`, `h1` through `h6` |
+| Blocks | `article`, `section`, `div`, `p`, `h1` through `h6` |
 | Inline text | `span`, `strong`, `b`, `em`, `i`, `a`, `br`; common named and numeric HTML entities are decoded |
 | Lists | `ul`, `ol`, `li` |
 | Tables | `table`, `caption`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td` |
 | Images | Strict `img` with required `src` |
-| Attributes | `id`, `class`, `style`, `lang` on `html`, metadata attributes on `meta`, `href` on links, `src` on images, `colspan`/`rowspan` on cells |
+| Attributes | `id`, `class`, `style`, `lang` on `html`, metadata attributes on `meta`, `href` on links, `src`/`alt` on images, `colspan`/`rowspan` on cells |
 | Links | `https://`, `http://`, and `mailto:` URI annotations |
 
 Unsupported HTML returns `{:error, :unsupported_html}` or `{:error, :invalid_document}` instead of being silently approximated.
@@ -111,21 +111,21 @@ Unsupported HTML returns `{:error, :unsupported_html}` or `{:error, :invalid_doc
 
 | Area | Supported |
 | --- | --- |
-| Selectors | Element, `.class`, `#id`, `element.class`, descendant, direct child, comma groups, `:root`, `:first-child` |
+| Selectors | Universal `*`, element, `.class`, `#id`, `element.class`, descendant, direct child, comma groups, `:root`, `:first-child`, `:last-child`, integer `:nth-child(n)` |
 | Cascade | Specificity, source order, inline style priority, `!important`, inheritance for text styles, and CSS custom properties via `var(--name)` |
 | Units | `pt`, `px`, `rem`, `mm`, `cm`, `in`, percentages for `width`/`height`/`min-height`, and unitless `0` |
 | Display | `block`, `inline`, `none`, `flex`, `inline-flex`, `grid`, `inline-grid` |
-| Box model | `width`, `height`, `min-height`, `aspect-ratio`, `margin`, negative margins, `padding`, side-specific margin/padding, `border`, side-specific `border-*`, `border-width`, `border-color`, `border-radius`, `border-collapse`, `background-color` |
-| Text | `color`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `text-align`, `vertical-align`, `line-break`; `#RRGGBBAA` colors are accepted with alpha ignored |
-| Page breaks | `break-before`, `break-after`, `page-break-before`, `page-break-after` with `auto`, `page`, or `always` |
-| Flexbox subset | `flex-direction`, `flex-wrap`, `gap`, `row-gap`, `column-gap`, `justify-content`, `align-items`, `align-self`, `order`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex` |
-| Grid subset | `grid-template-columns`, `grid-template-rows`, `grid-auto-columns`, `grid-auto-rows`, `grid-column`, `grid-column-start`, `grid-column-end`, `grid-row`, `grid-row-start`, `grid-row-end`, `grid-area`, `gap`, `row-gap`, `column-gap`, `justify-items`, `align-items`, `justify-content`, `align-content` |
+| Box model | `width`, `height`, `min-height`, `min()`, `aspect-ratio`, `box-sizing`, `margin`, negative margins, `padding`, side-specific margin/padding, `border`, side-specific `border-*`, `border-width`, `border-color`, `border-radius`, `border-collapse`, `background`, `background-color` |
+| Text | `color`, `font-family`, `font-size`, `font-weight`, `font-style`, `line-height`, `text-align`, `text-transform`, `vertical-align`, `line-break`, `word-break`, `word-wrap`, `overflow-wrap`, `white-space`, `letter-spacing`; `#RRGGBBAA` colors are accepted with alpha ignored |
+| Page rules and breaks | Simple `@page` blocks are accepted, page options control size; `break-before`, `break-after`, `page-break-before`, `page-break-after` with `auto`, `page`, or `always`; `page-break-inside: auto/avoid` is accepted |
+| Flexbox subset | `flex-direction`, `flex-wrap`, `gap`, `row-gap`, `column-gap`, `justify-content`, `align-items`, `align-self`, `justify-self`, `order`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex` |
+| Grid subset | `grid-template-columns`, `grid-template-rows`, `grid-auto-columns`, `grid-auto-rows`, `repeat()`, `minmax()`, `grid-column`, `grid-column-start`, `grid-column-end`, `grid-row`, `grid-row-start`, `grid-row-end`, `grid-area`, `gap`, `row-gap`, `column-gap`, `justify-items`, `justify-self`, `align-items`, `justify-content`, `align-content` |
 
 Unsupported CSS properties or invalid values return `{:error, :invalid_document}`. The renderer does not ignore unknown declarations.
 
 ### Layout Details
 
-Block, list, table, flexbox, and grid layout are deterministic and intentionally narrower than browser layout. Tables use deterministic column sizing based on declared widths, available table width, and intrinsic unbreakable content, with support for collapsed borders, cell backgrounds, `colspan`, repeated headers, and missing trailing cells in shorter rows. Flexbox and grid support document-oriented single-line text and image items, not the full browser algorithms.
+Block, list, table, flexbox, and grid layout are deterministic and intentionally narrower than browser layout. Tables use deterministic column sizing based on declared widths, available table width, and intrinsic unbreakable content, with support for collapsed borders, cell backgrounds, `colspan`, repeated headers, and missing trailing cells in shorter rows. Flexbox and grid support document-oriented text, images, and nested block-card items, not the full browser algorithms.
 
 Pagination supports automatic page breaks, manual page breaks, page margins, basic keep-together behavior for emitted flow units, and repeated table headers when table bodies continue across pages.
 
