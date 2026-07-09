@@ -135,16 +135,30 @@ Milestone goal: expand the CSS features commonly used by existing document templ
   - `counters(name, separator)` if practical
   - `counter(page)` and `counter(pages)` only if this fits the pagination model
     cleanly; otherwise keep page numbering in the header/footer token API
+- Correct documented CSS text whitespace behavior for inline layout:
+  - Preserve line breaks for `white-space: pre-line`.
+  - Normalize CRLF, CR, and LF sequences consistently before layout.
+  - Keep default HTML text behavior browser-compatible, where raw whitespace
+    collapses unless CSS or explicit `<br>` elements preserve it.
+  - Document that literal escaped sequences such as `\\n` and `\\r\\n` are plain
+    text unless the caller decodes them before rendering.
 
 #### Design Notes
 
 - Keep unsupported selector diagnostics clear and strict.
+- Distinguish browser-compatible HTML whitespace collapsing from supported CSS
+  preservation modes such as `white-space: pre-line`.
 
 #### Completion Criteria
 
 - Add focused parser, style, layout, and PDF writer tests for generated content,
   selectors, and counters.
+- Add focused parser, style, layout, and PDF writer tests for CSS text whitespace
+  behavior, including LF, CRLF, CR, `<br>`, and literal escaped newline
+  sequences.
 - Add browser parity fixtures for visible generated content and counter output.
+- Add or update browser parity fixtures for visible `white-space: pre-line`
+  rendering.
 
 ### 0.9.0 - Static HTML Form Rendering
 
