@@ -1,381 +1,606 @@
 # Roadmap
 
-This roadmap lists practical improvements that would make Native Elixir PDF
-Utilities more useful for real Elixir applications. The project should keep its
-current identity: a native, predictable PDF toolkit for app-generated documents,
-not a full browser engine.
+This roadmap describes the planned path toward Native Elixir PDF Utilities
+`1.0.0`.
 
-## Direction
+The project should keep its current identity: a native, predictable PDF toolkit
+for app-generated documents, not a full browser engine. The highest-value path
+is to improve common document workflows first:
 
-The highest-value path is to improve common document workflows:
-
-- render existing invoice, label, report, and statement templates with fewer edits
+- render existing invoice, label, report, and statement templates with fewer
+  edits
 - support predictable print-oriented layout features
 - add PDF manipulation tools that applications commonly need after rendering
 - keep unsafe or network-dependent behavior explicit and opt-in
 
-## HTML to PDF Rendering
+Milestones may move as implementation details become clearer. Before `1.0.0`,
+breaking API changes are allowed, but they should be explained clearly in
+`CHANGELOG.md`.
 
-### Print Styles
+## Milestones
 
-Support `@media print` blocks and ignore screen-only rules. Many existing
-templates already include print CSS, so this would reduce the amount of template
-rewriting callers need to do.
+### 0.5.0 - Diagnostics and Developer Experience
 
-Example:
+Milestone goal: standardize the diagnostic experience callers get when rendering or
+utility operations cannot continue.
 
-```css
-@media print {
-  .screen-only {
-    display: none;
-  }
-}
-```
+#### Scope
 
-### CSS Font Loading
+- Define the standard public error and diagnostics contract for the library.
+- Return rich diagnostic details wherever the library knows why an operation
+  cannot be completed.
+- Standardize diagnostic maps around actionable fields such as:
+  - `:stage`
+  - `:reason`
+  - `:message`
+  - `:operation`
+  - `:module`
+  - `:line`, `:column`, and `:source` when source locations are available
 
-Add `@font-face` support so templates can declare fonts in CSS instead of only
-through render options.
+#### Design Notes
 
-Example:
+- Treat developer experience as a core public API concern: errors should explain
+  what failed, why it failed, and what input or feature caused the failure when
+  that information is available.
+- Extend the HTML-to-PDF diagnostic style to the rest of the public APIs instead
+  of leaving each module to invent its own error shape.
 
-```css
-@font-face {
-  font-family: Inter;
-  src: url("./Inter-Regular.ttf");
-  font-weight: 400;
-}
-```
+#### Completion Criteria
 
-This should reuse the existing font registry and keep local file loading rules
-strict.
+- Add focused tests for diagnostic error shapes and important failure modes.
 
-### Running Headers, Footers, and Page Numbers
+### 0.6.0 - Fonts, Print CSS, and Render Metadata
 
-Add first-class support for repeated page furniture. This is one of the most
-useful features for reports, invoices, statements, contracts, and exports.
+Milestone goal: make existing print templates easier to render without rewriting common
+font, print stylesheet, and document metadata behavior.
 
-Possible API:
+#### Scope
 
-```elixir
-NativeElixirPdfUtilities.HtmlToPdf.render(html,
-  header_html: "...",
-  footer_html: "...",
-  page_numbers: true
-)
-```
+- Add CSS `@font-face` support so templates can declare local fonts in CSS.
+- Support font formats before `1.0.0` with this priority:
+  - TTF support is required.
+  - OTF support should be added if it can share the same font loading and glyph
+    metric path without a disproportionate implementation cost.
+- Add PDF metadata options to HTML rendering for common fields such as title,
+  author, subject, keywords, creation date, and modification date.
+- Use the HTML `<title>` as the default PDF title when no explicit metadata
+  title is provided.
 
-Useful follow-up features:
+#### Design Notes
 
-- current page number
-- total page count
-- first-page-only or except-first-page header/footer options
-- different odd/even page headers
+- Reuse the existing font registry for CSS-declared fonts.
+- Keep local file loading rules strict for `@font-face`.
+- Polish supported `@media print` behavior and browser parity coverage.
+- Document CSS font behavior, including unsupported font formats and the
+  recommended conversion path for WOFF/WOFF2.
+- Review render function naming before `1.0.0`, including whether
+  `render_file/3` should be complemented by a clearer `render_to_file/3` style
+  API for HTML-string-to-PDF-file output.
 
-### Generated Content
+#### Completion Criteria
 
-Support common pseudo-elements:
+- Add focused parser, style, layout, pagination, and PDF writer tests for CSS
+  fonts, print CSS, and metadata behavior.
+- Add or update browser parity fixtures for CSS fonts and print CSS.
+- Add focused tests for PDF metadata options and HTML `<title>` metadata
+  defaults.
 
-- `::before`
-- `::after`
-- `content`
-- `attr(...)`
+### 0.7.0 - Running Headers, Footers, and Page Numbers
 
-Example:
+Milestone goal: add first-class repeated page furniture for reports, invoices, statements,
+contracts, and exports.
 
-```css
-.required::after {
-  content: "*";
-}
+#### Scope
 
-a::after {
-  content: " (" attr(href) ")";
-}
-```
+- Add running headers and footers during HTML-to-PDF rendering.
+- Add page numbers during HTML-to-PDF rendering.
+- Add page number tokens for current page and total pages.
+- Add options for first-page-only or except-first-page headers and footers.
+- Add options for odd and even page headers and footers.
+- Evaluate `position: fixed` for repeated page furniture; implement it here if
+  it fits the renderer model, otherwise document it as deferred.
 
-### More Selectors
+#### Design Notes
 
-Add selectors commonly found in document templates:
+- Document header, footer, page number, and page furniture behavior.
 
-- `[attr]`
-- `[attr=value]`
-- `:not(...)`
-- `:nth-child(odd)`
-- `:nth-child(even)`
-- `:first-of-type`
-- `:last-of-type`
+#### Completion Criteria
 
-These should stay strict. Unsupported selectors should continue returning clear
-diagnostics instead of being silently ignored.
+- Add focused layout, pagination, and PDF writer tests for page furniture.
+- Add or update browser parity fixtures for headers, footers, and page numbers.
 
-### Positioning
+### 0.8.0 - Generated Content, Selectors, and Counters
 
-Add a limited positioning model for document use cases.
+Milestone goal: expand the CSS features commonly used by existing document templates.
 
-Start with:
+#### Scope
 
-- `position: absolute`
-- `top`
-- `right`
-- `bottom`
-- `left`
-- `z-index`
+- Add generated content support for `::before`, `::after`, `content`, and
+  `attr(...)`.
+- Add common document-template selectors:
+  - `[attr]`
+  - `[attr=value]`
+  - `:not(...)`
+  - `:nth-child(odd)`
+  - `:nth-child(even)`
+  - `:first-of-type`
+  - `:last-of-type`
+- Add basic CSS counter support for document numbering:
+  - `counter-reset`
+  - `counter-increment`
+  - `counter(name)`
+  - basic section, figure, table, and appendix numbering through generated
+    content
+  - list numbering integration if it fits the existing list model cleanly
+  - `counters(name, separator)` if practical
+  - `counter(page)` and `counter(pages)` only if this fits the pagination model
+    cleanly; otherwise keep page numbering in the header/footer token API
 
-Then consider:
+#### Design Notes
 
-- `position: fixed`
+- Keep unsupported selector diagnostics clear and strict.
 
-This would help labels, badges, watermarks, forms, and page furniture. Fixed
-positioning is especially useful for repeated headers and footers.
+#### Completion Criteria
 
-### Image Sizing
+- Add focused parser, style, layout, and PDF writer tests for generated content,
+  selectors, and counters.
+- Add browser parity fixtures for visible generated content and counter output.
 
-Support browser-like image fitting:
+### 0.9.0 - Static HTML Form Rendering
 
-- `object-fit: contain`
-- `object-fit: cover`
-- `object-position`
+Milestone goal: render common HTML form controls as static PDF content for government
+forms, applications, inspections, and contracts.
 
-This would make product images, logos, and thumbnails easier to use in fixed
-size boxes.
+#### Scope
 
-### Background Images
+- Add static rendering for HTML form controls:
+  - `input type="text"` renders the `value` attribute as visible text
+  - `input type="checkbox"` renders checked state from `checked`
+  - `input type="radio"` renders checked state from `checked`
+  - `select` renders the selected option text from `selected`
+  - `textarea` renders its text content or value as visible text
+  - `button` where it appears in existing templates
 
-Support local background images for branded PDFs, certificates, letterheads, and
-forms.
+#### Design Notes
 
-Useful CSS properties:
+- Document that HTML form controls render as static content only, not as
+  interactive PDF form fields.
+- Do not add special disabled-state rendering before `1.0.0`; callers can use
+  normal CSS classes or attributes if they need disabled-looking output.
 
-- `background-image`
-- `background-size`
-- `background-position`
-- `background-repeat`
+#### Completion Criteria
 
-Remote background images should follow the same safety model as normal images.
+- Add parser, style, layout, and PDF writer tests for static form controls.
+- Add browser parity fixtures for visible static form rendering.
+- Add or update a realistic government-style form fixture.
 
-### Opt-In Remote Assets
+### 0.10.0 - Positioning, Image Fitting, and Asset Inputs
 
-Keep remote asset loading disabled by default. Add an explicit opt-in API so
-callers control security, timeouts, authentication, and caching.
+Milestone goal: support fixed-size template regions while keeping asset handling explicit
+and safe.
 
-Possible API:
+#### Scope
 
-```elixir
-NativeElixirPdfUtilities.HtmlToPdf.render(html,
-  allow_remote_assets: true,
-  asset_fetcher: &MyApp.fetch_asset/1
-)
-```
+- Add limited absolute positioning:
+  - `position: absolute`
+  - `top`
+  - `right`
+  - `bottom`
+  - `left`
+  - `z-index`
+- Add browser-like image fitting:
+  - `object-fit: contain`
+  - `object-fit: cover`
+  - `object-position`
+- Add local background image support:
+  - `background-image`
+  - `background-size`
+  - `background-position`
+  - `background-repeat`
+- Remove any existing built-in remote asset fetching behavior from the renderer.
+- Add explicit asset inputs that consume caller-provided bytes or approved local
+  paths instead of fetching remote URLs directly.
+- Consider a caller-provided asset resolver callback that returns bytes for an
+  asset reference, while keeping all network access outside the library.
 
-The renderer should avoid owning HTTP policy directly when possible. A caller
-provided fetcher gives applications control over allowed hosts, headers,
-timeouts, and caching.
+#### Design Notes
 
-## Typography
+- Clarify supported positioning boundaries in the compatibility guide.
+- Keep remote background images under the same safety model as normal images:
+  the renderer may consume bytes supplied by the caller, but must not fetch them.
+- Reject remote asset URLs by default with clear diagnostics.
+- Do not provide built-in HTTP fetching for fonts, images, stylesheets, or other
+  remote assets.
 
-Text rendering is one of the hardest parts of browser-like output. Improve it in
-stages:
+#### Completion Criteria
+
+- Add layout and PDF writer tests for absolute positioning, z-index, image
+  fitting, and background painting.
+- Add browser parity fixtures for visible layout and painting changes.
+- Add or update realistic invoice, statement, and multi-page report fixtures.
+
+### 0.11.0 - PDF Core Reader and Object Resolution
+
+Milestone goal: add a shared PDF reader and object resolver so utility APIs can work with
+common modern PDFs, not only classic PDFs whose indirect objects can be found by
+flat token scanning.
+
+#### Scope
+
+- Add a shared PDF reader layer above the tokenizer.
+- Keep the tokenizer focused on lexical tokenization and move document-level
+  object resolution into the shared reader.
+- Add support for common PDF object storage structures:
+  - classic cross-reference tables
+  - cross-reference streams
+  - object streams
+  - compressed object containers
+- Add indirect object resolution through the shared reader so text extraction,
+  merge, inspection, and transforms can use the same parsed document model.
+- Add stream decoding support required for xref streams and object streams.
+- Add encryption detection with clear diagnostics. Decryption is not required
+  before `1.0.0` unless a later release explicitly takes it on.
+
+#### Design Notes
+
+- Document the tokenizer as the lexical layer and the shared reader as the
+  document/object-resolution layer.
+- Move text extraction and future inspection/transform APIs onto the shared
+  reader where practical.
+- Document behavior for malformed, encrypted, compressed, or unsupported PDFs.
+
+#### Completion Criteria
+
+- Add unit tests for classic xref tables, xref streams, object streams, stream
+  decoding, indirect object resolution, encryption detection, and unsupported
+  PDF structure diagnostics.
+- Add regression fixtures for classic PDFs, PDFs with cross-reference streams,
+  PDFs with object streams, encrypted PDFs, and malformed PDFs.
+
+### 0.12.0 - PDF Information and Metadata
+
+Milestone goal: expose reliable document inspection and metadata operations on top of the
+shared PDF reader.
+
+#### Scope
+
+- Add PDF information helpers:
+  - page count
+  - page sizes
+  - title
+  - author
+  - producer
+  - creation date
+  - modification date
+  - encryption status
+- Add metadata writing for common document fields:
+  - title
+  - author
+  - subject
+  - keywords
+  - producer
+  - creation date
+  - modification date
+
+#### Design Notes
+
+- Keep information and metadata APIs binary-in, structured-data-out where
+  practical.
+- Document behavior for malformed, encrypted, compressed, or unsupported PDFs.
+
+#### Completion Criteria
+
+- Add unit tests for page tree traversal, metadata parsing, metadata writing,
+  encryption status, and diagnostic failures.
+- Preserve 100% test coverage for public modules.
+
+### 0.13.0 - Page Transforms and Document Assembly
+
+Milestone goal: let applications assemble, split, rearrange, and rotate PDF documents
+after rendering or receiving them.
+
+#### Scope
+
+- Add PDF splitting by page range or individual page.
+- Add page picking so callers can reorder or delete pages.
+- Add page rotation for selected pages.
+
+#### Design Notes
+
+- Keep transform APIs binary-in, binary-out where practical.
+- Document page numbering conventions clearly.
+
+#### Completion Criteria
+
+- Add unit tests for page range validation, page picking, deletion, and rotation.
+- Add regression fixtures for realistic merged and multi-page PDFs.
+
+### 0.14.0 - Bookmarks and Outlines
+
+Milestone goal: support navigation metadata for generated reports and assembled document
+packets.
+
+#### Scope
+
+- Add bookmarks and outlines for generated or transformed PDFs.
+- Add outline preservation where practical when merging or transforming PDFs.
+
+#### Design Notes
+
+- Document outline creation, preservation, and loss cases.
+
+#### Completion Criteria
+
+- Add unit and fixture tests for outline creation and outline preservation.
+
+### 0.15.0 - Stamping and Existing-PDF Page Numbers
+
+Milestone goal: add common overlay workflows for drafts, approvals, internal documents,
+branded output, and assembled packets.
+
+#### Scope
+
+- Add text stamping and watermarking for existing PDFs.
+- Add PDF overlay stamping for existing PDFs.
+- Add page numbers to existing PDFs with configurable format, position, font,
+  size, color, and page ranges.
+
+#### Design Notes
+
+- Document stamp coordinate systems and page range behavior.
+
+#### Completion Criteria
+
+- Add unit and fixture tests for stamping and page numbering.
+- Add visual regression coverage for stamping and watermarking behavior.
+
+### 0.16.0 - PDF Forms and Attachments
+
+Milestone goal: support common operational document workflows involving existing PDF
+forms and bundled sidecar files.
+
+#### Scope
+
+- Add AcroForm filling.
+- Add optional AcroForm flattening.
+- Add embedded file attachments.
+
+#### Design Notes
+
+- Keep form and attachment APIs explicit about unsupported PDF structures.
+- Document the difference between static HTML form rendering and AcroForm
+  filling.
+
+#### Completion Criteria
+
+- Add unit and fixture tests for form filling, flattening, and attachments.
+- Verify form-filled PDFs remain readable by the shared PDF reader.
+
+### 0.17.0 - Resource Limits and API Boundary
+
+Milestone goal: harden the library behavior that will be difficult to change after
+`1.0.0`.
+
+#### Scope
+
+- Finalize the stable error contract across public APIs:
+  - no surprising raises for normal invalid input
+  - consistent `{:ok, value} | {:error, {reason, detail}}` return shapes where
+    diagnostic detail is available
+  - documented reason atoms and diagnostic maps
+- Add an error reference guide that lists public error return shapes and reason
+  atoms by module.
+- Add resource limit and safety controls for renderer and PDF utility APIs:
+  - maximum input size
+  - maximum page count
+  - maximum image dimensions
+  - maximum rendered pages
+  - timeout or cancellation guidance
+- Provide conservative default resource limits suitable for server-side use, with
+  explicit configuration options so applications can raise, lower, or disable
+  limits where appropriate.
+
+#### Design Notes
+
+- Audit all public APIs against the diagnostic contract defined earlier in the
+  roadmap and fix modules that still return vague or inconsistent errors.
+- Explicitly classify modules as stable public APIs, advanced public APIs, or
+  internal implementation modules.
+- Classify the normal app-facing modules as stable public APIs:
+  - `NativeElixirPdfUtilities.HtmlToPdf`
+  - `NativeElixirPdfUtilities.Merge`
+  - `NativeElixirPdfUtilities.Text`
+  - `NativeElixirPdfUtilities.Tokenizer`
+  - future `Info`, `Transform`, `Split`, `Stamp`, `Forms`, `Attachments`,
+    `Optimize`, and `Metadata` modules
+- Classify parser and pipeline building blocks as advanced public APIs:
+  - `NativeElixirPdfUtilities.HtmlToPdf.HtmlParser`
+  - `NativeElixirPdfUtilities.HtmlToPdf.CssParser`
+  - `NativeElixirPdfUtilities.HtmlToPdf.Style`
+  - `NativeElixirPdfUtilities.HtmlToPdf.Layout`
+  - `NativeElixirPdfUtilities.HtmlToPdf.Pagination`
+  - `NativeElixirPdfUtilities.HtmlToPdf.Font`
+  - future low-level PDF reader and object resolver modules
+- Classify PDF serialization and implementation helpers as internal unless
+  there is a strong user-facing reason to stabilize them.
+- Keep parser-style modules open for advanced users while documenting which
+  return shapes are stable and which data structures may change before `1.0.0`.
+- Add a public API boundary guide that explains stable public modules, advanced
+  public modules, and internal implementation modules.
+- Document unsupported features with practical migration advice, such as
+  pre-rendering dynamic values instead of relying on JavaScript and using local
+  asset paths instead of remote assets by default.
+
+#### Completion Criteria
+
+- Add tests for invalid input across public APIs.
+- Add tests for resource limits and safety failures.
+- Add documentation examples for stable and advanced public APIs.
+- Add doctests for public examples where they can run without external browser
+  tooling.
+
+### 0.18.0 - Optimization and Archive-Friendly Output
+
+Milestone goal: improve output size and archive readiness without claiming full PDF/A
+compliance before the library can validate it properly.
+
+#### Scope
+
+- Add conservative compression and optimization:
+  - compress uncompressed streams
+  - deduplicate repeated images where safe
+  - remove unreachable objects where safe
+  - optionally subset embedded fonts
+- Add best-effort archive-friendly output mode:
+  - embed required fonts
+  - avoid unsupported transparency where practical
+  - include document metadata
+  - expose best-effort diagnostics
+
+#### Design Notes
+
+- Ensure optimization does not intentionally change visual output.
+- Document the difference between archive-friendly output and full PDF/A
+  compliance.
+- Treat strict PDF/A validation and claims of fully validated archival output as
+  a future version 2 objective, not a `1.0.0` requirement.
+
+#### Completion Criteria
+
+- Add optimization fixture tests that confirm output remains readable.
+- Add fixture coverage for best-effort archive-friendly output.
+
+### 0.19.0 - Documentation, Fixtures, and Release Polish
+
+Milestone goal: remove small documentation and example friction before the release
+candidate.
+
+#### Scope
+
+- Add a changelog discipline section that explains how pre-`1.0.0` breaking
+  changes are recorded.
+- Add final production-style fixture coverage for common business documents that
+  were not already represented by browser parity fixtures.
+- Add final examples for metadata, static form rendering, PDF inspection,
+  transforms, stamping, and error handling.
+
+#### Design Notes
+
+- Rename `docs/html-to-pdf-exmaples.md` to `docs/html-to-pdf-examples.md` and
+  update all links.
+- Tighten README and HexDocs navigation so compatibility, examples, browser
+  parity coverage, roadmap, and changelog are easy to find.
+- Review all unsupported-feature documentation and add caller-side alternatives
+  where useful.
+- Review generated documentation for stale option names, old module names, and
+  examples that no longer match stable return shapes.
+
+#### Completion Criteria
+
+- Run doctests and normal tests after documentation example updates.
+- Run browser parity tests for any fixture or visible rendering documentation
+  changes.
+- Confirm README, HexDocs guide links, changelog links, and roadmap links are
+  valid.
+
+### 0.20.0 - Release Candidate and API Freeze
+
+Milestone goal: stop expanding scope and harden the public API before `1.0.0`.
+
+#### Scope
+
+- Add final migration notes for any pre-1.0 breaking changes.
+- Add examples for the stable renderer, merge, text extraction, inspection, and
+  transform workflows.
+- Add missing HexDocs guides for the stable public API.
+
+#### Design Notes
+
+- Freeze public module names, function names, option names, return values, and
+  error shapes except for bug fixes.
+- Normalize diagnostics across tokenizer, merge, text extraction, HTML-to-PDF,
+  and PDF transform APIs.
+- Review whether advanced typography work is required before `1.0.0`.
+- Confirm documentation links and file names are stable before release.
+
+#### Stabilization Work
+
+- Fix release-candidate bugs found by real fixtures and downstream usage.
+- Remove or clearly document unstable internals that should not be treated as
+  public API.
+
+#### Completion Criteria
+
+- Run the complete quality gate:
+
+  ```bash
+  mise exec -- mix test
+  MIX_ENV=test mise exec -- mix dialyzer
+  mise exec -- mix format
+  mise exec -- mix test --cover
+  CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity
+  ```
+
+### 1.0.0 - Stable Public API
+
+Milestone goal: publish the first stable release that users can depend on.
+
+#### Scope
+
+- Declare the supported public API stable.
+- Publish final `1.0.0` documentation and compatibility guides.
+- Publish final examples for common app workflows.
+
+#### Design Notes
+
+- Follow SemVer for future releases:
+  - `1.1.0` for backwards-compatible features
+  - `1.1.1` for bug fixes
+  - `2.0.0` for intentional breaking public API changes
+
+#### Completion Criteria
+
+- Confirm core rendering, merge, text extraction, tokenizer, inspection, and
+  transform APIs are settled.
+- Confirm supported HTML/CSS behavior is documented and covered by focused tests.
+- Confirm browser parity fixtures cover visible HTML-to-PDF behavior promised by
+  the compatibility docs.
+- Confirm diagnostics and error shapes are unlikely to change casually.
+- Confirm the full quality gate passes.
+
+## Typography Track
+
+Text rendering should improve in stages, but not every typography feature has to
+block `1.0.0`.
+
+Pre-1.0 candidates:
 
 1. Better Unicode line breaking.
 2. Soft hyphen support.
 3. Optional hyphenation dictionaries.
-4. `direction: rtl`.
-5. Basic bidirectional text layout.
-6. Optional complex shaping for Arabic, Indic scripts, Thai, emoji sequences,
+
+Likely post-1.0 candidates:
+
+1. `direction: rtl`.
+2. Basic bidirectional text layout.
+3. Optional complex shaping for Arabic, Indic scripts, Thai, emoji sequences,
    and other advanced typography.
 
-The first few steps would improve many documents without requiring a large text
-shaping engine immediately.
+## Remote Asset Policy
 
-## PDF Utility Features
+The renderer should consume assets; it should not fetch assets from the network.
+This keeps HTTP policy, credentials, allowlists, redirects, timeouts, retries,
+caching, observability, and security review inside the caller's application.
 
-These features are useful outside the HTML renderer and would make the package a
-broader PDF toolkit.
+Supported asset inputs should be explicit and local:
 
-### PDF Information
+- local file paths approved by the caller
+- data URIs where already supported
+- caller-provided asset bytes with content type metadata
+- optional asset resolver callbacks that return bytes without the library owning
+  any network access
 
-Expose common document information:
-
-```elixir
-NativeElixirPdfUtilities.Info.page_count(pdf)
-NativeElixirPdfUtilities.Info.metadata(pdf)
-```
-
-Useful fields:
-
-- page count
-- page sizes
-- title
-- author
-- producer
-- creation date
-- modification date
-- encryption status
-
-### Split PDFs
-
-Split a PDF into ranges or individual pages.
-
-Example:
-
-```elixir
-NativeElixirPdfUtilities.Split.pages(pdf, ranges: [1..3, 7])
-```
-
-### Reorder and Delete Pages
-
-Allow callers to pick pages in a new order.
-
-Example:
-
-```elixir
-NativeElixirPdfUtilities.Transform.pick_pages(pdf, [3, 1, 2])
-```
-
-This is useful for building packets, removing cover pages, or extracting
-selected documents from a merged PDF.
-
-### Rotate Pages
-
-Rotate selected pages.
-
-Example:
-
-```elixir
-NativeElixirPdfUtilities.Transform.rotate(pdf,
-  pages: :all,
-  degrees: 90
-)
-```
-
-### Stamp and Watermark
-
-Add text or PDF overlays to existing documents.
-
-Examples:
-
-```elixir
-NativeElixirPdfUtilities.Stamp.text(pdf, "CONFIDENTIAL")
-NativeElixirPdfUtilities.Stamp.pdf(pdf, overlay_pdf)
-```
-
-This is useful for drafts, approvals, internal documents, and branded output.
-
-### Add Page Numbers to Existing PDFs
-
-Add page numbers after rendering or merging. This should support position,
-format, font, size, color, and page ranges.
-
-Example:
-
-```elixir
-NativeElixirPdfUtilities.Stamp.page_numbers(pdf,
-  format: "Page {page} of {total}",
-  position: :bottom_center
-)
-```
-
-### Form Filling
-
-Support filling AcroForm fields and optionally flattening the result.
-
-Example:
-
-```elixir
-NativeElixirPdfUtilities.Forms.fill(pdf, %{
-  "customer_name" => "Acme Inc."
-})
-
-NativeElixirPdfUtilities.Forms.flatten(pdf)
-```
-
-This would be valuable for generated government forms, applications, contracts,
-and operational documents.
-
-### Attachments
-
-Embed files inside a PDF. This is useful for invoices with XML or JSON sidecar
-data, audit packages, and document bundles.
-
-Example:
-
-```elixir
-NativeElixirPdfUtilities.Attachments.add(pdf,
-  filename: "invoice.xml",
-  content: xml
-)
-```
-
-### Compression and Optimization
-
-Add basic output optimization:
-
-- compress uncompressed streams
-- deduplicate repeated images
-- remove unreachable objects when possible
-- optionally subset embedded fonts
-
-This should be conservative and should not change visual output.
-
-### Archive-Friendly Output
-
-Consider an archive-friendly mode before attempting full PDF/A compliance.
-
-Useful steps:
-
-- embed required fonts
-- avoid unsupported transparency where possible
-- include document metadata
-- expose validation diagnostics
-
-Full PDF/A support is a larger project, but an explicit archive-friendly mode
-would still be useful to callers.
-
-## Suggested Priority
-
-1. `@font-face`
-2. running headers, footers, and page numbers
-3. `@media print`
-4. `position: absolute`
-5. background images
-6. PDF page count and metadata
-7. split, reorder, and delete pages
-8. watermark and stamp existing PDFs
-9. add page numbers to existing PDFs
-10. form filling
-
-This sequence improves common user-facing document workflows first, then grows
-the package into a stronger general-purpose PDF utility library.
-
-## Versioning Path
-
-The project follows a SemVer-style release policy once the public API is stable:
-
-- `1.0.0` is the first stable release and defines the supported public API.
-- `1.1.0` is a backwards-compatible minor release with new capabilities or
-  improvements.
-- `1.1.1` is a patch release for bug fixes.
-- `2.0.0` is required after `1.0.0` when a release intentionally breaks the
-  public API.
-
-Before `1.0.0`, the package remains in initial development. Breaking public API
-changes can still happen in `0.x` releases, but they should be called out
-clearly in the changelog.
-
-Feature completion alone does not decide `1.0.0`; API stability does. A stable
-release is reasonable once the core rendering, merge, text extraction, and
-tokenizer APIs feel settled, the supported HTML/CSS surface is documented,
-diagnostics and error shapes are unlikely to change casually, and realistic
-fixtures cover the workflows the project promises.
-
-A practical path is:
-
-1. `0.4.0` - browser parity baseline for the currently documented HTML/CSS
-   renderer surface, including production-style fixtures and regression tests.
-2. `0.5.0` - finish must-have renderer improvements such as CSS font loading,
-   running headers and footers, page numbers, and print CSS polish.
-3. `0.6.0` to `0.8.0` - continue roadmap features, document behavior, and clean
-   up naming, options, return values, and diagnostics.
-4. `0.9.0` - release candidate and API freeze, except for bug fixes and final
-   documentation corrections.
-5. `1.0.0` - stable public API that users can depend on.
+Remote URLs in HTML or CSS should be rejected by default with clear diagnostics.
+If an application needs remote fonts, images, stylesheets, or background assets,
+it should fetch and validate them itself, then pass local paths, data URIs, or
+bytes into the renderer.
