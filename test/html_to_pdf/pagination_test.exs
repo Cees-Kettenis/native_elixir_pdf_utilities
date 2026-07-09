@@ -46,6 +46,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
     assert_in_delta four.y, 78.0, 0.0001
   end
 
+  test "paginate preserves first page top offset from parent padding" do
+    layout_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 0.0,
+      boxes: [text_box("Padded", 58.0, {:block, 1})]
+    }
+
+    assert {:ok, [page]} = Pagination.paginate(layout_tree, [])
+    [padded] = page.boxes
+
+    assert_in_delta padded.y, 58.0, 0.0001
+  end
+
   test "paginate honors manual page breaks" do
     boxes = [
       text_box("Before", 78.0, {:block, 1}),
@@ -82,6 +96,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
 
     assert {:ok, [%{boxes: [only]}]} = Pagination.paginate(leading_break_tree, [])
     assert only.text == "Only"
+  end
+
+  test "paginate keeps child groups inside an already placed parent background" do
+    boxes = [
+      %{
+        type: :rect,
+        x: 0.0,
+        y: 0.0,
+        width: 200.0,
+        height: 100.0,
+        flow_id: {:block, :parent},
+        break_before: :auto,
+        break_after: :auto
+      },
+      text_box("Child", 78.0, {:block, :child})
+    ]
+
+    layout_tree = %{type: :layout, page_size: {200.0, 100.0}, margin: 0.0, boxes: boxes}
+
+    assert {:ok, [page]} = Pagination.paginate(layout_tree, [])
+    assert Enum.map(page.boxes, &Map.get(&1, :text, :rect)) == [:rect, "Child"]
+
+    child = Enum.find(page.boxes, &(&1.type == :text))
+    assert_in_delta child.y, 78.0, 0.0001
   end
 
   test "paginate consumes empty manual page-break markers" do

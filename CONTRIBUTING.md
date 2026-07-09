@@ -21,6 +21,8 @@ Thanks for contributing to Native Elixir PDF Utilities.
   - `MIX_ENV=test mise exec -- mix dialyzer`
 - Format code:
   - `mise exec -- mix format`
+- Run browser parity tests after HTML-to-PDF rendering changes:
+  - `CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity`
 - Generate documentation locally:
   - `mise exec -- mix docs`
 
@@ -29,6 +31,9 @@ Thanks for contributing to Native Elixir PDF Utilities.
 - Keep PRs focused and small where possible.
 - Include a clear description of what changed and why.
 - Add or update tests for behavior changes.
+- For new HTML-to-PDF renderer features, include focused coverage in the
+  relevant parser/style/layout/pagination/PDF tests and add or update browser
+  parity fixtures when the feature affects visible rendering.
 - Update `README.md` when public behavior, options, or examples change.
 - Ensure tests, 100% coverage, Dialyzer, and formatting pass before opening a PR.
 

@@ -357,6 +357,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert_in_delta text.width, 551.28, 0.0001
   end
 
+  test "layout treats border-box width and height as outer box dimensions" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{
+                     "style" =>
+                       "box-sizing: border-box; width: 100pt; height: 50pt; padding: 10pt; border: 2pt solid #000; background-color: #eee"
+                   },
+                   children: [%{type: :text, text: "Border box"}]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {140, 90}, margin: 10)
+    [background | _boxes] = layout_tree.boxes
+
+    assert background.type == :rect
+    assert_in_delta background.width, 100.0, 0.0001
+    assert_in_delta background.height, 50.0, 0.0001
+  end
+
   test "layout creates list markers and link annotation bounds" do
     dom = %{
       type: :document,
@@ -554,6 +579,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert table_box.type == :rect
     assert_in_delta table_box.width, 180.0, 0.0001
     assert table_box.stroke_color == {1, 0, 0}
+  end
+
+  test "layout honors declared table row height" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{"style" => "height: 40pt"},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [%{type: :text, text: "Tall"}]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {120, 100}, margin: 10)
+    cell_background = Enum.find(layout_tree.boxes, &(&1.role == :table_cell_background))
+
+    assert_in_delta cell_background.height, 40.0, 0.0001
   end
 
   test "layout positions row flex items with order gap justify-content and align-items" do
@@ -1763,6 +1822,92 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert Layout.layout(document([invalid_flex]), page_size: {180, 160}, margin: 10) ==
              {:error, :invalid_layout}
+  end
+
+  test "layout supports table flex and grid container compositions" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{"style" => "display: grid; width: 180pt"},
+                   children: [
+                     table_dom("Grid Table"),
+                     %{type: :element, tag: "div", attributes: %{}, children: [text("Grid Peer")]}
+                   ]
+                 },
+                 %{
+                   type: :element,
+                   tag: "div",
+                   attributes: %{"style" => "display: flex; width: 180pt"},
+                   children: [
+                     table_dom("Flex Table"),
+                     %{type: :element, tag: "div", attributes: %{}, children: [text("Flex Peer")]}
+                   ]
+                 },
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{},
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [
+                             %{
+                               type: :element,
+                               tag: "div",
+                               attributes: %{"style" => "display: flex; width: 120pt"},
+                               children: [
+                                 %{
+                                   type: :element,
+                                   tag: "div",
+                                   attributes: %{},
+                                   children: [text("Direct Flex A")]
+                                 },
+                                 %{
+                                   type: :element,
+                                   tag: "div",
+                                   attributes: %{},
+                                   children: [text("Direct Flex B")]
+                                 }
+                               ]
+                             }
+                           ]
+                         },
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{},
+                           children: [text("Neighbor")]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {240, 260}, margin: 10)
+
+    rendered_text =
+      layout_tree.boxes
+      |> Enum.filter(&(&1.type == :text))
+      |> Enum.map(& &1.text)
+
+    assert "Grid Table" in rendered_text
+    assert "Flex Table" in rendered_text
+    assert Enum.join(rendered_text, "") =~ "Direct Flex A"
+    assert Enum.join(rendered_text, "") =~ "Direct Flex B"
+    assert "Neighbor" in rendered_text
   end
 
   test "layout rejects invalid nested structures through containers" do
@@ -3261,6 +3406,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       attributes: %{"style" => "width: #{width}; padding: 5pt; border: 1pt solid #ccc"},
       children: [%{type: :text, text: text}]
     }
+  end
+
+  defp table_dom(label) do
+    %{
+      type: :element,
+      tag: "table",
+      attributes: %{},
+      children: [
+        %{
+          type: :element,
+          tag: "tr",
+          attributes: %{},
+          children: [
+            %{
+              type: :element,
+              tag: "td",
+              attributes: %{},
+              children: [text(label)]
+            }
+          ]
+        }
+      ]
+    }
+  end
+
+  defp text(value) do
+    %{type: :text, text: value}
   end
 
   defp paragraph(text) do

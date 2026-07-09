@@ -75,11 +75,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       end
 
     gap = vertical_gap(state.previous_bottom, group.top)
-    target_top = state.current_y - gap
+    target_top = target_group_top(state, group, gap)
     group_bottom = target_top - group.height
 
     state =
-      case state.current_boxes != [] and group_bottom < margin do
+      case state.current_boxes != [] and group.height > 0 and group_bottom < margin do
         true ->
           state
           |> page_break(page_size, margin)
@@ -247,6 +247,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
   defp vertical_gap(previous_bottom, top) do
     max(previous_bottom - top, 0.0)
+  end
+
+  defp target_group_top(state, group, gap) do
+    target_top = state.current_y - gap
+
+    cond do
+      state.current_boxes != [] and group.top > state.current_y ->
+        group.top
+
+      state.current_boxes == [] and state.pages == [] and group.top < target_top ->
+        group.top
+
+      true ->
+        target_top
+    end
   end
 
   defp valid_page_size?(page_size) do

@@ -436,7 +436,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
           tag: "p",
           attributes: %{
             "style" =>
-              "margin: 2pt 4pt 6pt 8pt; padding: 3pt 5pt; border: 1pt solid #336699; border-radius: 2pt; background-color: #eeeeee"
+              "margin: 2pt 4pt 6pt 8pt; padding: 3pt 5pt; border: 1pt solid #336699; border-radius: 2pt; background-color: #eeeeee; box-sizing: border-box"
           },
           children: [%{type: :text, text: "Boxed"}]
         }
@@ -453,6 +453,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert paragraph.style.border_color == {0.2, 0.4, 0.6}
     assert paragraph.style.border_colors == edges({0.2, 0.4, 0.6})
     assert paragraph.style.border_radius == 2.0
+    assert paragraph.style.box_sizing == :border_box
     assert_in_delta elem(paragraph.style.background_color, 0), 0.9333, 0.0001
   end
 
@@ -988,6 +989,53 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert cell.style.height == 96.0
     assert cell.style.line_break == :anywhere
     assert cell.style.min_height == 96.0
+  end
+
+  test "compute resolves custom properties inside supported compound values" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "html",
+          attributes: %{},
+          children: [
+            %{
+              type: :element,
+              tag: "style",
+              attributes: %{},
+              children: [
+                %{
+                  type: :text,
+                  text:
+                    ":root { --pad: 6pt; --accent: #0f766e; } section { padding: var(--pad); border-left: 3pt solid var(--accent); }"
+                }
+              ]
+            },
+            %{
+              type: :element,
+              tag: "body",
+              attributes: %{},
+              children: [
+                %{
+                  type: :element,
+                  tag: "section",
+                  attributes: %{},
+                  children: [%{type: :text, text: "Panel"}]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [section] = styled_tree.children
+
+    assert section.style.padding == %{top: 6.0, right: 6.0, bottom: 6.0, left: 6.0}
+    assert section.style.border_widths.left == 3.0
+    assert_style_value(section.style.border_colors.left, {0.0588235294, 0.462745098, 0.431372549})
   end
 
   test "compute applies child selectors with first-child pseudo classes" do
@@ -1664,6 +1712,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       {"display: none", :display, :none},
       {"display: inline-flex", :display, :inline_flex},
       {"display: inline-grid", :display, :inline_grid},
+      {"box-sizing: content-box", :box_sizing, :content_box},
       {"margin: 1pt 2pt 3pt", :margin, %{top: 1.0, right: 2.0, bottom: 3.0, left: 2.0}},
       {"padding-top: 2pt", :padding, %{top: 2.0, right: 0.0, bottom: 0.0, left: 0.0}},
       {"padding-right: 2pt", :padding, %{top: 0.0, right: 2.0, bottom: 0.0, left: 0.0}},

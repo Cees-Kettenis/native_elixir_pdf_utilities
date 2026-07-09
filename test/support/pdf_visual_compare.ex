@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   import ExUnit.Assertions
 
   alias NativeElixirPdfUtilities.HtmlToPdf
+  alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
 
   @type comparison_stats :: %{
           required(:fixture) => String.t(),
@@ -37,7 +38,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
 
     chromium_pdf = Path.join(artifact_dir, "chromium.pdf")
     native_pdf = Path.join(artifact_dir, "native.pdf")
-    chromium_fixture_path = chromium_fixture_path!(fixture_path, artifact_dir, opts)
+    chromium_fixture_path = chromium_fixture_path!(fixture_path, artifact_dir, opts, render_opts)
 
     render_chromium_pdf!(chromium_bin, chromium_fixture_path, chromium_pdf)
 
@@ -103,12 +104,29 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   end
 
   defp default_render_opts(fixture_path) do
-    page_opts = [page_size: {612, 792}, margin: 0, base_url: Path.dirname(fixture_path)]
+    page_opts =
+      fixture_path
+      |> fixture_page_options()
+      |> Keyword.put(:base_url, Path.dirname(fixture_path))
 
     case ttf_font_path() do
       nil -> page_opts
       path -> Keyword.put(page_opts, :fonts, [%{family: "DejaVu Sans", path: path}])
     end
+  end
+
+  defp fixture_page_options(fixture_path) do
+    case raw_fixture_page_options(fixture_path) do
+      {:ok, []} -> [page_size: {612, 792}, margin: 0]
+      {:ok, page_options} -> page_options
+      {:error, :invalid_css} -> [page_size: {612, 792}, margin: 0]
+    end
+  end
+
+  defp raw_fixture_page_options(fixture_path) do
+    fixture_path
+    |> File.read!()
+    |> CssParser.page_options()
   end
 
   defp ttf_font_path do
@@ -164,8 +182,12 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     end
   end
 
-  defp chromium_fixture_path!(fixture_path, artifact_dir, opts) do
-    case Keyword.get(opts, :chromium_page_size) do
+  defp chromium_fixture_path!(fixture_path, artifact_dir, opts, render_opts) do
+    page_size =
+      Keyword.get(opts, :chromium_page_size) ||
+        chromium_default_page_size(fixture_path, render_opts)
+
+    case page_size do
       nil ->
         fixture_path
 
@@ -178,6 +200,13 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
         |> then(&File.write!(chromium_fixture_path, &1))
 
         chromium_fixture_path
+    end
+  end
+
+  defp chromium_default_page_size(fixture_path, render_opts) do
+    case raw_fixture_page_options(fixture_path) do
+      {:ok, []} -> Keyword.get(render_opts, :page_size)
+      _page_options -> nil
     end
   end
 
@@ -197,9 +226,18 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
 
   defp chromium_page_size_css(page_size) do
     case page_size do
-      :a4 -> "A4"
-      :letter -> "letter"
-      {width, height} when is_number(width) and is_number(height) -> "#{width}in #{height}in"
+      :a4 ->
+        "A4"
+
+      :letter ->
+        "letter"
+
+      {width, height}
+      when is_number(width) and is_number(height) and width <= 20 and height <= 20 ->
+        "#{width}in #{height}in"
+
+      {width, height} when is_number(width) and is_number(height) ->
+        "#{width}pt #{height}pt"
     end
   end
 

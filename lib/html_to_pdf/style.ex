@@ -434,6 +434,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       border_colors: edges({0, 0, 0}),
       border_radius: 0.0,
       border_widths: edges(0.0),
+      box_sizing: :content_box,
       display: :block,
       font_size: font_size,
       font_weight: font_weight,
@@ -488,6 +489,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       border_colors: edges({0, 0, 0}),
       border_radius: 0.0,
       border_widths: edges(0.0),
+      box_sizing: :content_box,
       display: :table_row_group,
       padding: edges(0.0),
       table_section: section
@@ -501,6 +503,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       border_colors: edges({0, 0, 0}),
       border_radius: 0.0,
       border_widths: edges(0.0),
+      box_sizing: :content_box,
       display: :table_row,
       padding: edges(0.0)
     }
@@ -513,6 +516,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       border_colors: edges({0, 0, 0}),
       border_radius: 0.0,
       border_widths: edges(1.0),
+      box_sizing: :content_box,
       colspan: 1,
       display: :table_cell,
       font_size: font_size,
@@ -1075,6 +1079,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
         {:ok, Map.put(style, :_custom_properties, custom_properties)}
 
+      _ ->
+        with {:ok, value} <- resolved_css_value(style, value) do
+          apply_resolved_declaration_value(style, property, value)
+        else
+          :error -> {:error, :invalid_document}
+        end
+    end
+  end
+
+  defp apply_resolved_declaration_value(style, property, value) do
+    case property do
       "color" ->
         with {:ok, color} <- parse_color(value, Map.fetch!(style, :color)) do
           case color do
@@ -1398,19 +1413,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     |> Map.put_new(:border_colors, edges(Map.get(style, :border_color, {0, 0, 0})))
     |> Map.put_new(:border_radius, 0.0)
     |> Map.put_new(:border_widths, edges(0.0))
+    |> Map.put_new(:box_sizing, :content_box)
     |> Map.put_new(:margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
     |> Map.put_new(:margin_after, 0.0)
     |> Map.put_new(:padding, edges(0.0))
   end
 
   defp put_size(style, property, value) do
-    case resolved_css_value(style, value) do
-      {:ok, value} ->
-        with {:ok, size} <- parse_size(value), do: {:ok, Map.put(style, property, size)}
-
-      :error ->
-        {:error, :invalid_document}
-    end
+    with {:ok, size} <- parse_size(value), do: {:ok, Map.put(style, property, size)}
   end
 
   defp put_vertical_align(style, value) do
@@ -1478,7 +1488,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp put_box_sizing(style, value) do
     case value |> String.trim() |> String.downcase() do
-      value when value in ["border-box", "content-box"] -> {:ok, style}
+      "border-box" -> {:ok, Map.put(style, :box_sizing, :border_box)}
+      "content-box" -> {:ok, Map.put(style, :box_sizing, :content_box)}
       _ -> {:error, :invalid_document}
     end
   end
@@ -1550,15 +1561,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp resolved_css_value(style, value) do
     normalized = String.trim(value)
 
-    case Regex.named_captures(~r/^var\((?<name>--[a-zA-Z_][a-zA-Z0-9_-]*)\)$/u, normalized) do
-      %{"name" => name} ->
-        case Map.get(Map.get(style, :_custom_properties, %{}), name) do
-          value when is_binary(value) -> {:ok, value}
-          _ -> :error
-        end
+    variable_references =
+      ~r/var\(\s*(--[a-zA-Z_][a-zA-Z0-9_-]*)\s*\)/u
+      |> Regex.scan(normalized, capture: :all_but_first)
+      |> List.flatten()
 
-      _ ->
+    case variable_references do
+      [] ->
         {:ok, normalized}
+
+      references ->
+        custom_properties = Map.get(style, :_custom_properties, %{})
+
+        Enum.reduce_while(references, normalized, fn name, acc ->
+          case Map.get(custom_properties, name) do
+            value when is_binary(value) ->
+              {:cont, String.replace(acc, ~r/var\(\s*#{Regex.escape(name)}\s*\)/u, value)}
+
+            _ ->
+              {:halt, :error}
+          end
+        end)
+        |> case do
+          value when is_binary(value) -> {:ok, value}
+          :error -> :error
+        end
     end
   end
 

@@ -44,6 +44,16 @@ Use case/cond/with or clearly named private functions instead of hidden branchin
 - All public-facing functions must include `@doc` and `@spec`.
 - Controllers and public endpoints must include Swagger/OpenAPI definitions.
 
+## HTML to PDF Rendering Changes
+
+- Any new HTML, CSS, layout, pagination, image, or font behavior added to the
+  HTML-to-PDF renderer must include focused unit coverage in the relevant
+  parser, style, layout, pagination, or PDF writer tests.
+- If the feature changes visible rendering, add or update a browser parity
+  fixture so the native output is compared against Chromium.
+- Browser parity work must pass with:
+  `CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity`
+
 ## Quality Gates
 
 All changes must pass the following commands so execute them:
