@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.0 - 2026-07-09
+
+### Added
+
+- Added a Chromium-backed browser parity test suite for the supported HTML/CSS rendering surface.
+- Added browser parity fixtures for common layout, CSS cascade, tables, flexbox, grid, pagination, image, link, unit, and production-document scenarios.
+- Added browser parity coverage documentation so supported renderer behavior is tied to explicit fixtures.
+
+### Changed
+
+- Improved HTML-to-PDF browser accuracy for nested table, flexbox, and grid compositions.
+- Improved collapsed table border sizing and painting to better match browser output.
+- Improved `@page` handling in parity tests so native and Chromium renders use the same page size and margins.
+- Updated contribution guidance to require focused tests and browser parity coverage for visible HTML-to-PDF feature work.
+
+### Fixed
+
+- Fixed CSS custom property resolution inside supported compound values such as padding and side-specific borders.
+- Fixed `box-sizing: border-box` handling across block, flex, grid, table, and image layout paths.
+- Fixed table layout inside flex and grid items, and flex layout directly inside table cells.
+- Fixed declared table row heights and pagination metadata propagation for table rows.
+- Fixed pagination edge cases around first-page parent padding, overlapping parent/child groups, and zero-height metadata groups.
+
 ## 0.3.0 - 2026-07-08
 
 ### Added

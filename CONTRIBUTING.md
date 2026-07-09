@@ -52,7 +52,7 @@ This project uses SemVer-style versioning to describe the public API promise:
   renaming, or moving public API in a way that can break existing users.
 
 While the package is still `0.x`, breaking public API changes should bump the
-minor version, such as `0.3.0` to `0.4.0`, and must be documented clearly in the
+minor version, such as `0.4.0` to `0.5.0`, and must be documented clearly in the
 changelog.
 
 Examples of breaking public API changes include:

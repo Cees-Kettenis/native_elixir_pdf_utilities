@@ -370,10 +370,12 @@ fixtures cover the workflows the project promises.
 
 A practical path is:
 
-1. `0.4.0` - finish must-have renderer improvements such as CSS font loading,
+1. `0.4.0` - browser parity baseline for the currently documented HTML/CSS
+   renderer surface, including production-style fixtures and regression tests.
+2. `0.5.0` - finish must-have renderer improvements such as CSS font loading,
    running headers and footers, page numbers, and print CSS polish.
-2. `0.5.0` to `0.8.0` - continue roadmap features, document behavior, and clean
+3. `0.6.0` to `0.8.0` - continue roadmap features, document behavior, and clean
    up naming, options, return values, and diagnostics.
-3. `0.9.0` - release candidate and API freeze, except for bug fixes and final
+4. `0.9.0` - release candidate and API freeze, except for bug fixes and final
    documentation corrections.
-4. `1.0.0` - stable public API that users can depend on.
+5. `1.0.0` - stable public API that users can depend on.

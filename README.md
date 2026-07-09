@@ -41,7 +41,7 @@ For planned improvements and useful future features, see [Roadmap](ROADMAP.md).
 ```elixir
 def deps do
   [
-    {:native_elixir_pdf_utilities, "~> 0.3.0"}
+    {:native_elixir_pdf_utilities, "~> 0.4.0"}
   ]
 end
 ```
