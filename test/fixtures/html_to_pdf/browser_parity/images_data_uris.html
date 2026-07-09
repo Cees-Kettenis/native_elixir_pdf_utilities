@@ -1,0 +1,71 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 9pt;
+        line-height: 11pt;
+        color: #111827;
+      }
+      .sheet { width: 612pt; padding: 20pt; box-sizing: border-box; }
+      .row {
+        display: flex;
+        gap: 12pt;
+        align-items: center;
+        width: 360pt;
+        padding: 8pt;
+        border: 2pt solid #334155;
+        background-color: #f8fafc;
+      }
+      img {
+        display: block;
+        width: 48pt;
+        height: 32pt;
+        padding: 3pt;
+        border: 1pt solid #1d4ed8;
+        background-color: #ffffff;
+      }
+      table {
+        margin-top: 16pt;
+        width: 300pt;
+        border-collapse: collapse;
+      }
+      td {
+        padding: 6pt;
+        border: 1pt solid #047857;
+        background-color: #ecfdf5;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 80pt 80pt;
+        gap: 8pt;
+        margin-top: 16pt;
+        padding: 6pt;
+        border: 2pt solid #92400e;
+        background-color: #fffbeb;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <section class="row">
+        <img alt="png sample" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAADElEQVR4nGP4zwACAAYBAQB/9VxdAAAAAElFTkSuQmCC">
+        <img alt="jpeg sample" src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/wAARCAABAAIDAREAAhEAAxEA/9k=">
+        <img alt="svg sample" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSIyNCI+PHJlY3Qgd2lkdGg9IjQwIiBoZWlnaHQ9IjI0IiBmaWxsPSIjMWQ0ZWQ4Ii8+PGNpcmNsZSBjeD0iMjgiIGN5PSIxMiIgcj0iOCIgZmlsbD0iI2ZhY2MxNSIvPjwvc3ZnPg==">
+      </section>
+      <table>
+        <tr>
+          <td><img alt="table image" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAADElEQVR4nGP4zwACAAYBAQB/9VxdAAAAAElFTkSuQmCC"></td>
+          <td>image in table</td>
+        </tr>
+      </table>
+      <section class="grid">
+        <img alt="grid image" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSIyNCI+PHJlY3Qgd2lkdGg9IjQwIiBoZWlnaHQ9IjI0IiBmaWxsPSIjMWQ0ZWQ4Ii8+PGNpcmNsZSBjeD0iMjgiIGN5PSIxMiIgcj0iOCIgZmlsbD0iI2ZhY2MxNSIvPjwvc3ZnPg==">
+        <div>image in grid</div>
+      </section>
+    </main>
+  </body>
+</html>

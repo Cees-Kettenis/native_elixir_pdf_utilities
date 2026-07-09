@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      html { font-size: 12pt; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 12pt;
+        color: #111827;
+      }
+      .sheet { width: 595pt; padding: 20pt; box-sizing: border-box; }
+      .pt { width: 90pt; height: 24pt; border: 1pt solid #1d4ed8; background: #dbeafe; }
+      .px { width: 120px; height: 32px; border: 1px solid #047857; background: #d1fae5; }
+      .mm { width: 40mm; height: 8mm; border: 1mm solid #92400e; background: #fef3c7; }
+      .cm { width: 3cm; height: 0.7cm; border: 0.05cm solid #7f1d1d; background: #fee2e2; }
+      .inch { width: 1.2in; height: 0.35in; border: 0.03in solid #6d28d9; background: #ede9fe; }
+      .rem { width: 10rem; min-height: 2rem; border: 0.1rem solid #334155; background: #e2e8f0; }
+      .percent {
+        width: 50%;
+        min-height: 24pt;
+        margin-top: 10pt;
+        padding: 4pt;
+        border: 1pt solid #0f766e;
+        background: #ccfbf1;
+      }
+      .aspect {
+        width: 120pt;
+        aspect-ratio: 2 / 1;
+        margin-top: 10pt;
+        border: 2pt solid #be123c;
+        background: #ffe4e6;
+      }
+      .box { margin-bottom: 5pt; padding: 2pt; }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <div class="box pt">pt</div>
+      <div class="box px">px</div>
+      <div class="box mm">mm</div>
+      <div class="box cm">cm</div>
+      <div class="box inch">in</div>
+      <div class="box rem">rem</div>
+      <div class="percent">percent width</div>
+      <div class="aspect">aspect ratio</div>
+    </main>
+  </body>
+</html>

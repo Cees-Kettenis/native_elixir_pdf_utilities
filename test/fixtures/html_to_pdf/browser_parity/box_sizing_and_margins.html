@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 12pt;
+        color: #111827;
+      }
+      .sheet { width: 595pt; padding: 24pt; box-sizing: border-box; }
+      .content-box {
+        box-sizing: content-box;
+        width: 160pt;
+        min-width: 140pt;
+        max-width: 190pt;
+        min-height: 38pt;
+        margin: 8pt 0 0 12pt;
+        padding: 8pt 12pt;
+        border: 3pt solid #4f46e5;
+        background-color: #eef2ff;
+      }
+      .border-box {
+        box-sizing: border-box;
+        width: 210pt;
+        min-height: 42pt;
+        margin: -4pt 0 0 36pt;
+        padding: 8pt;
+        border: 4pt solid #0f766e;
+        background-color: #ccfbf1;
+      }
+      .clamped {
+        width: 80%;
+        max-width: 260pt;
+        min-height: 24pt;
+        margin-top: 14pt;
+        padding: 5pt;
+        border: 1pt solid #92400e;
+        background-color: #fef3c7;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <section class="content-box">content box sizing</section>
+      <section class="border-box">border box with negative margin</section>
+      <section class="clamped">percentage width with max width</section>
+    </main>
+  </body>
+</html>

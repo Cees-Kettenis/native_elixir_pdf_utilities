@@ -12,7 +12,17 @@ defmodule NativeElixirPdfUtilities.MixProject do
       deps: deps(),
       package: package(),
       docs: docs(),
+      aliases: aliases(),
+      test_ignore_filters: [~r/test\/support\//],
       test_coverage: [summary: [threshold: 100]]
+    ]
+  end
+
+  def cli do
+    [
+      preferred_envs: [
+        "test.browser_parity": :test
+      ]
     ]
   end
 
@@ -48,10 +58,17 @@ defmodule NativeElixirPdfUtilities.MixProject do
         "README.md",
         "CHANGELOG.md",
         "docs/html-to-pdf-compatibility.md",
+        "docs/html-to-pdf-browser-parity-coverage.md",
         "docs/html-to-pdf-exmaples.md"
       ],
       source_ref: "v0.3.0",
       source_url: "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"
+    ]
+  end
+
+  defp aliases do
+    [
+      "test.browser_parity": "test --only browser_parity"
     ]
   end
 end

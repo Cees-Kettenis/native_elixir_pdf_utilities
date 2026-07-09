@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 12pt;
+        color: #111827;
+      }
+      .sheet { width: 595pt; padding: 22pt; box-sizing: border-box; }
+      .inline-row {
+        width: 300pt;
+        padding: 6pt;
+        border: 1pt solid #334155;
+        background-color: #f8fafc;
+      }
+      .chip {
+        display: inline-block;
+        width: 70pt;
+        margin-right: 5pt;
+        padding: 4pt;
+        border: 1pt solid #2563eb;
+        background-color: #dbeafe;
+      }
+      ul, ol {
+        width: 230pt;
+        margin: 12pt 0 0 18pt;
+        padding: 4pt 4pt 4pt 18pt;
+        border: 1pt solid #047857;
+        background-color: #ecfdf5;
+      }
+      li { margin-bottom: 4pt; }
+      .gone { display: none; }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <div class="inline-row">
+        <span class="chip">alpha</span>
+        <span class="chip">beta</span>
+        <span class="gone">hidden chip</span>
+        trailing inline text
+      </div>
+      <ul>
+        <li>unordered one</li>
+        <li>unordered two</li>
+      </ul>
+      <ol>
+        <li>ordered one</li>
+        <li>ordered two</li>
+      </ol>
+    </main>
+  </body>
+</html>

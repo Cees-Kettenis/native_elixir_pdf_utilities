@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 9pt;
+        line-height: 11pt;
+        color: #111827;
+      }
+      .sheet { width: 595pt; padding: 20pt; box-sizing: border-box; }
+      .row, .reverse, .column {
+        display: flex;
+        width: 360pt;
+        margin-bottom: 14pt;
+        padding: 6pt;
+        border: 2pt solid #334155;
+        background-color: #f8fafc;
+      }
+      .row {
+        flex-direction: row;
+        justify-content: space-around;
+        align-items: flex-end;
+        gap: 4pt;
+      }
+      .reverse {
+        flex-direction: row-reverse;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .column {
+        flex-direction: column;
+        width: 160pt;
+        justify-content: flex-start;
+        align-items: stretch;
+        row-gap: 5pt;
+      }
+      .item {
+        flex: 0 1 70pt;
+        min-height: 24pt;
+        padding: 4pt;
+        border: 1pt solid #7c3aed;
+        background-color: #ede9fe;
+      }
+      .wide { flex-grow: 1; align-self: flex-start; }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <section class="row">
+        <div class="item">row A</div>
+        <div class="item wide">row B grow</div>
+        <div class="item">row C</div>
+      </section>
+      <section class="reverse">
+        <div class="item">reverse A</div>
+        <div class="item">reverse B</div>
+        <div class="item">reverse C</div>
+      </section>
+      <section class="column">
+        <div class="item">column A</div>
+        <div class="item">column B</div>
+      </section>
+    </main>
+  </body>
+</html>

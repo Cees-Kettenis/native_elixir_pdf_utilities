@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 12pt;
+        color: #111827;
+      }
+      .page {
+        width: 612pt;
+        min-height: 160pt;
+        padding: 24pt;
+        box-sizing: border-box;
+      }
+      .box {
+        height: 48pt;
+        margin-bottom: 12pt;
+        padding: 6pt;
+        border: 2pt solid #334155;
+        background-color: #f1f5f9;
+        page-break-inside: avoid;
+      }
+      .before { page-break-before: always; background-color: #dbeafe; }
+      .modern-before { break-before: page; background-color: #dcfce7; }
+      .after { break-after: page; background-color: #fef3c7; }
+      .auto { break-before: auto; break-after: auto; }
+    </style>
+  </head>
+  <body>
+    <section class="page">
+      <div class="box auto">auto break values</div>
+      <div class="box before">legacy page break before</div>
+      <div class="box modern-before">modern break before</div>
+      <div class="box after">modern break after</div>
+      <div class="box">final block</div>
+    </section>
+  </body>
+</html>

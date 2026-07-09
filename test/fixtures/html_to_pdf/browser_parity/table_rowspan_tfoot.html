@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 9pt;
+        line-height: 11pt;
+        color: #111827;
+      }
+      .sheet { width: 612pt; padding: 20pt; box-sizing: border-box; }
+      table {
+        width: 420pt;
+        border-collapse: collapse;
+        border: 3pt solid #111827;
+      }
+      th, td {
+        padding: 6pt;
+        border: 1pt solid #1d4ed8;
+        vertical-align: middle;
+        background-color: #eff6ff;
+      }
+      th { background-color: #dbeafe; }
+      tfoot td {
+        font-weight: 700;
+        background-color: #dcfce7;
+      }
+      .rowspan {
+        background-color: #fef3c7;
+        border-right-width: 4pt;
+        border-right-color: #92400e;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <table>
+        <thead>
+          <tr><th>Group</th><th>Item</th><th>Qty</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="rowspan" rowspan="2">Alpha Group</td><td>First</td><td>10</td></tr>
+          <tr><td>Second</td><td>20</td></tr>
+          <tr><td>Beta Group</td><td colspan="2">Colspan summary</td></tr>
+        </tbody>
+        <tfoot>
+          <tr><td colspan="2">Total</td><td>30</td></tr>
+        </tfoot>
+      </table>
+    </main>
+  </body>
+</html>

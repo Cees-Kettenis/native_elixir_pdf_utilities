@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 9pt;
+        line-height: 11pt;
+        color: #111827;
+      }
+      .sheet { width: 595pt; padding: 18pt; box-sizing: border-box; }
+      table { border-collapse: collapse; }
+      .outer {
+        width: 430pt;
+        border: 4pt solid #111827;
+        background-color: #ffffff;
+      }
+      .outer th {
+        padding: 5pt;
+        border: 3pt solid #7f1d1d;
+        background-color: #fee2e2;
+      }
+      .outer td {
+        padding: 6pt;
+        vertical-align: top;
+        border: 2pt solid #1e3a8a;
+        background-color: #eff6ff;
+      }
+      .inner {
+        width: 100%;
+        border: 3pt solid #065f46;
+      }
+      .inner td {
+        padding: 4pt;
+        border: 1pt solid #047857;
+        background-color: #d1fae5;
+      }
+      .inner .strong { border-left-width: 4pt; border-left-color: #c2410c; }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <table class="outer">
+        <thead>
+          <tr><th>Header A</th><th>Header B</th><th>Header C</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>outer one</td>
+            <td colspan="2">
+              <table class="inner">
+                <tr><td>nested left</td><td class="strong">nested right</td></tr>
+                <tr><td colspan="2">nested colspan cell</td></tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td>short row</td>
+            <td>keeps borders</td>
+          </tr>
+        </tbody>
+      </table>
+    </main>
+  </body>
+</html>

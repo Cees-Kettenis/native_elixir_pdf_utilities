@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 12pt;
+        color: #111827;
+      }
+      .sheet { width: 595pt; padding: 20pt; box-sizing: border-box; }
+      .flex {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 8pt 10pt;
+        align-items: center;
+        justify-content: space-between;
+        width: 360pt;
+        padding: 8pt;
+        border: 2pt solid #1d4ed8;
+        background-color: #eff6ff;
+      }
+      .flex > div {
+        flex: 1 1 80pt;
+        min-height: 28pt;
+        padding: 5pt;
+        border: 1pt solid #60a5fa;
+        background-color: #dbeafe;
+      }
+      .grid {
+        display: grid;
+        width: 360pt;
+        margin-top: 18pt;
+        grid-template-columns: 70pt 1fr 2fr;
+        grid-template-rows: 30pt auto;
+        gap: 6pt 8pt;
+        justify-items: stretch;
+        align-items: stretch;
+        padding: 8pt;
+        border: 2pt solid #047857;
+        background-color: #ecfdf5;
+      }
+      .grid > div {
+        padding: 4pt;
+        border: 1pt solid #34d399;
+        background-color: #d1fae5;
+      }
+      .wide { grid-column: 2 / span 2; }
+      .tall { grid-row: 1 / 3; }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <section class="flex">
+        <div style="order: 2">second</div>
+        <div style="order: 1">first item wraps</div>
+        <div style="order: 3">third</div>
+      </section>
+      <section class="grid">
+        <div class="tall">A</div>
+        <div class="wide">B spans two columns</div>
+        <div>C</div>
+        <div>D</div>
+      </section>
+    </main>
+  </body>
+</html>

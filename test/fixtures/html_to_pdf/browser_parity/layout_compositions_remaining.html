@@ -1,0 +1,87 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 8pt;
+        line-height: 10pt;
+        color: #111827;
+      }
+      .sheet { width: 612pt; padding: 18pt; box-sizing: border-box; }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      td, th {
+        padding: 4pt;
+        border: 1pt solid #334155;
+        background-color: #f8fafc;
+        vertical-align: top;
+      }
+      .grid-host {
+        display: grid;
+        width: 430pt;
+        grid-template-columns: 1fr 1fr;
+        gap: 8pt;
+        padding: 6pt;
+        border: 2pt solid #047857;
+        background-color: #ecfdf5;
+      }
+      .flex-host {
+        display: flex;
+        width: 430pt;
+        gap: 8pt;
+        padding: 6pt;
+        border: 2pt solid #1d4ed8;
+        background-color: #eff6ff;
+      }
+      .direct-flex {
+        display: flex;
+        gap: 6pt;
+        padding: 4pt;
+        border: 2pt solid #be123c;
+        background-color: #fff1f2;
+      }
+      .direct-flex > div {
+        flex: 1 1 60pt;
+        padding: 3pt;
+        border: 1pt solid #fb7185;
+      }
+      .nested {
+        margin-bottom: 14pt;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <section class="grid-host nested">
+        <table>
+          <tr><th>Grid Table</th><th>Qty</th></tr>
+          <tr><td>inside grid</td><td>1</td></tr>
+        </table>
+        <div>grid peer</div>
+      </section>
+      <section class="flex-host nested">
+        <table>
+          <tr><th>Flex Table</th><th>Qty</th></tr>
+          <tr><td>inside flex</td><td>2</td></tr>
+        </table>
+        <div>flex peer</div>
+      </section>
+      <table class="nested">
+        <tr>
+          <td>
+            <div class="direct-flex">
+              <div>table direct flex A</div>
+              <div>table direct flex B</div>
+            </div>
+          </td>
+          <td>neighbor cell</td>
+        </tr>
+      </table>
+    </main>
+  </body>
+</html>

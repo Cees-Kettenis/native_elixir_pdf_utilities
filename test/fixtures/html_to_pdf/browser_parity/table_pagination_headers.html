@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 12pt;
+        color: #111827;
+      }
+      table {
+        width: 560pt;
+        margin: 20pt;
+        border-collapse: collapse;
+        page-break-inside: auto;
+      }
+      thead { background-color: #dbeafe; }
+      th, td {
+        padding: 8pt;
+        border: 1pt solid #1f2937;
+        vertical-align: top;
+      }
+      tr { height: 88pt; }
+      .forced { page-break-before: always; }
+    </style>
+  </head>
+  <body>
+    <table>
+      <thead>
+        <tr><th>Repeated Header A</th><th>Repeated Header B</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Row 1</td><td>First page body</td></tr>
+        <tr><td>Row 2</td><td>First page body</td></tr>
+        <tr><td>Row 3</td><td>Overflow body</td></tr>
+        <tr><td>Row 4</td><td>Overflow body</td></tr>
+        <tr class="forced"><td>Row 5</td><td>Forced new page around table row</td></tr>
+        <tr><td>Row 6</td><td>Final body</td></tr>
+      </tbody>
+    </table>
+  </body>
+</html>

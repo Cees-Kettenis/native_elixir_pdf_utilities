@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 9pt;
+        line-height: 11pt;
+        color: #111827;
+      }
+      .sheet { width: 595pt; padding: 18pt; box-sizing: border-box; }
+      table {
+        width: 390pt;
+        border-collapse: separate;
+        border: 3pt solid #111827;
+        background-color: #f8fafc;
+      }
+      caption {
+        padding: 4pt;
+        border: 1pt solid #64748b;
+        background-color: #e2e8f0;
+      }
+      th {
+        padding: 5pt;
+        border: 2pt solid #7f1d1d;
+        background-color: #fee2e2;
+      }
+      td {
+        padding: 6pt;
+        vertical-align: top;
+        border: 1pt solid #1d4ed8;
+        background-color: #dbeafe;
+      }
+      .right { text-align: right; }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <table>
+        <caption>separate border table</caption>
+        <thead>
+          <tr><th>Name</th><th class="right">Qty</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Alpha cell with wrapping text</td><td class="right">10</td></tr>
+          <tr><td colspan="2">Colspan summary row</td></tr>
+        </tbody>
+      </table>
+    </main>
+  </body>
+</html>

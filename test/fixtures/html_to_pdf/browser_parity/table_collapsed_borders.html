@@ -1,0 +1,69 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 9pt;
+        line-height: 11pt;
+        color: #111827;
+      }
+      .sheet { width: 595pt; padding: 18pt; box-sizing: border-box; }
+      table {
+        width: 420pt;
+        border-collapse: collapse;
+        border: 4pt solid #111827;
+        background-color: #ffffff;
+      }
+      caption {
+        padding: 4pt;
+        background-color: #e5e7eb;
+        border: 1pt solid #6b7280;
+      }
+      th {
+        padding: 5pt;
+        border: 3pt solid #7f1d1d;
+        background-color: #fee2e2;
+        font-weight: 700;
+      }
+      td {
+        padding: 6pt;
+        vertical-align: top;
+        border: 2pt solid #1e3a8a;
+        background-color: #eff6ff;
+      }
+      .accent {
+        border-left-width: 5pt;
+        border-left-color: #c2410c;
+        background-color: #ffedd5;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <table>
+        <caption>collapsed border table</caption>
+        <thead>
+          <tr><th>Code</th><th>Description</th><th>Qty</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>A-100</td>
+            <td class="accent">cell border precedence</td>
+            <td>12</td>
+          </tr>
+          <tr>
+            <td>B-200</td>
+            <td colspan="2">colspan should keep the collapsed grid</td>
+          </tr>
+          <tr>
+            <td>C-300</td>
+            <td>missing trailing cell</td>
+          </tr>
+        </tbody>
+      </table>
+    </main>
+  </body>
+</html>

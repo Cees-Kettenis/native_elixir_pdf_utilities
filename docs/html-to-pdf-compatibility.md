@@ -83,3 +83,55 @@ These features are intentionally outside the current renderer boundary:
 ## Validation Expectations
 
 Automated tests cover parsing, CSS cascade, layout dimensions, pagination, PDF object output, images, fonts, links, and end-to-end rendering. Human visual validation is still required before accepting broad layout changes because PDF layout regressions can be visually obvious while remaining structurally valid.
+
+Browser parity tests are available as an explicit, slower conformance suite. They render small HTML fixtures with Chromium, render the same fixtures with the native renderer, rasterize both PDFs with `pdftoppm`, and compare page pixels with a tolerance for font antialiasing.
+
+For the current fixture-by-feature coverage audit, see [HTML to PDF Browser Parity Coverage](html-to-pdf-browser-parity-coverage.md).
+
+The parity suite is excluded from normal `mix test` runs because it requires local browser tooling. Run it when changing CSS, layout, table, flexbox, grid, border, or pagination behavior:
+
+```bash
+CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity
+```
+
+Set `PDFTOPPM_BIN` if `pdftoppm` is not on `PATH`.
+
+Current parity fixtures cover:
+
+| Fixture | Coverage |
+| --- | --- |
+| `block_box_model.html` | margin, padding, width, min-height, side-specific borders, background, border radius, text alignment |
+| `box_sizing_and_margins.html` | `box-sizing`, min/max width, percentage width, negative margins, clamped block sizing |
+| `break_variants.html` | `break-before`, `break-after`, `page-break-before`, `page-break-inside`, auto and forced break values |
+| `css_cascade_selectors.html` | universal, element, class, id, child, descendant, `:first-child`, `:last-child`, `:nth-child`, `!important`, custom properties, `display: none` |
+| `css_remaining_supported_values.html` | grouped selectors, source order, inline style priority, inherited text styles, inline flex/grid, `min()`, named colors, no-op `overflow`/`position`, side padding/borders, `vertical-align`, `line-break`, `word-wrap` |
+| `display_lists_and_inline_block.html` | inline-block layout, hidden elements, unordered lists, ordered lists, list item spacing |
+| `html_semantics_typography.html` | semantic block aliases, metadata wrappers, `title`, `lang`, `h1`-`h6`, `b`, `i` |
+| `images_data_uris.html` | PNG, JPEG, and SVG data URI images in block, table, flex, and grid contexts |
+| `inline_text_flow.html` | inline runs, bold, italic, colors, line-height, wrapping, `<br>`, text transform |
+| `links_entities_and_protocols.html` | links, `https`, `http`, `mailto`, named entities, decimal and hex numeric entities |
+| `text_style_variants.html` | `rgb()`, `rgba()`, `currentColor`, transparent borders, white-space, word breaking, letter spacing, text transforms |
+| `units_and_sizing.html` | `pt`, `px`, `mm`, `cm`, `in`, `rem`, percentages, `aspect-ratio`, fixed height, min-height |
+
+Production-style fixtures from Sigportal are also included:
+
+| Fixture | Production settings |
+| --- | --- |
+| `purchase_order.html` | `Sigportal.EmailUtils.render_pdf(html, :a4)` |
+| `material_requisition.html` | `Sigportal.EmailUtils.render_pdf(html, :a4)` |
+| `stock_sticker.html` | `Sigportal.EmailUtils.render_pdf(html, {4.92126, 1.49606})` |
+| `trim_card.html` | `Sigportal.EmailUtils.render_pdf(html, {11.6929, 8.2677})` |
+| `flex_grid_alignment.html` | flex order, wrapping, gap, alignment, grid template tracks, grid spans, row/column gaps |
+| `flex_direction_and_justification.html` | flex row, row-reverse, column, grow/shrink/basis, `justify-content`, `align-items`, `align-self`, row gaps |
+| `grid_tracks_and_placement.html` | `repeat()`, `minmax()`, auto rows/columns, `grid-column`, `grid-row`, `grid-area`, item alignment |
+| `layout_compositions_remaining.html` | grid containing table, flex containing table, table containing direct flexbox |
+| `table_collapsed_borders.html` | table captions, headers, collapsed borders, side-specific border precedence, `colspan`, missing trailing cells |
+| `table_pagination_headers.html` | table overflow pagination, repeated header expectations, page breaks around table rows |
+| `table_rowspan_tfoot.html` | `rowspan`, `tfoot`, vertical alignment, footer rows, `colspan` totals |
+| `table_separate_borders.html` | separate borders, captions, headers, cell padding, `colspan`, right-aligned table content |
+| `nested_table_grid_flex.html` | table cell containing grid, grid item containing flexbox, ordering, gaps, nested borders |
+| `nested_table_collapsed_borders.html` | collapsed outer table containing a collapsed inner table, nested `colspan`, side-specific nested borders |
+| `page_rules_landscape.html` | CSS `@page` landscape sizing, page margins, explicit page-sized drawing geometry |
+| `pagination_breaks.html` | explicit page breaks, repeated page-sized sections, page count parity |
+
+The artifact directory for a failing fixture is reported in the assertion message under `tmp/browser_parity/<fixture-name>/` and contains Chromium/native PDFs plus rasterized PPM pages for inspection.

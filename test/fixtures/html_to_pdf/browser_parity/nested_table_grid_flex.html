@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 9pt;
+        line-height: 11pt;
+        color: #111827;
+      }
+      .sheet { width: 595pt; padding: 18pt; box-sizing: border-box; }
+      table { border-collapse: collapse; }
+      .outer {
+        width: 460pt;
+        border: 3pt solid #111827;
+      }
+      .outer > tbody > tr > td {
+        padding: 6pt;
+        vertical-align: top;
+        border: 2pt solid #1f2937;
+        background-color: #f8fafc;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 90pt 1fr;
+        gap: 5pt;
+        padding: 5pt;
+        border: 2pt solid #be123c;
+        background-color: #fff1f2;
+      }
+      .grid > div {
+        padding: 4pt;
+        border: 1pt solid #fb7185;
+        background-color: #ffe4e6;
+      }
+      .grid .wide { grid-column: 1 / span 2; }
+      .flex {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 4pt;
+        align-items: stretch;
+        justify-content: space-between;
+        border: 2pt solid #0369a1;
+        padding: 4pt;
+        background-color: #e0f2fe;
+      }
+      .flex > span {
+        flex: 1 1 48pt;
+        padding: 3pt;
+        border: 1pt solid #0284c7;
+        background-color: #bae6fd;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <table class="outer">
+        <tbody>
+          <tr>
+            <td style="width: 120pt">table cell</td>
+            <td>
+              <div class="grid">
+                <div>grid A</div>
+                <div>
+                  <div class="flex">
+                    <span style="order: 2">flex two</span>
+                    <span style="order: 1">flex one wraps</span>
+                    <span style="order: 3">flex three</span>
+                  </div>
+                </div>
+                <div class="wide">grid item spanning both columns</div>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </main>
+  </body>
+</html>

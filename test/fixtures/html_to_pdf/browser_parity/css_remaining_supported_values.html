@@ -1,0 +1,88 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 12pt;
+        color: blue;
+      }
+      .sheet { width: 612pt; padding: 20pt; box-sizing: border-box; }
+      .grouped, .source-order {
+        width: 260pt;
+        margin-bottom: 10pt;
+        padding-top: 5pt;
+        padding-right: 9pt;
+        padding-bottom: 7pt;
+        padding-left: 11pt;
+        border-top: 3pt solid red;
+        border-right: none;
+        border-bottom: 2pt solid green;
+        border-left: 4pt solid blue;
+        background-color: #eef2ff;
+      }
+      .source-order { color: red; }
+      .source-order { color: green; }
+      .inheritance { color: gray; font-weight: 700; font-style: italic; }
+      .inline-layouts {
+        width: 360pt;
+        height: 80pt;
+        min-height: 10%;
+        max-height: 90pt;
+        overflow: hidden;
+        position: relative;
+        border: 1pt solid #334155;
+        background-color: #f8fafc;
+      }
+      .inline-flex {
+        display: inline-flex;
+        width: min(60%, 120pt);
+        gap: 4pt;
+        margin: 4pt;
+        padding: 3pt;
+        border: 1pt solid #2563eb;
+        background: #dbeafe;
+      }
+      .inline-grid {
+        display: inline-grid;
+        grid-template-columns: 28pt 32pt;
+        gap: 3pt;
+        margin: 4pt;
+        padding: 3pt;
+        border: 1pt solid #047857;
+        background: #d1fae5;
+      }
+      .cell {
+        display: inline-block;
+        width: 34pt;
+        height: 18pt;
+        padding: 2pt;
+        border: 1pt solid currentColor;
+      }
+      .text {
+        width: 120pt;
+        margin-top: 8pt;
+        line-break: anywhere;
+        word-wrap: anywhere;
+        vertical-align: middle;
+        border: 1pt solid transparent;
+        background-color: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <section class="grouped">grouped selectors and side padding</section>
+      <section class="source-order" style="color: #1d4ed8">inline style priority</section>
+      <section class="inheritance"><span>inherited bold italic purple</span></section>
+      <section class="inline-layouts">
+        <div class="inline-flex"><span class="cell">IF1</span><span class="cell">IF2</span></div>
+        <div class="inline-grid"><span class="cell">IG1</span><span class="cell">IG2</span></div>
+      </section>
+      <p class="text">LongTokenForLineBreakAndWordWrap1234567890</p>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 9pt;
+        line-height: 11pt;
+        color: #111827;
+      }
+      .sheet { width: 595pt; padding: 20pt; box-sizing: border-box; }
+      .grid {
+        display: grid;
+        width: 390pt;
+        grid-template-columns: repeat(3, minmax(50pt, 1fr));
+        grid-template-rows: 26pt auto 30pt;
+        grid-auto-columns: 40pt;
+        grid-auto-rows: 24pt;
+        gap: 6pt 8pt;
+        justify-content: start;
+        align-content: start;
+        justify-items: stretch;
+        align-items: stretch;
+        padding: 8pt;
+        border: 2pt solid #166534;
+        background-color: #f0fdf4;
+      }
+      .grid > div {
+        padding: 4pt;
+        border: 1pt solid #22c55e;
+        background-color: #dcfce7;
+      }
+      .span-col { grid-column: 1 / span 2; }
+      .area { grid-area: 2 / 2 / 4 / 4; align-self: start; justify-self: end; }
+      .placed { grid-column-start: 3; grid-column-end: 4; grid-row-start: 1; grid-row-end: 2; }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <section class="grid">
+        <div class="span-col">span columns</div>
+        <div class="placed">placed</div>
+        <div>auto one</div>
+        <div class="area">grid area content wraps inside placed area</div>
+        <div>auto two</div>
+      </section>
+    </main>
+  </body>
+</html>

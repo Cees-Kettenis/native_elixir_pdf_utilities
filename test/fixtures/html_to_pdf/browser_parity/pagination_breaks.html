@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 12pt;
+        color: #111827;
+      }
+      .page {
+        width: 612pt;
+        height: 792pt;
+        padding: 28pt;
+        box-sizing: border-box;
+        page-break-after: always;
+      }
+      .page:last-child { page-break-after: auto; }
+      .band {
+        height: 90pt;
+        padding: 8pt;
+        border: 3pt solid #374151;
+        background-color: #f3f4f6;
+      }
+      .marker {
+        margin-top: 18pt;
+        height: 50pt;
+        border: 2pt solid #047857;
+        background-color: #d1fae5;
+      }
+    </style>
+  </head>
+  <body>
+    <section class="page">
+      <div class="band">first page block</div>
+      <div class="marker">page one marker</div>
+    </section>
+    <section class="page">
+      <div class="band">second page block</div>
+      <div class="marker">page two marker</div>
+    </section>
+  </body>
+</html>

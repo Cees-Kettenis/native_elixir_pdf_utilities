@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 13pt;
+        color: #111827;
+      }
+      .sheet { width: 595pt; padding: 24pt; box-sizing: border-box; }
+      .row {
+        width: 260pt;
+        margin-bottom: 10pt;
+        padding: 5pt;
+        border: 1pt solid currentColor;
+        background-color: #f8fafc;
+      }
+      .caps { text-transform: uppercase; color: rgb(153, 27, 27); }
+      .lower { text-transform: lowercase; color: rgba(29, 78, 216, 0.8); }
+      .nowrap { white-space: nowrap; overflow-wrap: normal; }
+      .break-word { width: 140pt; overflow-wrap: break-word; word-break: break-word; }
+      .spaced { letter-spacing: 1pt; }
+      .transparent { border-color: transparent; background-color: transparent; }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <p class="row caps">uppercase text</p>
+      <p class="row lower">LOWERCASE TEXT</p>
+      <p class="row nowrap">no wrap text stays on one line</p>
+      <p class="row break-word">BreakableReferenceNumber1234567890</p>
+      <p class="row spaced">letter spacing</p>
+      <p class="row transparent">transparent border accepted</p>
+    </main>
+  </body>
+</html>
