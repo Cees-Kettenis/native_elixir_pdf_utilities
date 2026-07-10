@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    container:
+      image: sigdevelopers/sigportal-ci:v2.6
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore Mix and Dialyzer caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+            priv/plts
+          key: elixir-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            elixir-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Compile with warnings as errors
+        run: mix compile --warnings-as-errors
+
+      - name: Check formatting and dependencies
+        run: |
+          mix format --check-formatted
+          mix deps.unlock --check-unused
+
+      - name: Run unit tests
+        run: mix test --warnings-as-errors
+
+      - name: Enforce 100% test coverage
+        run: mix test --cover --warnings-as-errors
+
+      - name: Run Dialyzer
+        run: mix dialyzer --no-compile
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: cover
+          retention-days: 7
+
+  browser-parity:
+    runs-on: ubuntu-latest
+    container:
+      image: sigdevelopers/sigportal-ci:v2.6
+    env:
+      MIX_ENV: test
+      CHROMIUM_BIN: /usr/bin/chromium
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install browser comparison tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends chromium fonts-dejavu-core poppler-utils
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Restore Mix cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: browser-parity-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            browser-parity-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Run Chromium browser parity tests
+        run: mix test.browser_parity --warnings-as-errors
+
+      - name: Upload browser parity artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-parity-artifacts
+          path: tmp/browser_parity
+          retention-days: 7
