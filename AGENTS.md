@@ -44,6 +44,22 @@ Use case/cond/with or clearly named private functions instead of hidden branchin
 - All public-facing functions must include `@doc` and `@spec`.
 - Controllers and public endpoints must include Swagger/OpenAPI definitions.
 
+## Diagnostics
+
+- Public APIs must return failures using the shared diagnostics contract when
+  the library can explain why an operation cannot continue:
+  `{:error, {reason, diagnostic}}`.
+- Build diagnostic maps with `NativeElixirPdfUtilities.Diagnostics` instead of
+  inventing per-module error shapes.
+- Diagnostic maps must include actionable `:stage`, `:reason`, and `:message`
+  fields, and should include `:operation`, `:module`, `:source`, `:line`, and
+  `:column` when that context is available.
+- Do not raise for ordinary caller/input failures in public APIs. Reserve
+  exceptions for programmer errors that cannot reasonably be represented as
+  recoverable library results.
+- Add focused tests for new or changed public failure modes, asserting the
+  diagnostic shape and the important actionable fields.
+
 ## HTML to PDF Rendering Changes
 
 - Any new HTML, CSS, layout, pagination, image, or font behavior added to the

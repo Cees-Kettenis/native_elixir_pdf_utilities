@@ -22,6 +22,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
+  alias NativeElixirPdfUtilities.Diagnostics
 
   @type page_size :: :a4 | :letter | {number(), number()}
   @type render_option ::
@@ -37,34 +38,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | :invalid_html
           | :invalid_layout
           | :invalid_margin
+          | :invalid_options
           | :invalid_page_size
           | :invalid_path
           | :invalid_pdf_input
           | :not_implemented
           | :unsupported_html
           | File.posix()
-  @type error_detail :: %{
-          required(:stage) => atom(),
-          required(:reason) => atom(),
-          required(:message) => String.t(),
-          optional(:line) => pos_integer(),
-          optional(:column) => pos_integer(),
-          optional(:source) => String.t()
-        }
-  @type detailed_error_reason ::
-          {:invalid_css
-           | :invalid_document
-           | :invalid_html
-           | :invalid_layout
-           | :invalid_margin
-           | :invalid_page_size
-           | :invalid_pdf_input
-           | :unsupported_html, error_detail()}
+  @type error_detail :: Diagnostics.diagnostic()
+  @type detailed_error_reason :: {error_reason(), error_detail()}
 
   @doc """
   Renders an HTML document to a PDF binary.
 
-  Returns `{:ok, pdf_binary}` when rendering succeeds or `{:error, reason}` when
+  Returns `{:ok, pdf_binary}` when rendering succeeds or
+  `{:error, {reason, diagnostic}}` when
   parsing, styling, layout, pagination, or PDF writing cannot be completed.
   Rendering failures include a broad reason and diagnostic detail, for example
   `{:error, {:invalid_css, %{message: "...", line: 18, source: "..."}}}`.
@@ -78,8 +66,64 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   points.
   """
   @spec render(String.t(), [render_option()]) ::
-          {:ok, binary()} | {:error, error_reason() | detailed_error_reason()}
+          {:ok, binary()} | {:error, detailed_error_reason()}
   def render(html, opts \\ []) do
+    case do_render(html, opts) do
+      {:ok, pdf_binary} ->
+        {:ok, pdf_binary}
+
+      {:error, {reason, detail}} ->
+        {:error,
+         {reason, Diagnostics.with_context(detail, operation: :render, module: __MODULE__)}}
+    end
+  end
+
+  @doc """
+  Reads an HTML file, renders it to PDF, and writes the PDF to `output_path`.
+
+  Returns `:ok` after writing the output file or `{:error, {reason, diagnostic}}` if reading,
+  rendering, or writing fails. Rendering options are the same as `render/2`.
+  """
+  @spec render_file(String.t(), String.t(), [render_option()]) ::
+          :ok | {:error, detailed_error_reason()}
+  def render_file(input_path, output_path, opts \\ []) do
+    case {input_path, output_path} do
+      {input_path, output_path} when is_binary(input_path) and is_binary(output_path) ->
+        case File.read(input_path) do
+          {:ok, html} ->
+            case render(html, opts) do
+              {:ok, pdf_binary} ->
+                case File.write(output_path, pdf_binary) do
+                  :ok ->
+                    :ok
+
+                  {:error, reason} ->
+                    file_error(reason, :write, output_path)
+                end
+
+              {:error, {reason, detail}} ->
+                {:error,
+                 {reason,
+                  Diagnostics.with_context(detail,
+                    operation: :render_file,
+                    module: __MODULE__,
+                    source: input_path
+                  )}}
+            end
+
+          {:error, reason} ->
+            file_error(reason, :read, input_path)
+        end
+
+      _ ->
+        Diagnostics.error(:file, :invalid_path, "input and output paths must be strings",
+          operation: :render_file,
+          module: __MODULE__
+        )
+    end
+  end
+
+  defp do_render(html, opts) do
     with {:ok, dom} <- HtmlParser.parse_detailed(html),
          {:ok, effective_opts} <- effective_render_options_detailed(dom, opts),
          {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts),
@@ -90,42 +134,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
     end
   end
 
-  @doc """
-  Reads an HTML file, renders it to PDF, and writes the PDF to `output_path`.
-
-  Returns `:ok` after writing the output file or `{:error, reason}` if reading,
-  rendering, or writing fails. Rendering options are the same as `render/2`.
-  """
-  @spec render_file(String.t(), String.t(), [render_option()]) ::
-          :ok | {:error, error_reason() | detailed_error_reason()}
-  def render_file(input_path, output_path, opts \\ []) do
-    case {input_path, output_path} do
-      {input_path, output_path} when is_binary(input_path) and is_binary(output_path) ->
-        with {:ok, html} <- File.read(input_path),
-             {:ok, pdf_binary} <- render(html, opts),
-             :ok <- File.write(output_path, pdf_binary) do
-          :ok
-        end
-
-      _ ->
-        {:error, :invalid_path}
-    end
-  end
-
   defp layout_document(styled_tree, opts) do
     case apply(Layout, :layout, [styled_tree, opts]) do
       {:ok, layout_tree} ->
         {:ok, layout_tree}
 
       {:error, reason} ->
-        {:error, {reason, stage_detail(:layout, reason, layout_message(reason))}}
+        Diagnostics.error(:layout, reason, layout_message(reason))
     end
   end
 
   defp effective_render_options_detailed(dom, opts) do
-    with {:ok, page_options} <-
-           dom |> stylesheet_sources() |> Enum.join("\n") |> CssParser.page_options() do
-      {:ok, Keyword.merge(page_options, opts)}
+    case Keyword.keyword?(opts) do
+      true ->
+        with {:ok, page_options} <-
+               dom |> stylesheet_sources() |> Enum.join("\n") |> CssParser.page_options() do
+          {:ok, Keyword.merge(page_options, opts)}
+        end
+
+      false ->
+        Diagnostics.error(:options, :invalid_options, "render options must be a keyword list")
     end
   end
 
@@ -133,12 +161,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
     "layout failed: #{reason}"
   end
 
-  defp stage_detail(stage, reason, message) do
-    %{
-      stage: stage,
-      reason: reason,
-      message: message
-    }
+  defp file_error(reason, operation, source) do
+    Diagnostics.error(:file, reason, "file #{operation} failed: #{reason}",
+      operation: operation,
+      module: __MODULE__,
+      source: source
+    )
   end
 
   defp stylesheet_sources(node) do

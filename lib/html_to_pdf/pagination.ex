@@ -9,11 +9,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
   @type page :: %{size: {float(), float()}, boxes: [term()]}
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
+  @type error_reason :: :invalid_layout
+
+  alias NativeElixirPdfUtilities.Diagnostics
 
   @doc """
   Splits a layout tree into PDF pages.
   """
-  @spec paginate(term(), [render_option()]) :: {:ok, [page()]} | {:error, :invalid_layout}
+  @spec paginate(term(), [render_option()]) ::
+          {:ok, [page()]} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def paginate(layout_tree, opts \\ []) do
     case {layout_tree, opts} do
       {%{type: :layout, page_size: page_size, boxes: boxes}, opts}
@@ -21,7 +25,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         paginate_boxes(layout_tree, page_size, boxes)
 
       _ ->
-        {:error, :invalid_layout}
+        Diagnostics.error(
+          :pagination,
+          :invalid_layout,
+          "pagination requires a layout tree with a page size and boxes",
+          operation: :paginate,
+          module: __MODULE__
+        )
     end
   end
 
@@ -35,7 +45,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         {:ok, groups_to_pages(groups, headers, page_size, margin)}
 
       _ ->
-        {:error, :invalid_layout}
+        Diagnostics.error(
+          :pagination,
+          :invalid_layout,
+          "pagination requires a positive page size and non-negative margin",
+          operation: :paginate,
+          module: __MODULE__
+        )
     end
   end
 

@@ -244,14 +244,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                message: "configured stylesheet must be inline CSS or a readable file path"
              }}} = HtmlToPdf.render("<p>Hello</p>", stylesheets: [:not_css])
 
-    assert {:error, :invalid_path} =
-             HtmlToPdf.render_file(:not_a_path, "/tmp/native-elixir-pdf-failure.pdf")
+    assert {:error,
+            {:invalid_options,
+             %{
+               stage: :options,
+               reason: :invalid_options,
+               operation: :render,
+               module: NativeElixirPdfUtilities.HtmlToPdf,
+               message: "render options must be a keyword list"
+             }}} = HtmlToPdf.render("<p>Hello</p>", [:not_options])
 
-    assert {:error, :enoent} =
-             HtmlToPdf.render_file(
-               "/tmp/native-elixir-pdf-missing-input.html",
-               "/tmp/native-elixir-pdf-failure.pdf"
-             )
+    assert {:error,
+            {:invalid_path,
+             %{
+               stage: :file,
+               reason: :invalid_path,
+               operation: :render_file,
+               module: NativeElixirPdfUtilities.HtmlToPdf,
+               message: "input and output paths must be strings"
+             }}} = HtmlToPdf.render_file(:not_a_path, "/tmp/native-elixir-pdf-failure.pdf")
+
+    missing_input = "/tmp/native-elixir-pdf-missing-input.html"
+
+    assert {:error,
+            {:enoent,
+             %{
+               stage: :file,
+               reason: :enoent,
+               operation: :read,
+               module: NativeElixirPdfUtilities.HtmlToPdf,
+               source: ^missing_input,
+               message: "file read failed: enoent"
+             }}} =
+             HtmlToPdf.render_file(missing_input, "/tmp/native-elixir-pdf-failure.pdf")
   end
 
   test "render converts tables to PDF text boxes and cell borders" do
@@ -411,14 +436,52 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert HtmlToPdf.render_file(input_path, output_path) == :ok
     assert File.read!(output_path) =~ "(Hello) Tj"
-    assert HtmlToPdf.render_file(input_path <> ".missing", output_path) == {:error, :enoent}
-    assert HtmlToPdf.render_file(:bad_input, output_path) == {:error, :invalid_path}
+
+    assert {:error, {:enoent, %{stage: :file, reason: :enoent, operation: :read}}} =
+             HtmlToPdf.render_file(input_path <> ".missing", output_path)
+
+    assert {:error,
+            {:invalid_path, %{stage: :file, reason: :invalid_path, operation: :render_file}}} =
+             HtmlToPdf.render_file(:bad_input, output_path)
   after
     input_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.html")
     output_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.pdf")
 
     File.rm(input_path)
     File.rm(output_path)
+  end
+
+  test "render_file returns diagnostics for render and write failures" do
+    input_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-bad-test.html")
+    File.write!(input_path, "<canvas></canvas>")
+
+    assert {:error,
+            {:unsupported_html,
+             %{
+               stage: :html,
+               reason: :unsupported_html,
+               operation: :render,
+               module: NativeElixirPdfUtilities.HtmlToPdf,
+               source: "<canvas>",
+               message: ~s(line 1: HTML tag "<canvas>" is unsupported)
+             }}} = HtmlToPdf.render_file(input_path, input_path <> ".pdf")
+
+    File.write!(input_path, "<p>Hello</p>")
+    output_path = System.tmp_dir!()
+
+    assert {:error,
+            {reason,
+             %{
+               stage: :file,
+               reason: reason,
+               operation: :write,
+               module: NativeElixirPdfUtilities.HtmlToPdf,
+               source: ^output_path
+             }}} = HtmlToPdf.render_file(input_path, output_path)
+  after
+    input_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-bad-test.html")
+    File.rm(input_path)
+    File.rm(input_path <> ".pdf")
   end
 
   defp png_fixture(width, height) do

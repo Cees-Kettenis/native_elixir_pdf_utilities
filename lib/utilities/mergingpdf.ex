@@ -15,6 +15,7 @@ defmodule NativeElixirPdfUtilities.Merge do
   """
 
   alias NativeElixirPdfUtilities.Tokenizer
+  alias NativeElixirPdfUtilities.Diagnostics
 
   @type pdf_bin :: binary()
   @typedoc "A single token as produced by `NativeElixirPdfUtilities.Tokenizer`."
@@ -27,6 +28,7 @@ defmodule NativeElixirPdfUtilities.Merge do
   @type id_map :: %{optional(integer()) => integer()}
   @typedoc "Byte-offset table for xref: object id -> {byte_offset, generation}."
   @type offsets_map :: %{optional(integer()) => {non_neg_integer(), non_neg_integer()}}
+  @type error_reason :: :empty_pdf_list | :invalid_pdf_input
 
   @doc """
   Merge a list of PDF binaries into a single PDF binary.
@@ -34,61 +36,86 @@ defmodule NativeElixirPdfUtilities.Merge do
   This is a best-effort merger for classic PDFs. It renumbers all objects of each input,
   collects Page objects, and emits a new Catalog/Pages tree that references all pages.
   """
-  @spec merge([pdf_bin()]) :: {:ok, pdf_bin()}
+  @spec merge([pdf_bin()]) ::
+          {:ok, pdf_bin()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def merge(bins) do
     case bins do
       [] ->
-        raise ArgumentError, "merge/1 expects at least one PDF binary"
+        Diagnostics.error(:merge, :empty_pdf_list, "merge/1 expects at least one PDF binary",
+          operation: :merge,
+          module: __MODULE__
+        )
 
       bins when is_list(bins) ->
-        # 1) Index all inputs -> objects and page ids
-        inputs = Enum.map(bins, &index_pdf/1)
+        case Enum.all?(bins, &is_binary/1) do
+          true ->
+            do_merge(bins)
 
-        # 2) Assign id offsets so object ids won't collide; reserve 1,2 for Pages,Catalog
-        {inputs2, _next_id} = assign_offsets(inputs, 3)
+          false ->
+            Diagnostics.error(
+              :merge,
+              :invalid_pdf_input,
+              "merge/1 expects a list of PDF binaries",
+              operation: :merge,
+              module: __MODULE__
+            )
+        end
 
-        # 3) Collect all page ids in new numbering (flatten Pages)
-        page_ids =
-          inputs2
-          |> Enum.flat_map(fn %{pages: pages, map: map} ->
-            Enum.map(pages, &Map.fetch!(map, &1))
-          end)
-          |> Enum.reduce({[], MapSet.new()}, fn id, {acc, seen} ->
-            if MapSet.member?(seen, id), do: {acc, seen}, else: {[id | acc], MapSet.put(seen, id)}
-          end)
-          |> then(fn {acc, _} -> Enum.reverse(acc) end)
-
-        pages_obj_id = 1
-        catalog_obj_id = 2
-
-        # 4) Render all objects with rewritten refs
-        # We'll render: new Pages, new Catalog, then all rewritten input objects
-        {pieces, offsets, pos} = add_piece([], pdf_header(), %{}, 0)
-        render_pages = render_pages_object(pages_obj_id, page_ids)
-        {pieces, offsets, pos} = add_object(pieces, offsets, pos, pages_obj_id, 0, render_pages)
-        render_catalog = render_catalog_object(catalog_obj_id, pages_obj_id)
-
-        {pieces, offsets, pos} =
-          add_object(pieces, offsets, pos, catalog_obj_id, 0, render_catalog)
-
-        {pieces, offsets, pos} =
-          Enum.reduce(inputs2, {pieces, offsets, pos}, fn input = %{objects: objs, map: map},
-                                                          acc ->
-            Enum.reduce(objs, acc, fn obj, {pieces, offsets, pos} ->
-              new_id = Map.fetch!(map, obj.obj)
-              page_ctx = page_injection_ctx(obj.tokens, input, pages_obj_id)
-              body = render_object_body(obj.tokens, map, page_ctx)
-              add_object(pieces, offsets, pos, new_id, obj.gen, body)
-            end)
-          end)
-
-        # 5) Xref + trailer
-        max_obj_id = Enum.max([catalog_obj_id, pages_obj_id | Map.keys(offsets)])
-        {xref_io, _xref_pos} = xref_and_trailer(offsets, pos, max_obj_id, catalog_obj_id)
-
-        final_io = [Enum.reverse(pieces), xref_io]
-        {:ok, IO.iodata_to_binary(final_io)}
+      _ ->
+        Diagnostics.error(:merge, :invalid_pdf_input, "merge/1 expects a list of PDF binaries",
+          operation: :merge,
+          module: __MODULE__
+        )
     end
+  end
+
+  defp do_merge(bins) do
+    # 1) Index all inputs -> objects and page ids
+    inputs = Enum.map(bins, &index_pdf/1)
+
+    # 2) Assign id offsets so object ids won't collide; reserve 1,2 for Pages,Catalog
+    {inputs2, _next_id} = assign_offsets(inputs, 3)
+
+    # 3) Collect all page ids in new numbering (flatten Pages)
+    page_ids =
+      inputs2
+      |> Enum.flat_map(fn %{pages: pages, map: map} ->
+        Enum.map(pages, &Map.fetch!(map, &1))
+      end)
+      |> Enum.reduce({[], MapSet.new()}, fn id, {acc, seen} ->
+        if MapSet.member?(seen, id), do: {acc, seen}, else: {[id | acc], MapSet.put(seen, id)}
+      end)
+      |> then(fn {acc, _} -> Enum.reverse(acc) end)
+
+    pages_obj_id = 1
+    catalog_obj_id = 2
+
+    # 4) Render all objects with rewritten refs
+    # We'll render: new Pages, new Catalog, then all rewritten input objects
+    {pieces, offsets, pos} = add_piece([], pdf_header(), %{}, 0)
+    render_pages = render_pages_object(pages_obj_id, page_ids)
+    {pieces, offsets, pos} = add_object(pieces, offsets, pos, pages_obj_id, 0, render_pages)
+    render_catalog = render_catalog_object(catalog_obj_id, pages_obj_id)
+
+    {pieces, offsets, pos} =
+      add_object(pieces, offsets, pos, catalog_obj_id, 0, render_catalog)
+
+    {pieces, offsets, pos} =
+      Enum.reduce(inputs2, {pieces, offsets, pos}, fn input = %{objects: objs, map: map}, acc ->
+        Enum.reduce(objs, acc, fn obj, {pieces, offsets, pos} ->
+          new_id = Map.fetch!(map, obj.obj)
+          page_ctx = page_injection_ctx(obj.tokens, input, pages_obj_id)
+          body = render_object_body(obj.tokens, map, page_ctx)
+          add_object(pieces, offsets, pos, new_id, obj.gen, body)
+        end)
+      end)
+
+    # 5) Xref + trailer
+    max_obj_id = Enum.max([catalog_obj_id, pages_obj_id | Map.keys(offsets)])
+    {xref_io, _xref_pos} = xref_and_trailer(offsets, pos, max_obj_id, catalog_obj_id)
+
+    final_io = [Enum.reverse(pieces), xref_io]
+    {:ok, IO.iodata_to_binary(final_io)}
   end
 
   # === Indexing ===

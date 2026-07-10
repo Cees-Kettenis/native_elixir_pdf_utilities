@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0 - 2026-07-10
+
+### Added
+
+- Added `NativeElixirPdfUtilities.Diagnostics` as the shared public diagnostic contract.
+- Added standardized diagnostic details for merge, text extraction, HTML rendering,
+  pagination, PDF writing, and file failures.
+- Added developer guidance for using the shared diagnostics contract in future public APIs.
+- Added a diagnostics guide under `docs/`.
+
+### Changed
+
+- Changed `Merge.merge/1` to return diagnostic errors instead of raising for empty input.
+- Changed recoverable failures from merge, text extraction, HTML rendering,
+  pagination, PDF writing, and file operations to return
+  `{:error, {reason, diagnostic}}` with `:stage`, `:reason`, `:message`,
+  `:operation`, `:module`, and `:source` context when available.
+
 ## 0.4.0 - 2026-07-09
 
 ### Added

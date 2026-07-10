@@ -77,6 +77,43 @@ examples are stable enough to support as the public API.
 - Prefer inline code when a private function is used only once and does not make the caller easier to understand.
 - Do not duplicate shared helpers for common concerns already handled elsewhere.
 
+## Diagnostic Error Guidelines
+
+Public APIs should return recoverable failures as `{:error, {reason, diagnostic}}`
+when the library knows why an operation cannot continue. Use
+`NativeElixirPdfUtilities.Diagnostics` to build these diagnostics.
+
+Diagnostic maps must include:
+
+- `:stage` - the pipeline or utility stage that failed
+- `:reason` - the machine-readable reason atom
+- `:message` - a human-readable explanation suitable for developer debugging
+
+Include these fields when available:
+
+- `:operation` - the public operation or file operation being performed
+- `:module` - the public module returning the error
+- `:source` - the relevant path, source snippet, or caller-provided input label
+- `:line` and `:column` - source location details for parser-style failures
+
+Do not raise for ordinary invalid caller input, missing files, unsupported
+documents, unsupported HTML/CSS, or empty extraction results. Prefer diagnostic
+error tuples and add focused tests that assert the important fields.
+
+Example:
+
+```elixir
+{:error,
+ {:invalid_path,
+  %{
+    stage: :file,
+    reason: :invalid_path,
+    message: "path must be a string",
+    operation: :extract_file,
+    module: NativeElixirPdfUtilities.Text
+  }}}
+```
+
 ## AI-Assisted Development
 
 AI tools such as OpenAI Codex may be used to assist with development, testing, documentation, and debugging.

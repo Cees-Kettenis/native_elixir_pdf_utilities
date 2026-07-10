@@ -8,8 +8,11 @@ defmodule NativeElixirPdfUtilities.Text do
   """
 
   alias NativeElixirPdfUtilities.Tokenizer
+  alias NativeElixirPdfUtilities.Diagnostics
 
   @type extract_option :: {:layout, boolean()}
+  @type error_reason ::
+          :empty_pdf_text | :invalid_options | :invalid_pdf_input | :invalid_path | File.posix()
   @type object_record :: %{obj: integer(), gen: integer(), tokens: [Tokenizer.token()]}
   @type text_chunk :: %{x: float(), y: float(), text: String.t()}
 
@@ -21,37 +24,62 @@ defmodule NativeElixirPdfUtilities.Text do
     * `:layout` - when true, approximate visible text layout using spaces and line breaks.
       This is currently the only output mode and defaults to true.
   """
-  @spec extract(binary(), [extract_option()]) :: {:ok, String.t()} | {:error, atom()}
+  @spec extract(binary(), [extract_option()]) ::
+          {:ok, String.t()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def extract(pdf_binary, opts \\ []) do
     case pdf_binary do
       pdf_binary when is_binary(pdf_binary) ->
-        layout? = Keyword.get(opts, :layout, true)
-        objects = parse_objects(pdf_binary)
+        case Keyword.keyword?(opts) do
+          true ->
+            layout? = Keyword.get(opts, :layout, true)
+            objects = parse_objects(pdf_binary)
 
-        cmap_by_ref = cmap_by_ref(objects)
-        font_cmap_by_name = font_cmap_by_name(objects, cmap_by_ref)
-        fallback_cmap = merge_cmaps(Map.values(cmap_by_ref))
+            cmap_by_ref = cmap_by_ref(objects)
+            font_cmap_by_name = font_cmap_by_name(objects, cmap_by_ref)
+            fallback_cmap = merge_cmaps(Map.values(cmap_by_ref))
 
-        pages =
-          objects
-          |> decoded_content_streams()
-          |> Enum.map(&extract_page_chunks(&1, font_cmap_by_name, fallback_cmap))
-          |> Enum.reject(&(&1 == []))
+            pages =
+              objects
+              |> decoded_content_streams()
+              |> Enum.map(&extract_page_chunks(&1, font_cmap_by_name, fallback_cmap))
+              |> Enum.reject(&(&1 == []))
 
-        case pages do
-          [] ->
-            {:error, :empty_pdf_text}
+            case pages do
+              [] ->
+                Diagnostics.error(
+                  :text_extraction,
+                  :empty_pdf_text,
+                  "PDF contains no extractable text",
+                  operation: :extract,
+                  module: __MODULE__
+                )
 
-          pages ->
-            text =
-              if layout? do
-                pages |> Enum.map(&layout_page/1) |> Enum.join("\f")
-              else
-                pages |> Enum.map(&plain_page/1) |> Enum.join("\n")
-              end
+              pages ->
+                text =
+                  if layout? do
+                    pages |> Enum.map(&layout_page/1) |> Enum.join("\f")
+                  else
+                    pages |> Enum.map(&plain_page/1) |> Enum.join("\n")
+                  end
 
-            {:ok, text}
+                {:ok, text}
+            end
+
+          false ->
+            Diagnostics.error(
+              :options,
+              :invalid_options,
+              "extract options must be a keyword list",
+              operation: :extract,
+              module: __MODULE__
+            )
         end
+
+      _ ->
+        Diagnostics.error(:text_extraction, :invalid_pdf_input, "PDF input must be a binary",
+          operation: :extract,
+          module: __MODULE__
+        )
     end
   end
 
@@ -59,14 +87,39 @@ defmodule NativeElixirPdfUtilities.Text do
   Reads a PDF file and extracts embedded text from it.
   """
   @spec extract_file(String.t(), [extract_option()]) ::
-          {:ok, String.t()} | {:error, atom() | File.posix()}
+          {:ok, String.t()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def extract_file(path, opts \\ []) do
     case path do
       path when is_binary(path) ->
         case File.read(path) do
-          {:ok, pdf_binary} -> extract(pdf_binary, opts)
-          {:error, reason} -> {:error, reason}
+          {:ok, pdf_binary} ->
+            case extract(pdf_binary, opts) do
+              {:ok, text} ->
+                {:ok, text}
+
+              {:error, {reason, detail}} ->
+                {:error,
+                 {reason,
+                  Diagnostics.with_context(detail,
+                    operation: :extract_file,
+                    module: __MODULE__,
+                    source: path
+                  )}}
+            end
+
+          {:error, reason} ->
+            Diagnostics.error(:file, reason, "file read failed: #{reason}",
+              operation: :read,
+              module: __MODULE__,
+              source: path
+            )
         end
+
+      _ ->
+        Diagnostics.error(:file, :invalid_path, "path must be a string",
+          operation: :extract_file,
+          module: __MODULE__
+        )
     end
   end
 

@@ -36,12 +36,14 @@ For HtmlToPdf options, supported HTML elements, CSS rules, layout behavior, and 
 
 For planned improvements and useful future features, see [Roadmap](ROADMAP.md).
 
+For public error shapes and diagnostic fields, see [Diagnostics](docs/diagnostics.md).
+
 ## Installation
 
 ```elixir
 def deps do
   [
-    {:native_elixir_pdf_utilities, "~> 0.4.0"}
+    {:native_elixir_pdf_utilities, "~> 0.5.0"}
   ]
 end
 ```

@@ -229,13 +229,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
   end
 
   test "paginate rejects invalid layout trees" do
-    assert Pagination.paginate(%{boxes: []}, []) == {:error, :invalid_layout}
+    assert {:error,
+            {:invalid_layout,
+             %{
+               stage: :pagination,
+               reason: :invalid_layout,
+               operation: :paginate,
+               module: NativeElixirPdfUtilities.HtmlToPdf.Pagination
+             }}} = Pagination.paginate(%{boxes: []}, [])
 
-    assert Pagination.paginate(%{type: :layout, page_size: {-1, 100}, margin: 10, boxes: []}, []) ==
-             {:error, :invalid_layout}
+    assert {:error,
+            {:invalid_layout,
+             %{stage: :pagination, reason: :invalid_layout, operation: :paginate}}} =
+             Pagination.paginate(
+               %{type: :layout, page_size: {-1, 100}, margin: 10, boxes: []},
+               []
+             )
 
-    assert Pagination.paginate(%{type: :layout, page_size: {100, 100}, margin: -1, boxes: []}, []) ==
-             {:error, :invalid_layout}
+    assert {:error,
+            {:invalid_layout,
+             %{stage: :pagination, reason: :invalid_layout, operation: :paginate}}} =
+             Pagination.paginate(
+               %{type: :layout, page_size: {100, 100}, margin: -1, boxes: []},
+               []
+             )
   end
 
   defp text_box(text, y, flow_id, extra \\ %{}) do

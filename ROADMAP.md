@@ -19,36 +19,6 @@ breaking API changes are allowed, but they should be explained clearly in
 
 ## Milestones
 
-### 0.5.0 - Diagnostics and Developer Experience
-
-Milestone goal: standardize the diagnostic experience callers get when rendering or
-utility operations cannot continue.
-
-#### Scope
-
-- Define the standard public error and diagnostics contract for the library.
-- Return rich diagnostic details wherever the library knows why an operation
-  cannot be completed.
-- Standardize diagnostic maps around actionable fields such as:
-  - `:stage`
-  - `:reason`
-  - `:message`
-  - `:operation`
-  - `:module`
-  - `:line`, `:column`, and `:source` when source locations are available
-
-#### Design Notes
-
-- Treat developer experience as a core public API concern: errors should explain
-  what failed, why it failed, and what input or feature caused the failure when
-  that information is available.
-- Extend the HTML-to-PDF diagnostic style to the rest of the public APIs instead
-  of leaving each module to invent its own error shape.
-
-#### Completion Criteria
-
-- Add focused tests for diagnostic error shapes and important failure modes.
-
 ### 0.6.0 - Fonts, Print CSS, and Render Metadata
 
 Milestone goal: make existing print templates easier to render without rewriting common

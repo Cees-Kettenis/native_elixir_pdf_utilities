@@ -81,7 +81,18 @@ defmodule NativeElixirPdfUtilities.TextTest do
     File.write!(path, pdf)
 
     assert Text.extract_file(path, layout: false) == {:ok, "Hello World"}
-    assert {:error, :enoent} = Text.extract_file(path <> ".missing")
+    missing_path = path <> ".missing"
+
+    assert {:error,
+            {:enoent,
+             %{
+               stage: :file,
+               reason: :enoent,
+               operation: :read,
+               module: NativeElixirPdfUtilities.Text,
+               source: ^missing_path,
+               message: "file read failed: enoent"
+             }}} = Text.extract_file(missing_path)
   after
     path = Path.join(System.tmp_dir!(), "native-elixir-pdf-text-test.pdf")
     File.rm(path)
@@ -89,7 +100,66 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
   test "extract reports empty pdf text" do
     assert Text.extract("%PDF-1.7\n1 0 obj << /Type /Catalog >> endobj\n%%EOF") ==
-             {:error, :empty_pdf_text}
+             {:error,
+              {:empty_pdf_text,
+               %{
+                 stage: :text_extraction,
+                 reason: :empty_pdf_text,
+                 operation: :extract,
+                 module: NativeElixirPdfUtilities.Text,
+                 message: "PDF contains no extractable text"
+               }}}
+  end
+
+  test "extract rejects invalid inputs with diagnostic details" do
+    assert {:error,
+            {:invalid_pdf_input,
+             %{
+               stage: :text_extraction,
+               reason: :invalid_pdf_input,
+               operation: :extract,
+               module: NativeElixirPdfUtilities.Text,
+               message: "PDF input must be a binary"
+             }}} = Text.extract(:not_pdf)
+
+    assert {:error,
+            {:invalid_options,
+             %{
+               stage: :options,
+               reason: :invalid_options,
+               operation: :extract,
+               module: NativeElixirPdfUtilities.Text,
+               message: "extract options must be a keyword list"
+             }}} = Text.extract("%PDF-1.7", [:not_options])
+
+    assert {:error,
+            {:invalid_path,
+             %{
+               stage: :file,
+               reason: :invalid_path,
+               operation: :extract_file,
+               module: NativeElixirPdfUtilities.Text,
+               message: "path must be a string"
+             }}} = Text.extract_file(:not_path)
+  end
+
+  test "extract_file adds file context to extraction diagnostics" do
+    path = Path.join(System.tmp_dir!(), "native-elixir-pdf-empty-text-test.pdf")
+    File.write!(path, "%PDF-1.7\n1 0 obj << /Type /Catalog >> endobj\n%%EOF")
+
+    assert {:error,
+            {:empty_pdf_text,
+             %{
+               stage: :text_extraction,
+               reason: :empty_pdf_text,
+               operation: :extract,
+               module: NativeElixirPdfUtilities.Text,
+               source: ^path,
+               message: "PDF contains no extractable text"
+             }}} = Text.extract_file(path)
+  after
+    path = Path.join(System.tmp_dir!(), "native-elixir-pdf-empty-text-test.pdf")
+    File.rm(path)
   end
 
   test "extracts text through text positioning operators and cmap ranges" do

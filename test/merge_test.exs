@@ -13,9 +13,37 @@ defmodule NativeElixirPdfUtilities.MergeTest do
   end
 
   test "rejects an empty input list" do
-    assert_raise ArgumentError, "merge/1 expects at least one PDF binary", fn ->
-      Merge.merge([])
-    end
+    assert {:error,
+            {:empty_pdf_list,
+             %{
+               stage: :merge,
+               reason: :empty_pdf_list,
+               operation: :merge,
+               module: NativeElixirPdfUtilities.Merge,
+               message: "merge/1 expects at least one PDF binary"
+             }}} = Merge.merge([])
+  end
+
+  test "rejects invalid input with diagnostic details" do
+    assert {:error,
+            {:invalid_pdf_input,
+             %{
+               stage: :merge,
+               reason: :invalid_pdf_input,
+               operation: :merge,
+               module: NativeElixirPdfUtilities.Merge,
+               message: "merge/1 expects a list of PDF binaries"
+             }}} = Merge.merge(["%PDF-1.7", :not_pdf])
+
+    assert {:error,
+            {:invalid_pdf_input,
+             %{
+               stage: :merge,
+               reason: :invalid_pdf_input,
+               operation: :merge,
+               module: NativeElixirPdfUtilities.Merge,
+               message: "merge/1 expects a list of PDF binaries"
+             }}} = Merge.merge(:not_a_list)
   end
 
   test "renumbers pages and injects inherited page attributes" do

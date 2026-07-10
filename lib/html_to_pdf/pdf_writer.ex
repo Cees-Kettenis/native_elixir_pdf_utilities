@@ -9,21 +9,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.Diagnostics
 
   @type page :: NativeElixirPdfUtilities.HtmlToPdf.Pagination.page()
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
+  @type error_reason :: :invalid_pdf_input
 
   @doc """
   Renders paginated drawing instructions to a PDF binary.
   """
-  @spec render([page()], [render_option()]) :: {:ok, binary()} | {:error, :invalid_pdf_input}
+  @spec render([page()], [render_option()]) ::
+          {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def render(pages, opts \\ []) do
     case {pages, opts} do
       {pages, opts} when is_list(pages) and is_list(opts) ->
         build_pdf(pages)
 
       _ ->
-        {:error, :invalid_pdf_input}
+        Diagnostics.error(:pdf, :invalid_pdf_input, "PDF writer requires a list of pages",
+          operation: :write_pdf,
+          module: __MODULE__
+        )
     end
   end
 
@@ -33,7 +39,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         {:ok, pages_to_pdf(pages)}
 
       false ->
-        {:error, :invalid_pdf_input}
+        Diagnostics.error(:pdf, :invalid_pdf_input, "PDF writer requires non-empty valid pages",
+          operation: :write_pdf,
+          module: __MODULE__
+        )
     end
   end
 

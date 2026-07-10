@@ -447,13 +447,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
       }
     ]
 
-    assert PdfWriter.render(pages, []) == {:error, :invalid_pdf_input}
+    assert_invalid_pdf_input(PdfWriter.render(pages, []))
   end
 
   test "render rejects invalid page data" do
-    assert PdfWriter.render([], []) == {:error, :invalid_pdf_input}
-    assert PdfWriter.render(:not_pages, []) == {:error, :invalid_pdf_input}
-    assert PdfWriter.render([%{size: {0, 100}, boxes: []}], []) == {:error, :invalid_pdf_input}
+    assert_invalid_pdf_input(PdfWriter.render([], []))
+    assert_invalid_pdf_input(PdfWriter.render(:not_pages, []))
+    assert_invalid_pdf_input(PdfWriter.render([%{size: {0, 100}, boxes: []}], []))
 
     invalid_boxes = [
       %{type: :text, text: "Bad", x: 1, y: 1, font: "Helvetica", font_size: -1, color: {0, 0, 0}},
@@ -569,9 +569,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     ]
 
     Enum.each(invalid_boxes, fn box ->
-      assert PdfWriter.render([%{size: {100.0, 100.0}, boxes: [box]}], []) ==
-               {:error, :invalid_pdf_input}
+      assert_invalid_pdf_input(PdfWriter.render([%{size: {100.0, 100.0}, boxes: [box]}], []))
     end)
+  end
+
+  defp assert_invalid_pdf_input(result) do
+    assert {:error,
+            {:invalid_pdf_input,
+             %{
+               stage: :pdf,
+               reason: :invalid_pdf_input,
+               operation: :write_pdf,
+               module: NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+             }}} = result
   end
 
   defp image_fixture(format, data, width, height, color_space) do
