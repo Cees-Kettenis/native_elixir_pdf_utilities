@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.1 - 2026-07-10
+
+### Changed
+
+- `Merge.merge/1` now rejects malformed classic PDF input with an
+  `:invalid_pdf_input` diagnostic rather than producing an empty PDF or raising.
+- `NativeElixirPdfUtilities.Tokenizer` now emits explicit error tokens for
+  unterminated literal and hexadecimal strings.
+- `Text.extract/2` rejects malformed token streams with an `:invalid_pdf_input`
+  diagnostic. It also ignores unusually large ToUnicode CMaps to bound memory
+  and CPU use during extraction.
+
+### Fixed
+
+- Fixed merge crashes caused by malformed tokens, incomplete streams, duplicate
+  object identifiers, and invalid object identifiers.
+- Fixed merged PDFs losing inherited `/MediaBox` and `/Resources` values from
+  intermediate `/Pages` tree nodes.
+- Fixed remapping of non-page `/Parent` references during a merge.
+- Fixed malformed TTF font input causing HTML-to-PDF rendering to crash.
+- Reduced avoidable repeated binary and list copying while writing larger PDFs.
+
 ## 0.5.0 - 2026-07-10
 
 ### Added
