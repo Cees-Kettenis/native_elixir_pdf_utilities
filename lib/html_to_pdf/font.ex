@@ -124,20 +124,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   """
   @spec load_registry(keyword()) :: {:ok, registry()} | :error
   def load_registry(opts) do
-    case Keyword.get(opts, :fonts, []) do
-      fonts when is_list(fonts) ->
-        Enum.reduce_while(fonts, {:ok, []}, fn font, {:ok, acc} ->
-          case load_font(font) do
-            {:ok, loaded} -> {:cont, {:ok, acc ++ [loaded]}}
-            :error -> {:halt, :error}
-          end
-        end)
-        |> case do
-          {:ok, embedded} -> {:ok, %{embedded: embedded ++ system_fonts(embedded)}}
-          :error -> :error
+    case Keyword.keyword?(opts) do
+      true ->
+        case Keyword.get(opts, :fonts, []) do
+          fonts when is_list(fonts) ->
+            Enum.reduce_while(fonts, {:ok, []}, fn font, {:ok, acc} ->
+              case load_font(font) do
+                {:ok, loaded} -> {:cont, {:ok, [loaded | acc]}}
+                :error -> {:halt, :error}
+              end
+            end)
+            |> case do
+              {:ok, embedded} ->
+                embedded = Enum.reverse(embedded)
+                {:ok, %{embedded: embedded ++ system_fonts(embedded)}}
+
+              :error ->
+                :error
+            end
+
+          _ ->
+            :error
         end
 
-      _ ->
+      false ->
         :error
     end
   end
@@ -312,7 +322,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
         {:ok, family, path, 400, :normal}
 
       font when is_list(font) ->
-        font_config(Map.new(font))
+        case Keyword.keyword?(font) do
+          true -> font_config(Map.new(font))
+          false -> :error
+        end
 
       font when is_map(font) ->
         family = Map.get(font, :family) || Map.get(font, "family")
@@ -479,6 +492,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     with {:ok, scaler_type} <- read_u32(data, 0),
          true <- scaler_type in [0x0001_0000, 0x7472_7565],
          {:ok, table_count} <- read_u16(data, 4),
+         true <- table_count > 0,
          true <- byte_size(data) >= 12 + table_count * 16 do
       records =
         0..(table_count - 1)
@@ -562,6 +576,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
   defp cmap_subtable_offsets(cmap) do
     with {:ok, count} <- read_u16(cmap, 2),
+         true <- count > 0,
          true <- byte_size(cmap) >= 4 + count * 8 do
       offsets =
         0..(count - 1)

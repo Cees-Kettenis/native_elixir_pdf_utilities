@@ -249,26 +249,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
          image_resources,
          first_page_object_id
        ) do
-    Enum.reduce(pages, {[], first_page_object_id}, fn page, {entries, next_object_id} ->
-      annotations = link_annotations(page)
+    {entries, next_object_id} =
+      Enum.reduce(pages, {[], first_page_object_id}, fn page, {entries, next_object_id} ->
+        annotations = link_annotations(page)
 
-      annotation_objects =
-        annotations
-        |> Enum.with_index(next_object_id + 2)
-        |> Enum.map(fn {annotation, object_id} -> {object_id, annotation} end)
+        annotation_objects =
+          annotations
+          |> Enum.with_index(next_object_id + 2)
+          |> Enum.map(fn {annotation, object_id} -> {object_id, annotation} end)
 
-      entry = %{
-        page: page,
-        page_object_id: next_object_id,
-        content_object_id: next_object_id + 1,
-        pages_object_id: pages_object_id,
-        font_resources: font_resources,
-        image_resources: image_resources,
-        annotation_objects: annotation_objects
-      }
+        entry = %{
+          page: page,
+          page_object_id: next_object_id,
+          content_object_id: next_object_id + 1,
+          pages_object_id: pages_object_id,
+          font_resources: font_resources,
+          image_resources: image_resources,
+          annotation_objects: annotation_objects
+        }
 
-      {entries ++ [entry], next_object_id + 2 + length(annotation_objects)}
-    end)
+        {[entry | entries], next_object_id + 2 + length(annotation_objects)}
+      end)
+
+    {Enum.reverse(entries), next_object_id}
   end
 
   defp page_object(
@@ -917,15 +920,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp objects_to_pdf(objects) do
     header = "%PDF-1.4\n%\xFF\xFF\xFF\xFF\n"
 
-    {body, offsets, _position} =
-      Enum.reduce(objects, {"", [], byte_size(header)}, fn {id, content},
-                                                           {acc, offsets, position} ->
+    {body, offsets, position} =
+      Enum.reduce(objects, {[], [], byte_size(header)}, fn {id, content},
+                                                           {pieces, offsets, position} ->
         object = "#{id} 0 obj\n#{content}\nendobj\n"
 
-        {acc <> object, offsets ++ [position], position + byte_size(object)}
+        {[object | pieces], [position | offsets], position + byte_size(object)}
       end)
 
-    xref_position = byte_size(header <> body)
+    body = Enum.reverse(body)
+    offsets = Enum.reverse(offsets)
+    xref_position = position
     size = length(objects) + 1
 
     xref_entries =
@@ -933,11 +938,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       |> Enum.map(&"#{pad_offset(&1)} 00000 n \n")
       |> Enum.join()
 
-    header <>
-      body <>
-      "xref\n0 #{size}\n0000000000 65535 f \n" <>
-      xref_entries <>
+    IO.iodata_to_binary([
+      header,
+      body,
+      "xref\n0 #{size}\n0000000000 65535 f \n",
+      xref_entries,
       "trailer\n<< /Size #{size} /Root 1 0 R >>\nstartxref\n#{xref_position}\n%%EOF\n"
+    ])
   end
 
   defp escape_text(text) do

@@ -10,6 +10,9 @@ defmodule NativeElixirPdfUtilities.Text do
   alias NativeElixirPdfUtilities.Tokenizer
   alias NativeElixirPdfUtilities.Diagnostics
 
+  @max_cmap_bytes 1_000_000
+  @max_cmap_entries 100_000
+
   @type extract_option :: {:layout, boolean()}
   @type error_reason ::
           :empty_pdf_text | :invalid_options | :invalid_pdf_input | :invalid_path | File.posix()
@@ -32,37 +35,48 @@ defmodule NativeElixirPdfUtilities.Text do
         case Keyword.keyword?(opts) do
           true ->
             layout? = Keyword.get(opts, :layout, true)
-            objects = parse_objects(pdf_binary)
 
-            cmap_by_ref = cmap_by_ref(objects)
-            font_cmap_by_name = font_cmap_by_name(objects, cmap_by_ref)
-            fallback_cmap = merge_cmaps(Map.values(cmap_by_ref))
+            case parse_objects(pdf_binary) do
+              {:ok, objects} ->
+                cmap_by_ref = cmap_by_ref(objects)
+                font_cmap_by_name = font_cmap_by_name(objects, cmap_by_ref)
+                fallback_cmap = merge_cmaps(Map.values(cmap_by_ref))
 
-            pages =
-              objects
-              |> decoded_content_streams()
-              |> Enum.map(&extract_page_chunks(&1, font_cmap_by_name, fallback_cmap))
-              |> Enum.reject(&(&1 == []))
+                pages =
+                  objects
+                  |> decoded_content_streams()
+                  |> Enum.map(&extract_page_chunks(&1, font_cmap_by_name, fallback_cmap))
+                  |> Enum.reject(&(&1 == []))
 
-            case pages do
-              [] ->
+                case pages do
+                  [] ->
+                    Diagnostics.error(
+                      :text_extraction,
+                      :empty_pdf_text,
+                      "PDF contains no extractable text",
+                      operation: :extract,
+                      module: __MODULE__
+                    )
+
+                  pages ->
+                    text =
+                      if layout? do
+                        pages |> Enum.map(&layout_page/1) |> Enum.join("\f")
+                      else
+                        pages |> Enum.map(&plain_page/1) |> Enum.join("\n")
+                      end
+
+                    {:ok, text}
+                end
+
+              :error ->
                 Diagnostics.error(
                   :text_extraction,
-                  :empty_pdf_text,
-                  "PDF contains no extractable text",
+                  :invalid_pdf_input,
+                  "PDF input is malformed or contains unsupported syntax",
                   operation: :extract,
                   module: __MODULE__
                 )
-
-              pages ->
-                text =
-                  if layout? do
-                    pages |> Enum.map(&layout_page/1) |> Enum.join("\f")
-                  else
-                    pages |> Enum.map(&plain_page/1) |> Enum.join("\n")
-                  end
-
-                {:ok, text}
             end
 
           false ->
@@ -124,10 +138,12 @@ defmodule NativeElixirPdfUtilities.Text do
   end
 
   defp parse_objects(pdf_binary) do
-    pdf_binary
-    |> Tokenizer.new()
-    |> Tokenizer.tokenize_all()
-    |> do_parse_objects([])
+    tokens = pdf_binary |> Tokenizer.new() |> Tokenizer.tokenize_all()
+
+    case {String.contains?(pdf_binary, "%PDF-"), Enum.any?(tokens, &match?({:error, _}, &1))} do
+      {true, false} -> {:ok, do_parse_objects(tokens, [])}
+      _ -> :error
+    end
   end
 
   defp do_parse_objects(tokens, acc) do
@@ -164,10 +180,9 @@ defmodule NativeElixirPdfUtilities.Text do
         stream ->
           decoded = decode_stream(stream, object.tokens)
 
-          if String.contains?(decoded, "begincmap") do
-            [{{object.obj, object.gen}, parse_cmap(decoded)}]
-          else
-            []
+          case String.contains?(decoded, "begincmap") and parse_cmap(decoded) do
+            {:ok, cmap} -> [{{object.obj, object.gen}, cmap}]
+            _ -> []
           end
       end
     end)
@@ -252,33 +267,57 @@ defmodule NativeElixirPdfUtilities.Text do
   end
 
   defp parse_cmap(cmap_text) do
-    bfchar =
+    case byte_size(cmap_text) <= @max_cmap_bytes do
+      true ->
+        with {:ok, bfchar} <- parse_bfchar(cmap_text),
+             {:ok, bfrange} <- parse_bfrange(cmap_text, map_size(bfchar)),
+             true <- map_size(bfchar) + map_size(bfrange) <= @max_cmap_entries do
+          {:ok, Map.merge(bfrange, bfchar)}
+        else
+          _ -> :error
+        end
+
+      false ->
+        :error
+    end
+  end
+
+  defp parse_bfchar(cmap_text) do
+    entries =
       cmap_text
       |> cmap_sections("beginbfchar", "endbfchar")
       |> Enum.flat_map(&Regex.scan(~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/, &1))
-      |> Map.new(fn [_, source, target] ->
-        {hex_to_integer(source), unicode_hex_to_string(target)}
-      end)
 
-    bfrange =
-      cmap_text
-      |> cmap_sections("beginbfrange", "endbfrange")
-      |> Enum.flat_map(
-        &Regex.scan(~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/, &1)
-      )
-      |> Enum.reduce(%{}, fn [_, first, last, target], acc ->
-        first = hex_to_integer(first)
-        last = hex_to_integer(last)
-        target = hex_to_integer(target)
+    {:ok,
+     Map.new(entries, fn [_, source, target] ->
+       {hex_to_integer(source), unicode_hex_to_string(target)}
+     end)}
+  end
 
-        first..last
-        |> Enum.with_index()
-        |> Enum.reduce(acc, fn {source, index}, range_acc ->
-          Map.put(range_acc, source, codepoint_to_string(target + index))
-        end)
-      end)
+  defp parse_bfrange(cmap_text, existing_entries) do
+    cmap_text
+    |> cmap_sections("beginbfrange", "endbfrange")
+    |> Enum.flat_map(&Regex.scan(~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/, &1))
+    |> Enum.reduce_while({:ok, %{}}, fn [_, first, last, target], {:ok, mappings} ->
+      first = hex_to_integer(first)
+      last = hex_to_integer(last)
+      target = hex_to_integer(target)
+      range_size = last - first + 1
 
-    Map.merge(bfrange, bfchar)
+      case last >= first and
+             range_size <= @max_cmap_entries - existing_entries - map_size(mappings) do
+        true ->
+          range =
+            Enum.reduce(first..last, mappings, fn source, acc ->
+              Map.put(acc, source, codepoint_to_string(target + source - first))
+            end)
+
+          {:cont, {:ok, range}}
+
+        false ->
+          {:halt, :error}
+      end
+    end)
   end
 
   defp cmap_sections(cmap_text, opening, closing) do

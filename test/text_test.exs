@@ -141,6 +141,43 @@ defmodule NativeElixirPdfUtilities.TextTest do
                module: NativeElixirPdfUtilities.Text,
                message: "path must be a string"
              }}} = Text.extract_file(:not_path)
+
+    assert {:error,
+            {:invalid_pdf_input,
+             %{
+               stage: :text_extraction,
+               reason: :invalid_pdf_input,
+               operation: :extract,
+               module: NativeElixirPdfUtilities.Text,
+               message: "PDF input is malformed or contains unsupported syntax"
+             }}} = Text.extract("%PDF-1.7\n1 0 obj <4142")
+  end
+
+  test "extract ignores CMaps whose ranges exceed the safe expansion limit" do
+    cmap = "begincmap\n1 beginbfrange\n<0000> <186A0> <0041>\nendbfrange\nendcmap"
+    content = "BT (safe) Tj ET"
+
+    pdf =
+      "%PDF-1.7\n" <>
+        "1 0 obj << /Length #{byte_size(cmap)} >> stream\n#{cmap}\nendstream endobj\n" <>
+        "2 0 obj << /Length #{byte_size(content)} >> stream\n#{content}\nendstream endobj\n%%EOF\n"
+
+    assert {:error,
+            {:empty_pdf_text,
+             %{stage: :text_extraction, reason: :empty_pdf_text, operation: :extract}}} =
+             Text.extract(pdf, layout: false)
+  end
+
+  test "extract ignores CMaps larger than the safe input limit" do
+    cmap = "begincmap\n" <> String.duplicate("x", 1_000_001)
+
+    pdf =
+      "%PDF-1.7\n1 0 obj << /Length #{byte_size(cmap)} >> stream\n#{cmap}\nendstream endobj\n%%EOF\n"
+
+    assert {:error,
+            {:empty_pdf_text,
+             %{stage: :text_extraction, reason: :empty_pdf_text, operation: :extract}}} =
+             Text.extract(pdf)
   end
 
   test "extract_file adds file context to extraction diagnostics" do

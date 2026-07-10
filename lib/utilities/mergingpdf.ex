@@ -70,9 +70,24 @@ defmodule NativeElixirPdfUtilities.Merge do
   end
 
   defp do_merge(bins) do
-    # 1) Index all inputs -> objects and page ids
-    inputs = Enum.map(bins, &index_pdf/1)
+    case Enum.reduce_while(bins, {:ok, []}, fn bin, {:ok, inputs} ->
+           case index_pdf(bin) do
+             {:ok, input} -> {:cont, {:ok, [input | inputs]}}
+             :error -> {:halt, :error}
+           end
+         end) do
+      {:ok, inputs} ->
+        build_merged_pdf(Enum.reverse(inputs))
 
+      :error ->
+        Diagnostics.error(:merge, :invalid_pdf_input, "merge/1 received an invalid classic PDF",
+          operation: :merge,
+          module: __MODULE__
+        )
+    end
+  end
+
+  defp build_merged_pdf(inputs) do
     # 2) Assign id offsets so object ids won't collide; reserve 1,2 for Pages,Catalog
     {inputs2, _next_id} = assign_offsets(inputs, 3)
 
@@ -104,7 +119,7 @@ defmodule NativeElixirPdfUtilities.Merge do
       Enum.reduce(inputs2, {pieces, offsets, pos}, fn input = %{objects: objs, map: map}, acc ->
         Enum.reduce(objs, acc, fn obj, {pieces, offsets, pos} ->
           new_id = Map.fetch!(map, obj.obj)
-          page_ctx = page_injection_ctx(obj.tokens, input, pages_obj_id)
+          page_ctx = page_injection_ctx(obj, input, pages_obj_id)
           body = render_object_body(obj.tokens, map, page_ctx)
           add_object(pieces, offsets, pos, new_id, obj.gen, body)
         end)
@@ -125,53 +140,95 @@ defmodule NativeElixirPdfUtilities.Merge do
     st = Tokenizer.new(bin)
     toks = Tokenizer.tokenize_all(st)
 
-    {objects, pages} = parse_objects_and_pages(toks)
-    root_pages = find_root_pages_id(objects)
-    inherited = extract_inherited_from_root_pages(objects, root_pages)
+    with true <- :binary.match(bin, "%PDF-") != :nomatch,
+         false <- Enum.any?(toks, &match?({:error, _reason}, &1)),
+         {:ok, objects, pages} <- parse_objects_and_pages(toks),
+         true <- objects != [] do
+      root_pages = find_root_pages_id(objects)
 
-    %{
-      objects: objects,
-      pages: pages,
-      root_pages: root_pages,
-      inherited: inherited,
-      max_obj: Enum.reduce(objects, 0, fn o, acc -> max(acc, o.obj) end)
-    }
+      {:ok,
+       %{
+         objects: objects,
+         pages: pages,
+         root_pages: root_pages,
+         inherited: page_inheritances(objects, root_pages),
+         max_obj: Enum.reduce(objects, 0, fn o, acc -> max(acc, o.obj) end)
+       }}
+    else
+      _ -> :error
+    end
   end
 
   # Parse the flat token stream into object records and collect Page object ids.
   defp parse_objects_and_pages(tokens) do
-    parse_objects_and_pages(tokens, 0, [], [], nil)
+    parse_objects_and_pages(tokens, [], [], %{})
   end
 
   # Internal worker for object scanning.
-  defp parse_objects_and_pages(tokens, idx, objects, pages, current) do
-    if idx >= length(tokens) do
-      {Enum.reverse(objects), Enum.reverse(pages)}
-    else
-      case Enum.slice(tokens, idx, 3) do
-        [{:int, obj}, {:int, gen}, :obj] ->
-          # collect until :endobj (exclusive)
-          {body, next_idx} = take_until_endobj(tokens, idx + 3, [])
-          is_page = object_is_page?(body)
-          pages2 = if is_page, do: [obj | pages], else: pages
-          obj_rec = %{obj: obj, gen: gen, tokens: body}
-          parse_objects_and_pages(tokens, next_idx + 1, [obj_rec | objects], pages2, current)
+  defp parse_objects_and_pages(tokens, objects, pages, object_ids) do
+    case tokens do
+      [] ->
+        {:ok, Enum.reverse(objects), Enum.reverse(pages)}
 
-        _ ->
-          parse_objects_and_pages(tokens, idx + 1, objects, pages, current)
-      end
+      [{:int, obj}, {:int, gen}, :obj | rest] when obj > 0 and gen >= 0 ->
+        case Map.has_key?(object_ids, obj) do
+          true ->
+            :error
+
+          false ->
+            case take_until_endobj(rest, []) do
+              {:ok, body, remaining} ->
+                case valid_object_tokens?(body) do
+                  true ->
+                    pages = if object_is_page?(body), do: [obj | pages], else: pages
+                    object = %{obj: obj, gen: gen, tokens: body}
+
+                    parse_objects_and_pages(
+                      remaining,
+                      [object | objects],
+                      pages,
+                      Map.put(object_ids, obj, true)
+                    )
+
+                  false ->
+                    :error
+                end
+
+              :error ->
+                :error
+            end
+        end
+
+      [{:int, _obj}, {:int, _gen}, :obj | _rest] ->
+        :error
+
+      [_token | rest] ->
+        parse_objects_and_pages(rest, objects, pages, object_ids)
     end
   end
 
-  # Take tokens until encountering :endobj (exclusive), returning collected tokens and index.
-  defp take_until_endobj(tokens, idx, acc) do
-    if idx >= length(tokens) do
-      {Enum.reverse(acc), idx}
-    else
-      case Enum.at(tokens, idx) do
-        :endobj -> {Enum.reverse(acc), idx}
-        tok -> take_until_endobj(tokens, idx + 1, [tok | acc])
-      end
+  # Take tokens until encountering :endobj (exclusive), preserving the remaining token stream.
+  defp take_until_endobj(tokens, acc) do
+    case tokens do
+      [] -> :error
+      [:endobj | rest] -> {:ok, Enum.reverse(acc), rest}
+      [token | rest] -> take_until_endobj(rest, [token | acc])
+    end
+  end
+
+  defp valid_object_tokens?(tokens) do
+    case tokens do
+      [] ->
+        true
+
+      [:stream, {:stream_data, _data}, :endstream | rest] ->
+        valid_object_tokens?(rest)
+
+      [:stream | _rest] ->
+        false
+
+      [_token | rest] ->
+        valid_object_tokens?(rest)
     end
   end
 
@@ -202,30 +259,73 @@ defmodule NativeElixirPdfUtilities.Merge do
   # Look for '/Pages <obj> <gen> R' in a token sequence and return <obj>.
   defp find_pages_ref_in_tokens(tokens) do
     tokens
-    |> Enum.chunk_every(5, 1, :discard)
+    |> Enum.chunk_every(4, 1, :discard)
     |> Enum.find_value(fn
-      [{:name, "Pages"}, {:int, obj}, {:int, _gen}, :R, _] -> obj
+      [{:name, "Pages"}, {:int, obj}, {:int, _gen}, :R] -> obj
       _ -> nil
     end)
   end
 
-  # Extract inherited attributes (/Resources and /MediaBox) from the root Pages object.
-  defp extract_inherited_from_root_pages(objects, root_pages_id) do
+  # Resolve inheritable page attributes through the complete /Pages tree.
+  defp page_inheritances(objects, root_pages_id) do
     case root_pages_id do
       nil ->
-        %{resources: nil, mediabox: nil}
+        %{}
 
       root_pages_id ->
-        case Enum.find(objects, &(&1.obj == root_pages_id)) do
-          nil ->
-            %{resources: nil, mediabox: nil}
+        object_by_id = Map.new(objects, &{&1.obj, &1})
 
-          %{tokens: toks} ->
-            %{
-              resources: find_value_after_name(toks, "Resources"),
-              mediabox: find_value_after_name(toks, "MediaBox")
-            }
+        collect_page_inheritances(
+          root_pages_id,
+          object_by_id,
+          %{resources: nil, mediabox: nil},
+          %{},
+          %{}
+        )
+    end
+  end
+
+  defp collect_page_inheritances(object_id, object_by_id, inherited, visited, page_attributes) do
+    case {Map.has_key?(visited, object_id), Map.get(object_by_id, object_id)} do
+      {true, _object} ->
+        page_attributes
+
+      {false, %{tokens: tokens} = object} ->
+        attributes = %{
+          resources: find_value_after_name(tokens, "Resources") || inherited.resources,
+          mediabox: find_value_after_name(tokens, "MediaBox") || inherited.mediabox
+        }
+
+        visited = Map.put(visited, object_id, true)
+
+        case object_is_page?(tokens) do
+          true ->
+            Map.put(page_attributes, object.obj, attributes)
+
+          false ->
+            page_child_references(tokens)
+            |> Enum.reduce(page_attributes, fn child_id, acc ->
+              collect_page_inheritances(child_id, object_by_id, attributes, visited, acc)
+            end)
         end
+
+      {false, nil} ->
+        page_attributes
+    end
+  end
+
+  defp page_child_references(tokens) do
+    case find_value_after_name(tokens, "Kids") do
+      kids when is_list(kids) ->
+        kids
+        |> Enum.chunk_every(3, 1, :discard)
+        |> Enum.flat_map(fn
+          [{:int, object_id}, {:int, _generation}, :R] -> [object_id]
+          _ -> []
+        end)
+
+      _ ->
+        []
     end
   end
 
@@ -284,9 +384,15 @@ defmodule NativeElixirPdfUtilities.Merge do
   end
 
   # Build a page-rewrite context for Page objects (to set Parent/Resources/MediaBox), else nil.
-  defp page_injection_ctx(tokens, %{inherited: inh}, parent_id) do
-    if object_is_page?(tokens) do
-      %{parent_id: parent_id, resources_tokens: inh.resources, mediabox_tokens: inh.mediabox}
+  defp page_injection_ctx(object, %{inherited: inheritances}, parent_id) do
+    if object_is_page?(object.tokens) do
+      inherited = Map.get(inheritances, object.obj, %{resources: nil, mediabox: nil})
+
+      %{
+        parent_id: parent_id,
+        resources_tokens: inherited.resources,
+        mediabox_tokens: inherited.mediabox
+      }
     else
       nil
     end
@@ -381,7 +487,7 @@ defmodule NativeElixirPdfUtilities.Merge do
     dict_inner =
       dict_inner
       |> drop_key("Parent")
-      |> put_key("Parent", [{:int, parent_id}, {:int, 0}, :R])
+      |> put_key("Parent", [{:generated_reference, parent_id}])
       |> ensure_type_page()
       |> ensure_resources(inh_res)
       |> ensure_mediabox(inh_mb || default_mediabox())
@@ -541,8 +647,7 @@ defmodule NativeElixirPdfUtilities.Merge do
     do_render_tokens(tokens, id_map, [], nil) |> Enum.reverse()
   end
 
-  # last_name: nil or the most recent name (e.g., "Parent")
-  defp do_render_tokens(tokens, id_map, acc, last_name) do
+  defp do_render_tokens(tokens, id_map, acc, _last_name) do
     case tokens do
       [] ->
         acc
@@ -550,8 +655,12 @@ defmodule NativeElixirPdfUtilities.Merge do
       [{:name, name} | rest] ->
         do_render_tokens(rest, id_map, [["/", name] | add_sep(acc)], name)
 
+      [{:generated_reference, obj} | rest] ->
+        io = [Integer.to_string(obj), " 0 R"]
+        do_render_tokens(rest, id_map, [io | add_sep(acc)], nil)
+
       [{:int, obj}, {:int, gen}, :R | rest] ->
-        new_obj = if last_name == "Parent", do: obj, else: Map.get(id_map, obj, obj)
+        new_obj = Map.get(id_map, obj, obj)
         io = [Integer.to_string(new_obj), " ", Integer.to_string(gen), " R"]
         do_render_tokens(rest, id_map, [io | add_sep(acc)], nil)
 

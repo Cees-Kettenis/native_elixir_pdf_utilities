@@ -54,7 +54,15 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
           | :trailer
           | :startxref
           | :R
+          | {:error, tokenizer_error()}
           | {:eof, nil}
+
+  @type tokenizer_error ::
+          {:unexpected_char, byte(), non_neg_integer()}
+          | {:unexpected_gt, non_neg_integer()}
+          | {:not_a_number, binary()}
+          | {:unterminated_literal_string, non_neg_integer()}
+          | {:unterminated_hex_string, non_neg_integer()}
 
   # NUL, HT, LF, FF, CR, SP
   @whitespace [0, 9, 10, 12, 13, 32]
@@ -344,13 +352,19 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
   defp parse_literal_string(%__MODULE__{} = st) do
     # skip '('
     st1 = bump(st, 1)
-    {iodata, st2} = collect_lit(st1, 0, [])
-    {{:string, IO.iodata_to_binary(iodata)}, st2}
+
+    case collect_lit(st1, 0, []) do
+      {:ok, iodata, st2} ->
+        {{:string, IO.iodata_to_binary(iodata)}, st2}
+
+      {:error, st2} ->
+        {{:error, {:unterminated_literal_string, st.pos}}, st2}
+    end
   end
 
   defp collect_lit(%__MODULE__{} = st, balance, acc) do
     if st.pos >= st.size do
-      {Enum.reverse(acc), st}
+      {:error, st}
     else
       case byte_at(st) do
         # escape
@@ -363,7 +377,7 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
         ?) ->
           if balance == 0 do
             # end of string
-            {Enum.reverse(acc), bump(st, 1)}
+            {:ok, Enum.reverse(acc), bump(st, 1)}
           else
             collect_lit(bump(st, 1), balance - 1, [?) | acc])
           end
@@ -376,50 +390,56 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
 
   # Handle a backslash escape sequence within a literal string.
   defp collect_escape(%__MODULE__{} = st, balance, acc) do
-    c = byte_at(st)
-
-    cond do
-      c == ?n ->
-        collect_lit(bump(st, 1), balance, [?\n | acc])
-
-      c == ?r ->
-        collect_lit(bump(st, 1), balance, [?\r | acc])
-
-      c == ?t ->
-        collect_lit(bump(st, 1), balance, [?\t | acc])
-
-      c == ?b ->
-        collect_lit(bump(st, 1), balance, [?\b | acc])
-
-      c == ?f ->
-        collect_lit(bump(st, 1), balance, [?\f | acc])
-
-      c == ?( ->
-        collect_lit(bump(st, 1), balance, [?( | acc])
-
-      c == ?) ->
-        collect_lit(bump(st, 1), balance, [?) | acc])
-
-      c == ?\\ ->
-        collect_lit(bump(st, 1), balance, [?\\ | acc])
-
-      c >= ?0 and c <= ?7 ->
-        {val, st2} = collect_octal(st, 0, 0)
-        collect_lit(st2, balance, [val | acc])
-
-      # line continuation: backslash followed by CR or LF (or CRLF) is ignored
-      # LF
-      c == 10 ->
-        collect_lit(bump(st, 1), balance, acc)
-
-      c == 13 ->
-        st2 = bump(st, 1)
-        st3 = if st2.pos < st2.size and byte_at(st2) == 10, do: bump(st2, 1), else: st2
-        collect_lit(st3, balance, acc)
-
+    case st.pos >= st.size do
       true ->
-        # unknown escape -> keep char as-is
-        collect_lit(bump(st, 1), balance, [c | acc])
+        {:error, st}
+
+      false ->
+        c = byte_at(st)
+
+        cond do
+          c == ?n ->
+            collect_lit(bump(st, 1), balance, [?\n | acc])
+
+          c == ?r ->
+            collect_lit(bump(st, 1), balance, [?\r | acc])
+
+          c == ?t ->
+            collect_lit(bump(st, 1), balance, [?\t | acc])
+
+          c == ?b ->
+            collect_lit(bump(st, 1), balance, [?\b | acc])
+
+          c == ?f ->
+            collect_lit(bump(st, 1), balance, [?\f | acc])
+
+          c == ?( ->
+            collect_lit(bump(st, 1), balance, [?( | acc])
+
+          c == ?) ->
+            collect_lit(bump(st, 1), balance, [?) | acc])
+
+          c == ?\\ ->
+            collect_lit(bump(st, 1), balance, [?\\ | acc])
+
+          c >= ?0 and c <= ?7 ->
+            {val, st2} = collect_octal(st, 0, 0)
+            collect_lit(st2, balance, [val | acc])
+
+          # line continuation: backslash followed by CR or LF (or CRLF) is ignored
+          # LF
+          c == 10 ->
+            collect_lit(bump(st, 1), balance, acc)
+
+          c == 13 ->
+            st2 = bump(st, 1)
+            st3 = if st2.pos < st2.size and byte_at(st2) == 10, do: bump(st2, 1), else: st2
+            collect_lit(st3, balance, acc)
+
+          true ->
+            # unknown escape -> keep char as-is
+            collect_lit(bump(st, 1), balance, [c | acc])
+        end
     end
   end
 
@@ -452,25 +472,36 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
 
   # Parse a hex string '<...>' into bytes (odd nibbles are padded with 0).
   defp parse_hex_string(%__MODULE__{} = st) do
-    {hexes, st2} = collect_until_gt(st, [])
-    # Remove all non-hex (whitespace/comments already skipped, but be safe)
-    hex_only =
-      for <<c <- IO.iodata_to_binary(hexes)>>,
-          (c >= ?0 and c <= ?9) or (c >= ?A and c <= ?F) or (c >= ?a and c <= ?f),
-          do: c
+    case collect_until_gt(st, []) do
+      {:ok, hexes, st2} ->
+        # Remove all non-hex (whitespace/comments already skipped, but be safe)
+        hex_only =
+          for <<c <- IO.iodata_to_binary(hexes)>>,
+              (c >= ?0 and c <= ?9) or (c >= ?A and c <= ?F) or (c >= ?a and c <= ?f),
+              do: c
 
-    # If odd count, pad with 0
-    hex_only = if rem(length(hex_only), 2) == 1, do: hex_only ++ [?0], else: hex_only
-    bytes = hex_pairs_to_bin(hex_only, [])
-    {{:hex_string, IO.iodata_to_binary(bytes)}, st2}
+        # If odd count, pad with 0
+        hex_only = if rem(length(hex_only), 2) == 1, do: hex_only ++ [?0], else: hex_only
+        bytes = hex_pairs_to_bin(hex_only, [])
+        {{:hex_string, IO.iodata_to_binary(bytes)}, st2}
+
+      {:error, st2} ->
+        {{:error, {:unterminated_hex_string, st.pos - 1}}, st2}
+    end
   end
 
   # Collect raw bytes until the closing '>' of a hex string (skip nested comments conservatively).
   defp collect_until_gt(%__MODULE__{} = st, acc) do
-    case byte_at(st) do
-      ?> -> {Enum.reverse(acc), bump(st, 1)}
-      ?% -> collect_until_gt(skip_comment(st), acc)
-      c -> collect_until_gt(bump(st, 1), [c | acc])
+    case st.pos >= st.size do
+      true ->
+        {:error, st}
+
+      false ->
+        case byte_at(st) do
+          ?> -> {:ok, Enum.reverse(acc), bump(st, 1)}
+          ?% -> collect_until_gt(skip_comment(st), acc)
+          c -> collect_until_gt(bump(st, 1), [c | acc])
+        end
     end
   end
 

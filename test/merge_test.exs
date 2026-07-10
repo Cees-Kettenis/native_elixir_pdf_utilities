@@ -44,6 +44,26 @@ defmodule NativeElixirPdfUtilities.MergeTest do
                module: NativeElixirPdfUtilities.Merge,
                message: "merge/1 expects a list of PDF binaries"
              }}} = Merge.merge(:not_a_list)
+
+    for malformed_pdf <- [
+          "garbage",
+          "%PDF-1.7\n1 0 obj @ endobj",
+          "%PDF-1.7\n1 0 obj <4142",
+          "%PDF-1.7\n1 0 obj <<",
+          "%PDF-1.7\n1 0 obj << /Length 1 >> stream\naendobj",
+          "%PDF-1.7\n0 0 obj << >> endobj",
+          "%PDF-1.7\n1 0 obj << >> endobj\n1 0 obj << >> endobj"
+        ] do
+      assert {:error,
+              {:invalid_pdf_input,
+               %{
+                 stage: :merge,
+                 reason: :invalid_pdf_input,
+                 operation: :merge,
+                 module: NativeElixirPdfUtilities.Merge,
+                 message: "merge/1 received an invalid classic PDF"
+               }}} = Merge.merge([malformed_pdf])
+    end
   end
 
   test "renumbers pages and injects inherited page attributes" do
@@ -170,5 +190,53 @@ defmodule NativeElixirPdfUtilities.MergeTest do
     assert merged =~ "/Resources << /ProcSet [ /PDF ] /Font << /F1"
     assert merged =~ "/AltParent 6 0 R"
     assert merged =~ "/MediaBox [ 0 0 595 842 ]"
+  end
+
+  test "preserves inherited page attributes from intermediate Pages nodes" do
+    pdf =
+      merge_pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>"},
+        {3,
+         "<< /Type /Pages /Parent 2 0 R /Kids [ 4 0 R ] /Count 1 /MediaBox [ 0 0 123 456 ] /Resources << /Font << /F1 5 0 R >> >> >>"},
+        {4, "<< /Type /Page /Parent 3 0 R /Contents 6 0 R >>"},
+        {5, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"},
+        {6, "<< /Length 6 >> stream\nBT ET\nendstream"}
+      ])
+
+    assert {:ok, merged} = Merge.merge([pdf])
+    assert merged =~ "/MediaBox [ 0 0 123 456 ]"
+    assert merged =~ "/Resources << /Font << /F1 8 0 R >> >>"
+  end
+
+  test "remaps Parent references outside rewritten Page objects" do
+    pdf =
+      merge_pdf([
+        {1, "<< /Type /NotPage >>"},
+        {2, "<< /Type /Example /Parent 1 0 R >>"}
+      ])
+
+    assert {:ok, merged} = Merge.merge([pdf])
+    assert merged =~ "/Type /Example /Parent 4 0 R"
+  end
+
+  test "handles empty and cyclic Pages trees without looping" do
+    empty_pages =
+      merge_pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Count 0 >>"}
+      ])
+
+    cyclic_pages =
+      merge_pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [ 2 0 R ] /Count 0 >>"}
+      ])
+
+    assert {:ok, empty_output} = Merge.merge([empty_pages])
+    assert empty_output =~ "/Type /Pages /Kids [  ] /Count 0"
+
+    assert {:ok, cyclic_output} = Merge.merge([cyclic_pages])
+    assert cyclic_output =~ "/Type /Pages /Kids [  ] /Count 0"
   end
 end

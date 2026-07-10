@@ -43,7 +43,8 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
     input = "(a(b)c\\r\\t\\b\\f\\\\\\\n\\\r\n\\101\\4\\z)"
     [{:string, s}] = toks(input)
     assert s == "a(b)c\r\t\b\f\\A" <> <<4>> <> "z"
-    assert [{:string, "unterminated"}] = toks("(unterminated")
+    assert [{:error, {:unterminated_literal_string, 0}}] = toks("(unterminated")
+    assert [{:error, {:unterminated_literal_string, 0}}] = toks("(unterminated\\")
   end
 
   test "hex strings" do
@@ -56,6 +57,8 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
              :dict_end,
              {:error, {:unexpected_gt, _}}
            ] = toks(input)
+
+    assert [{:error, {:unterminated_hex_string, 0}}] = toks("<48656C6C6F")
   end
 
   test "arrays and refs" do

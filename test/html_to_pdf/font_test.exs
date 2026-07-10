@@ -184,6 +184,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert Font.load_registry(fonts: [%{family: "Bad"}]) == :error
     assert Font.load_registry(fonts: :not_a_list) == :error
     assert Font.load_registry(fonts: ["bad"]) == :error
+    assert Font.load_registry(fonts: [[:not_a_keyword]]) == :error
+    assert Font.load_registry(:not_a_keyword_list) == :error
 
     assert Font.load_registry(fonts: [%{family: "Bad", path: __ENV__.file, weight: "950"}]) ==
              :error
@@ -226,6 +228,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     File.rm(short_head_path)
     File.rm(bad_cmap_path)
     File.rm(bad_range_path)
+  end
+
+  test "load_registry and the HTML facade reject malformed zero-table fonts without crashing" do
+    path = Path.join(System.tmp_dir!(), "native-elixir-pdf-zero-table-font.ttf")
+    File.write!(path, <<0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>>)
+
+    assert Font.load_registry(fonts: [%{family: "Bad", path: path}]) == :error
+
+    assert {:error,
+            {:invalid_document, %{stage: :style, reason: :invalid_document, operation: :render}}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render("<p>hello</p>",
+               fonts: [%{family: "Bad", path: path}]
+             )
+  after
+    File.rm(Path.join(System.tmp_dir!(), "native-elixir-pdf-zero-table-font.ttf"))
   end
 
   defp ttf_font_path! do
