@@ -20,6 +20,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install test fonts
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends fonts-dejavu-core
+          rm -rf /var/lib/apt/lists/*
+
       - name: Restore Mix and Dialyzer caches
         uses: actions/cache@v4
         with:
