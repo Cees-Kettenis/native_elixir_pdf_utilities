@@ -4,7 +4,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
   def project do
     [
       app: :native_elixir_pdf_utilities,
-      version: "0.5.1",
+      version: "0.6.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       description:
@@ -58,11 +58,14 @@ defmodule NativeElixirPdfUtilities.MixProject do
         "README.md",
         "CHANGELOG.md",
         "docs/diagnostics.md",
+        "docs/pdf-reader.md",
+        "docs/text-extraction.md",
+        "docs/pdf-merging.md",
         "docs/html-to-pdf-compatibility.md",
         "docs/html-to-pdf-browser-parity-coverage.md",
-        "docs/html-to-pdf-exmaples.md"
+        "docs/html-to-pdf-examples.md"
       ],
-      source_ref: "v0.5.1",
+      source_ref: "v0.6.0",
       source_url: "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"
     ]
   end

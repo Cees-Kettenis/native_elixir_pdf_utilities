@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.6.0 - 2026-07-20
+
+### Added
+
+- Added `NativeElixirPdfUtilities.Pdf.Reader`, a shared PDF document layer with
+  classic cross-reference tables, cross-reference streams, object streams,
+  incremental and hybrid revision chains, recursive indirect resolution,
+  supported stream filters, page-tree validation, and resource limits.
+- Added committed reader fixtures for classic, xref-stream, object-stream,
+  hybrid, incremental, encrypted, and malformed PDFs.
+- Added `Text.extract_spans/2` and `Text.extract_file_spans/2` for
+  page-preserving decoded text operations with source indexes, baseline
+  coordinates, font and matrix context, and text rendering-mode metadata.
+- Added strict Unicode decoding for standard simple-font encodings,
+  font-specific `Differences`, Adobe glyph names, Type 0 fonts, and ToUnicode
+  CMaps.
+- Added PDF reader, text extraction, and merging guides covering supported
+  structures, public behavior, diagnostics, limits, and known boundaries.
+- Added GitHub Actions checks for compilation warnings, formatting, unused
+  dependencies, tests, 100% coverage, Dialyzer, and Chromium browser parity.
+
+### Changed
+
+- Changed text extraction and PDF merging to consume the shared reader model so
+  both utilities honor active revisions, generations, free entries, compressed
+  objects, and the validated page tree.
+- Changed text extraction to reject malformed content and unreliable font
+  encodings with actionable diagnostics instead of guessing or returning
+  partial text.
+- Changed string extraction to project from the same positioned page spans
+  while preserving the existing `layout: true` and `layout: false` output.
+
+### Fixed
+
+- Fixed merging pages with malformed inherited `/MediaBox` values by applying
+  the default page box.
+- Fixed valid cross-reference offsets that point to PDF whitespace immediately
+  before an indirect object header being rejected.
+- Fixed tokenizer comments ending at end-of-input being emitted as tokens.
+
 ## 0.5.1 - 2026-07-10
 
 ### Changed

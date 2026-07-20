@@ -19,43 +19,6 @@ breaking API changes are allowed, but they should be explained clearly in
 
 ## Milestones
 
-### 0.6.0 - PDF Core Reader and Object Resolution
-
-Milestone goal: add a shared PDF reader and object resolver so utility APIs can work with
-common modern PDFs, not only classic PDFs whose indirect objects can be found by
-flat token scanning.
-
-#### Scope
-
-- Add a shared PDF reader layer above the tokenizer.
-- Keep the tokenizer focused on lexical tokenization and move document-level
-  object resolution into the shared reader.
-- Add support for common PDF object storage structures:
-  - classic cross-reference tables
-  - cross-reference streams
-  - object streams
-  - compressed object containers
-- Add indirect object resolution through the shared reader so text extraction,
-  merge, inspection, and transforms can use the same parsed document model.
-- Add stream decoding support required for xref streams and object streams.
-- Add encryption detection with clear diagnostics. Decryption is not required
-  before `1.0.0` unless a later release explicitly takes it on.
-
-#### Design Notes
-
-- Document the tokenizer as the lexical layer and the shared reader as the
-  document/object-resolution layer.
-- Move text extraction and future inspection/transform APIs onto the shared
-  reader where practical.
-- Document behavior for malformed, encrypted, compressed, or unsupported PDFs.
-
-#### Completion Criteria
-
-- Add unit tests for classic xref tables, xref streams, object streams, stream
-  decoding, indirect object resolution, encryption detection, and unsupported
-  PDF structure diagnostics.
-- Add regression fixtures for classic PDFs, PDFs with cross-reference streams,
-  PDFs with object streams, encrypted PDFs, and malformed PDFs.
 
 ### 0.7.0 - Fonts, Print CSS, and Render Metadata
 
@@ -470,8 +433,6 @@ candidate.
 
 #### Design Notes
 
-- Rename `docs/html-to-pdf-exmaples.md` to `docs/html-to-pdf-examples.md` and
-  update all links.
 - Tighten README and HexDocs navigation so compatibility, examples, browser
   parity coverage, roadmap, and changelog are easy to find.
 - Review all unsupported-feature documentation and add caller-side alternatives
