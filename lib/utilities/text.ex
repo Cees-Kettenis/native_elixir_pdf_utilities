@@ -1,104 +1,82 @@
 defmodule NativeElixirPdfUtilities.Text do
   @moduledoc """
-  Best-effort embedded text extraction for classic PDFs.
+  Strict native extraction of embedded Unicode text from PDF documents.
 
-  This module is native Elixir and does not perform OCR. It reads PDF content streams,
-  decodes supported Flate-compressed streams, applies ToUnicode CMaps where present,
-  and reconstructs approximate page layout from text matrix coordinates.
+  Extraction resolves the PDF page tree, resources, content streams, Form
+  XObjects, and the active font at every text operation. It succeeds only when
+  every visible text string has a reliable Unicode mapping; it never guesses
+  from an embedded font program or merges CMaps from unrelated fonts.
   """
 
-  alias NativeElixirPdfUtilities.Tokenizer
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Pdf.TextEncoding
+  alias NativeElixirPdfUtilities.Tokenizer
+  import Bitwise
 
   @max_cmap_bytes 1_000_000
   @max_cmap_entries 100_000
+  @max_form_depth 20
+  @validated_operators ~w(q Q cm BT ET Tf Tm Td TD T* TL Tc Tw Tz Tr Ts Tj TJ ' " Do)
 
   @type extract_option :: {:layout, boolean()}
   @type error_reason ::
-          :empty_pdf_text | :invalid_options | :invalid_pdf_input | :invalid_path | File.posix()
-  @type object_record :: %{obj: integer(), gen: integer(), tokens: [Tokenizer.token()]}
-  @type text_chunk :: %{x: float(), y: float(), text: String.t()}
+          :encrypted_pdf
+          | :invalid_options
+          | :invalid_path
+          | :invalid_pdf_input
+          | :no_extractable_text
+          | :resource_limit_exceeded
+          | :unsupported_pdf_feature
+          | :unsupported_text_encoding
+          | File.posix()
 
   @doc """
-  Extracts embedded text from a PDF binary.
+  Extracts reliably decodable embedded text from a PDF binary.
 
-  Options:
-
-    * `:layout` - when true, approximate visible text layout using spaces and line breaks.
-      This is currently the only output mode and defaults to true.
+  Set `layout: true` (the default) to group spans into approximate visual lines.
+  With `layout: false`, spans retain their content-stream order. Extraction fails
+  rather than returning partial text when a visible text operation cannot be
+  decoded with the active font.
   """
   @spec extract(binary(), [extract_option()]) ::
           {:ok, String.t()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def extract(pdf_binary, opts \\ []) do
-    case pdf_binary do
-      pdf_binary when is_binary(pdf_binary) ->
-        case Keyword.keyword?(opts) do
-          true ->
-            layout? = Keyword.get(opts, :layout, true)
+    cond do
+      not is_binary(pdf_binary) ->
+        error(:input, :invalid_pdf_input, "PDF input must be a binary")
 
-            case parse_objects(pdf_binary) do
-              {:ok, objects} ->
-                cmap_by_ref = cmap_by_ref(objects)
-                font_cmap_by_name = font_cmap_by_name(objects, cmap_by_ref)
-                fallback_cmap = merge_cmaps(Map.values(cmap_by_ref))
+      not Keyword.keyword?(opts) ->
+        error(:options, :invalid_options, "extract options must be a keyword list")
 
-                pages =
-                  objects
-                  |> decoded_content_streams()
-                  |> Enum.map(&extract_page_chunks(&1, font_cmap_by_name, fallback_cmap))
-                  |> Enum.reject(&(&1 == []))
+      not is_boolean(Keyword.get(opts, :layout, true)) ->
+        error(:options, :invalid_options, "layout option must be a boolean")
 
-                case pages do
-                  [] ->
-                    Diagnostics.error(
-                      :text_extraction,
-                      :empty_pdf_text,
-                      "PDF contains no extractable text",
-                      operation: :extract,
-                      module: __MODULE__
-                    )
+      true ->
+        with {:ok, document} <- Reader.read(pdf_binary),
+             {:ok, pages} <- extract_pages(document) do
+          case Enum.reject(pages, &(&1 == [])) do
+            [] ->
+              error(:text_extraction, :no_extractable_text, "PDF contains no extractable text")
 
-                  pages ->
-                    text =
-                      if layout? do
-                        pages |> Enum.map(&layout_page/1) |> Enum.join("\f")
-                      else
-                        pages |> Enum.map(&plain_page/1) |> Enum.join("\n")
-                      end
-
-                    {:ok, text}
+            pages ->
+              text =
+                if Keyword.get(opts, :layout, true) do
+                  pages |> Enum.map(&layout_page/1) |> Enum.join("\f")
+                else
+                  pages |> Enum.map(&plain_page/1) |> Enum.join("\n")
                 end
 
-              :error ->
-                Diagnostics.error(
-                  :text_extraction,
-                  :invalid_pdf_input,
-                  "PDF input is malformed or contains unsupported syntax",
-                  operation: :extract,
-                  module: __MODULE__
-                )
-            end
-
-          false ->
-            Diagnostics.error(
-              :options,
-              :invalid_options,
-              "extract options must be a keyword list",
-              operation: :extract,
-              module: __MODULE__
-            )
+              {:ok, text}
+          end
+        else
+          {:error, _} = reader_error -> text_error(reader_error)
         end
-
-      _ ->
-        Diagnostics.error(:text_extraction, :invalid_pdf_input, "PDF input must be a binary",
-          operation: :extract,
-          module: __MODULE__
-        )
     end
   end
 
   @doc """
-  Reads a PDF file and extracts embedded text from it.
+  Reads a PDF file and extracts reliably decodable embedded text from it.
   """
   @spec extract_file(String.t(), [extract_option()]) ::
           {:ok, String.t()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
@@ -111,435 +89,1227 @@ defmodule NativeElixirPdfUtilities.Text do
               {:ok, text} ->
                 {:ok, text}
 
-              {:error, {reason, detail}} ->
+              {:error, {reason, diagnostic}} ->
                 {:error,
                  {reason,
-                  Diagnostics.with_context(detail,
-                    operation: :extract_file,
-                    module: __MODULE__,
-                    source: path
-                  )}}
+                  Map.put(diagnostic, :source, path) |> Map.put(:operation, :extract_file)}}
             end
 
           {:error, reason} ->
-            Diagnostics.error(:file, reason, "file read failed: #{reason}",
-              operation: :read,
-              module: __MODULE__,
-              source: path
-            )
+            error(:file, reason, "file read failed: #{reason}", operation: :read, source: path)
         end
 
       _ ->
-        Diagnostics.error(:file, :invalid_path, "path must be a string",
-          operation: :extract_file,
-          module: __MODULE__
+        error(:file, :invalid_path, "path must be a string", operation: :extract_file)
+    end
+  end
+
+  defp extract_pages(document) do
+    document.pages
+    |> Enum.with_index(1)
+    |> Enum.reduce_while({:ok, []}, fn {page, page_number}, {:ok, pages} ->
+      case extract_page(document, page, page_number) do
+        {:ok, spans} -> {:cont, {:ok, [spans | pages]}}
+        {:error, _} = extraction_error -> {:halt, extraction_error}
+      end
+    end)
+    |> case do
+      {:ok, pages} -> {:ok, Enum.reverse(pages)}
+      error -> error
+    end
+  end
+
+  defp extract_page(document, page, page_number) do
+    with {:ok, dictionary} <- Reader.dictionary(document, {:ref, page.ref}),
+         {:ok, content_refs} <- content_refs(Map.get(dictionary, "Contents"), page.ref),
+         {:ok, media_box} <- Reader.resolve(document, page.media_box),
+         {:ok, initial_state} <- text_state(%{page | media_box: media_box}, page_number) do
+      Enum.reduce_while(content_refs, {:ok, initial_state, []}, fn content_ref,
+                                                                   {:ok, state, spans} ->
+        with {:ok, content} <- Reader.decoded_stream(document, content_ref),
+             {:ok, state, new_spans} <-
+               interpret(content, document, page.resources, state, page_number, 0) do
+          {:cont, {:ok, state, spans ++ new_spans}}
+        else
+          {:error, {reason, diagnostic}} ->
+            {:halt, {:error, {reason, with_debug_details(diagnostic, page: page_number)}}}
+        end
+      end)
+      |> case do
+        {:ok, _state, spans} -> {:ok, spans}
+        error -> error
+      end
+    end
+  end
+
+  defp content_refs(nil, _page_ref), do: {:ok, []}
+  defp content_refs({:ref, _} = content_ref, _page_ref), do: {:ok, [content_ref]}
+
+  defp content_refs(content_refs, _page_ref) when is_list(content_refs) do
+    if Enum.all?(content_refs, &match?({:ref, _}, &1)) do
+      {:ok, content_refs}
+    else
+      error(:content, :invalid_pdf_input, "Contents array contains a non-stream reference")
+    end
+  end
+
+  defp content_refs(_, page_ref),
+    do: error(:content, :invalid_pdf_input, "page Contents is malformed", object: page_ref)
+
+  defp interpret(content, document, resources, state, page_number, depth) do
+    tokens = Tokenizer.new(content) |> Tokenizer.tokenize_all()
+
+    if Enum.any?(tokens, &match?({:error, _}, &1)) do
+      error(:content, :invalid_pdf_input, "content stream contains invalid syntax",
+        page: page_number
+      )
+    else
+      Enum.reduce_while(tokens, {:ok, state, [], []}, fn token, {:ok, state, spans, operands} ->
+        case token do
+          :lbracket ->
+            {:cont, {:ok, state, spans, [:array_start | operands]}}
+
+          :rbracket ->
+            case close_array(operands) do
+              {:ok, operands} ->
+                {:cont, {:ok, state, spans, operands}}
+
+              :error ->
+                {:halt,
+                 error(:content, :invalid_pdf_input, "content array is unbalanced",
+                   page: page_number
+                 )}
+            end
+
+          {:op, operator} ->
+            case apply_operator(
+                   operator,
+                   Enum.reverse(operands),
+                   state,
+                   spans,
+                   document,
+                   resources,
+                   page_number,
+                   depth
+                 ) do
+              {:ok, state, spans} -> {:cont, {:ok, state, spans, []}}
+              {:error, _} = extraction_error -> {:halt, extraction_error}
+            end
+
+          token ->
+            {:cont, {:ok, state, spans, [token | operands]}}
+        end
+      end)
+      |> case do
+        {:ok, state, spans, []} ->
+          {:ok, state, spans}
+
+        {:ok, _state, _spans, _operands} ->
+          error(:content, :invalid_pdf_input, "content stream has dangling operands",
+            page: page_number
+          )
+
+        error ->
+          error
+      end
+    end
+  end
+
+  defp close_array(operands) do
+    {values, rest} = Enum.split_while(operands, &(&1 != :array_start))
+    if rest == [], do: :error, else: {:ok, [{:array, Enum.reverse(values)} | tl(rest)]}
+  end
+
+  defp apply_operator("q", [], state, spans, _document, _resources, _page, _depth),
+    do: {:ok, %{state | stack: [state.ctm | state.stack]}, spans}
+
+  defp apply_operator(
+         "Q",
+         [],
+         %{stack: [ctm | stack]} = state,
+         spans,
+         _document,
+         _resources,
+         _page,
+         _depth
+       ),
+       do: {:ok, %{state | ctm: ctm, stack: stack}, spans}
+
+  defp apply_operator("Q", [], _state, _spans, _document, _resources, page, _depth),
+    do: error(:content, :invalid_pdf_input, "Q has no matching q", page: page)
+
+  defp apply_operator("cm", operands, state, spans, _document, _resources, page, _depth) do
+    case numbers(operands, 6) do
+      {:ok, matrix} -> {:ok, %{state | ctm: multiply(matrix, state.ctm)}, spans}
+      :error -> invalid_operator("cm", state, spans, page)
+    end
+  end
+
+  defp apply_operator("BT", [], state, spans, _document, _resources, _page, _depth),
+    do: {:ok, %{state | in_text?: true, text_matrix: identity(), line_matrix: identity()}, spans}
+
+  defp apply_operator("ET", [], state, spans, _document, _resources, _page, _depth),
+    do: {:ok, %{state | in_text?: false}, spans}
+
+  defp apply_operator("Tf", operands, state, spans, document, resources, page, _depth) do
+    case operands do
+      [{:name, font_name}, size] ->
+        with {:ok, size} <- number_value(size),
+             {:ok, font} <- resolve_font(document, resources, font_name, page) do
+          {:ok, %{state | font: font, font_size: size * 1.0}, spans}
+        end
+
+      _ ->
+        invalid_operator("Tf", state, spans, page)
+    end
+  end
+
+  defp apply_operator("Tm", operands, state, spans, _document, _resources, page, _depth) do
+    case numbers(operands, 6) do
+      {:ok, matrix} -> {:ok, %{state | text_matrix: matrix, line_matrix: matrix}, spans}
+      :error -> invalid_operator("Tm", state, spans, page)
+    end
+  end
+
+  defp apply_operator(operator, operands, state, spans, _document, _resources, page, _depth)
+       when operator in ["Td", "TD"] do
+    case numbers(operands, 2) do
+      {:ok, [tx, ty]} ->
+        line_matrix = translate(state.line_matrix, tx, ty)
+
+        state = %{
+          state
+          | line_matrix: line_matrix,
+            text_matrix: line_matrix,
+            leading: if(operator == "TD", do: -ty, else: state.leading)
+        }
+
+        {:ok, state, spans}
+
+      :error ->
+        invalid_operator(operator, state, spans, page)
+    end
+  end
+
+  defp apply_operator("T*", [], state, spans, _document, _resources, _page, _depth) do
+    line_matrix = translate(state.line_matrix, 0.0, -state.leading)
+    {:ok, %{state | line_matrix: line_matrix, text_matrix: line_matrix}, spans}
+  end
+
+  defp apply_operator("TL", operands, state, spans, _document, _resources, page, _depth) do
+    case numbers(operands, 1) do
+      {:ok, [leading]} -> {:ok, %{state | leading: leading}, spans}
+      :error -> invalid_operator("TL", state, spans, page)
+    end
+  end
+
+  defp apply_operator("Tc", operands, state, spans, _document, _resources, page, _depth),
+    do: update_number("Tc", operands, state, spans, :char_spacing, page)
+
+  defp apply_operator("Tw", operands, state, spans, _document, _resources, page, _depth),
+    do: update_number("Tw", operands, state, spans, :word_spacing, page)
+
+  defp apply_operator("Tz", operands, state, spans, _document, _resources, page, _depth),
+    do: update_number("Tz", operands, state, spans, :horizontal_scale, page)
+
+  defp apply_operator("Tr", operands, state, spans, _document, _resources, page, _depth) do
+    case numbers(operands, 1) do
+      {:ok, [mode]} when mode >= 0 and mode <= 7 and trunc(mode) == mode ->
+        {:ok, %{state | render_mode: trunc(mode)}, spans}
+
+      _ ->
+        invalid_operator("Tr", state, spans, page)
+    end
+  end
+
+  defp apply_operator("Ts", operands, state, spans, _document, _resources, page, _depth),
+    do: update_number("Ts", operands, state, spans, :rise, page)
+
+  defp apply_operator("Tj", [string], state, spans, _document, _resources, page, _depth),
+    do: show(state, spans, string, page)
+
+  defp apply_operator("TJ", [{:array, values}], state, spans, _document, _resources, page, _depth) do
+    if state.in_text? do
+      show_array(values, state, spans, page)
+    else
+      error(:content, :invalid_pdf_input, "TJ appears outside a text object", page: page)
+    end
+  end
+
+  defp apply_operator("'", [string], state, spans, _document, _resources, page, _depth) do
+    with {:ok, state, spans} <- apply_operator("T*", [], state, spans, nil, nil, page, 0) do
+      show(state, spans, string, page)
+    end
+  end
+
+  defp apply_operator(
+         "\"",
+         [word_spacing, char_spacing, string],
+         state,
+         spans,
+         _document,
+         _resources,
+         page,
+         _depth
+       ) do
+    with {:ok, word_spacing} <- number_value(word_spacing),
+         {:ok, char_spacing} <- number_value(char_spacing) do
+      state = %{state | word_spacing: word_spacing * 1.0, char_spacing: char_spacing * 1.0}
+
+      with {:ok, state, spans} <- apply_operator("T*", [], state, spans, nil, nil, page, 0) do
+        show(state, spans, string, page)
+      end
+    else
+      :error -> invalid_operator("\"", state, spans, page)
+    end
+  end
+
+  defp apply_operator("Do", [{:name, name}], state, spans, document, resources, page, depth),
+    do: execute_form(name, state, spans, document, resources, page, depth)
+
+  defp apply_operator(operator, _operands, state, spans, _document, _resources, page, _depth) do
+    if operator in @validated_operators do
+      invalid_operator(operator, state, spans, page)
+    else
+      {:ok, state, spans}
+    end
+  end
+
+  defp update_number(operator, operands, state, spans, key, page) do
+    case numbers(operands, 1) do
+      {:ok, [value]} -> {:ok, Map.put(state, key, value), spans}
+      :error -> invalid_operator(operator, state, spans, page)
+    end
+  end
+
+  defp invalid_operator(operator, _state, _spans, page) do
+    error(:content, :invalid_pdf_input, "#{operator} has invalid operands", page: page)
+  end
+
+  defp show(state, spans, string, page) do
+    if state.in_text? do
+      with {:ok, decoded} <- decode_string(string, state.font, page),
+           {:ok, state, spans} <- add_span(state, spans, decoded) do
+        {:ok, state, spans}
+      end
+    else
+      error(:content, :invalid_pdf_input, "text-showing operator appears outside a text object",
+        page: page
+      )
+    end
+  end
+
+  defp show_array(values, state, spans, page) do
+    values
+    |> Enum.reduce_while({:ok, state, spans, false}, fn value, {:ok, state, spans, shown?} ->
+      case number_value(value) do
+        {:ok, value} ->
+          adjustment = -value / 1000.0 * state.font_size * state.horizontal_scale / 100.0
+
+          {:cont,
+           {:ok, %{state | text_matrix: translate(state.text_matrix, adjustment, 0.0)}, spans,
+            shown?}}
+
+        :error ->
+          case decode_string(value, state.font, page) do
+            {:ok, decoded} ->
+              {:ok, state, spans} = add_span(state, spans, decoded, shown?)
+              {:cont, {:ok, state, spans, true}}
+
+            {:error, _} = decoding_error ->
+              {:halt, decoding_error}
+          end
+      end
+    end)
+    |> case do
+      {:ok, state, spans, _shown?} -> {:ok, state, spans}
+      {:error, _} = array_error -> array_error
+    end
+  end
+
+  defp add_span(state, spans, decoded, join_previous? \\ false) do
+    if decoded.text == "" do
+      {:ok, state, spans}
+    else
+      next_state = advance_text(state, decoded)
+
+      if state.render_mode in [3, 7] do
+        {:ok, next_state, spans}
+      else
+        [_, _, _, _, x, y] = multiply(state.text_matrix, state.ctm)
+        [_, _, _, _, end_x, end_y] = multiply(next_state.text_matrix, state.ctm)
+        {x, y} = display_position(x, y + state.rise, state.page)
+        {end_x, end_y} = display_position(end_x, end_y + state.rise, state.page)
+
+        span = %{
+          text: decoded.text,
+          x: x,
+          y: y,
+          end_x: end_x,
+          end_y: end_y,
+          font: state.font.name,
+          size: state.font_size,
+          matrix: state.text_matrix,
+          rotation: state.rotation,
+          join_previous?: join_previous?
+        }
+
+        {:ok, next_state, spans ++ [span]}
+      end
+    end
+  end
+
+  defp advance_text(state, decoded) do
+    glyph_width = Enum.reduce(decoded.codes, 0, &(font_width(state.font, &1) + &2))
+    glyph_count = length(decoded.codes)
+    spaces = Enum.count(decoded.codes, &(&1 == 32))
+
+    width =
+      (glyph_width / 1000.0 * state.font_size + state.char_spacing * glyph_count +
+         state.word_spacing * spaces) *
+        state.horizontal_scale / 100.0
+
+    %{state | text_matrix: translate(state.text_matrix, width, 0.0)}
+  end
+
+  defp execute_form(_name, _state, _spans, _document, _resources, page, depth)
+       when depth >= @max_form_depth,
+       do:
+         error(:limits, :resource_limit_exceeded, "Form XObject nesting exceeds the limit",
+           page: page
+         )
+
+  defp execute_form(name, state, spans, document, resources, page, depth) do
+    with {:ok, resources} <- Reader.dictionary(document, resources),
+         {:ok, xobjects} <- Reader.dictionary(document, Map.get(resources, "XObject")),
+         {:ok, xobject_ref} <- required_value(xobjects, name, "XObject", page),
+         {:ok, xobject} <- Reader.dictionary(document, xobject_ref) do
+      if name?(Map.get(xobject, "Subtype"), "Form") do
+        with {:ok, stream} <- Reader.decoded_stream(document, xobject_ref),
+             {:ok, form_matrix} <- matrix_value(Map.get(xobject, "Matrix"), page),
+             {:ok, _child_state, child_spans} <-
+               interpret(
+                 stream,
+                 document,
+                 Map.get(xobject, "Resources", resources),
+                 %{
+                   state
+                   | ctm: multiply(form_matrix, state.ctm),
+                     stack: []
+                 },
+                 page,
+                 depth + 1
+               ) do
+          {:ok, state, spans ++ child_spans}
+        end
+      else
+        {:ok, state, spans}
+      end
+    else
+      {:error, _} = form_error -> form_error
+    end
+  end
+
+  defp resolve_font(document, resources, font_name, page) do
+    with {:ok, resources} <- Reader.dictionary(document, resources),
+         {:ok, fonts} <- Reader.dictionary(document, Map.get(resources, "Font")),
+         {:ok, font_ref} <- required_value(fonts, font_name, "font", page),
+         {:ok, font} <- Reader.dictionary(document, font_ref) do
+      cmap =
+        case Map.get(font, "ToUnicode") do
+          nil ->
+            {:ok, nil}
+
+          cmap_ref ->
+            with {:ok, stream} <- Reader.decoded_stream(document, cmap_ref),
+                 do: parse_cmap(stream, page, font_name)
+        end
+
+      with {:ok, cmap} <- cmap,
+           {:ok, widths, default_width} <- font_metrics(document, font) do
+        {:ok,
+         %{
+           name: font_name,
+           dictionary: font,
+           cmap: cmap,
+           document: document,
+           widths: widths,
+           default_width: default_width
+         }}
+      end
+    else
+      {:error, {reason, diagnostic}} ->
+        {:error, {reason, with_debug_details(diagnostic, page: page, font: font_name)}}
+    end
+  end
+
+  defp font_metrics(document, font) do
+    if name?(Map.get(font, "Subtype"), "Type0") do
+      type0_font_metrics(document, font)
+    else
+      simple_font_metrics(document, font)
+    end
+  end
+
+  defp simple_font_metrics(document, font) do
+    first_char = Map.get(font, "FirstChar", 0)
+
+    with true <- is_integer(first_char) and first_char >= 0,
+         {:ok, widths} <- Reader.resolve(document, Map.get(font, "Widths")),
+         true <- is_nil(widths) or (is_list(widths) and Enum.all?(widths, &is_number/1)),
+         {:ok, default_width} <- simple_default_width(document, font) do
+      width_map =
+        case widths do
+          nil ->
+            %{}
+
+          widths ->
+            widths
+            |> Enum.with_index(first_char)
+            |> Map.new(fn {width, code} -> {code, width} end)
+        end
+
+      {:ok, width_map, default_width}
+    else
+      false -> error(:font, :invalid_pdf_input, "simple font width metrics are malformed")
+      {:error, _} = metric_error -> metric_error
+    end
+  end
+
+  defp simple_default_width(document, font) do
+    case Map.get(font, "FontDescriptor") do
+      nil ->
+        {:ok, 500}
+
+      descriptor ->
+        with {:ok, descriptor} <- Reader.dictionary(document, descriptor) do
+          case Map.get(descriptor, "MissingWidth", 500) do
+            width when is_number(width) -> {:ok, width}
+            _ -> error(:font, :invalid_pdf_input, "font MissingWidth is malformed")
+          end
+        end
+    end
+  end
+
+  defp type0_font_metrics(document, font) do
+    with {:ok, descendants} <- Reader.resolve(document, Map.get(font, "DescendantFonts")),
+         [descendant | _] <- descendants,
+         {:ok, descendant} <- Reader.dictionary(document, descendant),
+         default_width when is_number(default_width) <- Map.get(descendant, "DW", 1000),
+         {:ok, widths} <- Reader.resolve(document, Map.get(descendant, "W")),
+         {:ok, widths} <- cid_widths(widths) do
+      {:ok, widths, default_width}
+    else
+      {:error, _} = metric_error -> metric_error
+      _ -> error(:font, :invalid_pdf_input, "Type0 descendant font metrics are malformed")
+    end
+  end
+
+  defp cid_widths(values) do
+    case values do
+      nil ->
+        {:ok, %{}}
+
+      values when is_list(values) ->
+        parse_cid_widths(values, %{})
+
+      _ ->
+        error(:font, :invalid_pdf_input, "CID font W array is malformed")
+    end
+  end
+
+  defp parse_cid_widths(values, widths) do
+    case values do
+      [] ->
+        {:ok, widths}
+
+      [first, listed | rest] when is_integer(first) and first >= 0 and is_list(listed) ->
+        if Enum.all?(listed, &is_number/1) do
+          listed_widths =
+            listed
+            |> Enum.with_index(first)
+            |> Map.new(fn {width, code} -> {code, width} end)
+
+          parse_cid_widths(rest, Map.merge(widths, listed_widths))
+        else
+          error(:font, :invalid_pdf_input, "CID font listed widths are malformed")
+        end
+
+      [first, last, width | rest]
+      when is_integer(first) and first >= 0 and is_integer(last) and last >= first and
+             is_number(width) ->
+        range_widths = Map.new(first..last, &{&1, width})
+        parse_cid_widths(rest, Map.merge(widths, range_widths))
+
+      _ ->
+        error(:font, :invalid_pdf_input, "CID font W array is malformed")
+    end
+  end
+
+  defp font_width(font, code) do
+    Map.get(font.widths, code, font.default_width)
+  end
+
+  defp decode_string(string, font, page) do
+    case string do
+      {kind, bytes} when kind in [:string, :hex_string] ->
+        cond do
+          is_nil(font) ->
+            error(
+              :text_encoding,
+              :unsupported_text_encoding,
+              "text is shown without an active font",
+              page: page
+            )
+
+          font.cmap ->
+            decode_cmap(bytes, font.cmap, page, font.name)
+
+          name?(Map.get(font.dictionary, "Subtype"), "Type0") ->
+            error(:text_encoding, :unsupported_text_encoding, "Type0 font has no ToUnicode CMap",
+              page: page,
+              font: font.name
+            )
+
+          true ->
+            decode_simple_font(bytes, font, page)
+        end
+
+      _ ->
+        error(:content, :invalid_pdf_input, "text-showing operator has an invalid string",
+          page: page
         )
     end
   end
 
-  defp parse_objects(pdf_binary) do
-    tokens = pdf_binary |> Tokenizer.new() |> Tokenizer.tokenize_all()
+  defp decode_simple_font(bytes, font, page) do
+    with {:ok, encoding, differences} <- font_encoding(font.document, font.dictionary),
+         {:ok, decoded} <- decode_simple_bytes(bytes, encoding, differences) do
+      {:ok, decoded}
+    else
+      {:error, {reason, diagnostic}} ->
+        {:error, {reason, with_debug_details(diagnostic, page: page, font: font.name)}}
+    end
+  end
 
-    case {String.contains?(pdf_binary, "%PDF-"), Enum.any?(tokens, &match?({:error, _}, &1))} do
-      {true, false} -> {:ok, do_parse_objects(tokens, [])}
+  defp font_encoding(document, font) do
+    case Map.get(font, "Encoding") do
+      nil ->
+        with {:ok, encoding} <- default_font_encoding(font) do
+          {:ok, encoding, %{}}
+        end
+
+      {:name, name} ->
+        if TextEncoding.supported?(name) do
+          {:ok, name, %{}}
+        else
+          error(:text_encoding, :unsupported_text_encoding, "simple font encoding is unsupported")
+        end
+
+      encoding_ref ->
+        with {:ok, encoding} <- Reader.dictionary(document, encoding_ref) do
+          base =
+            case Map.get(encoding, "BaseEncoding") do
+              {:name, name} -> {:ok, name}
+              nil -> default_font_encoding(font)
+              _ -> :error
+            end
+
+          with {:ok, base} <- base,
+               true <- TextEncoding.supported?(base),
+               {:ok, differences} <- differences(Map.get(encoding, "Differences")) do
+            {:ok, base, differences}
+          else
+            false ->
+              error(
+                :text_encoding,
+                :unsupported_text_encoding,
+                "simple font base encoding is unsupported"
+              )
+
+            :error ->
+              error(:text_encoding, :invalid_pdf_input, "simple font Encoding is malformed")
+
+            {:error, _} = encoding_error ->
+              encoding_error
+          end
+        end
+    end
+  end
+
+  defp default_font_encoding(font) do
+    case Map.get(font, "BaseFont") do
+      {:name, base_font} when is_binary(base_font) ->
+        if String.valid?(base_font) do
+          base_font = base_font |> String.split("+") |> List.last()
+
+          case base_font do
+            "Symbol" ->
+              {:ok, "SymbolEncoding"}
+
+            "ZapfDingbats" ->
+              {:ok, "ZapfDingbatsEncoding"}
+
+            base_font
+            when base_font in [
+                   "Times-Roman",
+                   "Times-Bold",
+                   "Times-Italic",
+                   "Times-BoldItalic",
+                   "Helvetica",
+                   "Helvetica-Bold",
+                   "Helvetica-Oblique",
+                   "Helvetica-BoldOblique",
+                   "Courier",
+                   "Courier-Bold",
+                   "Courier-Oblique",
+                   "Courier-BoldOblique"
+                 ] ->
+              {:ok, "StandardEncoding"}
+
+            _ ->
+              error(
+                :text_encoding,
+                :unsupported_text_encoding,
+                "custom simple font has no reliable Unicode encoding"
+              )
+          end
+        else
+          error(:text_encoding, :invalid_pdf_input, "font BaseFont name is malformed")
+        end
+
+      _ ->
+        error(
+          :text_encoding,
+          :unsupported_text_encoding,
+          "simple font has no declared or standard base encoding"
+        )
+    end
+  end
+
+  defp differences(values) do
+    case values do
+      nil ->
+        {:ok, %{}}
+
+      values when is_list(values) ->
+        values
+        |> Enum.reduce_while({:ok, %{}, nil}, fn value, {:ok, mappings, code} ->
+          case value do
+            value when is_integer(value) and value in 0..255 ->
+              {:cont, {:ok, mappings, value}}
+
+            {:name, glyph} when is_integer(code) and code in 0..255 ->
+              {:cont, {:ok, Map.put(mappings, code, glyph), code + 1}}
+
+            _ ->
+              {:halt,
+               error(:text_encoding, :invalid_pdf_input, "font Differences array is malformed")}
+          end
+        end)
+        |> case do
+          {:ok, mappings, _code} -> {:ok, mappings}
+          {:error, _} = differences_error -> differences_error
+        end
+
+      _ ->
+        error(:text_encoding, :invalid_pdf_input, "font Differences entry is malformed")
+    end
+  end
+
+  defp decode_simple_bytes(bytes, encoding, differences) do
+    bytes
+    |> :binary.bin_to_list()
+    |> Enum.reduce_while({:ok, []}, fn code, {:ok, characters} ->
+      case TextEncoding.character(encoding, code, differences) do
+        {:ok, character} ->
+          {:cont, {:ok, [character | characters]}}
+
+        :error ->
+          {:halt,
+           error(
+             :text_encoding,
+             :unsupported_text_encoding,
+             "font encoding cannot be converted to Unicode"
+           )}
+      end
+    end)
+    |> case do
+      {:ok, characters} ->
+        {:ok,
+         %{text: characters |> Enum.reverse() |> Enum.join(), codes: :binary.bin_to_list(bytes)}}
+
+      decoding_error ->
+        decoding_error
+    end
+  end
+
+  defp parse_cmap(stream, page, font) do
+    cond do
+      byte_size(stream) > @max_cmap_bytes ->
+        error(:cmap, :resource_limit_exceeded, "ToUnicode CMap exceeds the byte limit",
+          page: page,
+          font: font
+        )
+
+      Regex.match?(~r/\/\S+\s+usecmap\b/, stream) ->
+        error(
+          :cmap,
+          :unsupported_text_encoding,
+          "ToUnicode usecmap inheritance is unsupported",
+          page: page,
+          font: font
+        )
+
+      true ->
+        with {:ok, codespaces} <- parse_codespaces(stream),
+             {:ok, bfchar} <- parse_bfchar(stream),
+             {:ok, bfrange} <- parse_bfrange(stream, map_size(bfchar)),
+             mappings = Map.merge(bfrange, bfchar),
+             true <- map_size(mappings) <= @max_cmap_entries,
+             true <- map_size(mappings) > 0 do
+          {:ok, %{codespaces: codespaces, mappings: mappings}}
+        else
+          false ->
+            error(
+              :cmap,
+              :unsupported_text_encoding,
+              "ToUnicode CMap has no usable Unicode mappings",
+              page: page,
+              font: font
+            )
+
+          {:error, _} = error ->
+            error
+        end
+    end
+  end
+
+  defp parse_codespaces(stream) do
+    sections = Regex.scan(~r/(\d+)\s+begincodespacerange\s*(.*?)\s*endcodespacerange/s, stream)
+
+    sections
+    |> Enum.reduce_while({:ok, []}, fn [_, count, section], {:ok, values} ->
+      entries = Regex.scan(~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/, section)
+
+      valid? =
+        String.to_integer(count) == length(entries) and
+          cmap_section_consumed?(section, ~r/<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>/)
+
+      if valid? do
+        parsed =
+          Enum.map(entries, fn [_, first, last] -> {hex_bytes(first), hex_bytes(last)} end)
+
+        if Enum.all?(parsed, fn {first, last} ->
+             is_binary(first) and byte_size(first) == byte_size(last) and first <= last
+           end) do
+          {:cont, {:ok, values ++ parsed}}
+        else
+          {:halt, error(:cmap, :invalid_pdf_input, "ToUnicode codespace range is malformed")}
+        end
+      else
+        {:halt, error(:cmap, :invalid_pdf_input, "ToUnicode codespace count is malformed")}
+      end
+    end)
+    |> case do
+      {:ok, []} -> error(:cmap, :invalid_pdf_input, "ToUnicode codespace range is missing")
+      result -> result
+    end
+  end
+
+  defp parse_bfchar(stream) do
+    Regex.scan(~r/(\d+)\s+beginbfchar\s*(.*?)\s*endbfchar/s, stream)
+    |> Enum.reduce_while({:ok, %{}}, fn [_, count, section], {:ok, mappings} ->
+      entries = Regex.scan(~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/, section)
+
+      if String.to_integer(count) == length(entries) and
+           cmap_section_consumed?(section, ~r/<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>/) do
+        Enum.reduce_while(entries, {:ok, mappings}, fn [_, source, target], {:ok, mappings} ->
+          with source when is_binary(source) <- hex_bytes(source),
+               {:ok, target} <- utf16(hex_bytes(target)) do
+            {:cont, {:ok, Map.put(mappings, source, target)}}
+          else
+            _ ->
+              {:halt, error(:cmap, :invalid_pdf_input, "ToUnicode bfchar mapping is malformed")}
+          end
+        end)
+        |> case do
+          {:ok, mappings} -> {:cont, {:ok, mappings}}
+          {:error, _} = bfchar_error -> {:halt, bfchar_error}
+        end
+      else
+        {:halt, error(:cmap, :invalid_pdf_input, "ToUnicode bfchar count is malformed")}
+      end
+    end)
+  end
+
+  defp parse_bfrange(stream, existing) do
+    Regex.scan(~r/(\d+)\s+beginbfrange\s*(.*?)\s*endbfrange/s, stream)
+    |> Enum.reduce_while({:ok, %{}}, fn [_, declared_count, section], {:ok, mappings} ->
+      entries =
+        Regex.scan(
+          ~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(\[[^\]]*\]|<[0-9A-Fa-f]+>)/,
+          section
+        )
+
+      section_valid? =
+        String.to_integer(declared_count) == length(entries) and
+          cmap_section_consumed?(
+            section,
+            ~r/<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>\s*(?:\[[^\]]*\]|<[0-9A-Fa-f]+>)/
+          )
+
+      if section_valid? do
+        entries
+        |> Enum.reduce_while({:ok, mappings}, fn [_, first, last, target], {:ok, mappings} ->
+          with first when is_binary(first) <- hex_bytes(first),
+               last when is_binary(last) and byte_size(last) == byte_size(first) <-
+                 hex_bytes(last),
+               true <- first <= last,
+               count <- :binary.decode_unsigned(last) - :binary.decode_unsigned(first) + 1,
+               true <- count + existing + map_size(mappings) <= @max_cmap_entries,
+               {:ok, entries} <- bfrange_entries(first, count, target) do
+            {:cont, {:ok, Map.merge(mappings, entries)}}
+          else
+            _ ->
+              {:halt, error(:cmap, :invalid_pdf_input, "ToUnicode bfrange mapping is malformed")}
+          end
+        end)
+        |> case do
+          {:ok, mappings} -> {:cont, {:ok, mappings}}
+          {:error, _} = bfrange_error -> {:halt, bfrange_error}
+        end
+      else
+        {:halt, error(:cmap, :invalid_pdf_input, "ToUnicode bfrange count is malformed")}
+      end
+    end)
+  end
+
+  defp cmap_section_consumed?(section, entry_pattern) do
+    section
+    |> then(&Regex.replace(entry_pattern, &1, ""))
+    |> String.replace(~r/%[^\r\n]*/, "")
+    |> String.trim()
+    |> then(&(&1 == ""))
+  end
+
+  defp bfrange_entries(first, count, "[" <> array) do
+    targets = for [_, target] <- Regex.scan(~r/<([0-9A-Fa-f]+)>/, array), do: target
+
+    if length(targets) == count do
+      Enum.with_index(targets)
+      |> Enum.reduce_while({:ok, %{}}, fn {target, offset}, {:ok, mappings} ->
+        case utf16(hex_bytes(target)) do
+          {:ok, target} ->
+            {:cont, {:ok, Map.put(mappings, increment_binary(first, offset), target)}}
+
+          error ->
+            {:halt, error}
+        end
+      end)
+    else
+      error(:cmap, :invalid_pdf_input, "ToUnicode bfrange array length is invalid")
+    end
+  end
+
+  defp bfrange_entries(first, count, target) do
+    target = target |> String.trim_leading("<") |> String.trim_trailing(">") |> hex_bytes()
+
+    if is_binary(target) do
+      0..(count - 1)
+      |> Enum.reduce_while({:ok, %{}}, fn offset, {:ok, mappings} ->
+        with source when is_binary(source) <- increment_binary(first, offset),
+             destination when is_binary(destination) <- increment_binary(target, offset),
+             {:ok, text} <- utf16(destination) do
+          {:cont, {:ok, Map.put(mappings, source, text)}}
+        else
+          _ ->
+            {:halt, error(:cmap, :invalid_pdf_input, "ToUnicode bfrange destination overflows")}
+        end
+      end)
+    else
+      error(:cmap, :invalid_pdf_input, "ToUnicode bfrange destination is malformed")
+    end
+  end
+
+  defp decode_cmap(bytes, cmap, page, font),
+    do: decode_cmap(bytes, cmap, page, font, [], [])
+
+  defp decode_cmap(<<>>, _cmap, _page, _font, text_acc, codes),
+    do: {:ok, %{text: text_acc |> Enum.reverse() |> Enum.join(), codes: Enum.reverse(codes)}}
+
+  defp decode_cmap(bytes, cmap, page, font, text_acc, codes) do
+    candidate =
+      cmap.codespaces
+      |> Enum.map(fn {first, _last} -> byte_size(first) end)
+      |> Enum.uniq()
+      |> Enum.sort(:desc)
+      |> Enum.find(fn size ->
+        byte_size(bytes) >= size and
+          (cmap.codespaces == [] or
+             Enum.any?(cmap.codespaces, fn {first, last} ->
+               byte_size(first) == size and binary_part(bytes, 0, size) >= first and
+                 binary_part(bytes, 0, size) <= last
+             end))
+      end)
+
+    if candidate do
+      <<code::binary-size(candidate), rest::binary>> = bytes
+
+      case Map.get(cmap.mappings, code) do
+        nil ->
+          error(
+            :text_encoding,
+            :unsupported_text_encoding,
+            "ToUnicode CMap has no mapping for a shown character code",
+            page: page,
+            font: font
+          )
+
+        mapped_text ->
+          decode_cmap(
+            rest,
+            cmap,
+            page,
+            font,
+            [mapped_text | text_acc],
+            [:binary.decode_unsigned(code) | codes]
+          )
+      end
+    else
+      error(
+        :text_encoding,
+        :unsupported_text_encoding,
+        "shown character code is outside the ToUnicode codespace",
+        page: page,
+        font: font
+      )
+    end
+  end
+
+  defp plain_page(spans) do
+    Enum.reduce(spans, "", fn span, text ->
+      separator = if text == "" or span.join_previous?, do: "", else: " "
+      text <> separator <> span.text
+    end)
+  end
+
+  defp layout_page(spans) do
+    min_x = spans |> Enum.map(& &1.x) |> Enum.min()
+
+    spans
+    |> Enum.sort_by(&{&1.y, &1.x})
+    |> group_lines([])
+    |> Enum.map(fn line -> line.spans |> Enum.sort_by(& &1.x) |> render_line(min_x) end)
+    |> Enum.join("\n")
+  end
+
+  defp group_lines(spans, lines) do
+    case spans do
+      [] ->
+        Enum.reverse(lines)
+
+      [span | rest] ->
+        case lines do
+          [%{y: y, size: size, spans: line_spans} = line | previous]
+          when abs(span.y - y) <= 1.5 ->
+            updated = %{line | spans: [span | line_spans], size: max(size, span.size)}
+            group_lines(rest, [updated | previous])
+
+          _ ->
+            group_lines(rest, [%{y: span.y, size: span.size, spans: [span]} | lines])
+        end
+    end
+  end
+
+  defp render_line(spans, min_x) do
+    spans
+    |> Enum.reduce({"", min_x}, fn span, {line, current_x} ->
+      space_width = max(span.size * 0.25, 4.0)
+      gap = span.x - current_x
+
+      spaces =
+        cond do
+          line == "" -> max(round((span.x - min_x) / space_width), 0)
+          gap > space_width * 0.35 -> max(round(gap / space_width), 1)
+          true -> 0
+        end
+
+      {line <> String.duplicate(" ", spaces) <> span.text, max(span.end_x, span.x)}
+    end)
+    |> elem(0)
+    |> String.trim_trailing()
+  end
+
+  defp text_state(page, page_number) do
+    rotation = page.rotate || 0
+
+    case {page.media_box, rotation} do
+      {[left, bottom, right, top] = media_box, rotation}
+      when is_number(left) and is_number(bottom) and is_number(right) and is_number(top) and
+             right > left and top > bottom and is_integer(rotation) and rem(rotation, 90) == 0 ->
+        rotation = Integer.mod(rotation, 360)
+
+        {:ok,
+         %{
+           ctm: identity(),
+           text_matrix: identity(),
+           line_matrix: identity(),
+           font: nil,
+           font_size: 0.0,
+           char_spacing: 0.0,
+           word_spacing: 0.0,
+           horizontal_scale: 100.0,
+           leading: 0.0,
+           rise: 0.0,
+           render_mode: 0,
+           in_text?: false,
+           stack: [],
+           rotation: rotation,
+           page: %{media_box: media_box, rotation: rotation}
+         }}
+
+      _ ->
+        error(:page_tree, :invalid_pdf_input, "page MediaBox or Rotate value is malformed",
+          page: page_number
+        )
+    end
+  end
+
+  defp display_position(x, y, page) do
+    [left, bottom, right, top] = page.media_box
+
+    case page.rotation do
+      0 -> {x - left, top - y}
+      90 -> {y - bottom, x - left}
+      180 -> {right - x, y - bottom}
+      270 -> {top - y, right - x}
+    end
+  end
+
+  defp identity, do: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+
+  defp matrix_value(values, page) do
+    case values do
+      nil ->
+        {:ok, identity()}
+
+      values when is_list(values) ->
+        if length(values) == 6 and Enum.all?(values, &is_number/1) do
+          {:ok, Enum.map(values, &(&1 * 1.0))}
+        else
+          error(:content, :invalid_pdf_input, "Form XObject Matrix is malformed", page: page)
+        end
+
+      _ ->
+        error(:content, :invalid_pdf_input, "Form XObject Matrix is malformed", page: page)
+    end
+  end
+
+  defp translate(matrix, x, y), do: multiply([1.0, 0.0, 0.0, 1.0, x, y], matrix)
+
+  defp multiply([a, b, c, d, e, f], [a2, b2, c2, d2, e2, f2]),
+    do: [
+      a * a2 + b * c2,
+      a * b2 + b * d2,
+      c * a2 + d * c2,
+      c * b2 + d * d2,
+      e * a2 + f * c2 + e2,
+      e * b2 + f * d2 + f2
+    ]
+
+  defp numbers(values, count) do
+    converted = Enum.map(values, &number_value/1)
+
+    if length(converted) == count and Enum.all?(converted, &match?({:ok, _}, &1)) do
+      {:ok, Enum.map(converted, fn {:ok, value} -> value * 1.0 end)}
+    else
+      :error
+    end
+  end
+
+  defp number_value({:int, value}), do: {:ok, value}
+  defp number_value({:real, value}), do: {:ok, value}
+  defp number_value(value) when is_number(value), do: {:ok, value}
+  defp number_value(_), do: :error
+
+  defp required_value(dictionary, key, label, page) do
+    case Map.get(dictionary, key) do
+      nil ->
+        error(:resources, :invalid_pdf_input, "#{label} resource #{key} is missing", page: page)
+
+      value ->
+        {:ok, value}
+    end
+  end
+
+  defp name?({:name, value}, expected), do: value == expected
+  defp name?(_, _), do: false
+
+  defp hex_bytes(hex) do
+    case Base.decode16(hex, case: :mixed) do
+      {:ok, bytes} -> bytes
+      :error -> nil
+    end
+  end
+
+  defp utf16(nil), do: :error
+
+  defp utf16(bytes) do
+    case :unicode.characters_to_binary(bytes, {:utf16, :big}, :utf8) do
+      value when is_binary(value) -> {:ok, value}
       _ -> :error
     end
   end
 
-  defp do_parse_objects(tokens, acc) do
-    case tokens do
-      [] ->
-        Enum.reverse(acc)
+  defp increment_binary(binary, offset) do
+    size = bit_size(binary)
+    value = :binary.decode_unsigned(binary) + offset
 
-      [{:int, obj}, {:int, gen}, :obj | rest] ->
-        {body, rest} = take_until_endobj(rest, [])
-        do_parse_objects(rest, [%{obj: obj, gen: gen, tokens: body} | acc])
-
-      [_token | rest] ->
-        do_parse_objects(rest, acc)
+    if value < 1 <<< size do
+      <<value::unsigned-big-size(size)>>
+    else
+      nil
     end
   end
 
-  defp take_until_endobj(tokens, acc) do
-    case tokens do
-      [] -> {Enum.reverse(acc), []}
-      [:endobj | rest] -> {Enum.reverse(acc), rest}
-      [token | rest] -> take_until_endobj(rest, [token | acc])
-    end
+  defp text_error({:error, {reason, diagnostic}}),
+    do:
+      {:error,
+       {reason, diagnostic |> Map.put(:operation, :extract) |> Map.put(:module, __MODULE__)}}
+
+  defp error(stage, reason, message, details \\ []) do
+    {pdf_details, diagnostic_options} = Keyword.split(details, [:object, :page, :font])
+
+    {:error, {reason, diagnostic}} =
+      Diagnostics.error(
+        stage,
+        reason,
+        message,
+        Keyword.merge([operation: :extract, module: __MODULE__], diagnostic_options)
+      )
+
+    {:error, {reason, with_debug_details(diagnostic, pdf_details)}}
   end
 
-  defp cmap_by_ref(objects) do
-    objects
-    |> Enum.flat_map(fn object ->
-      object.tokens
-      |> stream_data()
-      |> case do
-        nil ->
-          []
+  defp with_debug_details(diagnostic, details) do
+    message =
+      Enum.reduce(details, diagnostic.message, fn detail, message ->
+        case detail do
+          {:object, {object, generation}} ->
+            "#{message}; object #{object} #{generation}"
 
-        stream ->
-          decoded = decode_stream(stream, object.tokens)
+          {:page, page} ->
+            "#{message}; page #{page}"
 
-          case String.contains?(decoded, "begincmap") and parse_cmap(decoded) do
-            {:ok, cmap} -> [{{object.obj, object.gen}, cmap}]
-            _ -> []
-          end
-      end
-    end)
-    |> Map.new()
-  end
+          {:font, font} ->
+            "#{message}; font #{font}"
 
-  defp font_cmap_by_name(objects, cmap_by_ref) do
-    font_ref_to_cmap_ref =
-      objects
-      |> Enum.flat_map(fn object ->
-        case find_ref_after_name(object.tokens, "ToUnicode") do
-          nil -> []
-          cmap_ref -> [{{object.obj, object.gen}, cmap_ref}]
+          _ ->
+            message
         end
       end)
-      |> Map.new()
 
-    objects
-    |> Enum.flat_map(fn object ->
-      object.tokens
-      |> font_resource_refs()
-      |> Enum.flat_map(fn {font_name, font_ref} ->
-        with cmap_ref when not is_nil(cmap_ref) <- Map.get(font_ref_to_cmap_ref, font_ref),
-             cmap when is_map(cmap) <- Map.get(cmap_by_ref, cmap_ref) do
-          [{font_name, cmap}]
-        else
-          _ -> []
-        end
-      end)
-    end)
-    |> Map.new()
-  end
-
-  defp decoded_content_streams(objects) do
-    objects
-    |> Enum.flat_map(fn object ->
-      case stream_data(object.tokens) do
-        nil ->
-          []
-
-        stream ->
-          decoded = decode_stream(stream, object.tokens)
-
-          cond do
-            String.contains?(decoded, "begincmap") ->
-              []
-
-            String.contains?(decoded, "BT") and
-                (String.contains?(decoded, "Tj") or String.contains?(decoded, "TJ")) ->
-              [decoded]
-
-            true ->
-              []
-          end
-      end
-    end)
-  end
-
-  defp stream_data(tokens) do
-    Enum.find_value(tokens, fn
-      {:stream_data, data} -> data
-      _ -> nil
-    end)
-  end
-
-  defp decode_stream(data, tokens) do
-    if has_flate_filter?(tokens) do
-      try do
-        :zlib.uncompress(data)
-      rescue
-        _ -> data
-      end
-    else
-      data
-    end
-  end
-
-  defp has_flate_filter?(tokens) do
-    tokens
-    |> Enum.take_while(&(&1 != :stream))
-    |> Enum.any?(&(&1 == {:name, "FlateDecode"}))
-  end
-
-  defp parse_cmap(cmap_text) do
-    case byte_size(cmap_text) <= @max_cmap_bytes do
-      true ->
-        with {:ok, bfchar} <- parse_bfchar(cmap_text),
-             {:ok, bfrange} <- parse_bfrange(cmap_text, map_size(bfchar)),
-             true <- map_size(bfchar) + map_size(bfrange) <= @max_cmap_entries do
-          {:ok, Map.merge(bfrange, bfchar)}
-        else
-          _ -> :error
-        end
-
-      false ->
-        :error
-    end
-  end
-
-  defp parse_bfchar(cmap_text) do
-    entries =
-      cmap_text
-      |> cmap_sections("beginbfchar", "endbfchar")
-      |> Enum.flat_map(&Regex.scan(~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/, &1))
-
-    {:ok,
-     Map.new(entries, fn [_, source, target] ->
-       {hex_to_integer(source), unicode_hex_to_string(target)}
-     end)}
-  end
-
-  defp parse_bfrange(cmap_text, existing_entries) do
-    cmap_text
-    |> cmap_sections("beginbfrange", "endbfrange")
-    |> Enum.flat_map(&Regex.scan(~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/, &1))
-    |> Enum.reduce_while({:ok, %{}}, fn [_, first, last, target], {:ok, mappings} ->
-      first = hex_to_integer(first)
-      last = hex_to_integer(last)
-      target = hex_to_integer(target)
-      range_size = last - first + 1
-
-      case last >= first and
-             range_size <= @max_cmap_entries - existing_entries - map_size(mappings) do
-        true ->
-          range =
-            Enum.reduce(first..last, mappings, fn source, acc ->
-              Map.put(acc, source, codepoint_to_string(target + source - first))
-            end)
-
-          {:cont, {:ok, range}}
-
-        false ->
-          {:halt, :error}
-      end
-    end)
-  end
-
-  defp cmap_sections(cmap_text, opening, closing) do
-    regex = Regex.compile!("(?s)#{opening}\\s+(.*?)\\s+#{closing}")
-
-    regex
-    |> Regex.scan(cmap_text)
-    |> Enum.map(fn [_, section] -> section end)
-  end
-
-  defp find_ref_after_name(tokens, name) do
-    tokens
-    |> Enum.chunk_every(4, 1, :discard)
-    |> Enum.find_value(fn
-      [{:name, ^name}, {:int, obj}, {:int, gen}, :R] -> {obj, gen}
-      _ -> nil
-    end)
-  end
-
-  defp font_resource_refs(tokens) do
-    tokens
-    |> Enum.chunk_every(4, 1, :discard)
-    |> Enum.flat_map(fn
-      [{:name, font_name}, {:int, obj}, {:int, gen}, :R] ->
-        if String.match?(font_name, ~r/^F\d+$/), do: [{font_name, {obj, gen}}], else: []
-
-      _ ->
-        []
-    end)
-  end
-
-  defp merge_cmaps(cmaps) do
-    Enum.reduce(cmaps, %{}, fn cmap, acc -> Map.merge(acc, cmap) end)
-  end
-
-  defp extract_page_chunks(content_stream, font_cmap_by_name, fallback_cmap) do
-    content_stream
-    |> Tokenizer.new()
-    |> Tokenizer.tokenize_all()
-    |> Enum.reduce({[], [], %{x: 0.0, y: 0.0, font: nil}}, fn token, {chunks, operands, state} ->
-      case token do
-        {:op, op} ->
-          handle_operator(op, operands, state, chunks, font_cmap_by_name, fallback_cmap)
-
-        _ ->
-          {chunks, [token | operands], state}
-      end
-    end)
-    |> elem(0)
-    |> Enum.reverse()
-    |> Enum.reject(&(String.trim(&1.text) == ""))
-  end
-
-  defp handle_operator(op, operands, state, chunks, font_cmap_by_name, fallback_cmap) do
-    case op do
-      "Tf" ->
-        font =
-          operands
-          |> Enum.find_value(fn
-            {:name, font_name} -> font_name
-            _ -> nil
-          end)
-
-        {chunks, [], %{state | font: font || state.font}}
-
-      "Tm" ->
-        numbers = operands |> Enum.reverse() |> Enum.flat_map(&number_value/1)
-
-        case numbers do
-          [_a, _b, _c, _d, x, y | _] -> {chunks, [], %{state | x: x, y: y}}
-          _ -> {chunks, [], state}
-        end
-
-      op when op in ["Td", "TD"] ->
-        numbers = operands |> Enum.reverse() |> Enum.flat_map(&number_value/1)
-
-        case numbers do
-          [tx, ty | _] -> {chunks, [], %{state | x: state.x + tx, y: state.y + ty}}
-          _ -> {chunks, [], state}
-        end
-
-      "T*" ->
-        {chunks, [], %{state | y: state.y + 12.0}}
-
-      "Tj" ->
-        text =
-          operands
-          |> List.first()
-          |> decode_text_token(cmap_for_font(state.font, font_cmap_by_name, fallback_cmap))
-
-        add_chunk(chunks, state, text)
-
-      "TJ" ->
-        cmap = cmap_for_font(state.font, font_cmap_by_name, fallback_cmap)
-
-        text =
-          operands
-          |> Enum.reverse()
-          |> Enum.filter(fn
-            {:string, _} -> true
-            {:hex_string, _} -> true
-            _ -> false
-          end)
-          |> Enum.map(&decode_text_token(&1, cmap))
-          |> Enum.join("")
-
-        add_chunk(chunks, state, text)
-
-      op when op in ["'", "\""] ->
-        handle_operator(
-          "Tj",
-          operands,
-          %{state | y: state.y + 12.0},
-          chunks,
-          font_cmap_by_name,
-          fallback_cmap
-        )
-
-      _ ->
-        {chunks, [], state}
-    end
-  end
-
-  defp add_chunk(chunks, state, text) do
-    chunk = %{x: state.x, y: state.y, text: text}
-    {[chunk | chunks], [], state}
-  end
-
-  defp cmap_for_font(font, font_cmap_by_name, fallback_cmap) do
-    Map.get(font_cmap_by_name, font, fallback_cmap)
-  end
-
-  defp decode_text_token(token, cmap) do
-    case token do
-      {:string, text} -> decode_encoded_text(text, cmap)
-      {:hex_string, text} -> decode_encoded_text(text, cmap)
-      _ -> ""
-    end
-  end
-
-  defp decode_encoded_text(text, cmap) do
-    cond do
-      byte_size(text) >= 2 and rem(byte_size(text), 2) == 0 ->
-        text
-        |> for_each_16bit_code()
-        |> Enum.map(fn code -> Map.get(cmap, code, fallback_code_to_string(code)) end)
-        |> Enum.join("")
-
-      true ->
-        text
-    end
-  end
-
-  defp for_each_16bit_code(text) do
-    for <<code::16 <- text>>, do: code
-  end
-
-  defp fallback_code_to_string(code) do
-    if code >= 32 and code <= 126 do
-      <<code>>
-    else
-      ""
-    end
-  end
-
-  defp layout_page(chunks) do
-    page_min_x =
-      chunks
-      |> Enum.map(& &1.x)
-      |> Enum.min()
-
-    chunks
-    |> Enum.group_by(fn chunk -> round(chunk.y / 6.0) * 6 end)
-    |> Enum.sort_by(fn {y, _chunks} -> y end)
-    |> Enum.map(fn {_y, line_chunks} ->
-      line_chunks
-      |> Enum.sort_by(& &1.x)
-      |> render_line(page_min_x)
-    end)
-    |> Enum.join("\n")
-  end
-
-  defp plain_page(chunks) do
-    chunks
-    |> Enum.map(& &1.text)
-    |> Enum.join(" ")
-  end
-
-  defp render_line(chunks, page_min_x) do
-    chunks
-    |> Enum.reduce("", fn chunk, acc ->
-      column = chunk.x |> Kernel.-(page_min_x) |> Kernel./(4.6) |> round() |> max(0)
-      padding = max(column - String.length(acc), 1)
-      acc <> String.duplicate(" ", padding) <> chunk.text
-    end)
-    |> String.trim_trailing()
-  end
-
-  defp number_value(token) do
-    case token do
-      {:int, value} -> [value * 1.0]
-      {:real, value} -> [value]
-      _ -> []
-    end
-  end
-
-  defp hex_to_integer(hex) do
-    {value, ""} = Integer.parse(hex, 16)
-    value
-  end
-
-  defp unicode_hex_to_string(hex) do
-    hex
-    |> hex_to_integer()
-    |> codepoint_to_string()
-  end
-
-  defp codepoint_to_string(codepoint) do
-    try do
-      <<codepoint::utf8>>
-    rescue
-      _ -> ""
-    end
+    Map.put(diagnostic, :message, message)
   end
 end
