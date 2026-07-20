@@ -1839,9 +1839,6 @@ defmodule NativeElixirPdfUtilities.Pdf.TextEncoding do
   end
 
   defp encoding_glyph(encoding, code) do
-    case Map.get(@encodings, encoding) do
-      values when is_tuple(values) -> elem(values, code)
-      nil -> nil
-    end
+    @encodings |> Map.fetch!(encoding) |> elem(code)
   end
 end

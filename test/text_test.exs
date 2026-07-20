@@ -63,24 +63,8 @@ defmodule NativeElixirPdfUtilities.TextTest do
   end
 
   test "opens objects stored in an object stream" do
-    compressed =
-      object_stream([
-        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
-        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
-        {3,
-         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources 4 0 R /Contents 6 0 R >>"},
-        {4, "<< /Font << /f-0-0 5 0 R >> >>"},
-        {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"}
-      ])
-
-    assert Text.extract(
-             pdf([
-               {6, stream_object("", "BT /f-0-0 10 Tf (Object stream) Tj ET")},
-               {7, compressed}
-             ]),
-             layout: false
-           ) ==
-             {:ok, "Object stream"}
+    path = Path.expand("fixtures/pdf_reader/object-stream.pdf", __DIR__)
+    assert Text.extract(File.read!(path), layout: false) == {:ok, "Reader milestone fixture"}
   end
 
   test "layout mode keeps positional columns" do
@@ -343,6 +327,20 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert Text.extract(pdf, layout: false) == {:ok, "Visible"}
   end
 
+  test "handles empty text and reports text shown without an active font" do
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf () Tj ET")),
+      :no_extractable_text,
+      :text_extraction
+    )
+
+    assert_error(
+      Text.extract(page_pdf("BT (A) Tj ET")),
+      :unsupported_text_encoding,
+      :text_encoding
+    )
+  end
+
   test "decodes the supported stream filters and their abbreviations" do
     decoded = "BT /F1 12 Tf (Filters) Tj ET"
 
@@ -581,6 +579,15 @@ defmodule NativeElixirPdfUtilities.TextTest do
       )
 
     assert_error(Text.extract(invalid), :invalid_pdf_input, :font)
+
+    invalid_range =
+      page_pdf("BT /F1 12 Tf <01> Tj ET",
+        font: font,
+        cmap: cmap,
+        descendant: "<< /Type /Font /Subtype /CIDFontType2 /DW 500 /W [1 2] >>"
+      )
+
+    assert_error(Text.extract(invalid_range), :invalid_pdf_input, :font)
   end
 
   test "normalizes 180 and 270 degree page rotation" do
@@ -697,6 +704,31 @@ defmodule NativeElixirPdfUtilities.TextTest do
       :unsupported_text_encoding,
       :text_encoding
     )
+
+    no_base_font = "<< /Type /Font /Subtype /Type1 >>"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf (A) Tj ET", font: no_base_font)),
+      :unsupported_text_encoding,
+      :text_encoding
+    )
+
+    invalid_base_font =
+      <<"<< /Type /Font /Subtype /Type1 /BaseFont /", 255, " >>">>
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf (A) Tj ET", font: invalid_base_font)),
+      :invalid_pdf_input,
+      :text_encoding
+    )
+
+    base_without_differences =
+      "<< /Type /Font /Subtype /Type1 /Encoding << /BaseEncoding /WinAnsiEncoding >> >>"
+
+    assert Text.extract(
+             page_pdf("BT /F1 12 Tf (A) Tj ET", font: base_without_differences),
+             layout: false
+           ) == {:ok, "A"}
   end
 
   test "validates malformed and oversized CMap sections" do
@@ -711,8 +743,15 @@ defmodule NativeElixirPdfUtilities.TextTest do
        :invalid_pdf_input},
       {"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfrange\n<01> <02> [<0041>]\nendbfrange",
        :invalid_pdf_input},
+      {"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n2 beginbfrange\n<01> <02> <0041>\nendbfrange",
+       :invalid_pdf_input},
       {"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfrange\n<01> <02> <FFFF>\nendbfrange",
-       :invalid_pdf_input}
+       :invalid_pdf_input},
+      {"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfrange\n<01> <01> [<D800>]\nendbfrange",
+       :invalid_pdf_input},
+      {"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfrange\n<01> <01> <0>\nendbfrange",
+       :invalid_pdf_input},
+      {"1 begincodespacerange\n<00> <FF>\nendcodespacerange", :unsupported_text_encoding}
     ]
 
     for {cmap, reason} <- cmaps do
@@ -732,6 +771,80 @@ defmodule NativeElixirPdfUtilities.TextTest do
       :resource_limit_exceeded,
       :cmap
     )
+  end
+
+  test "reports missing and out-of-codespace ToUnicode mappings" do
+    font =
+      "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    missing =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 beginbfchar\n<01> <0041>\nendbfchar"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf <02> Tj ET", font: font, cmap: missing)),
+      :unsupported_text_encoding,
+      :text_encoding
+    )
+
+    outside =
+      "1 begincodespacerange\n<01> <01>\nendcodespacerange\n" <>
+        "1 beginbfchar\n<01> <0041>\nendbfchar"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf <02> Tj ET", font: font, cmap: outside)),
+      :unsupported_text_encoding,
+      :text_encoding
+    )
+  end
+
+  test "decodes a sequential ToUnicode bfrange" do
+    font =
+      "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    cmap =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 beginbfrange\n<01> <02> <0041>\nendbfrange"
+
+    assert Text.extract(page_pdf("BT /F1 12 Tf <0102> Tj ET", font: font, cmap: cmap),
+             layout: false
+           ) == {:ok, "AB"}
+  end
+
+  test "limits recursive forms and accepts real content operands and form matrices" do
+    recursive_objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents 6 0 R >>"},
+      {4, "<< /Font << /F1 5 0 R >> /XObject << /form 7 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", "/form Do")},
+      {7, stream_object("/Type /XObject /Subtype /Form /Resources 4 0 R", "/form Do")}
+    ]
+
+    assert_error(Text.extract(pdf(recursive_objects)), :resource_limit_exceeded, :limits)
+
+    valid_form_objects =
+      List.replace_at(recursive_objects, 6, {
+        7,
+        stream_object(
+          "/Type /XObject /Subtype /Form /Matrix [1.0 0 0 1 2 3] /Resources 4 0 R",
+          "BT /F1 12 Tf 1.5 0 Td (Form) Tj ET"
+        )
+      })
+
+    assert Text.extract(pdf(valid_form_objects), layout: false) == {:ok, "Form"}
+
+    scalar_matrix_objects =
+      List.replace_at(recursive_objects, 6, {
+        7,
+        stream_object(
+          "/Type /XObject /Subtype /Form /Matrix /bad /Resources 4 0 R",
+          "BT /F1 12 Tf (Form) Tj ET"
+        )
+      })
+
+    assert_error(Text.extract(pdf(scalar_matrix_objects)), :invalid_pdf_input, :content)
   end
 
   defp page_pdf(content, options \\ []) do
@@ -772,23 +885,6 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
   defp stream_object(dictionary, stream) do
     "<< #{dictionary} /Length #{byte_size(stream)} >>\nstream\n#{stream}\nendstream"
-  end
-
-  defp object_stream(entries) do
-    {body, offsets, _offset} =
-      Enum.reduce(entries, {"", [], 0}, fn {object, value}, {body, offsets, offset} ->
-        value = value <> "\n"
-        {body <> value, offsets ++ [{object, offset}], offset + byte_size(value)}
-      end)
-
-    header =
-      offsets
-      |> Enum.map_join(" ", fn {object, offset} -> "#{object} #{offset}" end)
-      |> then(&(&1 <> " "))
-
-    stream = header <> body
-
-    "<< /Type /ObjStm /N #{length(entries)} /First #{byte_size(header)} /Length #{byte_size(stream)} >>\nstream\n#{stream}\nendstream"
   end
 
   defp ascii85(data) do

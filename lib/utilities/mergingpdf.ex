@@ -1,21 +1,22 @@
 defmodule NativeElixirPdfUtilities.Merge do
   @moduledoc """
-  Minimal PDF utilities for merging PDF binaries using the tokenizer.
+  PDF utilities for merging documents through the shared native reader.
 
   Notes and constraints:
   - Emits a classic PDF 1.7 header and builds a fresh `xref` + `trailer`.
-  - Copies all objects from inputs, renumbering to avoid collisions.
+  - Resolves classic xref tables, xref streams, and object streams before copying
+    active objects with fresh identifiers.
   - Adjusts indirect references (`n g R`) to the new numbering.
   - Collects Page objects and builds a new `Catalog` + `Pages` tree that references them.
   - Leaves stream bytes untouched and preserves declared `/Length` (direct or indirect ref),
     only renumbering indirect references as needed.
-  - Does not decode filters or resolve xref streams; expects classic PDFs tokenizable by the tokenizer.
 
   The merger is conservative and pragmatic, targeting structural correctness for common PDFs.
   """
 
-  alias NativeElixirPdfUtilities.Tokenizer
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Tokenizer
 
   @type pdf_bin :: binary()
   @typedoc "A single token as produced by `NativeElixirPdfUtilities.Tokenizer`."
@@ -33,8 +34,8 @@ defmodule NativeElixirPdfUtilities.Merge do
   @doc """
   Merge a list of PDF binaries into a single PDF binary.
 
-  This is a best-effort merger for classic PDFs. It renumbers all objects of each input,
-  collects Page objects, and emits a new Catalog/Pages tree that references all pages.
+  It resolves active objects through the shared reader, renumbers them, collects
+  Page objects, and emits a new Catalog/Pages tree referencing all input pages.
   """
   @spec merge([pdf_bin()]) ::
           {:ok, pdf_bin()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
@@ -73,14 +74,17 @@ defmodule NativeElixirPdfUtilities.Merge do
     case Enum.reduce_while(bins, {:ok, []}, fn bin, {:ok, inputs} ->
            case index_pdf(bin) do
              {:ok, input} -> {:cont, {:ok, [input | inputs]}}
-             :error -> {:halt, :error}
+             {:error, {_reason, diagnostic}} -> {:halt, {:error, diagnostic}}
            end
          end) do
       {:ok, inputs} ->
         build_merged_pdf(Enum.reverse(inputs))
 
-      :error ->
-        Diagnostics.error(:merge, :invalid_pdf_input, "merge/1 received an invalid classic PDF",
+      {:error, diagnostic} ->
+        Diagnostics.error(
+          :merge,
+          :invalid_pdf_input,
+          "merge/1 received an invalid PDF: #{diagnostic.message}",
           operation: :merge,
           module: __MODULE__
         )
@@ -95,7 +99,9 @@ defmodule NativeElixirPdfUtilities.Merge do
     page_ids =
       inputs2
       |> Enum.flat_map(fn %{pages: pages, map: map} ->
-        Enum.map(pages, &Map.fetch!(map, &1))
+        Enum.map(pages, fn {object, generation} ->
+          {Map.fetch!(map, object), generation}
+        end)
       end)
       |> Enum.reduce({[], MapSet.new()}, fn id, {acc, seen} ->
         if MapSet.member?(seen, id), do: {acc, seen}, else: {[id | acc], MapSet.put(seen, id)}
@@ -137,98 +143,36 @@ defmodule NativeElixirPdfUtilities.Merge do
 
   # Index a PDF binary into objects, page ids and inherited attributes.
   defp index_pdf(bin) do
-    st = Tokenizer.new(bin)
-    toks = Tokenizer.tokenize_all(st)
+    case Reader.read(bin) do
+      {:ok, document} ->
+        objects =
+          document.objects
+          |> Enum.reject(fn {_ref, object} -> structural_reader_object?(object.value) end)
+          |> Enum.map(fn {{object, generation}, parsed} ->
+            %{obj: object, gen: generation, tokens: parsed.tokens}
+          end)
+          |> Enum.sort_by(&{&1.obj, &1.gen})
 
-    with true <- :binary.match(bin, "%PDF-") != :nomatch,
-         false <- Enum.any?(toks, &match?({:error, _reason}, &1)),
-         {:ok, objects, pages} <- parse_objects_and_pages(toks),
-         true <- objects != [] do
-      root_pages = find_root_pages_id(objects)
+        root_pages = find_root_pages_id(objects)
 
-      {:ok,
-       %{
-         objects: objects,
-         pages: pages,
-         root_pages: root_pages,
-         inherited: page_inheritances(objects, root_pages),
-         max_obj: Enum.reduce(objects, 0, fn o, acc -> max(acc, o.obj) end)
-       }}
-    else
-      _ -> :error
+        {:ok,
+         %{
+           objects: objects,
+           pages: Enum.map(document.pages, & &1.ref),
+           root_pages: root_pages,
+           inherited: page_inheritances(objects, root_pages),
+           max_obj: Enum.reduce(objects, 0, fn object, maximum -> max(maximum, object.obj) end)
+         }}
+
+      {:error, _} = reader_error ->
+        reader_error
     end
   end
 
-  # Parse the flat token stream into object records and collect Page object ids.
-  defp parse_objects_and_pages(tokens) do
-    parse_objects_and_pages(tokens, [], [], %{})
-  end
-
-  # Internal worker for object scanning.
-  defp parse_objects_and_pages(tokens, objects, pages, object_ids) do
-    case tokens do
-      [] ->
-        {:ok, Enum.reverse(objects), Enum.reverse(pages)}
-
-      [{:int, obj}, {:int, gen}, :obj | rest] when obj > 0 and gen >= 0 ->
-        case Map.has_key?(object_ids, obj) do
-          true ->
-            :error
-
-          false ->
-            case take_until_endobj(rest, []) do
-              {:ok, body, remaining} ->
-                case valid_object_tokens?(body) do
-                  true ->
-                    pages = if object_is_page?(body), do: [obj | pages], else: pages
-                    object = %{obj: obj, gen: gen, tokens: body}
-
-                    parse_objects_and_pages(
-                      remaining,
-                      [object | objects],
-                      pages,
-                      Map.put(object_ids, obj, true)
-                    )
-
-                  false ->
-                    :error
-                end
-
-              :error ->
-                :error
-            end
-        end
-
-      [{:int, _obj}, {:int, _gen}, :obj | _rest] ->
-        :error
-
-      [_token | rest] ->
-        parse_objects_and_pages(rest, objects, pages, object_ids)
-    end
-  end
-
-  # Take tokens until encountering :endobj (exclusive), preserving the remaining token stream.
-  defp take_until_endobj(tokens, acc) do
-    case tokens do
-      [] -> :error
-      [:endobj | rest] -> {:ok, Enum.reverse(acc), rest}
-      [token | rest] -> take_until_endobj(rest, [token | acc])
-    end
-  end
-
-  defp valid_object_tokens?(tokens) do
-    case tokens do
-      [] ->
-        true
-
-      [:stream, {:stream_data, _data}, :endstream | rest] ->
-        valid_object_tokens?(rest)
-
-      [:stream | _rest] ->
-        false
-
-      [_token | rest] ->
-        valid_object_tokens?(rest)
+  defp structural_reader_object?(value) do
+    case value do
+      %{"Type" => {:name, type}} when type in ["XRef", "ObjStm"] -> true
+      _ -> false
     end
   end
 
@@ -244,16 +188,16 @@ defmodule NativeElixirPdfUtilities.Merge do
 
   # Find the object id of the root Pages tree via the Catalog's /Pages reference.
   defp find_root_pages_id(objects) do
-    case Enum.find(objects, fn %{tokens: toks} ->
-           Enum.chunk_every(toks, 2, 1, :discard)
-           |> Enum.any?(fn
-             [{:name, "Type"}, {:name, "Catalog"}] -> true
-             _ -> false
-           end)
-         end) do
-      nil -> nil
-      %{tokens: toks} -> find_pages_ref_in_tokens(toks)
-    end
+    %{tokens: tokens} =
+      Enum.find(objects, fn %{tokens: tokens} ->
+        Enum.chunk_every(tokens, 2, 1, :discard)
+        |> Enum.any?(fn
+          [{:name, "Type"}, {:name, "Catalog"}] -> true
+          _ -> false
+        end)
+      end)
+
+    find_pages_ref_in_tokens(tokens)
   end
 
   # Look for '/Pages <obj> <gen> R' in a token sequence and return <obj>.
@@ -268,65 +212,43 @@ defmodule NativeElixirPdfUtilities.Merge do
 
   # Resolve inheritable page attributes through the complete /Pages tree.
   defp page_inheritances(objects, root_pages_id) do
-    case root_pages_id do
-      nil ->
-        %{}
+    object_by_id = Map.new(objects, &{&1.obj, &1})
 
-      root_pages_id ->
-        object_by_id = Map.new(objects, &{&1.obj, &1})
-
-        collect_page_inheritances(
-          root_pages_id,
-          object_by_id,
-          %{resources: nil, mediabox: nil},
-          %{},
-          %{}
-        )
-    end
+    collect_page_inheritances(
+      root_pages_id,
+      object_by_id,
+      %{resources: nil, mediabox: nil},
+      %{}
+    )
   end
 
-  defp collect_page_inheritances(object_id, object_by_id, inherited, visited, page_attributes) do
-    case {Map.has_key?(visited, object_id), Map.get(object_by_id, object_id)} do
-      {true, _object} ->
-        page_attributes
+  defp collect_page_inheritances(object_id, object_by_id, inherited, page_attributes) do
+    %{tokens: tokens} = object = Map.fetch!(object_by_id, object_id)
 
-      {false, %{tokens: tokens} = object} ->
-        attributes = %{
-          resources: find_value_after_name(tokens, "Resources") || inherited.resources,
-          mediabox: find_value_after_name(tokens, "MediaBox") || inherited.mediabox
-        }
+    attributes = %{
+      resources: find_value_after_name(tokens, "Resources") || inherited.resources,
+      mediabox: find_value_after_name(tokens, "MediaBox") || inherited.mediabox
+    }
 
-        visited = Map.put(visited, object_id, true)
+    case object_is_page?(tokens) do
+      true ->
+        Map.put(page_attributes, object.obj, attributes)
 
-        case object_is_page?(tokens) do
-          true ->
-            Map.put(page_attributes, object.obj, attributes)
-
-          false ->
-            page_child_references(tokens)
-            |> Enum.reduce(page_attributes, fn child_id, acc ->
-              collect_page_inheritances(child_id, object_by_id, attributes, visited, acc)
-            end)
-        end
-
-      {false, nil} ->
-        page_attributes
+      false ->
+        page_child_references(tokens)
+        |> Enum.reduce(page_attributes, fn child_id, acc ->
+          collect_page_inheritances(child_id, object_by_id, attributes, acc)
+        end)
     end
   end
 
   defp page_child_references(tokens) do
-    case find_value_after_name(tokens, "Kids") do
-      kids when is_list(kids) ->
-        kids
-        |> Enum.chunk_every(3, 1, :discard)
-        |> Enum.flat_map(fn
-          [{:int, object_id}, {:int, _generation}, :R] -> [object_id]
-          _ -> []
-        end)
+    [:lbracket | children] = find_value_after_name(tokens, "Kids")
 
-      _ ->
-        []
-    end
+    children
+    |> Enum.drop(-1)
+    |> Enum.chunk_every(3)
+    |> Enum.map(fn [{:int, object_id}, {:int, _generation}, :R] -> object_id end)
   end
 
   # Find the value tokens immediately following a given name key in a token list.
@@ -336,10 +258,8 @@ defmodule NativeElixirPdfUtilities.Merge do
         nil
 
       {_prefix, [_name | rest]} ->
-        case read_value_tokens(rest) do
-          {val, _} when is_list(val) and val != [] -> val
-          _ -> nil
-        end
+        {value, _rest} = read_value_tokens(rest)
+        value
     end
   end
 
@@ -357,18 +277,12 @@ defmodule NativeElixirPdfUtilities.Merge do
 
       [tok | rest] ->
         {[tok], rest}
-
-      [] ->
-        {[], []}
     end
   end
 
   # Collect a balanced dictionary or array value while preserving nested tokens.
   defp take_until_matching(tokens, opening, closing, depth, acc) do
     case tokens do
-      [] ->
-        {Enum.reverse(acc), []}
-
       [^opening | rest] ->
         take_until_matching(rest, opening, closing, depth + 1, [opening | acc])
 
@@ -441,7 +355,9 @@ defmodule NativeElixirPdfUtilities.Merge do
   defp render_pages_object(_pages_obj_id, page_ids) do
     kids_refs =
       page_ids
-      |> Enum.map(fn id -> [Integer.to_string(id), " 0 R"] end)
+      |> Enum.map(fn {id, generation} ->
+        [Integer.to_string(id), " ", Integer.to_string(generation), " R"]
+      end)
       |> Enum.intersperse(" ")
 
     [
@@ -482,7 +398,8 @@ defmodule NativeElixirPdfUtilities.Merge do
          mediabox_tokens: inh_mb
        }) do
     # We expect a single top-level dict in a Page object. Split it out, sanitize, and put it back.
-    {dict_inner, before, afterr} = take_top_level_dict(tokens)
+    [:dict_start | rest] = tokens
+    {dict_inner, before, afterr} = do_take_dict(rest, 1, [], [])
 
     dict_inner =
       dict_inner
@@ -491,17 +408,8 @@ defmodule NativeElixirPdfUtilities.Merge do
       |> ensure_type_page()
       |> ensure_resources(inh_res)
       |> ensure_mediabox(inh_mb || default_mediabox())
-      |> drop_top_level_empty_arrays()
 
     before ++ [:dict_start | dict_inner] ++ [:dict_end | afterr]
-  end
-
-  # Extract the single top-level dictionary tokens (if present), plus leading/trailing tokens.
-  defp take_top_level_dict(tokens) do
-    case tokens do
-      [:dict_start | rest] -> do_take_dict(rest, 1, [], [])
-      tokens -> {tokens, [], []}
-    end
   end
 
   # Worker for top-level dict extraction.
@@ -560,6 +468,8 @@ defmodule NativeElixirPdfUtilities.Merge do
 
   # Keep a valid /MediaBox array; otherwise use provided fallback.
   defp ensure_mediabox(tokens, fallback) do
+    fallback = if valid_box?(fallback), do: fallback, else: default_mediabox()
+
     case split_on_name(tokens, "MediaBox") do
       {:ok, left, val, right} ->
         if valid_box?(val) do
@@ -594,38 +504,6 @@ defmodule NativeElixirPdfUtilities.Merge do
       {:int, _value} -> true
       {:real, _value} -> true
       _ -> false
-    end
-  end
-
-  # Drop empty [] arrays at the top level in a dict, unless they are a value for a key.
-  defp drop_top_level_empty_arrays(tokens) do
-    # within top-level dict (no nested dicts/arrays here), drop any [] that is not a value after a name
-    do_drop_empty_arrays(tokens, 0, false, [])
-  end
-
-  # Worker for empty-array dropping.
-  defp do_drop_empty_arrays(tokens, depth, after_name?, acc) do
-    case tokens do
-      [] ->
-        Enum.reverse(acc)
-
-      [:dict_start | rest] ->
-        do_drop_empty_arrays(rest, depth + 1, after_name?, [:dict_start | acc])
-
-      [:dict_end | rest] ->
-        do_drop_empty_arrays(rest, max(depth - 1, 0), after_name?, [:dict_end | acc])
-
-      [:lbracket, :rbracket | rest] when depth == 0 and after_name? == false ->
-        do_drop_empty_arrays(rest, 0, false, acc)
-
-      [:lbracket, :rbracket | rest] ->
-        do_drop_empty_arrays(rest, depth, after_name?, [:rbracket, :lbracket | acc])
-
-      [{:name, name} | rest] ->
-        do_drop_empty_arrays(rest, depth, true, [{:name, name} | acc])
-
-      [token | rest] ->
-        do_drop_empty_arrays(rest, depth, false, [token | acc])
     end
   end
 
@@ -691,12 +569,6 @@ defmodule NativeElixirPdfUtilities.Merge do
       [{:real, real} | rest] ->
         do_render_tokens(rest, id_map, [format_pdf_real(real) | add_sep(acc)], nil)
 
-      [:R | rest] ->
-        do_render_tokens(rest, id_map, ["R" | add_sep(acc)], nil)
-
-      [token | rest] when token in [:obj, :endobj, :xref, :trailer, :startxref] ->
-        do_render_tokens(rest, id_map, acc, nil)
-
       [true | rest] ->
         do_render_tokens(rest, id_map, ["true" | add_sep(acc)], nil)
 
@@ -705,9 +577,6 @@ defmodule NativeElixirPdfUtilities.Merge do
 
       [:null | rest] ->
         do_render_tokens(rest, id_map, ["null" | add_sep(acc)], nil)
-
-      [{:op, word} | rest] ->
-        do_render_tokens(rest, id_map, [word | add_sep(acc)], nil)
     end
   end
 

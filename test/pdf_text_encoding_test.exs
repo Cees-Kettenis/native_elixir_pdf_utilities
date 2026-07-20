@@ -28,6 +28,7 @@ defmodule NativeElixirPdfUtilities.Pdf.TextEncodingTest do
     assert GlyphName.to_unicode("uD800") == :error
     assert GlyphName.to_unicode("u110000") == :error
     assert GlyphName.to_unicode("unknownGlyph") == :error
+    assert GlyphName.to_unicode("madeup") == :error
     assert GlyphName.to_unicode(123) == :error
     assert GlyphName.to_unicode(<<255>>) == :error
   end

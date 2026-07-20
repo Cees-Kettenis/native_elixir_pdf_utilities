@@ -29,7 +29,12 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           | {:ref, ref()}
           | [value()]
           | %{optional(binary()) => value()}
-  @type object :: %{value: value(), stream: binary() | nil, offset: non_neg_integer() | nil}
+  @type object :: %{
+          value: value(),
+          stream: binary() | nil,
+          offset: non_neg_integer() | nil,
+          tokens: [Tokenizer.token()]
+        }
   @type page :: %{
           ref: ref(),
           resources: value() | nil,
@@ -40,6 +45,10 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           required(:objects) => %{optional(ref()) => object()},
           optional(atom()) => term()
         }
+  @type xref_entry ::
+          {:free, non_neg_integer(), non_neg_integer()}
+          | {:uncompressed, non_neg_integer(), non_neg_integer()}
+          | {:compressed, pos_integer(), non_neg_integer()}
   @type error_reason ::
           :encrypted_pdf
           | :invalid_pdf_input
@@ -54,16 +63,15 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     case pdf do
       pdf when is_binary(pdf) ->
         with :ok <- validate_header(pdf),
-             :ok <- validate_final_xref_pointer(pdf),
-             {:ok, objects, trailers} <- parse_objects(pdf),
-             {:ok, objects} <- expand_object_streams(objects),
-             {:ok, trailer} <- final_trailer(trailers, objects),
+             {:ok, xref_offset} <- final_xref_offset(pdf),
+             {:ok, xref, trailer} <- parse_xref_chain(pdf, xref_offset, %{}, 0),
+             :ok <- validate_xref(xref, trailer, pdf),
              :ok <- reject_encryption(trailer),
+             {:ok, objects} <- load_objects(pdf, xref),
              {:ok, pages} <- collect_pages(objects, trailer) do
-          {:ok, %{binary: pdf, objects: objects, trailer: trailer, pages: pages}}
+          {:ok, %{binary: pdf, objects: objects, trailer: trailer, pages: pages, xref: xref}}
         else
           {:error, {_reason, _diagnostic}} = reader_error -> reader_error
-          :error -> error(:structure, :invalid_pdf_input, "PDF syntax is malformed")
         end
 
       _ ->
@@ -79,15 +87,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   def resolve(document, value) do
     case value do
       {:ref, ref} ->
-        case Map.get(document.objects, ref) do
-          %{value: value} ->
-            {:ok, value}
-
-          nil ->
-            error(:resolution, :invalid_pdf_input, "indirect object reference is missing",
-              object: ref
-            )
-        end
+        resolve_reference(document, ref, %{})
 
       value ->
         {:ok, value}
@@ -102,16 +102,13 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   def decoded_stream(document, value) do
     case value do
       {:ref, ref} ->
-        case Map.get(document.objects, ref) do
-          %{value: dictionary, stream: stream}
-          when is_map(dictionary) and is_binary(stream) ->
-            decode_stream(stream, dictionary, document, ref)
-
-          %{value: _value} ->
-            error(:stream, :invalid_pdf_input, "object is not a stream", object: ref)
-
-          nil ->
-            error(:resolution, :invalid_pdf_input, "stream reference is missing", object: ref)
+        with {:ok, stream_ref, %{value: dictionary, stream: stream}} <-
+               resolve_stream_object(document, ref, %{}),
+             true <- is_map(dictionary) and is_binary(stream) do
+          decode_stream(stream, dictionary, document, stream_ref)
+        else
+          false -> error(:stream, :invalid_pdf_input, "object is not a stream", object: ref)
+          {:error, _} = stream_error -> stream_error
         end
 
       _ ->
@@ -164,19 +161,15 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp validate_final_xref_pointer(pdf) do
+  defp final_xref_offset(pdf) do
     case Regex.scan(~r/startxref\s*(\d+)\s*%%EOF\s*\z/s, pdf) do
       [[_, offset_text]] ->
         {offset, ""} = Integer.parse(offset_text)
 
-        if offset < byte_size(pdf) and xref_target?(pdf, offset) do
-          :ok
+        if offset < byte_size(pdf) do
+          {:ok, offset}
         else
-          error(
-            :xref,
-            :invalid_pdf_input,
-            "final startxref offset does not point to an xref section"
-          )
+          error(:xref, :invalid_pdf_input, "final startxref offset is outside the PDF")
         end
 
       _ ->
@@ -184,65 +177,250 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp xref_target?(pdf, offset) do
-    tail = binary_part(pdf, offset, byte_size(pdf) - offset)
-    String.starts_with?(tail, "xref") or Regex.match?(~r/\A\d+\s+\d+\s+obj(?:\s|\r|\n)/, tail)
-  end
+  defp parse_xref_chain(pdf, offset, seen, depth) do
+    cond do
+      Map.has_key?(seen, offset) ->
+        error(:xref, :invalid_pdf_input, "xref revision chain contains a cycle")
 
-  defp parse_objects(pdf) do
-    tokens = Tokenizer.new(pdf) |> Tokenizer.tokenize_all()
+      depth >= 1_000 ->
+        error(:limits, :resource_limit_exceeded, "xref revision count exceeds the limit")
 
-    if Enum.any?(tokens, &match?({:error, _}, &1)) do
-      error(:syntax, :invalid_pdf_input, "PDF contains invalid lexical syntax")
-    else
-      scan_top_level(tokens, %{}, [])
+      true ->
+        with {:ok, entries, trailer} <- parse_xref_revision(pdf, offset),
+             {:ok, previous_entries, previous_trailer} <-
+               previous_xref_revision(
+                 pdf,
+                 Map.get(trailer, "Prev"),
+                 Map.put(seen, offset, true),
+                 depth
+               ) do
+          {:ok, Map.merge(previous_entries, entries), Map.merge(previous_trailer, trailer)}
+        end
     end
   end
 
-  defp scan_top_level(tokens, objects, trailers) do
+  defp previous_xref_revision(pdf, offset, seen, depth) do
+    case offset do
+      nil ->
+        {:ok, %{}, %{}}
+
+      offset when is_integer(offset) and offset >= 0 ->
+        parse_xref_chain(pdf, offset, seen, depth + 1)
+
+      _ ->
+        error(:xref, :invalid_pdf_input, "xref Prev offset is malformed")
+    end
+  end
+
+  defp parse_xref_revision(pdf, offset) do
+    if offset >= 0 and offset < byte_size(pdf) do
+      tail = binary_part(pdf, offset, byte_size(pdf) - offset)
+
+      cond do
+        String.starts_with?(tail, "xref") ->
+          parse_classic_xref(pdf, offset, tail)
+
+        Regex.match?(~r/\A\d+\s+\d+\s+obj\b/, tail) ->
+          parse_xref_stream(pdf, offset)
+
+        true ->
+          error(:xref, :invalid_pdf_input, "xref offset does not point to an xref section")
+      end
+    else
+      error(:xref, :invalid_pdf_input, "xref offset is outside the PDF")
+    end
+  end
+
+  defp parse_classic_xref(pdf, offset, tail) do
+    tokens = Tokenizer.new(tail) |> Tokenizer.tokenize_all()
+
+    with [:xref | rest] <- tokens,
+         {:ok, entries, trailer} <- parse_classic_sections(rest, %{}),
+         {:ok, supplemental_entries, supplemental_trailer} <-
+           supplemental_xref_stream(pdf, Map.get(trailer, "XRefStm"), offset) do
+      {:ok, Map.merge(entries, supplemental_entries), Map.merge(supplemental_trailer, trailer)}
+    else
+      {:error, _} = xref_error -> xref_error
+      _ -> error(:xref, :invalid_pdf_input, "classic xref table is malformed")
+    end
+  end
+
+  defp parse_classic_sections(tokens, entries) do
     case tokens do
-      [] ->
-        {:ok, objects, Enum.reverse(trailers)}
-
-      [{:int, object}, {:int, generation}, :obj | rest]
-      when object >= 0 and generation >= 0 ->
-        with {:ok, value, rest} <- parse_value(rest),
-             {:ok, stream, rest} <- parse_optional_stream(rest),
-             [:endobj | rest] <- rest,
-             true <- map_size(objects) < @max_objects do
-          scan_top_level(
-            rest,
-            Map.put(objects, {object, generation}, %{value: value, stream: stream, offset: nil}),
-            trailers
-          )
-        else
-          false ->
-            error(:limits, :resource_limit_exceeded, "PDF object count exceeds the limit")
-
-          _ ->
-            error(:object, :invalid_pdf_input, "indirect object boundary is malformed",
-              object: {object, generation}
-            )
-        end
-
       [:trailer | rest] ->
-        with {:ok, trailer, rest} <- parse_value(rest),
+        with {:ok, trailer, _rest} <- parse_value(rest),
              true <- is_map(trailer) do
-          scan_top_level(rest, objects, [trailer | trailers])
+          {:ok, entries, trailer}
         else
           _ -> error(:trailer, :invalid_pdf_input, "trailer dictionary is malformed")
         end
 
-      [_token | rest] ->
-        scan_top_level(rest, objects, trailers)
+      [{:int, first}, {:int, count} | rest]
+      when first >= 0 and count >= 0 and first + count <= @max_objects + 1 ->
+        with {:ok, entries, rest} <- parse_classic_entries(rest, first, count, entries) do
+          parse_classic_sections(rest, entries)
+        end
+
+      _ ->
+        error(:xref, :invalid_pdf_input, "classic xref subsection is malformed")
     end
   end
 
-  defp parse_optional_stream([:stream, {:stream_data, stream}, :endstream | rest]),
-    do: {:ok, stream, rest}
+  defp parse_classic_entries(tokens, object, remaining, entries) do
+    case remaining do
+      0 ->
+        {:ok, entries, tokens}
 
-  defp parse_optional_stream([:stream | _]), do: :error
-  defp parse_optional_stream(rest), do: {:ok, nil, rest}
+      _ ->
+        case tokens do
+          [{:int, offset}, {:int, generation}, {:op, marker} | rest]
+          when offset >= 0 and generation in 0..65_535 and marker in ["n", "f"] ->
+            if Map.has_key?(entries, object) do
+              error(:xref, :invalid_pdf_input, "classic xref subsections overlap")
+            else
+              entry =
+                if marker == "n",
+                  do: {:uncompressed, offset, generation},
+                  else: {:free, offset, generation}
+
+              parse_classic_entries(
+                rest,
+                object + 1,
+                remaining - 1,
+                Map.put(entries, object, entry)
+              )
+            end
+
+          _ ->
+            error(:xref, :invalid_pdf_input, "classic xref entry is malformed")
+        end
+    end
+  end
+
+  defp supplemental_xref_stream(pdf, stream_offset, classic_offset) do
+    case stream_offset do
+      nil ->
+        {:ok, %{}, %{}}
+
+      stream_offset
+      when is_integer(stream_offset) and stream_offset >= 0 and stream_offset != classic_offset ->
+        parse_xref_stream(pdf, stream_offset)
+
+      _ ->
+        error(:xref, :invalid_pdf_input, "trailer XRefStm offset is malformed")
+    end
+  end
+
+  defp parse_xref_stream(pdf, offset) do
+    with {:ok, ref, object} <- parse_indirect_object_at(pdf, offset, byte_size(pdf), nil),
+         true <- is_map(object.value) and name?(Map.get(object.value, "Type"), "XRef"),
+         true <- is_binary(object.stream),
+         {:ok, decoded} <-
+           decode_stream(object.stream, object.value, %{objects: %{ref => object}}, ref),
+         {:ok, entries} <- xref_stream_entries(decoded, object.value) do
+      {:ok, entries, object.value}
+    else
+      false -> error(:xref, :invalid_pdf_input, "xref stream object is malformed")
+      {:error, _} = xref_error -> xref_error
+    end
+  end
+
+  defp xref_stream_entries(data, dictionary) do
+    size = Map.get(dictionary, "Size")
+    widths = Map.get(dictionary, "W")
+    index = Map.get(dictionary, "Index", if(is_integer(size), do: [0, size], else: nil))
+
+    with true <- is_integer(size) and size > 0 and size <= @max_objects + 1,
+         [type_width, field_width, generation_width] <- widths,
+         true <-
+           Enum.all?(
+             [type_width, field_width, generation_width],
+             &(is_integer(&1) and &1 >= 0)
+           ),
+         row_width when row_width > 0 <- type_width + field_width + generation_width,
+         {:ok, object_numbers} <- xref_index_objects(index, size),
+         true <- byte_size(data) == length(object_numbers) * row_width do
+      object_numbers
+      |> Enum.with_index()
+      |> Enum.reduce_while({:ok, %{}}, fn {object, row}, {:ok, entries} ->
+        record = binary_part(data, row * row_width, row_width)
+
+        case xref_stream_entry(record, type_width, field_width, generation_width) do
+          {:ok, entry} -> {:cont, {:ok, Map.put(entries, object, entry)}}
+          {:error, _} = entry_error -> {:halt, entry_error}
+        end
+      end)
+    else
+      false -> error(:xref, :invalid_pdf_input, "xref stream dimensions are malformed")
+      _ -> error(:xref, :invalid_pdf_input, "xref stream dictionary is malformed")
+    end
+  end
+
+  defp xref_index_objects(index, size) do
+    case index do
+      index when is_list(index) and rem(length(index), 2) == 0 ->
+        index
+        |> Enum.chunk_every(2)
+        |> Enum.reduce_while({:ok, [], MapSet.new()}, fn pair, {:ok, objects, seen} ->
+          case pair do
+            [first, count]
+            when is_integer(first) and first >= 0 and is_integer(count) and count >= 0 and
+                   first + count <= size ->
+              range = if count == 0, do: [], else: Enum.to_list(first..(first + count - 1))
+
+              if Enum.any?(range, &MapSet.member?(seen, &1)) do
+                {:halt, error(:xref, :invalid_pdf_input, "xref stream Index ranges overlap")}
+              else
+                {:cont, {:ok, objects ++ range, Enum.reduce(range, seen, &MapSet.put(&2, &1))}}
+              end
+
+            _ ->
+              {:halt, error(:xref, :invalid_pdf_input, "xref stream Index is malformed")}
+          end
+        end)
+        |> case do
+          {:ok, objects, _seen} -> {:ok, objects}
+          {:error, _} = index_error -> index_error
+        end
+
+      _ ->
+        error(:xref, :invalid_pdf_input, "xref stream Index is malformed")
+    end
+  end
+
+  defp xref_stream_entry(record, type_width, field_width, generation_width) do
+    <<type_bytes::binary-size(type_width), field_bytes::binary-size(field_width),
+      generation_bytes::binary-size(generation_width)>> = record
+
+    type = if type_width == 0, do: 1, else: :binary.decode_unsigned(type_bytes)
+    field = if field_width == 0, do: 0, else: :binary.decode_unsigned(field_bytes)
+    generation = if generation_width == 0, do: 0, else: :binary.decode_unsigned(generation_bytes)
+
+    case type do
+      0 when generation <= 65_535 ->
+        {:ok, {:free, field, generation}}
+
+      1 when generation <= 65_535 ->
+        {:ok, {:uncompressed, field, generation}}
+
+      type when type in [0, 1] ->
+        error(:xref, :invalid_pdf_input, "xref stream generation is malformed")
+
+      2 ->
+        {:ok, {:compressed, field, generation}}
+
+      _ ->
+        error(:xref, :unsupported_pdf_feature, "xref stream entry type is unsupported")
+    end
+  end
+
+  defp parse_optional_stream(tokens) do
+    case tokens do
+      [:stream, {:stream_data, stream}, :endstream | rest] -> {:ok, stream, rest}
+      [:stream | _] -> :error
+      rest -> {:ok, nil, rest}
+    end
+  end
 
   defp parse_value(tokens) do
     case tokens do
@@ -261,49 +439,182 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp parse_array([:rbracket | rest], values), do: {:ok, Enum.reverse(values), rest}
-
   defp parse_array(tokens, values) do
-    with {:ok, value, rest} <- parse_value(tokens) do
-      parse_array(rest, [value | values])
-    end
-  end
+    case tokens do
+      [:rbracket | rest] ->
+        {:ok, Enum.reverse(values), rest}
 
-  defp parse_dictionary([:dict_end | rest], dictionary), do: {:ok, dictionary, rest}
-
-  defp parse_dictionary([{:name, key} | rest], dictionary) do
-    with {:ok, value, rest} <- parse_value(rest) do
-      parse_dictionary(rest, Map.put(dictionary, key, value))
-    end
-  end
-
-  defp parse_dictionary(_, _), do: :error
-
-  defp expand_object_streams(objects) do
-    Enum.reduce_while(objects, {:ok, objects}, fn {ref, %{value: dictionary, stream: stream}},
-                                                  {:ok, acc} ->
-      if is_map(dictionary) and is_binary(stream) and
-           name?(Map.get(dictionary, "Type"), "ObjStm") do
-        with {:ok, decoded} <- decode_stream(stream, dictionary, %{objects: acc}, ref),
-             {:ok, expanded} <- parse_object_stream(decoded, dictionary, ref),
-             true <- map_size(acc) + map_size(expanded) <= @max_objects do
-          {:cont, {:ok, Map.merge(acc, expanded)}}
-        else
-          false ->
-            {:halt,
-             error(:limits, :resource_limit_exceeded, "PDF object count exceeds the limit")}
-
-          {:error, _} = error ->
-            {:halt, error}
-
-          _ ->
-            {:halt,
-             error(:object_stream, :invalid_pdf_input, "object stream is malformed", object: ref)}
+      _ ->
+        with {:ok, value, rest} <- parse_value(tokens) do
+          parse_array(rest, [value | values])
         end
+    end
+  end
+
+  defp parse_dictionary(tokens, dictionary) do
+    case tokens do
+      [:dict_end | rest] ->
+        {:ok, dictionary, rest}
+
+      [{:name, key} | rest] ->
+        with {:ok, value, rest} <- parse_value(rest) do
+          parse_dictionary(rest, Map.put(dictionary, key, value))
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp validate_xref(entries, trailer, pdf) do
+    size = Map.get(trailer, "Size")
+
+    cond do
+      not is_integer(size) or size <= 0 or size > @max_objects + 1 ->
+        error(:xref, :invalid_pdf_input, "xref Size is malformed")
+
+      map_size(entries) > @max_objects ->
+        error(:limits, :resource_limit_exceeded, "PDF object count exceeds the limit")
+
+      not match?({:ref, _}, Map.get(trailer, "Root")) ->
+        error(:trailer, :invalid_pdf_input, "trailer does not contain a catalog reference")
+
+      Enum.any?(entries, fn {object, entry} ->
+        object < 0 or object >= size or not valid_xref_entry?(entry, pdf, size)
+      end) ->
+        error(:xref, :invalid_pdf_input, "xref entry is outside its declared bounds")
+
+      true ->
+        :ok
+    end
+  end
+
+  defp valid_xref_entry?(entry, pdf, size) do
+    case entry do
+      {:free, next, generation} ->
+        next >= 0 and next < size and generation in 0..65_535
+
+      {:uncompressed, offset, generation} ->
+        offset >= 0 and offset < byte_size(pdf) and generation in 0..65_535
+
+      {:compressed, object_stream, index} ->
+        object_stream > 0 and object_stream < size and index >= 0
+    end
+  end
+
+  defp load_objects(pdf, xref) do
+    uncompressed =
+      xref
+      |> Enum.flat_map(fn
+        {object, {:uncompressed, offset, generation}} -> [{offset, object, generation}]
+        _ -> []
+      end)
+      |> Enum.sort()
+
+    with {:ok, objects} <- load_uncompressed_objects(pdf, uncompressed, %{}),
+         {:ok, objects} <- load_compressed_objects(xref, objects) do
+      {:ok, objects}
+    end
+  end
+
+  defp load_uncompressed_objects(pdf, pending, objects) do
+    case pending do
+      [] ->
+        {:ok, objects}
+
+      [{offset, object, generation} | rest] ->
+        limit =
+          case rest do
+            [{next_offset, _next_object, _next_generation} | _] -> next_offset
+            [] -> byte_size(pdf)
+          end
+
+        with {:ok, {^object, ^generation}, parsed} <-
+               parse_indirect_object_at(pdf, offset, limit, {object, generation}) do
+          load_uncompressed_objects(pdf, rest, Map.put(objects, {object, generation}, parsed))
+        else
+          {:ok, actual_ref, _parsed} ->
+            error(
+              :xref,
+              :invalid_pdf_input,
+              "xref entry points to object #{elem(actual_ref, 0)} #{elem(actual_ref, 1)} instead of #{object} #{generation}"
+            )
+
+          {:error, {reason, diagnostic}} ->
+            {:error,
+             {reason, Map.update!(diagnostic, :message, &"#{&1}; object #{object} #{generation}")}}
+        end
+    end
+  end
+
+  defp parse_indirect_object_at(pdf, offset, limit, _expected_ref) do
+    if offset >= 0 and limit > offset and limit <= byte_size(pdf) do
+      slice = binary_part(pdf, offset, limit - offset)
+      header = Regex.run(~r/\A(\d+)\s+(\d+)\s+obj\b/, slice)
+
+      case header do
+        [_, object_text, generation_text] ->
+          object = String.to_integer(object_text)
+          generation = String.to_integer(generation_text)
+          tokens = Tokenizer.new(slice) |> Tokenizer.tokenize_all()
+
+          [{:int, ^object}, {:int, ^generation}, :obj | rest] = tokens
+          {body, tail} = Enum.split_while(rest, &(&1 != :endobj))
+
+          with true <- generation in 0..65_535,
+               [_endobj | _] <- tail,
+               false <- Enum.any?(body, &match?({:error, _}, &1)),
+               {:ok, value, value_rest} <- parse_value(body),
+               {:ok, stream, []} <- parse_optional_stream(value_rest) do
+            ref = {object, generation}
+            {:ok, ref, %{value: value, stream: stream, offset: offset, tokens: body}}
+          else
+            _ -> error(:object, :invalid_pdf_input, "indirect object boundary is malformed")
+          end
+
+        _ ->
+          error(:object, :invalid_pdf_input, "xref offset does not point to an indirect object")
+      end
+    else
+      error(:xref, :invalid_pdf_input, "indirect object offset is outside the PDF")
+    end
+  end
+
+  defp load_compressed_objects(xref, objects) do
+    xref
+    |> Enum.flat_map(fn
+      {object, {:compressed, object_stream, index}} -> [{object, object_stream, index}]
+      _ -> []
+    end)
+    |> Enum.group_by(fn {_object, object_stream, _index} -> object_stream end)
+    |> Enum.reduce_while({:ok, objects}, fn {object_stream, requested}, {:ok, objects} ->
+      with {:ok, stream_ref} <- object_stream_ref(xref, object_stream),
+           %{value: dictionary, stream: stream} <- Map.get(objects, stream_ref),
+           true <-
+             is_map(dictionary) and is_binary(stream) and
+               name?(Map.get(dictionary, "Type"), "ObjStm"),
+           {:ok, decoded} <- decode_stream(stream, dictionary, %{objects: objects}, stream_ref),
+           {:ok, contained} <- parse_object_stream(decoded, dictionary, stream_ref),
+           {:ok, objects} <- add_compressed_objects(requested, contained, objects, stream_ref) do
+        {:cont, {:ok, objects}}
       else
-        {:cont, {:ok, acc}}
+        {:error, _} = stream_error ->
+          {:halt, stream_error}
+
+        _ ->
+          {:halt,
+           error(:object_stream, :invalid_pdf_input, "object stream is malformed",
+             object: {object_stream, 0}
+           )}
       end
     end)
+  end
+
+  defp object_stream_ref(xref, object_stream) do
+    case Map.get(xref, object_stream) do
+      {:uncompressed, _offset, generation} -> {:ok, {object_stream, generation}}
+      _ -> error(:object_stream, :invalid_pdf_input, "object stream has no direct xref entry")
+    end
   end
 
   defp parse_object_stream(data, dictionary, ref) do
@@ -313,6 +624,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
          header <- binary_part(data, 0, first),
          numbers <-
            Regex.scan(~r/\d+/, header) |> List.flatten() |> Enum.map(&String.to_integer/1),
+         true <- String.trim(Regex.replace(~r/\d+/, header, "")) == "",
          true <- length(numbers) == count * 2 do
       pairs = Enum.chunk_every(numbers, 2)
 
@@ -330,19 +642,18 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
         if length >= 0 and first + relative_offset + length <= byte_size(data) do
           slice = binary_part(data, first + relative_offset, length)
 
-          case Tokenizer.new(slice) |> Tokenizer.tokenize_all() do
-            tokens when is_list(tokens) ->
-              case parse_value(tokens) do
-                {:ok, value, []} ->
-                  {:cont,
-                   {:ok, Map.put(acc, {object, 0}, %{value: value, stream: nil, offset: nil})}}
+          tokens = Tokenizer.new(slice) |> Tokenizer.tokenize_all()
 
-                _ ->
-                  {:halt,
-                   error(:object_stream, :invalid_pdf_input, "compressed object is malformed",
-                     object: ref
-                   )}
-              end
+          case parse_value(tokens) do
+            {:ok, value, []} when object > 0 and not is_map_key(acc, object) ->
+              parsed = %{value: value, stream: nil, offset: nil, tokens: tokens, index: index}
+              {:cont, {:ok, Map.put(acc, object, parsed)}}
+
+            _ ->
+              {:halt,
+               error(:object_stream, :invalid_pdf_input, "compressed object is malformed",
+                 object: ref
+               )}
           end
         else
           {:halt,
@@ -357,25 +668,24 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp final_trailer(trailers, objects) do
-    case Enum.find(Enum.reverse(trailers), &Map.has_key?(&1, "Root")) do
-      nil ->
-        case objects
-             |> Map.values()
-             |> Enum.map(& &1.value)
-             |> Enum.find(
-               &(is_map(&1) and name?(Map.get(&1, "Type"), "XRef") and Map.has_key?(&1, "Root"))
-             ) do
-          nil ->
-            error(:trailer, :invalid_pdf_input, "trailer does not contain a catalog reference")
+  defp add_compressed_objects(requested, contained, objects, stream_ref) do
+    Enum.reduce_while(requested, {:ok, objects}, fn {object, _object_stream, index},
+                                                    {:ok, objects} ->
+      case Enum.find(contained, fn {_contained_object, parsed} -> parsed.index == index end) do
+        {^object, parsed} ->
+          parsed = Map.delete(parsed, :index)
+          {:cont, {:ok, Map.put(objects, {object, 0}, parsed)}}
 
-          trailer ->
-            {:ok, trailer}
-        end
-
-      trailer ->
-        {:ok, trailer}
-    end
+        _ ->
+          {:halt,
+           error(
+             :object_stream,
+             :invalid_pdf_input,
+             "compressed xref entry does not match object stream index #{index}",
+             object: stream_ref
+           )}
+      end
+    end)
   end
 
   defp reject_encryption(trailer) do
@@ -383,6 +693,46 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       error(:encryption, :encrypted_pdf, "encrypted PDFs are not supported")
     else
       :ok
+    end
+  end
+
+  defp resolve_reference(document, ref, seen) do
+    if Map.has_key?(seen, ref) do
+      error(:resolution, :invalid_pdf_input, "indirect reference chain contains a cycle",
+        object: ref
+      )
+    else
+      case Map.get(document.objects, ref) do
+        %{value: {:ref, next_ref}} ->
+          resolve_reference(document, next_ref, Map.put(seen, ref, true))
+
+        %{value: value} ->
+          {:ok, value}
+
+        nil ->
+          error(:resolution, :invalid_pdf_input, "indirect object reference is missing",
+            object: ref
+          )
+      end
+    end
+  end
+
+  defp resolve_stream_object(document, ref, seen) do
+    if Map.has_key?(seen, ref) do
+      error(:resolution, :invalid_pdf_input, "indirect stream reference contains a cycle",
+        object: ref
+      )
+    else
+      case Map.get(document.objects, ref) do
+        %{value: {:ref, next_ref}, stream: nil} ->
+          resolve_stream_object(document, next_ref, Map.put(seen, ref, true))
+
+        %{stream: _stream} = object ->
+          {:ok, ref, object}
+
+        nil ->
+          error(:resolution, :invalid_pdf_input, "stream reference is missing", object: ref)
+      end
     end
   end
 
@@ -455,24 +805,20 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp walk_page_tree(
-         _document,
-         _page_ref,
-         _resources,
-         _rotate,
-         _media_box,
-         _seen,
-         _pages
-       ),
-       do: :error
-
   defp walk_kids(document, kids, resources, rotate, media_box, seen, pages) do
     case kids do
       kids when is_list(kids) ->
         Enum.reduce_while(kids, {:ok, pages}, fn kid, {:ok, pages} ->
-          case walk_page_tree(document, kid, resources, rotate, media_box, seen, pages) do
-            {:ok, pages} -> {:cont, {:ok, pages}}
-            {:error, _} = page_error -> {:halt, page_error}
+          case kid do
+            {:ref, _} ->
+              case walk_page_tree(document, kid, resources, rotate, media_box, seen, pages) do
+                {:ok, pages} -> {:cont, {:ok, pages}}
+                {:error, _} = page_error -> {:halt, page_error}
+              end
+
+            _ ->
+              {:halt,
+               error(:page_tree, :invalid_pdf_input, "Pages Kids array contains a non-reference")}
           end
         end)
 
@@ -525,19 +871,24 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp filter_list(nil), do: {:ok, []}
-  defp filter_list({:name, filter}), do: {:ok, [filter]}
+  defp filter_list(value) do
+    case value do
+      nil ->
+        {:ok, []}
 
-  defp filter_list(filters) when is_list(filters) do
-    if Enum.all?(filters, &match?({:name, _}, &1)) do
-      {:ok, Enum.map(filters, fn {:name, filter} -> filter end)}
-    else
-      error(:filter, :invalid_pdf_input, "Filter array is malformed")
+      {:name, filter} ->
+        {:ok, [filter]}
+
+      filters when is_list(filters) ->
+        if Enum.all?(filters, &match?({:name, _}, &1)) do
+          {:ok, Enum.map(filters, fn {:name, filter} -> filter end)}
+        else
+          error(:filter, :invalid_pdf_input, "Filter array is malformed")
+        end
+
+      _ ->
+        error(:filter, :invalid_pdf_input, "Filter is malformed")
     end
-  end
-
-  defp filter_list(_) do
-    error(:filter, :invalid_pdf_input, "Filter is malformed")
   end
 
   defp parameter_list(document, parameters, count) do
@@ -649,25 +1000,21 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
     cond do
       decoded_size > limit ->
-        error(:limits, :resource_limit_exceeded, "decoded stream exceeds its safety limit",
-          object: ref
-        )
+        decoded_stream_limit_error(ref)
 
       rest == <<>> ->
         final = :zlib.inflate(zlib, <<>>)
-        final_size = decoded_size + IO.iodata_length(final)
-
-        if final_size <= limit do
-          {:ok, IO.iodata_to_binary(Enum.reverse([final, output | decoded]))}
-        else
-          error(:limits, :resource_limit_exceeded, "decoded stream exceeds its safety limit",
-            object: ref
-          )
-        end
+        {:ok, IO.iodata_to_binary(Enum.reverse([final, output | decoded]))}
 
       true ->
         inflate_chunks(zlib, rest, limit, decoded_size, [output | decoded], ref)
     end
+  end
+
+  defp decoded_stream_limit_error(ref) do
+    error(:limits, :resource_limit_exceeded, "decoded stream exceeds its safety limit",
+      object: ref
+    )
   end
 
   defp ascii_hex(data, ref) do
@@ -711,54 +1058,70 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp decode_ascii85([], acc, _ref), do: {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
-  defp decode_ascii85([?z | rest], [], ref), do: decode_ascii85(rest, [<<0, 0, 0, 0>>], ref)
-
-  defp decode_ascii85([?z | _], _group, ref),
-    do: error(:filter, :invalid_pdf_input, "ASCII85Decode z appears inside a group", object: ref)
-
   defp decode_ascii85(bytes, acc, ref) do
-    {group, rest} = Enum.split(bytes, min(5, length(bytes)))
+    case {bytes, acc} do
+      {[], acc} ->
+        {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
 
-    cond do
-      Enum.any?(group, &(&1 < 33 or &1 > 117)) ->
-        error(:filter, :invalid_pdf_input, "ASCII85Decode byte is out of range", object: ref)
+      {[?z | rest], []} ->
+        decode_ascii85(rest, [<<0, 0, 0, 0>>], ref)
 
-      length(group) == 1 ->
-        error(:filter, :invalid_pdf_input, "ASCII85Decode final group is too short", object: ref)
+      {[?z | _], _acc} ->
+        error(:filter, :invalid_pdf_input, "ASCII85Decode z appears inside a group", object: ref)
 
-      true ->
-        padded = group ++ List.duplicate(?u, 5 - length(group))
-        value = Enum.reduce(padded, 0, fn byte, value -> value * 85 + byte - 33 end)
-        <<bytes::binary-size(4)>> = <<value::unsigned-big-integer-size(32)>>
-        take = if rest == [], do: length(group) - 1, else: 4
-        decode_ascii85(rest, [binary_part(bytes, 0, take) | acc], ref)
+      {bytes, acc} ->
+        {group, rest} = Enum.split(bytes, min(5, length(bytes)))
+
+        cond do
+          Enum.any?(group, &(&1 < 33 or &1 > 117)) ->
+            error(:filter, :invalid_pdf_input, "ASCII85Decode byte is out of range", object: ref)
+
+          length(group) == 1 ->
+            error(:filter, :invalid_pdf_input, "ASCII85Decode final group is too short",
+              object: ref
+            )
+
+          true ->
+            padded = group ++ List.duplicate(?u, 5 - length(group))
+            value = Enum.reduce(padded, 0, fn byte, value -> value * 85 + byte - 33 end)
+            <<decoded::binary-size(4)>> = <<value::unsigned-big-integer-size(32)>>
+            take = if rest == [], do: length(group) - 1, else: 4
+            decode_ascii85(rest, [binary_part(decoded, 0, take) | acc], ref)
+        end
     end
   end
 
-  defp run_length(data, ref), do: run_length(:binary.bin_to_list(data), [], ref)
-  defp run_length([128 | _], acc, _ref), do: {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
+  defp run_length(data, ref) do
+    decode_run_length(:binary.bin_to_list(data), [], ref)
+  end
 
-  defp run_length([], _acc, ref),
-    do: error(:filter, :invalid_pdf_input, "RunLengthDecode data has no end marker", object: ref)
+  defp decode_run_length(bytes, acc, ref) do
+    case bytes do
+      [128 | _] ->
+        {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
 
-  defp run_length([length | rest], acc, ref) when length <= 127 do
-    count = length + 1
+      [] ->
+        error(:filter, :invalid_pdf_input, "RunLengthDecode data has no end marker", object: ref)
 
-    if length(rest) >= count do
-      {bytes, rest} = Enum.split(rest, count)
-      run_length(rest, [bytes | acc], ref)
-    else
-      error(:filter, :invalid_pdf_input, "RunLengthDecode literal run is truncated", object: ref)
+      [length | rest] when length <= 127 ->
+        count = length + 1
+
+        if length(rest) >= count do
+          {literal, rest} = Enum.split(rest, count)
+          decode_run_length(rest, [literal | acc], ref)
+        else
+          error(:filter, :invalid_pdf_input, "RunLengthDecode literal run is truncated",
+            object: ref
+          )
+        end
+
+      [length, byte | rest] ->
+        decode_run_length(rest, [List.duplicate(byte, 257 - length) | acc], ref)
+
+      _ ->
+        error(:filter, :invalid_pdf_input, "RunLengthDecode repeat run is truncated", object: ref)
     end
   end
-
-  defp run_length([length, byte | rest], acc, ref) do
-    run_length(rest, [List.duplicate(byte, 257 - length) | acc], ref)
-  end
-
-  defp run_length(_, _acc, ref),
-    do: error(:filter, :invalid_pdf_input, "RunLengthDecode repeat run is truncated", object: ref)
 
   defp lzw(data, parameters, ref) do
     early_change = if is_map(parameters), do: Map.get(parameters, "EarlyChange", 1), else: 1
@@ -779,7 +1142,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
         max(byte_size(data) * @max_decompression_ratio, 1)
       )
 
-    decode_lzw_bits(data, 0, 9, dictionary, nil, early_change, 0, limit, [], ref)
+    decode_lzw_bits(data, 0, 9, dictionary, 258, nil, early_change, 0, limit, [], ref)
   end
 
   defp decode_lzw_bits(
@@ -787,6 +1150,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
          bit_offset,
          width,
          dictionary,
+         next_code,
          previous,
          early_change,
          decoded_size,
@@ -807,6 +1171,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
             bit_offset + width,
             9,
             Enum.into(0..255, %{}, fn value -> {value, <<value>>} end),
+            258,
             nil,
             early_change,
             decoded_size,
@@ -820,7 +1185,16 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
         _ ->
           value =
-            Map.get(dictionary, code) || if previous, do: previous <> binary_part(previous, 0, 1)
+            case Map.fetch(dictionary, code) do
+              {:ok, value} ->
+                value
+
+              :error when is_binary(previous) and code == next_code ->
+                previous <> binary_part(previous, 0, 1)
+
+              :error ->
+                nil
+            end
 
           if is_binary(value) do
             decoded_size = decoded_size + byte_size(value)
@@ -830,15 +1204,16 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
                 object: ref
               )
             else
-              dictionary =
-                if previous && map_size(dictionary) < 4096 do
-                  Map.put(dictionary, map_size(dictionary), previous <> binary_part(value, 0, 1))
+              {dictionary, next_code} =
+                if previous && next_code < 4096 do
+                  {Map.put(dictionary, next_code, previous <> binary_part(value, 0, 1)),
+                   next_code + 1}
                 else
-                  dictionary
+                  {dictionary, next_code}
                 end
 
               next_width =
-                if width < 12 and map_size(dictionary) + early_change == 1 <<< width,
+                if width < 12 and next_code + early_change == 1 <<< width,
                   do: width + 1,
                   else: width
 
@@ -847,6 +1222,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
                 bit_offset + width,
                 next_width,
                 dictionary,
+                next_code,
                 value,
                 early_change,
                 decoded_size,
@@ -864,19 +1240,27 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp apply_predictor(data, nil, _ref), do: {:ok, data}
+  defp apply_predictor(data, parameters, ref) do
+    case parameters do
+      nil ->
+        {:ok, data}
 
-  defp apply_predictor(data, parameters, ref) when is_map(parameters) do
-    case Map.get(parameters, "Predictor", 1) do
-      1 -> {:ok, data}
-      2 -> tiff_predictor(data, parameters, ref)
-      predictor when predictor in 10..15 -> png_predictor(data, parameters, ref)
-      _ -> error(:filter, :unsupported_pdf_feature, "unsupported stream predictor", object: ref)
+      parameters when is_map(parameters) ->
+        case Map.get(parameters, "Predictor", 1) do
+          1 ->
+            {:ok, data}
+
+          2 ->
+            tiff_predictor(data, parameters, ref)
+
+          predictor when predictor in 10..15 ->
+            png_predictor(data, parameters, ref)
+
+          _ ->
+            error(:filter, :unsupported_pdf_feature, "unsupported stream predictor", object: ref)
+        end
     end
   end
-
-  defp apply_predictor(_data, _parameters, ref),
-    do: error(:filter, :invalid_pdf_input, "DecodeParms must be a dictionary", object: ref)
 
   defp tiff_predictor(data, parameters, ref) do
     with {:ok, row_bytes, _bytes_per_pixel} <- predictor_dimensions(parameters, ref),
@@ -935,55 +1319,64 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp decode_png_rows(<<>>, _row_bytes, _bytes_per_pixel, _previous, acc, _ref),
-    do: {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
-
   defp decode_png_rows(data, row_bytes, bytes_per_pixel, previous, acc, ref) do
-    if byte_size(data) >= row_bytes + 1 do
-      <<filter, encoded::binary-size(row_bytes), rest::binary>> = data
+    case data do
+      <<>> ->
+        {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
 
-      case png_row(filter, encoded, previous, bytes_per_pixel) do
-        {:ok, row} ->
-          decode_png_rows(rest, row_bytes, bytes_per_pixel, row, [row | acc], ref)
+      _ ->
+        if byte_size(data) >= row_bytes + 1 do
+          <<filter, encoded::binary-size(row_bytes), rest::binary>> = data
 
-        :error ->
-          error(:filter, :invalid_pdf_input, "PNG predictor row has an invalid filter",
-            object: ref
-          )
-      end
-    else
-      error(:filter, :invalid_pdf_input, "PNG predictor rows are truncated", object: ref)
+          case png_row(filter, encoded, previous, bytes_per_pixel) do
+            {:ok, row} ->
+              decode_png_rows(rest, row_bytes, bytes_per_pixel, row, [row | acc], ref)
+
+            :error ->
+              error(:filter, :invalid_pdf_input, "PNG predictor row has an invalid filter",
+                object: ref
+              )
+          end
+        else
+          error(:filter, :invalid_pdf_input, "PNG predictor rows are truncated", object: ref)
+        end
     end
   end
 
-  defp png_row(filter, encoded, previous, bytes_per_pixel) when filter in 0..4 do
-    encoded
-    |> :binary.bin_to_list()
-    |> Enum.with_index()
-    |> Enum.reduce({[], %{}}, fn {byte, index}, {decoded, values} ->
-      left = Map.get(values, index - bytes_per_pixel, 0)
-      up = :binary.at(previous, index)
+  defp png_row(filter, encoded, previous, bytes_per_pixel) do
+    case filter do
+      filter when filter in 0..4 ->
+        encoded
+        |> :binary.bin_to_list()
+        |> Enum.with_index()
+        |> Enum.reduce({[], %{}}, fn {byte, index}, {decoded, values} ->
+          left = Map.get(values, index - bytes_per_pixel, 0)
+          up = :binary.at(previous, index)
 
-      up_left =
-        if index < bytes_per_pixel, do: 0, else: :binary.at(previous, index - bytes_per_pixel)
+          up_left =
+            if index < bytes_per_pixel,
+              do: 0,
+              else: :binary.at(previous, index - bytes_per_pixel)
 
-      value =
-        case filter do
-          0 -> byte
-          1 -> rem(byte + left, 256)
-          2 -> rem(byte + up, 256)
-          3 -> rem(byte + div(left + up, 2), 256)
-          4 -> rem(byte + paeth(left, up, up_left), 256)
-        end
+          value =
+            case filter do
+              0 -> byte
+              1 -> rem(byte + left, 256)
+              2 -> rem(byte + up, 256)
+              3 -> rem(byte + div(left + up, 2), 256)
+              4 -> rem(byte + paeth(left, up, up_left), 256)
+            end
 
-      {[value | decoded], Map.put(values, index, value)}
-    end)
-    |> then(fn {decoded, _values} ->
-      {:ok, decoded |> Enum.reverse() |> :erlang.list_to_binary()}
-    end)
+          {[value | decoded], Map.put(values, index, value)}
+        end)
+        |> then(fn {decoded, _values} ->
+          {:ok, decoded |> Enum.reverse() |> :erlang.list_to_binary()}
+        end)
+
+      _ ->
+        :error
+    end
   end
-
-  defp png_row(_, _encoded, _previous, _bytes_per_pixel), do: :error
 
   defp paeth(left, up, up_left) do
     prediction = left + up - up_left
@@ -1023,25 +1416,29 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp name?({:name, name}, expected), do: name == expected
-  defp name?(_, _), do: false
+  defp name?(value, expected) do
+    case value do
+      {:name, name} -> name == expected
+      _ -> false
+    end
+  end
+
   defp hex_digit?(byte), do: byte in ?0..?9 or byte in ?A..?F or byte in ?a..?f
-  defp hex_value(byte) when byte in ?0..?9, do: byte - ?0
-  defp hex_value(byte) when byte in ?A..?F, do: byte - ?A + 10
-  defp hex_value(byte), do: byte - ?a + 10
+
+  defp hex_value(byte) do
+    cond do
+      byte in ?0..?9 -> byte - ?0
+      byte in ?A..?F -> byte - ?A + 10
+      true -> byte - ?a + 10
+    end
+  end
 
   defp error(stage, reason, message, details \\ []) do
     {pdf_details, diagnostic_options} = Keyword.split(details, [:object])
 
     message =
-      Enum.reduce(pdf_details, message, fn detail, message ->
-        case detail do
-          {:object, {object, generation}} ->
-            "#{message}; object #{object} #{generation}"
-
-          _ ->
-            message
-        end
+      Enum.reduce(pdf_details, message, fn {:object, {object, generation}}, message ->
+        "#{message}; object #{object} #{generation}"
       end)
 
     Diagnostics.error(

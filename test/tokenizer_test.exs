@@ -207,4 +207,8 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
 
     assert Tokenizer.pending_stream_length(Tokenizer.new("stream\nabc")) == :unknown
   end
+
+  test "skips a comment that ends at end of input" do
+    assert toks("% comment without a newline") == []
+  end
 end

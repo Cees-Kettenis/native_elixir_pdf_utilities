@@ -142,19 +142,25 @@ defmodule NativeElixirPdfUtilities.Text do
     end
   end
 
-  defp content_refs(nil, _page_ref), do: {:ok, []}
-  defp content_refs({:ref, _} = content_ref, _page_ref), do: {:ok, [content_ref]}
+  defp content_refs(value, page_ref) do
+    case value do
+      nil ->
+        {:ok, []}
 
-  defp content_refs(content_refs, _page_ref) when is_list(content_refs) do
-    if Enum.all?(content_refs, &match?({:ref, _}, &1)) do
-      {:ok, content_refs}
-    else
-      error(:content, :invalid_pdf_input, "Contents array contains a non-stream reference")
+      {:ref, _} = content_ref ->
+        {:ok, [content_ref]}
+
+      content_refs when is_list(content_refs) ->
+        if Enum.all?(content_refs, &match?({:ref, _}, &1)) do
+          {:ok, content_refs}
+        else
+          error(:content, :invalid_pdf_input, "Contents array contains a non-stream reference")
+        end
+
+      _ ->
+        error(:content, :invalid_pdf_input, "page Contents is malformed", object: page_ref)
     end
   end
-
-  defp content_refs(_, page_ref),
-    do: error(:content, :invalid_pdf_input, "page Contents is malformed", object: page_ref)
 
   defp interpret(content, document, resources, state, page_number, depth) do
     tokens = Tokenizer.new(content) |> Tokenizer.tokenize_all()
@@ -220,158 +226,126 @@ defmodule NativeElixirPdfUtilities.Text do
     if rest == [], do: :error, else: {:ok, [{:array, Enum.reverse(values)} | tl(rest)]}
   end
 
-  defp apply_operator("q", [], state, spans, _document, _resources, _page, _depth),
-    do: {:ok, %{state | stack: [state.ctm | state.stack]}, spans}
+  defp apply_operator(operator, operands, state, spans, document, resources, page, depth) do
+    case {operator, operands} do
+      {"q", []} ->
+        {:ok, %{state | stack: [state.ctm | state.stack]}, spans}
 
-  defp apply_operator(
-         "Q",
-         [],
-         %{stack: [ctm | stack]} = state,
-         spans,
-         _document,
-         _resources,
-         _page,
-         _depth
-       ),
-       do: {:ok, %{state | ctm: ctm, stack: stack}, spans}
+      {"Q", []} ->
+        case state.stack do
+          [ctm | stack] -> {:ok, %{state | ctm: ctm, stack: stack}, spans}
+          [] -> error(:content, :invalid_pdf_input, "Q has no matching q", page: page)
+        end
 
-  defp apply_operator("Q", [], _state, _spans, _document, _resources, page, _depth),
-    do: error(:content, :invalid_pdf_input, "Q has no matching q", page: page)
+      {"cm", operands} ->
+        case numbers(operands, 6) do
+          {:ok, matrix} -> {:ok, %{state | ctm: multiply(matrix, state.ctm)}, spans}
+          :error -> invalid_operator("cm", state, spans, page)
+        end
 
-  defp apply_operator("cm", operands, state, spans, _document, _resources, page, _depth) do
-    case numbers(operands, 6) do
-      {:ok, matrix} -> {:ok, %{state | ctm: multiply(matrix, state.ctm)}, spans}
-      :error -> invalid_operator("cm", state, spans, page)
-    end
-  end
+      {"BT", []} ->
+        {:ok, %{state | in_text?: true, text_matrix: identity(), line_matrix: identity()}, spans}
 
-  defp apply_operator("BT", [], state, spans, _document, _resources, _page, _depth),
-    do: {:ok, %{state | in_text?: true, text_matrix: identity(), line_matrix: identity()}, spans}
+      {"ET", []} ->
+        {:ok, %{state | in_text?: false}, spans}
 
-  defp apply_operator("ET", [], state, spans, _document, _resources, _page, _depth),
-    do: {:ok, %{state | in_text?: false}, spans}
-
-  defp apply_operator("Tf", operands, state, spans, document, resources, page, _depth) do
-    case operands do
-      [{:name, font_name}, size] ->
+      {"Tf", [{:name, font_name}, size]} ->
         with {:ok, size} <- number_value(size),
              {:ok, font} <- resolve_font(document, resources, font_name, page) do
           {:ok, %{state | font: font, font_size: size * 1.0}, spans}
         end
 
-      _ ->
-        invalid_operator("Tf", state, spans, page)
-    end
-  end
+      {"Tm", operands} ->
+        case numbers(operands, 6) do
+          {:ok, matrix} -> {:ok, %{state | text_matrix: matrix, line_matrix: matrix}, spans}
+          :error -> invalid_operator("Tm", state, spans, page)
+        end
 
-  defp apply_operator("Tm", operands, state, spans, _document, _resources, page, _depth) do
-    case numbers(operands, 6) do
-      {:ok, matrix} -> {:ok, %{state | text_matrix: matrix, line_matrix: matrix}, spans}
-      :error -> invalid_operator("Tm", state, spans, page)
-    end
-  end
+      {operator, operands} when operator in ["Td", "TD"] ->
+        case numbers(operands, 2) do
+          {:ok, [tx, ty]} ->
+            line_matrix = translate(state.line_matrix, tx, ty)
 
-  defp apply_operator(operator, operands, state, spans, _document, _resources, page, _depth)
-       when operator in ["Td", "TD"] do
-    case numbers(operands, 2) do
-      {:ok, [tx, ty]} ->
-        line_matrix = translate(state.line_matrix, tx, ty)
+            state = %{
+              state
+              | line_matrix: line_matrix,
+                text_matrix: line_matrix,
+                leading: if(operator == "TD", do: -ty, else: state.leading)
+            }
 
-        state = %{
-          state
-          | line_matrix: line_matrix,
-            text_matrix: line_matrix,
-            leading: if(operator == "TD", do: -ty, else: state.leading)
-        }
+            {:ok, state, spans}
 
-        {:ok, state, spans}
+          :error ->
+            invalid_operator(operator, state, spans, page)
+        end
 
-      :error ->
-        invalid_operator(operator, state, spans, page)
-    end
-  end
+      {"T*", []} ->
+        line_matrix = translate(state.line_matrix, 0.0, -state.leading)
+        {:ok, %{state | line_matrix: line_matrix, text_matrix: line_matrix}, spans}
 
-  defp apply_operator("T*", [], state, spans, _document, _resources, _page, _depth) do
-    line_matrix = translate(state.line_matrix, 0.0, -state.leading)
-    {:ok, %{state | line_matrix: line_matrix, text_matrix: line_matrix}, spans}
-  end
+      {"TL", operands} ->
+        case numbers(operands, 1) do
+          {:ok, [leading]} -> {:ok, %{state | leading: leading}, spans}
+          :error -> invalid_operator("TL", state, spans, page)
+        end
 
-  defp apply_operator("TL", operands, state, spans, _document, _resources, page, _depth) do
-    case numbers(operands, 1) do
-      {:ok, [leading]} -> {:ok, %{state | leading: leading}, spans}
-      :error -> invalid_operator("TL", state, spans, page)
-    end
-  end
+      {"Tc", operands} ->
+        update_number("Tc", operands, state, spans, :char_spacing, page)
 
-  defp apply_operator("Tc", operands, state, spans, _document, _resources, page, _depth),
-    do: update_number("Tc", operands, state, spans, :char_spacing, page)
+      {"Tw", operands} ->
+        update_number("Tw", operands, state, spans, :word_spacing, page)
 
-  defp apply_operator("Tw", operands, state, spans, _document, _resources, page, _depth),
-    do: update_number("Tw", operands, state, spans, :word_spacing, page)
+      {"Tz", operands} ->
+        update_number("Tz", operands, state, spans, :horizontal_scale, page)
 
-  defp apply_operator("Tz", operands, state, spans, _document, _resources, page, _depth),
-    do: update_number("Tz", operands, state, spans, :horizontal_scale, page)
+      {"Tr", operands} ->
+        case numbers(operands, 1) do
+          {:ok, [mode]} when mode >= 0 and mode <= 7 and trunc(mode) == mode ->
+            {:ok, %{state | render_mode: trunc(mode)}, spans}
 
-  defp apply_operator("Tr", operands, state, spans, _document, _resources, page, _depth) do
-    case numbers(operands, 1) do
-      {:ok, [mode]} when mode >= 0 and mode <= 7 and trunc(mode) == mode ->
-        {:ok, %{state | render_mode: trunc(mode)}, spans}
+          _ ->
+            invalid_operator("Tr", state, spans, page)
+        end
 
-      _ ->
-        invalid_operator("Tr", state, spans, page)
-    end
-  end
+      {"Ts", operands} ->
+        update_number("Ts", operands, state, spans, :rise, page)
 
-  defp apply_operator("Ts", operands, state, spans, _document, _resources, page, _depth),
-    do: update_number("Ts", operands, state, spans, :rise, page)
-
-  defp apply_operator("Tj", [string], state, spans, _document, _resources, page, _depth),
-    do: show(state, spans, string, page)
-
-  defp apply_operator("TJ", [{:array, values}], state, spans, _document, _resources, page, _depth) do
-    if state.in_text? do
-      show_array(values, state, spans, page)
-    else
-      error(:content, :invalid_pdf_input, "TJ appears outside a text object", page: page)
-    end
-  end
-
-  defp apply_operator("'", [string], state, spans, _document, _resources, page, _depth) do
-    with {:ok, state, spans} <- apply_operator("T*", [], state, spans, nil, nil, page, 0) do
-      show(state, spans, string, page)
-    end
-  end
-
-  defp apply_operator(
-         "\"",
-         [word_spacing, char_spacing, string],
-         state,
-         spans,
-         _document,
-         _resources,
-         page,
-         _depth
-       ) do
-    with {:ok, word_spacing} <- number_value(word_spacing),
-         {:ok, char_spacing} <- number_value(char_spacing) do
-      state = %{state | word_spacing: word_spacing * 1.0, char_spacing: char_spacing * 1.0}
-
-      with {:ok, state, spans} <- apply_operator("T*", [], state, spans, nil, nil, page, 0) do
+      {"Tj", [string]} ->
         show(state, spans, string, page)
-      end
-    else
-      :error -> invalid_operator("\"", state, spans, page)
-    end
-  end
 
-  defp apply_operator("Do", [{:name, name}], state, spans, document, resources, page, depth),
-    do: execute_form(name, state, spans, document, resources, page, depth)
+      {"TJ", [{:array, values}]} ->
+        if state.in_text? do
+          show_array(values, state, spans, page)
+        else
+          error(:content, :invalid_pdf_input, "TJ appears outside a text object", page: page)
+        end
 
-  defp apply_operator(operator, _operands, state, spans, _document, _resources, page, _depth) do
-    if operator in @validated_operators do
-      invalid_operator(operator, state, spans, page)
-    else
-      {:ok, state, spans}
+      {"'", [string]} ->
+        with {:ok, state, spans} <- apply_operator("T*", [], state, spans, nil, nil, page, 0) do
+          show(state, spans, string, page)
+        end
+
+      {"\"", [word_spacing, char_spacing, string]} ->
+        with {:ok, word_spacing} <- number_value(word_spacing),
+             {:ok, char_spacing} <- number_value(char_spacing) do
+          state = %{state | word_spacing: word_spacing * 1.0, char_spacing: char_spacing * 1.0}
+
+          with {:ok, state, spans} <- apply_operator("T*", [], state, spans, nil, nil, page, 0) do
+            show(state, spans, string, page)
+          end
+        else
+          :error -> invalid_operator("\"", state, spans, page)
+        end
+
+      {"Do", [{:name, name}]} ->
+        execute_form(name, state, spans, document, resources, page, depth)
+
+      _ ->
+        if operator in @validated_operators do
+          invalid_operator(operator, state, spans, page)
+        else
+          {:ok, state, spans}
+        end
     end
   end
 
@@ -472,41 +446,40 @@ defmodule NativeElixirPdfUtilities.Text do
     %{state | text_matrix: translate(state.text_matrix, width, 0.0)}
   end
 
-  defp execute_form(_name, _state, _spans, _document, _resources, page, depth)
-       when depth >= @max_form_depth,
-       do:
-         error(:limits, :resource_limit_exceeded, "Form XObject nesting exceeds the limit",
-           page: page
-         )
-
   defp execute_form(name, state, spans, document, resources, page, depth) do
-    with {:ok, resources} <- Reader.dictionary(document, resources),
-         {:ok, xobjects} <- Reader.dictionary(document, Map.get(resources, "XObject")),
-         {:ok, xobject_ref} <- required_value(xobjects, name, "XObject", page),
-         {:ok, xobject} <- Reader.dictionary(document, xobject_ref) do
-      if name?(Map.get(xobject, "Subtype"), "Form") do
-        with {:ok, stream} <- Reader.decoded_stream(document, xobject_ref),
-             {:ok, form_matrix} <- matrix_value(Map.get(xobject, "Matrix"), page),
-             {:ok, _child_state, child_spans} <-
-               interpret(
-                 stream,
-                 document,
-                 Map.get(xobject, "Resources", resources),
-                 %{
-                   state
-                   | ctm: multiply(form_matrix, state.ctm),
-                     stack: []
-                 },
-                 page,
-                 depth + 1
-               ) do
-          {:ok, state, spans ++ child_spans}
+    if depth >= @max_form_depth do
+      error(:limits, :resource_limit_exceeded, "Form XObject nesting exceeds the limit",
+        page: page
+      )
+    else
+      with {:ok, resources} <- Reader.dictionary(document, resources),
+           {:ok, xobjects} <- Reader.dictionary(document, Map.get(resources, "XObject")),
+           {:ok, xobject_ref} <- required_value(xobjects, name, "XObject", page),
+           {:ok, xobject} <- Reader.dictionary(document, xobject_ref) do
+        if name?(Map.get(xobject, "Subtype"), "Form") do
+          with {:ok, stream} <- Reader.decoded_stream(document, xobject_ref),
+               {:ok, form_matrix} <- matrix_value(Map.get(xobject, "Matrix"), page),
+               {:ok, _child_state, child_spans} <-
+                 interpret(
+                   stream,
+                   document,
+                   Map.get(xobject, "Resources", resources),
+                   %{
+                     state
+                     | ctm: multiply(form_matrix, state.ctm),
+                       stack: []
+                   },
+                   page,
+                   depth + 1
+                 ) do
+            {:ok, state, spans ++ child_spans}
+          end
+        else
+          {:ok, state, spans}
         end
       else
-        {:ok, state, spans}
+        {:error, _} = form_error -> form_error
       end
-    else
-      {:error, _} = form_error -> form_error
     end
   end
 
@@ -952,8 +925,10 @@ defmodule NativeElixirPdfUtilities.Text do
           section
         )
 
+      declared_count = String.to_integer(declared_count)
+
       section_valid? =
-        String.to_integer(declared_count) == length(entries) and
+        declared_count == length(entries) and
           cmap_section_consumed?(
             section,
             ~r/<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>\s*(?:\[[^\]]*\]|<[0-9A-Fa-f]+>)/
@@ -993,97 +968,104 @@ defmodule NativeElixirPdfUtilities.Text do
     |> then(&(&1 == ""))
   end
 
-  defp bfrange_entries(first, count, "[" <> array) do
-    targets = for [_, target] <- Regex.scan(~r/<([0-9A-Fa-f]+)>/, array), do: target
-
-    if length(targets) == count do
-      Enum.with_index(targets)
-      |> Enum.reduce_while({:ok, %{}}, fn {target, offset}, {:ok, mappings} ->
-        case utf16(hex_bytes(target)) do
-          {:ok, target} ->
-            {:cont, {:ok, Map.put(mappings, increment_binary(first, offset), target)}}
-
-          error ->
-            {:halt, error}
-        end
-      end)
-    else
-      error(:cmap, :invalid_pdf_input, "ToUnicode bfrange array length is invalid")
-    end
-  end
-
   defp bfrange_entries(first, count, target) do
-    target = target |> String.trim_leading("<") |> String.trim_trailing(">") |> hex_bytes()
+    case target do
+      "[" <> array ->
+        targets = for [_, target] <- Regex.scan(~r/<([0-9A-Fa-f]+)>/, array), do: target
 
-    if is_binary(target) do
-      0..(count - 1)
-      |> Enum.reduce_while({:ok, %{}}, fn offset, {:ok, mappings} ->
-        with source when is_binary(source) <- increment_binary(first, offset),
-             destination when is_binary(destination) <- increment_binary(target, offset),
-             {:ok, text} <- utf16(destination) do
-          {:cont, {:ok, Map.put(mappings, source, text)}}
+        if length(targets) == count do
+          Enum.with_index(targets)
+          |> Enum.reduce_while({:ok, %{}}, fn {target, offset}, {:ok, mappings} ->
+            case utf16(hex_bytes(target)) do
+              {:ok, target} ->
+                {:cont, {:ok, Map.put(mappings, increment_binary(first, offset), target)}}
+
+              error ->
+                {:halt, error}
+            end
+          end)
         else
-          _ ->
-            {:halt, error(:cmap, :invalid_pdf_input, "ToUnicode bfrange destination overflows")}
+          error(:cmap, :invalid_pdf_input, "ToUnicode bfrange array length is invalid")
         end
-      end)
-    else
-      error(:cmap, :invalid_pdf_input, "ToUnicode bfrange destination is malformed")
+
+      target ->
+        target = target |> String.trim_leading("<") |> String.trim_trailing(">") |> hex_bytes()
+
+        if is_binary(target) do
+          0..(count - 1)
+          |> Enum.reduce_while({:ok, %{}}, fn offset, {:ok, mappings} ->
+            with source when is_binary(source) <- increment_binary(first, offset),
+                 destination when is_binary(destination) <- increment_binary(target, offset),
+                 {:ok, text} <- utf16(destination) do
+              {:cont, {:ok, Map.put(mappings, source, text)}}
+            else
+              _ ->
+                {:halt,
+                 error(:cmap, :invalid_pdf_input, "ToUnicode bfrange destination overflows")}
+            end
+          end)
+        else
+          error(:cmap, :invalid_pdf_input, "ToUnicode bfrange destination is malformed")
+        end
     end
   end
 
-  defp decode_cmap(bytes, cmap, page, font),
-    do: decode_cmap(bytes, cmap, page, font, [], [])
+  defp decode_cmap(bytes, cmap, page, font) do
+    decode_cmap_bytes(bytes, cmap, page, font, [], [])
+  end
 
-  defp decode_cmap(<<>>, _cmap, _page, _font, text_acc, codes),
-    do: {:ok, %{text: text_acc |> Enum.reverse() |> Enum.join(), codes: Enum.reverse(codes)}}
+  defp decode_cmap_bytes(bytes, cmap, page, font, text_acc, codes) do
+    case bytes do
+      <<>> ->
+        {:ok, %{text: text_acc |> Enum.reverse() |> Enum.join(), codes: Enum.reverse(codes)}}
 
-  defp decode_cmap(bytes, cmap, page, font, text_acc, codes) do
-    candidate =
-      cmap.codespaces
-      |> Enum.map(fn {first, _last} -> byte_size(first) end)
-      |> Enum.uniq()
-      |> Enum.sort(:desc)
-      |> Enum.find(fn size ->
-        byte_size(bytes) >= size and
-          (cmap.codespaces == [] or
-             Enum.any?(cmap.codespaces, fn {first, last} ->
-               byte_size(first) == size and binary_part(bytes, 0, size) >= first and
-                 binary_part(bytes, 0, size) <= last
-             end))
-      end)
+      bytes ->
+        candidate =
+          cmap.codespaces
+          |> Enum.map(fn {first, _last} -> byte_size(first) end)
+          |> Enum.uniq()
+          |> Enum.sort(:desc)
+          |> Enum.find(fn size ->
+            byte_size(bytes) >= size and
+              (cmap.codespaces == [] or
+                 Enum.any?(cmap.codespaces, fn {first, last} ->
+                   byte_size(first) == size and binary_part(bytes, 0, size) >= first and
+                     binary_part(bytes, 0, size) <= last
+                 end))
+          end)
 
-    if candidate do
-      <<code::binary-size(candidate), rest::binary>> = bytes
+        if candidate do
+          <<code::binary-size(candidate), rest::binary>> = bytes
 
-      case Map.get(cmap.mappings, code) do
-        nil ->
+          case Map.get(cmap.mappings, code) do
+            nil ->
+              error(
+                :text_encoding,
+                :unsupported_text_encoding,
+                "ToUnicode CMap has no mapping for a shown character code",
+                page: page,
+                font: font
+              )
+
+            mapped_text ->
+              decode_cmap_bytes(
+                rest,
+                cmap,
+                page,
+                font,
+                [mapped_text | text_acc],
+                [:binary.decode_unsigned(code) | codes]
+              )
+          end
+        else
           error(
             :text_encoding,
             :unsupported_text_encoding,
-            "ToUnicode CMap has no mapping for a shown character code",
+            "shown character code is outside the ToUnicode codespace",
             page: page,
             font: font
           )
-
-        mapped_text ->
-          decode_cmap(
-            rest,
-            cmap,
-            page,
-            font,
-            [mapped_text | text_acc],
-            [:binary.decode_unsigned(code) | codes]
-          )
-      end
-    else
-      error(
-        :text_encoding,
-        :unsupported_text_encoding,
-        "shown character code is outside the ToUnicode codespace",
-        page: page,
-        font: font
-      )
+        end
     end
   end
 
@@ -1228,10 +1210,13 @@ defmodule NativeElixirPdfUtilities.Text do
     end
   end
 
-  defp number_value({:int, value}), do: {:ok, value}
-  defp number_value({:real, value}), do: {:ok, value}
-  defp number_value(value) when is_number(value), do: {:ok, value}
-  defp number_value(_), do: :error
+  defp number_value(value) do
+    case value do
+      {:int, value} -> {:ok, value}
+      {:real, value} -> {:ok, value}
+      _ -> :error
+    end
+  end
 
   defp required_value(dictionary, key, label, page) do
     case Map.get(dictionary, key) do
@@ -1243,8 +1228,12 @@ defmodule NativeElixirPdfUtilities.Text do
     end
   end
 
-  defp name?({:name, value}, expected), do: value == expected
-  defp name?(_, _), do: false
+  defp name?(value, expected) do
+    case value do
+      {:name, value} -> value == expected
+      _ -> false
+    end
+  end
 
   defp hex_bytes(hex) do
     case Base.decode16(hex, case: :mixed) do
@@ -1253,12 +1242,16 @@ defmodule NativeElixirPdfUtilities.Text do
     end
   end
 
-  defp utf16(nil), do: :error
-
   defp utf16(bytes) do
-    case :unicode.characters_to_binary(bytes, {:utf16, :big}, :utf8) do
-      value when is_binary(value) -> {:ok, value}
-      _ -> :error
+    case bytes do
+      nil ->
+        :error
+
+      bytes ->
+        case :unicode.characters_to_binary(bytes, {:utf16, :big}, :utf8) do
+          value when is_binary(value) -> {:ok, value}
+          _ -> :error
+        end
     end
   end
 
@@ -1304,9 +1297,6 @@ defmodule NativeElixirPdfUtilities.Text do
 
           {:font, font} ->
             "#{message}; font #{font}"
-
-          _ ->
-            message
         end
       end)
 
