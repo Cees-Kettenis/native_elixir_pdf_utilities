@@ -53,6 +53,11 @@ end
 Use `NativeElixirPdfUtilities.Diagnostics` for new public API failures instead
 of inventing per-module error shapes.
 
+Changes to the shared diagnostics API, including its tuple shape, fields, and
+types, are permitted only when there is no other way to return correct debug
+information to the developer using the existing contract. Prefer expressing
+additional detail through the existing `:message` and `:source` fields.
+
 Do not raise for ordinary caller/input failures such as invalid paths, missing
 files, unsupported documents, unsupported HTML/CSS, or empty extraction results.
 Prefer diagnostic error tuples and add focused tests that assert the important
@@ -60,16 +65,19 @@ fields.
 
 ## Malformed PDF Input
 
-`Merge.merge/1` and `Text.extract/2` validate tokenized PDF input before
-continuing. Malformed classic PDF input returns an `:invalid_pdf_input`
-diagnostic rather than producing partial output or raising.
+`Text.extract/2` validates PDF headers, final xref pointers, object boundaries,
+stream lengths, page trees, and indirect references before extraction. Malformed
+input returns an `:invalid_pdf_input` diagnostic rather than producing partial
+output or raising. Encrypted PDFs return `:encrypted_pdf`; unsupported stream
+features return `:unsupported_pdf_feature`; custom fonts without a reliable
+Unicode mapping return `:unsupported_text_encoding`; image-only PDFs return
+`:no_extractable_text`.
 
 The tokenizer represents malformed literal and hexadecimal strings as
 `{:error, reason}` tokens. This is primarily useful to callers using
 `NativeElixirPdfUtilities.Tokenizer` directly; merge and text extraction convert
 such tokenization failures into their public diagnostic error shape.
 
-To protect extraction from resource exhaustion, text extraction ignores
-ToUnicode CMaps that exceed its input or mapping-entry limits. It continues
-using the remaining supported text data and may return `:empty_pdf_text` when
-no extractable text remains.
+To protect extraction from resource exhaustion, the shared reader applies input,
+decoded-stream, ratio, object/page, CMap, and recursion limits. A limit failure
+returns `:resource_limit_exceeded`; it is never converted to a partial result.

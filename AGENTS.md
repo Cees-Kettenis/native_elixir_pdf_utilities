@@ -54,6 +54,10 @@ Use case/cond/with or clearly named private functions instead of hidden branchin
 - Diagnostic maps must include actionable `:stage`, `:reason`, and `:message`
   fields, and should include `:operation`, `:module`, `:source`, `:line`, and
   `:column` when that context is available.
+- Changes to the shared diagnostics API, including its tuple shape, fields, and
+  types, are permitted only when there is no other way to return correct debug
+  information to the developer using the existing contract. Prefer expressing
+  additional detail through the existing `:message` and `:source` fields.
 - Do not raise for ordinary caller/input failures in public APIs. Reserve
   exceptions for programmer errors that cannot reasonably be represented as
   recoverable library results.
