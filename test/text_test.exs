@@ -327,6 +327,216 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert Text.extract(pdf, layout: false) == {:ok, "Visible"}
   end
 
+  test "extract_spans preserves rendering modes that the string projection excludes" do
+    pdf =
+      page_pdf("BT /F1 12 Tf 1 0 0 1 10 20 Tm (Painted) Tj 3 Tr (Hidden) Tj 7 Tr (Clip) Tj ET")
+
+    assert {:ok, %{page_count: 1, pages: [%{number: 1, spans: spans}]}} =
+             Text.extract_spans(pdf)
+
+    assert Enum.map(spans, & &1.text) == ["Painted", "Hidden", "Clip"]
+    assert Enum.map(spans, & &1.source_index) == [0, 1, 2]
+
+    assert Enum.map(spans, &{&1.render_mode, &1.paints_text?, &1.adds_to_clip_path?}) == [
+             {0, true, false},
+             {3, false, false},
+             {7, false, true}
+           ]
+
+    assert Text.extract(pdf, layout: false) == {:ok, "Painted"}
+    assert Text.extract(pdf, layout: true) == {:ok, "Painted"}
+  end
+
+  test "extract_spans exposes baseline geometry, matrices, font context, and TJ joins" do
+    font =
+      "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding /FirstChar 65 /Widths [1000 1000] >>"
+
+    pdf = page_pdf("BT /F1 20 Tf 1 0 0 1 10 20 Tm [(A) -100 (B)] TJ ET", font: font)
+
+    assert {:ok, %{pages: [%{media_box: [0, 0, 612, 792], rotation: 0, spans: [a, b]}]}} =
+             Text.extract_spans(pdf)
+
+    assert %{
+             text: "A",
+             source_index: 0,
+             font_resource: "F1",
+             joins_previous?: false
+           } = a
+
+    assert {a.x, a.y, a.end_x, a.end_y, a.font_size} == {10.0, 772.0, 30.0, 772.0, 20.0}
+    assert a.text_matrix == [1.0, 0.0, 0.0, 1.0, 10.0, 20.0]
+    assert a.ctm == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    assert b.text == "B"
+    assert b.source_index == 1
+    assert b.x == 32.0
+    assert b.end_x == 52.0
+    assert b.joins_previous?
+  end
+
+  test "extract_spans keeps source order and can provide best-effort visual order" do
+    content =
+      "BT /F1 12 Tf 1 0 0 1 100 20 Tm (RIGHT) Tj " <>
+        "1 0 0 1 10 20.8 Tm (LEFT) Tj 1 0 0 1 10 40 Tm (TOP) Tj ET"
+
+    pdf = page_pdf(content)
+
+    assert {:ok, %{pages: [%{spans: source}]}} = Text.extract_spans(pdf)
+    assert Enum.map(source, & &1.text) == ["RIGHT", "LEFT", "TOP"]
+    assert Enum.map(source, & &1.source_index) == [0, 1, 2]
+    assert_in_delta Enum.at(source, 0).y, Enum.at(source, 1).y, 1.0
+
+    assert {:ok, %{pages: [%{spans: visual}]}} = Text.extract_spans(pdf, order: :visual)
+    assert Enum.map(visual, & &1.text) == ["TOP", "LEFT", "RIGHT"]
+    assert Enum.map(visual, & &1.source_index) == [2, 1, 0]
+  end
+
+  test "extract_spans preserves multiple pages including an empty page" do
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2,
+       "<< /Type /Pages /Kids [3 0 R 4 0 R 9 0 R] /Count 3 /MediaBox [0 0 612 792] /Resources 5 0 R >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>"},
+      {4, "<< /Type /Page /Parent 2 0 R >>"},
+      {9, "<< /Type /Page /Parent 2 0 R /Contents 8 0 R >>"},
+      {5, "<< /Font << /F1 6 0 R >> >>"},
+      {6, "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>"},
+      {7, stream_object("", "BT /F1 12 Tf (One) Tj ET")},
+      {8, stream_object("", "BT /F1 12 Tf (Two) Tj ET")}
+    ]
+
+    pdf = pdf(objects)
+
+    assert {:ok, %{page_count: 3, pages: pages}} = Text.extract_spans(pdf)
+    assert Enum.map(pages, & &1.number) == [1, 2, 3]
+
+    assert Enum.map(pages, fn page -> Enum.map(page.spans, & &1.text) end) == [
+             ["One"],
+             [],
+             ["Two"]
+           ]
+
+    assert Text.extract(pdf, layout: false) == {:ok, "One\nTwo"}
+  end
+
+  test "extract_spans returns empty pages for a valid PDF without text" do
+    image_only =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>"}
+      ])
+
+    assert Text.extract_spans(image_only) ==
+             {:ok,
+              %{
+                page_count: 1,
+                pages: [%{number: 1, media_box: [0, 0, 612, 792], rotation: 0, spans: []}]
+              }}
+  end
+
+  test "extract_spans applies page rotation to normalized baseline coordinates" do
+    pdf = page_pdf("BT /F1 12 Tf 1 0 0 1 10 20 Tm (A) Tj ET", rotate: 90)
+
+    assert {:ok, %{pages: [%{rotation: 90, spans: [span]}]}} = Text.extract_spans(pdf)
+    assert span.x == 20.0
+    assert span.y == 10.0
+    assert span.end_x == 20.0
+    assert span.end_y == 16.0
+  end
+
+  test "extract_spans indexes multiple content streams and nested transformed Forms" do
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents [6 0 R 7 0 R] >>"},
+      {4, "<< /Font << /F1 5 0 R >> /XObject << /outer 8 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", "BT /F1 10 Tf (A) Tj ET")},
+      {7, stream_object("", "/outer Do BT /F1 10 Tf (D) Tj ET")},
+      {8,
+       stream_object(
+         "/Type /XObject /Subtype /Form /Matrix [1 0 0 1 20 30] /Resources 10 0 R",
+         "BT /F1 10 Tf (B) Tj ET /inner Do"
+       )},
+      {9,
+       stream_object(
+         "/Type /XObject /Subtype /Form /Matrix [2 0 0 2 3 4] /Resources << /Font << /F1 5 0 R >> >>",
+         "BT /F1 10 Tf (C) Tj ET"
+       )},
+      {10, "<< /Font << /F1 5 0 R >> /XObject << /inner 9 0 R >> >>"}
+    ]
+
+    assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(pdf(objects))
+    assert Enum.map(spans, & &1.text) == ["A", "B", "C", "D"]
+    assert Enum.map(spans, & &1.source_index) == [0, 1, 2, 3]
+    assert Enum.at(spans, 1).ctm == [1.0, 0.0, 0.0, 1.0, 20.0, 30.0]
+    assert Enum.at(spans, 2).ctm == [2.0, 0.0, 0.0, 2.0, 23.0, 34.0]
+    assert {Enum.at(spans, 1).x, Enum.at(spans, 1).y} == {20.0, 762.0}
+    assert {Enum.at(spans, 2).x, Enum.at(spans, 2).y} == {23.0, 758.0}
+  end
+
+  test "extract_spans validates options, input, encoding, and file diagnostics" do
+    assert {:error, {:invalid_pdf_input, input_diagnostic}} = Text.extract_spans(:not_a_pdf)
+    assert input_diagnostic.stage == :input
+    assert input_diagnostic.operation == :extract_spans
+    assert input_diagnostic.module == Text
+
+    assert {:error, {:invalid_options, %{stage: :options, operation: :extract_spans}}} =
+             Text.extract_spans("%PDF-1.7", [:not_a_keyword])
+
+    assert {:error, {:invalid_options, %{stage: :options, operation: :extract_spans}}} =
+             Text.extract_spans("%PDF-1.7", layout: true)
+
+    assert {:error, {:invalid_options, %{stage: :options, operation: :extract_spans}}} =
+             Text.extract_spans("%PDF-1.7", order: :invalid)
+
+    custom =
+      page_pdf("BT /F1 10 Tf <01> Tj ET",
+        font: "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] >>"
+      )
+
+    assert {:error, {:unsupported_text_encoding, encoding_diagnostic}} =
+             Text.extract_spans(custom)
+
+    assert encoding_diagnostic.stage == :text_encoding
+    assert encoding_diagnostic.operation == :extract_spans
+    assert encoding_diagnostic.module == Text
+
+    assert {:error,
+            {:invalid_path, %{stage: :file, operation: :extract_file_spans, module: Text}}} =
+             Text.extract_file_spans(:not_a_path)
+
+    missing = Path.join(System.tmp_dir!(), "native-elixir-pdf-missing-spans.pdf")
+
+    assert {:error, {:enoent, %{source: ^missing, operation: :read, module: Text}}} =
+             Text.extract_file_spans(missing)
+  end
+
+  test "extract_file_spans returns spans and adds source context to extraction errors" do
+    valid_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-spans.pdf")
+    encrypted_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-encrypted-spans.pdf")
+    on_exit(fn -> File.rm(valid_path) end)
+    on_exit(fn -> File.rm(encrypted_path) end)
+
+    File.write!(valid_path, page_pdf("BT /F1 12 Tf (File) Tj ET"))
+
+    assert {:ok, %{pages: [%{spans: [%{text: "File"}]}]}} =
+             Text.extract_file_spans(valid_path)
+
+    File.write!(
+      encrypted_path,
+      pdf(
+        [{1, "<< /Type /Catalog /Pages 2 0 R >>"}, {2, "<< /Type /Pages /Kids [] /Count 0 >>"}],
+        "/Root 1 0 R /Encrypt 9 0 R"
+      )
+    )
+
+    assert {:error,
+            {:encrypted_pdf,
+             %{source: ^encrypted_path, operation: :extract_file_spans, module: Text}}} =
+             Text.extract_file_spans(encrypted_path)
+  end
+
   test "handles empty text and reports text shown without an active font" do
     assert_error(
       Text.extract(page_pdf("BT /F1 12 Tf () Tj ET")),

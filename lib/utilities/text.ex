@@ -4,8 +4,19 @@ defmodule NativeElixirPdfUtilities.Text do
 
   Extraction resolves the PDF page tree, resources, content streams, Form
   XObjects, and the active font at every text operation. It succeeds only when
-  every visible text string has a reliable Unicode mapping; it never guesses
-  from an embedded font program or merges CMaps from unrelated fonts.
+  every shown text string has a reliable Unicode mapping; it never guesses from
+  an embedded font program or merges CMaps from unrelated fonts.
+
+  PDFs store positioned text operations, not semantic rows, columns, or tables.
+  `extract_spans/2` exposes those decoded operations for callers that need to
+  interpret document-specific structure. `extract/2` remains a string
+  projection: `layout: true` reconstructs approximate visual lines, while
+  `layout: false` projects text-show execution order.
+
+  Extraction does not perform OCR. Successfully decoded text can be recovered
+  even when its rendering mode does not paint the text, but clipping paths,
+  transparency, occlusion, and other causes of visual visibility are not
+  evaluated.
   """
 
   alias NativeElixirPdfUtilities.Diagnostics
@@ -19,7 +30,82 @@ defmodule NativeElixirPdfUtilities.Text do
   @max_form_depth 20
   @validated_operators ~w(q Q cm BT ET Tf Tm Td TD T* TL Tc Tw Tz Tr Ts Tj TJ ' " Do)
 
+  @typedoc "Options for reconstructed string extraction."
   @type extract_option :: {:layout, boolean()}
+  @typedoc "Options for positioned span extraction."
+  @type span_option :: {:order, :source | :visual}
+  @typedoc "A PDF text rendering mode from 0 through 7."
+  @type render_mode :: 0..7
+  @typedoc "A six-value PDF affine matrix in `[a, b, c, d, e, f]` order."
+  @type matrix :: [float()]
+
+  @typedoc """
+  A decoded text-showing operand and its positioned extraction context.
+
+  `source_index` is zero-based within a page and follows text-show execution
+  order. Page content streams are traversed in `/Contents` order, and Form
+  XObjects are traversed where their `Do` operator occurs. Reusing a Form
+  therefore produces new spans with new indexes.
+
+  `x`, `y`, `end_x`, and `end_y` describe the text baseline in normalized
+  display coordinates. The origin is the top-left of the rotated MediaBox, X
+  increases rightward, Y increases downward, and page rotation and Form CTMs
+  are applied. These points are not glyph bounding boxes. The end point uses
+  the PDF font widths available to the extractor and can be approximate when a
+  font omits explicit metrics.
+
+  `text_matrix` is the PDF text matrix at the start of the operand. `ctm` is the
+  active PDF current transformation matrix, including Form transforms. Neither
+  matrix includes the final MediaBox/page-rotation normalization represented by
+  the baseline coordinates.
+
+  `font_resource` is the active PDF resource name, not a guaranteed font family
+  or PostScript name. `font_size` is the `Tf` text-space size, not a calculated
+  display-space height.
+
+  `paints_text?` and `adds_to_clip_path?` are derived only from `render_mode`.
+  They describe the requested PDF text rendering operation; they do not claim
+  that the text is visually visible or clipped. `joins_previous?` identifies a
+  later string operand from the same `TJ` array, preserving the existing
+  source-order string projection behavior.
+  """
+  @type text_span :: %{
+          text: String.t(),
+          source_index: non_neg_integer(),
+          x: float(),
+          y: float(),
+          end_x: float(),
+          end_y: float(),
+          font_resource: String.t(),
+          font_size: float(),
+          text_matrix: matrix(),
+          ctm: matrix(),
+          render_mode: render_mode(),
+          paints_text?: boolean(),
+          adds_to_clip_path?: boolean(),
+          joins_previous?: boolean()
+        }
+
+  @typedoc """
+  Positioned text for one resolved PDF page.
+
+  `media_box` is `[left, bottom, right, top]` in PDF default user-space units.
+  `rotation` is the effective inherited page rotation normalized to 0, 90, 180,
+  or 270 degrees. Every resolved page is returned, including pages whose
+  `spans` list is empty.
+  """
+  @type text_page :: %{
+          number: pos_integer(),
+          media_box: [number()],
+          rotation: 0 | 90 | 180 | 270,
+          spans: [text_span()]
+        }
+
+  @typedoc "A page-preserving positioned-text extraction result."
+  @type text_document :: %{
+          page_count: non_neg_integer(),
+          pages: [text_page()]
+        }
   @type error_reason ::
           :encrypted_pdf
           | :invalid_options
@@ -36,7 +122,7 @@ defmodule NativeElixirPdfUtilities.Text do
 
   Set `layout: true` (the default) to group spans into approximate visual lines.
   With `layout: false`, spans retain their content-stream order. Extraction fails
-  rather than returning partial text when a visible text operation cannot be
+  rather than returning partial text when a shown text operation cannot be
   decoded with the active font.
   """
   @spec extract(binary(), [extract_option()]) ::
@@ -55,7 +141,12 @@ defmodule NativeElixirPdfUtilities.Text do
       true ->
         with {:ok, document} <- Reader.read(pdf_binary),
              {:ok, pages} <- extract_pages(document) do
-          case Enum.reject(pages, &(&1 == [])) do
+          visible_pages =
+            pages
+            |> Enum.map(fn page -> Enum.filter(page.spans, & &1.paints_text?) end)
+            |> Enum.reject(&(&1 == []))
+
+          case visible_pages do
             [] ->
               error(:text_extraction, :no_extractable_text, "PDF contains no extractable text")
 
@@ -70,7 +161,64 @@ defmodule NativeElixirPdfUtilities.Text do
               {:ok, text}
           end
         else
-          {:error, _} = reader_error -> text_error(reader_error)
+          {:error, _} = reader_error -> text_error(reader_error, :extract)
+        end
+    end
+  end
+
+  @doc """
+  Extracts positioned, reliably decoded text spans from a PDF binary.
+
+  The result preserves every resolved page and every non-empty text operand
+  that can be decoded, including rendering modes 3 (neither painted nor added
+  to the clipping path) and 7 (added to the clipping path without painting).
+  This preservation guarantee applies to decoded text operations, not to OCR,
+  undecodable fonts, glyph outlines, semantic tables, or evaluated visual
+  visibility.
+
+  Spans use source execution order by default. Set `order: :visual` to return a
+  best-effort display ordering using the same line grouping as `extract/2`;
+  `source_index` remains unchanged so source order can always be restored.
+
+  A valid PDF with no decodable text returns an `:ok` document containing empty
+  page span lists. Extraction remains strict and returns a structured error
+  rather than a partial document when a shown string cannot be decoded.
+  """
+  @spec extract_spans(binary(), [span_option()]) ::
+          {:ok, text_document()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
+  def extract_spans(pdf_binary, opts \\ []) do
+    cond do
+      not is_binary(pdf_binary) ->
+        error(:input, :invalid_pdf_input, "PDF input must be a binary", operation: :extract_spans)
+
+      not Keyword.keyword?(opts) ->
+        error(:options, :invalid_options, "extract span options must be a keyword list",
+          operation: :extract_spans
+        )
+
+      Enum.any?(Keyword.keys(opts), &(&1 != :order)) ->
+        error(:options, :invalid_options, "extract span options contain an unknown option",
+          operation: :extract_spans
+        )
+
+      Keyword.get(opts, :order, :source) not in [:source, :visual] ->
+        error(:options, :invalid_options, "span order must be :source or :visual",
+          operation: :extract_spans
+        )
+
+      true ->
+        with {:ok, document} <- Reader.read(pdf_binary),
+             {:ok, pages} <- extract_pages(document) do
+          pages =
+            if Keyword.get(opts, :order, :source) == :visual do
+              Enum.map(pages, fn page -> %{page | spans: visual_spans(page.spans)} end)
+            else
+              pages
+            end
+
+          {:ok, %{page_count: length(pages), pages: pages}}
+        else
+          {:error, _} = extraction_error -> text_error(extraction_error, :extract_spans)
         end
     end
   end
@@ -81,18 +229,33 @@ defmodule NativeElixirPdfUtilities.Text do
   @spec extract_file(String.t(), [extract_option()]) ::
           {:ok, String.t()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def extract_file(path, opts \\ []) do
+    extract_file_with(path, opts, :extract_file, &extract/2)
+  end
+
+  @doc """
+  Reads a PDF file and extracts its page-preserving positioned text spans.
+
+  This has the same ordering, geometry, preservation, and strict diagnostic
+  behavior as `extract_spans/2`. File extraction errors include the source path.
+  """
+  @spec extract_file_spans(String.t(), [span_option()]) ::
+          {:ok, text_document()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
+  def extract_file_spans(path, opts \\ []) do
+    extract_file_with(path, opts, :extract_file_spans, &extract_spans/2)
+  end
+
+  defp extract_file_with(path, opts, operation, extractor) do
     case path do
       path when is_binary(path) ->
         case File.read(path) do
           {:ok, pdf_binary} ->
-            case extract(pdf_binary, opts) do
-              {:ok, text} ->
-                {:ok, text}
+            case extractor.(pdf_binary, opts) do
+              {:ok, result} ->
+                {:ok, result}
 
               {:error, {reason, diagnostic}} ->
                 {:error,
-                 {reason,
-                  Map.put(diagnostic, :source, path) |> Map.put(:operation, :extract_file)}}
+                 {reason, diagnostic |> Map.put(:source, path) |> Map.put(:operation, operation)}}
             end
 
           {:error, reason} ->
@@ -100,7 +263,7 @@ defmodule NativeElixirPdfUtilities.Text do
         end
 
       _ ->
-        error(:file, :invalid_path, "path must be a string", operation: :extract_file)
+        error(:file, :invalid_path, "path must be a string", operation: operation)
     end
   end
 
@@ -109,7 +272,7 @@ defmodule NativeElixirPdfUtilities.Text do
     |> Enum.with_index(1)
     |> Enum.reduce_while({:ok, []}, fn {page, page_number}, {:ok, pages} ->
       case extract_page(document, page, page_number) do
-        {:ok, spans} -> {:cont, {:ok, [spans | pages]}}
+        {:ok, page} -> {:cont, {:ok, [page | pages]}}
         {:error, _} = extraction_error -> {:halt, extraction_error}
       end
     end)
@@ -136,8 +299,17 @@ defmodule NativeElixirPdfUtilities.Text do
         end
       end)
       |> case do
-        {:ok, _state, spans} -> {:ok, spans}
-        error -> error
+        {:ok, _state, spans} ->
+          {:ok,
+           %{
+             number: page_number,
+             media_box: media_box,
+             rotation: initial_state.rotation,
+             spans: spans
+           }}
+
+        error ->
+          error
       end
     end
   end
@@ -406,30 +578,32 @@ defmodule NativeElixirPdfUtilities.Text do
       {:ok, state, spans}
     else
       next_state = advance_text(state, decoded)
+      [_, _, _, _, x, y] = state.text_matrix |> translate(0.0, state.rise) |> multiply(state.ctm)
 
-      if state.render_mode in [3, 7] do
-        {:ok, next_state, spans}
-      else
-        [_, _, _, _, x, y] = multiply(state.text_matrix, state.ctm)
-        [_, _, _, _, end_x, end_y] = multiply(next_state.text_matrix, state.ctm)
-        {x, y} = display_position(x, y + state.rise, state.page)
-        {end_x, end_y} = display_position(end_x, end_y + state.rise, state.page)
+      [_, _, _, _, end_x, end_y] =
+        next_state.text_matrix |> translate(0.0, state.rise) |> multiply(state.ctm)
 
-        span = %{
-          text: decoded.text,
-          x: x,
-          y: y,
-          end_x: end_x,
-          end_y: end_y,
-          font: state.font.name,
-          size: state.font_size,
-          matrix: state.text_matrix,
-          rotation: state.rotation,
-          join_previous?: join_previous?
-        }
+      {x, y} = display_position(x, y, state.page)
+      {end_x, end_y} = display_position(end_x, end_y, state.page)
 
-        {:ok, next_state, spans ++ [span]}
-      end
+      span = %{
+        text: decoded.text,
+        source_index: state.next_source_index,
+        x: x,
+        y: y,
+        end_x: end_x,
+        end_y: end_y,
+        font_resource: state.font.name,
+        font_size: state.font_size,
+        text_matrix: state.text_matrix,
+        ctm: state.ctm,
+        render_mode: state.render_mode,
+        paints_text?: state.render_mode not in [3, 7],
+        adds_to_clip_path?: state.render_mode in 4..7,
+        joins_previous?: join_previous?
+      }
+
+      {:ok, %{next_state | next_source_index: state.next_source_index + 1}, spans ++ [span]}
     end
   end
 
@@ -459,7 +633,7 @@ defmodule NativeElixirPdfUtilities.Text do
         if name?(Map.get(xobject, "Subtype"), "Form") do
           with {:ok, stream} <- Reader.decoded_stream(document, xobject_ref),
                {:ok, form_matrix} <- matrix_value(Map.get(xobject, "Matrix"), page),
-               {:ok, _child_state, child_spans} <-
+               {:ok, child_state, child_spans} <-
                  interpret(
                    stream,
                    document,
@@ -472,7 +646,8 @@ defmodule NativeElixirPdfUtilities.Text do
                    page,
                    depth + 1
                  ) do
-            {:ok, state, spans ++ child_spans}
+            {:ok, %{state | next_source_index: child_state.next_source_index},
+             spans ++ child_spans}
           end
         else
           {:ok, state, spans}
@@ -1071,7 +1246,7 @@ defmodule NativeElixirPdfUtilities.Text do
 
   defp plain_page(spans) do
     Enum.reduce(spans, "", fn span, text ->
-      separator = if text == "" or span.join_previous?, do: "", else: " "
+      separator = if text == "" or span.joins_previous?, do: "", else: " "
       text <> separator <> span.text
     end)
   end
@@ -1086,6 +1261,13 @@ defmodule NativeElixirPdfUtilities.Text do
     |> Enum.join("\n")
   end
 
+  defp visual_spans(spans) do
+    spans
+    |> Enum.sort_by(&{&1.y, &1.x})
+    |> group_lines([])
+    |> Enum.flat_map(fn line -> Enum.sort_by(line.spans, & &1.x) end)
+  end
+
   defp group_lines(spans, lines) do
     case spans do
       [] ->
@@ -1093,13 +1275,21 @@ defmodule NativeElixirPdfUtilities.Text do
 
       [span | rest] ->
         case lines do
-          [%{y: y, size: size, spans: line_spans} = line | previous]
+          [%{y: y, font_size: font_size, spans: line_spans} = line | previous]
           when abs(span.y - y) <= 1.5 ->
-            updated = %{line | spans: [span | line_spans], size: max(size, span.size)}
+            updated = %{
+              line
+              | spans: [span | line_spans],
+                font_size: max(font_size, span.font_size)
+            }
+
             group_lines(rest, [updated | previous])
 
           _ ->
-            group_lines(rest, [%{y: span.y, size: span.size, spans: [span]} | lines])
+            group_lines(
+              rest,
+              [%{y: span.y, font_size: span.font_size, spans: [span]} | lines]
+            )
         end
     end
   end
@@ -1107,7 +1297,7 @@ defmodule NativeElixirPdfUtilities.Text do
   defp render_line(spans, min_x) do
     spans
     |> Enum.reduce({"", min_x}, fn span, {line, current_x} ->
-      space_width = max(span.size * 0.25, 4.0)
+      space_width = max(span.font_size * 0.25, 4.0)
       gap = span.x - current_x
 
       spaces =
@@ -1147,6 +1337,7 @@ defmodule NativeElixirPdfUtilities.Text do
            render_mode: 0,
            in_text?: false,
            stack: [],
+           next_source_index: 0,
            rotation: rotation,
            page: %{media_box: media_box, rotation: rotation}
          }}
@@ -1266,10 +1457,10 @@ defmodule NativeElixirPdfUtilities.Text do
     end
   end
 
-  defp text_error({:error, {reason, diagnostic}}),
+  defp text_error({:error, {reason, diagnostic}}, operation),
     do:
       {:error,
-       {reason, diagnostic |> Map.put(:operation, :extract) |> Map.put(:module, __MODULE__)}}
+       {reason, diagnostic |> Map.put(:operation, operation) |> Map.put(:module, __MODULE__)}}
 
   defp error(stage, reason, message, details \\ []) do
     {pdf_details, diagnostic_options} = Keyword.split(details, [:object, :page, :font])
