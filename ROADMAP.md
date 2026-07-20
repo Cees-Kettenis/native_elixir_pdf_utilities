@@ -19,7 +19,45 @@ breaking API changes are allowed, but they should be explained clearly in
 
 ## Milestones
 
-### 0.6.0 - Fonts, Print CSS, and Render Metadata
+### 0.6.0 - PDF Core Reader and Object Resolution
+
+Milestone goal: add a shared PDF reader and object resolver so utility APIs can work with
+common modern PDFs, not only classic PDFs whose indirect objects can be found by
+flat token scanning.
+
+#### Scope
+
+- Add a shared PDF reader layer above the tokenizer.
+- Keep the tokenizer focused on lexical tokenization and move document-level
+  object resolution into the shared reader.
+- Add support for common PDF object storage structures:
+  - classic cross-reference tables
+  - cross-reference streams
+  - object streams
+  - compressed object containers
+- Add indirect object resolution through the shared reader so text extraction,
+  merge, inspection, and transforms can use the same parsed document model.
+- Add stream decoding support required for xref streams and object streams.
+- Add encryption detection with clear diagnostics. Decryption is not required
+  before `1.0.0` unless a later release explicitly takes it on.
+
+#### Design Notes
+
+- Document the tokenizer as the lexical layer and the shared reader as the
+  document/object-resolution layer.
+- Move text extraction and future inspection/transform APIs onto the shared
+  reader where practical.
+- Document behavior for malformed, encrypted, compressed, or unsupported PDFs.
+
+#### Completion Criteria
+
+- Add unit tests for classic xref tables, xref streams, object streams, stream
+  decoding, indirect object resolution, encryption detection, and unsupported
+  PDF structure diagnostics.
+- Add regression fixtures for classic PDFs, PDFs with cross-reference streams,
+  PDFs with object streams, encrypted PDFs, and malformed PDFs.
+
+### 0.7.0 - Fonts, Print CSS, and Render Metadata
 
 Milestone goal: make existing print templates easier to render without rewriting common
 font, print stylesheet, and document metadata behavior.
@@ -55,7 +93,7 @@ font, print stylesheet, and document metadata behavior.
 - Add focused tests for PDF metadata options and HTML `<title>` metadata
   defaults.
 
-### 0.7.0 - Running Headers, Footers, and Page Numbers
+### 0.8.0 - Running Headers, Footers, and Page Numbers
 
 Milestone goal: add first-class repeated page furniture for reports, invoices, statements,
 contracts, and exports.
@@ -79,7 +117,7 @@ contracts, and exports.
 - Add focused layout, pagination, and PDF writer tests for page furniture.
 - Add or update browser parity fixtures for headers, footers, and page numbers.
 
-### 0.8.0 - Generated Content, Selectors, and Counters
+### 0.9.0 - Generated Content, Selectors, and Counters
 
 Milestone goal: expand the CSS features commonly used by existing document templates.
 
@@ -130,7 +168,7 @@ Milestone goal: expand the CSS features commonly used by existing document templ
 - Add or update browser parity fixtures for visible `white-space: pre-line`
   rendering.
 
-### 0.9.0 - Static HTML Form Rendering
+### 0.10.0 - Static HTML Form Rendering
 
 Milestone goal: render common HTML form controls as static PDF content for government
 forms, applications, inspections, and contracts.
@@ -158,7 +196,7 @@ forms, applications, inspections, and contracts.
 - Add browser parity fixtures for visible static form rendering.
 - Add or update a realistic government-style form fixture.
 
-### 0.10.0 - Positioning, Image Fitting, and Asset Inputs
+### 0.11.0 - Positioning, Image Fitting, and Asset Inputs
 
 Milestone goal: support fixed-size template regions while keeping asset handling explicit
 and safe.
@@ -202,44 +240,6 @@ and safe.
   fitting, and background painting.
 - Add browser parity fixtures for visible layout and painting changes.
 - Add or update realistic invoice, statement, and multi-page report fixtures.
-
-### 0.11.0 - PDF Core Reader and Object Resolution
-
-Milestone goal: add a shared PDF reader and object resolver so utility APIs can work with
-common modern PDFs, not only classic PDFs whose indirect objects can be found by
-flat token scanning.
-
-#### Scope
-
-- Add a shared PDF reader layer above the tokenizer.
-- Keep the tokenizer focused on lexical tokenization and move document-level
-  object resolution into the shared reader.
-- Add support for common PDF object storage structures:
-  - classic cross-reference tables
-  - cross-reference streams
-  - object streams
-  - compressed object containers
-- Add indirect object resolution through the shared reader so text extraction,
-  merge, inspection, and transforms can use the same parsed document model.
-- Add stream decoding support required for xref streams and object streams.
-- Add encryption detection with clear diagnostics. Decryption is not required
-  before `1.0.0` unless a later release explicitly takes it on.
-
-#### Design Notes
-
-- Document the tokenizer as the lexical layer and the shared reader as the
-  document/object-resolution layer.
-- Move text extraction and future inspection/transform APIs onto the shared
-  reader where practical.
-- Document behavior for malformed, encrypted, compressed, or unsupported PDFs.
-
-#### Completion Criteria
-
-- Add unit tests for classic xref tables, xref streams, object streams, stream
-  decoding, indirect object resolution, encryption detection, and unsupported
-  PDF structure diagnostics.
-- Add regression fixtures for classic PDFs, PDFs with cross-reference streams,
-  PDFs with object streams, encrypted PDFs, and malformed PDFs.
 
 ### 0.12.0 - PDF Information and Metadata
 

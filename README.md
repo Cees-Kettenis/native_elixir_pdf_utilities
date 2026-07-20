@@ -21,37 +21,10 @@ The goal is not to be a full PDF engine overnight. It is a steadily improving to
 
 ## What It Does
 
-1. Tokenizer - turns classic PDF byte streams into structured Elixir tokens.
+1. Tokenizer - turns PDF byte streams into structured Elixir tokens.
 2. Merger - combines multiple PDF binaries into a fresh PDF with rewritten object references.
-3. Reader - extracts embedded text from PDFs when the document contains readable text data.
+3. Reader and text extraction - strictly resolve embedded Unicode text from classic and modern PDFs.
 4. HTML to PDF - renders a strict, document-oriented HTML/CSS subset to native PDF bytes without Chromium, wkhtmltopdf, Node, Rust, Python, OS packages, or SaaS calls.
-
-## PDF Input Handling
-
-Merge and text extraction are designed for classic, tokenizable PDFs. Malformed
-input now returns a diagnostic error rather than producing partial output or
-raising. In particular, merging validates indirect objects and stream
-boundaries before writing a result.
-
-The tokenizer emits `{:error, reason}` tokens for malformed literal or
-hexadecimal strings. Consumers that operate directly on tokenizer output should
-handle these tokens as invalid input.
-
-For extraction safety, unusually large ToUnicode CMaps are ignored rather than
-expanded. This may reduce decoded text for documents that rely exclusively on
-an oversized CMap, but it bounds memory and CPU use for untrusted PDFs.
-
-## Native HTML/CSS to PDF
-
-`NativeElixirPdfUtilities.HtmlToPdf` is a native document renderer. It is designed for predictable server-side PDFs such as reports, invoices, labels, statements, and simple generated documents. It is not a browser engine and does not claim browser compatibility.
-
-For runnable render examples, styling patterns, file/image/font examples, and diagnostic error handling, see [HTML to PDF Examples](docs/html-to-pdf-exmaples.md).
-
-For HtmlToPdf options, supported HTML elements, CSS rules, layout behavior, and known renderer boundaries, see [HTML to PDF Compatibility](docs/html-to-pdf-compatibility.md).
-
-For planned improvements and useful future features, see [Roadmap](ROADMAP.md).
-
-For public error shapes and diagnostic fields, see [Diagnostics](docs/diagnostics.md).
 
 ## Installation
 
