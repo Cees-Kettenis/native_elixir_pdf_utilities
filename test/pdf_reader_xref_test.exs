@@ -129,6 +129,41 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
     assert_error(Reader.read(non_object), :invalid_pdf_input, :object)
   end
 
+  test "accepts xref offsets that point to whitespace before an object" do
+    generated =
+      classic_pdf([
+        {1, 0, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"}
+      ])
+
+    whitespace = <<0, 9, 10, 12, 13, 32>>
+    first_offset = generated.offsets[1]
+
+    pdf =
+      binary_part(generated.pdf, 0, first_offset) <>
+        whitespace <>
+        binary_part(generated.pdf, first_offset, byte_size(generated.pdf) - first_offset)
+
+    shifted_second_offset = generated.offsets[2] + byte_size(whitespace)
+    shifted_xref = generated.xref + byte_size(whitespace)
+
+    pdf =
+      pdf
+      |> String.replace(
+        classic_entry(generated.offsets[2], 0, "n"),
+        classic_entry(shifted_second_offset, 0, "n"),
+        global: false
+      )
+      |> String.replace(
+        "startxref\n#{generated.xref}",
+        "startxref\n#{shifted_xref}",
+        global: false
+      )
+
+    assert {:ok, document} = Reader.read(pdf)
+    assert document.objects[{1, 0}].offset == first_offset
+  end
+
   test "validates object-stream containers and compressed entry indexes" do
     fixture = File.read!(Path.join(@fixture_directory, "object-stream.pdf"))
 

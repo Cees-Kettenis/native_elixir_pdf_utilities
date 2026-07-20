@@ -550,7 +550,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   defp parse_indirect_object_at(pdf, offset, limit, _expected_ref) do
     if offset >= 0 and limit > offset and limit <= byte_size(pdf) do
       slice = binary_part(pdf, offset, limit - offset)
-      header = Regex.run(~r/\A(\d+)\s+(\d+)\s+obj\b/, slice)
+      header = Regex.run(~r/\A[\x00\t\n\f\r ]*(\d+)\s+(\d+)\s+obj\b/, slice)
 
       case header do
         [_, object_text, generation_text] ->
