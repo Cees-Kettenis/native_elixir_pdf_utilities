@@ -142,7 +142,7 @@ Remote asset fetching is intentionally not supported. The renderer should be det
 
 ## Fonts
 
-Built-in PDF fonts are available without setup. For Unicode-heavy documents, pass explicit TTF fonts.
+Built-in PDF fonts are available without setup. For Unicode-heavy documents, pass explicit TrueType fonts or declare a local font in CSS.
 
 ```elixir
 {:ok, pdf} =
@@ -155,6 +155,48 @@ Built-in PDF fonts are available without setup. For Unicode-heavy documents, pas
 ```
 
 Explicit font registration avoids relying on OS font discovery. That makes production output easier to reproduce across containers and hosts.
+
+CSS declarations use the same registry and can resolve relative URLs from `:base_url`:
+
+```elixir
+{:ok, pdf} =
+  HtmlToPdf.render(
+    """
+    <style>
+      @font-face {
+        font-family: "Report Sans";
+        src: url("fonts/report-sans.ttf") format("truetype");
+        font-weight: 400;
+        font-style: normal;
+      }
+      @media print { body { font-family: "Report Sans", sans-serif; } }
+    </style>
+    <p>Café</p>
+    """,
+    base_url: "priv/static"
+  )
+```
+
+Font URLs must be local. WOFF/WOFF2 and CFF-flavored OpenType fonts are unsupported; convert them to TTF for predictable embedding.
+
+## PDF Metadata
+
+Set common PDF document information under `:metadata`. Calendar structs and ISO 8601 strings are accepted for dates.
+
+```elixir
+{:ok, pdf} =
+  HtmlToPdf.render(
+    "<title>Monthly statement</title><p>Statement content</p>",
+    metadata: [
+      author: "Finance Operations",
+      subject: "Customer statement",
+      keywords: ["statement", "monthly"],
+      creation_date: Date.utc_today()
+    ]
+  )
+```
+
+When `:metadata` does not contain `:title`, the renderer uses the first non-empty HTML `<title>`. An explicit metadata title always wins.
 
 ## Styling Choices
 

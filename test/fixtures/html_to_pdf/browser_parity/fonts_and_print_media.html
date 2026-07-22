@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Fonts and print media parity</title>
+    <style>
+      @page { size: letter; margin: 0; }
+      @font-face {
+        font-family: "Parity Sans";
+        src: url("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf") format("truetype");
+        font-display: block;
+      }
+      html, body { margin: 0; padding: 0; }
+      body { font-family: "Parity Sans"; }
+      @media screen {
+        .print-card { display: none; }
+      }
+      @media print {
+        .print-card {
+          width: 360pt;
+          margin: 36pt;
+          padding: 24pt;
+          border: 4pt solid #7c3aed;
+          background-color: #ede9fe;
+          box-sizing: border-box;
+        }
+        .print-title {
+          color: #5b21b6;
+          font-size: 24pt;
+          font-weight: bold;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="print-card">
+      <div class="print-title">Print-ready report</div>
+      <p>Local CSS font with print-only presentation.</p>
+    </main>
+  </body>
+</html>
