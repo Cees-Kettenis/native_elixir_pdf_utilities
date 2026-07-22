@@ -4,10 +4,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   The parser accepts the document-oriented selector subset used by the style
   cascade: element, class, id, element.class, descendant, child, and comma
-  groups. Simple `@page` rules are accepted outside the style cascade so the
-  renderer can use page size and margin defaults. Declarations are kept as
-  normalized property/value pairs so the style layer can validate values against
-  the renderer's supported property set.
+  groups. Simple `@page` and `@font-face` rules are accepted outside the style
+  cascade, and `@media print` rules are included in the active print cascade.
+  Declarations are kept as normalized property/value pairs so the style layer
+  can validate values against the renderer's supported property set.
   """
 
   @type declaration :: {String.t(), String.t()} | {String.t(), String.t(), :important}
@@ -28,6 +28,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           order: non_neg_integer()
         }
   @type stylesheet :: [rule()]
+  @type font_face :: %{
+          family: String.t(),
+          sources: [String.t()],
+          weight: 100..900,
+          style: :normal | :italic
+        }
   @type page_option ::
           {:page_size, :a4 | :letter | {number(), number()}} | {:margin, String.t() | number()}
 
@@ -50,11 +56,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   def parse_detailed(css) do
     case css do
       css when is_binary(css) ->
-        parsed_css = css |> strip_comments() |> strip_page_rules()
+        with {:ok, active_css} <- css |> strip_comments() |> active_media_rules(),
+             {:ok, _font_faces} <- parse_font_faces(active_css) do
+          parsed_css = active_css |> strip_font_face_rules() |> strip_page_rules()
 
-        case parse_rules(parsed_css) do
-          {:ok, stylesheet} -> {:ok, stylesheet}
-          {:error, :invalid_css} -> {:error, {:invalid_css, css_error_detail(css, parsed_css)}}
+          case parse_rules(parsed_css) do
+            {:ok, stylesheet} -> {:ok, stylesheet}
+            {:error, :invalid_css} -> {:error, {:invalid_css, css_error_detail(css, parsed_css)}}
+          end
+        else
+          {:error, :invalid_css} ->
+            {:error, {:invalid_css, css_error_detail(css, css)}}
         end
 
       _ ->
@@ -65,6 +77,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
             reason: :invalid_css,
             message: "CSS input must be a string"
           }}}
+    end
+  end
+
+  @doc """
+  Extracts active local font declarations from `@font-face` rules.
+
+  Sources must use `url(...)` with a TrueType or OpenType source. Remote URLs,
+  data URIs, WOFF/WOFF2 sources, and unsupported descriptors are rejected.
+  Relative paths are returned unchanged for the style layer to resolve against
+  the stylesheet location or renderer `:base_url`. Supported sources retain
+  their declared order so loading can fall back when an earlier file is
+  unavailable or invalid.
+  """
+  @spec font_faces(String.t()) :: {:ok, [font_face()]} | {:error, :invalid_css}
+  def font_faces(css) do
+    case css do
+      css when is_binary(css) ->
+        with {:ok, active_css} <- css |> strip_comments() |> active_media_rules() do
+          parse_font_faces(active_css)
+        end
+
+      _ ->
+        {:error, :invalid_css}
     end
   end
 
@@ -80,15 +115,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   def page_options(css) do
     case css do
       css when is_binary(css) ->
-        css
-        |> strip_comments()
-        |> page_rule_blocks()
-        |> Enum.reduce({:ok, []}, fn block, {:ok, acc} ->
-          case parse_declarations(block) do
-            {:ok, declarations} -> {:ok, Keyword.merge(acc, page_options_from(declarations))}
-            {:error, _reason} -> {:ok, acc}
-          end
-        end)
+        with {:ok, active_css} <- css |> strip_comments() |> active_media_rules() do
+          active_css
+          |> page_rule_blocks()
+          |> Enum.reduce({:ok, []}, fn block, {:ok, acc} ->
+            case parse_declarations(block) do
+              {:ok, declarations} -> {:ok, Keyword.merge(acc, page_options_from(declarations))}
+              {:error, _reason} -> {:ok, acc}
+            end
+          end)
+        end
 
       _ ->
         {:error, :invalid_css}
@@ -149,6 +185,173 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   defp strip_page_rules(css) do
     Regex.replace(~r/@page\s*(?:[^{]*)\{[^{}]*\}/ui, css, "")
+  end
+
+  defp strip_font_face_rules(css) do
+    Regex.replace(~r/@font-face\s*\{[^{}]*\}/ui, css, "")
+  end
+
+  defp active_media_rules(css) do
+    media_rule = ~r/@media\s+(?<query>[^{}]+)\{(?<body>(?:[^{}]|\{[^{}]*\})*)\}/ui
+
+    active_css =
+      Regex.replace(media_rule, css, fn _rule, query, body ->
+        query = query |> String.trim() |> String.downcase()
+
+        case query in ["print", "only print", "all", "only all"] do
+          true -> body
+          false -> ""
+        end
+      end)
+
+    case Regex.match?(~r/@media\b/ui, active_css) do
+      true -> {:error, :invalid_css}
+      false -> {:ok, active_css}
+    end
+  end
+
+  defp parse_font_faces(css) do
+    ~r/@font-face\s*\{(?<declarations>[^{}]*)\}/ui
+    |> Regex.scan(css, capture: ["declarations"])
+    |> List.flatten()
+    |> Enum.reduce_while({:ok, []}, fn block, {:ok, acc} ->
+      case parse_font_face(block) do
+        {:ok, font_face} -> {:cont, {:ok, acc ++ [font_face]}}
+        {:error, :invalid_css} -> {:halt, {:error, :invalid_css}}
+      end
+    end)
+  end
+
+  defp parse_font_face(block) do
+    with {:ok, declarations} <- parse_declarations(block),
+         true <- Enum.all?(declarations, &supported_font_descriptor?/1),
+         {:ok, family} <- font_family_descriptor(declarations),
+         {:ok, sources} <- font_source_descriptor(declarations),
+         {:ok, weight} <- font_weight_descriptor(declarations),
+         {:ok, style} <- font_style_descriptor(declarations) do
+      {:ok, %{family: family, sources: sources, weight: weight, style: style}}
+    else
+      _ -> {:error, :invalid_css}
+    end
+  end
+
+  defp supported_font_descriptor?(declaration) do
+    case declaration do
+      {property, _value} when property in ["font-family", "src", "font-weight", "font-style"] ->
+        true
+
+      {"font-display", value} ->
+        String.downcase(value) in ["auto", "block", "swap", "fallback", "optional"]
+
+      _ ->
+        false
+    end
+  end
+
+  defp font_family_descriptor(declarations) do
+    case declarations |> Enum.reverse() |> List.keyfind("font-family", 0) do
+      {"font-family", value} ->
+        family = value |> String.trim() |> String.trim("\"") |> String.trim("'")
+        if family == "", do: {:error, :invalid_css}, else: {:ok, family}
+
+      _ ->
+        {:error, :invalid_css}
+    end
+  end
+
+  defp font_source_descriptor(declarations) do
+    case declarations |> Enum.reverse() |> List.keyfind("src", 0) do
+      {"src", value} ->
+        sources =
+          value
+          |> String.split(",")
+          |> Enum.map(&String.trim/1)
+          |> Enum.flat_map(fn candidate ->
+            captures =
+              Regex.named_captures(
+                ~r/^url\(\s*(?:"(?<double>[^"]+)"|'(?<single>[^']+)'|(?<bare>[^)'"\s]+))\s*\)(?:\s+format\(\s*(?:"(?<format_double>[^"]+)"|'(?<format_single>[^']+)'|(?<format_bare>[^)'"\s]+))\s*\))?$/ui,
+                candidate
+              )
+
+            case captures do
+              captures when is_map(captures) ->
+                source = first_capture(captures, ["double", "single", "bare"])
+
+                format =
+                  first_capture(captures, ["format_double", "format_single", "format_bare"])
+
+                if supported_font_source?(source, format), do: [source], else: []
+
+              _ ->
+                []
+            end
+          end)
+
+        case sources do
+          [] -> {:error, :invalid_css}
+          sources -> {:ok, sources}
+        end
+
+      _ ->
+        {:error, :invalid_css}
+    end
+  end
+
+  defp supported_font_source?(source, format) do
+    normalized_format = String.downcase(format)
+    extension = source |> Path.extname() |> String.downcase()
+
+    local? =
+      source != "" and not String.contains?(source, ["\0", "://"]) and
+        not String.starts_with?(String.downcase(source), "data:")
+
+    format_supported? =
+      case normalized_format do
+        "" -> true
+        format -> format in ["truetype", "opentype"]
+      end
+
+    local? and extension in [".ttf", ".otf"] and format_supported?
+  end
+
+  defp first_capture(captures, names) do
+    Enum.find_value(names, "", fn name ->
+      case Map.get(captures, name) do
+        value when is_binary(value) and value != "" -> value
+        _ -> nil
+      end
+    end)
+  end
+
+  defp font_weight_descriptor(declarations) do
+    case declarations |> Enum.reverse() |> List.keyfind("font-weight", 0) do
+      nil ->
+        {:ok, 400}
+
+      {"font-weight", value} ->
+        case String.downcase(String.trim(value)) do
+          "normal" -> {:ok, 400}
+          "bold" -> {:ok, 700}
+          value -> parsed_font_weight(Integer.parse(value))
+        end
+    end
+  end
+
+  defp parsed_font_weight({weight, ""}) when weight >= 100 and weight <= 900, do: {:ok, weight}
+  defp parsed_font_weight(_parsed), do: {:error, :invalid_css}
+
+  defp font_style_descriptor(declarations) do
+    case declarations |> Enum.reverse() |> List.keyfind("font-style", 0) do
+      nil ->
+        {:ok, :normal}
+
+      {"font-style", value} ->
+        case String.downcase(String.trim(value)) do
+          "normal" -> {:ok, :normal}
+          "italic" -> {:ok, :italic}
+          _ -> {:error, :invalid_css}
+        end
+    end
   end
 
   defp page_rule_blocks(css) do
@@ -547,12 +750,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         {1, 1}
 
       false ->
-        {index, _length} = :binary.match(source, snippet)
-        prefix = binary_part(source, 0, index)
-        lines = String.split(prefix, "\n", trim: false)
-        line = length(lines)
-        column = String.length(List.last(lines) || "") + 1
-        {line, column}
+        case :binary.match(source, snippet) do
+          {index, _length} ->
+            prefix = binary_part(source, 0, index)
+            lines = String.split(prefix, "\n", trim: false)
+            line = length(lines)
+            column = String.length(List.last(lines) || "") + 1
+            {line, column}
+
+          :nomatch ->
+            {1, 1}
+        end
     end
   end
 end

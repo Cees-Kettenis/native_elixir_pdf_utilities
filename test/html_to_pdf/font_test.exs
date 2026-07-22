@@ -20,6 +20,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert Font.pdf_name(font) == "Embedded-" <> font.id
   end
 
+  test "load_registry accepts OpenType files that use the shared TrueType table path" do
+    open_type_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-true-type-outline.otf")
+    File.cp!(ttf_font_path!(), open_type_path)
+
+    assert {:ok, registry} =
+             Font.load_registry(fonts: [%{family: "OpenType Fixture", path: open_type_path}])
+
+    assert {:ok, _families, font} =
+             Font.resolve("OpenType Fixture", 400, :normal, registry)
+
+    assert font.type == :embedded
+  after
+    File.rm(Path.join(System.tmp_dir!(), "native-elixir-pdf-true-type-outline.otf"))
+  end
+
+  test "load_registry tries font path candidates in order" do
+    missing_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-missing-fallback.ttf")
+
+    assert {:ok, registry} =
+             Font.load_registry(
+               fonts: [%{family: "Fallback Fixture", path: [missing_path, ttf_font_path!()]}]
+             )
+
+    assert {:ok, _families, font} =
+             Font.resolve("Fallback Fixture", 400, :normal, registry)
+
+    assert font.type == :embedded
+
+    assert Font.load_registry(fonts: [%{family: "Bad", path: []}]) == :error
+    assert Font.load_registry(fonts: [%{family: "Bad", path: [ttf_font_path!(), 123]}]) == :error
+  end
+
   test "load_registry accepts supported config shapes and normalizes metadata" do
     font_path = ttf_font_path!()
 

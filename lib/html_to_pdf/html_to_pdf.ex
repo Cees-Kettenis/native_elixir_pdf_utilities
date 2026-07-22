@@ -25,6 +25,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   alias NativeElixirPdfUtilities.Diagnostics
 
   @type page_size :: :a4 | :letter | {number(), number()}
+  @type pdf_metadata ::
+          keyword()
+          | %{
+              optional(:title) => String.t(),
+              optional(:author) => String.t(),
+              optional(:subject) => String.t(),
+              optional(:keywords) => String.t() | [String.t()],
+              optional(:creation_date) =>
+                Date.t() | NaiveDateTime.t() | DateTime.t() | String.t(),
+              optional(:modification_date) =>
+                Date.t() | NaiveDateTime.t() | DateTime.t() | String.t()
+            }
   @type render_option ::
           {:page_size, page_size() | {number(), number()}}
           | {:margin, String.t() | number()}
@@ -32,6 +44,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | {:stylesheets, [String.t()]}
           | {:default_font, String.t()}
           | {:fonts, [map() | keyword() | {String.t(), String.t()}]}
+          | {:metadata, pdf_metadata()}
   @type error_reason ::
           :invalid_document
           | :invalid_css
@@ -58,7 +71,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   `{:error, {:invalid_css, %{message: "...", line: 18, source: "..."}}}`.
 
   Supported options include `:page_size`, `:margin`, `:base_url`,
-  `:stylesheets`, `:default_font`, and explicit TTF `:fonts`.
+  `:stylesheets`, `:default_font`, explicit local `:fonts`, and PDF
+  `:metadata`. Metadata supports title, author, subject, keywords, creation
+  date, and modification date. An HTML `<title>` supplies the PDF title when
+  `metadata[:title]` is not set.
 
   `:page_size` accepts `:a4`, `:letter`, or a positive `{width, height}` tuple.
   Tuple values up to `20 x 20` are interpreted as inches for compatibility with
@@ -147,13 +163,80 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   defp effective_render_options_detailed(dom, opts) do
     case Keyword.keyword?(opts) do
       true ->
-        with {:ok, page_options} <-
-               dom |> stylesheet_sources() |> Enum.join("\n") |> CssParser.page_options() do
-          {:ok, Keyword.merge(page_options, opts)}
+        with {:ok, stylesheet_entries} <- Style.load_stylesheets(dom, opts),
+             {:ok, page_options} <- page_options_from_stylesheets(stylesheet_entries) do
+          effective_opts = Keyword.merge(page_options, opts)
+          {:ok, metadata_options(dom, effective_opts)}
+        else
+          {:error, :invalid_document} ->
+            Diagnostics.error(
+              :style,
+              :invalid_document,
+              "configured stylesheet must be inline CSS or a readable file path"
+            )
+
+          {:error, {_reason, _diagnostic}} = error ->
+            error
         end
 
       false ->
         Diagnostics.error(:options, :invalid_options, "render options must be a keyword list")
+    end
+  end
+
+  defp page_options_from_stylesheets(entries) do
+    Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, acc} ->
+      case CssParser.page_options(entry.css) do
+        {:ok, page_options} ->
+          {:cont, {:ok, Keyword.merge(acc, page_options)}}
+
+        {:error, :invalid_css} ->
+          {:error, error} = CssParser.parse_detailed(entry.css)
+          {:halt, {:error, error}}
+      end
+    end)
+  end
+
+  defp metadata_options(dom, opts) do
+    case document_title(dom) do
+      nil ->
+        opts
+
+      title ->
+        case Keyword.fetch(opts, :metadata) do
+          :error ->
+            Keyword.put(opts, :metadata, title: title)
+
+          {:ok, metadata} when is_map(metadata) ->
+            Keyword.put(opts, :metadata, Map.put_new(metadata, :title, title))
+
+          {:ok, metadata} when is_list(metadata) ->
+            case Keyword.keyword?(metadata) do
+              true -> Keyword.put(opts, :metadata, Keyword.put_new(metadata, :title, title))
+              false -> opts
+            end
+
+          {:ok, _metadata} ->
+            opts
+        end
+    end
+  end
+
+  defp document_title(node) do
+    case node do
+      %{type: :element, tag: "title", children: children} ->
+        title =
+          children
+          |> Enum.map_join("", & &1.text)
+          |> String.trim()
+
+        if title == "", do: nil, else: title
+
+      %{children: children} when is_list(children) ->
+        Enum.find_value(children, &document_title/1)
+
+      _ ->
+        nil
     end
   end
 
@@ -167,28 +250,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
       module: __MODULE__,
       source: source
     )
-  end
-
-  defp stylesheet_sources(node) do
-    stylesheet_sources(node, false)
-  end
-
-  defp stylesheet_sources(node, in_style?) do
-    case node do
-      %{type: :document, children: children} ->
-        Enum.flat_map(children, &stylesheet_sources(&1, in_style?))
-
-      %{type: :element, tag: "style", children: children} ->
-        Enum.flat_map(children, &stylesheet_sources(&1, true))
-
-      %{type: :element, children: children} ->
-        Enum.flat_map(children, &stylesheet_sources(&1, in_style?))
-
-      %{type: :text, text: text} when is_binary(text) ->
-        case in_style? do
-          true -> [text]
-          false -> []
-        end
-    end
   end
 end

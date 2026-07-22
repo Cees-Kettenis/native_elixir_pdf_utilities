@@ -236,9 +236,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   end
 
   defp load_font(font) do
-    with {:ok, family, path, weight, style} <- font_config(font),
-         {:ok, data} <- File.read(path),
-         {:ok, parsed} <- parse_ttf(data) do
+    with {:ok, family, paths, weight, style} <- font_config(font),
+         {:ok, data, parsed} <- load_first_supported_font(paths) do
       hash =
         :crypto.hash(:sha256, [family, data])
         |> Base.encode16(case: :lower)
@@ -258,6 +257,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     else
       _ -> :error
     end
+  end
+
+  defp load_first_supported_font(paths) do
+    Enum.reduce_while(paths, :error, fn path, :error ->
+      with {:ok, data} <- File.read(path),
+           {:ok, parsed} <- parse_ttf(data) do
+        {:halt, {:ok, data, parsed}}
+      else
+        _ -> {:cont, :error}
+      end
+    end)
   end
 
   defp system_fonts(explicit_fonts) do
@@ -319,7 +329,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   defp font_config(font) do
     case font do
       {family, path} when is_binary(family) and is_binary(path) ->
-        {:ok, family, path, 400, :normal}
+        {:ok, family, [path], 400, :normal}
 
       font when is_list(font) ->
         case Keyword.keyword?(font) do
@@ -334,10 +344,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
         style = Map.get(font, :style) || Map.get(font, "style") || :normal
 
         with true <- is_binary(family) and String.trim(family) != "",
-             true <- is_binary(path) and String.trim(path) != "",
+             {:ok, paths} <- font_paths(path),
              {:ok, weight} <- font_weight(weight),
              {:ok, style} <- font_style(style) do
-          {:ok, String.trim(family), path, weight, style}
+          {:ok, String.trim(family), paths, weight, style}
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp font_paths(path) do
+    case path do
+      path when is_binary(path) ->
+        if String.trim(path) == "", do: :error, else: {:ok, [path]}
+
+      paths when is_list(paths) ->
+        case paths != [] and Enum.all?(paths, &(is_binary(&1) and String.trim(&1) != "")) do
+          true -> {:ok, paths}
+          false -> :error
         end
 
       _ ->

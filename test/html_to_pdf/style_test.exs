@@ -716,6 +716,113 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     File.rm(stylesheet_path)
   end
 
+  test "compute loads local fonts declared by embedded font-face rules" do
+    font_path = ttf_font_path!()
+
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [
+            %{
+              type: :text,
+              text: """
+              @font-face {
+                font-family: "CSS Fixture";
+                src: url("#{font_path}") format("truetype");
+              }
+              @media print { p { font-family: "CSS Fixture"; color: red; } }
+              @media screen { p { color: blue; } }
+              """
+            }
+          ]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{},
+          children: [%{type: :text, text: "Printed"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom)
+    [paragraph] = styled_tree.children
+
+    assert paragraph.style.font_family == "CSS Fixture"
+    assert paragraph.style.font_face.type == :embedded
+    assert paragraph.style.color == {1, 0, 0}
+  end
+
+  test "compute resolves font-face URLs relative to stylesheet files and base_url" do
+    fixture_dir = Path.join(System.tmp_dir!(), "native-elixir-pdf-css-font-test")
+    css_dir = Path.join(fixture_dir, "css")
+    font_dir = Path.join(fixture_dir, "fonts")
+    stylesheet_path = Path.join(css_dir, "print.css")
+    copied_font_path = Path.join(font_dir, "fixture.ttf")
+    File.mkdir_p!(css_dir)
+    File.mkdir_p!(font_dir)
+    File.cp!(ttf_font_path!(), copied_font_path)
+
+    File.write!(
+      stylesheet_path,
+      "@font-face { font-family: FileFixture; src: url('../fonts/fixture.ttf'); } p { font-family: FileFixture; }"
+    )
+
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{},
+          children: [%{type: :text, text: "From file"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_from_file} = Style.compute(dom, stylesheets: [stylesheet_path])
+    [paragraph] = styled_from_file.children
+    assert paragraph.style.font_face.type == :embedded
+
+    inline_css =
+      "@font-face { font-family: BaseFixture; src: url('fonts/fixture.ttf'); } p { font-family: BaseFixture; }"
+
+    assert {:ok, styled_from_base} =
+             Style.compute(dom, stylesheets: [inline_css], base_url: fixture_dir)
+
+    [paragraph] = styled_from_base.children
+    assert paragraph.style.font_face.type == :embedded
+
+    assert {:ok, styled_from_file_url} =
+             Style.compute(dom, stylesheets: [inline_css], base_url: "file://#{fixture_dir}")
+
+    [paragraph] = styled_from_file_url.children
+    assert paragraph.style.font_face.type == :embedded
+
+    assert Style.compute(dom, stylesheets: [inline_css]) == {:error, :invalid_document}
+
+    assert Style.compute(dom, stylesheets: [inline_css], base_url: "https://example.com") ==
+             {:error, :invalid_document}
+
+    invalid_face_css =
+      "@font-face { font-family: Bad; src: url('font.woff2') format('woff2'); }"
+
+    assert Style.compute(dom, stylesheets: [invalid_face_css], base_url: fixture_dir) ==
+             {:error, :invalid_document}
+
+    invalid_stylesheet_path = Path.join(css_dir, "invalid.css")
+    File.write!(invalid_stylesheet_path, "p { color: chartreuse; }")
+
+    assert {:error, {:invalid_css, %{stage: :css}}} =
+             Style.compute_detailed(dom, stylesheets: [invalid_stylesheet_path])
+  after
+    File.rm_rf(Path.join(System.tmp_dir!(), "native-elixir-pdf-css-font-test"))
+  end
+
   test "compute resolves font-family fallback against embedded fonts" do
     dom = %{
       type: :document,
@@ -2113,6 +2220,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     assert Style.compute(%{type: :document, children: []}, stylesheets: [123]) ==
              {:error, :invalid_document}
+
+    assert Style.compute_detailed(%{type: :document, children: []}, [:not_options]) ==
+             {:error,
+              {:invalid_document,
+               %{
+                 stage: :style,
+                 reason: :invalid_document,
+                 message: "style options must be a keyword list"
+               }}}
+
+    assert Style.load_stylesheets(:not_a_document, []) == {:error, :invalid_document}
 
     assert Style.compute(%{type: :document, children: []}, fonts: :bad) ==
              {:error, :invalid_document}

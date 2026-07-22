@@ -29,6 +29,77 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "startxref"
   end
 
+  test "render writes document information metadata" do
+    pages = [%{size: {100.0, 100.0}, boxes: []}]
+    {:ok, modification_date, _offset} = DateTime.from_iso8601("2026-07-21T12:30:45+08:00")
+
+    assert {:ok, pdf} =
+             PdfWriter.render(pages,
+               metadata: %{
+                 title: "Quarterly (Draft)",
+                 author: "Ada \\ Bob",
+                 subject: "Résumé",
+                 keywords: ["finance", "quarterly"],
+                 creation_date: ~D[2026-07-20],
+                 modification_date: modification_date
+               }
+             )
+
+    assert pdf =~ "/Title (Quarterly \\(Draft\\))"
+    assert pdf =~ "/Author (Ada \\\\ Bob)"
+    assert pdf =~ "/Subject <FEFF005200E900730075006D00E9>"
+    assert pdf =~ "/Keywords (finance, quarterly)"
+    assert pdf =~ "/CreationDate (D:20260720)"
+    assert pdf =~ "/ModDate (D:20260721043045+00'00')"
+    assert pdf =~ ~r/trailer\n<< \/Size \d+ \/Root 1 0 R \/Info \d+ 0 R >>/
+  end
+
+  test "render accepts keyword metadata and ISO date strings" do
+    pages = [%{size: {100.0, 100.0}, boxes: []}]
+
+    assert {:ok, pdf} =
+             PdfWriter.render(pages,
+               metadata: [
+                 title: "ISO dates",
+                 creation_date: "2026-07-21T10:20:30Z",
+                 modification_date: "2026-07-22"
+               ]
+             )
+
+    assert pdf =~ "/CreationDate (D:20260721102030+00'00')"
+    assert pdf =~ "/ModDate (D:20260722)"
+
+    assert {:ok, naive_pdf} =
+             PdfWriter.render(pages, metadata: [creation_date: "2026-07-21T10:20:30"])
+
+    assert naive_pdf =~ "/CreationDate (D:20260721102030)"
+  end
+
+  test "render rejects malformed metadata with diagnostics" do
+    pages = [%{size: {100.0, 100.0}, boxes: []}]
+
+    for metadata <- [
+          [unknown: "value"],
+          [title: 123],
+          [title: <<255>>],
+          [keywords: <<255>>],
+          [keywords: ["valid", 123]],
+          [creation_date: "not-a-date"],
+          [creation_date: :today],
+          [:not_a_keyword]
+        ] do
+      assert {:error,
+              {:invalid_pdf_input,
+               %{
+                 stage: :pdf,
+                 reason: :invalid_pdf_input,
+                 message: "PDF metadata must use supported fields and value types"
+               }}} = PdfWriter.render(pages, metadata: metadata)
+    end
+
+    assert_invalid_pdf_input(PdfWriter.render(pages, [:not_options]))
+  end
+
   test "render escapes PDF text literals" do
     pages = [
       %{

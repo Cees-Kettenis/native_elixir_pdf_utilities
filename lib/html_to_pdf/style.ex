@@ -10,6 +10,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.Diagnostics
 
   @type text_node :: %{type: :text, text: String.t(), style: map()}
   @type styled_element :: %{
@@ -20,6 +21,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         }
   @type styled_tree :: %{type: :document, children: [styled_element()]}
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
+  @type stylesheet_entry :: %{css: String.t(), base_url: String.t() | nil}
 
   @doc """
   Computes styles for a parsed HTML document tree.
@@ -40,7 +42,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   def compute_detailed(dom, opts \\ []) do
     case {dom, opts} do
       {%{type: :document, children: children}, opts} when is_list(opts) and is_list(children) ->
-        with {:ok, font_registry} <- font_registry(opts),
+        with {:ok, stylesheet_entries} <- load_stylesheets(dom, opts),
+             {:ok, css_fonts} <- stylesheet_fonts(stylesheet_entries),
+             {:ok, font_registry} <- font_registry(opts, css_fonts),
              {:ok, font_families, font_face} <-
                resolve_font(
                  Keyword.get(opts, :default_font, "Helvetica"),
@@ -48,7 +52,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                  :normal,
                  font_registry
                ),
-             {:ok, rules} <- stylesheet_rules(children, opts) do
+             {:ok, rules} <- stylesheet_rules(stylesheet_entries) do
           base_style = %{
             _custom_properties: %{},
             _font_registry: font_registry,
@@ -88,8 +92,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               {:error, style_error_detail(dom, opts)}
           end
         else
+          {:error, {:font_load_failed, sources}} ->
+            {:error, font_load_error(sources)}
+
           {:error, :invalid_document} ->
-            {:error, style_error_detail(dom, opts)}
+            case Keyword.keyword?(opts) do
+              true ->
+                {:error, style_error_detail(dom, opts)}
+
+              false ->
+                {:error,
+                 {:invalid_document,
+                  %{
+                    stage: :style,
+                    reason: :invalid_document,
+                    message: "style options must be a keyword list"
+                  }}}
+            end
         end
 
       _ ->
@@ -100,6 +119,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             reason: :invalid_document,
             message: "document tree must be a parsed HTML document"
           }}}
+    end
+  end
+
+  @doc false
+  @spec load_stylesheets(term(), [render_option()]) ::
+          {:ok, [stylesheet_entry()]} | {:error, :invalid_document}
+  def load_stylesheets(dom, opts) do
+    case {dom, opts} do
+      {%{type: :document, children: children}, opts} when is_list(children) and is_list(opts) ->
+        case Keyword.keyword?(opts) do
+          true -> stylesheet_entries(children, opts)
+          false -> {:error, :invalid_document}
+        end
+
+      _ ->
+        {:error, :invalid_document}
     end
   end
 
@@ -605,20 +640,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     %{top: top, right: right, bottom: bottom, left: left}
   end
 
-  defp stylesheet_rules(children, opts) do
-    case Keyword.get(opts, :stylesheets, []) do
-      stylesheets when is_list(stylesheets) ->
-        with {:ok, configured_rules} <- parse_stylesheets(stylesheets, 0),
-             {:ok, embedded_rules} <-
-               children
-               |> style_sources()
-               |> parse_stylesheets(length(configured_rules)) do
-          {:ok, configured_rules ++ embedded_rules}
-        end
-
-      _ ->
-        {:error, :invalid_document}
-    end
+  defp stylesheet_rules(entries) do
+    entries
+    |> Enum.map(& &1.css)
+    |> parse_stylesheets(0)
   end
 
   defp parse_stylesheets(stylesheets, initial_order) do
@@ -664,6 +689,111 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
+  defp stylesheet_entries(children, opts) do
+    case Keyword.get(opts, :stylesheets, []) do
+      stylesheets when is_list(stylesheets) ->
+        base_url = Keyword.get(opts, :base_url)
+
+        with {:ok, configured_entries} <- configured_stylesheet_entries(stylesheets, base_url) do
+          embedded_entries =
+            children
+            |> style_sources()
+            |> Enum.map(&%{css: &1, base_url: base_url})
+
+          {:ok, configured_entries ++ embedded_entries}
+        end
+
+      _ ->
+        {:error, :invalid_document}
+    end
+  end
+
+  defp configured_stylesheet_entries(stylesheets, base_url) do
+    Enum.reduce_while(stylesheets, {:ok, []}, fn stylesheet, {:ok, acc} ->
+      case stylesheet do
+        stylesheet when is_binary(stylesheet) ->
+          case String.contains?(stylesheet, "{") do
+            true ->
+              {:cont, {:ok, acc ++ [%{css: stylesheet, base_url: base_url}]}}
+
+            false ->
+              case File.read(stylesheet) do
+                {:ok, css} ->
+                  entry = %{css: css, base_url: stylesheet |> Path.expand() |> Path.dirname()}
+                  {:cont, {:ok, acc ++ [entry]}}
+
+                {:error, _reason} ->
+                  {:halt, {:error, :invalid_document}}
+              end
+          end
+
+        _ ->
+          {:halt, {:error, :invalid_document}}
+      end
+    end)
+  end
+
+  defp stylesheet_fonts(entries) do
+    Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, acc} ->
+      case CssParser.font_faces(entry.css) do
+        {:ok, font_faces} ->
+          resolved =
+            Enum.reduce_while(font_faces, {:ok, []}, fn font_face, {:ok, fonts} ->
+              paths =
+                Enum.flat_map(font_face.sources, fn source ->
+                  case local_font_path(source, entry.base_url) do
+                    {:ok, path} -> [path]
+                    :error -> []
+                  end
+                end)
+
+              case paths do
+                [_path | _remaining] ->
+                  font =
+                    font_face
+                    |> Map.delete(:sources)
+                    |> Map.put(:path, paths)
+
+                  {:cont, {:ok, fonts ++ [font]}}
+
+                [] ->
+                  {:halt, {:error, {:font_load_failed, font_face.sources}}}
+              end
+            end)
+
+          case resolved do
+            {:ok, fonts} -> {:cont, {:ok, acc ++ fonts}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+
+        {:error, :invalid_css} ->
+          {:halt, {:error, :invalid_document}}
+      end
+    end)
+  end
+
+  defp local_font_path(source, stylesheet_base_url) do
+    cond do
+      Path.type(source) == :absolute ->
+        {:ok, source}
+
+      is_binary(stylesheet_base_url) ->
+        case URI.parse(stylesheet_base_url) do
+          %URI{scheme: nil, path: path} when is_binary(path) ->
+            {:ok, Path.expand(source, path)}
+
+          %URI{scheme: "file", path: path} when is_binary(path) ->
+            {:ok, Path.expand(source, path)}
+
+          _ ->
+            :error
+        end
+
+      true ->
+        :error
+    end
+  end
+
   defp style_sources(children) do
     Enum.flat_map(children, fn child ->
       case child do
@@ -688,11 +818,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end)
   end
 
-  defp font_registry(opts) do
-    case Font.load_registry(opts) do
-      {:ok, registry} -> {:ok, registry}
-      :error -> {:error, :invalid_document}
+  defp font_registry(opts, css_fonts) do
+    fonts = Keyword.get(opts, :fonts, [])
+
+    case is_list(fonts) do
+      true ->
+        case Font.load_registry(Keyword.put(opts, :fonts, fonts ++ css_fonts)) do
+          {:ok, registry} ->
+            {:ok, registry}
+
+          :error when css_fonts != [] ->
+            sources = Enum.flat_map(css_fonts, &Map.get(&1, :path, []))
+            {:error, {:font_load_failed, sources}}
+
+          :error ->
+            {:error, :invalid_document}
+        end
+
+      false ->
+        {:error, :invalid_document}
     end
+  end
+
+  defp font_load_error(sources) do
+    source = Enum.join(sources, ", ")
+
+    {:invalid_document,
+     Diagnostics.diagnostic(
+       :style,
+       :invalid_document,
+       "CSS font sources could not be resolved or loaded: #{source}",
+       source: source
+     )}
   end
 
   defp style_error_detail(dom, opts) do
@@ -777,8 +934,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp stylesheet_declaration_sources(css) do
-    ~r/[^{}]+\{(?<declarations>[^{}]*)\}/u
-    |> Regex.scan(css, capture: ["declarations"])
+    css
+    |> then(&Regex.replace(~r/@font-face\s*\{[^{}]*\}/ui, &1, ""))
+    |> then(&Regex.scan(~r/[^{}]+\{(?<declarations>[^{}]*)\}/u, &1, capture: ["declarations"]))
     |> List.flatten()
     |> Enum.flat_map(fn declarations ->
       declarations
@@ -841,7 +999,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp diagnostic_style do
-    with {:ok, registry} <- font_registry([]),
+    with {:ok, registry} <- font_registry([], []),
          {:ok, families, font_face} <- resolve_font("Helvetica", 400, :normal, registry) do
       {:ok,
        12.0
@@ -2620,7 +2778,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         with {:ok, data} <- File.read(src), do: {:ok, data, nil}
 
       is_binary(base_url) ->
-        with {:ok, path} <- relative_image_path(src, base_url),
+        with {:ok, path} <- relative_asset_path(src, base_url),
              {:ok, data} <- File.read(path) do
           {:ok, data, nil}
         end
@@ -2637,7 +2795,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp relative_image_path(src, base_url) do
+  defp relative_asset_path(src, base_url) do
     case String.contains?(src, ["\0", "://"]) do
       true ->
         :error

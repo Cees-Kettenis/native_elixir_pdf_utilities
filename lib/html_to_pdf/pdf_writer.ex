@@ -23,7 +23,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   def render(pages, opts \\ []) do
     case {pages, opts} do
       {pages, opts} when is_list(pages) and is_list(opts) ->
-        build_pdf(pages)
+        case Keyword.keyword?(opts) do
+          true ->
+            with {:ok, metadata} <- normalize_metadata(Keyword.get(opts, :metadata, [])) do
+              build_pdf(pages, metadata)
+            else
+              :error ->
+                Diagnostics.error(
+                  :pdf,
+                  :invalid_pdf_input,
+                  "PDF metadata must use supported fields and value types",
+                  operation: :write_pdf,
+                  module: __MODULE__
+                )
+            end
+
+          false ->
+            Diagnostics.error(
+              :pdf,
+              :invalid_pdf_input,
+              "PDF writer options must be a keyword list",
+              operation: :write_pdf,
+              module: __MODULE__
+            )
+        end
 
       _ ->
         Diagnostics.error(:pdf, :invalid_pdf_input, "PDF writer requires a list of pages",
@@ -33,10 +56,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp build_pdf(pages) do
+  defp build_pdf(pages, metadata) do
     case pages != [] and Enum.all?(pages, &valid_page?/1) do
       true ->
-        {:ok, pages_to_pdf(pages)}
+        {:ok, pages_to_pdf(pages, metadata)}
 
       false ->
         Diagnostics.error(:pdf, :invalid_pdf_input, "PDF writer requires non-empty valid pages",
@@ -200,13 +223,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp pages_to_pdf(pages) do
+  defp pages_to_pdf(pages, metadata) do
     {font_resources, next_object_id} = font_resources(pages, 3)
     image_resources = image_resources(pages, next_object_id)
     first_page_object_id = next_object_id + image_object_count(image_resources)
     pages_object_id = 2
 
-    {page_entries, _next_object_id} =
+    {page_entries, next_object_id} =
       page_entries(pages, pages_object_id, font_resources, image_resources, first_page_object_id)
 
     page_object_ids = Enum.map(page_entries, & &1.page_object_id)
@@ -233,7 +256,152 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         {pages_object_id, pages_object(page_object_ids)}
       ] ++ font_objects(font_resources) ++ image_objects(image_resources) ++ page_objects
 
-    objects_to_pdf(objects)
+    case map_size(metadata) do
+      0 ->
+        objects_to_pdf(objects, nil)
+
+      _ ->
+        objects_to_pdf(objects ++ [{next_object_id, metadata_object(metadata)}], next_object_id)
+    end
+  end
+
+  defp normalize_metadata(metadata) do
+    metadata =
+      case metadata do
+        metadata when is_map(metadata) -> metadata
+        metadata when is_list(metadata) -> if Keyword.keyword?(metadata), do: Map.new(metadata)
+        _ -> nil
+      end
+
+    allowed_fields = [:title, :author, :subject, :keywords, :creation_date, :modification_date]
+
+    case is_map(metadata) and Enum.all?(Map.keys(metadata), &(&1 in allowed_fields)) do
+      true ->
+        Enum.reduce_while(metadata, {:ok, %{}}, fn {field, value}, {:ok, acc} ->
+          case normalize_metadata_value(field, value) do
+            {:ok, normalized} -> {:cont, {:ok, Map.put(acc, field, normalized)}}
+            :error -> {:halt, :error}
+          end
+        end)
+
+      false ->
+        :error
+    end
+  end
+
+  defp normalize_metadata_value(field, value) do
+    case {field, value} do
+      {field, value}
+      when field in [:title, :author, :subject] and is_binary(value) ->
+        if String.valid?(value), do: {:ok, value}, else: :error
+
+      {:keywords, value} when is_binary(value) ->
+        if String.valid?(value), do: {:ok, value}, else: :error
+
+      {:keywords, values} when is_list(values) ->
+        case Enum.all?(values, &(is_binary(&1) and String.valid?(&1))) do
+          true -> {:ok, Enum.join(values, ", ")}
+          false -> :error
+        end
+
+      {field, value} when field in [:creation_date, :modification_date] ->
+        pdf_date(value)
+
+      _ ->
+        :error
+    end
+  end
+
+  defp pdf_date(value) do
+    case value do
+      %DateTime{} = date_time ->
+        offset_seconds = date_time.utc_offset + date_time.std_offset
+        sign = if offset_seconds < 0, do: "-", else: "+"
+        offset_seconds = abs(offset_seconds)
+
+        offset_hours =
+          div(offset_seconds, 3600) |> Integer.to_string() |> String.pad_leading(2, "0")
+
+        offset_minutes =
+          div(rem(offset_seconds, 3600), 60) |> Integer.to_string() |> String.pad_leading(2, "0")
+
+        {:ok,
+         "D:#{calendar_date(date_time)}#{calendar_time(date_time)}#{sign}#{offset_hours}'#{offset_minutes}'"}
+
+      %NaiveDateTime{} = date_time ->
+        {:ok, "D:#{calendar_date(date_time)}#{calendar_time(date_time)}"}
+
+      %Date{} = date ->
+        {:ok, "D:#{calendar_date(date)}"}
+
+      value when is_binary(value) ->
+        parsed_iso_date(value)
+
+      _ ->
+        :error
+    end
+  end
+
+  defp parsed_iso_date(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, date_time, _offset} ->
+        pdf_date(date_time)
+
+      {:error, _reason} ->
+        case NaiveDateTime.from_iso8601(value) do
+          {:ok, date_time} ->
+            pdf_date(date_time)
+
+          {:error, _reason} ->
+            case Date.from_iso8601(value) do
+              {:ok, date} -> pdf_date(date)
+              {:error, _reason} -> :error
+            end
+        end
+    end
+  end
+
+  defp calendar_date(value) do
+    Integer.to_string(value.year) <> two_digits(value.month) <> two_digits(value.day)
+  end
+
+  defp calendar_time(value) do
+    two_digits(value.hour) <> two_digits(value.minute) <> two_digits(value.second)
+  end
+
+  defp two_digits(value) do
+    value |> Integer.to_string() |> String.pad_leading(2, "0")
+  end
+
+  defp metadata_object(metadata) do
+    entries =
+      [
+        title: :Title,
+        author: :Author,
+        subject: :Subject,
+        keywords: :Keywords,
+        creation_date: :CreationDate,
+        modification_date: :ModDate
+      ]
+      |> Enum.flat_map(fn {field, pdf_key} ->
+        case Map.fetch(metadata, field) do
+          {:ok, value} -> ["/#{pdf_key} #{pdf_string(value)}"]
+          :error -> []
+        end
+      end)
+      |> Enum.join(" ")
+
+    "<< #{entries} >>"
+  end
+
+  defp pdf_string(value) do
+    case String.to_charlist(value) |> Enum.all?(&(&1 <= 0x7F)) do
+      true ->
+        "(#{escape_text(value)})"
+
+      false ->
+        "<FEFF#{value |> :unicode.characters_to_binary(:utf8, {:utf16, :big}) |> Base.encode16()}>"
+    end
   end
 
   defp pages_object(page_object_ids) do
@@ -917,7 +1085,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     Regex.match?(~r/^(https?:\/\/[^\s<>]+|mailto:[^\s<>@]+@[^\s<>@]+)$/iu, uri)
   end
 
-  defp objects_to_pdf(objects) do
+  defp objects_to_pdf(objects, info_object_id) do
     header = "%PDF-1.4\n%\xFF\xFF\xFF\xFF\n"
 
     {body, offsets, position} =
@@ -938,12 +1106,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       |> Enum.map(&"#{pad_offset(&1)} 00000 n \n")
       |> Enum.join()
 
+    info_reference = if is_integer(info_object_id), do: " /Info #{info_object_id} 0 R", else: ""
+
     IO.iodata_to_binary([
       header,
       body,
       "xref\n0 #{size}\n0000000000 65535 f \n",
       xref_entries,
-      "trailer\n<< /Size #{size} /Root 1 0 R >>\nstartxref\n#{xref_position}\n%%EOF\n"
+      "trailer\n<< /Size #{size} /Root 1 0 R#{info_reference} >>\nstartxref\n#{xref_position}\n%%EOF\n"
     ])
   end
 

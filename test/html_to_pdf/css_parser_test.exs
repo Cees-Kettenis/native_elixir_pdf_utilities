@@ -89,6 +89,105 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert hd(selector.parts).classes == ["sheet"]
   end
 
+  test "parse activates print media rules and skips non-print rules" do
+    assert {:ok, [base_rule, print_rule]} =
+             CssParser.parse("""
+             p { color: black; }
+             @media screen { p { color: blue; } }
+             @media only print { p { color: red; } }
+             """)
+
+    assert base_rule.declarations == [{"color", "black"}]
+    assert print_rule.declarations == [{"color", "red"}]
+
+    assert {:ok, [all_rule]} = CssParser.parse("@media all { p { color: green; } }")
+    assert all_rule.declarations == [{"color", "green"}]
+
+    assert CssParser.parse("@media print and (color) { p { color: red; } }") ==
+             {:ok, []}
+
+    assert CssParser.parse("@media print { @media print { p { color: red; } } }") ==
+             {:error, :invalid_css}
+  end
+
+  test "font_faces extracts supported local TrueType and OpenType sources" do
+    assert {:ok, [regular, italic]} =
+             CssParser.font_faces("""
+             @font-face {
+               font-family: "Report Sans";
+               src: local("Report Sans"), url('../fonts/report.woff2') format('woff2'), url("../fonts/report.ttf") format("truetype");
+               font-display: swap;
+             }
+             @media print {
+               @font-face {
+                 font-family: 'Report Sans';
+               src: url(../fonts/report.otf) format(opentype);
+                 font-weight: 500;
+                 font-style: italic;
+               }
+             }
+             """)
+
+    assert regular == %{
+             family: "Report Sans",
+             sources: ["../fonts/report.ttf"],
+             weight: 400,
+             style: :normal
+           }
+
+    assert italic == %{
+             family: "Report Sans",
+             sources: ["../fonts/report.otf"],
+             weight: 500,
+             style: :italic
+           }
+
+    assert {:ok, [fallback]} =
+             CssParser.font_faces(
+               "@font-face { font-family: Fallback; src: url(missing.ttf), url(valid.otf) format(opentype); }"
+             )
+
+    assert fallback.sources == ["missing.ttf", "valid.otf"]
+
+    assert {:ok, [normal]} =
+             CssParser.font_faces(
+               "@font-face { font-family: Normal; src: url(normal.ttf); font-weight: normal; font-style: normal; }"
+             )
+
+    assert normal.weight == 400
+    assert normal.style == :normal
+
+    assert {:ok, [bold]} =
+             CssParser.font_faces(
+               "@font-face { font-family: Bold; src: url(bold.ttf); font-weight: bold; }"
+             )
+
+    assert bold.weight == 700
+
+    assert {:ok, []} = CssParser.parse("@font-face { font-family: X; src: url(x.ttf); }")
+  end
+
+  test "font_faces rejects remote, WOFF-only, and malformed declarations" do
+    for css <- [
+          "@font-face { font-family: X; src: url(https://example.com/x.ttf); }",
+          "@font-face { font-family: X; src: url(x.woff2) format(woff2); }",
+          "@font-face { font-family: X; src: url(x.png) format(truetype); }",
+          "@font-face { font-family: X; font-weight: bold; }",
+          "@font-face { font-family: ''; src: url(x.ttf); }",
+          "@font-face { src: url(x.ttf); }",
+          "@font-face { font-family: X; src: url(x.ttf); font-style: oblique; }",
+          "@font-face { font-family: X; src: url(x.ttf); font-style: italic !important; }",
+          "@font-face { font-family: X; src: url(x.ttf); font-weight: 950; }",
+          "@font-face { font-family: X; src: url(x.ttf); unicode-range: U+0-FF; }",
+          "@font-face { font-family: X; src: url(x.ttf); font-display: eager; }"
+        ] do
+      assert CssParser.font_faces(css) == {:error, :invalid_css}
+      assert CssParser.parse(css) == {:error, :invalid_css}
+    end
+
+    assert CssParser.font_faces(:not_css) == {:error, :invalid_css}
+  end
+
   test "page_options extracts supported page size and margin defaults" do
     assert {:ok, options} =
              CssParser.page_options("""
@@ -124,6 +223,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
            """) == {:ok, []}
 
     assert CssParser.page_options(:not_css) == {:error, :invalid_css}
+
+    assert {:ok, print_page_options} =
+             CssParser.page_options("@media print { @page { size: letter; margin: 0; } }")
+
+    assert Keyword.fetch!(print_page_options, :page_size) == :letter
+    assert Keyword.fetch!(print_page_options, :margin) == 0.0
   end
 
   test "parse_declarations normalizes inline declaration blocks" do

@@ -15,6 +15,64 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert String.ends_with?(pdf, "%%EOF\n")
   end
 
+  test "render uses the HTML title as PDF metadata unless explicitly overridden" do
+    html = "<html><head><title>  HTML Report  </title></head><body><p>Hello</p></body></html>"
+
+    assert {:ok, default_pdf} = HtmlToPdf.render(html)
+    assert default_pdf =~ "/Title (HTML Report)"
+    assert default_pdf =~ "/Info "
+
+    assert {:ok, explicit_pdf} =
+             HtmlToPdf.render(html,
+               metadata: [title: "Caller title", author: "Finance", subject: "Monthly"]
+             )
+
+    assert explicit_pdf =~ "/Title (Caller title)"
+    refute explicit_pdf =~ "/Title (HTML Report)"
+    assert explicit_pdf =~ "/Author (Finance)"
+    assert explicit_pdf =~ "/Subject (Monthly)"
+
+    assert {:ok, map_pdf} = HtmlToPdf.render(html, metadata: %{author: "Operations"})
+    assert map_pdf =~ "/Title (HTML Report)"
+    assert map_pdf =~ "/Author (Operations)"
+  end
+
+  test "render supports CSS-declared local fonts inside print media" do
+    font_path = ttf_font_path!()
+
+    html = """
+    <style>
+      @font-face {
+        font-family: "CSS Fixture";
+        src: url("#{font_path}") format("truetype");
+      }
+      @media screen { p { color: blue; } }
+      @media print { p { color: red; font-family: "CSS Fixture"; } }
+    </style>
+    <p>CSS font</p>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert pdf =~ "/Subtype /Type0"
+    assert pdf =~ "1 0 0 rg"
+    refute pdf =~ "0 0 1 rg"
+  end
+
+  test "render rejects malformed PDF metadata through the diagnostics contract" do
+    assert {:error,
+            {:invalid_pdf_input,
+             %{
+               stage: :pdf,
+               reason: :invalid_pdf_input,
+               operation: :write_pdf,
+               module: NativeElixirPdfUtilities.HtmlToPdf.PdfWriter,
+               message: "PDF metadata must use supported fields and value types"
+             }}} = HtmlToPdf.render("<title>Fallback</title><p>Hello</p>", metadata: :bad)
+
+    assert {:error, {:invalid_pdf_input, %{stage: :pdf}}} =
+             HtmlToPdf.render("<title>Fallback</title><p>Hello</p>", metadata: [:bad])
+  end
+
   test "render converts headings and inline styled text to PDF runs" do
     html =
       ~s(<h1 style="color: #336699">Title</h1><p>Hello <strong>bold</strong> <em style="color: blue">italic</em></p>)
@@ -61,6 +119,79 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert {:ok, override_pdf} = HtmlToPdf.render(html, page_size: {200, 100}, margin: 0)
     assert override_pdf =~ "/MediaBox [0 0 200 100]"
     assert override_pdf =~ "0 88 200 12 re"
+  end
+
+  test "render uses page CSS defaults from configured stylesheets" do
+    assert {:ok, inline_pdf} =
+             HtmlToPdf.render("<p>Configured page</p>",
+               stylesheets: ["@media print { @page { size: letter; margin: 0; } }"]
+             )
+
+    assert inline_pdf =~ "/MediaBox [0 0 612 792]"
+
+    stylesheet_path =
+      Path.join(System.tmp_dir!(), "native-elixir-pdf-configured-page-options.css")
+
+    File.write!(stylesheet_path, "@page { size: A4 landscape; margin: 0; }")
+
+    assert {:ok, file_pdf} =
+             HtmlToPdf.render("<p>Configured file page</p>", stylesheets: [stylesheet_path])
+
+    assert file_pdf =~ "/MediaBox [0 0 841.89 595.28]"
+  after
+    File.rm(Path.join(System.tmp_dir!(), "native-elixir-pdf-configured-page-options.css"))
+  end
+
+  test "render returns diagnostics for malformed embedded media rules" do
+    html = "<style>@media print { @media print { p { color: red; } } }</style><p>x</p>"
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               operation: :render,
+               module: NativeElixirPdfUtilities.HtmlToPdf
+             }}} = HtmlToPdf.render(html)
+  end
+
+  test "render falls back across CSS font sources and reports failed candidates" do
+    font_path = ttf_font_path!()
+    missing_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-missing-css-font.ttf")
+
+    html = """
+    <style>
+      @font-face {
+        font-family: FallbackFixture;
+        src: url("#{missing_path}"), url("#{font_path}") format("truetype");
+      }
+      p { font-family: FallbackFixture; }
+    </style>
+    <p>Fallback font</p>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert pdf =~ "/Subtype /Type0"
+
+    failed_html = """
+    <style>
+      @font-face { font-family: MissingFixture; src: url("#{missing_path}"); }
+      p { font-family: MissingFixture; }
+    </style>
+    <p>Missing font</p>
+    """
+
+    assert {:error,
+            {:invalid_document,
+             %{
+               stage: :style,
+               reason: :invalid_document,
+               source: ^missing_path,
+               message: message
+             }}} = HtmlToPdf.render(failed_html)
+
+    assert message =~ "CSS font sources could not be resolved or loaded"
+    refute message =~ "font-family"
   end
 
   test "render lays out grid containers nested inside flex items" do
