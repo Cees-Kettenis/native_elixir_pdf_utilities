@@ -7,7 +7,7 @@ defmodule NativeElixirPdfUtilities.MergeTest do
 
   @fixture_directory Path.expand("fixtures/pdf_reader", __DIR__)
 
-  defp merge_pdf(objects) do
+  defp merge_pdf(objects, root_id \\ 1) do
     header = "%PDF-1.7\n"
 
     {body, offsets} =
@@ -30,7 +30,7 @@ defmodule NativeElixirPdfUtilities.MergeTest do
     body <>
       "xref\n0 #{maximum + 1}\n" <>
       Enum.join(entries) <>
-      "trailer\n<< /Size #{maximum + 1} /Root 1 0 R >>\n" <>
+      "trailer\n<< /Size #{maximum + 1} /Root #{root_id} 0 R >>\n" <>
       "startxref\n#{xref_offset}\n%%EOF\n"
   end
 
@@ -81,8 +81,12 @@ defmodule NativeElixirPdfUtilities.MergeTest do
       assert diagnostic.reason == :invalid_pdf_input
       assert diagnostic.operation == :merge
       assert diagnostic.module == NativeElixirPdfUtilities.Merge
-      assert diagnostic.message =~ "merge/1 received an invalid PDF:"
+      assert diagnostic.message =~ "merge/1 received an invalid PDF ("
     end
+
+    encrypted = File.read!(Path.join(@fixture_directory, "encrypted.pdf"))
+    assert {:error, {:invalid_pdf_input, diagnostic}} = Merge.merge([encrypted])
+    assert diagnostic.message =~ "encrypted_pdf at encryption"
   end
 
   test "renumbers pages and injects inherited page attributes" do
@@ -112,6 +116,26 @@ defmodule NativeElixirPdfUtilities.MergeTest do
     assert merged =~ "/MediaBox [ 0 0 612 792 ]"
     assert merged =~ "xref\n0 25\n"
     assert merged =~ " 00000 f"
+  end
+
+  test "uses the trailer catalog when unrelated catalog objects are present" do
+    pdf =
+      merge_pdf(
+        [
+          {1, "<< /Type /Catalog >>"},
+          {3, "<< /Type /Catalog /Pages 4 0 R >>"},
+          {4, "<< /Type /Pages /Kids [5 0 R] /Count 1 /MediaBox [0 0 200 300] >>"},
+          {5, "<< /Type /Page /Parent 4 0 R >>"}
+        ],
+        3
+      )
+
+    assert {:ok, source_document} = Reader.read(pdf)
+    assert hd(source_document.pages).media_box == [0, 0, 200, 300]
+
+    assert {:ok, merged} = Merge.merge([pdf])
+    assert {:ok, merged_document} = Reader.read(merged)
+    assert hd(merged_document.pages).media_box == [0, 0, 200, 300]
   end
 
   test "handles sparse and unusual object bodies without changing stream bytes" do

@@ -74,17 +74,17 @@ defmodule NativeElixirPdfUtilities.Merge do
     case Enum.reduce_while(bins, {:ok, []}, fn bin, {:ok, inputs} ->
            case index_pdf(bin) do
              {:ok, input} -> {:cont, {:ok, [input | inputs]}}
-             {:error, {_reason, diagnostic}} -> {:halt, {:error, diagnostic}}
+             {:error, {reason, diagnostic}} -> {:halt, {:error, {reason, diagnostic}}}
            end
          end) do
       {:ok, inputs} ->
         build_merged_pdf(Enum.reverse(inputs))
 
-      {:error, diagnostic} ->
+      {:error, {reader_reason, diagnostic}} ->
         Diagnostics.error(
           :merge,
           :invalid_pdf_input,
-          "merge/1 received an invalid PDF: #{diagnostic.message}",
+          "merge/1 received an invalid PDF (#{reader_reason} at #{diagnostic.stage}): #{diagnostic.message}",
           operation: :merge,
           module: __MODULE__
         )
@@ -145,6 +145,9 @@ defmodule NativeElixirPdfUtilities.Merge do
   defp index_pdf(bin) do
     case Reader.read(bin) do
       {:ok, document} ->
+        {:ok, catalog} = Reader.dictionary(document, Map.fetch!(document.trailer, "Root"))
+        {:ref, {root_pages, _generation}} = Map.fetch!(catalog, "Pages")
+
         objects =
           document.objects
           |> Enum.reject(fn {_ref, object} -> structural_reader_object?(object.value) end)
@@ -152,8 +155,6 @@ defmodule NativeElixirPdfUtilities.Merge do
             %{obj: object, gen: generation, tokens: parsed.tokens}
           end)
           |> Enum.sort_by(&{&1.obj, &1.gen})
-
-        root_pages = find_root_pages_id(objects)
 
         {:ok,
          %{
@@ -183,30 +184,6 @@ defmodule NativeElixirPdfUtilities.Merge do
     |> Enum.any?(fn
       [{:name, "Type"}, {:name, "Page"}] -> true
       _ -> false
-    end)
-  end
-
-  # Find the object id of the root Pages tree via the Catalog's /Pages reference.
-  defp find_root_pages_id(objects) do
-    %{tokens: tokens} =
-      Enum.find(objects, fn %{tokens: tokens} ->
-        Enum.chunk_every(tokens, 2, 1, :discard)
-        |> Enum.any?(fn
-          [{:name, "Type"}, {:name, "Catalog"}] -> true
-          _ -> false
-        end)
-      end)
-
-    find_pages_ref_in_tokens(tokens)
-  end
-
-  # Look for '/Pages <obj> <gen> R' in a token sequence and return <obj>.
-  defp find_pages_ref_in_tokens(tokens) do
-    tokens
-    |> Enum.chunk_every(4, 1, :discard)
-    |> Enum.find_value(fn
-      [{:name, "Pages"}, {:int, obj}, {:int, _gen}, :R] -> obj
-      _ -> nil
     end)
   end
 

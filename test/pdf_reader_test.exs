@@ -292,10 +292,27 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
   end
 
   test "enforces final decoded-stream size and ratio limits" do
-    oversized = run_length_encode(:binary.copy("A", 25_000_001))
+    oversized = :binary.copy(<<129, ?A>>, div(25_000_000, 128) + 1) <> <<128>>
 
     assert_error(
       decoded_stream(oversized, {:name, "RunLengthDecode"}),
+      :resource_limit_exceeded,
+      :limits
+    )
+
+    literal = :binary.list_to_bin(Enum.to_list(0..127))
+
+    oversized_literal =
+      :binary.copy(<<127, literal::binary>>, div(25_000_000, 128) + 1) <> <<128>>
+
+    assert_error(
+      decoded_stream(oversized_literal, {:name, "RunLengthDecode"}),
+      :resource_limit_exceeded,
+      :limits
+    )
+
+    assert_error(
+      decoded_stream(:binary.copy("A", 25_000_001), nil),
       :resource_limit_exceeded,
       :limits
     )

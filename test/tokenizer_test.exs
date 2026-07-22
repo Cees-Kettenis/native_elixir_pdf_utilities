@@ -48,7 +48,7 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
   end
 
   test "hex strings" do
-    input = "<48656C6C6F> <4 1 % comment\n2> << >> >"
+    input = "<48656C6C6F> <4 1 2> << >> >"
 
     assert [
              {:hex_string, "Hello"},
@@ -59,6 +59,8 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
            ] = toks(input)
 
     assert [{:error, {:unterminated_hex_string, 0}}] = toks("<48656C6C6F")
+    assert [{:error, {:invalid_hex_string, 3}}] = toks("<41GG42>")
+    assert [{:error, {:invalid_hex_string, 3}}] = toks("<41% comment\n42>")
   end
 
   test "arrays and refs" do

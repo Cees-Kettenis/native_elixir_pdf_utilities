@@ -63,6 +63,7 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
           | {:not_a_number, binary()}
           | {:unterminated_literal_string, non_neg_integer()}
           | {:unterminated_hex_string, non_neg_integer()}
+          | {:invalid_hex_string, non_neg_integer()}
 
   # NUL, HT, LF, FF, CR, SP
   @whitespace [0, 9, 10, 12, 13, 32]
@@ -472,35 +473,43 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
 
   # Parse a hex string '<...>' into bytes (odd nibbles are padded with 0).
   defp parse_hex_string(%__MODULE__{} = st) do
-    case collect_until_gt(st, []) do
+    case collect_until_gt(st, [], nil) do
       {:ok, hexes, st2} ->
-        # Remove all non-hex (whitespace/comments already skipped, but be safe)
-        hex_only =
-          for <<c <- IO.iodata_to_binary(hexes)>>,
-              (c >= ?0 and c <= ?9) or (c >= ?A and c <= ?F) or (c >= ?a and c <= ?f),
-              do: c
-
         # If odd count, pad with 0
-        hex_only = if rem(length(hex_only), 2) == 1, do: hex_only ++ [?0], else: hex_only
-        bytes = hex_pairs_to_bin(hex_only, [])
+        hexes = if rem(length(hexes), 2) == 1, do: hexes ++ [?0], else: hexes
+        bytes = hex_pairs_to_bin(hexes, [])
         {{:hex_string, IO.iodata_to_binary(bytes)}, st2}
 
-      {:error, st2} ->
+      {:error, :unterminated, st2} ->
         {{:error, {:unterminated_hex_string, st.pos - 1}}, st2}
+
+      {:error, {:invalid, position}, st2} ->
+        {{:error, {:invalid_hex_string, position}}, st2}
     end
   end
 
-  # Collect raw bytes until the closing '>' of a hex string (skip nested comments conservatively).
-  defp collect_until_gt(%__MODULE__{} = st, acc) do
+  # Collect hexadecimal digits until the closing '>', ignoring PDF whitespace only.
+  defp collect_until_gt(%__MODULE__{} = st, acc, invalid_position) do
     case st.pos >= st.size do
       true ->
-        {:error, st}
+        {:error, :unterminated, st}
 
       false ->
         case byte_at(st) do
-          ?> -> {:ok, Enum.reverse(acc), bump(st, 1)}
-          ?% -> collect_until_gt(skip_comment(st), acc)
-          c -> collect_until_gt(bump(st, 1), [c | acc])
+          ?> ->
+            case invalid_position do
+              nil -> {:ok, Enum.reverse(acc), bump(st, 1)}
+              position -> {:error, {:invalid, position}, bump(st, 1)}
+            end
+
+          c when c in @whitespace ->
+            collect_until_gt(bump(st, 1), acc, invalid_position)
+
+          c ->
+            case hex_char?(c) do
+              true -> collect_until_gt(bump(st, 1), [c | acc], invalid_position)
+              false -> collect_until_gt(bump(st, 1), acc, invalid_position || st.pos)
+            end
         end
     end
   end

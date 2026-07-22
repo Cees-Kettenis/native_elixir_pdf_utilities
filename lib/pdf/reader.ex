@@ -1092,31 +1092,56 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp run_length(data, ref) do
-    decode_run_length(:binary.bin_to_list(data), [], ref)
+    limit =
+      min(
+        @max_decoded_stream_bytes,
+        max(byte_size(data) * @max_decompression_ratio, 1)
+      )
+
+    decode_run_length(data, 0, limit, [], ref)
   end
 
-  defp decode_run_length(bytes, acc, ref) do
+  defp decode_run_length(bytes, decoded_size, limit, acc, ref) do
     case bytes do
-      [128 | _] ->
+      <<128, _rest::binary>> ->
         {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
 
-      [] ->
+      <<>> ->
         error(:filter, :invalid_pdf_input, "RunLengthDecode data has no end marker", object: ref)
 
-      [length | rest] when length <= 127 ->
+      <<length, rest::binary>> when length <= 127 ->
         count = length + 1
 
-        if length(rest) >= count do
-          {literal, rest} = Enum.split(rest, count)
-          decode_run_length(rest, [literal | acc], ref)
+        if byte_size(rest) >= count do
+          <<literal::binary-size(count), rest::binary>> = rest
+          decoded_size = decoded_size + count
+
+          if decoded_size > limit do
+            decoded_stream_limit_error(ref)
+          else
+            decode_run_length(rest, decoded_size, limit, [literal | acc], ref)
+          end
         else
           error(:filter, :invalid_pdf_input, "RunLengthDecode literal run is truncated",
             object: ref
           )
         end
 
-      [length, byte | rest] ->
-        decode_run_length(rest, [List.duplicate(byte, 257 - length) | acc], ref)
+      <<length, byte, rest::binary>> ->
+        count = 257 - length
+        decoded_size = decoded_size + count
+
+        if decoded_size > limit do
+          decoded_stream_limit_error(ref)
+        else
+          decode_run_length(
+            rest,
+            decoded_size,
+            limit,
+            [:binary.copy(<<byte>>, count) | acc],
+            ref
+          )
+        end
 
       _ ->
         error(:filter, :invalid_pdf_input, "RunLengthDecode repeat run is truncated", object: ref)
