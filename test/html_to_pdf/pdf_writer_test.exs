@@ -73,6 +73,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
              PdfWriter.render(pages, metadata: [creation_date: "2026-07-21T10:20:30"])
 
     assert naive_pdf =~ "/CreationDate (D:20260721102030)"
+
+    assert {:ok, early_pdf} = PdfWriter.render(pages, metadata: [creation_date: ~D[0001-01-02]])
+    assert early_pdf =~ "/CreationDate (D:00010102)"
   end
 
   test "render rejects malformed metadata with diagnostics" do

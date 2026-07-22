@@ -56,6 +56,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
       main: "readme",
       extras: [
         "README.md",
+        "LICENSE",
         "CHANGELOG.md",
         "docs/diagnostics.md",
         "docs/pdf-reader.md",

@@ -362,7 +362,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp calendar_date(value) do
-    Integer.to_string(value.year) <> two_digits(value.month) <> two_digits(value.day)
+    (value.year |> Integer.to_string() |> String.pad_leading(4, "0")) <>
+      two_digits(value.month) <> two_digits(value.day)
   end
 
   defp calendar_time(value) do
