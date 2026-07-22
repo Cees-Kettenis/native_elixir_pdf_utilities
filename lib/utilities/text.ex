@@ -28,6 +28,7 @@ defmodule NativeElixirPdfUtilities.Text do
   @max_cmap_bytes 1_000_000
   @max_cmap_entries 100_000
   @max_form_depth 20
+  @max_text_spans 25_000
   @validated_operators ~w(q Q cm BT ET Tf Tm Td TD T* TL Tc Tw Tz Tr Ts Tj TJ ' " Do)
 
   @typedoc "Options for reconstructed string extraction."
@@ -292,7 +293,7 @@ defmodule NativeElixirPdfUtilities.Text do
         with {:ok, content} <- Reader.decoded_stream(document, content_ref),
              {:ok, state, new_spans} <-
                interpret(content, document, page.resources, state, page_number, 0) do
-          {:cont, {:ok, state, spans ++ new_spans}}
+          {:cont, {:ok, state, Enum.reverse(new_spans, spans)}}
         else
           {:error, {reason, diagnostic}} ->
             {:halt, {:error, {reason, with_debug_details(diagnostic, page: page_number)}}}
@@ -305,7 +306,7 @@ defmodule NativeElixirPdfUtilities.Text do
              number: page_number,
              media_box: media_box,
              rotation: initial_state.rotation,
-             spans: spans
+             spans: Enum.reverse(spans)
            }}
 
         error ->
@@ -380,7 +381,7 @@ defmodule NativeElixirPdfUtilities.Text do
       end)
       |> case do
         {:ok, state, spans, []} ->
-          {:ok, state, spans}
+          {:ok, state, Enum.reverse(spans)}
 
         {:ok, _state, _spans, _operands} ->
           error(:content, :invalid_pdf_input, "content stream has dangling operands",
@@ -535,7 +536,7 @@ defmodule NativeElixirPdfUtilities.Text do
   defp show(state, spans, string, page) do
     if state.in_text? do
       with {:ok, decoded} <- decode_string(string, state.font, page),
-           {:ok, state, spans} <- add_span(state, spans, decoded) do
+           {:ok, state, spans} <- add_span(state, spans, decoded, page) do
         {:ok, state, spans}
       end
     else
@@ -559,8 +560,10 @@ defmodule NativeElixirPdfUtilities.Text do
         :error ->
           case decode_string(value, state.font, page) do
             {:ok, decoded} ->
-              {:ok, state, spans} = add_span(state, spans, decoded, shown?)
-              {:cont, {:ok, state, spans, true}}
+              case add_span(state, spans, decoded, page, shown?) do
+                {:ok, state, spans} -> {:cont, {:ok, state, spans, true}}
+                {:error, _} = span_error -> {:halt, span_error}
+              end
 
             {:error, _} = decoding_error ->
               {:halt, decoding_error}
@@ -573,37 +576,44 @@ defmodule NativeElixirPdfUtilities.Text do
     end
   end
 
-  defp add_span(state, spans, decoded, join_previous? \\ false) do
-    if decoded.text == "" do
-      {:ok, state, spans}
-    else
-      next_state = advance_text(state, decoded)
-      [_, _, _, _, x, y] = state.text_matrix |> translate(0.0, state.rise) |> multiply(state.ctm)
+  defp add_span(state, spans, decoded, page, join_previous? \\ false) do
+    cond do
+      decoded.text == "" ->
+        {:ok, state, spans}
 
-      [_, _, _, _, end_x, end_y] =
-        next_state.text_matrix |> translate(0.0, state.rise) |> multiply(state.ctm)
+      state.next_source_index >= @max_text_spans ->
+        error(:limits, :resource_limit_exceeded, "text span count exceeds the limit", page: page)
 
-      {x, y} = display_position(x, y, state.page)
-      {end_x, end_y} = display_position(end_x, end_y, state.page)
+      true ->
+        next_state = advance_text(state, decoded)
 
-      span = %{
-        text: decoded.text,
-        source_index: state.next_source_index,
-        x: x,
-        y: y,
-        end_x: end_x,
-        end_y: end_y,
-        font_resource: state.font.name,
-        font_size: state.font_size,
-        text_matrix: state.text_matrix,
-        ctm: state.ctm,
-        render_mode: state.render_mode,
-        paints_text?: state.render_mode not in [3, 7],
-        adds_to_clip_path?: state.render_mode in 4..7,
-        joins_previous?: join_previous?
-      }
+        [_, _, _, _, x, y] =
+          state.text_matrix |> translate(0.0, state.rise) |> multiply(state.ctm)
 
-      {:ok, %{next_state | next_source_index: state.next_source_index + 1}, spans ++ [span]}
+        [_, _, _, _, end_x, end_y] =
+          next_state.text_matrix |> translate(0.0, state.rise) |> multiply(state.ctm)
+
+        {x, y} = display_position(x, y, state.page)
+        {end_x, end_y} = display_position(end_x, end_y, state.page)
+
+        span = %{
+          text: decoded.text,
+          source_index: state.next_source_index,
+          x: x,
+          y: y,
+          end_x: end_x,
+          end_y: end_y,
+          font_resource: state.font.name,
+          font_size: state.font_size,
+          text_matrix: state.text_matrix,
+          ctm: state.ctm,
+          render_mode: state.render_mode,
+          paints_text?: state.render_mode not in [3, 7],
+          adds_to_clip_path?: state.render_mode in 4..7,
+          joins_previous?: join_previous?
+        }
+
+        {:ok, %{next_state | next_source_index: state.next_source_index + 1}, [span | spans]}
     end
   end
 
@@ -647,7 +657,7 @@ defmodule NativeElixirPdfUtilities.Text do
                    depth + 1
                  ) do
             {:ok, %{state | next_source_index: child_state.next_source_index},
-             spans ++ child_spans}
+             Enum.reverse(child_spans, spans)}
           end
         else
           {:ok, state, spans}
@@ -1245,10 +1255,13 @@ defmodule NativeElixirPdfUtilities.Text do
   end
 
   defp plain_page(spans) do
-    Enum.reduce(spans, "", fn span, text ->
-      separator = if text == "" or span.joins_previous?, do: "", else: " "
-      text <> separator <> span.text
+    spans
+    |> Enum.map_reduce(true, fn span, first? ->
+      separator = if first? or span.joins_previous?, do: "", else: " "
+      {[separator, span.text], false}
     end)
+    |> elem(0)
+    |> IO.iodata_to_binary()
   end
 
   defp layout_page(spans) do
@@ -1296,20 +1309,22 @@ defmodule NativeElixirPdfUtilities.Text do
 
   defp render_line(spans, min_x) do
     spans
-    |> Enum.reduce({"", min_x}, fn span, {line, current_x} ->
+    |> Enum.reduce({[], min_x, true}, fn span, {parts, current_x, first?} ->
       space_width = max(span.font_size * 0.25, 4.0)
       gap = span.x - current_x
 
       spaces =
         cond do
-          line == "" -> max(round((span.x - min_x) / space_width), 0)
+          first? -> max(round((span.x - min_x) / space_width), 0)
           gap > space_width * 0.35 -> max(round(gap / space_width), 1)
           true -> 0
         end
 
-      {line <> String.duplicate(" ", spaces) <> span.text, max(span.end_x, span.x)}
+      {[span.text, String.duplicate(" ", spaces) | parts], max(span.end_x, span.x), false}
     end)
     |> elem(0)
+    |> Enum.reverse()
+    |> IO.iodata_to_binary()
     |> String.trim_trailing()
   end
 

@@ -12,6 +12,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Diagnostics
 
+  @max_decoded_image_bytes 100_000_000
+
   @type text_node :: %{type: :text, text: String.t(), style: map()}
   @type styled_element :: %{
           type: :element,
@@ -2850,7 +2852,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
            idat: idat
          }
          when width > 0 and height > 0 and color_type in [2, 6] <- parsed,
-         {:ok, inflated} <- png_inflate(Enum.join(idat, "")),
+         bytes_per_pixel = if(color_type == 2, do: 3, else: 4),
+         decoded_size = height * (width * bytes_per_pixel + 1),
+         true <- decoded_size <= @max_decoded_image_bytes,
+         {:ok, inflated} <-
+           png_inflate(idat |> Enum.reverse() |> IO.iodata_to_binary(), decoded_size),
          {:ok, rgb_data, alpha_data} <- png_image_data(inflated, width, height, color_type) do
       image = %{
         format: :png,
@@ -2909,18 +2915,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         end
 
       "IDAT" ->
-        png_chunks(rest, Map.update!(acc, :idat, &(&1 ++ [data])))
+        png_chunks(rest, Map.update!(acc, :idat, &[data | &1]))
 
       _ ->
         png_chunks(rest, acc)
     end
   end
 
-  defp png_inflate(data) do
+  defp png_inflate(data, expected_size) do
+    zlib = :zlib.open()
+
     try do
-      {:ok, :zlib.uncompress(data)}
+      :ok = :zlib.inflateInit(zlib)
+      png_inflate_chunks(zlib, data, expected_size, 0, [])
     rescue
       ErlangError -> :error
+    after
+      :zlib.close(zlib)
+    end
+  end
+
+  defp png_inflate_chunks(zlib, data, expected_size, inflated_size, inflated) do
+    {status, output} = :zlib.safeInflate(zlib, data)
+    inflated_size = inflated_size + IO.iodata_length(output)
+
+    cond do
+      inflated_size > expected_size ->
+        :error
+
+      status == :finished and inflated_size == expected_size ->
+        :ok = :zlib.inflateEnd(zlib)
+        {:ok, [output | inflated] |> Enum.reverse() |> IO.iodata_to_binary()}
+
+      status == :finished ->
+        :error
+
+      true ->
+        png_inflate_chunks(zlib, <<>>, expected_size, inflated_size, [output | inflated])
     end
   end
 
@@ -2933,7 +2964,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
     row_size = width * bytes_per_pixel
 
-    case png_rows(data, width, height, bytes_per_pixel, row_size, [], "") do
+    case png_rows(data, height, bytes_per_pixel, row_size, 0, [], "") do
       {:ok, rows} ->
         {rgb, alpha} = split_png_rows(rows, color_type)
 
@@ -2963,23 +2994,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp png_rows(data, _width, height, _bytes_per_pixel, _row_size, rows, _previous)
-       when length(rows) == height do
-    case data do
-      "" -> {:ok, Enum.reverse(rows)}
-      _ -> :error
-    end
-  end
+  defp png_rows(data, height, bytes_per_pixel, row_size, row_count, rows, previous) do
+    case row_count == height do
+      true ->
+        {:ok, Enum.reverse(rows)}
 
-  defp png_rows(data, width, height, bytes_per_pixel, row_size, rows, previous) do
-    case data do
-      <<filter, row::binary-size(row_size), rest::binary>> ->
+      false ->
+        <<filter, row::binary-size(row_size), rest::binary>> = data
+
         with {:ok, decoded} <- png_unfilter_row(filter, row, previous, bytes_per_pixel) do
-          png_rows(rest, width, height, bytes_per_pixel, row_size, [decoded | rows], decoded)
+          png_rows(
+            rest,
+            height,
+            bytes_per_pixel,
+            row_size,
+            row_count + 1,
+            [decoded | rows],
+            decoded
+          )
         end
-
-      _ ->
-        :error
     end
   end
 

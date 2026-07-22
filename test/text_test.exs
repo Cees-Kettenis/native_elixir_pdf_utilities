@@ -97,6 +97,16 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert_error(Text.extract(encrypted), :encrypted_pdf, :encryption)
   end
 
+  test "limits the number of extracted text spans per page" do
+    content = "BT /F1 10 Tf " <> String.duplicate("(A) Tj ", 25_000) <> "[(A)] TJ ET"
+
+    assert_error(
+      Text.extract(page_pdf(content), layout: false),
+      :resource_limit_exceeded,
+      :limits
+    )
+  end
+
   test "rejects unsupported filters, image-only PDFs, and custom encodings without Unicode" do
     unsupported =
       page_pdf("BT /F1 10 Tf (x) Tj ET", content_dictionary: "/Filter /DCTDecode")

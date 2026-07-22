@@ -2038,6 +2038,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert {:ok, chunked_png_style} = image_style("chunked.png", base_url: base_dir)
     assert chunked_png_style.image.format == :png
 
+    large_png_src = "data:image/png;base64,#{Base.encode64(png_fixture(100, 100))}"
+    assert {:ok, large_png_style} = image_style(large_png_src, [])
+    assert large_png_style.image.width_px == 100
+    assert large_png_style.image.height_px == 100
+
     for filter <- [1, 2, 3] do
       filter_path = Path.join(base_dir, "filter-#{filter}.png")
       File.write!(filter_path, png_rgba_fixture(1, 2, filter))
@@ -2153,10 +2158,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       {"data:image/png;base64,#{Base.encode64("not png")}"},
       {"data:image/png;base64,#{Base.encode64(<<137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3>>)}"},
       {"data:image/png;base64,#{Base.encode64(bad_idat_png_fixture())}"},
+      {"data:image/png;base64,#{Base.encode64(truncated_idat_png_fixture())}"},
       {"data:image/png;base64,#{Base.encode64(malformed_png_fixture())}"},
       {"data:image/png;base64,#{Base.encode64(short_row_png_fixture())}"},
       {"data:image/png;base64,#{Base.encode64(invalid_filter_png_fixture())}"},
       {"data:image/png;base64,#{Base.encode64(trailing_png_fixture())}"},
+      {"data:image/png;base64,#{Base.encode64(oversized_png_fixture())}"},
       {"data:image/jpeg;base64,#{Base.encode64(<<1, 2, 3>>)}"},
       {"data:image/jpeg;base64,#{Base.encode64(<<255, 216, 255, 192, 0, 17, 7, 0, 1, 0, 1, 3>>)}"},
       {"data:image/jpeg;base64,#{Base.encode64(<<255, 216, 255, 217>>)}"},
@@ -2464,10 +2471,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       png_chunk("IEND", "")
   end
 
+  defp truncated_idat_png_fixture do
+    compressed = :zlib.compress(<<0, 255, 0, 0>>)
+    truncated = binary_part(compressed, 0, byte_size(compressed) - 1)
+
+    <<137, 80, 78, 71, 13, 10, 26, 10>> <>
+      png_chunk("IHDR", <<1::32, 1::32, 8, 2, 0, 0, 0>>) <>
+      png_chunk("IDAT", truncated) <>
+      png_chunk("IEND", "")
+  end
+
   defp trailing_png_fixture do
     <<137, 80, 78, 71, 13, 10, 26, 10>> <>
       png_chunk("IHDR", <<1::32, 1::32, 8, 2, 0, 0, 0>>) <>
       png_chunk("IDAT", :zlib.compress(<<0, 255, 0, 0, 1>>)) <>
+      png_chunk("IEND", "")
+  end
+
+  defp oversized_png_fixture do
+    <<137, 80, 78, 71, 13, 10, 26, 10>> <>
+      png_chunk("IHDR", <<100_000::32, 100_000::32, 8, 2, 0, 0, 0>>) <>
+      png_chunk("IDAT", :zlib.compress("")) <>
       png_chunk("IEND", "")
   end
 
