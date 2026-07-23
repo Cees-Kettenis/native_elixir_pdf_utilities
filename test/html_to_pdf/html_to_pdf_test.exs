@@ -58,6 +58,52 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     refute pdf =~ "0 0 1 rg"
   end
 
+  test "render supports commas inside quoted CSS font URLs" do
+    fixture_dir = Path.join(System.tmp_dir!(), "native-elixir-pdf-comma-font-url")
+    font_path = Path.join(fixture_dir, "report,sans.ttf")
+    File.mkdir_p!(fixture_dir)
+    File.cp!(ttf_font_path!(), font_path)
+
+    html = """
+    <style>
+      @font-face {
+        font-family: "Comma Fixture";
+        src: url("report,sans.ttf") format("truetype");
+      }
+      p { font-family: "Comma Fixture"; }
+    </style>
+    <p>Comma font</p>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, base_url: fixture_dir)
+    assert pdf =~ "/Subtype /Type0"
+  after
+    File.rm_rf(Path.join(System.tmp_dir!(), "native-elixir-pdf-comma-font-url"))
+  end
+
+  test "render identifies invalid font-face descriptors" do
+    html = """
+    <style>
+      @font-face {
+        font-family: Broken;
+        src: url("broken.ttf");
+        font-style: oblique;
+      }
+    </style>
+    <p>Broken font</p>
+    """
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               source: "font-style: oblique",
+               message:
+                 ~s(line 5: @font-face declaration "font-style: oblique" is invalid or unsupported)
+             }}} = HtmlToPdf.render(html)
+  end
+
   test "render rejects malformed PDF metadata through the diagnostics contract" do
     assert {:error,
             {:invalid_pdf_input,

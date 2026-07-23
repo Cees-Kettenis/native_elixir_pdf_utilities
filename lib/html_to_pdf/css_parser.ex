@@ -57,7 +57,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     case css do
       css when is_binary(css) ->
         with {:ok, active_css} <- css |> strip_comments() |> active_media_rules(),
-             {:ok, _font_faces} <- parse_font_faces(active_css) do
+             {:ok, _font_faces} <- parse_font_faces(active_css, css) do
           parsed_css = active_css |> strip_font_face_rules() |> strip_page_rules()
 
           case parse_rules(parsed_css) do
@@ -65,6 +65,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
             {:error, :invalid_css} -> {:error, {:invalid_css, css_error_detail(css, parsed_css)}}
           end
         else
+          {:error, {:invalid_css, detail}} ->
+            {:error, {:invalid_css, detail}}
+
           {:error, :invalid_css} ->
             {:error, {:invalid_css, css_error_detail(css, css)}}
         end
@@ -94,8 +97,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   def font_faces(css) do
     case css do
       css when is_binary(css) ->
-        with {:ok, active_css} <- css |> strip_comments() |> active_media_rules() do
-          parse_font_faces(active_css)
+        case css |> strip_comments() |> active_media_rules() do
+          {:ok, active_css} ->
+            case parse_font_faces(active_css, active_css) do
+              {:ok, font_faces} -> {:ok, font_faces}
+              {:error, {:invalid_css, _detail}} -> {:error, :invalid_css}
+            end
+
+          {:error, :invalid_css} ->
+            {:error, :invalid_css}
         end
 
       _ ->
@@ -210,29 +220,93 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end
   end
 
-  defp parse_font_faces(css) do
+  defp parse_font_faces(css, diagnostic_css) do
     ~r/@font-face\s*\{(?<declarations>[^{}]*)\}/ui
     |> Regex.scan(css, capture: ["declarations"])
     |> List.flatten()
     |> Enum.reduce_while({:ok, []}, fn block, {:ok, acc} ->
       case parse_font_face(block) do
-        {:ok, font_face} -> {:cont, {:ok, acc ++ [font_face]}}
-        {:error, :invalid_css} -> {:halt, {:error, :invalid_css}}
+        {:ok, font_face} ->
+          {:cont, {:ok, acc ++ [font_face]}}
+
+        {:error, {message, source}} ->
+          {:halt,
+           {:error, {:invalid_css, font_face_error_detail(diagnostic_css, message, source)}}}
       end
     end)
   end
 
   defp parse_font_face(block) do
-    with {:ok, declarations} <- parse_declarations(block),
-         true <- Enum.all?(declarations, &supported_font_descriptor?/1),
-         {:ok, family} <- font_family_descriptor(declarations),
-         {:ok, sources} <- font_source_descriptor(declarations),
-         {:ok, weight} <- font_weight_descriptor(declarations),
-         {:ok, style} <- font_style_descriptor(declarations) do
-      {:ok, %{family: family, sources: sources, weight: weight, style: style}}
-    else
-      _ -> {:error, :invalid_css}
+    case parse_declarations_detailed(block) do
+      {:ok, declarations} ->
+        case Enum.find(declarations, &(not supported_font_descriptor?(&1))) do
+          nil ->
+            family = font_family_descriptor(declarations)
+            sources = font_source_descriptor(declarations)
+            weight = font_weight_descriptor(declarations)
+            style = font_style_descriptor(declarations)
+
+            case {family, sources, weight, style} do
+              {{:ok, family}, {:ok, sources}, {:ok, weight}, {:ok, style}} ->
+                {:ok, %{family: family, sources: sources, weight: weight, style: style}}
+
+              _ ->
+                error =
+                  [
+                    {"font-family", family},
+                    {"src", sources},
+                    {"font-weight", weight},
+                    {"font-style", style}
+                  ]
+                  |> Enum.find_value(fn {property, result} ->
+                    case result do
+                      {:error, :invalid_css} -> font_face_descriptor_error(block, property)
+                      _ -> nil
+                    end
+                  end)
+
+                {:error, error}
+            end
+
+          declaration ->
+            property = elem(declaration, 0)
+            {:error, font_face_descriptor_error(block, property)}
+        end
+
+      {:error, {:invalid_css, detail}} ->
+        source = Map.get(detail, :source, "@font-face")
+
+        {:error, {~s(@font-face declaration "#{source}" is invalid or unsupported), source}}
     end
+  end
+
+  defp font_face_descriptor_error(block, property) do
+    source =
+      block
+      |> String.split(";")
+      |> Enum.map(&String.trim/1)
+      |> Enum.find(&Regex.match?(~r/^#{Regex.escape(property)}\s*:/iu, &1))
+
+    case source do
+      nil ->
+        {~s(@font-face is missing required "#{property}" descriptor), "@font-face"}
+
+      source ->
+        {~s(@font-face declaration "#{source}" is invalid or unsupported), source}
+    end
+  end
+
+  defp font_face_error_detail(css, message, source) do
+    {line, column} = source_location(css, source)
+
+    %{
+      stage: :css,
+      reason: :invalid_css,
+      message: "line #{line}: #{message}",
+      line: line,
+      column: column,
+      source: source
+    }
   end
 
   defp supported_font_descriptor?(declaration) do
@@ -264,8 +338,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       {"src", value} ->
         sources =
           value
-          |> String.split(",")
-          |> Enum.map(&String.trim/1)
+          |> font_source_candidates()
           |> Enum.flat_map(fn candidate ->
             captures =
               Regex.named_captures(
@@ -295,6 +368,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       _ ->
         {:error, :invalid_css}
     end
+  end
+
+  defp font_source_candidates(value) do
+    {candidates, current, _quote, _depth} =
+      value
+      |> String.graphemes()
+      |> Enum.reduce({[], [], nil, 0}, fn character, {candidates, current, quote, depth} ->
+        cond do
+          character in ["\"", "'"] and is_nil(quote) ->
+            {candidates, [character | current], character, depth}
+
+          character == quote ->
+            {candidates, [character | current], nil, depth}
+
+          is_nil(quote) and character == "(" ->
+            {candidates, [character | current], quote, depth + 1}
+
+          is_nil(quote) and character == ")" ->
+            {candidates, [character | current], quote, max(depth - 1, 0)}
+
+          is_nil(quote) and depth == 0 and character == "," ->
+            candidate = current |> Enum.reverse() |> Enum.join() |> String.trim()
+            {[candidate | candidates], [], quote, depth}
+
+          true ->
+            {candidates, [character | current], quote, depth}
+        end
+      end)
+
+    final_candidate = current |> Enum.reverse() |> Enum.join() |> String.trim()
+
+    [final_candidate | candidates]
+    |> Enum.reverse()
+    |> Enum.reject(&(&1 == ""))
   end
 
   defp supported_font_source?(source, format) do

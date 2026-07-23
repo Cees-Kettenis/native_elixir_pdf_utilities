@@ -149,6 +149,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
 
     assert fallback.sources == ["missing.ttf", "valid.otf"]
 
+    assert {:ok, [comma_path]} =
+             CssParser.font_faces(
+               "@font-face { font-family: CommaPath; src: url(\"report,sans.ttf\") format(\"truetype\"); }"
+             )
+
+    assert comma_path.sources == ["report,sans.ttf"]
+
     assert {:ok, [normal]} =
              CssParser.font_faces(
                "@font-face { font-family: Normal; src: url(normal.ttf); font-weight: normal; font-style: normal; }"
@@ -186,6 +193,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     end
 
     assert CssParser.font_faces(:not_css) == {:error, :invalid_css}
+
+    assert CssParser.font_faces("@media print { @media print { p { color: red; } } }") ==
+             {:error, :invalid_css}
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               source: "src: url(x.woff2) format(woff2)",
+               message:
+                 "line 1: @font-face declaration \"src: url(x.woff2) format(woff2)\" is invalid or unsupported"
+             }}} =
+             CssParser.parse_detailed(
+               "@font-face { font-family: X; src: url(x.woff2) format(woff2); }"
+             )
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               source: "font-family X",
+               message:
+                 "line 1: @font-face declaration \"font-family X\" is invalid or unsupported"
+             }}} =
+             CssParser.parse_detailed("@font-face { font-family X; src: url(valid.ttf); }")
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               source: "@font-face",
+               message: "line 1: @font-face is missing required \"src\" descriptor"
+             }}} =
+             CssParser.parse_detailed("@font-face { font-family: X; }")
   end
 
   test "page_options extracts supported page size and margin defaults" do
