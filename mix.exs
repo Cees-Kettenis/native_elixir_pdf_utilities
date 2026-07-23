@@ -4,7 +4,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
   def project do
     [
       app: :native_elixir_pdf_utilities,
-      version: "0.6.0",
+      version: "0.7.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       description:
@@ -66,7 +66,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
         "docs/html-to-pdf-browser-parity-coverage.md",
         "docs/html-to-pdf-examples.md"
       ],
-      source_ref: "v0.6.0",
+      source_ref: "v0.7.0",
       source_url: "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"
     ]
   end

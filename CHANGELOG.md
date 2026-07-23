@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.7.0 - 2026-07-23
+
+### Added
+
+- Added local CSS `@font-face` support for embedded and configured
+  stylesheets, including `font-family`, ordered `src: url(...)` fallbacks,
+  `font-weight`, `font-style`, and supported `font-display` values.
+- Added TrueType font loading from `.ttf` files and `.otf` files that use
+  TrueType outlines. Relative font URLs resolve against the configured
+  stylesheet directory or renderer `:base_url`.
+- Added print media handling for `@media print`, `@media only print`,
+  `@media all`, and `@media only all`, while non-print media rules are omitted
+  from the active print cascade.
+- Added PDF document metadata through the HTML renderer's `:metadata` option
+  for title, author, subject, keywords, creation date, and modification date.
+  Metadata dates accept `Date`, `NaiveDateTime`, `DateTime`, and ISO 8601
+  strings, and non-ASCII values are written as Unicode PDF strings.
+- Added automatic PDF title metadata from the first non-empty HTML `<title>`
+  when no explicit metadata title is provided.
+- Added Chromium parity coverage for CSS-declared fonts and print media, plus
+  examples and compatibility documentation for fonts, print CSS, metadata,
+  supported formats, URL resolution, and conversion boundaries.
+
+### Changed
+
+- Changed configured stylesheet handling to preserve each file's directory for
+  relative assets and to apply configured `@page` rules when deriving default
+  page options.
+- Changed explicit and CSS-declared font registration to try ordered local
+  source candidates until a supported font loads.
+- Changed PNG decoding to stream decompression, require the exact expected
+  decoded size, and reject images whose decoded scanlines exceed 100 MB.
+- Changed RunLengthDecode to operate on binaries and enforce the PDF reader's
+  decoded-stream and decompression-ratio limits.
+- Changed text extraction to accumulate spans and output text without repeated
+  list or binary copying, and capped extraction at 25,000 text spans per page
+  with a `:resource_limit_exceeded` diagnostic.
+- Changed merge failures to retain the PDF reader's reason and stage in the
+  actionable merge diagnostic.
+
+### Fixed
+
+- Fixed merging PDFs that contain unrelated or stale catalog objects by
+  resolving the active catalog from the trailer's `/Root` reference.
+- Fixed hexadecimal strings with non-hexadecimal bytes being silently
+  sanitized; the tokenizer now emits `:invalid_hex_string` with the offending
+  byte position.
+- Fixed PDF `DateTime` metadata formatting so UTC and non-UTC offsets are
+  encoded correctly.
+- Fixed CSS `@font-face` parsing for quoted URLs containing commas, ordered
+  fallback sources, invalid or missing descriptors, unsupported formats, and
+  malformed declarations.
+- Fixed CSS diagnostics for malformed font and media rules so rendering returns
+  actionable `:invalid_css` details with source, line, and column context.
+
 ## 0.6.0 - 2026-07-20
 
 ### Added

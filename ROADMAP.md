@@ -19,43 +19,6 @@ breaking API changes are allowed, but they should be explained clearly in
 
 ## Milestones
 
-
-### 0.7.0 - Fonts, Print CSS, and Render Metadata
-
-Milestone goal: make existing print templates easier to render without rewriting common
-font, print stylesheet, and document metadata behavior.
-
-#### Scope
-
-- Add CSS `@font-face` support so templates can declare local fonts in CSS.
-- Support font formats before `1.0.0` with this priority:
-  - TTF support is required.
-  - OTF support should be added if it can share the same font loading and glyph
-    metric path without a disproportionate implementation cost.
-- Add PDF metadata options to HTML rendering for common fields such as title,
-  author, subject, keywords, creation date, and modification date.
-- Use the HTML `<title>` as the default PDF title when no explicit metadata
-  title is provided.
-
-#### Design Notes
-
-- Reuse the existing font registry for CSS-declared fonts.
-- Keep local file loading rules strict for `@font-face`.
-- Polish supported `@media print` behavior and browser parity coverage.
-- Document CSS font behavior, including unsupported font formats and the
-  recommended conversion path for WOFF/WOFF2.
-- Review render function naming before `1.0.0`, including whether
-  `render_file/3` should be complemented by a clearer `render_to_file/3` style
-  API for HTML-string-to-PDF-file output.
-
-#### Completion Criteria
-
-- Add focused parser, style, layout, pagination, and PDF writer tests for CSS
-  fonts, print CSS, and metadata behavior.
-- Add or update browser parity fixtures for CSS fonts and print CSS.
-- Add focused tests for PDF metadata options and HTML `<title>` metadata
-  defaults.
-
 ### 0.8.0 - Running Headers, Footers, and Page Numbers
 
 Milestone goal: add first-class repeated page furniture for reports, invoices, statements,
