@@ -85,7 +85,7 @@ position, measured height, and available margin. Reserve enough `@page` or
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Document wrappers | `doctype html`, `html`, `head`, `body`, `style`, `meta`, `title`                                                                                      |
 | Blocks            | `article`, `aside`, `div`, `footer`, `header`, `main`, `nav`, `section`, `p`, `h1` through `h6`                                               |
-| Inline text       | `span`, `strong`, `b`, `em`, `i`, `a`, `br`; common named and numeric HTML entities are decoded                                                       |
+| Inline text       | `span`, `strong`, `b`, `em`, `i`, `a`, `br`; WHATWG named and numeric HTML character references are decoded once, including multi-code-point references and non-breaking spaces |
 | Lists             | `ul`, `ol`, `li`                                                                                                                                              |
 | Tables            | `table`, `caption`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td`                                                                                     |
 | Images            | Strict`img` with required `src`                                                                                                                                 |
@@ -164,7 +164,7 @@ Current parity fixtures cover:
 | `html_semantics_typography.html`      | semantic block aliases, metadata wrappers,`title`, `lang`, `h1`-`h6`, `b`, `i`                                                                                                                                        |
 | `images_data_uris.html`               | PNG, JPEG, and SVG data URI images in block, table, flex, and grid contexts                                                                                                                                                       |
 | `inline_text_flow.html`               | inline runs, bold, italic, colors, line-height, wrapping,`<br>`, text transform                                                                                                                                                 |
-| `links_entities_and_protocols.html`   | links,`https`, `http`, `mailto`, named entities, decimal and hex numeric entities                                                                                                                                           |
+| `links_entities_and_protocols.html`   | links,`https`, `http`, `mailto`, named entities, decimal and hex numeric entities, non-breaking-space wrapping                                                                                                                |
 | `text_style_variants.html`            | `rgb()`, `rgba()`, `currentColor`, transparent borders, white-space, word breaking, letter spacing, text transforms                                                                                                         |
 | `units_and_sizing.html`               | `pt`, `px`, `mm`, `cm`, `in`, `rem`, percentages, `aspect-ratio`, fixed height, min-height                                                                                                                          |
 

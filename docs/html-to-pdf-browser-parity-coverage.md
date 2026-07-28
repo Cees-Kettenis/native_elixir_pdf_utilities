@@ -38,7 +38,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `images_data_uris.html` | PNG, JPEG, and SVG data URI images in block, table, flex, and grid contexts |
 | `inline_text_flow.html` | inline runs, bold, italic, colors, line-height, wrapping, `<br>`, text transform |
 | `layout_compositions_remaining.html` | grid containing table, flex containing table, table containing direct flexbox |
-| `links_entities_and_protocols.html` | links, `https`, `http`, `mailto`, named entities, decimal and hex numeric entities |
+| `links_entities_and_protocols.html` | links, `https`, `http`, `mailto`, named entities, decimal and hex numeric entities, non-breaking-space wrapping |
 | `nested_table_collapsed_borders.html` | collapsed outer table containing a collapsed inner table, nested `colspan`, side-specific nested borders |
 | `nested_table_grid_flex.html` | table cell containing grid, grid item containing flexbox, ordering, gaps, nested borders |
 | `page_rules_landscape.html` | CSS `@page` landscape sizing, page margins, explicit page-sized drawing geometry |

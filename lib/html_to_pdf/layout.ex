@@ -226,7 +226,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp layout_flow_child(child, style, x, y, width) do
     case child do
       %{type: :text, text: text} when is_binary(text) ->
-        case String.trim(text) do
+        case trim_inline_whitespace(text) do
           "" ->
             {:ok, [], y}
 
@@ -433,7 +433,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp grid_item(child, index) do
     case child do
       %{type: :text, text: text} when is_binary(text) ->
-        case String.trim(text) do
+        case trim_inline_whitespace(text) do
           "" ->
             {:ok, nil}
 
@@ -1134,7 +1134,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp flex_item(child, index, main_axis, available_main, available_cross) do
     case child do
       %{type: :text, text: text} when is_binary(text) ->
-        case text |> collapse_inline_whitespace() |> String.trim() do
+        case text |> collapse_inline_whitespace() |> trim_inline_whitespace() do
           "" ->
             {:ok, nil}
 
@@ -1829,7 +1829,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp flex_child_intrinsic_width(child) do
     case child do
       %{type: :text, text: text, style: style} when is_binary(text) ->
-        text |> String.trim() |> text_width(style)
+        text |> trim_inline_whitespace() |> text_width(style)
 
       %{type: :element, style: %{display: :none}} ->
         0.0
@@ -2723,7 +2723,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               |> Enum.flat_map(fn run ->
                 run.text
                 |> inline_wrap_tokens(run.style)
-                |> Enum.map(&%{text: String.trim(&1), style: run.style})
+                |> Enum.map(&%{text: trim_inline_whitespace(&1), style: run.style})
               end)
               |> Enum.reject(&(&1.text == ""))
               |> Enum.map(&text_width(&1.text, &1.style))
@@ -2994,7 +2994,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp layout_table_cell_block(child, style, x, y, width) do
     case child do
       %{type: :text, text: text} when is_binary(text) ->
-        case String.trim(text) do
+        case trim_inline_whitespace(text) do
           "" ->
             {:ok, [], y}
 
@@ -3232,7 +3232,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         String.graphemes(text)
 
       _ ->
-        ~r/\S+\s*|\s+/u
+        ~r/[^ \t\n\f\r]+[ \t\n\f\r]*|[ \t\n\f\r]+/u
         |> Regex.scan(text)
         |> Enum.map(&List.first/1)
     end
@@ -3243,14 +3243,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     token_width = text_width(run.text, run.style)
 
     cond do
-      String.trim(run.text) == "" and current_line == [] ->
+      trim_inline_whitespace(run.text) == "" and current_line == [] ->
         lines
 
       token_width > width and Map.get(run.style, :line_break) == :break_word ->
         append_break_word_token(lines, run, width)
 
       current_line != [] and inline_line_width(current_line) + token_width > width ->
-        lines ++ [[%{run | text: String.trim_leading(run.text)}]]
+        lines ++ [[%{run | text: trim_leading_inline_whitespace(run.text)}]]
 
       true ->
         List.update_at(lines, length(lines) - 1, &append_inline_line_run(&1, run))
@@ -3314,7 +3314,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp collapse_inline_whitespace(text) do
-    String.replace(text, ~r/\s+/u, " ")
+    String.replace(text, ~r/[ \t\n\f\r]+/u, " ")
+  end
+
+  defp trim_inline_whitespace(text) do
+    String.replace(text, ~r/^[ \t\n\f\r]+|[ \t\n\f\r]+$/u, "")
+  end
+
+  defp trim_leading_inline_whitespace(text) do
+    String.replace(text, ~r/^[ \t\n\f\r]+/u, "")
   end
 
   @spec text_box(%{text: String.t(), style: map()}, number(), number(), number()) :: box()

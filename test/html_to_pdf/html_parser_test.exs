@@ -135,7 +135,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert image.children == []
   end
 
-  test "parse ignores structural whitespace and decodes supported entities" do
+  test "parse ignores structural whitespace and decodes HTML character references once" do
     assert {:ok, dom} =
              HtmlParser.parse("""
 
@@ -145,7 +145,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
                </head>
                <body>
                  <ul>
-                   <li>&lt;One&gt; &apos;Two&apos; &#39;Three&#39;&nbsp;Four</li>
+                  <li>&lt;One&gt; &apos;Two&apos; &#39;Three&#39;&nbsp;Four &copy; &#169; &#x2122; &NotEqualTilde; &amp;lt;</li>
                  </ul>
                  <table>
                    <tr><td>A</td></tr>
@@ -161,8 +161,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     [text] = item.children
     [row] = table.children
 
-    assert text.text == "<One> 'Two' 'Three' Four"
+    assert text.text == "<One> 'Two' 'Three'\u00A0Four © © ™ ≂̸ &lt;"
     assert row.tag == "tr"
+  end
+
+  test "parse applies legacy named-reference rules in text and attributes" do
+    assert {:ok, dom} =
+             HtmlParser.parse(~s(<p class="&copy; &copyy &amp=1">&copy &copyy &unknown;</p>))
+
+    [paragraph] = dom.children
+    [text] = paragraph.children
+
+    assert paragraph.attributes == %{"class" => "© &copyy &amp=1"}
+    assert text.text == "© ©y &unknown;"
+  end
+
+  test "parse normalizes invalid and legacy numeric character references" do
+    assert {:ok, dom} =
+             HtmlParser.parse("<p>&#x80; &#0; &#xD800; &#x110000; &#x; &#;</p>")
+
+    [paragraph] = dom.children
+    [text] = paragraph.children
+
+    assert text.text == "€ � � � &#x; &#;"
   end
 
   test "parse accepts div containers for flex layouts" do

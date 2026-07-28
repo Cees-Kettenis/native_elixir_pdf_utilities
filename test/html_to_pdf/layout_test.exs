@@ -70,6 +70,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert bold.flow_id == second.flow_id
   end
 
+  test "layout preserves non-breaking spaces and does not wrap across them" do
+    html =
+      ~s(<p style="font-size: 10pt; line-height: 12pt; width: 24pt; margin: 0">A&nbsp;B C</p>)
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom)
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {100, 100}, margin: 0)
+
+    text_boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
+
+    assert Enum.map(text_boxes, & &1.text) == ["A\u00A0B ", "C"]
+    assert Enum.at(text_boxes, 0).y > Enum.at(text_boxes, 1).y
+  end
+
   test "layout includes letter spacing in text measurements" do
     styled_tree = %{
       type: :document,

@@ -9,6 +9,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   an error instead of guessing at browser behavior.
   """
 
+  alias NativeElixirPdfUtilities.HtmlToPdf.HtmlEntities
+
   @type text_node :: %{type: :text, text: String.t()}
   @type element_node :: %{
           type: :element,
@@ -138,7 +140,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
           remaining,
           context,
           closing_tag,
-          children ++ [%{type: :text, text: decode_entities(token)}]
+          children ++ [%{type: :text, text: HtmlEntities.decode(token, :text)}]
         )
     end
   end
@@ -204,7 +206,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   defp attributes_to_map(captures, tag) do
     Enum.reduce_while(captures, {:ok, %{}}, fn [_, name, quoted_value], {:ok, acc} ->
       name = String.downcase(name)
-      value = quoted_value |> String.slice(1..-2//1) |> decode_entities()
+
+      value =
+        quoted_value
+        |> String.slice(1..-2//1)
+        |> HtmlEntities.decode(:attribute)
 
       case {name, tag, Map.has_key?(acc, name)} do
         {"style", _, false} ->
@@ -411,7 +417,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
       Map.put(
         acc,
         String.downcase(name),
-        quoted_value |> String.slice(1..-2//1) |> decode_entities()
+        quoted_value
+        |> String.slice(1..-2//1)
+        |> HtmlEntities.decode(:attribute)
       )
     end)
   end
@@ -445,16 +453,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         column = String.length(List.last(lines) || "") + 1
         {line, column}
     end
-  end
-
-  defp decode_entities(text) do
-    text
-    |> String.replace("&amp;", "&")
-    |> String.replace("&nbsp;", " ")
-    |> String.replace("&lt;", "<")
-    |> String.replace("&gt;", ">")
-    |> String.replace("&quot;", "\"")
-    |> String.replace("&#39;", "'")
-    |> String.replace("&apos;", "'")
   end
 end
