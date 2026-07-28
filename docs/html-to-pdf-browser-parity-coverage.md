@@ -35,7 +35,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `flex_grid_alignment.html` | flex order, wrapping, gap, alignment, grid template tracks, grid spans, row/column gaps |
 | `grid_tracks_and_placement.html` | `repeat()`, `minmax()`, auto rows/columns, `grid-column`, `grid-row`, `grid-area`, item alignment |
 | `html_semantics_typography.html` | semantic block aliases, metadata wrappers, `title`, `lang`, `h1`-`h6`, `b`, `i` |
-| `images_data_uris.html` | PNG, JPEG, and SVG data URI images in block, table, flex, and grid contexts |
+| `images_data_uris.html` | 8-bit non-interlaced RGB PNG, JPEG, and SVG data URI images in block, table, flex, and grid contexts |
 | `inline_text_flow.html` | inline runs, bold, italic, colors, line-height, wrapping, `<br>`, text transform |
 | `layout_compositions_remaining.html` | grid containing table, flex containing table, table containing direct flexbox |
 | `links_entities_and_protocols.html` | links, `https`, `http`, `mailto`, named entities, decimal and hex numeric entities, non-breaking-space wrapping |
@@ -83,7 +83,7 @@ Current production fixture parity:
 | HTML entities | Passing | `links_entities_and_protocols.html` |
 | Lists: `ul`, `ol`, `li` | Passing | `display_lists_and_inline_block.html` |
 | Tables: `table`, `caption`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td` | Passing | Table fixtures, especially `table_rowspan_tfoot.html` |
-| Images: PNG, JPEG, SVG data URIs | Passing | `images_data_uris.html` |
+| Images: 8-bit non-interlaced RGB/RGBA PNG, JPEG, SVG data URIs | Passing | `images_data_uris.html` |
 | Attributes: `id`, `class`, `style`, `lang`, metadata attributes, `href`, `src`, `alt`, `colspan`, `rowspan` | Passing | `css_cascade_selectors.html`, `html_semantics_typography.html`, `links_entities_and_protocols.html`, `images_data_uris.html`, table fixtures |
 | Link protocols: `https`, `http`, `mailto` | Passing | `links_entities_and_protocols.html` |
 

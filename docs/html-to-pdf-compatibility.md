@@ -113,7 +113,12 @@ Block, list, table, flexbox, and grid layout are deterministic and intentionally
 
 Pagination supports automatic page breaks, manual page breaks, page margins, line-level paragraph fragmentation, best-effort keep-together behavior for `break-inside: avoid`, and repeated table headers when table bodies continue across pages. An avoided paragraph that is taller than the printable page is fragmented so that all text remains visible.
 
-Images support PNG, JPEG, and SVG data URIs, plus PNG/JPEG from absolute local paths and `base_url`-relative paths. SVG data URIs are rasterized to PNG with the lightweight `resvg` NIF using local in-process rendering; remote URLs and unsafe relative paths are rejected.
+Images support 8-bit, non-interlaced RGB and RGBA PNGs, JPEGs, and SVG data URIs,
+plus the same PNG subset and JPEGs from absolute local paths and
+`base_url`-relative paths. SVG data URIs are rasterized to PNG with the
+lightweight `resvg` NIF using local in-process rendering; remote URLs and unsafe
+relative paths are rejected. Greyscale, indexed-color, 16-bit, and
+Adam7-interlaced PNG decoding is scheduled for `0.20.0`.
 
 Fonts support built-in PDF fonts (`Helvetica`, `Courier`, `Times-Roman` and their bold/italic variants), explicit font options, local CSS `@font-face` declarations, and bundled DejaVu Sans regular, bold, oblique, and bold-oblique fallback faces. Relative `@font-face` URLs resolve against the containing stylesheet directory or `:base_url`; HTTP(S), data URLs, `local(...)`-only sources, WOFF, WOFF2, and CFF-flavored OpenType fonts are rejected. Convert unsupported web fonts to TTF before rendering.
 
@@ -162,7 +167,7 @@ Current parity fixtures cover:
 | `display_lists_and_inline_block.html` | inline-block layout, hidden elements, unordered lists, ordered lists, list item spacing                                                                                                                                           |
 | `fonts_and_print_media.html`          | local CSS `@font-face`, print-only media cascade, embedded font output, bundled Unicode glyph fallback from a built-in font                                                                                                          |
 | `html_semantics_typography.html`      | semantic block aliases, metadata wrappers,`title`, `lang`, `h1`-`h6`, `b`, `i`                                                                                                                                        |
-| `images_data_uris.html`               | PNG, JPEG, and SVG data URI images in block, table, flex, and grid contexts                                                                                                                                                       |
+| `images_data_uris.html`               | 8-bit non-interlaced RGB PNG, JPEG, and SVG data URI images in block, table, flex, and grid contexts                                                                                                                               |
 | `inline_text_flow.html`               | inline runs, bold, italic, colors, line-height, wrapping,`<br>`, text transform                                                                                                                                                 |
 | `links_entities_and_protocols.html`   | links,`https`, `http`, `mailto`, named entities, decimal and hex numeric entities, non-breaking-space wrapping                                                                                                                |
 | `text_style_variants.html`            | `rgb()`, `rgba()`, `currentColor`, transparent borders, white-space, word breaking, letter spacing, text transforms                                                                                                         |

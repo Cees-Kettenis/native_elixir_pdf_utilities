@@ -411,7 +411,56 @@ candidate.
 - Confirm README, HexDocs guide links, changelog links, and roadmap links are
   valid.
 
-### 0.20.0 - Release Candidate and API Freeze
+### 0.20.0 - Complete PNG Decoding and Validation
+
+Milestone goal: make the renderer's PNG support cover conforming PNG image
+variants while preserving strict input validation and bounded resource use.
+
+#### Scope
+
+- Support every standard PNG color type and valid bit-depth combination:
+  - greyscale at 1, 2, 4, 8, and 16 bits
+  - truecolor RGB at 8 and 16 bits
+  - indexed color at 1, 2, 4, and 8 bits
+  - greyscale with alpha at 8 and 16 bits
+  - truecolor RGBA at 8 and 16 bits
+- Decode `PLTE` palettes and `tRNS` transparency for greyscale, truecolor, and
+  indexed-color images.
+- Unpack 1-, 2-, and 4-bit samples and convert 16-bit samples into the
+  renderer's 8-bit image representation.
+- Support both non-interlaced images and Adam7 interlacing.
+- Verify every chunk CRC before accepting its data.
+- Enforce required chunk presence, uniqueness, and ordering.
+- Reject unknown critical chunks while safely ignoring unknown ancillary
+  chunks.
+- Preserve decompression-ratio, decoded-byte, dimension, and total-image-size
+  limits through every decoding path.
+
+#### Design Notes
+
+- Normalize decoded PNGs to 8-bit RGB plus an optional 8-bit alpha mask before
+  they reach layout and the PDF writer.
+- Keep decoding local and deterministic without introducing remote image
+  processing.
+- Treat malformed palettes, invalid palette indexes, truncated packed samples,
+  invalid Adam7 passes, CRC failures, and impossible decoded sizes as input
+  errors.
+- Keep optional color-management metadata outside the pre-1.0 scope unless it
+  is required for consistent rendering of common document assets.
+
+#### Completion Criteria
+
+- Add focused tests for every valid color-type and bit-depth combination.
+- Add focused tests for `PLTE`, every applicable `tRNS` form, packed samples,
+  16-bit conversion, all scanline filters, and every Adam7 pass.
+- Add malformed-input tests for CRCs, chunk order, duplicate or missing
+  critical chunks, unknown critical chunks, palette bounds, truncated passes,
+  decompression limits, and oversized images.
+- Add or update Chromium parity fixtures with representative greyscale,
+  indexed, transparent, 16-bit, and Adam7 PNGs.
+- Preserve 100% test coverage and pass the full HTML-to-PDF quality gate.
+
+### 0.21.0 - Release Candidate and API Freeze
 
 Milestone goal: stop expanding scope and harden the public API before `1.0.0`.
 
