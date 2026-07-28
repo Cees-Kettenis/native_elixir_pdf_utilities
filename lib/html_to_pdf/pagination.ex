@@ -40,7 +40,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
     case {valid_page_size?(page_size), is_number(margin) and margin >= 0} do
       {true, true} ->
-        groups = flow_groups(boxes)
+        {_page_width, page_height} = page_size
+        content_height = page_height - margin * 2
+
+        groups =
+          boxes
+          |> flow_groups()
+          |> Enum.flat_map(&fragment_flow_group(&1, content_height))
+
         headers = repeated_table_headers(groups)
         {:ok, groups_to_pages(groups, headers, page_size, margin)}
 
@@ -206,10 +213,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       height: top - bottom,
       break_before: Map.get(first, :break_before, :auto),
       break_after: Map.get(first, :break_after, :auto),
+      break_inside: Map.get(first, :break_inside, :auto),
       table_id: Map.get(first, :table_id),
       table_section: Map.get(first, :table_section),
       repeat_table_header: Map.get(first, :repeat_table_header, false)
     }
+  end
+
+  defp fragment_flow_group(group, content_height) do
+    fragmentable? = Enum.any?(group.boxes, &Map.has_key?(&1, :fragment_id))
+
+    case fragmentable? and
+           (group.break_inside == :auto or group.height > content_height) do
+      true ->
+        group.boxes
+        |> Enum.chunk_by(&Map.get(&1, :fragment_id))
+        |> Enum.map(&flow_group/1)
+
+      false ->
+        [group]
+    end
   end
 
   defp box_bounds(box) do
@@ -219,6 +242,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
       %{type: :image, y: y, height: height} when is_number(y) and is_number(height) ->
         {y + height, y}
+
+      %{type: :text, y: y, font_size: font_size, line_height: line_height}
+      when is_number(y) and is_number(font_size) and is_number(line_height) ->
+        {y + font_size, y + font_size - line_height}
 
       %{type: :text, y: y, font_size: font_size} when is_number(y) and is_number(font_size) ->
         {y + font_size, y}

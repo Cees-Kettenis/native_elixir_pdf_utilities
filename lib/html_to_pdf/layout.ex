@@ -111,6 +111,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           flow_metadata =
             style
             |> break_metadata()
+            |> Map.put(
+              :fragment_lines,
+              Map.get(style, :background_color) == nil and
+                Enum.all?(Map.values(border_widths), &(&1 <= 0))
+            )
             |> Map.put(:flow_id, {:block, box_x, box_top})
 
           case layout_block_content(
@@ -908,7 +913,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         )
 
       {:ok, boxes} = flex_item_boxes(item, :row)
-      tagged_boxes = tag_boxes(boxes, %{flow_id: container_flow_id})
+      tagged_boxes = tag_atomic_boxes(boxes, %{flow_id: container_flow_id})
       {:cont, {:ok, acc ++ tagged_boxes}}
     end)
   end
@@ -1444,7 +1449,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     Enum.reduce_while(lines, {:ok, []}, fn item, {:ok, acc} ->
       {:ok, boxes} = flex_item_boxes(item, main_axis)
-      tagged_boxes = tag_boxes(boxes, %{flow_id: container_flow_id})
+      tagged_boxes = tag_atomic_boxes(boxes, %{flow_id: container_flow_id})
       {:cont, {:ok, acc ++ tagged_boxes}}
     end)
   end
@@ -2494,7 +2499,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         |> tag_boxes(row_metadata)
         |> Enum.map(&Map.put(&1, :role, :table_border))
 
-      {:ok, cell_box ++ border_box ++ tag_boxes(content_boxes, row_metadata)}
+      {:ok, cell_box ++ border_box ++ tag_atomic_boxes(content_boxes, row_metadata)}
     end
   end
 
@@ -3126,6 +3131,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     line_height = Map.fetch!(style, :line_height)
     font_size = Map.fetch!(style, :font_size)
     lines = inline_lines(runs, width)
+    last_line_index = length(lines) - 1
 
     boxes =
       lines
@@ -3134,9 +3140,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         baseline_y = y - line_height * index - font_size
         start_x = aligned_text_x(line_runs, style, x, width)
 
+        line_metadata =
+          case Map.get(metadata, :fragment_lines, false) do
+            true ->
+              metadata
+              |> Map.put(:fragment_id, {:line, Map.fetch!(metadata, :flow_id), index})
+              |> Map.put(
+                :break_before,
+                if(index == 0, do: Map.get(metadata, :break_before, :auto), else: :auto)
+              )
+              |> Map.put(
+                :break_after,
+                if(index == last_line_index,
+                  do: Map.get(metadata, :break_after, :auto),
+                  else: :auto
+                )
+              )
+
+            false ->
+              metadata
+          end
+
         {line_boxes, _next_x} =
           Enum.reduce(line_runs, {[], start_x}, fn run, {acc, current_x} ->
-            box = run |> text_box(current_x, baseline_y, width) |> Map.merge(metadata)
+            box = run |> text_box(current_x, baseline_y, width) |> Map.merge(line_metadata)
             {acc ++ [box], current_x + text_width(run.text, run.style)}
           end)
 
@@ -3350,10 +3377,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     Enum.map(boxes, &Map.merge(&1, metadata))
   end
 
+  defp tag_atomic_boxes(boxes, metadata) do
+    Enum.map(boxes, fn box ->
+      box
+      |> Map.drop([:fragment_id, :fragment_lines])
+      |> Map.merge(metadata)
+    end)
+  end
+
   defp break_metadata(style) do
     %{
       break_before: Map.get(style, :break_before, :auto),
-      break_after: Map.get(style, :break_after, :auto)
+      break_after: Map.get(style, :break_after, :auto),
+      break_inside: Map.get(style, :break_inside, :auto)
     }
   end
 

@@ -47,6 +47,92 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
     assert_in_delta four.y, 78.0, 0.0001
   end
 
+  test "paginate fragments default auto paragraphs across the remaining page space" do
+    paragraph_boxes =
+      [63.6, 49.2, 34.8, 20.4, 6.0, -8.4]
+      |> Enum.with_index(1)
+      |> Enum.map(fn {y, index} ->
+        text_box("Line #{index}", y, {:block, :paragraph}, %{
+          break_inside: :auto,
+          fragment_id: {:line, :paragraph, index}
+        })
+      end)
+
+    layout_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 10.0,
+      boxes: [text_box("Lead", 78.0, {:block, :lead})] ++ paragraph_boxes
+    }
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+
+    assert Enum.map(first_page.boxes, & &1.text) ==
+             ["Lead", "Line 1", "Line 2", "Line 3", "Line 4"]
+
+    assert Enum.map(second_page.boxes, & &1.text) == ["Line 5", "Line 6"]
+  end
+
+  test "paginate moves a fitting break-inside avoid paragraph to a fresh page" do
+    lead = %{
+      type: :rect,
+      x: 10.0,
+      y: 30.0,
+      width: 180.0,
+      height: 60.0,
+      flow_id: {:block, :lead},
+      break_before: :auto,
+      break_after: :auto
+    }
+
+    paragraph_boxes =
+      [13.0, -1.4]
+      |> Enum.with_index(1)
+      |> Enum.map(fn {y, index} ->
+        text_box("Avoid #{index}", y, {:block, :avoid}, %{
+          break_inside: :avoid,
+          fragment_id: {:line, :avoid, index}
+        })
+      end)
+
+    layout_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 10.0,
+      boxes: [lead] ++ paragraph_boxes
+    }
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+    assert first_page.boxes == [lead]
+    assert Enum.map(second_page.boxes, & &1.text) == ["Avoid 1", "Avoid 2"]
+  end
+
+  test "paginate fragments an oversized break-inside avoid paragraph" do
+    paragraph_boxes =
+      [78.0, 63.6, 49.2, 34.8, 20.4, 6.0, -8.4]
+      |> Enum.with_index(1)
+      |> Enum.map(fn {y, index} ->
+        text_box("Oversized #{index}", y, {:block, :oversized}, %{
+          break_inside: :avoid,
+          fragment_id: {:line, :oversized, index}
+        })
+      end)
+
+    layout_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 10.0,
+      boxes: paragraph_boxes
+    }
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+
+    assert Enum.map(first_page.boxes, & &1.text) ==
+             ["Oversized 1", "Oversized 2", "Oversized 3", "Oversized 4", "Oversized 5"]
+
+    assert Enum.map(second_page.boxes, & &1.text) == ["Oversized 6", "Oversized 7"]
+  end
+
   test "paginated page count supplies current and total page furniture tokens" do
     boxes = [
       text_box("One", 68.0, {:block, 1}),
@@ -201,14 +287,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
         break_before: :auto,
         break_after: :auto
       },
+      %{
+        type: :text,
+        text: "Font size bounds",
+        x: 10.0,
+        y: 12.0,
+        width: 20.0,
+        annotation_width: 20.0,
+        font: "Helvetica",
+        font_size: 8.0,
+        color: {0, 0, 0},
+        flow_id: {:text, 2},
+        break_before: :auto,
+        break_after: :auto
+      },
       %{type: :metadata, flow_id: {:metadata, 1}, break_before: :auto, break_after: :auto}
     ]
 
     layout_tree = %{type: :layout, page_size: {200.0, 100.0}, margin: 10.0, boxes: boxes}
 
     assert {:ok, [page]} = Pagination.paginate(layout_tree, [])
-    assert length(page.boxes) == 3
-    assert Enum.at(page.boxes, 2).type == :metadata
+    assert length(page.boxes) == 4
+    assert Enum.at(page.boxes, 3).type == :metadata
   end
 
   test "paginate overflows table body groups without a repeated header" do

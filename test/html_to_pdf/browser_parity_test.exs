@@ -55,6 +55,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
      chromium_page_margin: 36,
      max_changed_ratio: 0.12,
      max_average_delta: 0.03},
+    {"paragraph_pagination.html",
+     render_opts: [page_size: {240, 180}, margin: 0],
+     chromium_page_size: {240, 180},
+     max_changed_ratio: 0.14,
+     max_average_delta: 0.035},
     {"pagination_breaks.html", max_changed_ratio: 0.12, max_average_delta: 0.03}
   ]
 

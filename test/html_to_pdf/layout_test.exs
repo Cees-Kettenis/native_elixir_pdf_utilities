@@ -51,6 +51,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert box.font == "Helvetica"
   end
 
+  test "layout marks complete visual lines as paragraph fragmentation units" do
+    html = """
+    <p style="font-size: 10pt; line-height: 12pt; margin: 0">
+      <span>Normal </span><strong>bold</strong><br>Second line
+    </p>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom)
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 100}, margin: 10)
+
+    [normal, bold, second] = Enum.filter(layout_tree.boxes, &(&1.type == :text))
+
+    assert normal.fragment_id == bold.fragment_id
+    refute normal.fragment_id == second.fragment_id
+    assert normal.flow_id == bold.flow_id
+    assert bold.flow_id == second.flow_id
+  end
+
   test "layout includes letter spacing in text measurements" do
     styled_tree = %{
       type: :document,

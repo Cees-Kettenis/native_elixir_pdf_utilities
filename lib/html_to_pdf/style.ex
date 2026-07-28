@@ -467,6 +467,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp block_defaults(font_size, font_weight, margin_bottom) do
     %{
       background_color: nil,
+      break_inside: :auto,
       border_color: {0, 0, 0},
       border_colors: edges({0, 0, 0}),
       border_radius: 0.0,
@@ -1384,7 +1385,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         with {:ok, break_value} <- page_break_value(value),
              do: {:ok, Map.put(style, :break_after, break_value)}
 
-      "page-break-inside" ->
+      property when property in ["break-inside", "page-break-inside"] ->
         put_break_inside(style, value)
 
       "line-break" ->
@@ -1721,7 +1722,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp put_break_inside(style, value) do
     case value |> String.trim() |> String.downcase() do
-      value when value in ["auto", "avoid"] -> {:ok, style}
+      "auto" -> {:ok, Map.put(style, :break_inside, :auto)}
+      "avoid" -> {:ok, Map.put(style, :break_inside, :avoid)}
       _ -> {:error, :invalid_document}
     end
   end

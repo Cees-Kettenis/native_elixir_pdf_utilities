@@ -18,6 +18,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert paragraph.style.font_family == "Helvetica"
     assert paragraph.style.font_size == 12.0
     assert paragraph.style.color == {0, 0, 0}
+    assert paragraph.style.break_inside == :auto
   end
 
   test "compute treats section and article as block containers" do
@@ -236,6 +237,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert style_for!("div", "white-space: nowrap").line_break == :normal
     assert style_for!("div", "word-wrap: normal").line_break == :normal
     assert style_for!("div", "overflow-wrap: anywhere").line_break == :anywhere
+    assert style_for!("div", "break-inside: avoid").break_inside == :avoid
+    assert style_for!("div", "page-break-inside: auto").break_inside == :auto
     assert style_for!("div", "border: 0").border_widths == edges(0.0)
     assert style_for!("div", "border-right: 0").border_widths.right == 0.0
     assert style_for!("div", "display: grid; grid-template-columns: 1fr  auto").display == :grid

@@ -43,6 +43,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `nested_table_grid_flex.html` | table cell containing grid, grid item containing flexbox, ordering, gaps, nested borders |
 | `page_rules_landscape.html` | CSS `@page` landscape sizing, page margins, explicit page-sized drawing geometry |
 | `page_furniture.html` | repeated header and footer placement inside page margins across multiple pages |
+| `paragraph_pagination.html` | default line-level paragraph fragmentation across automatic page breaks |
 | `pagination_breaks.html` | explicit page breaks, repeated page-sized sections, page count parity |
 | `table_collapsed_borders.html` | table captions, headers, collapsed borders, side-specific border precedence, `colspan`, missing trailing cells |
 | `table_pagination_headers.html` | table overflow pagination, repeated header expectations, page breaks around table rows |

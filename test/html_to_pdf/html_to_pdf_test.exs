@@ -492,6 +492,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "(Alpha 3) Tj"
   end
 
+  test "render fragments a paragraph taller than the printable page" do
+    lines =
+      1..13
+      |> Enum.map_join("<br>", fn index ->
+        "Paragraph line #{String.pad_leading(Integer.to_string(index), 2, "0")}"
+      end)
+
+    html = """
+    <p style="font-size: 10pt; line-height: 12pt; margin: 0">#{lines}</p>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {200, 100}, margin: 10)
+    assert pdf =~ "/Count 3"
+
+    for index <- 1..13 do
+      label = "Paragraph line #{String.pad_leading(Integer.to_string(index), 2, "0")}"
+      assert pdf =~ "(#{label}) Tj"
+    end
+  end
+
   test "render adds opt-in running page furniture without changing default rendering" do
     html = """
     <p>First body page</p>
