@@ -23,7 +23,7 @@ jobs:
       - name: Install test fonts
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends fonts-dejavu-core
+          apt-get install -y --no-install-recommends fonts-dejavu-core fonts-liberation
           rm -rf /var/lib/apt/lists/*
 
       - name: Restore Mix and Dialyzer caches
