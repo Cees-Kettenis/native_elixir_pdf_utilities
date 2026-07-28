@@ -1224,6 +1224,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp apply_declarations(style, declarations) do
+    {custom_property_declarations, ordinary_declarations} =
+      Enum.split_with(declarations, &custom_property_declaration?/1)
+
+    with {:ok, style} <- apply_declaration_list(style, custom_property_declarations) do
+      apply_declaration_list(style, ordinary_declarations)
+    end
+  end
+
+  defp custom_property_declaration?(declaration) do
+    case declaration do
+      {"--" <> _custom_property, _value} -> true
+      {"--" <> _custom_property, _value, :important} -> true
+      _ -> false
+    end
+  end
+
+  defp apply_declaration_list(style, declarations) do
     Enum.reduce_while(declarations, {:ok, style}, fn declaration, {:ok, acc} ->
       case apply_declaration(acc, declaration) do
         {:ok, style} -> {:cont, {:ok, style}}

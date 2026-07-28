@@ -1148,6 +1148,65 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert_style_value(section.style.border_colors.left, {0.0588235294, 0.462745098, 0.431372549})
   end
 
+  test "compute resolves ordinary declarations against final custom properties" do
+    forward_reference =
+      style_for!("p", "color: var(--brand); --brand: red")
+
+    later_override =
+      style_for!("p", "--brand: blue; color: var(--brand); --brand: red")
+
+    assert forward_reference.color == {1, 0, 0}
+    assert later_override.color == {1, 0, 0}
+  end
+
+  test "compute cascades custom properties before resolving ordinary declarations" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [
+            %{
+              type: :text,
+              text: """
+              .normal { --brand: blue; color: var(--brand); }
+              .normal { --brand: red; }
+              .important { --brand: blue !important; color: var(--brand); }
+              """
+            }
+          ]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"class" => "normal"},
+          children: [%{type: :text, text: "Later source order"}]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"class" => "important", "style" => "--brand: red"},
+          children: [%{type: :text, text: "Important stylesheet variable"}]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"class" => "important", "style" => "--brand: red !important"},
+          children: [%{type: :text, text: "Important inline variable"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [normal, stylesheet_important, inline_important] = styled_tree.children
+
+    assert normal.style.color == {1, 0, 0}
+    assert stylesheet_important.style.color == {0, 0, 1}
+    assert inline_important.style.color == {1, 0, 0}
+  end
+
   test "compute applies child selectors with first-child pseudo classes" do
     dom = %{
       type: :document,

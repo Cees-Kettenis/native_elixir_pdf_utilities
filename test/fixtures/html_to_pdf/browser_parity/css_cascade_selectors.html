@@ -19,6 +19,7 @@
       section.panel > div:first-child { background-color: #dbeafe; }
       section.panel > div:last-child { background-color: #dcfce7; }
       section.panel > div:nth-child(2) { font-weight: 700; }
+      .forward-reference { color: var(--forward-color); --forward-color: #7c3aed; }
       #important { color: #1d4ed8 !important; }
       .hidden { display: none; }
     </style>
@@ -29,6 +30,7 @@
         <div>first child rule</div>
         <div class="note" id="important" style="color: #dc2626">stylesheet important over inline normal</div>
         <div class="hidden">this should not render</div>
+        <div class="forward-reference">custom property declared after use</div>
         <div>last child rule</div>
       </section>
     </main>
