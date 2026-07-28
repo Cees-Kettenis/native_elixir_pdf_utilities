@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
+  alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
   alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
@@ -44,6 +45,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
     assert Enum.map(second_page.boxes, & &1.text) == ["Four"]
     [four] = second_page.boxes
     assert_in_delta four.y, 78.0, 0.0001
+  end
+
+  test "paginated page count supplies current and total page furniture tokens" do
+    boxes = [
+      text_box("One", 68.0, {:block, 1}),
+      text_box("Two", 41.6, {:block, 2}),
+      text_box("Three", 15.2, {:block, 3})
+    ]
+
+    layout_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 20.0,
+      boxes: boxes
+    }
+
+    assert {:ok, pages} = Pagination.paginate(layout_tree, [])
+    assert length(pages) == 2
+
+    assert {:ok, [first_page, second_page]} =
+             PageFurniture.decorate(pages, layout_tree,
+               page_furniture: [
+                 header: "<div style=\"font-size: 8pt\">Page {{page}}/{{pages}}</div>"
+               ]
+             )
+
+    assert Enum.any?(first_page.boxes, &(&1.type == :text and &1.text == "Page 1/2"))
+    assert Enum.any?(second_page.boxes, &(&1.type == :text and &1.text == "Page 2/2"))
   end
 
   test "paginate preserves first page top offset from parent padding" do

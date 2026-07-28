@@ -492,6 +492,89 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "(Alpha 3) Tj"
   end
 
+  test "render adds opt-in running page furniture without changing default rendering" do
+    html = """
+    <p>First body page</p>
+    <div style="page-break-after: always"></div>
+    <p>Second body page</p>
+    <div style="page-break-after: always"></div>
+    <p>Third body page</p>
+    """
+
+    assert {:ok, default_pdf} =
+             HtmlToPdf.render(html, page_size: {200, 100}, margin: 20)
+
+    refute default_pdf =~ "(Report header) Tj"
+    refute default_pdf =~ "(Page 1 of 3) Tj"
+
+    assert {:ok, furnished_pdf} =
+             HtmlToPdf.render(html,
+               page_size: {200, 100},
+               margin: 20,
+               page_furniture: [
+                 header: [
+                   default: "<div style=\"font-size: 8pt\">Report header</div>",
+                   first: false,
+                   odd: "<div style=\"font-size: 8pt\">Odd header</div>",
+                   even: "<div style=\"font-size: 8pt\">Even header</div>"
+                 ],
+                 footer:
+                   "<div style=\"font-size: 8pt; text-align: right\">Page {{page}} of {{pages}}</div>"
+               ]
+             )
+
+    assert furnished_pdf =~ "/Count 3"
+    refute furnished_pdf =~ "(Report header) Tj"
+    assert furnished_pdf =~ "(Odd header) Tj"
+    assert furnished_pdf =~ "(Even header) Tj"
+    assert furnished_pdf =~ "(Page 1 of 3) Tj"
+    assert furnished_pdf =~ "(Page 2 of 3) Tj"
+    assert furnished_pdf =~ "(Page 3 of 3) Tj"
+  end
+
+  test "render reports invalid page furniture through the shared diagnostics contract" do
+    assert {:error,
+            {:invalid_options,
+             %{
+               stage: :options,
+               reason: :invalid_options,
+               operation: :decorate_pages,
+               module: NativeElixirPdfUtilities.HtmlToPdf.PageFurniture,
+               message: "page_furniture contains unsupported keys: [:watermark]"
+             }}} =
+             HtmlToPdf.render("<p>Hello</p>",
+               page_furniture: [watermark: "Draft"]
+             )
+
+    assert {:error,
+            {:invalid_layout,
+             %{
+               stage: :layout,
+               reason: :invalid_layout,
+               operation: :decorate_pages,
+               module: NativeElixirPdfUtilities.HtmlToPdf.PageFurniture,
+               message: "footer page furniture height 12.0pt exceeds the 0.0pt page margin"
+             }}} =
+             HtmlToPdf.render("<p>Hello</p>", page_furniture: [footer: "Page {{page}}"])
+
+    assert {:error,
+            {:invalid_layout,
+             %{
+               stage: :layout,
+               reason: :invalid_layout,
+               operation: :decorate_pages,
+               module: NativeElixirPdfUtilities.HtmlToPdf.PageFurniture,
+               message: "header page furniture layout failed: invalid_layout"
+             }}} =
+             HtmlToPdf.render("<p>Hello</p>",
+               page_size: {200, 100},
+               margin: 20,
+               page_furniture: [
+                 header: ~s(<div style="display: flex"><ul><li>Invalid layout</li></ul></div>)
+               ]
+             )
+  end
+
   test "render honors an empty manual page break element" do
     html = ~s(<p>First</p><div style="page-break-after: always"></div><p>Second</p>)
 

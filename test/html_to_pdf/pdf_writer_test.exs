@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
 
   test "render writes a valid PDF for a text page" do
     pages = [
@@ -27,6 +28,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "/MediaBox [0 0 595.28 841.89]"
     assert pdf =~ "BT /F1 12 Tf 0 0 0 rg 56.69 773.2 Td (Hello) Tj ET"
     assert pdf =~ "startxref"
+  end
+
+  test "render writes page-furniture boxes produced after pagination" do
+    layout_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 20.0,
+      boxes: [],
+      content_width: 160.0,
+      content_height: 60.0
+    }
+
+    pages = [
+      %{
+        size: {200.0, 100.0},
+        boxes: [
+          %{
+            type: :text,
+            text: "Body",
+            x: 20.0,
+            y: 44.0,
+            font: "Helvetica",
+            font_size: 10.0,
+            color: {0, 0, 0}
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, decorated} =
+             PageFurniture.decorate(pages, layout_tree,
+               page_furniture: [
+                 header: "<div style=\"font-size: 8pt\">Header</div>",
+                 footer: "<div style=\"font-size: 8pt\">Page {{page}}/{{pages}}</div>"
+               ]
+             )
+
+    assert {:ok, pdf} = PdfWriter.render(decorated)
+    assert pdf =~ "(Body) Tj"
+    assert pdf =~ "(Header) Tj"
+    assert pdf =~ "(Page 1/1) Tj"
   end
 
   test "render writes document information metadata" do

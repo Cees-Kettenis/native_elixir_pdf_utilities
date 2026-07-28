@@ -19,6 +19,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
+  alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
   alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
@@ -37,6 +38,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
               optional(:modification_date) =>
                 Date.t() | NaiveDateTime.t() | DateTime.t() | String.t()
             }
+  @type page_furniture_template :: String.t() | false | nil
+  @type page_furniture_variants ::
+          String.t()
+          | [
+              default: page_furniture_template(),
+              first: page_furniture_template(),
+              odd: page_furniture_template(),
+              even: page_furniture_template()
+            ]
+          | %{
+              optional(:default) => page_furniture_template(),
+              optional(:first) => page_furniture_template(),
+              optional(:odd) => page_furniture_template(),
+              optional(:even) => page_furniture_template()
+            }
+  @type page_furniture ::
+          [
+            header: page_furniture_variants(),
+            footer: page_furniture_variants()
+          ]
+          | %{
+              optional(:header) => page_furniture_variants(),
+              optional(:footer) => page_furniture_variants()
+            }
   @type render_option ::
           {:page_size, page_size() | {number(), number()}}
           | {:margin, String.t() | number()}
@@ -45,6 +70,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | {:default_font, String.t()}
           | {:fonts, [map() | keyword() | {String.t(), String.t()}]}
           | {:metadata, pdf_metadata()}
+          | {:page_furniture, page_furniture() | false | nil}
   @type error_reason ::
           :invalid_document
           | :invalid_css
@@ -72,9 +98,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
 
   Supported options include `:page_size`, `:margin`, `:base_url`,
   `:stylesheets`, `:default_font`, explicit local `:fonts`, and PDF
-  `:metadata`. Metadata supports title, author, subject, keywords, creation
-  date, and modification date. An HTML `<title>` supplies the PDF title when
-  `metadata[:title]` is not set.
+  `:metadata`, plus opt-in `:page_furniture` headers and footers. Metadata
+  supports title, author, subject, keywords, creation date, and modification
+  date. An HTML `<title>` supplies the PDF title when `metadata[:title]` is not
+  set.
+
+  Page furniture accepts `:header` and `:footer` HTML templates. Each can be a
+  string used on every page or variants named `:default`, `:first`, `:odd`, and
+  `:even`. A variant set to `false` or `nil` is omitted. The `:first` variant
+  has precedence on page one, followed by the matching odd/even variant and
+  then `:default`. Templates can contain `{{page}}` and `{{pages}}` tokens.
+  Furniture is disabled when `:page_furniture` is omitted, `nil`, or `false`.
+  Enabled furniture must fit inside the page margin.
 
   `:page_size` accepts `:a4`, `:letter`, or a positive `{width, height}` tuple.
   Tuple values up to `20 x 20` are interpreted as inches for compatibility with
@@ -145,6 +180,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
          {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts),
          {:ok, layout_tree} <- layout_document(styled_tree, effective_opts),
          {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
+         {:ok, pages} <- PageFurniture.decorate(pages, layout_tree, effective_opts),
          {:ok, pdf_binary} <- PdfWriter.render(pages, effective_opts) do
       {:ok, pdf_binary}
     end
