@@ -10,7 +10,7 @@ CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity
 
 ## Current Result
 
-The browser-parity suite contains 24 synthetic HTML fixtures, 4 real production environment document fixtures, and guard tests that ensure every fixture has configured thresholds.
+The browser-parity suite contains 25 synthetic HTML fixtures, 4 real production environment document fixtures, and guard tests that ensure every fixture has configured thresholds.
 
 Current status: passing. The full suite passes with:
 
@@ -42,6 +42,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `nested_table_collapsed_borders.html` | collapsed outer table containing a collapsed inner table, nested `colspan`, side-specific nested borders |
 | `nested_table_grid_flex.html` | table cell containing grid, grid item containing flexbox, ordering, gaps, nested borders |
 | `page_rules_landscape.html` | CSS `@page` landscape sizing, page margins, explicit page-sized drawing geometry |
+| `page_furniture.html` | repeated header and footer placement inside page margins across multiple pages |
 | `pagination_breaks.html` | explicit page breaks, repeated page-sized sections, page count parity |
 | `table_collapsed_borders.html` | table captions, headers, collapsed borders, side-specific border precedence, `colspan`, missing trailing cells |
 | `table_pagination_headers.html` | table overflow pagination, repeated header expectations, page breaks around table rows |
@@ -115,6 +116,7 @@ Current production fixture parity:
 | Grid containing table, flex containing table, table containing direct flex | Passing | `layout_compositions_remaining.html` |
 | Page breaks around blocks | Passing | `pagination_breaks.html`, `break_variants.html` |
 | Page breaks inside/around tables | Passing | `table_pagination_headers.html` |
+| Running headers and footers inside page margins | Passing | `page_furniture.html` |
 | Images inside block/table/flex/grid | Passing | `images_data_uris.html` |
 | Embedded/system font metrics vs Chromium | Passing | Synthetic fixtures use `DejaVu Sans` when available; production fixtures use their declared font families when registered by the test helper |
 

@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      @page { size: letter; margin: 36pt; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 12pt;
+        color: #1f2933;
+      }
+      .page {
+        height: 650pt;
+        page-break-after: always;
+      }
+      .page:last-child { page-break-after: auto; }
+      .panel {
+        height: 80pt;
+        padding: 10pt;
+        border: 1pt solid #9fb3c8;
+        background: #f0f4f8;
+      }
+    </style>
+  </head>
+  <body>
+    <section class="page">
+      <div class="panel">First report page</div>
+    </section>
+    <section class="page">
+      <div class="panel">Second report page</div>
+    </section>
+  </body>
+</html>

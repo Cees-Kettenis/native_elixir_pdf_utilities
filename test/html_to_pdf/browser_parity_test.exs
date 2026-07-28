@@ -8,6 +8,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   @fixtures_dir Path.expand("../fixtures/html_to_pdf/browser_parity", __DIR__)
   @real_fixtures_dir Path.expand("../fixtures/html_to_pdf", __DIR__)
 
+  @page_furniture_header """
+  <div style="height: 18pt; padding: 4pt; border-bottom: 1pt solid #1f4b7a; background: #e8f1fa; color: #1f4b7a; font-family: 'DejaVu Sans'; font-size: 8pt; line-height: 10pt">Quarterly report</div>
+  """
+  @page_furniture_footer """
+  <div style="height: 14pt; padding: 4pt; border-top: 1pt solid #52606d; color: #52606d; font-family: 'DejaVu Sans'; font-size: 8pt; line-height: 10pt; text-align: right">Confidential</div>
+  """
+
   @fixture_thresholds [
     {"block_box_model.html", max_changed_ratio: 0.08, max_average_delta: 0.02},
     {"box_sizing_and_margins.html", max_changed_ratio: 0.12, max_average_delta: 0.03},
@@ -34,6 +41,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     {"nested_table_collapsed_borders.html", max_changed_ratio: 0.14, max_average_delta: 0.035},
     {"page_rules_landscape.html",
      render_opts: [margin: 0], max_changed_ratio: 0.08, max_average_delta: 0.02},
+    {"page_furniture.html",
+     render_opts: [
+       page_furniture: [
+         header: @page_furniture_header,
+         footer: @page_furniture_footer
+       ]
+     ],
+     chromium_page_furniture: [
+       header: @page_furniture_header,
+       footer: @page_furniture_footer
+     ],
+     chromium_page_margin: 36,
+     max_changed_ratio: 0.12,
+     max_average_delta: 0.03},
     {"pagination_breaks.html", max_changed_ratio: 0.12, max_average_delta: 0.03}
   ]
 

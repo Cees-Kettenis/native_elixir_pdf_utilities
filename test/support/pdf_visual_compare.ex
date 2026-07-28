@@ -187,19 +187,63 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       Keyword.get(opts, :chromium_page_size) ||
         chromium_default_page_size(fixture_path, render_opts)
 
-    case page_size do
-      nil ->
+    page_furniture = Keyword.get(opts, :chromium_page_furniture)
+
+    case {page_size, page_furniture} do
+      {nil, nil} ->
         fixture_path
 
-      page_size ->
+      _configured ->
         chromium_fixture_path = Path.join(artifact_dir, "chromium-input.html")
 
         fixture_path
         |> File.read!()
-        |> inject_chromium_page_css(page_size)
+        |> maybe_inject_chromium_page_css(page_size)
+        |> maybe_inject_chromium_page_furniture(
+          page_furniture,
+          Keyword.get(opts, :chromium_page_margin, 0)
+        )
         |> then(&File.write!(chromium_fixture_path, &1))
 
         chromium_fixture_path
+    end
+  end
+
+  defp maybe_inject_chromium_page_css(html, nil) do
+    html
+  end
+
+  defp maybe_inject_chromium_page_css(html, page_size) do
+    inject_chromium_page_css(html, page_size)
+  end
+
+  defp maybe_inject_chromium_page_furniture(html, nil, _margin) do
+    html
+  end
+
+  defp maybe_inject_chromium_page_furniture(html, page_furniture, margin)
+       when is_list(page_furniture) and is_number(margin) do
+    header = Keyword.get(page_furniture, :header, "")
+    footer = Keyword.get(page_furniture, :footer, "")
+
+    furniture = """
+    <style>
+      .browser-parity-running-header,
+      .browser-parity-running-footer {
+        position: fixed;
+        left: 0;
+        right: 0;
+      }
+      .browser-parity-running-header { top: -#{margin}pt; }
+      .browser-parity-running-footer { bottom: -#{margin}pt; }
+    </style>
+    <div class="browser-parity-running-header">#{header}</div>
+    <div class="browser-parity-running-footer">#{footer}</div>
+    """
+
+    case Regex.run(~r/<body\b[^>]*>/iu, html) do
+      [body_tag] -> String.replace(html, body_tag, body_tag <> "\n" <> furniture, global: false)
+      _ -> furniture <> "\n" <> html
     end
   end
 
