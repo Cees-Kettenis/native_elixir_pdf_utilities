@@ -13,6 +13,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   alias NativeElixirPdfUtilities.Diagnostics
 
   @max_decoded_image_bytes 100_000_000
+  @border_styles [
+    :none,
+    :hidden,
+    :dotted,
+    :dashed,
+    :solid,
+    :double,
+    :groove,
+    :ridge,
+    :inset,
+    :outset
+  ]
+  @medium_border_width 2.25
 
   @type text_node :: %{type: :text, text: String.t(), style: map()}
   @type styled_element :: %{
@@ -471,7 +484,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       border_color: {0, 0, 0},
       border_colors: edges({0, 0, 0}),
       border_radius: 0.0,
-      border_widths: edges(0.0),
+      border_styles: edges(:none),
+      border_widths: edges(@medium_border_width),
       box_sizing: :content_box,
       display: :block,
       font_size: font_size,
@@ -526,7 +540,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       border_color: {0, 0, 0},
       border_colors: edges({0, 0, 0}),
       border_radius: 0.0,
-      border_widths: edges(0.0),
+      border_styles: edges(:none),
+      border_widths: edges(@medium_border_width),
       box_sizing: :content_box,
       display: :table_row_group,
       padding: edges(0.0),
@@ -540,7 +555,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       border_color: {0, 0, 0},
       border_colors: edges({0, 0, 0}),
       border_radius: 0.0,
-      border_widths: edges(0.0),
+      border_styles: edges(:none),
+      border_widths: edges(@medium_border_width),
       box_sizing: :content_box,
       display: :table_row,
       padding: edges(0.0)
@@ -553,6 +569,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       border_color: {0, 0, 0},
       border_colors: edges({0, 0, 0}),
       border_radius: 0.0,
+      border_styles: edges(:solid),
       border_widths: edges(1.0),
       box_sizing: :content_box,
       colspan: 1,
@@ -1089,6 +1106,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           |> Enum.map(& &1.declaration)
 
         with {:ok, style} <- apply_declarations(style, declarations),
+             style = apply_border_styles(style),
              {:ok, style} <- put_font_face(style) do
           {:ok, put_line_height(style)}
         end
@@ -1308,9 +1326,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         with {:ok, lengths} <- parse_box_lengths(value, :margin),
              do: {:ok, put_box_lengths(style, "margin", lengths)}
 
-      property when property in ["padding", "border-width"] ->
+      "padding" ->
         with {:ok, lengths} <- parse_box_lengths(value),
-             do: {:ok, put_box_lengths(style, property, lengths)}
+             do: {:ok, put_box_lengths(style, "padding", lengths)}
+
+      "border-width" ->
+        with {:ok, widths} <- parse_border_widths(value),
+             do: {:ok, put_box_lengths(style, "border-width", widths)}
 
       property when property in ["margin-top", "margin-right", "margin-bottom", "margin-left"] ->
         with {:ok, length} <- parse_length(value, :margin),
@@ -1322,25 +1344,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
              do: {:ok, put_edge_length(style, property, length)}
 
       "border-color" ->
-        with {:ok, color} <- parse_color(value, Map.fetch!(style, :color)) do
-          case color do
-            :transparent ->
-              {:ok, style}
+        with {:ok, border_colors} <-
+               parse_border_colors(value, Map.fetch!(style, :color)) do
+          border_color = border_colors.top
 
-            color ->
-              {:ok,
-               style |> Map.put(:border_color, color) |> Map.put(:border_colors, edges(color))}
-          end
+          {:ok,
+           style
+           |> Map.put(:border_color, border_color)
+           |> Map.put(:border_colors, border_colors)}
         end
 
       property when property in ["border-top", "border-right", "border-bottom", "border-left"] ->
-        with {:ok, width, color} <- parse_border_edge(value, Map.fetch!(style, :color)) do
-          style = put_border_edge_width(style, property, width)
-
-          case color do
-            nil -> {:ok, style}
-            color -> {:ok, put_border_edge_color(style, property, color)}
-          end
+        with {:ok, width, color, border_style} <-
+               parse_border_edge(value, Map.fetch!(style, :color)) do
+          {:ok,
+           style
+           |> put_border_edge_width(property, width)
+           |> put_border_edge_color(property, color)
+           |> put_border_edge_style(property, border_style)}
         end
 
       property
@@ -1350,7 +1371,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
              "border-bottom-width",
              "border-left-width"
            ] ->
-        with {:ok, width} <- parse_length(value) do
+        with {:ok, width} <- parse_border_width(value) do
           {:ok, put_border_edge_width(style, border_edge_property(property), width)}
         end
 
@@ -1362,10 +1383,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
              "border-left-color"
            ] ->
         with {:ok, color} <- parse_color(value, Map.fetch!(style, :color)) do
-          case color do
-            :transparent -> {:ok, style}
-            color -> {:ok, put_border_edge_color(style, border_edge_property(property), color)}
-          end
+          {:ok,
+           put_border_edge_color(
+             style,
+             border_edge_property(property),
+             transparent_color_to_nil(color)
+           )}
         end
 
       property
@@ -1418,12 +1441,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         put_size(style, length_property(property), value)
 
       "border" ->
-        with {:ok, border_widths, border_color} <- parse_border(value, Map.fetch!(style, :color)) do
+        with {:ok, border_widths, border_color, border_styles} <-
+               parse_border(value, Map.fetch!(style, :color)) do
           style =
             style
             |> Map.put(:border_widths, border_widths)
             |> Map.put(:border_color, border_color)
             |> Map.put(:border_colors, edges(border_color))
+            |> Map.put(:border_styles, border_styles)
 
           {:ok, style}
         end
@@ -1607,7 +1632,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     |> Map.put_new(:border_color, {0, 0, 0})
     |> Map.put_new(:border_colors, edges(Map.get(style, :border_color, {0, 0, 0})))
     |> Map.put_new(:border_radius, 0.0)
-    |> Map.put_new(:border_widths, edges(0.0))
+    |> Map.put_new(:border_styles, edges(:none))
+    |> Map.put_new(:border_widths, edges(@medium_border_width))
     |> Map.put_new(:box_sizing, :content_box)
     |> Map.put_new(:margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
     |> Map.put_new(:margin_after, 0.0)
@@ -1664,21 +1690,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp put_border_style(style, property, value) do
-    normalized = value |> String.trim() |> String.downcase()
+    case property do
+      "border-style" ->
+        with {:ok, border_styles} <- parse_border_styles(value) do
+          {:ok, Map.put(style, :border_styles, border_styles)}
+        end
 
-    cond do
-      normalized in ["solid", "dashed"] ->
-        {:ok, style}
-
-      normalized == "none" and property == "border-style" ->
-        {:ok, Map.put(style, :border_widths, edges(0.0))}
-
-      normalized == "none" ->
-        {:ok, put_border_edge_width(style, border_edge_property(property), 0.0)}
-
-      true ->
-        {:error, :invalid_document}
+      _ ->
+        with {:ok, border_style} <- parse_border_style(value) do
+          {:ok, put_border_edge_style(style, border_edge_property(property), border_style)}
+        end
     end
+  end
+
+  defp apply_border_styles(style) do
+    border_styles = Map.get(style, :border_styles, edges(:none))
+
+    border_widths =
+      style
+      |> Map.get(:border_widths, edges(@medium_border_width))
+      |> Enum.map(fn {side, width} ->
+        case Map.fetch!(border_styles, side) in [:none, :hidden] do
+          true -> {side, 0.0}
+          false -> {side, width}
+        end
+      end)
+      |> Map.new()
+
+    style
+    |> Map.put(:border_styles, border_styles)
+    |> Map.put(:border_widths, border_widths)
   end
 
   defp put_box_sizing(style, value) do
@@ -2603,13 +2644,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       |> String.replace_prefix("border-", "")
       |> String.to_existing_atom()
 
-    style
-    |> Map.update(
+    Map.update(
+      style,
       :border_colors,
       edges(Map.get(style, :border_color, {0, 0, 0})),
       &Map.put(&1, edge, color)
     )
-    |> Map.put(:border_color, color)
+  end
+
+  defp put_border_edge_style(style, property, border_style) do
+    edge =
+      property
+      |> String.replace_prefix("border-", "")
+      |> String.to_existing_atom()
+
+    Map.update(style, :border_styles, edges(:none), &Map.put(&1, edge, border_style))
   end
 
   defp border_edge_property(property) do
@@ -2620,66 +2669,149 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp parse_border(value, current_color) do
-    tokens = String.split(value, ~r/\s+/u, trim: true)
+    tokens = split_css_tokens(value)
 
-    case tokens do
-      ["none"] ->
-        {:ok, edges(0.0), current_color}
+    parsed =
+      Enum.reduce_while(tokens, %{width: nil, style: nil, color: nil}, fn token, acc ->
+        cond do
+          is_nil(acc.style) and match?({:ok, _}, parse_border_style(token)) ->
+            {:ok, border_style} = parse_border_style(token)
+            {:cont, %{acc | style: border_style}}
 
-      ["0"] ->
-        {:ok, edges(0.0), current_color}
+          is_nil(acc.width) and match?({:ok, _}, parse_border_width(token)) ->
+            {:ok, width} = parse_border_width(token)
+            {:cont, %{acc | width: width}}
 
-      tokens ->
-        parsed =
-          Enum.reduce_while(tokens, %{width: nil, style: nil, color: nil}, fn token, acc ->
-            cond do
-              token in ["solid", "dashed"] and is_nil(acc.style) ->
-                {:cont, %{acc | style: String.to_atom(token)}}
+          is_nil(acc.color) and match?({:ok, _}, parse_color(token, current_color)) ->
+            {:ok, color} = parse_color(token, current_color)
+            {:cont, %{acc | color: transparent_color_to_nil(color)}}
 
-              is_nil(acc.width) and match?({:ok, _}, parse_length(token)) ->
-                {:ok, width} = parse_length(token)
-                {:cont, %{acc | width: width}}
-
-              is_nil(acc.color) and match?({:ok, _}, parse_color(token, current_color)) ->
-                {:ok, color} = parse_color(token, current_color)
-                {:cont, %{acc | color: color}}
-
-              true ->
-                {:halt, :error}
-            end
-          end)
-
-        case parsed do
-          %{width: width, style: style, color: color}
-          when is_number(width) and style in [:solid, :dashed] ->
-            border_color =
-              case color do
-                nil -> current_color
-                :transparent -> current_color
-                color -> color
-              end
-
-            {:ok, edges(width), border_color}
-
-          _ ->
-            :error
+          true ->
+            {:halt, :error}
         end
+      end)
+
+    case parsed do
+      %{width: width, style: border_style, color: color} ->
+        width = width || @medium_border_width
+        border_style = border_style || :none
+
+        color =
+          if is_nil(color) and not Enum.any?(tokens, &transparent_token?/1),
+            do: current_color,
+            else: color
+
+        {:ok, edges(width), color, edges(border_style)}
+
+      :error ->
+        :error
     end
   end
 
   defp parse_border_edge(value, current_color) do
-    case value |> String.trim() |> String.downcase() do
-      "none" ->
-        {:ok, 0.0, nil}
+    with {:ok, border_widths, border_color, border_styles} <-
+           parse_border(value, current_color) do
+      {:ok, border_widths.top, border_color, border_styles.top}
+    end
+  end
 
-      "0" ->
-        {:ok, 0.0, nil}
+  defp parse_border_styles(value) do
+    styles =
+      value
+      |> String.split(~r/\s+/u, trim: true)
+      |> Enum.map(&parse_border_style/1)
+
+    case styles do
+      [{:ok, all}] ->
+        {:ok, edges(all)}
+
+      [{:ok, vertical}, {:ok, horizontal}] ->
+        {:ok, edges(vertical, horizontal, vertical, horizontal)}
+
+      [{:ok, top}, {:ok, horizontal}, {:ok, bottom}] ->
+        {:ok, edges(top, horizontal, bottom, horizontal)}
+
+      [{:ok, top}, {:ok, right}, {:ok, bottom}, {:ok, left}] ->
+        {:ok, edges(top, right, bottom, left)}
 
       _ ->
-        with {:ok, border_widths, border_color} <- parse_border(value, current_color) do
-          {:ok, Enum.max(Map.values(border_widths)), border_color}
-        end
+        :error
     end
+  end
+
+  defp parse_border_colors(value, current_color) do
+    colors =
+      value
+      |> split_css_tokens()
+      |> Enum.map(fn color ->
+        case parse_color(color, current_color) do
+          {:ok, color} -> {:ok, transparent_color_to_nil(color)}
+          :error -> :error
+        end
+      end)
+
+    case colors do
+      [{:ok, all}] ->
+        {:ok, edges(all)}
+
+      [{:ok, vertical}, {:ok, horizontal}] ->
+        {:ok, edges(vertical, horizontal, vertical, horizontal)}
+
+      [{:ok, top}, {:ok, horizontal}, {:ok, bottom}] ->
+        {:ok, edges(top, horizontal, bottom, horizontal)}
+
+      [{:ok, top}, {:ok, right}, {:ok, bottom}, {:ok, left}] ->
+        {:ok, edges(top, right, bottom, left)}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp parse_border_style(value) do
+    normalized = value |> String.trim() |> String.downcase()
+
+    case Enum.find(@border_styles, &(Atom.to_string(&1) == normalized)) do
+      nil -> :error
+      border_style -> {:ok, border_style}
+    end
+  end
+
+  defp parse_border_widths(value) do
+    widths =
+      value
+      |> String.split(~r/\s+/u, trim: true)
+      |> Enum.map(&parse_border_width/1)
+
+    case widths do
+      [{:ok, all}] ->
+        {:ok, edges(all)}
+
+      [{:ok, vertical}, {:ok, horizontal}] ->
+        {:ok, edges(vertical, horizontal, vertical, horizontal)}
+
+      [{:ok, top}, {:ok, horizontal}, {:ok, bottom}] ->
+        {:ok, edges(top, horizontal, bottom, horizontal)}
+
+      [{:ok, top}, {:ok, right}, {:ok, bottom}, {:ok, left}] ->
+        {:ok, edges(top, right, bottom, left)}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp parse_border_width(value) do
+    case value |> String.trim() |> String.downcase() do
+      "thin" -> {:ok, 0.75}
+      "medium" -> {:ok, @medium_border_width}
+      "thick" -> {:ok, 3.75}
+      value -> parse_length(value)
+    end
+  end
+
+  defp transparent_token?(token) do
+    String.downcase(String.trim(token)) == "transparent"
   end
 
   defp transparent_color_to_nil(color) do

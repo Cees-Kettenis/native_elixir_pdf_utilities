@@ -391,6 +391,62 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert_in_delta text.width, 551.28, 0.0001
   end
 
+  test "layout carries side border styles and preserves transparent border spacing" do
+    visible_style =
+      block_style()
+      |> Map.merge(%{
+        background_color: nil,
+        border_color: {0.2, 0.4, 0.6},
+        border_colors: %{
+          top: {0.2, 0.4, 0.6},
+          right: {0.2, 0.4, 0.6},
+          bottom: {0.2, 0.4, 0.6},
+          left: {0.2, 0.4, 0.6}
+        },
+        border_radius: 0.0,
+        border_styles: %{top: :dotted, right: :dashed, bottom: :double, left: :groove},
+        border_widths: %{top: 1.0, right: 2.0, bottom: 3.0, left: 4.0},
+        margin_after: 0.0,
+        padding: %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+      })
+
+    transparent_style =
+      visible_style
+      |> Map.put(:border_color, nil)
+      |> Map.put(:border_colors, %{top: nil, right: nil, bottom: nil, left: nil})
+      |> Map.put(:border_styles, %{top: :solid, right: :solid, bottom: :solid, left: :solid})
+      |> Map.put(:border_widths, %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0})
+
+    styled_tree = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          style: visible_style,
+          children: [%{type: :text, text: "Visible", style: text_style()}]
+        },
+        %{
+          type: :element,
+          tag: "div",
+          style: transparent_style,
+          children: [%{type: :text, text: "Transparent", style: text_style()}]
+        }
+      ]
+    }
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 120}, margin: 10)
+
+    [border, visible_text, transparent_text] = layout_tree.boxes
+    assert border.type == :rect
+    assert border.border_styles == visible_style.border_styles
+    assert border.border_widths == visible_style.border_widths
+    assert border.border_colors == visible_style.border_colors
+    assert visible_text.text == "Visible"
+    assert transparent_text.text == "Transparent"
+    assert_in_delta transparent_text.x, 12.0, 0.0001
+  end
+
   test "layout treats border-box width and height as outer box dimensions" do
     assert {:ok, styled_tree} =
              Style.compute(%{

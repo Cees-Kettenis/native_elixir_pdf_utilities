@@ -364,6 +364,99 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     refute stroke_only_pdf =~ "10 20 40 30 re f"
   end
 
+  test "render writes every CSS border style and skips transparent sides" do
+    edges = fn value -> %{top: value, right: value, bottom: value, left: value} end
+
+    border_box = fn x, y, border_style, stroke_width ->
+      %{
+        type: :rect,
+        x: x,
+        y: y,
+        width: 10.0,
+        height: 10.0,
+        fill_color: nil,
+        stroke_color: {0.2, 0.4, 0.6},
+        stroke_width: stroke_width,
+        border_widths: edges.(stroke_width),
+        border_colors: edges.({0.2, 0.4, 0.6}),
+        border_styles: edges.(border_style),
+        border_radius: 0.0
+      }
+    end
+
+    transparent_box =
+      border_box.(70.0, 30.0, :solid, 1.0)
+      |> Map.put(:fill_color, {0.9, 0.9, 0.9})
+      |> Map.put(:border_colors, %{top: nil, right: {1, 0, 0}, bottom: nil, left: nil})
+
+    invisible_boxes =
+      [:none, :hidden]
+      |> Enum.with_index()
+      |> Enum.map(fn {border_style, index} ->
+        border_box.(10.0 + index * 20, 50.0, border_style, 2.0)
+        |> Map.put(:fill_color, {0.8, 0.8, 0.8})
+      end)
+
+    mixed_hidden_box =
+      border_box.(10.0, 70.0, :solid, 1.0)
+      |> Map.put(:border_styles, %{top: :hidden, right: :solid, bottom: :solid, left: :solid})
+
+    fallback_color_box =
+      border_box.(30.0, 70.0, :double, 3.0)
+      |> Map.delete(:border_colors)
+
+    fallback_style_box =
+      border_box.(50.0, 70.0, :solid, 1.0)
+      |> Map.delete(:border_styles)
+
+    pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes:
+          [
+            border_box.(10.0, 10.0, :dotted, 2.0),
+            border_box.(30.0, 10.0, :dashed, 2.0),
+            border_box.(50.0, 10.0, :double, 3.0),
+            border_box.(10.0, 30.0, :groove, 3.0),
+            border_box.(30.0, 30.0, :ridge, 3.0),
+            border_box.(50.0, 30.0, :inset, 3.0),
+            border_box.(70.0, 10.0, :outset, 3.0),
+            transparent_box
+          ] ++
+            invisible_boxes ++ [mixed_hidden_box, fallback_color_box, fallback_style_box]
+      }
+    ]
+
+    assert {:ok, pdf} = PdfWriter.render(pages, [])
+
+    assert pdf =~ "[0 4] 0 d 1 J"
+    assert pdf =~ "[6 6] 0 d 0 J"
+
+    assert pdf =~ "0.2 0.4 0.6 RG 1 w 50 20 m 60 20 l S"
+    assert pdf =~ "0.2 0.4 0.6 RG 1 w 50 18 m 60 18 l S"
+
+    assert pdf =~ "0.1 0.2 0.3 RG 1.5 w 10 40 m 20 40 l S"
+    assert pdf =~ "0.6 0.7 0.8 RG 1.5 w 10 38.5 m 20 38.5 l S"
+    assert pdf =~ "0.6 0.7 0.8 RG 1.5 w 30 40 m 40 40 l S"
+    assert pdf =~ "0.1 0.2 0.3 RG 1.5 w 30 38.5 m 40 38.5 l S"
+
+    assert pdf =~ "0.1 0.2 0.3 RG 3 w 50 40 m 60 40 l S"
+    assert pdf =~ "0.1 0.2 0.3 RG 3 w 80 10 m 80 20 l S"
+
+    assert pdf =~ "1 0 0 RG 1 w 80 30 m 80 40 l S"
+    refute pdf =~ "70 40 m 80 40 l S"
+    refute pdf =~ "70 30 m 80 30 l S"
+    refute pdf =~ "70 30 m 70 40 l S"
+
+    assert pdf =~ "10 50 10 10 re f"
+    assert pdf =~ "30 50 10 10 re f"
+
+    refute pdf =~ "10 80 m 20 80 l S"
+    assert pdf =~ "20 70 m 20 80 l S"
+    assert pdf =~ "0.2 0.4 0.6 RG 1 w 30 80 m 40 80 l S"
+    assert pdf =~ "0.2 0.4 0.6 RG 1 w 50 70 10 10 re S"
+  end
+
   test "render writes rounded rectangle paths when radius is set" do
     pages = [
       %{
@@ -681,6 +774,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
         stroke_width: 1,
         border_widths: %{top: 1, right: 1, bottom: 1, left: 1},
         border_colors: :bad,
+        border_radius: 0
+      },
+      %{
+        type: :rect,
+        x: 1,
+        y: 1,
+        width: 10,
+        height: 10,
+        fill_color: nil,
+        stroke_color: {0, 0, 0},
+        stroke_width: 1,
+        border_widths: %{top: 1, right: 1, bottom: 1, left: 1},
+        border_styles: %{top: :solid, right: :sparkly, bottom: :solid, left: :solid},
+        border_radius: 0
+      },
+      %{
+        type: :rect,
+        x: 1,
+        y: 1,
+        width: 10,
+        height: 10,
+        fill_color: nil,
+        stroke_color: {0, 0, 0},
+        stroke_width: 1,
+        border_widths: %{top: 1, right: 1, bottom: 1, left: 1},
+        border_styles: :bad,
         border_radius: 0
       },
       %{

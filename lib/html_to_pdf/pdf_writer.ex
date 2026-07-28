@@ -11,6 +11,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Diagnostics
 
+  @border_styles [
+    :none,
+    :hidden,
+    :dotted,
+    :dashed,
+    :solid,
+    :double,
+    :groove,
+    :ridge,
+    :inset,
+    :outset
+  ]
+
   @type page :: NativeElixirPdfUtilities.HtmlToPdf.Pagination.page()
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
   @type error_reason :: :invalid_pdf_input
@@ -105,7 +118,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         valid_optional_color?(fill_color) and valid_optional_color?(stroke_color) and
           valid_border_widths?(Map.get(box, :border_widths)) and
           valid_border_colors?(Map.get(box, :border_colors)) and
-          (not is_nil(fill_color) or stroke_width > 0)
+          valid_border_styles?(Map.get(box, :border_styles)) and
+          (not is_nil(fill_color) or visible_border?(box))
 
       %{type: :image, x: x, y: y, width: width, height: height, image: image}
       when is_number(x) and is_number(y) and is_number(width) and is_number(height) and
@@ -178,6 +192,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
       %{top: top, right: right, bottom: bottom, left: left} ->
         Enum.all?([top, right, bottom, left], &valid_optional_color?/1)
+
+      _ ->
+        false
+    end
+  end
+
+  defp valid_border_styles?(border_styles) do
+    case border_styles do
+      nil ->
+        true
+
+      %{top: top, right: right, bottom: bottom, left: left} ->
+        Enum.all?([top, right, bottom, left], &(&1 in @border_styles))
 
       _ ->
         false
@@ -589,10 +616,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         side_specific_rect_stream(box)
 
       false ->
+        border_style = uniform_border_style(box)
+
         graphics_state =
           ["q"]
           |> put_fill_color(box.fill_color)
-          |> put_stroke_color(box.stroke_color, box.stroke_width)
+          |> put_stroke_color(
+            box.stroke_color,
+            box.stroke_width,
+            border_style not in [:none, :hidden]
+          )
+          |> put_stroke_pattern(border_style, box.stroke_width)
           |> Kernel.++([rect_path(box), paint_operator(box), "Q"])
 
         Enum.join(graphics_state, " ")
@@ -627,8 +661,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp put_stroke_color(parts, color, stroke_width) do
-    case {color, stroke_width > 0} do
+  defp put_stroke_color(parts, color, stroke_width, visible? \\ true) do
+    case {color, stroke_width > 0 and visible?} do
       {{r, g, b}, true} ->
         parts ++
           [
@@ -639,6 +673,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             format_number(stroke_width),
             "w"
           ]
+
+      _ ->
+        parts
+    end
+  end
+
+  defp put_stroke_pattern(parts, border_style, stroke_width) do
+    case {border_style, stroke_width > 0} do
+      {:dotted, true} ->
+        parts ++ ["[0 #{format_number(stroke_width * 2)}] 0 d", "1 J"]
+
+      {:dashed, true} ->
+        dash_length = stroke_width * 3
+        parts ++ ["[#{format_number(dash_length)} #{format_number(dash_length)}] 0 d", "0 J"]
 
       _ ->
         parts
@@ -678,11 +726,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp side_specific_border?(box) do
-    case {Map.get(box, :border_widths), Map.get(box, :border_colors)} do
-      {%{top: top, right: right, bottom: bottom, left: left}, border_colors}
-      when box.stroke_width > 0 and box.border_radius == 0 ->
+    case {Map.get(box, :border_widths), Map.get(box, :border_colors),
+          Map.get(box, :border_styles)} do
+      {%{top: top, right: right, bottom: bottom, left: left}, border_colors, border_styles}
+      when box.stroke_width > 0 ->
         Enum.uniq([top, right, bottom, left]) |> length() > 1 or
-          side_specific_border_colors?(border_colors, box.stroke_color)
+          side_specific_border_colors?(border_colors, box.stroke_color) or
+          side_specific_border_styles?(border_styles)
+
+      _ ->
+        false
+    end
+  end
+
+  defp side_specific_border_styles?(border_styles) do
+    case border_styles do
+      %{top: top, right: right, bottom: bottom, left: left} ->
+        Enum.uniq([top, right, bottom, left]) |> length() > 1 or
+          Enum.any?(
+            [top, right, bottom, left],
+            &(&1 in [:double, :groove, :ridge, :inset, :outset])
+          )
 
       _ ->
         false
@@ -714,15 +778,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     stroke_parts =
       box.border_widths
       |> Enum.flat_map(fn {side, stroke_width} ->
-        case stroke_width > 0 do
-          true ->
-            ["q"]
-            |> put_stroke_color(border_side_color(box, side), stroke_width)
-            |> Kernel.++([border_side_path(box, side), "S", "Q"])
-
-          false ->
-            []
-        end
+        border_side_stream(box, side, stroke_width)
       end)
 
     Enum.join(fill_parts ++ stroke_parts, " ")
@@ -735,7 +791,110 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp border_side_path(box, side) do
+  defp border_side_style(box, side) do
+    case Map.get(box, :border_styles) do
+      %{^side => border_style} -> border_style
+      _ -> :solid
+    end
+  end
+
+  defp uniform_border_style(box) do
+    border_side_style(box, :top)
+  end
+
+  defp border_side_stream(box, side, stroke_width) do
+    border_style = border_side_style(box, side)
+    color = border_side_color(box, side)
+
+    case {stroke_width > 0, border_style, color} do
+      {false, _, _} ->
+        []
+
+      {_, border_style, _} when border_style in [:none, :hidden] ->
+        []
+
+      {_, _, nil} ->
+        []
+
+      {true, :double, color} ->
+        line_width = stroke_width / 3
+
+        border_stroke(box, side, line_width, color, :solid, 0.0) ++
+          border_stroke(box, side, line_width, color, :solid, stroke_width * 2 / 3)
+
+      {true, border_style, color} when border_style in [:groove, :ridge] ->
+        line_width = stroke_width / 2
+        {outer_color, inner_color} = relief_pair(color, side, border_style)
+
+        border_stroke(box, side, line_width, outer_color, :solid, 0.0) ++
+          border_stroke(box, side, line_width, inner_color, :solid, line_width)
+
+      {true, border_style, color} when border_style in [:inset, :outset] ->
+        border_stroke(
+          box,
+          side,
+          stroke_width,
+          relief_color(color, side, border_style),
+          :solid,
+          0.0
+        )
+
+      {true, border_style, color} ->
+        border_stroke(box, side, stroke_width, color, border_style, 0.0)
+    end
+  end
+
+  defp border_stroke(box, side, stroke_width, color, border_style, inset) do
+    ["q"]
+    |> put_stroke_color(color, stroke_width)
+    |> put_stroke_pattern(border_style, stroke_width)
+    |> Kernel.++([border_side_path(box, side, inset), "S", "Q"])
+  end
+
+  defp relief_pair(color, side, border_style) do
+    outer_style =
+      case border_style do
+        :groove -> :inset
+        :ridge -> :outset
+      end
+
+    inner_style =
+      case border_style do
+        :groove -> :outset
+        :ridge -> :inset
+      end
+
+    {relief_color(color, side, outer_style), relief_color(color, side, inner_style)}
+  end
+
+  defp relief_color(color, side, border_style) do
+    dark_side? = side in [:top, :left]
+
+    dark? =
+      case border_style do
+        :inset -> dark_side?
+        :outset -> not dark_side?
+      end
+
+    case dark? do
+      true -> shade_color(color, 0.5)
+      false -> tint_color(color, 0.5)
+    end
+  end
+
+  defp shade_color({r, g, b}, amount) do
+    {r * amount, g * amount, b * amount}
+  end
+
+  defp tint_color({r, g, b}, amount) do
+    {
+      r + (1 - r) * amount,
+      g + (1 - g) * amount,
+      b + (1 - b) * amount
+    }
+  end
+
+  defp border_side_path(box, side, inset) do
     left = box.x
     right = box.x + box.width
     bottom = box.y
@@ -743,25 +902,49 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
     case side do
       :top ->
-        "#{format_number(left)} #{format_number(top)} m #{format_number(right)} #{format_number(top)} l"
+        y = top - inset
+
+        "#{format_number(left)} #{format_number(y)} m #{format_number(right)} #{format_number(y)} l"
 
       :right ->
-        "#{format_number(right)} #{format_number(bottom)} m #{format_number(right)} #{format_number(top)} l"
+        x = right - inset
+
+        "#{format_number(x)} #{format_number(bottom)} m #{format_number(x)} #{format_number(top)} l"
 
       :bottom ->
-        "#{format_number(left)} #{format_number(bottom)} m #{format_number(right)} #{format_number(bottom)} l"
+        y = bottom + inset
+
+        "#{format_number(left)} #{format_number(y)} m #{format_number(right)} #{format_number(y)} l"
 
       :left ->
-        "#{format_number(left)} #{format_number(bottom)} m #{format_number(left)} #{format_number(top)} l"
+        x = left + inset
+
+        "#{format_number(x)} #{format_number(bottom)} m #{format_number(x)} #{format_number(top)} l"
     end
   end
 
   defp paint_operator(box) do
-    case {box.fill_color, box.stroke_width > 0} do
+    case {box.fill_color, visible_border?(box)} do
       {nil, true} -> "S"
       {_, true} -> "B"
       {_, false} -> "f"
     end
+  end
+
+  defp visible_border?(box) do
+    border_widths =
+      Map.get(box, :border_widths, %{
+        top: box.stroke_width,
+        right: box.stroke_width,
+        bottom: box.stroke_width,
+        left: box.stroke_width
+      })
+
+    Enum.any?([:top, :right, :bottom, :left], fn side ->
+      Map.fetch!(border_widths, side) > 0 and
+        border_side_style(box, side) not in [:none, :hidden] and
+        not is_nil(border_side_color(box, side))
+    end)
   end
 
   defp font_resources(pages, first_object_id) do

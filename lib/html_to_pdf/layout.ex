@@ -2533,6 +2533,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     case border_collapse do
       :collapse ->
         border_widths = Map.get(style, :border_widths, edges(0.0))
+        border_styles = Map.get(style, :border_styles, edges(:solid))
+
+        border_colors =
+          Map.get(style, :border_colors, edges(Map.get(style, :border_color, {0, 0, 0})))
 
         collapsed_widths = %{
           top: border_widths.top,
@@ -2543,7 +2547,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
         stroke_width = collapsed_widths |> Map.values() |> Enum.max()
 
-        case stroke_width > 0 do
+        case visible_border?(collapsed_widths, border_styles, border_colors) do
           true ->
             [
               %{
@@ -2556,6 +2560,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 stroke_color: Map.get(style, :border_color, {0, 0, 0}),
                 stroke_width: stroke_width,
                 border_widths: collapsed_widths,
+                border_colors: border_colors,
+                border_styles: border_styles,
                 border_radius: 0.0
               }
             ]
@@ -3354,10 +3360,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @spec background_box(map(), number(), number(), number(), number()) :: [box()]
   defp background_box(style, x, y, width, height) do
     border_widths = Map.get(style, :border_widths, edges(0.0))
+    border_styles = Map.get(style, :border_styles, edges(:solid))
+
+    border_colors =
+      Map.get(style, :border_colors, edges(Map.get(style, :border_color, {0, 0, 0})))
+
     stroke_width = Enum.max(Map.values(border_widths))
     fill_color = Map.get(style, :background_color)
 
-    case {fill_color, stroke_width > 0} do
+    case {fill_color, visible_border?(border_widths, border_styles, border_colors)} do
       {nil, false} ->
         []
 
@@ -3373,12 +3384,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             stroke_color: Map.get(style, :border_color, {0, 0, 0}),
             stroke_width: stroke_width,
             border_widths: border_widths,
-            border_colors:
-              Map.get(style, :border_colors, edges(Map.get(style, :border_color, {0, 0, 0}))),
+            border_colors: border_colors,
+            border_styles: border_styles,
             border_radius: Map.get(style, :border_radius, 0.0)
           }
         ]
     end
+  end
+
+  defp visible_border?(border_widths, border_styles, border_colors) do
+    Enum.any?([:top, :right, :bottom, :left], fn side ->
+      Map.fetch!(border_widths, side) > 0 and
+        Map.fetch!(border_styles, side) not in [:none, :hidden] and
+        not is_nil(Map.fetch!(border_colors, side))
+    end)
   end
 
   defp tag_boxes(boxes, metadata) do

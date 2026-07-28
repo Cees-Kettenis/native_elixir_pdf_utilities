@@ -1645,21 +1645,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                  %{
                    type: :element,
                    tag: "p",
-                   attributes: %{"style" => "border: 1pt double red"},
-                   children: [%{type: :text, text: "Hello"}]
-                 }
-               ]
-             },
-             []
-           ) == {:error, :invalid_document}
-
-    assert Style.compute(
-             %{
-               type: :document,
-               children: [
-                 %{
-                   type: :element,
-                   tag: "p",
                    attributes: %{},
                    children: [
                      %{
@@ -1938,24 +1923,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       {"padding-bottom: 2pt", :padding, %{top: 0.0, right: 0.0, bottom: 2.0, left: 0.0}},
       {"padding-left: 2pt", :padding, %{top: 0.0, right: 0.0, bottom: 0.0, left: 2.0}},
       {"margin-left: 2pt", :margin, %{top: 0.0, right: 0.0, bottom: 12.0, left: 2.0}},
-      {"border-width: 2pt", :border_widths, %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0}},
+      {"border-width: 2pt", :border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}},
       {"border: none", :border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}},
       {"border-right: none", :border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}},
       {"border-left: 2pt solid red", :border_widths,
        %{top: 0.0, right: 0.0, bottom: 0.0, left: 2.0}},
-      {"border-top-width: 3pt", :border_widths, %{top: 3.0, right: 0.0, bottom: 0.0, left: 0.0}},
+      {"border-top-width: 3pt", :border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}},
       {"border-bottom-color: rgb(51, 102, 153)", :border_colors,
        %{top: {0, 0, 0}, right: {0, 0, 0}, bottom: {0.2, 0.4, 0.6}, left: {0, 0, 0}}},
       {"border-left-style: none", :border_widths,
        %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}},
       {"border-style: none", :border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}},
       {"border: 1pt solid", :border_color, {0, 0, 0}},
-      {"border: 1pt solid transparent", :border_color, {0, 0, 0}},
-      {"border-color: transparent", :border_color, {0, 0, 0}},
+      {"border: 1pt solid transparent", :border_color, nil},
+      {"border-color: transparent", :border_color, nil},
       {"border-top: 2pt solid transparent", :border_colors,
-       %{top: {0, 0, 0}, right: {0, 0, 0}, bottom: {0, 0, 0}, left: {0, 0, 0}}},
+       %{top: nil, right: {0, 0, 0}, bottom: {0, 0, 0}, left: {0, 0, 0}}},
       {"border-right-color: transparent", :border_colors,
-       %{top: {0, 0, 0}, right: {0, 0, 0}, bottom: {0, 0, 0}, left: {0, 0, 0}}},
+       %{top: {0, 0, 0}, right: nil, bottom: {0, 0, 0}, left: {0, 0, 0}}},
       {"color: #abc", :color, {0.6666666667, 0.7333333333, 0.8}},
       {"color: #00000070", :color, {0, 0, 0}},
       {"color: rgba(255, 128, 0, 0.5)", :color, {1.0, 0.5019607843, 0.0}},
@@ -1990,7 +1975,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       {"font-style: normal", :font_style, :normal},
       {"font-style: italic", :font_style, :italic},
       {"border-color: red", :border_color, {1, 0, 0}},
-      {"border-top: 2pt solid red", :border_color, {1, 0, 0}},
+      {"border-top: 2pt solid red", :border_color, {0, 0, 0}},
       {"border-collapse: collapse", :border_collapse, :collapse},
       {"border-collapse: separate", :border_collapse, :separate},
       {"aspect-ratio: 1.5", :aspect_ratio, 1.5},
@@ -2009,6 +1994,131 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     assert style.border_widths == %{top: 0.75, right: 0.0, bottom: 0.75, left: 0.75}
     assert_style_value(style.border_color, {0.8, 0.8, 0.8})
+  end
+
+  test "all border styles cascade independently on every side" do
+    border_styles = [
+      :none,
+      :hidden,
+      :dotted,
+      :dashed,
+      :solid,
+      :double,
+      :groove,
+      :ridge,
+      :inset,
+      :outset
+    ]
+
+    Enum.each(border_styles, fn border_style ->
+      assert {:ok, style} = style_for("div", "border: 3pt #{border_style} #336699")
+
+      assert style.border_styles == %{
+               top: border_style,
+               right: border_style,
+               bottom: border_style,
+               left: border_style
+             }
+
+      expected_width =
+        case border_style do
+          border_style when border_style in [:none, :hidden] -> 0.0
+          _ -> 3.0
+        end
+
+      assert style.border_widths == %{
+               top: expected_width,
+               right: expected_width,
+               bottom: expected_width,
+               left: expected_width
+             }
+
+      assert style.border_colors == %{
+               top: {0.2, 0.4, 0.6},
+               right: {0.2, 0.4, 0.6},
+               bottom: {0.2, 0.4, 0.6},
+               left: {0.2, 0.4, 0.6}
+             }
+    end)
+
+    assert {:ok, sides} =
+             style_for(
+               "div",
+               "border-width: thin medium thick 4pt; " <>
+                 "border-style: dotted dashed double groove; " <>
+                 "border-color: rgb(255, 0, 0) green transparent #fff"
+             )
+
+    assert sides.border_widths == %{top: 0.75, right: 2.25, bottom: 3.75, left: 4.0}
+    assert sides.border_styles == %{top: :dotted, right: :dashed, bottom: :double, left: :groove}
+
+    assert sides.border_colors == %{
+             top: {1.0, 0.0, 0.0},
+             right: {0, 0.5019607843, 0},
+             bottom: nil,
+             left: {1.0, 1.0, 1.0}
+           }
+
+    assert {:ok, two_values} =
+             style_for(
+               "div",
+               "border-width: 1pt 2pt; border-style: dotted dashed; border-color: red blue"
+             )
+
+    assert two_values.border_widths == %{top: 1.0, right: 2.0, bottom: 1.0, left: 2.0}
+
+    assert two_values.border_styles == %{
+             top: :dotted,
+             right: :dashed,
+             bottom: :dotted,
+             left: :dashed
+           }
+
+    assert two_values.border_colors == %{
+             top: {1, 0, 0},
+             right: {0, 0, 1},
+             bottom: {1, 0, 0},
+             left: {0, 0, 1}
+           }
+
+    assert {:ok, three_values} =
+             style_for(
+               "div",
+               "border-width: 1pt 2pt 3pt; border-style: solid double ridge; " <>
+                 "border-color: red green blue"
+             )
+
+    assert three_values.border_widths == %{top: 1.0, right: 2.0, bottom: 3.0, left: 2.0}
+
+    assert three_values.border_styles == %{
+             top: :solid,
+             right: :double,
+             bottom: :ridge,
+             left: :double
+           }
+
+    assert three_values.border_colors == %{
+             top: {1, 0, 0},
+             right: {0, 0.5019607843, 0},
+             bottom: {0, 0, 1},
+             left: {0, 0.5019607843, 0}
+           }
+
+    assert {:ok, reordered} =
+             style_for("div", "border-style: none; border-width: 2pt; border-style: dashed")
+
+    assert reordered.border_widths == %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0}
+
+    assert reordered.border_styles == %{
+             top: :dashed,
+             right: :dashed,
+             bottom: :dashed,
+             left: :dashed
+           }
+
+    assert {:ok, transparent} = style_for("div", "border: 2pt solid transparent")
+    assert transparent.border_widths == %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0}
+    assert transparent.border_colors == %{top: nil, right: nil, bottom: nil, left: nil}
   end
 
   test "table cells default to browser middle vertical alignment" do
@@ -2089,7 +2199,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "position: absolute",
       "overflow: scroll",
       "border-top-color: nope",
-      "border-top-style: dotted",
+      "border-color: red nope",
+      "border-style: solid nope",
+      "border-width: 1pt nope",
       "color: rgb(1, 2)",
       "color: rgb()",
       "color: rgb(nope, 0, 0)",

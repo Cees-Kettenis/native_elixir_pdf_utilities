@@ -1,0 +1,64 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        color: #172033;
+        font-family: "DejaVu Sans", sans-serif;
+        font-size: 9pt;
+        line-height: 12pt;
+      }
+      main {
+        box-sizing: border-box;
+        padding: 20pt;
+        width: 595pt;
+      }
+      .sample {
+        background: #f6f8fb;
+        border-color: #35608f;
+        border-width: 4pt;
+        box-sizing: border-box;
+        height: 30pt;
+        margin-bottom: 6pt;
+        padding: 5pt;
+        width: 250pt;
+      }
+      .none { border-style: none; }
+      .hidden { border-style: hidden; }
+      .dotted { border-style: dotted; }
+      .dashed { border-style: dashed; }
+      .solid { border-style: solid; }
+      .double { border-style: double; }
+      .groove { border-style: groove; }
+      .ridge { border-style: ridge; }
+      .inset { border-style: inset; }
+      .outset { border-style: outset; }
+      .sides {
+        border-color: #b42318 #1a7f37 #175cd3 #9333aa;
+        border-style: dotted dashed double groove;
+      }
+      .transparent {
+        border-color: transparent;
+        border-style: solid;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="sample none">none</div>
+      <div class="sample hidden">hidden</div>
+      <div class="sample dotted">dotted</div>
+      <div class="sample dashed">dashed</div>
+      <div class="sample solid">solid</div>
+      <div class="sample double">double</div>
+      <div class="sample groove">groove</div>
+      <div class="sample ridge">ridge</div>
+      <div class="sample inset">inset</div>
+      <div class="sample outset">outset</div>
+      <div class="sample sides">side-specific styles and colors</div>
+      <div class="sample transparent">transparent border</div>
+    </main>
+  </body>
+</html>
