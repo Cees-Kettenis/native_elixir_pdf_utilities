@@ -2255,112 +2255,188 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp layout_table_rows(rows, x, y, width, table_id, border_collapse) do
-    column_count =
-      rows
-      |> Enum.map(fn %{row: %{children: cells}} -> table_column_count(cells) end)
-      |> Enum.max()
+    grid_rows = table_grid(rows)
+    column_count = table_column_count(grid_rows)
+    column_widths = table_column_widths(grid_rows, column_count, width)
 
-    column_widths = table_column_widths(rows, column_count, width)
+    with {:ok, row_heights} <- table_row_heights(grid_rows, column_widths) do
+      {boxes, next_y} =
+        grid_rows
+        |> Enum.with_index()
+        |> Enum.reduce({[], y}, fn {row, index}, {boxes, current_y} ->
+          {:ok, row_boxes, next_y} =
+            layout_table_row(
+              row,
+              table_id,
+              index,
+              x,
+              current_y,
+              column_widths,
+              row_heights,
+              border_collapse
+            )
 
-    result =
-      rows
-      |> Enum.with_index()
-      |> Enum.reduce_while({:ok, [], y}, fn {%{row: row, section: section}, index},
-                                            {:ok, boxes, current_y} ->
-        case layout_table_row(
-               row,
-               section,
-               table_id,
-               index,
-               x,
-               current_y,
-               column_widths,
-               width,
-               border_collapse,
-               index == length(rows) - 1
-             ) do
-          {:ok, row_boxes, next_y} -> {:cont, {:ok, boxes ++ row_boxes, next_y}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
-      end)
+          {boxes ++ row_boxes, next_y}
+        end)
 
-    case result do
-      {:ok, boxes, next_y} -> {:ok, boxes, next_y}
-      {:error, reason} -> {:error, reason}
+      {:ok, boxes, next_y}
     end
   end
 
   defp layout_table_row(
-         %{style: %{display: :table_row} = style, children: cells},
-         section,
+         %{
+           row: %{style: %{display: :table_row} = style},
+           section: section,
+           cells: cells,
+           active_columns: active_columns,
+           consumed_columns: consumed_columns
+         },
          table_id,
          index,
          x,
          y,
          column_widths,
-         table_width,
-         border_collapse,
-         last_row?
-       )
-       when is_list(cells) do
-    case Enum.all?(cells, &match?(%{style: %{display: :table_cell}}, &1)) do
-      true ->
-        with {:ok, row_height} <- table_row_height(cells, column_widths, table_width, style) do
-          row_metadata =
-            table_id
-            |> table_row_metadata(section, index)
-            |> Map.merge(break_metadata(style))
+         row_heights,
+         border_collapse
+       ) do
+    row_height = Enum.at(row_heights, index)
+    last_row? = index == length(row_heights) - 1
+    single_cell_row? = length(cells) == 1 and active_columns == []
 
-          {boxes, consumed_columns} =
-            Enum.reduce(cells, {[], 0}, fn cell, {acc, index} ->
-              colspan = table_cell_colspan(cell)
-              cell_x = x + (column_widths |> Enum.take(index) |> Enum.sum())
-              cell_width = table_cell_width(cells, column_widths, index, colspan, table_width)
-              last_cell? = index + colspan >= length(column_widths)
+    row_metadata =
+      table_id
+      |> table_row_metadata(section, index)
+      |> Map.merge(break_metadata(style))
 
-              {:ok, cell_boxes} =
-                layout_table_cell(
-                  cell,
-                  cell_x,
-                  y,
-                  cell_width,
-                  row_height,
-                  row_metadata,
-                  border_collapse,
-                  last_cell?,
-                  last_row?
-                )
+    boxes =
+      Enum.reduce(cells, [], fn
+        %{cell: cell, column: column, colspan: colspan, rowspan: rowspan}, boxes ->
+          cell_x = x + (column_widths |> Enum.take(column) |> Enum.sum())
 
-              {acc ++ cell_boxes, index + colspan}
-            end)
+          cell_width =
+            table_cell_width(column_widths, column, colspan, single_cell_row?)
 
-          boxes =
-            boxes ++
-              trailing_collapsed_table_border(
-                cells,
-                x,
-                y,
-                row_height,
-                column_widths,
-                consumed_columns,
-                border_collapse,
-                last_row?,
-                row_metadata
-              )
+          cell_height = row_heights |> Enum.slice(index, rowspan) |> Enum.sum()
+          last_cell? = column + colspan >= length(column_widths)
+          cell_last_row? = index + rowspan >= length(row_heights)
 
-          {background_boxes, content_boxes} =
-            Enum.split_with(boxes, &(Map.get(&1, :role) == :table_cell_background))
+          {:ok, cell_boxes} =
+            layout_table_cell(
+              cell,
+              cell_x,
+              y,
+              cell_width,
+              cell_height,
+              row_metadata,
+              border_collapse,
+              last_cell?,
+              cell_last_row?
+            )
 
-          {border_boxes, content_boxes} =
-            Enum.split_with(content_boxes, &(Map.get(&1, :role) == :table_border))
+          boxes ++ cell_boxes
+      end)
 
-          {:ok, background_boxes ++ border_boxes ++ content_boxes, y - row_height}
-        else
-          {:error, reason} -> {:error, reason}
-        end
+    cells_for_border = Enum.map(cells, & &1.cell)
 
-      false ->
-        {:error, :invalid_layout}
+    boxes =
+      boxes ++
+        trailing_collapsed_table_border(
+          cells_for_border,
+          x,
+          y,
+          row_height,
+          column_widths,
+          consumed_columns,
+          border_collapse,
+          last_row?,
+          row_metadata
+        )
+
+    {background_boxes, content_boxes} =
+      Enum.split_with(boxes, &(Map.get(&1, :role) == :table_cell_background))
+
+    {border_boxes, content_boxes} =
+      Enum.split_with(content_boxes, &(Map.get(&1, :role) == :table_border))
+
+    {:ok, background_boxes ++ border_boxes ++ content_boxes, y - row_height}
+  end
+
+  defp table_grid(rows) do
+    {grid_rows, _occupied_until} =
+      rows
+      |> Enum.with_index()
+      |> Enum.map_reduce(%{}, fn {%{row: %{children: cells}} = row, row_index}, occupied_until ->
+        row_group_length =
+          rows
+          |> Enum.drop(row_index)
+          |> Enum.take_while(&(&1.section == row.section))
+          |> length()
+
+        active_columns =
+          occupied_until
+          |> Enum.filter(fn {_column, end_row} -> end_row > row_index end)
+          |> Enum.map(&elem(&1, 0))
+
+        {placed_cells, occupied_until, _next_column} =
+          Enum.reduce(cells, {[], occupied_until, 0}, fn cell,
+                                                         {placements, occupied, next_column} ->
+            colspan = table_cell_colspan(cell)
+            rowspan = min(table_cell_rowspan(cell), row_group_length)
+
+            column =
+              next_table_cell_column(occupied, row_index, next_column, colspan)
+
+            occupied =
+              case rowspan > 1 do
+                true ->
+                  Enum.reduce(column..(column + colspan - 1), occupied, fn occupied_column, acc ->
+                    Map.put(acc, occupied_column, row_index + rowspan)
+                  end)
+
+                false ->
+                  occupied
+              end
+
+            placement = %{
+              cell: cell,
+              column: column,
+              colspan: colspan,
+              rowspan: rowspan
+            }
+
+            {placements ++ [placement], occupied, column + colspan}
+          end)
+
+        covered_columns =
+          Enum.reduce(placed_cells, active_columns, fn placement, columns ->
+            columns ++
+              Enum.to_list(placement.column..(placement.column + placement.colspan - 1))
+          end)
+
+        consumed_columns = Enum.max(covered_columns) + 1
+
+        {Map.merge(
+           row,
+           %{
+             cells: placed_cells,
+             active_columns: active_columns,
+             consumed_columns: consumed_columns
+           }
+         ), occupied_until}
+      end)
+
+    grid_rows
+  end
+
+  defp next_table_cell_column(occupied_until, row_index, candidate, colspan) do
+    occupied? =
+      Enum.any?(candidate..(candidate + colspan - 1), fn column ->
+        Map.get(occupied_until, column, 0) > row_index
+      end)
+
+    case occupied? do
+      true -> next_table_cell_column(occupied_until, row_index, candidate + 1, colspan)
+      false -> candidate
     end
   end
 
@@ -2541,38 +2617,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp table_column_count(cells) do
-    Enum.reduce(cells, 0, &(&2 + table_cell_colspan(&1)))
+  defp table_column_count(rows) do
+    rows
+    |> Enum.flat_map(& &1.cells)
+    |> Enum.map(&(&1.column + &1.colspan))
+    |> Enum.max()
   end
 
   defp table_column_widths(rows, column_count, table_width) do
     preferred =
-      Enum.reduce(rows, List.duplicate(nil, column_count), fn %{row: %{children: cells}},
-                                                              widths ->
-        {next_widths, _index} =
-          Enum.reduce(cells, {widths, 0}, fn cell, {acc, index} ->
-            colspan = table_cell_colspan(cell)
+      Enum.reduce(rows, List.duplicate(nil, column_count), fn %{cells: cells}, widths ->
+        Enum.reduce(cells, widths, fn
+          %{cell: cell, column: index, colspan: colspan}, acc ->
+            case table_cell_preferred_width(cell, table_width) do
+              nil ->
+                acc
 
-            acc =
-              case table_cell_preferred_width(cell, table_width) do
-                nil ->
-                  acc
+              preferred_width ->
+                share = preferred_width / colspan
 
-                preferred_width ->
-                  share = preferred_width / colspan
-
-                  Enum.reduce(index..(index + colspan - 1), acc, fn column, column_acc ->
-                    List.update_at(column_acc, column, fn
-                      nil -> share
-                      width -> max(width, share)
-                    end)
+                Enum.reduce(index..(index + colspan - 1), acc, fn column, column_acc ->
+                  List.update_at(column_acc, column, fn
+                    nil -> share
+                    width -> max(width, share)
                   end)
-              end
-
-            {acc, index + colspan}
-          end)
-
-        next_widths
+                end)
+            end
+        end)
       end)
 
     minimum = table_minimum_column_widths(rows, column_count)
@@ -2620,24 +2691,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp table_minimum_column_widths(rows, column_count) do
-    Enum.reduce(rows, List.duplicate(0.0, column_count), fn %{row: %{children: cells}}, widths ->
-      {next_widths, _index} =
-        Enum.reduce(cells, {widths, 0}, fn cell, {acc, index} ->
-          colspan = table_cell_colspan(cell)
+    Enum.reduce(rows, List.duplicate(0.0, column_count), fn %{cells: cells}, widths ->
+      Enum.reduce(cells, widths, fn
+        %{cell: cell, column: index, colspan: colspan}, acc ->
+          case {colspan, table_cell_minimum_width(cell)} do
+            {1, min_width} when min_width > 0 ->
+              List.update_at(acc, index, &max(&1, min_width))
 
-          acc =
-            case {colspan, table_cell_minimum_width(cell)} do
-              {1, min_width} when min_width > 0 ->
-                List.update_at(acc, index, &max(&1, min_width))
-
-              _ ->
-                acc
-            end
-
-          {acc, index + colspan}
-        end)
-
-      next_widths
+            _ ->
+              acc
+          end
+      end)
     end)
   end
 
@@ -2737,30 +2801,110 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp table_cell_width(cells, column_widths, index, colspan, table_width) do
-    case cells do
-      [_single_cell] -> table_width
-      _ -> column_widths |> Enum.slice(index, colspan) |> Enum.sum()
+  defp table_cell_width(column_widths, index, colspan, single_cell_row?) do
+    case single_cell_row? do
+      true -> Enum.sum(column_widths)
+      false -> column_widths |> Enum.slice(index, colspan) |> Enum.sum()
     end
   end
 
-  defp table_row_height(cells, column_widths, table_width, style) do
-    cells
-    |> Enum.reduce_while({:ok, [], 0}, fn cell, {:ok, heights, index} ->
-      colspan = table_cell_colspan(cell)
-      cell_width = table_cell_width(cells, column_widths, index, colspan, table_width)
+  defp table_row_heights(rows, column_widths) do
+    initial_heights =
+      Enum.reduce_while(rows, {:ok, []}, fn
+        %{row: %{style: style}, cells: cells, active_columns: active_columns},
+        {:ok, row_heights} ->
+          single_cell_row? = length(cells) == 1 and active_columns == []
 
-      case table_cell_height(cell, cell_width) do
-        {:ok, height} -> {:cont, {:ok, heights ++ [height], index + colspan}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, heights, _index} when heights != [] ->
-        {:ok, max(Enum.max(heights), table_row_declared_height(style))}
+          result =
+            cells
+            |> Enum.filter(&(&1.rowspan == 1))
+            |> Enum.reduce_while({:ok, []}, fn placement, {:ok, cell_heights} ->
+              width =
+                table_cell_width(
+                  column_widths,
+                  placement.column,
+                  placement.colspan,
+                  single_cell_row?
+                )
 
-      _ ->
-        {:error, :invalid_layout}
+              case table_cell_height(placement.cell, width) do
+                {:ok, height} -> {:cont, {:ok, cell_heights ++ [height]}}
+                {:error, reason} -> {:halt, {:error, reason}}
+              end
+            end)
+
+          case result do
+            {:ok, cell_heights} ->
+              intrinsic_height = Enum.max(cell_heights, fn -> 0.0 end)
+
+              {:cont,
+               {:ok, row_heights ++ [max(intrinsic_height, table_row_declared_height(style))]}}
+
+            {:error, reason} ->
+              {:halt, {:error, reason}}
+          end
+      end)
+
+    case initial_heights do
+      {:ok, heights} ->
+        rows
+        |> Enum.with_index()
+        |> Enum.reduce_while({:ok, heights}, fn {%{
+                                                   cells: cells,
+                                                   active_columns: active_columns
+                                                 }, row_index},
+                                                {:ok, row_heights} ->
+          single_cell_row? = length(cells) == 1 and active_columns == []
+
+          result =
+            cells
+            |> Enum.filter(&(&1.rowspan > 1))
+            |> Enum.reduce_while({:ok, row_heights}, fn placement, {:ok, acc} ->
+              width =
+                table_cell_width(
+                  column_widths,
+                  placement.column,
+                  placement.colspan,
+                  single_cell_row?
+                )
+
+              case table_cell_height(placement.cell, width) do
+                {:ok, required_height} ->
+                  current_height =
+                    acc
+                    |> Enum.slice(row_index, placement.rowspan)
+                    |> Enum.sum()
+
+                  extra_height = max(required_height - current_height, 0.0)
+                  share = extra_height / placement.rowspan
+
+                  adjusted =
+                    acc
+                    |> Enum.with_index()
+                    |> Enum.map(fn
+                      {height, index}
+                      when index >= row_index and index < row_index + placement.rowspan ->
+                        height + share
+
+                      {height, _index} ->
+                        height
+                    end)
+
+                  {:cont, {:ok, adjusted}}
+
+                {:error, reason} ->
+                  {:halt, {:error, reason}}
+              end
+            end)
+
+          case result do
+            {:ok, adjusted} -> {:cont, {:ok, adjusted}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+        end)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -2796,6 +2940,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp table_cell_colspan(cell) do
     case cell do
       %{style: %{colspan: colspan}} when is_integer(colspan) and colspan >= 1 -> colspan
+      _ -> 1
+    end
+  end
+
+  defp table_cell_rowspan(cell) do
+    case cell do
+      %{style: %{rowspan: rowspan}} when is_integer(rowspan) and rowspan >= 1 -> rowspan
       _ -> 1
     end
   end

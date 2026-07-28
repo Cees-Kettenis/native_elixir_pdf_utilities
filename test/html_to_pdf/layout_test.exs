@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   use ExUnit.Case
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
+  alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
   test "layout positions a paragraph text box on the first page" do
@@ -613,6 +614,66 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     cell_background = Enum.find(layout_tree.boxes, &(&1.role == :table_cell_background))
 
     assert_in_delta cell_background.height, 40.0, 0.0001
+  end
+
+  test "layout reserves rowspan columns and spans the combined row height" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <table style="width: 120pt">
+               <tr>
+                 <td rowspan="2" style="background-color: #fef3c7">Alpha</td>
+                 <td>First</td>
+                 <td>10</td>
+               </tr>
+               <tr>
+                 <td>Second</td>
+                 <td>20</td>
+               </tr>
+               <tr>
+                 <td>Beta</td>
+                 <td colspan="2">Summary</td>
+               </tr>
+             </table>
+             """)
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {160, 160}, margin: 10)
+
+    text_boxes =
+      layout_tree.boxes
+      |> Enum.filter(&(&1.type == :text))
+      |> Map.new(&{&1.text, &1})
+
+    alpha = Map.fetch!(text_boxes, "Alpha")
+    first = Map.fetch!(text_boxes, "First")
+    ten = Map.fetch!(text_boxes, "10")
+    second = Map.fetch!(text_boxes, "Second")
+    twenty = Map.fetch!(text_boxes, "20")
+    beta = Map.fetch!(text_boxes, "Beta")
+    summary = Map.fetch!(text_boxes, "Summary")
+
+    assert first.x > alpha.x
+    assert_in_delta second.x, first.x, 0.0001
+    assert_in_delta twenty.x, ten.x, 0.0001
+    assert_in_delta beta.x, alpha.x, 0.0001
+    assert_in_delta summary.x, first.x, 0.0001
+
+    cell_backgrounds =
+      Enum.filter(layout_tree.boxes, &(Map.get(&1, :role) == :table_cell_background))
+
+    rowspan_background = Enum.find(cell_backgrounds, &(not is_nil(&1.fill_color)))
+
+    [first_row_background, second_row_background] =
+      cell_backgrounds
+      |> Enum.filter(&(abs(&1.x - (first.x - 5.0)) < 0.0001))
+      |> Enum.sort_by(& &1.y, :desc)
+      |> Enum.take(2)
+
+    assert_in_delta rowspan_background.y, second_row_background.y, 0.0001
+
+    assert_in_delta rowspan_background.height,
+                    first_row_background.height + second_row_background.height,
+                    0.0001
   end
 
   test "layout positions row flex items with order gap justify-content and align-items" do
@@ -2070,6 +2131,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     }
 
     assert Layout.layout(document([bad_cell_inline]), []) == {:error, :invalid_layout}
+
+    bad_rowspan_cell = %{
+      type: :element,
+      style: table_style(),
+      children: [
+        %{
+          type: :element,
+          style: %{display: :table_row},
+          children: [
+            %{
+              type: :element,
+              style: Map.put(table_cell_style(), :rowspan, 2),
+              children: :bad
+            }
+          ]
+        },
+        %{
+          type: :element,
+          style: %{display: :table_row},
+          children: [
+            %{
+              type: :element,
+              style: table_cell_style(),
+              children: [%{type: :text, text: "x", style: text_style()}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert Layout.layout(document([bad_rowspan_cell]), []) == {:error, :invalid_layout}
 
     bad_table_after_error = %{
       type: :element,
