@@ -638,7 +638,8 @@ defmodule NativeElixirPdfUtilities.Text do
   end
 
   defp advance_text(state, decoded) do
-    glyph_width = Enum.reduce(decoded.codes, 0, &(font_width(state.font, &1) + &2))
+    width_codes = Map.get(decoded, :width_codes, decoded.codes)
+    glyph_width = Enum.reduce(width_codes, 0, &(font_width(state.font, &1) + &2))
     glyph_count = length(decoded.codes)
     spaces = Enum.count(decoded.codes, &(&1 == 32))
 
@@ -704,12 +705,14 @@ defmodule NativeElixirPdfUtilities.Text do
         end
 
       with {:ok, cmap} <- cmap,
+           {:ok, cid_encoding} <- type0_cid_encoding(document, font, page, font_name),
            {:ok, widths, default_width} <- font_metrics(document, font) do
         {:ok,
          %{
            name: font_name,
            dictionary: font,
            cmap: cmap,
+           cid_encoding: cid_encoding,
            document: document,
            widths: widths,
            default_width: default_width
@@ -726,6 +729,61 @@ defmodule NativeElixirPdfUtilities.Text do
       type0_font_metrics(document, font)
     else
       simple_font_metrics(document, font)
+    end
+  end
+
+  defp type0_cid_encoding(document, font, page, font_name) do
+    case name?(Map.get(font, "Subtype"), "Type0") do
+      true ->
+        case Map.get(font, "Encoding") do
+          {:name, "Identity-H"} ->
+            {:ok, :identity}
+
+          {:name, _name} ->
+            error(
+              :cmap,
+              :unsupported_text_encoding,
+              "predefined Type0 Encoding CMaps other than Identity-H are unsupported",
+              page: page,
+              font: font_name
+            )
+
+          nil ->
+            error(:font, :invalid_pdf_input, "Type0 font Encoding entry is missing",
+              page: page,
+              font: font_name
+            )
+
+          encoding ->
+            with {:ok, dictionary} <- Reader.dictionary(document, encoding),
+                 {:ok, stream} <- Reader.decoded_stream(document, encoding) do
+              case {Map.get(dictionary, "UseCMap"), Map.get(dictionary, "WMode", 0)} do
+                {nil, 0} ->
+                  parse_cid_cmap(stream, page, font_name)
+
+                {nil, _vertical} ->
+                  error(
+                    :cmap,
+                    :unsupported_text_encoding,
+                    "vertical Type0 Encoding CMaps are unsupported",
+                    page: page,
+                    font: font_name
+                  )
+
+                {_use_cmap, _writing_mode} ->
+                  error(
+                    :cmap,
+                    :unsupported_text_encoding,
+                    "Type0 Encoding UseCMap inheritance is unsupported",
+                    page: page,
+                    font: font_name
+                  )
+              end
+            end
+        end
+
+      false ->
+        {:ok, nil}
     end
   end
 
@@ -841,7 +899,9 @@ defmodule NativeElixirPdfUtilities.Text do
             )
 
           font.cmap ->
-            decode_cmap(bytes, font.cmap, page, font.name)
+            with {:ok, decoded} <- decode_cmap(bytes, font.cmap, page, font.name) do
+              {:ok, Map.put(decoded, :width_codes, width_codes(font, decoded))}
+            end
 
           name?(Map.get(font.dictionary, "Subtype"), "Type0") ->
             error(:text_encoding, :unsupported_text_encoding, "Type0 font has no ToUnicode CMap",
@@ -1022,6 +1082,21 @@ defmodule NativeElixirPdfUtilities.Text do
     end
   end
 
+  defp width_codes(font, decoded) do
+    case font.cid_encoding do
+      :identity ->
+        Enum.map(decoded.source_codes, &:binary.decode_unsigned/1)
+
+      %{mappings: mappings, notdef: notdef} ->
+        Enum.map(decoded.source_codes, fn source ->
+          Map.get(mappings, source, Map.get(notdef, source, 0))
+        end)
+
+      nil ->
+        decoded.codes
+    end
+  end
+
   defp parse_cmap(stream, page, font) do
     cond do
       byte_size(stream) > @max_cmap_bytes ->
@@ -1040,7 +1115,7 @@ defmodule NativeElixirPdfUtilities.Text do
         )
 
       true ->
-        with {:ok, codespaces} <- parse_codespaces(stream),
+        with {:ok, codespaces} <- parse_codespaces(stream, "ToUnicode"),
              {:ok, bfchar} <- parse_bfchar(stream),
              {:ok, bfrange} <- parse_bfrange(stream, map_size(bfchar)),
              mappings = Map.merge(bfrange, bfchar),
@@ -1063,7 +1138,72 @@ defmodule NativeElixirPdfUtilities.Text do
     end
   end
 
-  defp parse_codespaces(stream) do
+  defp parse_cid_cmap(stream, page, font) do
+    cond do
+      byte_size(stream) > @max_cmap_bytes ->
+        error(:cmap, :resource_limit_exceeded, "Type0 Encoding CMap exceeds the byte limit",
+          page: page,
+          font: font
+        )
+
+      Regex.match?(~r/\/\S+\s+usecmap\b/, stream) ->
+        error(
+          :cmap,
+          :unsupported_text_encoding,
+          "Type0 Encoding usecmap inheritance is unsupported",
+          page: page,
+          font: font
+        )
+
+      Regex.match?(~r/\/WMode\s+1\s+def\b/, stream) ->
+        error(
+          :cmap,
+          :unsupported_text_encoding,
+          "vertical Type0 Encoding CMaps are unsupported",
+          page: page,
+          font: font
+        )
+
+      true ->
+        with {:ok, codespaces} <- parse_codespaces(stream, "Type0 Encoding"),
+             {:ok, cidchar} <- parse_cid_char(stream, "cidchar", 0),
+             {:ok, cidrange} <-
+               parse_cid_range(stream, "cidrange", map_size(cidchar), :sequential),
+             mappings = Map.merge(cidrange, cidchar),
+             {:ok, notdefchar} <-
+               parse_cid_char(stream, "notdefchar", map_size(mappings)),
+             {:ok, notdefrange} <-
+               parse_cid_range(
+                 stream,
+                 "notdefrange",
+                 map_size(mappings) + map_size(notdefchar),
+                 :constant
+               ),
+             notdef = Map.merge(notdefrange, notdefchar) do
+          {:ok, %{codespaces: codespaces, mappings: mappings, notdef: notdef}}
+        else
+          :limit ->
+            error(
+              :cmap,
+              :resource_limit_exceeded,
+              "Type0 Encoding CMap entry count exceeds the limit",
+              page: page,
+              font: font
+            )
+
+          :error ->
+            error(:cmap, :invalid_pdf_input, "Type0 Encoding CMap mappings are malformed",
+              page: page,
+              font: font
+            )
+
+          {:error, _} = cmap_error ->
+            cmap_error
+        end
+    end
+  end
+
+  defp parse_codespaces(stream, label) do
     sections = Regex.scan(~r/(\d+)\s+begincodespacerange\s*(.*?)\s*endcodespacerange/s, stream)
 
     sections
@@ -1083,16 +1223,116 @@ defmodule NativeElixirPdfUtilities.Text do
            end) do
           {:cont, {:ok, values ++ parsed}}
         else
-          {:halt, error(:cmap, :invalid_pdf_input, "ToUnicode codespace range is malformed")}
+          {:halt, error(:cmap, :invalid_pdf_input, "#{label} codespace range is malformed")}
         end
       else
-        {:halt, error(:cmap, :invalid_pdf_input, "ToUnicode codespace count is malformed")}
+        {:halt, error(:cmap, :invalid_pdf_input, "#{label} codespace count is malformed")}
       end
     end)
     |> case do
-      {:ok, []} -> error(:cmap, :invalid_pdf_input, "ToUnicode codespace range is missing")
+      {:ok, []} -> error(:cmap, :invalid_pdf_input, "#{label} codespace range is missing")
       result -> result
     end
+  end
+
+  defp parse_cid_char(stream, operator, existing) do
+    pattern = Regex.compile!("(\\d+)\\s+begin#{operator}\\s*(.*?)\\s*end#{operator}", "s")
+
+    Regex.scan(pattern, stream)
+    |> Enum.reduce_while({:ok, %{}}, fn [_, count, section], {:ok, mappings} ->
+      entries = Regex.scan(~r/<([0-9A-Fa-f]+)>\s+(\d+)/, section)
+
+      valid? =
+        String.to_integer(count) == length(entries) and
+          cmap_section_consumed?(section, ~r/<[0-9A-Fa-f]+>\s+\d+/)
+
+      case valid? do
+        true ->
+          parsed =
+            Enum.map(entries, fn [_, source, cid] ->
+              {hex_bytes(source), String.to_integer(cid)}
+            end)
+
+          case Enum.all?(parsed, fn {source, cid} ->
+                 is_binary(source) and cid in 0..65_535
+               end) do
+            true ->
+              mappings = Map.merge(mappings, Map.new(parsed))
+
+              case existing + map_size(mappings) <= @max_cmap_entries do
+                true -> {:cont, {:ok, mappings}}
+                false -> {:halt, :limit}
+              end
+
+            false ->
+              {:halt, :error}
+          end
+
+        false ->
+          {:halt, :error}
+      end
+    end)
+  end
+
+  defp parse_cid_range(stream, operator, existing, mapping_type) do
+    pattern = Regex.compile!("(\\d+)\\s+begin#{operator}\\s*(.*?)\\s+end#{operator}", "s")
+
+    Regex.scan(pattern, stream)
+    |> Enum.reduce_while({:ok, %{}}, fn [_, declared_count, section], {:ok, mappings} ->
+      entries = Regex.scan(~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(\d+)/, section)
+
+      valid? =
+        String.to_integer(declared_count) == length(entries) and
+          cmap_section_consumed?(section, ~r/<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>\s*\d+/)
+
+      case valid? do
+        true ->
+          Enum.reduce_while(entries, {:ok, mappings}, fn [_, first, last, cid], {:ok, mappings} ->
+            first = hex_bytes(first)
+            last = hex_bytes(last)
+            cid = String.to_integer(cid)
+
+            case is_binary(first) and is_binary(last) and
+                   byte_size(first) == byte_size(last) and first <= last do
+              true ->
+                count = :binary.decode_unsigned(last) - :binary.decode_unsigned(first) + 1
+
+                cond do
+                  cid > 65_535 or (mapping_type == :sequential and cid + count - 1 > 65_535) ->
+                    {:halt, :error}
+
+                  existing + map_size(mappings) + count > @max_cmap_entries ->
+                    {:halt, :limit}
+
+                  true ->
+                    range =
+                      0..(count - 1)
+                      |> Map.new(fn offset ->
+                        mapped_cid =
+                          case mapping_type do
+                            :sequential -> cid + offset
+                            :constant -> cid
+                          end
+
+                        {increment_binary(first, offset), mapped_cid}
+                      end)
+
+                    {:cont, {:ok, Map.merge(mappings, range)}}
+                end
+
+              false ->
+                {:halt, :error}
+            end
+          end)
+          |> case do
+            {:ok, mappings} -> {:cont, {:ok, mappings}}
+            failure -> {:halt, failure}
+          end
+
+        false ->
+          {:halt, :error}
+      end
+    end)
   end
 
   defp parse_bfchar(stream) do
@@ -1216,13 +1456,18 @@ defmodule NativeElixirPdfUtilities.Text do
   end
 
   defp decode_cmap(bytes, cmap, page, font) do
-    decode_cmap_bytes(bytes, cmap, page, font, [], [])
+    decode_cmap_bytes(bytes, cmap, page, font, [], [], [])
   end
 
-  defp decode_cmap_bytes(bytes, cmap, page, font, text_acc, codes) do
+  defp decode_cmap_bytes(bytes, cmap, page, font, text_acc, codes, source_codes) do
     case bytes do
       <<>> ->
-        {:ok, %{text: text_acc |> Enum.reverse() |> Enum.join(), codes: Enum.reverse(codes)}}
+        {:ok,
+         %{
+           text: text_acc |> Enum.reverse() |> Enum.join(),
+           codes: Enum.reverse(codes),
+           source_codes: Enum.reverse(source_codes)
+         }}
 
       bytes ->
         candidate =
@@ -1259,7 +1504,8 @@ defmodule NativeElixirPdfUtilities.Text do
                 page,
                 font,
                 [mapped_text | text_acc],
-                [:binary.decode_unsigned(code) | codes]
+                [:binary.decode_unsigned(code) | codes],
+                [code | source_codes]
               )
           end
         else

@@ -876,6 +876,130 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert_error(Text.extract(invalid_range), :invalid_pdf_input, :font)
   end
 
+  test "maps Type0 source codes through the Encoding CMap before CID width lookup" do
+    to_unicode =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 beginbfrange\n<01> <07> <0041>\nendbfrange"
+
+    encoding =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 begincidchar\n<01> 5\nendcidchar\n" <>
+        "1 begincidrange\n<02> <03> 6\nendcidrange\n" <>
+        "1 beginnotdefchar\n<04> 8\nendnotdefchar\n" <>
+        "1 beginnotdefrange\n<05> <06> 9\nendnotdefrange"
+
+    font =
+      "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    pdf =
+      page_pdf(
+        "BT /F1 10 Tf 1 0 0 1 10 20 Tm <01> Tj 1 0 0 1 30 20 Tm <020304050607> Tj ET",
+        font: font,
+        cmap: to_unicode,
+        descendant:
+          "<< /Type /Font /Subtype /CIDFontType2 /DW 500 /W [0 [200] 5 [1000 800 600 700 400 300]] >>",
+        extra_objects: [{9, stream_object("", encoding)}]
+      )
+
+    assert {:ok, %{pages: [%{spans: [a, rest]}]}} = Text.extract_spans(pdf)
+    assert {a.text, a.x, a.end_x} == {"A", 10.0, 20.0}
+    assert {rest.text, rest.x, rest.end_x} == {"BCDEFG", 30.0, 61.0}
+  end
+
+  test "validates supported Type0 Encoding CMap boundaries" do
+    to_unicode =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 beginbfchar\n<01> <0041>\nendbfchar"
+
+    render = fn encoding_entry, encoding_object ->
+      font =
+        "<< /Type /Font /Subtype /Type0#{encoding_entry} /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+      extra_objects =
+        case encoding_object do
+          nil -> []
+          encoding_object -> [{9, encoding_object}]
+        end
+
+      page_pdf("BT /F1 10 Tf <01> Tj ET",
+        font: font,
+        cmap: to_unicode,
+        extra_objects: extra_objects
+      )
+      |> Text.extract_spans()
+    end
+
+    assert {:error, {:unsupported_text_encoding, %{stage: :cmap}}} =
+             render.(" /Encoding /Identity-V", nil)
+
+    assert {:error, {:invalid_pdf_input, %{stage: :font}}} = render.("", nil)
+
+    encoding = "1 begincodespacerange\n<00> <FF>\nendcodespacerange"
+
+    assert {:error, {:unsupported_text_encoding, %{stage: :cmap}}} =
+             render.(" /Encoding 9 0 R", stream_object("/WMode 1", encoding))
+
+    assert {:error, {:unsupported_text_encoding, %{stage: :cmap}}} =
+             render.(" /Encoding 9 0 R", stream_object("/UseCMap /Identity-H", encoding))
+
+    assert {:error, {:unsupported_text_encoding, %{stage: :cmap}}} =
+             render.(
+               " /Encoding 9 0 R",
+               stream_object("", "/Identity-H usecmap\n" <> encoding)
+             )
+
+    assert {:error, {:unsupported_text_encoding, %{stage: :cmap}}} =
+             render.(
+               " /Encoding 9 0 R",
+               stream_object("", "/WMode 1 def\n" <> encoding)
+             )
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :cmap}}} =
+             render.(" /Encoding 9 0 R", stream_object("", :binary.copy(" ", 1_000_001)))
+
+    malformed_encodings = [
+      "1 begincodespacerange\n<00> <FFFF>\nendcodespacerange",
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "2 begincidchar\n<01> 5\nendcidchar",
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 begincidchar\n<01> 65536\nendcidchar",
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "2 begincidrange\n<01> <02> 5\nendcidrange",
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 begincidrange\n<01> <0002> 5\nendcidrange",
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 begincidrange\n<01> <02> 65535\nendcidrange",
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 beginnotdefrange\n<01> <02> 65536\nendnotdefrange"
+    ]
+
+    for malformed <- malformed_encodings do
+      assert {:error, {:invalid_pdf_input, %{stage: :cmap}}} =
+               render.(" /Encoding 9 0 R", stream_object("", malformed))
+    end
+
+    range_limit =
+      "2 begincodespacerange\n<0000> <FFFF>\n<000000> <00FFFF>\nendcodespacerange\n" <>
+        "1 begincidrange\n<0000> <FFFF> 0\nendcidrange\n" <>
+        "1 beginnotdefrange\n<000000> <00FFFF> 0\nendnotdefrange"
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :cmap}}} =
+             render.(" /Encoding 9 0 R", stream_object("", range_limit))
+
+    notdef_entries =
+      Enum.map_join(0..34_464, "\n", fn source ->
+        "<#{source |> Integer.to_string(16) |> String.pad_leading(6, "0")}> #{source}"
+      end)
+
+    char_limit =
+      "2 begincodespacerange\n<0000> <FFFF>\n<000000> <00FFFF>\nendcodespacerange\n" <>
+        "1 begincidrange\n<0000> <FFFF> 0\nendcidrange\n" <>
+        "34465 beginnotdefchar\n#{notdef_entries}\nendnotdefchar"
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :cmap}}} =
+             render.(" /Encoding 9 0 R", stream_object("", char_limit))
+  end
+
   test "normalizes 180 and 270 degree page rotation" do
     content = "BT /F1 12 Tf 1 0 0 1 10 20 Tm (A) Tj ET"
     assert {:ok, _} = Text.extract(page_pdf(content, rotate: 180))
