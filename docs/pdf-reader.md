@@ -25,6 +25,8 @@ The reader supports:
 - hybrid-reference files through `/XRefStm`
 - active generation and free-entry selection from the newest revision
 - recursive indirect value and stream resolution with cycle detection
+- page-tree traversal with cycle and duplicate-reference detection, required
+  `/Count` validation, and descendant-count consistency checks
 
 The returned `:xref` map describes the active entry for each object number.
 The returned `:objects` map is keyed by `{object_number, generation}`. Free

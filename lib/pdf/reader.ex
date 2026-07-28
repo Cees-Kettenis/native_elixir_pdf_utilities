@@ -743,7 +743,8 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
          true <- is_map(catalog),
          true <- name?(Map.get(catalog, "Type"), "Catalog"),
          {:ok, pages_ref} <- required_ref(catalog, "Pages"),
-         {:ok, pages} <- walk_page_tree(document, pages_ref, nil, nil, nil, %{}, []) do
+         {:ok, _seen, pages, _count} <-
+           walk_page_tree(document, pages_ref, nil, nil, nil, %{}, %{}, []) do
       {:ok, Enum.reverse(pages)}
     else
       false -> error(:page_tree, :invalid_pdf_input, "catalog object is malformed")
@@ -757,12 +758,21 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
          inherited_resources,
          inherited_rotate,
          inherited_media_box,
+         ancestors,
          seen,
          pages
        ) do
     cond do
-      Map.has_key?(seen, ref) ->
+      Map.has_key?(ancestors, ref) ->
         error(:page_tree, :invalid_pdf_input, "page tree contains a cycle", object: ref)
+
+      Map.has_key?(seen, ref) ->
+        error(
+          :page_tree,
+          :invalid_pdf_input,
+          "page tree contains a duplicate reference",
+          object: ref
+        )
 
       length(pages) >= @max_pages ->
         error(:limits, :resource_limit_exceeded, "PDF page count exceeds the limit")
@@ -772,26 +782,33 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           resources = Map.get(dictionary, "Resources", inherited_resources)
           rotate = Map.get(dictionary, "Rotate", inherited_rotate)
           media_box = Map.get(dictionary, "MediaBox", inherited_media_box)
+          ancestors = Map.put(ancestors, ref, true)
           seen = Map.put(seen, ref, true)
 
           case Map.get(dictionary, "Type") do
             {:name, "Page"} ->
-              {:ok,
+              {:ok, seen,
                [
                  %{ref: ref, resources: resources, rotate: rotate, media_box: media_box}
                  | pages
-               ]}
+               ], 1}
 
             {:name, "Pages"} ->
-              walk_kids(
-                document,
-                Map.get(dictionary, "Kids"),
-                resources,
-                rotate,
-                media_box,
-                seen,
-                pages
-              )
+              with {:ok, declared_count} <- page_tree_count(document, dictionary, ref),
+                   {:ok, seen, pages, actual_count} <-
+                     walk_kids(
+                       document,
+                       Map.get(dictionary, "Kids"),
+                       resources,
+                       rotate,
+                       media_box,
+                       ancestors,
+                       seen,
+                       pages
+                     ),
+                   :ok <- validate_page_tree_count(declared_count, actual_count, ref) do
+                {:ok, seen, pages, actual_count}
+              end
 
             _ ->
               error(:page_tree, :invalid_pdf_input, "page tree node has an invalid Type",
@@ -805,25 +822,68 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp walk_kids(document, kids, resources, rotate, media_box, seen, pages) do
-    case kids do
-      kids when is_list(kids) ->
-        Enum.reduce_while(kids, {:ok, pages}, fn kid, {:ok, pages} ->
-          case kid do
-            {:ref, _} ->
-              case walk_page_tree(document, kid, resources, rotate, media_box, seen, pages) do
-                {:ok, pages} -> {:cont, {:ok, pages}}
-                {:error, _} = page_error -> {:halt, page_error}
-              end
+  defp walk_kids(document, kids, resources, rotate, media_box, ancestors, seen, pages) do
+    with {:ok, kids} <- resolve(document, kids) do
+      case kids do
+        kids when is_list(kids) ->
+          Enum.reduce_while(kids, {:ok, seen, pages, 0}, fn kid, {:ok, seen, pages, count} ->
+            case kid do
+              {:ref, _} ->
+                case walk_page_tree(
+                       document,
+                       kid,
+                       resources,
+                       rotate,
+                       media_box,
+                       ancestors,
+                       seen,
+                       pages
+                     ) do
+                  {:ok, seen, pages, child_count} ->
+                    {:cont, {:ok, seen, pages, count + child_count}}
 
-            _ ->
-              {:halt,
-               error(:page_tree, :invalid_pdf_input, "Pages Kids array contains a non-reference")}
-          end
-        end)
+                  {:error, _} = page_error ->
+                    {:halt, page_error}
+                end
+
+              _ ->
+                {:halt,
+                 error(
+                   :page_tree,
+                   :invalid_pdf_input,
+                   "Pages Kids array contains a non-reference"
+                 )}
+            end
+          end)
+
+        _ ->
+          error(:page_tree, :invalid_pdf_input, "Pages node is missing a valid Kids array")
+      end
+    end
+  end
+
+  defp page_tree_count(document, dictionary, ref) do
+    case resolve(document, Map.get(dictionary, "Count")) do
+      {:ok, count} when is_integer(count) and count >= 0 ->
+        {:ok, count}
 
       _ ->
-        error(:page_tree, :invalid_pdf_input, "Pages node is missing a valid Kids array")
+        error(:page_tree, :invalid_pdf_input, "Pages node is missing a valid Count", object: ref)
+    end
+  end
+
+  defp validate_page_tree_count(declared_count, actual_count, ref) do
+    case declared_count == actual_count do
+      true ->
+        :ok
+
+      false ->
+        error(
+          :page_tree,
+          :invalid_pdf_input,
+          "Pages node Count #{declared_count} does not match #{actual_count} descendant pages",
+          object: ref
+        )
     end
   end
 

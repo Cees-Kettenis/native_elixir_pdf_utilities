@@ -1,7 +1,9 @@
 defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
   use ExUnit.Case, async: false
 
+  alias NativeElixirPdfUtilities.Merge
   alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Text
 
   @fixture_directory Path.expand("fixtures/pdf_reader", __DIR__)
 
@@ -193,6 +195,89 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
       ])
 
     assert_error(Reader.read(cycle), :invalid_pdf_input, :page_tree)
+  end
+
+  test "rejects duplicate page-tree references and invalid descendant counts" do
+    duplicate_sibling =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R 3 0 R] /Count 2 >>"},
+        {3, "<< /Type /Page /Parent 2 0 R >>"}
+      ])
+
+    assert {:error, {:invalid_pdf_input, duplicate_diagnostic}} =
+             Reader.read(duplicate_sibling)
+
+    assert duplicate_diagnostic.stage == :page_tree
+    assert duplicate_diagnostic.message == "page tree contains a duplicate reference; object 3 0"
+
+    duplicate_branch =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>"},
+        {3, "<< /Type /Pages /Parent 2 0 R /Kids [5 0 R] /Count 1 >>"},
+        {4, "<< /Type /Pages /Parent 2 0 R /Kids [5 0 R] /Count 1 >>"},
+        {5, "<< /Type /Page /Parent 3 0 R >>"}
+      ])
+
+    assert_error(Reader.read(duplicate_branch), :invalid_pdf_input, :page_tree)
+
+    invalid_counts = [
+      {"", "Pages node is missing a valid Count; object 2 0"},
+      {"/Count /bad", "Pages node is missing a valid Count; object 2 0"},
+      {"/Count -1", "Pages node is missing a valid Count; object 2 0"},
+      {"/Count 2", "Pages node Count 2 does not match 1 descendant pages; object 2 0"}
+    ]
+
+    for {count, message} <- invalid_counts do
+      malformed =
+        pdf([
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2, "<< /Type /Pages /Kids [3 0 R] #{count} >>"},
+          {3, "<< /Type /Page /Parent 2 0 R >>"}
+        ])
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Reader.read(malformed)
+      assert diagnostic.stage == :page_tree
+      assert diagnostic.message == message
+    end
+
+    nested_mismatch =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3, "<< /Type /Pages /Parent 2 0 R /Kids [4 0 R] /Count 2 >>"},
+        {4, "<< /Type /Page /Parent 3 0 R >>"}
+      ])
+
+    assert {:error, {:invalid_pdf_input, nested_diagnostic}} = Reader.read(nested_mismatch)
+    assert nested_diagnostic.message =~ "object 3 0"
+
+    indirect =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids 4 0 R /Count 5 0 R >>"},
+        {3, "<< /Type /Page /Parent 2 0 R >>"},
+        {4, "[3 0 R]"},
+        {5, "1"}
+      ])
+
+    assert {:ok, %{pages: [_page]}} = Reader.read(indirect)
+  end
+
+  test "shared consumers reject page trees rejected by the reader" do
+    malformed =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R 3 0 R] /Count 2 /MediaBox [0 0 200 100] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R >>"}
+      ])
+
+    assert_error(Text.extract(malformed), :invalid_pdf_input, :page_tree)
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} = Merge.merge([malformed])
+    assert diagnostic.stage == :merge
+    assert diagnostic.message =~ "page tree contains a duplicate reference"
   end
 
   test "resolves indirect stream lengths, filters, and DecodeParms" do
