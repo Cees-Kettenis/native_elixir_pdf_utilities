@@ -25,7 +25,8 @@ Merging uses the shared PDF reader and therefore supports:
 - cross-reference streams and object streams
 - incremental revisions and hybrid-reference files
 - active object generations and free entries
-- inherited page resources and MediaBox values
+- inherited page `Resources`, `MediaBox`, `CropBox`, and `Rotate` values,
+  including indirectly referenced page rectangles
 - the stream filters and resource limits described in the
   [PDF reader guide](pdf-reader.md)
 
@@ -37,8 +38,10 @@ the shared diagnostic contract. The merger does not decrypt PDFs.
 The merger emits a fresh PDF 1.7 document with a new cross-reference table,
 trailer, catalog, and flat page tree. Active input objects receive new object
 numbers, their indirect references are rewritten, and stream bytes and filter
-declarations are preserved. Page-level inherited resources and MediaBox values
-are written onto the merged pages where required.
+declarations are preserved. Effective inherited page resources, media and crop
+boxes, and rotation values are written onto the merged pages where required.
+Missing or malformed required page geometry fails with an actionable diagnostic
+instead of being replaced with a fabricated page size.
 
 The result is intended for combining page content. Because the top-level
 catalog is rebuilt, document-level features such as metadata, outlines and

@@ -24,7 +24,7 @@ defmodule NativeElixirPdfUtilities.Merge do
   @typedoc "A list of PDF tokens."
   @type tokens :: [token()]
   @typedoc "Object record captured while indexing inputs."
-  @type obj_rec :: %{obj: integer(), gen: integer(), tokens: tokens()}
+  @type obj_rec :: %{obj: integer(), gen: integer(), tokens: tokens(), value: Reader.value()}
   @typedoc "Mapping from original object id to new object id."
   @type id_map :: %{optional(integer()) => integer()}
   @typedoc "Byte-offset table for xref: object id -> {byte_offset, generation}."
@@ -86,7 +86,8 @@ defmodule NativeElixirPdfUtilities.Merge do
           :invalid_pdf_input,
           "merge/1 received an invalid PDF (#{reader_reason} at #{diagnostic.stage}): #{diagnostic.message}",
           operation: :merge,
-          module: __MODULE__
+          module: __MODULE__,
+          source: Map.get(diagnostic, :source)
         )
     end
   end
@@ -152,18 +153,20 @@ defmodule NativeElixirPdfUtilities.Merge do
           document.objects
           |> Enum.reject(fn {_ref, object} -> structural_reader_object?(object.value) end)
           |> Enum.map(fn {{object, generation}, parsed} ->
-            %{obj: object, gen: generation, tokens: parsed.tokens}
+            %{obj: object, gen: generation, tokens: parsed.tokens, value: parsed.value}
           end)
           |> Enum.sort_by(&{&1.obj, &1.gen})
 
-        {:ok,
-         %{
-           objects: objects,
-           pages: Enum.map(document.pages, & &1.ref),
-           root_pages: root_pages,
-           inherited: page_inheritances(objects, root_pages),
-           max_obj: Enum.reduce(objects, 0, fn object, maximum -> max(maximum, object.obj) end)
-         }}
+        with {:ok, inherited} <- page_inheritances(document, objects, root_pages) do
+          {:ok,
+           %{
+             objects: objects,
+             pages: Enum.map(document.pages, & &1.ref),
+             root_pages: root_pages,
+             inherited: inherited,
+             max_obj: Enum.reduce(objects, 0, fn object, maximum -> max(maximum, object.obj) end)
+           }}
+        end
 
       {:error, _} = reader_error ->
         reader_error
@@ -188,34 +191,157 @@ defmodule NativeElixirPdfUtilities.Merge do
   end
 
   # Resolve inheritable page attributes through the complete /Pages tree.
-  defp page_inheritances(objects, root_pages_id) do
+  defp page_inheritances(document, objects, root_pages_id) do
     object_by_id = Map.new(objects, &{&1.obj, &1})
 
     collect_page_inheritances(
       root_pages_id,
       object_by_id,
-      %{resources: nil, mediabox: nil},
+      document,
+      %{resources: nil, mediabox: nil, cropbox: nil, rotate: nil},
       %{}
     )
   end
 
-  defp collect_page_inheritances(object_id, object_by_id, inherited, page_attributes) do
-    %{tokens: tokens} = object = Map.fetch!(object_by_id, object_id)
+  defp collect_page_inheritances(
+         object_id,
+         object_by_id,
+         document,
+         inherited,
+         page_attributes
+       ) do
+    %{tokens: tokens, value: dictionary} = object = Map.fetch!(object_by_id, object_id)
 
     attributes = %{
-      resources: find_value_after_name(tokens, "Resources") || inherited.resources,
-      mediabox: find_value_after_name(tokens, "MediaBox") || inherited.mediabox
+      resources: inherited_attribute(dictionary, tokens, "Resources", inherited.resources),
+      mediabox: inherited_attribute(dictionary, tokens, "MediaBox", inherited.mediabox),
+      cropbox: inherited_attribute(dictionary, tokens, "CropBox", inherited.cropbox),
+      rotate: inherited_attribute(dictionary, tokens, "Rotate", inherited.rotate)
     }
 
     case object_is_page?(tokens) do
       true ->
-        Map.put(page_attributes, object.obj, attributes)
+        with {:ok, attributes} <- resolve_page_attributes(document, object.obj, attributes) do
+          {:ok, Map.put(page_attributes, object.obj, attributes)}
+        end
 
       false ->
         page_child_references(tokens)
-        |> Enum.reduce(page_attributes, fn child_id, acc ->
-          collect_page_inheritances(child_id, object_by_id, attributes, acc)
+        |> Enum.reduce_while({:ok, page_attributes}, fn child_id, {:ok, acc} ->
+          case collect_page_inheritances(child_id, object_by_id, document, attributes, acc) do
+            {:ok, acc} -> {:cont, {:ok, acc}}
+            {:error, _} = inheritance_error -> {:halt, inheritance_error}
+          end
         end)
+    end
+  end
+
+  defp inherited_attribute(dictionary, tokens, name, inherited) do
+    value_tokens = find_value_after_name(tokens, name)
+
+    case is_map(dictionary) and Map.has_key?(dictionary, name) do
+      true ->
+        %{value: Map.fetch!(dictionary, name), tokens: value_tokens}
+
+      false ->
+        inherited
+    end
+  end
+
+  defp resolve_page_attributes(document, page, attributes) do
+    with {:ok, mediabox} <-
+           resolved_rectangle(document, attributes.mediabox, "MediaBox", page, :required),
+         {:ok, cropbox} <-
+           resolved_rectangle(document, attributes.cropbox, "CropBox", page, :optional),
+         {:ok, rotate} <- resolved_rotation(document, attributes.rotate, page) do
+      {:ok,
+       %{
+         resources: attribute_tokens(attributes.resources),
+         mediabox: mediabox,
+         cropbox: cropbox,
+         rotate: rotate
+       }}
+    end
+  end
+
+  defp resolved_rectangle(document, attribute, name, page, requirement) do
+    case attribute do
+      nil when requirement == :optional ->
+        {:ok, nil}
+
+      nil ->
+        Diagnostics.error(
+          :page_tree,
+          :invalid_pdf_input,
+          "page #{page} is missing an effective #{name}",
+          source: "page #{page}"
+        )
+
+      %{value: value} ->
+        with {:ok, value} <- Reader.resolve(document, value),
+             true <- is_list(value) and length(value) == 4,
+             {:ok, numbers} <- resolve_rectangle_numbers(document, value) do
+          {:ok, [:lbracket | Enum.map(numbers, &number_token/1)] ++ [:rbracket]}
+        else
+          _ ->
+            Diagnostics.error(
+              :page_tree,
+              :invalid_pdf_input,
+              "page #{page} has a malformed effective #{name}",
+              source: "page #{page}"
+            )
+        end
+    end
+  end
+
+  defp resolve_rectangle_numbers(document, values) do
+    Enum.reduce_while(values, {:ok, []}, fn value, {:ok, numbers} ->
+      case Reader.resolve(document, value) do
+        {:ok, number} when is_number(number) ->
+          {:cont, {:ok, [number | numbers]}}
+
+        _ ->
+          {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, numbers} -> {:ok, Enum.reverse(numbers)}
+      :error -> :error
+    end
+  end
+
+  defp resolved_rotation(document, attribute, page) do
+    case attribute do
+      nil ->
+        {:ok, nil}
+
+      %{value: value} ->
+        case Reader.resolve(document, value) do
+          {:ok, rotate} when is_integer(rotate) and rem(rotate, 90) == 0 ->
+            {:ok, [{:int, rotate}]}
+
+          _ ->
+            Diagnostics.error(
+              :page_tree,
+              :invalid_pdf_input,
+              "page #{page} has a malformed effective Rotate",
+              source: "page #{page}"
+            )
+        end
+    end
+  end
+
+  defp attribute_tokens(attribute) do
+    case attribute do
+      nil -> nil
+      %{tokens: tokens} -> tokens
+    end
+  end
+
+  defp number_token(number) do
+    case number do
+      number when is_integer(number) -> {:int, number}
+      number -> {:real, number}
     end
   end
 
@@ -274,15 +400,23 @@ defmodule NativeElixirPdfUtilities.Merge do
     end
   end
 
-  # Build a page-rewrite context for Page objects (to set Parent/Resources/MediaBox), else nil.
+  # Build a page-rewrite context for Page objects, else nil.
   defp page_injection_ctx(object, %{inherited: inheritances}, parent_id) do
     if object_is_page?(object.tokens) do
-      inherited = Map.get(inheritances, object.obj, %{resources: nil, mediabox: nil})
+      inherited =
+        Map.get(inheritances, object.obj, %{
+          resources: nil,
+          mediabox: nil,
+          cropbox: nil,
+          rotate: nil
+        })
 
       %{
         parent_id: parent_id,
         resources_tokens: inherited.resources,
-        mediabox_tokens: inherited.mediabox
+        mediabox_tokens: inherited.mediabox,
+        cropbox_tokens: inherited.cropbox,
+        rotate_tokens: inherited.rotate
       }
     else
       nil
@@ -368,11 +502,13 @@ defmodule NativeElixirPdfUtilities.Merge do
     render_tokens(tokens2, id_map)
   end
 
-  # Rewrite top-level Page dictionary to set Parent, ensure /Type /Page, /Resources and /MediaBox.
+  # Rewrite a Page dictionary with its new parent and effective inheritable attributes.
   defp rewrite_page_tokens(tokens, %{
          parent_id: parent_id,
          resources_tokens: inh_res,
-         mediabox_tokens: inh_mb
+         mediabox_tokens: inh_mb,
+         cropbox_tokens: inh_crop,
+         rotate_tokens: inh_rotate
        }) do
     # We expect a single top-level dict in a Page object. Split it out, sanitize, and put it back.
     [:dict_start | rest] = tokens
@@ -384,7 +520,9 @@ defmodule NativeElixirPdfUtilities.Merge do
       |> put_key("Parent", [{:generated_reference, parent_id}])
       |> ensure_type_page()
       |> ensure_resources(inh_res)
-      |> ensure_mediabox(inh_mb || default_mediabox())
+      |> put_key("MediaBox", inh_mb)
+      |> put_optional_key("CropBox", inh_crop)
+      |> put_optional_key("Rotate", inh_rotate)
 
     before ++ [:dict_start | dict_inner] ++ [:dict_end | afterr]
   end
@@ -423,6 +561,13 @@ defmodule NativeElixirPdfUtilities.Merge do
     end
   end
 
+  defp put_optional_key(tokens, name, value_tokens) do
+    case value_tokens do
+      nil -> tokens
+      value_tokens -> put_key(tokens, name, value_tokens)
+    end
+  end
+
   # Ensure /Type /Page is set.
   defp ensure_type_page(tokens) do
     put_key(tokens, "Type", [{:name, "Page"}])
@@ -440,47 +585,6 @@ defmodule NativeElixirPdfUtilities.Merge do
         else
           tokens
         end
-    end
-  end
-
-  # Keep a valid /MediaBox array; otherwise use provided fallback.
-  defp ensure_mediabox(tokens, fallback) do
-    fallback = if valid_box?(fallback), do: fallback, else: default_mediabox()
-
-    case split_on_name(tokens, "MediaBox") do
-      {:ok, left, val, right} ->
-        if valid_box?(val) do
-          left ++ [{:name, "MediaBox"} | val] ++ right
-        else
-          left ++ [{:name, "MediaBox"} | fallback] ++ right
-        end
-
-      :error ->
-        put_key(tokens, "MediaBox", fallback)
-    end
-  end
-
-  # A4
-  defp default_mediabox do
-    [:lbracket, {:int, 0}, {:int, 0}, {:int, 595}, {:int, 842}, :rbracket]
-  end
-
-  # Validate a box array [a b c d] of numbers.
-  defp valid_box?(tokens) do
-    case tokens do
-      [:lbracket, a, b, c, d, :rbracket] ->
-        Enum.all?([a, b, c, d], &numeric_token?/1)
-
-      _ ->
-        false
-    end
-  end
-
-  defp numeric_token?(token) do
-    case token do
-      {:int, _value} -> true
-      {:real, _value} -> true
-      _ -> false
     end
   end
 

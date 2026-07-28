@@ -144,7 +144,7 @@ defmodule NativeElixirPdfUtilities.MergeTest do
         {1, "<< /Type /Catalog /Pages 2 0 R >>"},
         {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
         {3,
-         "<< /Type /Page /Parent 2 0 R /MediaBox [1 2 /nope 4] /Resources [] /Contents 10 0 R >>"},
+         "<< /Type /Page /Parent 2 0 R /MediaBox [1 2 300 400] /Resources [] /Contents 10 0 R >>"},
         {4,
          "<< /Flag true /Other false /Nothing null /Real 1.25 /One 1.0 /Name /AName /Hex <0F> /Literal (a\\n\\r\\t\\b\\f\\(\\)\\\\\\001) /Ref 3 0 R >>"},
         {10,
@@ -158,7 +158,7 @@ defmodule NativeElixirPdfUtilities.MergeTest do
 
     assert {:ok, merged} = Merge.merge([pdf])
 
-    assert merged =~ "/MediaBox [ 0 0 595 842 ]"
+    assert merged =~ "/MediaBox [ 1 2 300 400 ]"
     assert merged =~ "/Flag true /Other false /Nothing null"
     assert merged =~ "/Real 1.25 /One 1"
     assert merged =~ "/Hex <0F>"
@@ -166,7 +166,7 @@ defmodule NativeElixirPdfUtilities.MergeTest do
     assert merged =~ "\nstream\nabc123\nendstream"
   end
 
-  test "replaces a scalar MediaBox with the default page box" do
+  test "rejects a malformed MediaBox instead of silently replacing it" do
     pdf =
       merge_pdf([
         {1, "<< /Type /Catalog /Pages 2 0 R >>"},
@@ -174,8 +174,11 @@ defmodule NativeElixirPdfUtilities.MergeTest do
         {3, "<< /Type /Page /Parent 2 0 R /MediaBox 42 >>"}
       ])
 
-    assert {:ok, merged} = Merge.merge([pdf])
-    assert merged =~ "/MediaBox [ 0 0 595 842 ]"
+    assert {:error, {:invalid_pdf_input, diagnostic}} = Merge.merge([pdf])
+    assert diagnostic.stage == :merge
+    assert diagnostic.reason == :invalid_pdf_input
+    assert diagnostic.source == "page 3"
+    assert diagnostic.message =~ "page 3 has a malformed effective MediaBox"
   end
 
   test "rejects inputs without valid catalogs and page trees" do
@@ -233,6 +236,109 @@ defmodule NativeElixirPdfUtilities.MergeTest do
     assert {:ok, merged} = Merge.merge([pdf])
     assert merged =~ "/MediaBox [ 0 0 123 456 ]"
     assert merged =~ "/Resources << /Font << /F1 8 0 R >> >>"
+  end
+
+  test "materializes all inherited page attributes and resolves indirect values" do
+    pdf =
+      merge_pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2,
+         "<< /Type /Pages /Kids [3 0 R] /Count 1 /Resources 8 0 R /MediaBox 9 0 R /CropBox 10 0 R /Rotate 11 0 R >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /BleedBox [1 2 199 99] /TrimBox [2 3 198 98] /ArtBox [3 4 197 97] /UserUnit 2 >>"},
+        {8, "<< /ProcSet [/PDF] >>"},
+        {9, "12 0 R"},
+        {10, "[10 5 190 95]"},
+        {11, "17 0 R"},
+        {12, "[13 0 R 14 0 R 15 0 R 16 0 R]"},
+        {13, "0"},
+        {14, "0"},
+        {15, "200"},
+        {16, "100"},
+        {17, "90"}
+      ])
+
+    assert {:ok, merged} = Merge.merge([pdf])
+    assert {:ok, document} = Reader.read(merged)
+    page = hd(document.pages)
+    assert {:ok, dictionary} = Reader.dictionary(document, {:ref, page.ref})
+
+    assert dictionary["MediaBox"] == [0, 0, 200, 100]
+    assert dictionary["CropBox"] == [10, 5, 190, 95]
+    assert dictionary["Rotate"] == 90
+    assert dictionary["BleedBox"] == [1, 2, 199, 99]
+    assert dictionary["TrimBox"] == [2, 3, 198, 98]
+    assert dictionary["ArtBox"] == [3, 4, 197, 97]
+    assert dictionary["UserUnit"] == 2
+
+    assert {:ok, %{"ProcSet" => [{:name, "PDF"}]}} =
+             Reader.resolve(document, dictionary["Resources"])
+  end
+
+  test "uses the nearest page-tree value and page-local overrides" do
+    pdf =
+      merge_pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2,
+         "<< /Type /Pages /Kids [3 0 R] /Count 1 /Resources << /Marker /Root >> /MediaBox [0 0 600 800] /CropBox [0 0 590 790] /Rotate 0 >>"},
+        {3,
+         "<< /Type /Pages /Parent 2 0 R /Kids [4 0 R] /Count 1 /Resources << /Marker /Intermediate >> /MediaBox [0 0 300 400] /CropBox [1 1 290 390] /Rotate 90 >>"},
+        {4,
+         "<< /Type /Page /Parent 3 0 R /Resources << /Marker /Page >> /CropBox [2 2 280 380] /Rotate 180 >>"}
+      ])
+
+    assert {:ok, merged} = Merge.merge([pdf])
+    assert {:ok, document} = Reader.read(merged)
+    page = hd(document.pages)
+    assert {:ok, dictionary} = Reader.dictionary(document, {:ref, page.ref})
+
+    assert dictionary["Resources"] == %{"Marker" => {:name, "Page"}}
+    assert dictionary["MediaBox"] == [0, 0, 300, 400]
+    assert dictionary["CropBox"] == [2, 2, 280, 380]
+    assert dictionary["Rotate"] == 180
+  end
+
+  test "keeps CropBox and Rotate defaults implicit" do
+    pdf =
+      merge_pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 100] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R >>"}
+      ])
+
+    assert {:ok, merged} = Merge.merge([pdf])
+    assert {:ok, document} = Reader.read(merged)
+    page = hd(document.pages)
+    assert {:ok, dictionary} = Reader.dictionary(document, {:ref, page.ref})
+
+    assert dictionary["MediaBox"] == [0, 0, 200, 100]
+    refute Map.has_key?(dictionary, "CropBox")
+    refute Map.has_key?(dictionary, "Rotate")
+  end
+
+  test "rejects missing or malformed effective page geometry" do
+    invalid_pages = [
+      {"", "missing an effective MediaBox"},
+      {"/MediaBox [0 0 /bad 100]", "malformed effective MediaBox"},
+      {"/MediaBox [0 0 200 100] /CropBox 9 0 R", "malformed effective CropBox"},
+      {"/MediaBox [0 0 200 100] /CropBox [0 0 180 /bad]", "malformed effective CropBox"},
+      {"/MediaBox [0 0 200 100] /Rotate 45", "malformed effective Rotate"},
+      {"/MediaBox [0 0 200 100] /Rotate 90.0", "malformed effective Rotate"}
+    ]
+
+    for {geometry, message} <- invalid_pages do
+      pdf =
+        merge_pdf([
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+          {3, "<< /Type /Page /Parent 2 0 R #{geometry} >>"}
+        ])
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Merge.merge([pdf])
+      assert diagnostic.stage == :merge
+      assert diagnostic.source == "page 3"
+      assert diagnostic.message =~ message
+    end
   end
 
   test "remaps Parent references outside rewritten Page objects" do
