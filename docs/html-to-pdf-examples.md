@@ -103,6 +103,42 @@ Use `render_file/3` when the HTML already lives on disk and the result should be
 
 Configured stylesheets are loaded before embedded `<style>` tags. This lets shared print CSS define defaults while the template keeps document-specific overrides close to the markup.
 
+## Running Headers, Footers, and Page Numbers
+
+Page furniture is disabled unless `:page_furniture` is supplied. Reserve enough
+page margin for the visible header and footer:
+
+```elixir
+{:ok, pdf} =
+  HtmlToPdf.render(
+    """
+    <h1>Account statement</h1>
+    <p>Statement content...</p>
+    """,
+    page_size: :a4,
+    margin: "18mm",
+    page_furniture: [
+      header: [
+        default: "<div style=\"font-size: 8pt\">Account statement</div>",
+        first: false
+      ],
+      footer:
+        "<div style=\"font-size: 8pt; text-align: right\">Page {{page}} of {{pages}}</div>"
+    ]
+  )
+```
+
+The example omits the header on the first page and repeats it afterward. For
+first-page-only furniture, use `default: false` and provide `first: template`.
+For distinct facing-page designs, provide `odd:` and `even:` templates.
+`:first` takes precedence on page one, then odd/even, then `:default`.
+
+Templates support the normal renderer HTML/CSS subset. Configured
+`:stylesheets`, `:fonts`, and `:base_url` options are available while rendering
+them. Main-document embedded styles are separate from page-furniture
+templates, so place shared rules in `:stylesheets` or inline them in the
+template.
+
 ## Images
 
 Local PNG/JPEG paths can be absolute or relative to `:base_url`. SVG data URIs are accepted and rasterized locally.

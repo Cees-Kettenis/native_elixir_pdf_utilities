@@ -32,6 +32,52 @@ The detail map always includes `:stage`, `:reason`, and `:message`. It includes 
 | `:default_font` | Font family or fallback list                                                    | Defaults to`"Helvetica"`.                                                                                                                                               |
 | `:fonts`        | `%{family: ..., path: ...}` maps, keyword lists, or `{family, path}` tuples | TrueType fonts.`:weight` and `:style` are optional. OpenType files using TrueType outlines share this path; CFF-flavored OTF is unsupported.                            |
 | `:metadata`     | Keyword list or map                                                              | Supports `:title`, `:author`, `:subject`, `:keywords`, `:creation_date`, and `:modification_date`. Dates accept calendar structs or ISO 8601 strings. An HTML `<title>` is the default PDF title. |
+| `:page_furniture` | Keyword list or map with `:header` and `:footer` | Opt-in running page furniture. Each position accepts HTML or `:default`, `:first`, `:odd`, and `:even` variants. Omitted, `nil`, and `false` furniture is disabled. |
+
+## Running Headers, Footers, and Page Numbers
+
+Running page furniture is an opt-in rendering option:
+
+```elixir
+HtmlToPdf.render(html,
+  margin: "18mm",
+  page_furniture: [
+    header: [
+      default: "<div>Account statement</div>",
+      first: false,
+      odd: "<div>Account statement</div>",
+      even: "<div style=\"text-align: right\">Account statement</div>"
+    ],
+    footer: "<div style=\"text-align: right\">Page {{page}} of {{pages}}</div>"
+  ]
+)
+```
+
+Templates use the same supported HTML, CSS, configured stylesheets, local
+images, and font registry as normal rendering. A plain text fragment is also
+accepted. Main-document embedded `<style>` rules are not automatically copied
+into a separate furniture template, so shared rules should be supplied through
+`:stylesheets` or included in the furniture HTML.
+
+Variant selection is deterministic:
+
+1. `:first` is selected for page one when present.
+2. Otherwise, a matching `:odd` or `:even` variant is selected when present.
+3. Otherwise, `:default` is selected.
+
+A `false` or `nil` variant renders nothing. First-page-only furniture uses
+`[default: false, first: template]`; except-first-page furniture uses
+`[default: template, first: false]`.
+
+`{{page}}` expands to the current one-based page number and `{{pages}}` expands
+to the final total page count. Substitution happens before each furniture
+template is laid out.
+
+Furniture is placed inside the existing page margin and does not change body
+pagination. The visible template must fit inside that margin. If it does not,
+rendering returns an `:invalid_layout` diagnostic describing the furniture
+position, measured height, and available margin. Reserve enough `@page` or
+`:margin` space for the header and footer.
 
 ## HTML Support Matrix
 
@@ -78,7 +124,7 @@ These features are intentionally outside the current renderer boundary:
 - JavaScript and runtime DOM behavior.
 - `script`, `canvas`, `video`, `audio`, `iframe`, and interactive form behavior.
 - Remote asset fetching.
-- CSS floats, absolute/fixed positioning, transforms, animations, media queries beyond the documented print subset, pseudo-elements, and pseudo-classes beyond the documented selector subset.
+- CSS floats, absolute/fixed positioning, transforms, animations, media queries beyond the documented print subset, pseudo-elements, and pseudo-classes beyond the documented selector subset. Repeated page furniture uses the explicit `:page_furniture` option; `position: fixed` remains deferred because the flow layout model does not yet support positioned offsets or removing positioned elements from flow.
 - Full browser-compatible table, flexbox, and grid algorithms.
 - Complex text shaping and bidirectional layout.
 
