@@ -1227,6 +1227,56 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert paragraph.style.color == {1, 0, 0}
   end
 
+  test "compute gives important stylesheet declarations priority over normal inline declarations" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [%{type: :text, text: "#intro { color: blue !important; }"}]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"id" => "intro", "style" => "color: red"},
+          children: [%{type: :text, text: "Stylesheet important"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [paragraph] = styled_tree.children
+
+    assert paragraph.style.color == {0, 0, 1}
+  end
+
+  test "compute gives important inline declarations priority over important stylesheet declarations" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [%{type: :text, text: "#intro { color: blue !important; }"}]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"id" => "intro", "style" => "color: red !important"},
+          children: [%{type: :text, text: "Inline important"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [paragraph] = styled_tree.children
+
+    assert paragraph.style.color == {1, 0, 0}
+  end
+
   test "compute applies flex container and item declarations" do
     dom = %{
       type: :document,

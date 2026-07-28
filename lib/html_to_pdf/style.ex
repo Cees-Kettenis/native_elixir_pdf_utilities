@@ -1057,18 +1057,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp apply_author_styles(style, node, ancestors, rules) do
-    with {:ok, style} <- apply_stylesheet_rules(style, node, ancestors, rules),
-         {:ok, style} <- apply_inline_style(style, Map.get(node.attributes, "style", "")),
-         {:ok, style} <- put_font_face(style) do
-      {:ok, put_line_height(style)}
-    end
-  end
+    case CssParser.parse_declarations(Map.get(node.attributes, "style", "")) do
+      {:ok, inline_declarations} ->
+        declarations =
+          rules
+          |> matching_declarations(node, ancestors)
+          |> Kernel.++(
+            inline_declarations
+            |> Enum.with_index()
+            |> Enum.map(fn {declaration, declaration_index} ->
+              %{
+                declaration: declaration,
+                important: important_declaration?(declaration),
+                inline: true,
+                specificity: {0, 0, 0},
+                order: 0,
+                declaration_index: declaration_index
+              }
+            end)
+          )
+          |> Enum.sort_by(fn matched ->
+            {
+              matched.important,
+              matched.inline,
+              matched.specificity,
+              matched.order,
+              matched.declaration_index
+            }
+          end)
+          |> Enum.map(& &1.declaration)
 
-  defp apply_stylesheet_rules(style, node, ancestors, rules) do
-    rules
-    |> matching_declarations(node, ancestors)
-    |> Enum.map(& &1.declaration)
-    |> then(&apply_declarations(style, &1))
+        with {:ok, style} <- apply_declarations(style, declarations),
+             {:ok, style} <- put_font_face(style) do
+          {:ok, put_line_height(style)}
+        end
+
+      {:error, _reason} ->
+        {:error, :invalid_document}
+    end
   end
 
   defp matching_declarations(rules, node, ancestors) do
@@ -1085,15 +1111,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             %{
               declaration: declaration,
               important: important_declaration?(declaration),
+              inline: false,
               specificity: specificity,
               order: rule.order,
               declaration_index: declaration_index
             }
           end)
       end
-    end)
-    |> Enum.sort_by(fn matched ->
-      {matched.important, matched.specificity, matched.order, matched.declaration_index}
     end)
   end
 
@@ -1195,13 +1219,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           _ ->
             false
         end
-    end
-  end
-
-  defp apply_inline_style(style, inline_style) do
-    case CssParser.parse_declarations(inline_style) do
-      {:ok, declarations} -> apply_declarations(style, declarations)
-      {:error, _reason} -> {:error, :invalid_document}
     end
   end
 
