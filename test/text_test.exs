@@ -383,6 +383,72 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert b.joins_previous?
   end
 
+  test "q and Q restore nested graphics and text state in LIFO order" do
+    content = """
+    /F1 10 Tf 1 Tc 2 Tw 80 Tz 12 TL 1 Ts 2 Tr
+    q
+      /F2 20 Tf 3 Tc 4 Tw 60 Tz 24 TL 2 Ts 7 Tr
+      q
+        /F1 30 Tf 5 Tc 6 Tw 40 Tz 36 TL 3 Ts 3 Tr
+        2 0 0 2 3 4 cm
+      Q
+      BT 1 0 0 1 10 100 Tm (A A) Tj T* (A) Tj ET
+      1 0 0 1 20 30 cm
+    Q
+    BT 1 0 0 1 10 50 Tm (A A) Tj T* (A) Tj ET
+    """
+
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+      {3,
+       "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources 4 0 R /Contents 6 0 R >>"},
+      {4, "<< /Font << /F1 5 0 R /F2 7 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", content)},
+      {7, "<< /Type /Font /Subtype /Type1 /BaseFont /Symbol >>"}
+    ]
+
+    assert {:ok, %{pages: [%{spans: [inner, inner_next, outer, outer_next]}]}} =
+             Text.extract_spans(pdf(objects))
+
+    assert Enum.map([inner, inner_next, outer, outer_next], & &1.source_index) == [0, 1, 2, 3]
+
+    assert Enum.map([inner, inner_next, outer, outer_next], & &1.font_resource) ==
+             ["F2", "F2", "F1", "F1"]
+
+    assert Enum.map([inner, inner_next, outer, outer_next], & &1.font_size) ==
+             [20.0, 20.0, 10.0, 10.0]
+
+    assert Enum.map([inner, inner_next, outer, outer_next], & &1.text) ==
+             ["Α Α", "Α", "A A", "A"]
+
+    assert Enum.map(
+             [inner, inner_next, outer, outer_next],
+             &{&1.render_mode, &1.paints_text?, &1.adds_to_clip_path?}
+           ) == [
+             {7, false, true},
+             {7, false, true},
+             {2, true, false},
+             {2, true, false}
+           ]
+
+    assert Enum.all?(
+             [inner, inner_next, outer, outer_next],
+             &(&1.ctm == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+           )
+
+    assert {inner.x, inner.y} == {10.0, 690.0}
+    assert_in_delta inner.end_x, 35.8, 0.0001
+    assert inner_next.y == 714.0
+    assert_in_delta inner_next.end_x, 17.8, 0.0001
+
+    assert {outer.x, outer.y} == {10.0, 741.0}
+    assert_in_delta outer.end_x, 26.0, 0.0001
+    assert outer_next.y == 753.0
+    assert_in_delta outer_next.end_x, 14.8, 0.0001
+  end
+
   test "extract_spans keeps source order and can provide best-effort visual order" do
     content =
       "BT /F1 12 Tf 1 0 0 1 100 20 Tm (RIGHT) Tj " <>

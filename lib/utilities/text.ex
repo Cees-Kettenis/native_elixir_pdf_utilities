@@ -29,6 +29,17 @@ defmodule NativeElixirPdfUtilities.Text do
   @max_cmap_entries 100_000
   @max_form_depth 20
   @max_text_spans 25_000
+  @graphics_state_fields [
+    :ctm,
+    :font,
+    :font_size,
+    :char_spacing,
+    :word_spacing,
+    :horizontal_scale,
+    :leading,
+    :rise,
+    :render_mode
+  ]
   @validated_operators ~w(q Q cm BT ET Tf Tm Td TD T* TL Tc Tw Tz Tr Ts Tj TJ ' " Do)
 
   @typedoc "Options for reconstructed string extraction."
@@ -402,12 +413,21 @@ defmodule NativeElixirPdfUtilities.Text do
   defp apply_operator(operator, operands, state, spans, document, resources, page, depth) do
     case {operator, operands} do
       {"q", []} ->
-        {:ok, %{state | stack: [state.ctm | state.stack]}, spans}
+        saved_state = Map.take(state, @graphics_state_fields)
+        {:ok, %{state | stack: [saved_state | state.stack]}, spans}
 
       {"Q", []} ->
         case state.stack do
-          [ctm | stack] -> {:ok, %{state | ctm: ctm, stack: stack}, spans}
-          [] -> error(:content, :invalid_pdf_input, "Q has no matching q", page: page)
+          [saved_state | stack] ->
+            restored_state =
+              state
+              |> Map.merge(saved_state)
+              |> Map.put(:stack, stack)
+
+            {:ok, restored_state, spans}
+
+          [] ->
+            error(:content, :invalid_pdf_input, "Q has no matching q", page: page)
         end
 
       {"cm", operands} ->
