@@ -45,7 +45,9 @@ including their abbreviated names:
 
 TIFF predictor 2 and PNG predictors 10 through 15 are supported through
 `/DecodeParms`. Filter arrays are applied in declaration order. Unknown filters
-and predictors return `:unsupported_pdf_feature` diagnostics.
+and predictors return `:unsupported_pdf_feature` diagnostics. ASCII85 decoding
+enforces group boundaries, the 32-bit value ceiling, and valid final partial
+groups.
 
 ## Errors and limits
 

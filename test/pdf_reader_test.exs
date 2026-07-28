@@ -327,11 +327,36 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
   test "decodes filter edge cases and reports malformed encoded data" do
     assert decoded_stream("z~>", {:name, "ASCII85Decode"}) == {:ok, <<0, 0, 0, 0>>}
 
-    assert_error(
-      decoded_stream("!!!!!z~>", {:name, "ASCII85Decode"}),
-      :invalid_pdf_input,
-      :filter
-    )
+    assert decoded_stream("!!!!!z~>", {:name, "ASCII85Decode"}) ==
+             {:ok, :binary.copy(<<0>>, 8)}
+
+    assert decoded_stream("z!!!!!z~>", {:name, "A85"}) ==
+             {:ok, :binary.copy(<<0>>, 12)}
+
+    assert decoded_stream("<~z~>", {:name, "ASCII85Decode"}) == {:ok, <<0, 0, 0, 0>>}
+
+    assert decoded_stream(<<0, "!!!!!\n z~>">>, {:name, "ASCII85Decode"}) ==
+             {:ok, :binary.copy(<<0>>, 8)}
+
+    assert decoded_stream("s8W-!~>", {:name, "ASCII85Decode"}) ==
+             {:ok, <<255, 255, 255, 255>>}
+
+    for {encoded, decoded_size} <- [{"!!~>", 1}, {"!!!~>", 2}, {"!!!!~>", 3}] do
+      assert decoded_stream(encoded, {:name, "ASCII85Decode"}) ==
+               {:ok, :binary.copy(<<0>>, decoded_size)}
+    end
+
+    assert_error(decoded_stream("!z~>", {:name, "ASCII85Decode"}), :invalid_pdf_input, :filter)
+    assert_error(decoded_stream("!~>", {:name, "ASCII85Decode"}), :invalid_pdf_input, :filter)
+    assert_error(decoded_stream("v~>", {:name, "ASCII85Decode"}), :invalid_pdf_input, :filter)
+
+    for overflow <- ["s8W-\"~>", "uuuuu~>", "uu~>"] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} =
+               decoded_stream(overflow, {:name, "ASCII85Decode"})
+
+      assert diagnostic.stage == :filter
+      assert diagnostic.message =~ "group exceeds the 32-bit range"
+    end
 
     assert decoded_stream(<<255, ?A, 128>>, {:name, "RunLengthDecode"}) ==
              {:ok, String.duplicate("A", 2)}

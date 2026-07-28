@@ -1109,7 +1109,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
     case Enum.split_while(data, fn byte -> byte != ?~ end) do
       {body, [?~, ?> | _]} ->
-        decode_ascii85(body, [], ref)
+        decode_ascii85(body, [], [], ref)
 
       _ ->
         error(:filter, :invalid_pdf_input, "ASCII85Decode data is missing its terminator",
@@ -1118,36 +1118,79 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp decode_ascii85(bytes, acc, ref) do
-    case {bytes, acc} do
-      {[], acc} ->
-        {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
+  defp decode_ascii85(bytes, group, acc, ref) do
+    case bytes do
+      [] ->
+        case group do
+          [] ->
+            {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
 
-      {[?z | rest], []} ->
-        decode_ascii85(rest, [<<0, 0, 0, 0>>], ref)
-
-      {[?z | _], _acc} ->
-        error(:filter, :invalid_pdf_input, "ASCII85Decode z appears inside a group", object: ref)
-
-      {bytes, acc} ->
-        {group, rest} = Enum.split(bytes, min(5, length(bytes)))
-
-        cond do
-          Enum.any?(group, &(&1 < 33 or &1 > 117)) ->
-            error(:filter, :invalid_pdf_input, "ASCII85Decode byte is out of range", object: ref)
-
-          length(group) == 1 ->
+          [_byte] ->
             error(:filter, :invalid_pdf_input, "ASCII85Decode final group is too short",
               object: ref
             )
 
-          true ->
+          group ->
+            group = Enum.reverse(group)
             padded = group ++ List.duplicate(?u, 5 - length(group))
-            value = Enum.reduce(padded, 0, fn byte, value -> value * 85 + byte - 33 end)
-            <<decoded::binary-size(4)>> = <<value::unsigned-big-integer-size(32)>>
-            take = if rest == [], do: length(group) - 1, else: 4
-            decode_ascii85(rest, [binary_part(decoded, 0, take) | acc], ref)
+
+            with {:ok, decoded} <- decode_ascii85_group(padded, ref) do
+              {:ok,
+               [binary_part(decoded, 0, length(group) - 1) | acc]
+               |> Enum.reverse()
+               |> IO.iodata_to_binary()}
+            end
         end
+
+      [?z | rest] ->
+        case group do
+          [] ->
+            decode_ascii85(rest, [], [<<0, 0, 0, 0>> | acc], ref)
+
+          _group ->
+            error(
+              :filter,
+              :invalid_pdf_input,
+              "ASCII85Decode z appears inside a group",
+              object: ref
+            )
+        end
+
+      [byte | rest] ->
+        case byte in 33..117 do
+          true ->
+            group = [byte | group]
+
+            case length(group) == 5 do
+              true ->
+                with {:ok, decoded} <- decode_ascii85_group(Enum.reverse(group), ref) do
+                  decode_ascii85(rest, [], [decoded | acc], ref)
+                end
+
+              false ->
+                decode_ascii85(rest, group, acc, ref)
+            end
+
+          false ->
+            error(:filter, :invalid_pdf_input, "ASCII85Decode byte is out of range", object: ref)
+        end
+    end
+  end
+
+  defp decode_ascii85_group(group, ref) do
+    value = Enum.reduce(group, 0, fn byte, value -> value * 85 + byte - 33 end)
+
+    case value <= 0xFFFFFFFF do
+      true ->
+        {:ok, <<value::unsigned-big-integer-size(32)>>}
+
+      false ->
+        error(
+          :filter,
+          :invalid_pdf_input,
+          "ASCII85Decode group exceeds the 32-bit range",
+          object: ref
+        )
     end
   end
 
