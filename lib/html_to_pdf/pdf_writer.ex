@@ -210,13 +210,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       }
       when is_binary(id) and is_binary(data) and is_integer(units_per_em) and units_per_em > 0 and
              is_list(widths) and is_map(cmap) ->
-        box.font == Font.pdf_name(box.font_face)
+        box.font == Font.pdf_name(box.font_face) and Font.supports_text?(box.font_face, box.text)
 
       %{type: :built_in, pdf_name: pdf_name} when is_binary(pdf_name) ->
-        box.font == pdf_name and pdf_name in built_in_fonts()
+        box.font == pdf_name and pdf_name in built_in_fonts() and
+          Font.supports_text?(box.font_face, box.text)
 
       nil ->
-        box.font in built_in_fonts()
+        box.font in built_in_fonts() and
+          Font.supports_text?(
+            %{type: :built_in, family: box.font, pdf_name: box.font},
+            box.text
+          )
 
       _ ->
         false

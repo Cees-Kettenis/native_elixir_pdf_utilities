@@ -2,12 +2,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   @moduledoc """
   Font loading, fallback resolution, text measurement, and PDF text encoding.
 
-  The renderer loads explicitly configured fonts and also discovers a small set
-  of common system sans-serif fonts when they are available.
+  The renderer loads explicitly configured fonts, bundles DejaVu Sans fallback
+  faces, and also discovers a small set of common system sans-serif fonts when
+  they are available.
   """
 
   @type font_style :: :normal | :italic
-  @type registry :: %{embedded: [embedded_font()]}
+  @type registry :: %{embedded: [embedded_font()], fallback: [embedded_font()]}
   @type built_in_font :: %{type: :built_in, family: String.t(), pdf_name: String.t()}
   @type embedded_font :: %{
           type: :embedded,
@@ -28,6 +29,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   @type font_face :: built_in_font() | embedded_font()
 
   @built_in_families ["Courier", "Helvetica", "Times-Roman"]
+  @bundled_font_family "DejaVu Sans"
   @system_font_candidates [
     %{
       family: "Arial",
@@ -128,19 +130,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       true ->
         case Keyword.get(opts, :fonts, []) do
           fonts when is_list(fonts) ->
-            Enum.reduce_while(fonts, {:ok, []}, fn font, {:ok, acc} ->
-              case load_font(font) do
-                {:ok, loaded} -> {:cont, {:ok, [loaded | acc]}}
-                :error -> {:halt, :error}
-              end
-            end)
-            |> case do
-              {:ok, embedded} ->
-                embedded = Enum.reverse(embedded)
-                {:ok, %{embedded: embedded ++ system_fonts(embedded)}}
-
-              :error ->
-                :error
+            with {:ok, configured} <- load_fonts(fonts),
+                 {:ok, bundled} <- load_fonts(bundled_font_configs()) do
+              fallback = configured ++ bundled
+              embedded = Enum.uniq_by(fallback, &font_key/1)
+              {:ok, %{embedded: embedded ++ system_fonts(embedded), fallback: fallback}}
             end
 
           _ ->
@@ -163,6 +157,57 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     case Enum.find_value(families, &resolve_family(&1, weight, style, registry)) do
       nil -> :error
       font -> {:ok, families, font}
+    end
+  end
+
+  @doc """
+  Returns configured and bundled fallback faces in family declaration order,
+  ordering each family's faces by the closest weight and style.
+  """
+  @spec fallback_faces(registry(), number(), font_style()) :: [embedded_font()]
+  def fallback_faces(registry, weight, style) do
+    registry
+    |> Map.get(:fallback, [])
+    |> Enum.group_by(&String.downcase(&1.family))
+    |> then(fn grouped ->
+      registry
+      |> Map.get(:fallback, [])
+      |> Enum.map(&String.downcase(&1.family))
+      |> Enum.uniq()
+      |> Enum.flat_map(fn family ->
+        grouped
+        |> Map.fetch!(family)
+        |> Enum.sort_by(fn font ->
+          style_penalty = if font.style == style, do: 0, else: 1_000
+          abs(font.weight - weight) + style_penalty
+        end)
+      end)
+    end)
+  end
+
+  @doc """
+  Returns whether a font face can safely encode every codepoint in `text`.
+
+  Built-in PDF fonts are limited to printable ASCII. Embedded fonts are
+  checked against their Unicode character map.
+  """
+  @spec supports_text?(font_face(), String.t()) :: boolean()
+  def supports_text?(font, text) do
+    case {font, text} do
+      {%{type: :built_in}, text} when is_binary(text) ->
+        String.valid?(text) and
+          text
+          |> String.to_charlist()
+          |> Enum.all?(&(&1 in 0x20..0x7E))
+
+      {%{type: :embedded, cmap: cmap}, text} when is_map(cmap) and is_binary(text) ->
+        String.valid?(text) and
+          text
+          |> String.to_charlist()
+          |> Enum.all?(&(Map.get(cmap, &1, 0) != 0))
+
+      _ ->
+        false
     end
   end
 
@@ -233,6 +278,51 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
         end
       end)
     end)
+  end
+
+  defp load_fonts(fonts) do
+    Enum.reduce_while(fonts, {:ok, []}, fn font, {:ok, acc} ->
+      case load_font(font) do
+        {:ok, loaded} -> {:cont, {:ok, acc ++ [loaded]}}
+        :error -> {:halt, :error}
+      end
+    end)
+  end
+
+  defp bundled_font_configs do
+    font_directory =
+      Application.app_dir(:native_elixir_pdf_utilities, "priv/fonts/dejavu")
+
+    [
+      %{
+        family: @bundled_font_family,
+        path: Path.join(font_directory, "DejaVuSans.ttf"),
+        weight: 400,
+        style: :normal
+      },
+      %{
+        family: @bundled_font_family,
+        path: Path.join(font_directory, "DejaVuSans-Bold.ttf"),
+        weight: 700,
+        style: :normal
+      },
+      %{
+        family: @bundled_font_family,
+        path: Path.join(font_directory, "DejaVuSans-Oblique.ttf"),
+        weight: 400,
+        style: :italic
+      },
+      %{
+        family: @bundled_font_family,
+        path: Path.join(font_directory, "DejaVuSans-BoldOblique.ttf"),
+        weight: 700,
+        style: :italic
+      }
+    ]
+  end
+
+  defp font_key(font) do
+    {String.downcase(font.family), font.weight, font.style}
   end
 
   defp load_font(font) do

@@ -3417,7 +3417,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             Map.fetch!(style, :font_family),
             Map.fetch!(style, :font_weight),
             Map.fetch!(style, :font_style),
-            %{embedded: []}
+            %{embedded: [], fallback: []}
           )
 
         font_face

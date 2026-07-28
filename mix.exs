@@ -45,7 +45,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
   defp package do
     [
       name: "native_elixir_pdf_utilities",
-      files: ~w(lib assets docs mix.exs README.md CHANGELOG.md LICENSE),
+      files: ~w(lib assets priv docs mix.exs README.md CHANGELOG.md LICENSE),
       licenses: ["MIT"],
       links: %{"GitHub" => "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"}
     ]

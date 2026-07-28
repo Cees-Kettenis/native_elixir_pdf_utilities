@@ -6,6 +6,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
 
     * parse HTML into a document tree
     * compute styles
+    * resolve every text grapheme to an available font
     * lay out the styled tree
     * paginate layout boxes
     * write PDF bytes
@@ -17,6 +18,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
+  alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
   alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
@@ -74,6 +76,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   @type error_reason ::
           :invalid_document
           | :invalid_css
+          | :invalid_encoding
           | :invalid_html
           | :invalid_layout
           | :invalid_margin
@@ -82,6 +85,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | :invalid_path
           | :invalid_pdf_input
           | :not_implemented
+          | :unsupported_glyph
           | :unsupported_html
           | File.posix()
   @type error_detail :: Diagnostics.diagnostic()
@@ -175,14 +179,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   end
 
   defp do_render(html, opts) do
-    with {:ok, dom} <- HtmlParser.parse_detailed(html),
-         {:ok, effective_opts} <- effective_render_options_detailed(dom, opts),
-         {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts),
-         {:ok, layout_tree} <- layout_document(styled_tree, effective_opts),
-         {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
-         {:ok, pages} <- PageFurniture.decorate(pages, layout_tree, effective_opts),
-         {:ok, pdf_binary} <- PdfWriter.render(pages, effective_opts) do
-      {:ok, pdf_binary}
+    case is_binary(html) and not String.valid?(html) do
+      true ->
+        Diagnostics.error(:html, :invalid_encoding, "HTML input must be valid UTF-8")
+
+      false ->
+        with {:ok, dom} <- HtmlParser.parse_detailed(html),
+             {:ok, effective_opts} <- effective_render_options_detailed(dom, opts),
+             {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts),
+             {:ok, styled_tree} <- FontFallback.resolve(styled_tree),
+             {:ok, layout_tree} <- layout_document(styled_tree, effective_opts),
+             {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
+             {:ok, pages} <- PageFurniture.decorate(pages, layout_tree, effective_opts),
+             {:ok, pdf_binary} <- PdfWriter.render(pages, effective_opts) do
+          {:ok, pdf_binary}
+        end
     end
   end
 

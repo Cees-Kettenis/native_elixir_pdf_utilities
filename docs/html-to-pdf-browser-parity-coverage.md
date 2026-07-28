@@ -30,7 +30,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `css_cascade_selectors.html` | universal, element, class, id, child, descendant, `:first-child`, `:last-child`, `:nth-child`, `!important`, custom properties, `display: none` |
 | `css_remaining_supported_values.html` | grouped selectors, source order, inline style priority, inheritance, inline flex/grid, `min()`, named colors, no-op `overflow`/`position`, side padding/borders, `vertical-align`, `line-break`, `word-wrap` |
 | `display_lists_and_inline_block.html` | inline-block layout, hidden elements, unordered lists, ordered lists, list item spacing |
-| `fonts_and_print_media.html` | local CSS `@font-face`, print-only media cascade, embedded font output |
+| `fonts_and_print_media.html` | local CSS `@font-face`, print-only media cascade, embedded font output, bundled Unicode glyph fallback from a built-in font |
 | `flex_direction_and_justification.html` | flex row, row-reverse, column, grow/shrink/basis, `justify-content`, `align-items`, `align-self`, row gaps |
 | `flex_grid_alignment.html` | flex order, wrapping, gap, alignment, grid template tracks, grid spans, row/column gaps |
 | `grid_tracks_and_placement.html` | `repeat()`, `minmax()`, auto rows/columns, `grid-column`, `grid-row`, `grid-area`, item alignment |
@@ -119,7 +119,7 @@ Current production fixture parity:
 | Page breaks inside/around tables | Passing | `table_pagination_headers.html` |
 | Running headers and footers inside page margins | Passing | `page_furniture.html` |
 | Images inside block/table/flex/grid | Passing | `images_data_uris.html` |
-| Embedded/system font metrics vs Chromium | Passing | Synthetic fixtures use `DejaVu Sans` when available; production fixtures use their declared font families when registered by the test helper |
+| Embedded/system font metrics and Unicode fallback vs Chromium | Passing | `fonts_and_print_media.html` exercises both declared DejaVu Sans and built-in Helvetica text that falls back to bundled DejaVu glyphs; production fixtures use their declared font families when registered by the test helper |
 
 ## Summary
 

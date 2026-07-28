@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   use ExUnit.Case
 
   alias NativeElixirPdfUtilities.HtmlToPdf
+  alias NativeElixirPdfUtilities.Text
 
   test "render converts a simple paragraph to a valid PDF binary" do
     assert {:ok, pdf} = HtmlToPdf.render("<p>Hello</p>")
@@ -706,6 +707,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "/ToUnicode"
     assert pdf =~ "<"
     refute pdf =~ "(Café) Tj"
+  end
+
+  test "render falls back from built-in fonts for Unicode text without corrupting glyphs" do
+    assert {:ok, pdf} = HtmlToPdf.render("<p>café © α €</p>")
+
+    assert pdf =~ "/Subtype /Type1"
+    assert pdf =~ "/Subtype /Type0"
+    assert pdf =~ "/FontFile2"
+    assert pdf =~ "/ToUnicode"
+
+    assert {:ok, extracted} = Text.extract(pdf, layout: false)
+    assert extracted =~ "é"
+    assert extracted =~ "©"
+    assert extracted =~ "α"
+    assert extracted =~ "€"
+  end
+
+  test "render rejects invalid UTF-8 and glyphs unavailable in configured or bundled fonts" do
+    assert {:error,
+            {:invalid_encoding,
+             %{
+               stage: :html,
+               reason: :invalid_encoding,
+               operation: :render,
+               module: HtmlToPdf,
+               message: "HTML input must be valid UTF-8"
+             }}} = HtmlToPdf.render(<<"<p>", 255, "</p>">>)
+
+    assert {:error,
+            {:unsupported_glyph,
+             %{
+               stage: :font,
+               reason: :unsupported_glyph,
+               operation: :resolve_fonts,
+               module: NativeElixirPdfUtilities.HtmlToPdf.FontFallback,
+               source: "漢"
+             }}} = HtmlToPdf.render("<p>漢</p>")
   end
 
   test "render_file writes a PDF for a supported paragraph" do

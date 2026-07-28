@@ -542,6 +542,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     refute pdf =~ "(Café) Tj"
   end
 
+  test "render rejects text that its selected font cannot encode" do
+    built_in_page = %{
+      size: {100.0, 100.0},
+      boxes: [
+        %{
+          type: :text,
+          text: "café",
+          x: 10.0,
+          y: 80.0,
+          font: "Helvetica",
+          font_size: 12.0,
+          color: {0, 0, 0}
+        }
+      ]
+    }
+
+    assert_invalid_pdf_input(PdfWriter.render([built_in_page], []))
+
+    assert {:ok, registry} = Font.load_registry([])
+    assert {:ok, _families, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    embedded_page =
+      put_in(
+        built_in_page.boxes,
+        [
+          %{
+            type: :text,
+            text: "漢",
+            x: 10.0,
+            y: 80.0,
+            font: Font.pdf_name(font),
+            font_face: font,
+            font_size: 12.0,
+            color: {0, 0, 0}
+          }
+        ]
+      )
+
+    assert_invalid_pdf_input(PdfWriter.render([embedded_page], []))
+  end
+
   test "render rejects unsupported link annotations" do
     pages = [
       %{

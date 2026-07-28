@@ -90,6 +90,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
     assert header.font_size == 8.0
   end
 
+  test "decorate applies bundled font fallback to Unicode furniture text" do
+    assert {:ok, [page]} =
+             PageFurniture.decorate(pages(1), layout_tree(),
+               page_furniture: [header: furniture_html("Résumé α")]
+             )
+
+    header_boxes = Enum.drop_while(page.boxes, &(&1.text == "Body 1"))
+
+    assert Enum.map_join(header_boxes, & &1.text) == "Résumé α"
+
+    assert Enum.any?(
+             header_boxes,
+             &(&1.text in ["é", "α"] and &1.font_face.type == :embedded and
+                 &1.font_face.family == "DejaVu Sans")
+           )
+  end
+
   test "decorate returns actionable diagnostics for invalid options and oversized furniture" do
     invalid_options = [
       :invalid,

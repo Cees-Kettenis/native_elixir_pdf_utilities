@@ -10,6 +10,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
+  alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
@@ -19,9 +20,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
   @type error_reason ::
           :invalid_css
           | :invalid_document
+          | :invalid_encoding
           | :invalid_html
           | :invalid_layout
           | :invalid_options
+          | :unsupported_glyph
           | :unsupported_html
   @type detailed_error :: {error_reason(), Diagnostics.diagnostic()}
 
@@ -235,7 +238,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
           |> Keyword.put(:margin, margin)
 
         with {:ok, dom} <- HtmlParser.parse_detailed(html),
-             {:ok, styled_tree} <- Style.compute_detailed(dom, furniture_opts) do
+             {:ok, styled_tree} <- Style.compute_detailed(dom, furniture_opts),
+             {:ok, styled_tree} <- FontFallback.resolve(styled_tree) do
           case apply(Layout, :layout, [styled_tree, furniture_opts]) do
             {:ok, furniture_layout} ->
               place(position, furniture_layout.boxes, page_size, margin)

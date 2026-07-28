@@ -150,13 +150,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert times.pdf_name == "Times-Roman"
   end
 
-  test "load_registry discovers common system fonts when present" do
+  test "load_registry always includes bundled fallback faces and discovers other system fonts" do
     assert {:ok, registry} = Font.load_registry([])
+
+    assert Enum.map(registry.fallback, &{&1.family, &1.weight, &1.style}) == [
+             {"DejaVu Sans", 400, :normal},
+             {"DejaVu Sans", 700, :normal},
+             {"DejaVu Sans", 400, :italic},
+             {"DejaVu Sans", 700, :italic}
+           ]
+
+    assert {:ok, ["DejaVu Sans"], bundled} =
+             Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    assert bundled.type == :embedded
+    assert is_binary(bundled.data)
 
     system_font =
       [
         {"Liberation Sans", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"},
-        {"DejaVu Sans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"},
         {"Noto Sans", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"}
       ]
       |> Enum.find(fn {_family, path} -> File.regular?(path) end)
@@ -168,8 +180,55 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
         assert font.family == family
 
       nil ->
-        assert registry.embedded == []
+        assert Enum.all?(registry.embedded, &(&1.family == "DejaVu Sans"))
     end
+  end
+
+  test "fallback_faces prefers configured families and matches weight and style" do
+    font_path = ttf_font_path!()
+
+    assert {:ok, registry} =
+             Font.load_registry(
+               fonts: [
+                 %{family: "Provided Sans", path: font_path, weight: 400, style: :normal},
+                 %{family: "Provided Sans", path: font_path, weight: 700, style: :italic}
+               ]
+             )
+
+    assert [provided, provided_normal, bundled | remaining_bundled] =
+             Font.fallback_faces(registry, 700, :italic)
+
+    assert {provided.family, provided.weight, provided.style} == {"Provided Sans", 700, :italic}
+
+    assert {provided_normal.family, provided_normal.weight, provided_normal.style} ==
+             {"Provided Sans", 400, :normal}
+
+    assert {bundled.family, bundled.weight, bundled.style} == {"DejaVu Sans", 700, :italic}
+
+    assert Enum.map(remaining_bundled, &{&1.family, &1.weight, &1.style}) == [
+             {"DejaVu Sans", 400, :italic},
+             {"DejaVu Sans", 700, :normal},
+             {"DejaVu Sans", 400, :normal}
+           ]
+
+    assert Font.fallback_faces(%{embedded: []}, 400, :normal) == []
+  end
+
+  test "supports_text validates built-in and embedded glyph coverage" do
+    built_in = %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"}
+
+    assert Font.supports_text?(built_in, "ASCII ~")
+    refute Font.supports_text?(built_in, "ASCII\n")
+    refute Font.supports_text?(built_in, "café")
+    refute Font.supports_text?(built_in, <<255>>)
+
+    assert {:ok, registry} = Font.load_registry([])
+    assert {:ok, _families, embedded} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    assert Font.supports_text?(embedded, "café © α €")
+    refute Font.supports_text?(embedded, "漢")
+    refute Font.supports_text?(embedded, <<255>>)
+    refute Font.supports_text?(%{type: :unknown}, "ASCII")
   end
 
   test "text_width and embedded text encoding use TTF cmap and hmtx data" do

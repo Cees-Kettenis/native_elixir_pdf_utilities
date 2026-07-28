@@ -29,6 +29,11 @@
           font-size: 24pt;
           font-weight: bold;
         }
+        .unicode-fallback {
+          font-family: Helvetica, sans-serif;
+          font-size: 13pt;
+          color: #334155;
+        }
       }
     </style>
   </head>
@@ -36,6 +41,7 @@
     <main class="print-card">
       <div class="print-title">Print-ready report</div>
       <p>Local CSS font with print-only presentation.</p>
+      <p class="unicode-fallback">Fallback glyphs: café © α €</p>
     </main>
   </body>
 </html>

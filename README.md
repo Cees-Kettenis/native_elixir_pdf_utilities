@@ -52,4 +52,6 @@ For HTML/CSS to PDF changes, also open representative rendered PDFs and compare 
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+The library source is MIT licensed. See [LICENSE](LICENSE). Bundled DejaVu font
+files retain their own permissive license in
+[`priv/fonts/dejavu/LICENSE.txt`](priv/fonts/dejavu/LICENSE.txt).
