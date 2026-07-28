@@ -46,7 +46,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `paragraph_pagination.html` | default line-level paragraph fragmentation across automatic page breaks |
 | `pagination_breaks.html` | explicit page breaks, repeated page-sized sections, page count parity |
 | `table_collapsed_borders.html` | table captions, headers, collapsed borders, side-specific border precedence, `colspan`, missing trailing cells |
-| `table_pagination_headers.html` | table overflow pagination, repeated header expectations, page breaks around table rows |
+| `table_pagination_headers.html` | table overflow pagination, repeated multi-row header expectations, page breaks around table rows |
 | `table_rowspan_tfoot.html` | `rowspan`, `tfoot`, vertical alignment, footer rows, `colspan` totals |
 | `table_separate_borders.html` | separate borders, captions, headers, cell padding, `colspan`, right-aligned table content |
 | `text_style_variants.html` | `rgb()`, `rgba()`, `currentColor`, transparent borders, white-space, word breaking, letter spacing, text transforms |

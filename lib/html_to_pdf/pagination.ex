@@ -272,7 +272,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   defp repeated_table_headers(groups) do
     groups
     |> Enum.filter(&(&1.repeat_table_header == true and not is_nil(&1.table_id)))
-    |> Map.new(&{&1.table_id, &1})
+    |> Enum.group_by(& &1.table_id)
+    |> Map.new(fn {table_id, header_groups} ->
+      top = header_groups |> Enum.map(& &1.top) |> Enum.max()
+      bottom = header_groups |> Enum.map(& &1.bottom) |> Enum.min()
+
+      header = %{
+        boxes: Enum.flat_map(header_groups, & &1.boxes),
+        top: top,
+        bottom: bottom,
+        height: top - bottom
+      }
+
+      {table_id, header}
+    end)
   end
 
   defp shift_boxes(boxes, delta_y) do

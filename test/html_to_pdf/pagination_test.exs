@@ -339,22 +339,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
       |> Enum.join()
 
     html =
-      "<table><thead><tr><th>Name</th><th>Count</th></tr></thead><tbody>" <>
+      "<table><thead><tr><th colspan=\"2\">Inventory</th></tr>" <>
+        "<tr><th>Name</th><th>Count</th></tr></thead><tbody>" <>
         rows <> "</tbody></table>"
 
     assert {:ok, dom} = HtmlParser.parse(html)
     assert {:ok, styled_tree} = Style.compute(dom, [])
     assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 100}, margin: 10)
-    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+    assert {:ok, pages} = Pagination.paginate(layout_tree, [])
+    assert length(pages) > 1
 
-    assert Enum.count(first_page.boxes, &(&1.type == :text and &1.text == "Name")) == 1
-    assert Enum.count(second_page.boxes, &(&1.type == :text and &1.text == "Name")) == 1
-    assert Enum.any?(second_page.boxes, &(&1.type == :text and &1.text == "Alpha 3"))
+    for page <- pages do
+      assert Enum.count(page.boxes, &(&1.type == :text and &1.text == "Inventory")) == 1
+      assert Enum.count(page.boxes, &(&1.type == :text and &1.text == "Name")) == 1
+    end
 
-    header_text = Enum.find(second_page.boxes, &(&1.type == :text and &1.text == "Name"))
-    body_text = Enum.find(second_page.boxes, &(&1.type == :text and &1.text == "Alpha 3"))
+    last_page = List.last(pages)
+    assert Enum.any?(last_page.boxes, &(&1.type == :text and &1.text == "Alpha 3"))
 
-    assert header_text.y > body_text.y
+    title = Enum.find(last_page.boxes, &(&1.type == :text and &1.text == "Inventory"))
+    column_header = Enum.find(last_page.boxes, &(&1.type == :text and &1.text == "Name"))
+    body_text = Enum.find(last_page.boxes, &(&1.type == :text and &1.text == "Alpha 3"))
+
+    assert title.y > column_header.y
+    assert column_header.y > body_text.y
   end
 
   test "paginate rejects invalid layout trees" do

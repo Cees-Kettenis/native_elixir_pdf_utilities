@@ -109,7 +109,7 @@ position, measured height, and available margin. Reserve enough `@page` or
 
 ## Layout Details
 
-Block, list, table, flexbox, and grid layout are deterministic and intentionally narrower than browser layout. Tables use deterministic column sizing based on declared widths, available table width, and intrinsic unbreakable content, with support for collapsed borders, cell backgrounds, `colspan`, repeated headers, and missing trailing cells in shorter rows. Flexbox and grid support document-oriented text, images, and nested block-card items, not the full browser algorithms.
+Block, list, table, flexbox, and grid layout are deterministic and intentionally narrower than browser layout. Tables use deterministic column sizing based on declared widths, available table width, and intrinsic unbreakable content, with support for collapsed borders, cell backgrounds, `colspan`, repeated multi-row headers, and missing trailing cells in shorter rows. Flexbox and grid support document-oriented text, images, and nested block-card items, not the full browser algorithms.
 
 Pagination supports automatic page breaks, manual page breaks, page margins, line-level paragraph fragmentation, best-effort keep-together behavior for `break-inside: avoid`, and repeated table headers when table bodies continue across pages. An avoided paragraph that is taller than the printable page is fragmented so that all text remains visible.
 
@@ -177,7 +177,7 @@ Real production environment fixtures are also included:
 | `grid_tracks_and_placement.html`        | `repeat()`, `minmax()`, auto rows/columns, `grid-column`, `grid-row`, `grid-area`, item alignment     |
 | `layout_compositions_remaining.html`    | grid containing table, flex containing table, table containing direct flexbox                                   |
 | `table_collapsed_borders.html`          | table captions, headers, collapsed borders, side-specific border precedence,`colspan`, missing trailing cells |
-| `table_pagination_headers.html`         | table overflow pagination, repeated header expectations, page breaks around table rows                          |
+| `table_pagination_headers.html`         | table overflow pagination, repeated multi-row header expectations, page breaks around table rows                |
 | `table_rowspan_tfoot.html`              | `rowspan`, `tfoot`, vertical alignment, footer rows, `colspan` totals                                     |
 | `table_separate_borders.html`           | separate borders, captions, headers, cell padding,`colspan`, right-aligned table content                      |
 | `nested_table_grid_flex.html`           | table cell containing grid, grid item containing flexbox, ordering, gaps, nested borders                        |
