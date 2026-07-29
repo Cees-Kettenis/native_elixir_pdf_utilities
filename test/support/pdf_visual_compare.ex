@@ -203,6 +203,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
           page_furniture,
           Keyword.get(opts, :chromium_page_margin, 0)
         )
+        |> maybe_inject_chromium_page_margin_css(Keyword.get(opts, :chromium_page_margin_css))
         |> then(&File.write!(chromium_fixture_path, &1))
 
         chromium_fixture_path
@@ -244,6 +245,19 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     case Regex.run(~r/<body\b[^>]*>/iu, html) do
       [body_tag] -> String.replace(html, body_tag, body_tag <> "\n" <> furniture, global: false)
       _ -> furniture <> "\n" <> html
+    end
+  end
+
+  defp maybe_inject_chromium_page_margin_css(html, nil) do
+    html
+  end
+
+  defp maybe_inject_chromium_page_margin_css(html, css) when is_binary(css) do
+    style = "<style>\n#{css}\n</style>"
+
+    case Regex.run(~r/<head\b[^>]*>/iu, html) do
+      [head_tag] -> String.replace(html, head_tag, head_tag <> "\n" <> style, global: false)
+      _ -> style <> "\n" <> html
     end
   end
 

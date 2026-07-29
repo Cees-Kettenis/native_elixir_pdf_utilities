@@ -43,7 +43,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `nested_table_grid_flex.html` | table cell containing grid, grid item containing flexbox, ordering, gaps, nested borders |
 | `page_geometry_asymmetric.html` | named page sizing, landscape orientation, and asymmetric one-to-four-value `@page` margins |
 | `page_rules_landscape.html` | CSS `@page` landscape sizing, page margins, explicit page-sized drawing geometry |
-| `page_furniture.html` | repeated header and footer placement inside page margins across multiple pages |
+| `page_furniture.html` | repeated header and footer placement inside page margins across multiple pages, including visible current-page and total-page tokens |
 | `paragraph_pagination.html` | default line-level paragraph fragmentation across automatic page breaks |
 | `pagination_breaks.html` | explicit page breaks, repeated page-sized sections, page count parity |
 | `table_collapsed_borders.html` | table captions, headers, collapsed borders, side-specific border precedence, `colspan`, missing trailing cells |
@@ -118,7 +118,7 @@ Current production fixture parity:
 | Grid containing table, flex containing table, table containing direct flex | Passing | `layout_compositions_remaining.html` |
 | Page breaks around blocks | Passing | `pagination_breaks.html`, `break_variants.html` |
 | Page breaks inside/around tables | Passing | `table_pagination_headers.html` |
-| Running headers and footers inside page margins | Passing | `page_furniture.html` |
+| Running headers, footers, and current/total page-number tokens inside page margins | Passing | `page_furniture.html` |
 | Images inside block/table/flex/grid | Passing | `images_data_uris.html` |
 | Embedded/system font metrics and Unicode fallback vs Chromium | Passing | `fonts_and_print_media.html` exercises both declared DejaVu Sans and built-in Helvetica text that falls back to bundled DejaVu glyphs; production fixtures use their declared font families when registered by the test helper |
 

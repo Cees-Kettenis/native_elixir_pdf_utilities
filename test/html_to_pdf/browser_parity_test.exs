@@ -12,7 +12,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   <div style="height: 18pt; padding: 4pt; border-bottom: 1pt solid #1f4b7a; background: #e8f1fa; color: #1f4b7a; font-family: 'DejaVu Sans'; font-size: 8pt; line-height: 10pt">Quarterly report</div>
   """
   @page_furniture_footer """
-  <div style="height: 14pt; padding: 4pt; border-top: 1pt solid #52606d; color: #52606d; font-family: 'DejaVu Sans'; font-size: 8pt; line-height: 10pt; text-align: right">Confidential</div>
+  <div style="height: 14pt; color: #52606d; font-family: 'DejaVu Sans'; font-size: 8pt; line-height: 10pt; text-align: right">Page {{page}} of {{pages}}</div>
   """
 
   @fixture_thresholds [
@@ -51,10 +51,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
        ]
      ],
      chromium_page_furniture: [
-       header: @page_furniture_header,
-       footer: @page_furniture_footer
+       header: @page_furniture_header
      ],
      chromium_page_margin: 36,
+     chromium_page_margin_css: """
+     @page {
+       @bottom-right {
+         content: "Page " counter(page) " of " counter(pages);
+         color: #52606d;
+         font-family: "DejaVu Sans";
+         font-size: 8pt;
+         vertical-align: top;
+       }
+     }
+     """,
      max_changed_ratio: 0.12,
      max_average_delta: 0.03},
     {"paragraph_pagination.html",
