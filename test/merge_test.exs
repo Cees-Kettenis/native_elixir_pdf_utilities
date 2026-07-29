@@ -166,6 +166,36 @@ defmodule NativeElixirPdfUtilities.MergeTest do
     assert merged =~ "\nstream\nabc123\nendstream"
   end
 
+  test "re-encodes escaped PDF names without changing their values" do
+    pdf =
+      merge_pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /F#20X /A#2FB /Hash#23Name /Paren#28Value#29 /Binary#FF /Control#01 >>"}
+      ])
+
+    assert {:ok, source_document} = Reader.read(pdf)
+    source_page = hd(source_document.pages)
+    assert {:ok, source_dictionary} = Reader.dictionary(source_document, {:ref, source_page.ref})
+    assert source_dictionary["F X"] == {:name, "A/B"}
+    assert source_dictionary["Hash#Name"] == {:name, "Paren(Value)"}
+    assert source_dictionary[<<"Binary", 255>>] == {:name, <<"Control", 1>>}
+
+    assert {:ok, merged} = Merge.merge([pdf])
+    assert merged =~ "/F#20X /A#2FB"
+    assert merged =~ "/Hash#23Name /Paren#28Value#29"
+    assert merged =~ "/Binary#FF /Control#01"
+    refute merged =~ "/F X"
+
+    assert {:ok, merged_document} = Reader.read(merged)
+    merged_page = hd(merged_document.pages)
+    assert {:ok, merged_dictionary} = Reader.dictionary(merged_document, {:ref, merged_page.ref})
+    assert merged_dictionary["F X"] == {:name, "A/B"}
+    assert merged_dictionary["Hash#Name"] == {:name, "Paren(Value)"}
+    assert merged_dictionary[<<"Binary", 255>>] == {:name, <<"Control", 1>>}
+  end
+
   test "rejects a malformed MediaBox instead of silently replacing it" do
     pdf =
       merge_pdf([

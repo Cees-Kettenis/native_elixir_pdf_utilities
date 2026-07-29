@@ -612,7 +612,7 @@ defmodule NativeElixirPdfUtilities.Merge do
         acc
 
       [{:name, name} | rest] ->
-        do_render_tokens(rest, id_map, [["/", name] | add_sep(acc)], name)
+        do_render_tokens(rest, id_map, [["/", encode_pdf_name(name)] | add_sep(acc)], name)
 
       [{:generated_reference, obj} | rest] ->
         io = [Integer.to_string(obj), " 0 R"]
@@ -666,6 +666,23 @@ defmodule NativeElixirPdfUtilities.Merge do
     case acc do
       [] -> []
       _ -> [" " | acc]
+    end
+  end
+
+  # PDF names use # followed by two hexadecimal digits for bytes that cannot be
+  # written literally. Tokenization decodes those escapes, so rendering must
+  # restore them to avoid changing token boundaries or the logical name value.
+  defp encode_pdf_name(name) do
+    for <<byte <- name>> do
+      case byte do
+        byte
+        when byte >= 33 and byte <= 126 and
+               byte not in [?#, ?(, ?), ?<, ?>, ?[, ?], ?{, ?}, ?/, ?%] ->
+          <<byte>>
+
+        byte ->
+          ["#", :io_lib.format("~2.16.0B", [byte])]
+      end
     end
   end
 
