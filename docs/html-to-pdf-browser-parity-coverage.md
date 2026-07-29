@@ -34,7 +34,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `flex_direction_and_justification.html` | flex row, row-reverse, column, grow/shrink/basis, `justify-content`, `align-items`, `align-self`, row gaps |
 | `flex_grid_alignment.html` | flex order, wrapping, gap, alignment, grid template tracks, grid spans, row/column gaps |
 | `grid_tracks_and_placement.html` | `repeat()`, `minmax()`, auto rows/columns, `grid-column`, `grid-row`, `grid-area`, item alignment |
-| `html_semantics_typography.html` | semantic block aliases, metadata wrappers, `title`, `lang`, `h1`-`h6`, `b`, `i` |
+| `html_semantics_typography.html` | semantic block aliases, metadata wrappers, `title`, `lang`, `h1`-`h6`, `b`, `i`, font-relative semantic margins |
 | `images_data_uris.html` | 8-bit non-interlaced RGB PNG, JPEG, and SVG data URI images in block, table, flex, and grid contexts |
 | `inline_text_flow.html` | inline runs, bold, italic, colors, line-height, wrapping, `<br>`, text transform |
 | `layout_compositions_remaining.html` | grid containing table, flex containing table, table containing direct flexbox |
@@ -50,8 +50,8 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `table_pagination_headers.html` | table overflow pagination, repeated multi-row header expectations, page breaks around table rows |
 | `table_rowspan_tfoot.html` | `rowspan`, `tfoot`, vertical alignment, footer rows, `colspan` totals |
 | `table_separate_borders.html` | separate borders, captions, headers, cell padding, `colspan`, right-aligned table content |
-| `text_style_variants.html` | `rgb()`, `rgba()`, `currentColor`, transparent borders, white-space, word breaking, letter spacing, text transforms |
-| `units_and_sizing.html` | `pt`, `px`, `mm`, `cm`, `in`, `rem`, percentages, `aspect-ratio`, fixed height, min-height |
+| `text_style_variants.html` | `rgb()`, `rgba()`, `currentColor`, nested custom properties, inherited unitless line height, transparent borders, white-space, word breaking, letter spacing, text transforms |
+| `units_and_sizing.html` | `pt`, `px`, `mm`, `cm`, `in`, root-font-relative `rem`, percentages, `aspect-ratio`, fixed height, min-height |
 
 ## Production Fixture Catalog
 
@@ -93,11 +93,11 @@ Current production fixture parity:
 | Feature | Status | Fixtures |
 | --- | --- | --- |
 | Selectors: universal, element, class, id, `element.class`, descendant, direct child, comma groups, `:root`, `:first-child`, `:last-child`, `:nth-child(n)` | Passing | `css_cascade_selectors.html`, `css_remaining_supported_values.html` |
-| Cascade: specificity, source order, inline style priority, `!important`, inheritance, custom properties via `var()` | Passing | `css_cascade_selectors.html`, `css_remaining_supported_values.html` |
-| Units: `pt`, `px`, `rem`, `mm`, `cm`, `in`, percentages, unitless `0` | Passing | `units_and_sizing.html`, reset rules across fixtures |
+| Cascade: specificity, source order, inline style priority, `!important`, inheritance, recursively resolved custom properties via `var()` | Passing | `css_cascade_selectors.html`, `css_remaining_supported_values.html`, `text_style_variants.html` |
+| Units: `pt`, `px`, root-font-relative `rem`, `mm`, `cm`, `in`, percentages, unitless `0` | Passing | `units_and_sizing.html`, reset rules across fixtures |
 | Display: `block`, `inline`, `inline-block`, `none`, `flex`, `inline-flex`, `grid`, `inline-grid` | Passing | `display_lists_and_inline_block.html`, `css_remaining_supported_values.html`, flex/grid fixtures |
 | Box model: width/height, min/max width/height, `min()`, `aspect-ratio`, `box-sizing`, margin, negative margin, padding, side-specific padding, borders, border radius, border collapse, background, overflow, position | Passing | `block_box_model.html`, `box_sizing_and_margins.html`, `css_remaining_supported_values.html`, table fixtures |
-| Text: color, font family/size/weight/style, line height, text alignment, transform, vertical align, line breaking, word breaking, white-space, letter spacing | Passing | `inline_text_flow.html`, `text_style_variants.html`, `css_remaining_supported_values.html`, table fixtures |
+| Text: color, font family/size/weight/style, relative and absolute line-height inheritance, text alignment, transform, vertical align, line breaking, word breaking, white-space, letter spacing | Passing | `inline_text_flow.html`, `text_style_variants.html`, `css_remaining_supported_values.html`, table fixtures |
 | Colors: hex, named colors, `rgb()`, `rgba()`, `currentColor`, transparent | Passing | `text_style_variants.html`, `css_remaining_supported_values.html` |
 | Page rules and breaks: `@page`, `@media print`, `break-before`, `break-after`, `page-break-before`, `page-break-after`, `page-break-inside` | Passing | `page_geometry_asymmetric.html`, `page_rules_landscape.html`, `fonts_and_print_media.html`, `pagination_breaks.html`, `break_variants.html` |
 | Flexbox subset: direction, wrap, gap, row/column gap, justify/align, order, grow/shrink/basis, `flex`, inline flex | Passing | `flex_direction_and_justification.html`, `flex_grid_alignment.html`, `css_remaining_supported_values.html` |

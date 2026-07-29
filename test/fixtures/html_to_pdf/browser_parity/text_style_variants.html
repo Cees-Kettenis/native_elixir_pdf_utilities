@@ -4,6 +4,10 @@
     <meta charset="utf-8">
     <style>
       html, body { margin: 0; padding: 0; }
+      :root {
+        --nested-base: #7c3aed;
+        --nested-background: var(--nested-base);
+      }
       body {
         font-family: "DejaVu Sans", Arial, sans-serif;
         font-size: 10pt;
@@ -23,6 +27,16 @@
       .nowrap { white-space: nowrap; overflow-wrap: normal; }
       .break-word { width: 140pt; overflow-wrap: break-word; word-break: break-word; }
       .spaced { letter-spacing: 1pt; }
+      .computed {
+        background: currentColor;
+        letter-spacing: 0.08em;
+        color: #1d4ed8;
+        font-size: 14pt;
+      }
+      .computed span { color: white; }
+      .nested-variable { background: var(--nested-background); color: white; }
+      .inherited-line-height { font-size: 10pt; line-height: 2; }
+      .inherited-line-height span { font-size: 15pt; }
       .transparent { border-color: transparent; background-color: transparent; }
     </style>
   </head>
@@ -33,6 +47,9 @@
       <p class="row nowrap">no wrap text stays on one line</p>
       <p class="row break-word">BreakableReferenceNumber1234567890</p>
       <p class="row spaced">letter spacing</p>
+      <p class="row computed"><span>computed value dependencies</span></p>
+      <p class="row nested-variable">nested custom property</p>
+      <p class="row inherited-line-height"><span>inherited unitless line height</span></p>
       <p class="row transparent">transparent border accepted</p>
     </main>
   </body>

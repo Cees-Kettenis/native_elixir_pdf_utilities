@@ -273,6 +273,189 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     end
   end
 
+  test "compute resolves dependent values against final font size and color" do
+    early_letter_spacing = style_for!("div", "letter-spacing: 1em; font-size: 20pt")
+    late_letter_spacing = style_for!("div", "font-size: 20pt; letter-spacing: 1em")
+
+    assert early_letter_spacing.letter_spacing == 20.0
+    assert late_letter_spacing.letter_spacing == 20.0
+
+    final_font_size =
+      style_for!(
+        "div",
+        "font-size: 20pt; letter-spacing: 1em !important; font-size: 10pt"
+      )
+
+    assert final_font_size.letter_spacing == 10.0
+
+    early_current_color = style_for!("div", "background: currentColor; color: red")
+    late_current_color = style_for!("div", "color: red; background: currentColor")
+
+    assert early_current_color.background_color == {1, 0, 0}
+    assert late_current_color.background_color == {1, 0, 0}
+
+    important_color =
+      style_for!("div", "background: currentColor; color: red !important; color: blue")
+
+    assert important_color.background_color == {1, 0, 0}
+
+    implicit_border_color =
+      style_for!("div", "border-width: 1pt; border-style: solid; color: blue")
+
+    assert implicit_border_color.border_color == {0, 0, 1}
+    assert implicit_border_color.border_colors == edges({0, 0, 1})
+
+    inherited_current_color = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{"style" => "color: red"},
+          children: [
+            %{
+              type: :element,
+              tag: "a",
+              attributes: %{
+                "href" => "mailto:team@example.com",
+                "style" => "color: currentColor"
+              },
+              children: [%{type: :text, text: "Inherited link color"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(inherited_current_color)
+    [parent] = styled_tree.children
+    [link] = parent.children
+    assert link.style.color == {1, 0, 0}
+  end
+
+  test "compute resolves rem lengths against the root element's final font size" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "html",
+          attributes: %{"style" => "font-size: 2rem; line-height: 1rem"},
+          children: [
+            %{
+              type: :element,
+              tag: "body",
+              attributes: %{},
+              children: [
+                %{
+                  type: :element,
+                  tag: "div",
+                  attributes: %{
+                    "style" => """
+                    width: 1rem;
+                    height: 2rem;
+                    min-width: 3rem;
+                    max-height: 4rem;
+                    padding: 0.5rem;
+                    margin: 0.25rem;
+                    border: 0.1rem solid;
+                    border-radius: 0.2rem;
+                    display: grid;
+                    gap: 0.3rem;
+                    grid-template-columns: 1rem minmax(2rem, 3rem);
+                    font-size: 0.5rem;
+                    line-height: 1rem;
+                    letter-spacing: 0.1rem;
+                    """
+                  },
+                  children: [%{type: :text, text: "Root-relative lengths"}]
+                },
+                %{
+                  type: :element,
+                  tag: "p",
+                  attributes: %{"style" => "margin: 0"},
+                  children: [%{type: :text, text: "Root element rem"}]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom)
+    [element, root_relative_line_height] = styled_tree.children
+
+    assert element.style.width == 24.0
+    assert element.style.height == 48.0
+    assert element.style.min_width == 72.0
+    assert element.style.max_height == 96.0
+    assert element.style.padding == edges(12.0)
+    assert element.style.margin == edges(6.0)
+
+    Enum.each(element.style.border_widths, fn {_side, width} ->
+      assert_in_delta width, 2.4, 0.0001
+    end)
+
+    assert_in_delta element.style.border_radius, 4.8, 0.0001
+    assert_in_delta element.style.row_gap, 7.2, 0.0001
+    assert_in_delta element.style.column_gap, 7.2, 0.0001
+    assert element.style.grid_template_columns == [length: 24.0, length: 72.0]
+    assert element.style.font_size == 12.0
+    assert element.style.line_height == 24.0
+    assert_in_delta element.style.letter_spacing, 2.4, 0.0001
+    assert root_relative_line_height.style.line_height == 24.0
+  end
+
+  test "compute resolves font-relative semantic margins against final font size" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"style" => "font-size: 24pt"},
+          children: [%{type: :text, text: "Paragraph"}]
+        },
+        %{
+          type: :element,
+          tag: "h1",
+          attributes: %{"style" => "font-size: 30pt"},
+          children: [%{type: :text, text: "Heading"}]
+        },
+        %{
+          type: :element,
+          tag: "ul",
+          attributes: %{"style" => "font-size: 18pt"},
+          children: [
+            %{
+              type: :element,
+              tag: "li",
+              attributes: %{},
+              children: [%{type: :text, text: "List item"}]
+            }
+          ]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"style" => "font-size: 24pt; margin-bottom: 5pt"},
+          children: [%{type: :text, text: "Explicit margin"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom)
+    [paragraph, heading, list, explicit_margin] = styled_tree.children
+
+    assert paragraph.style.margin_after == 24.0
+    assert paragraph.style.margin.bottom == 24.0
+    assert_in_delta heading.style.margin_after, 20.0, 0.0001
+    assert list.style.margin_after == 18.0
+    assert explicit_margin.style.margin_after == 5.0
+    assert explicit_margin.style.margin.bottom == 5.0
+  end
+
   test "compute applies heading defaults and inline style colors" do
     dom = %{
       type: :document,
@@ -343,6 +526,66 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
              },
              []
            ) == {:error, :invalid_document}
+  end
+
+  test "compute preserves inherited unitless, normal, and absolute line heights" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{"style" => "font-size: 12pt; line-height: 2"},
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "font-size: 20pt"},
+              children: [%{type: :text, text: "Unitless"}]
+            }
+          ]
+        },
+        %{
+          type: :element,
+          tag: "section",
+          attributes: %{"style" => "font-size: 12pt; line-height: normal"},
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "font-size: 20pt"},
+              children: [%{type: :text, text: "Normal"}]
+            }
+          ]
+        },
+        %{
+          type: :element,
+          tag: "aside",
+          attributes: %{"style" => "font-size: 12pt; line-height: 15pt"},
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "font-size: 20pt"},
+              children: [%{type: :text, text: "Absolute"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom)
+    [unitless_parent, normal_parent, absolute_parent] = styled_tree.children
+    [unitless_child] = unitless_parent.children
+    [normal_child] = normal_parent.children
+    [absolute_child] = absolute_parent.children
+
+    assert unitless_parent.style.line_height == 24.0
+    assert unitless_child.style.line_height == 40.0
+    assert_in_delta normal_parent.style.line_height, 14.4, 0.0001
+    assert normal_child.style.line_height == 24.0
+    assert absolute_parent.style.line_height == 15.0
+    assert absolute_child.style.line_height == 15.0
   end
 
   test "compute derives normal line-height from embedded font metrics" do
@@ -1157,6 +1400,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     assert forward_reference.color == {1, 0, 0}
     assert later_override.color == {1, 0, 0}
+  end
+
+  test "compute recursively resolves custom properties and rejects cycles" do
+    nested =
+      style_for!(
+        "p",
+        """
+        --base: red;
+        --accent: var(--base);
+        --foreground: var(--accent);
+        color: var(--foreground);
+        """
+      )
+
+    assert nested.color == {1, 0, 0}
+
+    assert style_for(
+             "p",
+             "--first: var(--second); --second: var(--first); color: var(--first)"
+           ) == {:error, :invalid_document}
   end
 
   test "compute cascades custom properties before resolving ordinary declarations" do

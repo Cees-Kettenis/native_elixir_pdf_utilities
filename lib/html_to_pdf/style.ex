@@ -71,6 +71,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           base_style = %{
             _custom_properties: %{},
             _font_registry: font_registry,
+            _root_font_size: 12.0,
             color: {0, 0, 0},
             font_face: font_face,
             font_families: font_families,
@@ -80,6 +81,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             font_weight: 400,
             letter_spacing: 0.0,
             line_height: 14.4,
+            line_height_normal: true,
             text_align: :left,
             text_transform: :none
           }
@@ -282,25 +284,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           block_defaults(inherited_font_size, 400, 0.0)
 
         "p" ->
-          block_defaults(inherited_font_size, 400, inherited_font_size)
+          inherited_font_size
+          |> block_defaults(400, inherited_font_size)
+          |> Map.put(:_margin_after_em, 1.0)
 
         "h1" ->
-          block_defaults(inherited_font_size * 2.0, 700, inherited_font_size * 1.3333333333)
+          inherited_font_size
+          |> Kernel.*(2.0)
+          |> block_defaults(700, inherited_font_size * 1.3333333333)
+          |> Map.put(:_margin_after_em, 0.66666666665)
 
         "h2" ->
-          block_defaults(inherited_font_size * 1.5, 700, inherited_font_size * 1.1666666667)
+          inherited_font_size
+          |> Kernel.*(1.5)
+          |> block_defaults(700, inherited_font_size * 1.1666666667)
+          |> Map.put(:_margin_after_em, 0.7777777778)
 
         "h3" ->
-          block_defaults(inherited_font_size * 1.17, 700, inherited_font_size)
+          inherited_font_size
+          |> Kernel.*(1.17)
+          |> block_defaults(700, inherited_font_size)
+          |> Map.put(:_margin_after_em, 1.0 / 1.17)
 
         "h4" ->
-          block_defaults(inherited_font_size, 700, inherited_font_size * 0.8333333333)
+          inherited_font_size
+          |> block_defaults(700, inherited_font_size * 0.8333333333)
+          |> Map.put(:_margin_after_em, 0.8333333333)
 
         "h5" ->
-          block_defaults(inherited_font_size * 0.83, 700, inherited_font_size * 0.6666666667)
+          inherited_font_size
+          |> Kernel.*(0.83)
+          |> block_defaults(700, inherited_font_size * 0.6666666667)
+          |> Map.put(:_margin_after_em, 0.6666666667 / 0.83)
 
         "h6" ->
-          block_defaults(inherited_font_size * 0.67, 700, inherited_font_size * 0.6666666667)
+          inherited_font_size
+          |> Kernel.*(0.67)
+          |> block_defaults(700, inherited_font_size * 0.6666666667)
+          |> Map.put(:_margin_after_em, 0.6666666667 / 0.67)
 
         "ul" ->
           list_defaults(:disc, inherited_font_size)
@@ -363,27 +384,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           :invalid
       end
 
+    defaults =
+      case defaults do
+        {:ok, defaults} -> defaults
+        defaults -> defaults
+      end
+
     case defaults do
-      {:ok, defaults} ->
+      defaults when is_map(defaults) ->
         style =
           inherited_style
           |> text_style()
           |> Map.merge(defaults)
+          |> Map.put(:_inherited_color, Map.fetch!(inherited_style, :color))
+          |> Map.put(:_root_element, tag in ["html", "body"] and ancestors == [])
 
-        tag
-        |> finalize_element_style(apply_author_styles(style, node, ancestors, rules))
+        result = tag |> finalize_element_style(apply_author_styles(style, node, ancestors, rules))
+
+        case {tag, ancestors, result} do
+          {tag, [], {:ok, style}} when tag in ["html", "body"] ->
+            {:ok, Map.put(style, :_root_font_size, Map.fetch!(style, :font_size))}
+
+          _ ->
+            result
+        end
 
       :invalid ->
         {:error, :invalid_document}
-
-      defaults ->
-        style =
-          inherited_style
-          |> text_style()
-          |> Map.merge(defaults)
-
-        tag
-        |> finalize_element_style(apply_author_styles(style, node, ancestors, rules))
     end
   end
 
@@ -420,25 +447,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       multiplier when is_number(multiplier) ->
         style
         |> Map.put(:line_height, Map.fetch!(style, :font_size) * multiplier)
-        |> Map.delete(:line_height_multiplier)
         |> Map.delete(:line_height_explicit)
 
       _ ->
-        case Map.get(style, :line_height_explicit, false) do
+        case Map.get(style, :line_height_normal, false) do
           true ->
-            case Map.get(style, :line_height_normal, false) do
-              true ->
-                style
-                |> Map.put(:line_height, normal_line_height(style))
-                |> Map.delete(:line_height_normal)
-                |> Map.delete(:line_height_explicit)
-
-              false ->
-                Map.delete(style, :line_height_explicit)
-            end
+            style
+            |> Map.put(:line_height, normal_line_height(style))
+            |> Map.delete(:line_height_explicit)
 
           false ->
-            Map.put(style, :line_height, normal_line_height(style))
+            Map.delete(style, :line_height_explicit)
         end
     end
   end
@@ -461,6 +480,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     Map.take(style, [
       :_custom_properties,
       :_font_registry,
+      :_root_font_size,
       :color,
       :font_face,
       :font_families,
@@ -471,6 +491,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       :letter_spacing,
       :line_break,
       :line_height,
+      :line_height_multiplier,
+      :line_height_normal,
       :link_url,
       :text_align,
       :text_transform
@@ -481,8 +503,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     %{
       background_color: nil,
       break_inside: :auto,
-      border_color: {0, 0, 0},
-      border_colors: edges({0, 0, 0}),
+      border_color: :current_color,
+      border_colors: edges(:current_color),
       border_radius: 0.0,
       border_styles: edges(:none),
       border_widths: edges(@medium_border_width),
@@ -499,6 +521,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp list_defaults(marker_type, font_size) do
     block_defaults(font_size, 400, font_size)
     |> Map.merge(%{
+      _margin_after_em: 1.0,
       display: :list,
       list_marker_type: marker_type,
       margin: edges(0.0, 0.0, font_size, 0.0),
@@ -537,8 +560,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp table_row_group_defaults(section) do
     %{
       background_color: nil,
-      border_color: {0, 0, 0},
-      border_colors: edges({0, 0, 0}),
+      border_color: :current_color,
+      border_colors: edges(:current_color),
       border_radius: 0.0,
       border_styles: edges(:none),
       border_widths: edges(@medium_border_width),
@@ -552,8 +575,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp table_row_defaults do
     %{
       background_color: nil,
-      border_color: {0, 0, 0},
-      border_colors: edges({0, 0, 0}),
+      border_color: :current_color,
+      border_colors: edges(:current_color),
       border_radius: 0.0,
       border_styles: edges(:none),
       border_widths: edges(@medium_border_width),
@@ -566,8 +589,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp table_cell_defaults(kind, attributes, font_size) do
     base = %{
       background_color: nil,
-      border_color: {0, 0, 0},
-      border_colors: edges({0, 0, 0}),
+      border_color: :current_color,
+      border_colors: edges(:current_color),
       border_radius: 0.0,
       border_styles: edges(:solid),
       border_widths: edges(1.0),
@@ -626,6 +649,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       {:ok,
        block_defaults(font_size, 400, font_size)
        |> Map.merge(%{
+         _margin_after_em: 1.0,
          display: :image,
          margin: edges(0.0, 0.0, font_size, 0.0),
          padding: edges(0.0)
@@ -1029,6 +1053,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
        |> Map.merge(%{
          _custom_properties: %{},
          _font_registry: registry,
+         _root_font_size: 12.0,
          color: {0, 0, 0},
          font_face: font_face,
          font_families: families,
@@ -1038,6 +1063,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
          font_weight: 400,
          letter_spacing: 0.0,
          line_height: 14.4,
+         line_height_normal: true,
          text_align: :left,
          text_transform: :none
        })}
@@ -1106,6 +1132,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           |> Enum.map(& &1.declaration)
 
         with {:ok, style} <- apply_declarations(style, declarations),
+             style =
+               style
+               |> resolve_rem_values()
+               |> resolve_font_relative_defaults()
+               |> Map.delete(:_inherited_color)
+               |> Map.delete(:_root_element)
+               |> resolve_current_color_values(),
              style = apply_border_styles(style),
              {:ok, style} <- put_font_face(style) do
           {:ok, put_line_height(style)}
@@ -1245,8 +1278,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     {custom_property_declarations, ordinary_declarations} =
       Enum.split_with(declarations, &custom_property_declaration?/1)
 
-    with {:ok, style} <- apply_declaration_list(style, custom_property_declarations) do
-      apply_declaration_list(style, ordinary_declarations)
+    {foundational_declarations, dependent_declarations} =
+      Enum.split_with(ordinary_declarations, fn declaration ->
+        case declaration do
+          {property, _value} -> property in ["color", "font-size"]
+          {property, _value, :important} -> property in ["color", "font-size"]
+        end
+      end)
+
+    with {:ok, style} <- apply_declaration_list(style, custom_property_declarations),
+         {:ok, style} <- apply_declaration_list(style, foundational_declarations) do
+      style = resolve_rem_values(style)
+
+      style =
+        case Map.get(style, :_root_element, false) do
+          true -> Map.put(style, :_root_font_size, Map.fetch!(style, :font_size))
+          false -> style
+        end
+
+      apply_declaration_list(style, dependent_declarations)
     end
   end
 
@@ -1304,7 +1354,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp apply_resolved_declaration_value(style, property, value) do
     case property do
       "color" ->
-        with {:ok, color} <- parse_color(value, Map.fetch!(style, :color)) do
+        with {:ok, color} <-
+               parse_color(value, Map.get(style, :_inherited_color, Map.fetch!(style, :color))) do
           case color do
             :transparent -> {:ok, style}
             color -> {:ok, Map.put(style, :color, color)}
@@ -1462,6 +1513,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             {:ok,
              style
              |> Map.put(:line_height_multiplier, multiplier)
+             |> Map.delete(:line_height_normal)
              |> Map.put(:line_height_explicit, true)}
 
           {:ok, :normal} ->
@@ -1476,6 +1528,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
              style
              |> Map.put(:line_height, line_height)
              |> Map.delete(:line_height_multiplier)
+             |> Map.delete(:line_height_normal)
              |> Map.put(:line_height_explicit, true)}
 
           :error ->
@@ -1629,8 +1682,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp ensure_box_style(style) do
     style
     |> Map.put_new(:background_color, nil)
-    |> Map.put_new(:border_color, {0, 0, 0})
-    |> Map.put_new(:border_colors, edges(Map.get(style, :border_color, {0, 0, 0})))
+    |> Map.put_new(:border_color, :current_color)
+    |> Map.put_new(:border_colors, edges(Map.get(style, :border_color, :current_color)))
     |> Map.put_new(:border_radius, 0.0)
     |> Map.put_new(:border_styles, edges(:none))
     |> Map.put_new(:border_widths, edges(@medium_border_width))
@@ -1722,6 +1775,78 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     |> Map.put(:border_widths, border_widths)
   end
 
+  defp resolve_current_color_values(style) do
+    color = Map.fetch!(style, :color)
+
+    style =
+      case Map.get(style, :border_color) do
+        :current_color -> Map.put(style, :border_color, color)
+        _ -> style
+      end
+
+    case Map.get(style, :border_colors) do
+      border_colors when is_map(border_colors) ->
+        resolved =
+          border_colors
+          |> Enum.map(fn {side, border_color} ->
+            case border_color do
+              :current_color -> {side, color}
+              _ -> {side, border_color}
+            end
+          end)
+          |> Map.new()
+
+        Map.put(style, :border_colors, resolved)
+
+      _ ->
+        style
+    end
+  end
+
+  defp resolve_rem_values(style) do
+    root_font_size = Map.fetch!(style, :_root_font_size)
+    resolve_rem_term(style, root_font_size)
+  end
+
+  defp resolve_rem_term(term, root_font_size) do
+    cond do
+      match?({:rem, multiplier} when is_number(multiplier), term) ->
+        {:rem, multiplier} = term
+        multiplier * root_font_size
+
+      is_map(term) ->
+        term
+        |> Enum.map(fn {key, value} -> {key, resolve_rem_term(value, root_font_size)} end)
+        |> Map.new()
+
+      is_list(term) ->
+        Enum.map(term, &resolve_rem_term(&1, root_font_size))
+
+      is_tuple(term) ->
+        term
+        |> Tuple.to_list()
+        |> Enum.map(&resolve_rem_term(&1, root_font_size))
+        |> List.to_tuple()
+
+      true ->
+        term
+    end
+  end
+
+  defp resolve_font_relative_defaults(style) do
+    case Map.pop(style, :_margin_after_em) do
+      {multiplier, style} when is_number(multiplier) ->
+        margin_after = Map.fetch!(style, :font_size) * multiplier
+
+        style
+        |> Map.update!(:margin, &Map.put(&1, :bottom, margin_after))
+        |> Map.put(:margin_after, margin_after)
+
+      {_value, style} ->
+        style
+    end
+  end
+
   defp put_box_sizing(style, value) do
     case value |> String.trim() |> String.downcase() do
       "border-box" -> {:ok, Map.put(style, :box_sizing, :border_box)}
@@ -1797,32 +1922,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp resolved_css_value(style, value) do
     normalized = String.trim(value)
+    custom_properties = Map.get(style, :_custom_properties, %{})
+    resolve_css_variables(normalized, custom_properties, %{})
+  end
 
+  defp resolve_css_variables(value, custom_properties, resolving) do
     variable_references =
       ~r/var\(\s*(--[a-zA-Z_][a-zA-Z0-9_-]*)\s*\)/u
-      |> Regex.scan(normalized, capture: :all_but_first)
+      |> Regex.scan(value, capture: :all_but_first)
       |> List.flatten()
+      |> Enum.uniq()
 
     case variable_references do
       [] ->
-        {:ok, normalized}
+        {:ok, value}
 
       references ->
-        custom_properties = Map.get(style, :_custom_properties, %{})
+        Enum.reduce_while(references, {:ok, value}, fn name, {:ok, resolved_value} ->
+          case {Map.has_key?(resolving, name), Map.get(custom_properties, name)} do
+            {false, custom_value} when is_binary(custom_value) ->
+              case resolve_css_variables(
+                     custom_value,
+                     custom_properties,
+                     Map.put(resolving, name, true)
+                   ) do
+                {:ok, replacement} ->
+                  pattern = ~r/var\(\s*#{Regex.escape(name)}\s*\)/u
+                  {:cont, {:ok, Regex.replace(pattern, resolved_value, replacement)}}
 
-        Enum.reduce_while(references, normalized, fn name, acc ->
-          case Map.get(custom_properties, name) do
-            value when is_binary(value) ->
-              {:cont, String.replace(acc, ~r/var\(\s*#{Regex.escape(name)}\s*\)/u, value)}
+                :error ->
+                  {:halt, :error}
+              end
 
-            _ ->
+            {_cycle_or_missing, _value} ->
               {:halt, :error}
           end
         end)
-        |> case do
-          value when is_binary(value) -> {:ok, value}
-          :error -> :error
-        end
     end
   end
 
@@ -2518,8 +2653,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {number, ""} = Float.parse(value)
 
         case length_context == :margin or number >= 0 do
-          true -> {:ok, number * points_per_unit(unit)}
-          false -> :error
+          true ->
+            case unit do
+              "rem" -> {:ok, {:rem, number}}
+              unit -> {:ok, number * points_per_unit(unit)}
+            end
+
+          false ->
+            :error
         end
 
       _ ->
@@ -2537,6 +2678,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       [_, "", value, "em"] ->
         {number, ""} = Float.parse(value)
         {:ok, number * font_size}
+
+      [_, "", value, "rem"] ->
+        {number, ""} = Float.parse(value)
+        {:ok, {:rem, number}}
 
       [_, "", value, unit] ->
         {number, ""} = Float.parse(value)
@@ -2607,6 +2752,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         style
         |> Map.put(:margin, lengths)
         |> Map.put(:margin_after, lengths.bottom)
+        |> Map.delete(:_margin_after_em)
 
       "padding" ->
         Map.put(style, :padding, lengths)
@@ -2624,8 +2770,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     style = Map.put(style, map_key, lengths)
 
     case property do
-      "margin-bottom" -> Map.put(style, :margin_after, length)
-      _ -> style
+      "margin-bottom" ->
+        style
+        |> Map.put(:margin_after, length)
+        |> Map.delete(:_margin_after_em)
+
+      _ ->
+        style
     end
   end
 
@@ -2647,7 +2798,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     Map.update(
       style,
       :border_colors,
-      edges(Map.get(style, :border_color, {0, 0, 0})),
+      edges(Map.get(style, :border_color, :current_color)),
       &Map.put(&1, edge, color)
     )
   end
@@ -3371,7 +3522,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       "mm" -> 72.0 / 25.4
       "cm" -> 72.0 / 2.54
       "in" -> 72.0
-      "rem" -> 12.0
     end
   end
 end
