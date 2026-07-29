@@ -189,6 +189,51 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     File.rm(Path.join(System.tmp_dir!(), "native-elixir-pdf-configured-page-options.css"))
   end
 
+  test "render returns detailed diagnostics for invalid page declarations" do
+    html = """
+    <style>
+    @page {
+      nonsense: value;
+      margin: bananas;
+    }
+    </style>
+    <p>Invalid page CSS</p>
+    """
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               operation: :render,
+               module: NativeElixirPdfUtilities.HtmlToPdf,
+               line: 3,
+               column: 3,
+               source: "nonsense: value",
+               message: ~s(line 3: declaration "nonsense: value" is invalid or unsupported)
+             }}} = HtmlToPdf.render(html)
+  end
+
+  test "render accepts valid unused page-context properties" do
+    html = """
+    <style>
+    @page {
+      margin-top: 100px;
+      margin-right: auto;
+      page-orientation: upright;
+      background: white;
+      border: 1px solid black;
+      padding: 5mm;
+      color: black;
+    }
+    </style>
+    <p>Valid page CSS</p>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert pdf =~ "(Valid page CSS) Tj"
+  end
+
   test "render returns diagnostics for malformed embedded media rules" do
     html = "<style>@media print { @media print { p { color: red; } } }</style><p>x</p>"
 

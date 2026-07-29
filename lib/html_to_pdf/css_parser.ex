@@ -37,6 +37,93 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   @type page_option ::
           {:page_size, :a4 | :letter | {number(), number()}} | {:margin, String.t() | number()}
 
+  @page_context_properties [
+    "background",
+    "background-attachment",
+    "background-color",
+    "background-image",
+    "background-position",
+    "background-repeat",
+    "bleed",
+    "border",
+    "border-bottom",
+    "border-bottom-color",
+    "border-bottom-style",
+    "border-bottom-width",
+    "border-color",
+    "border-left",
+    "border-left-color",
+    "border-left-style",
+    "border-left-width",
+    "border-right",
+    "border-right-color",
+    "border-right-style",
+    "border-right-width",
+    "border-style",
+    "border-top",
+    "border-top-color",
+    "border-top-style",
+    "border-top-width",
+    "border-width",
+    "color",
+    "counter-increment",
+    "counter-reset",
+    "direction",
+    "font",
+    "font-family",
+    "font-size",
+    "font-style",
+    "font-variant",
+    "font-weight",
+    "height",
+    "letter-spacing",
+    "line-height",
+    "margin",
+    "margin-bottom",
+    "margin-left",
+    "margin-right",
+    "margin-top",
+    "marks",
+    "max-height",
+    "max-width",
+    "min-height",
+    "min-width",
+    "outline",
+    "outline-color",
+    "outline-style",
+    "outline-width",
+    "padding",
+    "padding-bottom",
+    "padding-left",
+    "padding-right",
+    "padding-top",
+    "page-orientation",
+    "quotes",
+    "size",
+    "text-align",
+    "text-decoration",
+    "text-indent",
+    "text-transform",
+    "visibility",
+    "white-space",
+    "width",
+    "word-spacing"
+  ]
+  @page_size_names ~w(a5 a4 a3 b5 b4 jis-b5 jis-b4 letter legal ledger)
+  @page_length_units ~w(cm mm q in pc pt px em ex ch rem lh rlh vw vh vmin vmax)
+  @page_number_pattern "(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?"
+  @page_length_pattern Enum.join(@page_length_units, "|")
+  @page_length_regex Regex.compile!(
+                       "^[+-]?#{@page_number_pattern}(?:#{@page_length_pattern})$",
+                       "u"
+                     )
+  @page_nonnegative_length_regex Regex.compile!(
+                                   "^\\+?#{@page_number_pattern}(?:#{@page_length_pattern})$",
+                                   "u"
+                                 )
+  @page_percentage_regex Regex.compile!("^[+-]?#{@page_number_pattern}%$", "u")
+  @css_wide_keywords ~w(initial inherit unset revert revert-layer)
+
   @doc """
   Parses a CSS stylesheet into strict renderer rules.
   """
@@ -57,7 +144,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     case css do
       css when is_binary(css) ->
         with {:ok, active_css} <- css |> strip_comments() |> active_media_rules(),
-             {:ok, _font_faces} <- parse_font_faces(active_css, css) do
+             {:ok, _font_faces} <- parse_font_faces(active_css, css),
+             {:ok, _page_options} <- parse_page_rules(active_css, css) do
           parsed_css = active_css |> strip_font_face_rules() |> strip_page_rules()
 
           case parse_rules(parsed_css) do
@@ -116,24 +204,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   @doc """
   Extracts renderer page defaults from simple `@page` rules.
 
-  Supported declarations are single-value `margin` lengths and common
-  `size` values such as `A4`, `A4 landscape`, `letter`, and
-  `letter landscape`. Unsupported page declarations are ignored so normal CSS
-  parsing remains strict for the supported style cascade.
+  Valid page-context properties are accepted even when the renderer does not
+  apply them yet. Rendering currently consumes a single-value `margin` and
+  common `size` values such as `A4`, `A4 landscape`, `letter`, and
+  `letter landscape`. Malformed declarations, unknown properties, and invalid
+  paged-media descriptor values return `{:error, :invalid_css}`.
   """
   @spec page_options(String.t()) :: {:ok, [page_option()]} | {:error, :invalid_css}
   def page_options(css) do
     case css do
       css when is_binary(css) ->
         with {:ok, active_css} <- css |> strip_comments() |> active_media_rules() do
-          active_css
-          |> page_rule_blocks()
-          |> Enum.reduce({:ok, []}, fn block, {:ok, acc} ->
-            case parse_declarations(block) do
-              {:ok, declarations} -> {:ok, Keyword.merge(acc, page_options_from(declarations))}
-              {:error, _reason} -> {:ok, acc}
-            end
-          end)
+          case parse_page_rules(active_css, css) do
+            {:ok, page_options} -> {:ok, page_options}
+            {:error, {:invalid_css, _detail}} -> {:error, :invalid_css}
+          end
         end
 
       _ ->
@@ -467,25 +552,189 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     |> List.flatten()
   end
 
-  defp page_options_from(declarations) do
-    Enum.reduce(declarations, [], fn declaration, acc ->
-      case declaration do
-        {"size", value} ->
-          case page_size_option(value) do
-            nil -> acc
-            page_size -> Keyword.put(acc, :page_size, page_size)
-          end
+  defp parse_page_rules(css, diagnostic_css) do
+    css
+    |> page_rule_blocks()
+    |> Enum.reduce_while({:ok, []}, fn block, {:ok, acc} ->
+      case page_options_from(block) do
+        {:ok, page_options} ->
+          {:cont, {:ok, Keyword.merge(acc, page_options)}}
 
-        {"margin", value} ->
-          case page_margin_option(value) do
-            nil -> acc
-            margin -> Keyword.put(acc, :margin, margin)
-          end
-
-        _ ->
-          acc
+        {:error, source} ->
+          {:halt, {:error, {:invalid_css, declaration_error_detail(diagnostic_css, source)}}}
       end
     end)
+  end
+
+  defp page_options_from(block) do
+    block
+    |> String.split(";")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.reduce_while({:ok, []}, fn source, {:ok, acc} ->
+      case parse_declaration(source) do
+        {:ok, {property, value}} ->
+          put_page_option(acc, property, value, source)
+
+        {:ok, {property, value, :important}} ->
+          put_page_option(acc, property, value, source)
+
+        {:error, :invalid_css} ->
+          {:halt, {:error, source}}
+      end
+    end)
+  end
+
+  defp put_page_option(options, property, value, source) do
+    case page_declaration_option(property, value) do
+      {:ok, nil} -> {:cont, {:ok, options}}
+      {:ok, {key, option}} -> {:cont, {:ok, Keyword.put(options, key, option)}}
+      :error -> {:halt, {:error, source}}
+    end
+  end
+
+  defp page_declaration_option(property, value) do
+    case property do
+      "size" ->
+        case valid_page_size?(value) do
+          true ->
+            case page_size_option(value) do
+              nil -> {:ok, nil}
+              page_size -> {:ok, {:page_size, page_size}}
+            end
+
+          false ->
+            :error
+        end
+
+      "margin" ->
+        case valid_page_margin?(value, 4) do
+          true ->
+            case page_margin_option(value) do
+              nil -> {:ok, nil}
+              margin -> {:ok, {:margin, margin}}
+            end
+
+          false ->
+            :error
+        end
+
+      property when property in ["margin-top", "margin-right", "margin-bottom", "margin-left"] ->
+        case valid_page_margin?(value, 1) do
+          true -> {:ok, nil}
+          false -> :error
+        end
+
+      "page-orientation" ->
+        case value |> String.trim() |> String.downcase() do
+          value when value in ["upright", "rotate-left", "rotate-right"] -> {:ok, nil}
+          value when value in @css_wide_keywords -> {:ok, nil}
+          value -> if valid_page_function?(value), do: {:ok, nil}, else: :error
+        end
+
+      "marks" ->
+        marks = value |> String.trim() |> String.downcase() |> String.split(~r/\s+/u, trim: true)
+
+        case marks do
+          ["none"] ->
+            {:ok, nil}
+
+          [value] when value in @css_wide_keywords ->
+            {:ok, nil}
+
+          [value] ->
+            if valid_page_function?(value), do: {:ok, nil}, else: page_marks_option(marks)
+
+          marks when length(marks) in 1..2 ->
+            page_marks_option(marks)
+
+          _ ->
+            :error
+        end
+
+      "bleed" ->
+        case value |> String.trim() |> String.downcase() do
+          "auto" ->
+            {:ok, nil}
+
+          value when value in @css_wide_keywords ->
+            {:ok, nil}
+
+          value ->
+            if valid_page_length?(value, true) or valid_page_function?(value),
+              do: {:ok, nil},
+              else: :error
+        end
+
+      property ->
+        case property in @page_context_properties and String.trim(value) != "" do
+          true -> {:ok, nil}
+          false -> :error
+        end
+    end
+  end
+
+  defp valid_page_size?(value) do
+    normalized = value |> String.trim() |> String.downcase()
+    tokens = String.split(normalized, ~r/\s+/u, trim: true)
+
+    case tokens do
+      ["auto"] ->
+        true
+
+      [value] when value in @css_wide_keywords ->
+        true
+
+      [orientation] when orientation in ["portrait", "landscape"] ->
+        true
+
+      [page_size] ->
+        page_size in @page_size_names or valid_page_length?(page_size, false) or
+          valid_page_function?(normalized)
+
+      [first, second] ->
+        (first in @page_size_names and second in ["portrait", "landscape"]) or
+          (second in @page_size_names and first in ["portrait", "landscape"]) or
+          (valid_page_length?(first, false) and valid_page_length?(second, false))
+
+      _ ->
+        false
+    end
+  end
+
+  defp valid_page_margin?(value, maximum_values) do
+    normalized = value |> String.trim() |> String.downcase()
+
+    values =
+      case valid_page_function?(normalized) do
+        true -> [normalized]
+        false -> String.split(normalized, ~r/\s+/u, trim: true)
+      end
+
+    length(values) in 1..maximum_values and
+      Enum.all?(values, fn value ->
+        value == "auto" or value in @css_wide_keywords or
+          Regex.match?(@page_percentage_regex, value) or valid_page_length?(value, true) or
+          valid_page_function?(value)
+      end)
+  end
+
+  defp valid_page_length?(value, allow_negative?) do
+    length_regex =
+      if allow_negative?, do: @page_length_regex, else: @page_nonnegative_length_regex
+
+    value == "0" or Regex.match?(length_regex, value)
+  end
+
+  defp valid_page_function?(value) do
+    Regex.match?(~r/^(?:calc|min|max|clamp|var|env)\(.+\)$/u, value)
+  end
+
+  defp page_marks_option(marks) do
+    case Enum.all?(marks, &(&1 in ["crop", "cross"])) and Enum.uniq(marks) == marks do
+      true -> {:ok, nil}
+      false -> :error
+    end
   end
 
   defp page_size_option(value) do

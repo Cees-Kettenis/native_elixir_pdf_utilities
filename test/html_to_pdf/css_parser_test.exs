@@ -255,10 +255,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
       assert Keyword.fetch!(options, :page_size) == expected
     end
 
-    assert CssParser.page_options("""
-           @page { size: tabloid; margin: auto; color: red; }
-           @page broken { color }
-           """) == {:ok, []}
+    for css <- [
+          "@page { size: tabloid; }",
+          "@page { margin: 1pt 2pt 3pt 4pt 5pt; }",
+          "@page { margin-top: bananas; }",
+          "@page { page-orientation: sideways; }",
+          "@page { marks: crop crop; }",
+          "@page { marks: crop cross crop; }",
+          "@page { bleed: bananas; }",
+          "@page { size: A4 landscape portrait; }",
+          "@page { nonsense: value; }",
+          "@page { color }"
+        ] do
+      assert CssParser.page_options(css) == {:error, :invalid_css}
+      assert CssParser.parse(css) == {:error, :invalid_css}
+    end
 
     assert CssParser.page_options(:not_css) == {:error, :invalid_css}
 
@@ -267,6 +278,172 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
 
     assert Keyword.fetch!(print_page_options, :page_size) == :letter
     assert Keyword.fetch!(print_page_options, :margin) == 0.0
+
+    assert CssParser.page_options("@media screen { @page { nonsense: value; margin: bananas; } }") ==
+             {:ok, []}
+  end
+
+  test "page_options accepts valid page-context properties that are not rendered yet" do
+    css = """
+    @page {
+      size: 210mm 297mm !important;
+      margin: auto 20px 10% -5mm;
+      margin-top: 100px;
+      margin-right: auto;
+      margin-bottom: -2pt;
+      margin-left: 5%;
+      page-orientation: rotate-left;
+      marks: crop cross;
+      bleed: -3mm;
+      background: red;
+      border: 1px solid black;
+      padding: 10px;
+      color: navy;
+      counter-reset: page 1;
+      font-size: 12pt;
+      text-align: center;
+      width: 100px;
+    }
+    """
+
+    assert CssParser.page_options(css) == {:ok, []}
+    assert CssParser.parse(css) == {:ok, []}
+
+    for size <- [
+          "auto",
+          "portrait",
+          "landscape",
+          "A5",
+          "A3 landscape",
+          "portrait B4",
+          "JIS-B5",
+          "legal",
+          "ledger portrait",
+          "8.5in",
+          "8.5in 11in"
+        ] do
+      assert {:ok, _options} = CssParser.page_options("@page { size: #{size}; }")
+    end
+
+    for margin <- [
+          "initial",
+          "inherit",
+          "unset",
+          "revert",
+          "revert-layer",
+          ".5in",
+          "+1e2px",
+          "calc(10px + 2%)",
+          "var(--page-margin)"
+        ] do
+      assert {:ok, _options} = CssParser.page_options("@page { margin-top: #{margin}; }")
+    end
+
+    for marks <- ["none", "crop", "cross", "cross crop", "initial", "var(--marks)"] do
+      assert CssParser.page_options("@page { marks: #{marks}; }") == {:ok, []}
+    end
+
+    assert CssParser.page_options("@page { bleed: auto; }") == {:ok, []}
+    assert CssParser.page_options("@page { bleed: initial; }") == {:ok, []}
+    assert CssParser.page_options("@page { bleed: var(--bleed); }") == {:ok, []}
+    assert CssParser.page_options("@page { page-orientation: initial; }") == {:ok, []}
+    assert CssParser.page_options("@page { page-orientation: var(--orientation); }") == {:ok, []}
+    assert CssParser.page_options("@page { size: initial; }") == {:ok, []}
+    assert CssParser.page_options("@page { size: var(--page-size); }") == {:ok, []}
+    assert CssParser.page_options("@page { size: A4 !important; }") == {:ok, page_size: :a4}
+  end
+
+  test "page_options recognizes CSS Paged Media page-context properties" do
+    declarations = [
+      {"background", "white"},
+      {"background-attachment", "scroll"},
+      {"background-color", "white"},
+      {"background-image", "none"},
+      {"background-position", "center"},
+      {"background-repeat", "no-repeat"},
+      {"border", "1px solid black"},
+      {"border-bottom", "1px solid black"},
+      {"border-bottom-color", "black"},
+      {"border-bottom-style", "solid"},
+      {"border-bottom-width", "1px"},
+      {"border-color", "black"},
+      {"border-left", "1px solid black"},
+      {"border-left-color", "black"},
+      {"border-left-style", "solid"},
+      {"border-left-width", "1px"},
+      {"border-right", "1px solid black"},
+      {"border-right-color", "black"},
+      {"border-right-style", "solid"},
+      {"border-right-width", "1px"},
+      {"border-style", "solid"},
+      {"border-top", "1px solid black"},
+      {"border-top-color", "black"},
+      {"border-top-style", "solid"},
+      {"border-top-width", "1px"},
+      {"border-width", "1px"},
+      {"color", "black"},
+      {"counter-increment", "page 1"},
+      {"counter-reset", "page 0"},
+      {"direction", "ltr"},
+      {"font", "12pt sans-serif"},
+      {"font-family", "sans-serif"},
+      {"font-size", "12pt"},
+      {"font-style", "normal"},
+      {"font-variant", "normal"},
+      {"font-weight", "400"},
+      {"height", "100px"},
+      {"letter-spacing", "normal"},
+      {"line-height", "normal"},
+      {"max-height", "none"},
+      {"max-width", "none"},
+      {"min-height", "0"},
+      {"min-width", "0"},
+      {"outline", "1px solid black"},
+      {"outline-color", "black"},
+      {"outline-style", "solid"},
+      {"outline-width", "1px"},
+      {"padding", "1px"},
+      {"padding-bottom", "1px"},
+      {"padding-left", "1px"},
+      {"padding-right", "1px"},
+      {"padding-top", "1px"},
+      {"quotes", "auto"},
+      {"text-align", "center"},
+      {"text-decoration", "none"},
+      {"text-indent", "0"},
+      {"text-transform", "none"},
+      {"visibility", "visible"},
+      {"white-space", "normal"},
+      {"width", "100px"},
+      {"word-spacing", "normal"}
+    ]
+
+    Enum.each(declarations, fn {property, value} ->
+      css = "@page { #{property}: #{value}; }"
+      assert CssParser.page_options(css) == {:ok, []}
+      assert CssParser.parse(css) == {:ok, []}
+    end)
+  end
+
+  test "parse_detailed locates invalid page declarations" do
+    css = """
+    @page {
+      size: A4;
+      nonsense: value;
+      margin: 7mm;
+    }
+    """
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               line: 3,
+               column: 3,
+               source: "nonsense: value",
+               message: ~s(line 3: declaration "nonsense: value" is invalid or unsupported)
+             }}} = CssParser.parse_detailed(css)
   end
 
   test "parse_declarations normalizes inline declaration blocks" do
