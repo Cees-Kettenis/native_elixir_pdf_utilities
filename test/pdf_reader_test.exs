@@ -276,7 +276,9 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
     assert_error(Text.extract(malformed), :invalid_pdf_input, :page_tree)
 
     assert {:error, {:invalid_pdf_input, diagnostic}} = Merge.merge([malformed])
-    assert diagnostic.stage == :merge
+    assert diagnostic.stage == :page_tree
+    assert diagnostic.operation == :merge
+    assert diagnostic.module == NativeElixirPdfUtilities.Merge
     assert diagnostic.message =~ "page tree contains a duplicate reference"
   end
 

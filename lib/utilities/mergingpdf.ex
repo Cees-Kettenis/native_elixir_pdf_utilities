@@ -29,7 +29,7 @@ defmodule NativeElixirPdfUtilities.Merge do
   @type id_map :: %{optional(integer()) => integer()}
   @typedoc "Byte-offset table for xref: object id -> {byte_offset, generation}."
   @type offsets_map :: %{optional(integer()) => {non_neg_integer(), non_neg_integer()}}
-  @type error_reason :: :empty_pdf_list | :invalid_pdf_input
+  @type error_reason :: :empty_pdf_list | Reader.error_reason()
 
   @doc """
   Merge a list of PDF binaries into a single PDF binary.
@@ -73,18 +73,31 @@ defmodule NativeElixirPdfUtilities.Merge do
   defp do_merge(bins) do
     case Enum.reduce_while(bins, {:ok, []}, fn bin, {:ok, inputs} ->
            case index_pdf(bin) do
-             {:ok, input} -> {:cont, {:ok, [input | inputs]}}
-             {:error, {reason, diagnostic}} -> {:halt, {:error, {reason, diagnostic}}}
+             {:ok, input} ->
+               {:cont, {:ok, [input | inputs]}}
+
+             {:reader_error, {reason, diagnostic}} ->
+               {:halt, {:reader_error, {reason, diagnostic}}}
+
+             {:error, {reason, diagnostic}} ->
+               {:halt, {:error, {reason, diagnostic}}}
            end
          end) do
       {:ok, inputs} ->
         build_merged_pdf(Enum.reverse(inputs))
 
-      {:error, {reader_reason, diagnostic}} ->
+      {:reader_error, {reader_reason, diagnostic}} ->
+        {:error,
+         {reader_reason,
+          diagnostic
+          |> Map.put(:operation, :merge)
+          |> Map.put(:module, __MODULE__)}}
+
+      {:error, {merge_reason, diagnostic}} ->
         Diagnostics.error(
           :merge,
           :invalid_pdf_input,
-          "merge/1 received an invalid PDF (#{reader_reason} at #{diagnostic.stage}): #{diagnostic.message}",
+          "merge/1 received an invalid PDF (#{merge_reason} at #{diagnostic.stage}): #{diagnostic.message}",
           operation: :merge,
           module: __MODULE__,
           source: Map.get(diagnostic, :source)
@@ -168,8 +181,8 @@ defmodule NativeElixirPdfUtilities.Merge do
            }}
         end
 
-      {:error, _} = reader_error ->
-        reader_error
+      {:error, error} ->
+        {:reader_error, error}
     end
   end
 

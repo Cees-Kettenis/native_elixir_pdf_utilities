@@ -77,16 +77,23 @@ defmodule NativeElixirPdfUtilities.MergeTest do
           "%PDF-1.7\n1 0 obj << >> endobj\n1 0 obj << >> endobj"
         ] do
       assert {:error, {:invalid_pdf_input, diagnostic}} = Merge.merge([malformed_pdf])
-      assert diagnostic.stage == :merge
+      refute diagnostic.stage == :merge
       assert diagnostic.reason == :invalid_pdf_input
       assert diagnostic.operation == :merge
       assert diagnostic.module == NativeElixirPdfUtilities.Merge
-      assert diagnostic.message =~ "merge/1 received an invalid PDF ("
+      assert is_binary(diagnostic.message)
     end
 
     encrypted = File.read!(Path.join(@fixture_directory, "encrypted.pdf"))
-    assert {:error, {:invalid_pdf_input, diagnostic}} = Merge.merge([encrypted])
-    assert diagnostic.message =~ "encrypted_pdf at encryption"
+
+    assert {:error,
+            {:encrypted_pdf,
+             %{
+               stage: :encryption,
+               reason: :encrypted_pdf,
+               operation: :merge,
+               module: NativeElixirPdfUtilities.Merge
+             }}} = Merge.merge([encrypted])
   end
 
   test "renumbers pages and injects inherited page attributes" do
