@@ -1438,6 +1438,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     main_axis = flex_main_axis(style)
     gap = flex_main_gap(style)
     available_main = flex_available_main(style, main_axis, content_width, items, gap)
+
+    constraint_available_main =
+      case main_axis do
+        :row -> available_main
+        :column -> resolved_content_size(style, :height, nil, nil)
+      end
+
     wrap = Map.get(style, :flex_wrap, :nowrap)
 
     lines =
@@ -1446,7 +1453,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       end)
 
     lines
-    |> Enum.map(&resolve_flex_line(&1, available_main, gap))
+    |> Enum.map(&resolve_flex_line(&1, available_main, constraint_available_main, gap))
   end
 
   defp append_flex_item_to_lines([], item, _wrap, _available_main, _gap) do
@@ -1466,50 +1473,168 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp resolve_flex_line(line, available_main, gap) do
+  defp resolve_flex_line(line, available_main, constraint_available_main, gap) do
     item_gap_total = gap * max(length(line.items) - 1, 0)
     base_without_gap = Enum.reduce(line.items, 0.0, &(&1.outer_main + &2))
 
     free_space = available_main - base_without_gap - item_gap_total
-    items = resolve_flex_item_sizes(line.items, free_space)
+    items = resolve_flex_item_sizes(line.items, free_space, constraint_available_main)
     outer_main = Enum.reduce(items, 0.0, &(&1.outer_main + &2)) + item_gap_total
     cross = items |> Enum.map(& &1.outer_cross) |> Enum.max(fn -> 0.0 end)
 
     %{items: items, main: outer_main, cross: cross}
   end
 
-  defp resolve_flex_item_sizes(items, free_space) do
-    cond do
-      free_space > 0 ->
-        total_grow = Enum.reduce(items, 0.0, &(&1.flex_grow + &2))
+  defp resolve_flex_item_sizes(items, free_space, available_main) do
+    {items, free_space} =
+      Enum.map_reduce(items, free_space, fn item, remaining_space ->
+        {minimum, maximum} = flex_main_constraints(item, available_main)
+        constrained_main = constrain_flex_main(item.main_box, minimum, maximum)
 
-        case total_grow > 0 do
-          true ->
-            Enum.map(items, fn item ->
-              extra = free_space * item.flex_grow / total_grow
-              resize_flex_item(item, item.main_box + extra)
-            end)
+        item =
+          item
+          |> resize_flex_item(constrained_main)
+          |> Map.merge(%{
+            flex_base_main: item.main_box,
+            flex_minimum_main: minimum,
+            flex_maximum_main: maximum,
+            flex_frozen: false
+          })
 
-          false ->
-            items
+        {item, remaining_space - (constrained_main - item.flex_base_main)}
+      end)
+
+    mode =
+      cond do
+        free_space > 0 -> :grow
+        free_space < 0 -> :shrink
+        true -> :none
+      end
+
+    items
+    |> redistribute_flex_space(free_space, mode)
+    |> Enum.map(
+      &Map.drop(&1, [:flex_base_main, :flex_minimum_main, :flex_maximum_main, :flex_frozen])
+    )
+  end
+
+  defp redistribute_flex_space(items, free_space, mode) do
+    total_weight =
+      Enum.reduce(items, 0.0, fn item, total ->
+        case item.flex_frozen do
+          true -> total
+          false -> total + flex_distribution_weight(item, mode)
         end
+      end)
 
-      free_space < 0 ->
-        scaled_shrink = Enum.reduce(items, 0.0, &(&1.flex_shrink * &1.main_box + &2))
-
-        case scaled_shrink > 0 do
-          true ->
-            Enum.map(items, fn item ->
-              reduction = abs(free_space) * item.flex_shrink * item.main_box / scaled_shrink
-              resize_flex_item(item, max(item.main_box - reduction, 0.0))
-            end)
-
-          false ->
-            items
-        end
-
+    case abs(free_space) <= 1.0e-9 or total_weight <= 0 do
       true ->
         items
+
+      false ->
+        {items, consumed_space, frozen_any?} =
+          Enum.reduce(items, {[], 0.0, false}, fn item, {resolved, consumed, frozen_any?} ->
+            weight = flex_distribution_weight(item, mode)
+
+            case item.flex_frozen or weight <= 0 do
+              true ->
+                {resolved ++ [item], consumed, frozen_any?}
+
+              false ->
+                previous_main = item.main_box
+                proposed_main = item.main_box + free_space * weight / total_weight
+
+                constrained_main =
+                  constrain_flex_main(
+                    proposed_main,
+                    item.flex_minimum_main,
+                    item.flex_maximum_main
+                  )
+
+                case abs(constrained_main - proposed_main) > 1.0e-9 do
+                  true ->
+                    item =
+                      item
+                      |> resize_flex_item(constrained_main)
+                      |> Map.put(:flex_frozen, true)
+
+                    {
+                      resolved ++ [item],
+                      consumed + constrained_main - previous_main,
+                      true
+                    }
+
+                  false ->
+                    {resolved ++ [item], consumed, frozen_any?}
+                end
+            end
+          end)
+
+        case frozen_any? do
+          true ->
+            redistribute_flex_space(items, free_space - consumed_space, mode)
+
+          false ->
+            Enum.map(items, fn item ->
+              weight = flex_distribution_weight(item, mode)
+
+              case item.flex_frozen or weight <= 0 do
+                true ->
+                  item
+
+                false ->
+                  resize_flex_item(item, item.main_box + free_space * weight / total_weight)
+              end
+            end)
+        end
+    end
+  end
+
+  defp flex_distribution_weight(item, mode) do
+    case mode do
+      :grow -> item.flex_grow
+      :shrink -> item.flex_shrink * item.flex_base_main
+      :none -> 0.0
+    end
+  end
+
+  defp flex_main_constraints(item, available_main) do
+    {minimum_property, maximum_property} =
+      case item.main_axis do
+        :row -> {:min_width, :max_width}
+        :column -> {:min_height, :max_height}
+      end
+
+    box_size = flex_main_box_size(item.style, item.main_axis)
+
+    constraint_box_size = fn property, fallback ->
+      case resolved_constraint_size(item.style, property, available_main) do
+        constraint when is_number(constraint) ->
+          case Map.get(item.style, :box_sizing, :content_box) do
+            :border_box -> max(constraint, box_size)
+            :content_box -> constraint + box_size
+          end
+
+        _ ->
+          fallback
+      end
+    end
+
+    minimum = constraint_box_size.(minimum_property, box_size)
+    maximum = constraint_box_size.(maximum_property, nil)
+
+    case maximum do
+      maximum when is_number(maximum) -> {minimum, max(maximum, minimum)}
+      nil -> {minimum, nil}
+    end
+  end
+
+  defp constrain_flex_main(size, minimum, maximum) do
+    size = max(size, minimum)
+
+    case maximum do
+      maximum when is_number(maximum) -> min(size, maximum)
+      nil -> size
     end
   end
 

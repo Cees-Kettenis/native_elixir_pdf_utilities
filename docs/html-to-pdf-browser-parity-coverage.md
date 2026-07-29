@@ -31,7 +31,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `css_remaining_supported_values.html` | grouped selectors, source order, inline style priority, inheritance, inline flex/grid, `min()`, named colors, no-op `overflow`/`position`, side padding/borders, `vertical-align`, `line-break`, `word-wrap` |
 | `display_lists_and_inline_block.html` | inline-block layout, hidden elements, unordered lists, ordered lists, list item spacing |
 | `fonts_and_print_media.html` | local CSS `@font-face`, print-only media cascade, embedded font output, bundled Unicode glyph fallback from a built-in font |
-| `flex_direction_and_justification.html` | flex row, row-reverse, column, grow/shrink/basis, `justify-content`, `align-items`, `align-self`, row gaps |
+| `flex_direction_and_justification.html` | flex row, row-reverse, column, grow/shrink/basis, main-axis min/max freezing and redistribution, `justify-content`, `align-items`, `align-self`, row gaps |
 | `flex_grid_alignment.html` | flex order, wrapping, gap, alignment, grid template tracks, grid spans, row/column gaps |
 | `grid_tracks_and_placement.html` | `repeat()`, `minmax()` growth and minimum-bound overflow, auto rows/columns, `grid-column`, `grid-row`, `grid-area`, item alignment |
 | `html_semantics_typography.html` | semantic block aliases, metadata wrappers, `title`, `lang`, `h1`-`h6`, `b`, `i`, font-relative semantic margins |
@@ -100,7 +100,7 @@ Current production fixture parity:
 | Text: color, font family/size/weight/style, relative and absolute line-height inheritance, text alignment, transform, vertical align, line breaking, word breaking, white-space, letter spacing | Passing | `inline_text_flow.html`, `text_style_variants.html`, `css_remaining_supported_values.html`, table fixtures |
 | Colors: hex, named colors, `rgb()`, `rgba()`, `currentColor`, transparent | Passing | `text_style_variants.html`, `css_remaining_supported_values.html` |
 | Page rules and breaks: `@page`, `@media print`, `break-before`, `break-after`, `page-break-before`, `page-break-after`, `page-break-inside` | Passing | `page_geometry_asymmetric.html`, `page_rules_landscape.html`, `fonts_and_print_media.html`, `pagination_breaks.html`, `break_variants.html` |
-| Flexbox subset: direction, wrap, gap, row/column gap, justify/align, order, grow/shrink/basis, `flex`, inline flex | Passing | `flex_direction_and_justification.html`, `flex_grid_alignment.html`, `css_remaining_supported_values.html` |
+| Flexbox subset: direction, wrap, gap, row/column gap, justify/align, order, grow/shrink/basis, main-axis min/max freezing and redistribution, `flex`, inline flex | Passing | `flex_direction_and_justification.html`, `flex_grid_alignment.html`, `css_remaining_supported_values.html` |
 | Grid subset: template rows/columns, auto rows/columns, `repeat()`, `minmax()` growth and minimum-bound overflow, placement, area, gaps, justify/align items/content/self, inline grid | Passing | `grid_tracks_and_placement.html`, `flex_grid_alignment.html`, `css_remaining_supported_values.html` |
 
 ## Layout Interaction Coverage

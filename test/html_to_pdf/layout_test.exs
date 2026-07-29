@@ -935,6 +935,159 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert c.y < a.y
   end
 
+  test "layout freezes row flex items at minimums and redistributes growth after maximums" do
+    shrink_dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{"style" => "display: flex; width: 100pt"},
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{
+                "style" => "flex: 1 1 80pt; min-width: 70pt; background-color: #ff0000"
+              },
+              children: [%{type: :text, text: "A"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{
+                "style" => "flex: 1 1 80pt; min-width: 70pt; background-color: #0000ff"
+              },
+              children: [%{type: :text, text: "B"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, shrink_tree} = Style.compute(shrink_dom, [])
+    assert {:ok, shrink_layout} = Layout.layout(shrink_tree, page_size: {200, 100}, margin: 10)
+    [first_minimum, second_minimum] = Enum.filter(shrink_layout.boxes, &(&1.type == :rect))
+
+    assert_in_delta first_minimum.width, 70.0, 0.0001
+    assert_in_delta second_minimum.x - first_minimum.x, 70.0, 0.0001
+    assert_in_delta second_minimum.width, 70.0, 0.0001
+
+    grow_dom =
+      put_in(
+        shrink_dom,
+        [:children, Access.at(0)],
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{"style" => "display: flex; width: 300pt"},
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{
+                "style" => "flex: 1 1 80pt; max-width: 120pt; background-color: #ff0000"
+              },
+              children: [%{type: :text, text: "A"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "flex: 1 1 80pt; background-color: #0000ff"},
+              children: [%{type: :text, text: "B"}]
+            }
+          ]
+        }
+      )
+
+    assert {:ok, grow_tree} = Style.compute(grow_dom, [])
+    assert {:ok, grow_layout} = Layout.layout(grow_tree, page_size: {400, 100}, margin: 10)
+    [first_maximum, second_grown] = Enum.filter(grow_layout.boxes, &(&1.type == :rect))
+
+    assert_in_delta first_maximum.width, 120.0, 0.0001
+    assert_in_delta second_grown.x - first_maximum.x, 120.0, 0.0001
+    assert_in_delta second_grown.width, 180.0, 0.0001
+  end
+
+  test "layout enforces flex item height constraints in column containers" do
+    shrink_dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{
+            "style" => "display: flex; flex-direction: column; width: 80pt; height: 100pt"
+          },
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{
+                "style" => "flex: 1 1 80pt; min-height: 70pt; background-color: #ff0000"
+              },
+              children: [%{type: :text, text: "A"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{
+                "style" => "flex: 1 1 80pt; min-height: 70pt; background-color: #0000ff"
+              },
+              children: [%{type: :text, text: "B"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, shrink_tree} = Style.compute(shrink_dom, [])
+    assert {:ok, shrink_layout} = Layout.layout(shrink_tree, page_size: {200, 200}, margin: 10)
+    [first_minimum, second_minimum] = Enum.filter(shrink_layout.boxes, &(&1.type == :rect))
+
+    assert_in_delta first_minimum.height, 70.0, 0.0001
+    assert_in_delta first_minimum.y - second_minimum.y, 70.0, 0.0001
+    assert_in_delta second_minimum.height, 70.0, 0.0001
+
+    grow_dom =
+      put_in(
+        shrink_dom,
+        [:children, Access.at(0)],
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{
+            "style" => "display: flex; flex-direction: column; width: 80pt; height: 300pt"
+          },
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{
+                "style" =>
+                  "box-sizing: border-box; flex: 1 1 80pt; max-height: 120pt; padding: 5pt 0; background-color: #ff0000"
+              },
+              children: [%{type: :text, text: "A"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "flex: 1 1 80pt; background-color: #0000ff"},
+              children: [%{type: :text, text: "B"}]
+            }
+          ]
+        }
+      )
+
+    assert {:ok, grow_tree} = Style.compute(grow_dom, [])
+    assert {:ok, grow_layout} = Layout.layout(grow_tree, page_size: {200, 400}, margin: 10)
+    [first_maximum, second_grown] = Enum.filter(grow_layout.boxes, &(&1.type == :rect))
+
+    assert_in_delta first_maximum.height, 120.0, 0.0001
+    assert_in_delta first_maximum.y - second_grown.y, 180.0, 0.0001
+    assert_in_delta second_grown.height, 180.0, 0.0001
+  end
+
   test "layout positions column flex items with cross-axis alignment" do
     dom = %{
       type: :document,

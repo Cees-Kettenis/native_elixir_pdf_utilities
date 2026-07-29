@@ -37,6 +37,35 @@
         align-items: stretch;
         row-gap: 5pt;
       }
+      .minimum-row {
+        display: flex;
+        width: 100pt;
+        margin-bottom: 14pt;
+        border: 2pt solid #991b1b;
+        background-color: #fef2f2;
+      }
+      .minimum-row .constraint-item {
+        flex: 1 1 80pt;
+        min-width: 70pt;
+        height: 24pt;
+        background-color: #fecaca;
+      }
+      .maximum-column {
+        display: flex;
+        flex-direction: column;
+        width: 160pt;
+        height: 180pt;
+        border: 2pt solid #166534;
+        background-color: #f0fdf4;
+      }
+      .maximum-column .constraint-item {
+        flex: 1 1 40pt;
+        background-color: #bbf7d0;
+      }
+      .maximum-column .constraint-item:first-child {
+        max-height: 60pt;
+        background-color: #86efac;
+      }
       .item {
         flex: 0 1 70pt;
         min-height: 24pt;
@@ -62,6 +91,14 @@
       <section class="column">
         <div class="item">column A</div>
         <div class="item">column B</div>
+      </section>
+      <section class="minimum-row">
+        <div class="constraint-item">minimum A</div>
+        <div class="constraint-item">minimum B</div>
+      </section>
+      <section class="maximum-column">
+        <div class="constraint-item">maximum A</div>
+        <div class="constraint-item">remaining growth B</div>
       </section>
     </main>
   </body>
