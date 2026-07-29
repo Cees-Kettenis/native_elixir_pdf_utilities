@@ -250,7 +250,11 @@ Preferred template patterns:
 Useful print CSS:
 
 ```css
-@page { size: A4 landscape; margin: 7mm; }
+@page {
+  size: A4 landscape;
+  margin: 12mm 10mm 15mm;
+  margin-left: 18mm;
+}
 
 .sheet {
   width: 100%;

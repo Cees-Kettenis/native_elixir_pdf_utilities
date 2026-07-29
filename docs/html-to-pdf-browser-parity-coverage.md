@@ -41,6 +41,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `links_entities_and_protocols.html` | links, `https`, `http`, `mailto`, named entities, decimal and hex numeric entities, non-breaking-space wrapping |
 | `nested_table_collapsed_borders.html` | collapsed outer table containing a collapsed inner table, nested `colspan`, side-specific nested borders |
 | `nested_table_grid_flex.html` | table cell containing grid, grid item containing flexbox, ordering, gaps, nested borders |
+| `page_geometry_asymmetric.html` | named page sizing, landscape orientation, and asymmetric one-to-four-value `@page` margins |
 | `page_rules_landscape.html` | CSS `@page` landscape sizing, page margins, explicit page-sized drawing geometry |
 | `page_furniture.html` | repeated header and footer placement inside page margins across multiple pages |
 | `paragraph_pagination.html` | default line-level paragraph fragmentation across automatic page breaks |
@@ -98,7 +99,7 @@ Current production fixture parity:
 | Box model: width/height, min/max width/height, `min()`, `aspect-ratio`, `box-sizing`, margin, negative margin, padding, side-specific padding, borders, border radius, border collapse, background, overflow, position | Passing | `block_box_model.html`, `box_sizing_and_margins.html`, `css_remaining_supported_values.html`, table fixtures |
 | Text: color, font family/size/weight/style, line height, text alignment, transform, vertical align, line breaking, word breaking, white-space, letter spacing | Passing | `inline_text_flow.html`, `text_style_variants.html`, `css_remaining_supported_values.html`, table fixtures |
 | Colors: hex, named colors, `rgb()`, `rgba()`, `currentColor`, transparent | Passing | `text_style_variants.html`, `css_remaining_supported_values.html` |
-| Page rules and breaks: `@page`, `@media print`, `break-before`, `break-after`, `page-break-before`, `page-break-after`, `page-break-inside` | Passing | `page_rules_landscape.html`, `fonts_and_print_media.html`, `pagination_breaks.html`, `break_variants.html` |
+| Page rules and breaks: `@page`, `@media print`, `break-before`, `break-after`, `page-break-before`, `page-break-after`, `page-break-inside` | Passing | `page_geometry_asymmetric.html`, `page_rules_landscape.html`, `fonts_and_print_media.html`, `pagination_breaks.html`, `break_variants.html` |
 | Flexbox subset: direction, wrap, gap, row/column gap, justify/align, order, grow/shrink/basis, `flex`, inline flex | Passing | `flex_direction_and_justification.html`, `flex_grid_alignment.html`, `css_remaining_supported_values.html` |
 | Grid subset: template rows/columns, auto rows/columns, `repeat()`, `minmax()`, placement, area, gaps, justify/align items/content/self, inline grid | Passing | `grid_tracks_and_placement.html`, `flex_grid_alignment.html`, `css_remaining_supported_values.html` |
 
