@@ -426,10 +426,11 @@ candidate.
 - Confirm README, HexDocs guide links, changelog links, and roadmap links are
   valid.
 
-### 0.20.0 - Complete PNG Decoding and Validation
+### 0.20.0 - Complete PNG Decoding and CMYK JPEG Handling
 
 Milestone goal: make the renderer's PNG support cover conforming PNG image
-variants while preserving strict input validation and bounded resource use.
+variants and make four-component JPEG rendering predictable, while preserving
+strict input validation and bounded resource use.
 
 #### Scope
 
@@ -450,6 +451,13 @@ variants while preserving strict input validation and bounded resource use.
   chunks.
 - Preserve decompression-ratio, decoded-byte, dimension, and total-image-size
   limits through every decoding path.
+- Parse the JPEG metadata needed to distinguish ordinary CMYK, Adobe-inverted
+  CMYK, and YCCK color-transform conventions instead of inferring rendering
+  semantics solely from the component count.
+- Emit the PDF `/ColorSpace`, `/Decode`, and `/DecodeParms` values required to
+  preserve supported CMYK JPEG colors.
+- Reject unsupported or ambiguous four-component JPEG variants with an
+  actionable diagnostic instead of rendering predictably incorrect colors.
 
 #### Design Notes
 
@@ -462,6 +470,12 @@ variants while preserving strict input validation and bounded resource use.
   errors.
 - Keep optional color-management metadata outside the pre-1.0 scope unless it
   is required for consistent rendering of common document assets.
+- Keep JPEG DCT streams compressed when their color semantics can be expressed
+  correctly in the PDF image dictionary; do not introduce a full JPEG decoder
+  solely for CMYK handling.
+- Treat CMYK JPEG support as an uncommon but explicit compatibility boundary:
+  preserve colors for recognized conventions and reject unrecognized
+  conventions rather than guessing.
 
 #### Completion Criteria
 
@@ -473,6 +487,11 @@ variants while preserving strict input validation and bounded resource use.
   decompression limits, and oversized images.
 - Add or update Chromium parity fixtures with representative greyscale,
   indexed, transparent, 16-bit, and Adam7 PNGs.
+- Add real ordinary-CMYK, Adobe-inverted-CMYK, and YCCK JPEG fixtures, with
+  focused PDF dictionary assertions and visible Chromium parity coverage.
+- Add malformed and ambiguous four-component JPEG tests that assert the public
+  diagnostic reason, stage, and actionable message.
+- Confirm grayscale and three-component JPEG rendering remains unchanged.
 - Preserve 100% test coverage and pass the full HTML-to-PDF quality gate.
 
 ### 0.21.0 - Release Candidate and API Freeze

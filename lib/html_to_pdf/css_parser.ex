@@ -4,10 +4,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   The parser accepts the document-oriented selector subset used by the style
   cascade: element, class, id, element.class, descendant, child, and comma
-  groups. Simple `@page` and `@font-face` rules are accepted outside the style
-  cascade, and `@media print` rules are included in the active print cascade.
-  Declarations are kept as normalized property/value pairs so the style layer
-  can validate values against the renderer's supported property set.
+  groups. Bare `@page { ... }` and simple `@font-face` rules are accepted
+  outside the style cascade, and `@media print` rules are included in the
+  active print cascade. Page selectors, named-page preludes, and misspelled
+  `@page` at-rules are rejected. Declarations are kept as normalized
+  property/value pairs so the style layer can validate values against the
+  renderer's supported property set.
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
@@ -126,6 +128,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                                  )
   @page_percentage_regex Regex.compile!("^[+-]?#{@page_number_pattern}%$", "u")
   @css_wide_keywords ~w(initial inherit unset revert revert-layer)
+  @page_rule_regex ~r/@page\s*\{(?<declarations>[^{}]*)\}/ui
+  @page_rule_candidate_regex ~r/@page[^{;]*(?=\{|;|$)/ui
 
   @doc """
   Parses a CSS stylesheet into strict renderer rules.
@@ -205,13 +209,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   end
 
   @doc """
-  Extracts renderer page defaults from simple `@page` rules.
+  Extracts renderer page defaults from bare `@page { ... }` rules.
 
   Valid page-context properties are accepted even when the renderer does not
   apply them yet. Rendering consumes accepted named and explicit two-length
   `size` values, portrait and landscape orientations, one-to-four-value
   `margin` shorthands, and the four margin longhands. Malformed declarations,
-  unknown properties, and invalid paged-media descriptor values return
+  unknown properties, invalid paged-media descriptor values, page selectors,
+  named-page preludes, and misspelled `@page` at-rules return
   `{:error, :invalid_css}`.
   """
   @spec page_options(String.t()) :: {:ok, [page_option()]} | {:error, :invalid_css}
@@ -283,7 +288,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   end
 
   defp strip_page_rules(css) do
-    Regex.replace(~r/@page\s*(?:[^{]*)\{[^{}]*\}/ui, css, "")
+    Regex.replace(@page_rule_regex, css, "")
   end
 
   defp strip_font_face_rules(css) do
@@ -551,23 +556,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   end
 
   defp page_rule_blocks(css) do
-    ~r/@page\s*(?:[^{]*)\{(?<declarations>[^{}]*)\}/ui
+    @page_rule_regex
     |> Regex.scan(css, capture: ["declarations"])
     |> List.flatten()
   end
 
   defp parse_page_rules(css, diagnostic_css) do
-    css
-    |> page_rule_blocks()
-    |> Enum.reduce_while({:ok, []}, fn block, {:ok, acc} ->
-      case page_options_from(block) do
-        {:ok, page_options} ->
-          {:cont, {:ok, PageGeometry.merge_page_options(acc, page_options)}}
+    case invalid_page_rule_source(css) do
+      nil ->
+        css
+        |> page_rule_blocks()
+        |> Enum.reduce_while({:ok, []}, fn block, {:ok, acc} ->
+          case page_options_from(block) do
+            {:ok, page_options} ->
+              {:cont, {:ok, PageGeometry.merge_page_options(acc, page_options)}}
 
-        {:error, source} ->
-          {:halt, {:error, {:invalid_css, declaration_error_detail(diagnostic_css, source)}}}
-      end
-    end)
+            {:error, source} ->
+              {:halt, {:error, {:invalid_css, declaration_error_detail(diagnostic_css, source)}}}
+          end
+        end)
+
+      source ->
+        {:error, {:invalid_css, page_rule_error_detail(diagnostic_css, source)}}
+    end
+  end
+
+  defp invalid_page_rule_source(css) do
+    css
+    |> strip_page_rules()
+    |> then(&Regex.replace(~r/\{[^{}]*\}/u, &1, "{}"))
+    |> then(&Regex.run(@page_rule_candidate_regex, &1))
+    |> case do
+      [source] -> String.trim(source)
+      nil -> nil
+    end
   end
 
   defp page_options_from(block) do
@@ -1101,6 +1123,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       stage: :css,
       reason: :invalid_css,
       message: ~s(line #{line}: declaration "#{source}" is invalid or unsupported),
+      line: line,
+      column: column,
+      source: source
+    }
+  end
+
+  defp page_rule_error_detail(css, page_rule) do
+    source = String.trim(page_rule)
+    {line, column} = source_location(css, source)
+
+    %{
+      stage: :css,
+      reason: :invalid_css,
+      message: ~s(line #{line}: page rule "#{source}" is invalid or unsupported),
       line: line,
       column: column,
       source: source

@@ -230,7 +230,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert {:ok, options} =
              CssParser.page_options("""
              @page { size: A4 landscape; margin: 7mm; }
-             @page rotated { size: letter portrait; margin: 0; }
+             @page { size: letter portrait; margin: 0; }
              """)
 
     assert Keyword.fetch!(options, :page_size) == :letter
@@ -281,6 +281,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
 
     assert CssParser.page_options("@media screen { @page { nonsense: value; margin: bananas; } }") ==
              {:ok, []}
+  end
+
+  test "page rules reject selectors, named pages, and misspelled at-rules" do
+    for css <- [
+          "@page :first { size: A5; margin: 1pt; }",
+          "@page rotated { size: letter; }",
+          "@pagefoo { size: A3; }",
+          "@page;"
+        ] do
+      assert CssParser.page_options(css) == {:error, :invalid_css}
+      assert CssParser.parse(css) == {:error, :invalid_css}
+    end
+
+    css = """
+    p { color: black; }
+    @page :first { size: A5; margin: 1pt; }
+    """
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               line: 2,
+               column: 1,
+               source: "@page :first",
+               message: ~s(line 2: page rule "@page :first" is invalid or unsupported)
+             }}} = CssParser.parse_detailed(css)
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               line: 1,
+               column: 1,
+               source: "@pagefoo",
+               message: ~s(line 1: page rule "@pagefoo" is invalid or unsupported)
+             }}} = CssParser.parse_detailed("@pagefoo { size: A3; }")
+
+    custom_property_css = ~s(:root { --page-rule-label: "@pagefoo"; })
+    assert {:ok, [_rule]} = CssParser.parse(custom_property_css)
+    assert CssParser.page_options(custom_property_css) == {:ok, []}
   end
 
   test "page_options applies resolvable geometry and accepts remaining page-context properties" do
