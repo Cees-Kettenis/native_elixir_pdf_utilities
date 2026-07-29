@@ -947,7 +947,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       ]
     }
 
-    assert {:ok, styled_tree} = Style.compute(dom, stylesheets: ["p { color: red; }"])
+    assert {:ok, styled_tree} = Style.compute(dom, stylesheets: [{:css, "p { color: red; }"}])
     [paragraph] = styled_tree.children
     [text] = paragraph.children
 
@@ -971,13 +971,46 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       ]
     }
 
-    assert {:ok, styled_tree} = Style.compute(dom, stylesheets: [stylesheet_path])
+    assert {:ok, styled_tree} = Style.compute(dom, stylesheets: [{:file, stylesheet_path}])
     [paragraph] = styled_tree.children
 
     assert paragraph.style.color == {0.2, 0.4, 0.6}
   after
     stylesheet_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-style-test.css")
     File.rm(stylesheet_path)
+  end
+
+  test "compute accepts empty and comment-only CSS and file paths containing braces" do
+    stylesheet_path =
+      Path.join(System.tmp_dir!(), "native-elixir-pdf-style-{print}-test.css")
+
+    File.write!(stylesheet_path, "p { color: #336699; }")
+
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{},
+          children: [%{type: :text, text: "Hello"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} =
+             Style.compute(dom,
+               stylesheets: [
+                 {:css, ""},
+                 {:css, "/* intentionally empty */"},
+                 {:file, stylesheet_path}
+               ]
+             )
+
+    [paragraph] = styled_tree.children
+    assert paragraph.style.color == {0.2, 0.4, 0.6}
+  after
+    File.rm(Path.join(System.tmp_dir!(), "native-elixir-pdf-style-{print}-test.css"))
   end
 
   test "compute loads local fonts declared by embedded font-face rules" do
@@ -1048,7 +1081,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       ]
     }
 
-    assert {:ok, styled_from_file} = Style.compute(dom, stylesheets: [stylesheet_path])
+    assert {:ok, styled_from_file} =
+             Style.compute(dom, stylesheets: [{:file, stylesheet_path}])
+
     [paragraph] = styled_from_file.children
     assert paragraph.style.font_face.type == :embedded
 
@@ -1056,33 +1091,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "@font-face { font-family: BaseFixture; src: url('fonts/fixture.ttf'); } p { font-family: BaseFixture; }"
 
     assert {:ok, styled_from_base} =
-             Style.compute(dom, stylesheets: [inline_css], base_url: fixture_dir)
+             Style.compute(dom, stylesheets: [{:css, inline_css}], base_url: fixture_dir)
 
     [paragraph] = styled_from_base.children
     assert paragraph.style.font_face.type == :embedded
 
     assert {:ok, styled_from_file_url} =
-             Style.compute(dom, stylesheets: [inline_css], base_url: "file://#{fixture_dir}")
+             Style.compute(dom,
+               stylesheets: [{:css, inline_css}],
+               base_url: "file://#{fixture_dir}"
+             )
 
     [paragraph] = styled_from_file_url.children
     assert paragraph.style.font_face.type == :embedded
 
-    assert Style.compute(dom, stylesheets: [inline_css]) == {:error, :invalid_document}
+    assert Style.compute(dom, stylesheets: [{:css, inline_css}]) ==
+             {:error, :invalid_document}
 
-    assert Style.compute(dom, stylesheets: [inline_css], base_url: "https://example.com") ==
+    assert Style.compute(dom,
+             stylesheets: [{:css, inline_css}],
+             base_url: "https://example.com"
+           ) ==
              {:error, :invalid_document}
 
     invalid_face_css =
       "@font-face { font-family: Bad; src: url('font.woff2') format('woff2'); }"
 
-    assert Style.compute(dom, stylesheets: [invalid_face_css], base_url: fixture_dir) ==
+    assert Style.compute(dom, stylesheets: [{:css, invalid_face_css}], base_url: fixture_dir) ==
              {:error, :invalid_document}
 
     invalid_stylesheet_path = Path.join(css_dir, "invalid.css")
     File.write!(invalid_stylesheet_path, "p { color: chartreuse; }")
 
     assert {:error, {:invalid_css, %{stage: :css}}} =
-             Style.compute_detailed(dom, stylesheets: [invalid_stylesheet_path])
+             Style.compute_detailed(dom, stylesheets: [{:file, invalid_stylesheet_path}])
   after
     File.rm_rf(Path.join(System.tmp_dir!(), "native-elixir-pdf-css-font-test"))
   end
@@ -2727,11 +2769,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert Style.compute(%{type: :document, children: []}, stylesheets: :bad) ==
              {:error, :invalid_document}
 
-    assert Style.compute(%{type: :document, children: []}, stylesheets: ["missing-file.css"]) ==
+    assert Style.compute(
+             %{type: :document, children: []},
+             stylesheets: [{:file, "missing-file.css"}]
+           ) ==
              {:error, :invalid_document}
 
     assert Style.compute(%{type: :document, children: []}, stylesheets: [123]) ==
              {:error, :invalid_document}
+
+    for invalid_entry <- ["p { color: red; }", {:css, 123}, {:file, 123}] do
+      assert Style.compute_detailed(
+               %{type: :document, children: []},
+               stylesheets: [invalid_entry]
+             ) ==
+               {:error,
+                {:invalid_options,
+                 %{
+                   stage: :options,
+                   reason: :invalid_options,
+                   message:
+                     "stylesheets option must be a list of {:css, css} or {:file, path} tuples"
+                 }}}
+    end
 
     assert Style.compute_detailed(%{type: :document, children: []}, [:not_options]) ==
              {:error,
@@ -2783,7 +2843,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                  }
                ]
              },
-             stylesheets: ["aside { color: red; }"]
+             stylesheets: [{:css, "aside { color: red; }"}]
            ) == {:error, :invalid_document}
   end
 

@@ -197,7 +197,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   test "render uses page CSS defaults from configured stylesheets" do
     assert {:ok, inline_pdf} =
              HtmlToPdf.render("<p>Configured page</p>",
-               stylesheets: ["@media print { @page { size: letter; margin: 0; } }"]
+               stylesheets: [{:css, "@media print { @page { size: letter; margin: 0; } }"}]
              )
 
     assert inline_pdf =~ "/MediaBox [0 0 612 792]"
@@ -208,7 +208,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     File.write!(stylesheet_path, "@page { size: A4 landscape; margin: 0; }")
 
     assert {:ok, file_pdf} =
-             HtmlToPdf.render("<p>Configured file page</p>", stylesheets: [stylesheet_path])
+             HtmlToPdf.render("<p>Configured file page</p>",
+               stylesheets: [{:file, stylesheet_path}]
+             )
 
     assert file_pdf =~ "/MediaBox [0 0 841.89 595.28]"
   after
@@ -226,7 +228,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert {:ok, pdf} =
              HtmlToPdf.render(html,
                page_size: {200, 100},
-               stylesheets: ["@page { margin: 10pt 20pt; }"]
+               stylesheets: [{:css, "@page { margin: 10pt 20pt; }"}]
              )
 
     assert pdf =~ "40 78 140 12 re"
@@ -374,7 +376,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     html =
       ~s(<style>p.notice { color: #336699; font-weight: bold; }</style><p class="notice">Styled</p>)
 
-    assert {:ok, pdf} = HtmlToPdf.render(html, stylesheets: ["p { color: red; }"])
+    assert {:ok, pdf} = HtmlToPdf.render(html, stylesheets: [{:css, "p { color: red; }"}])
     assert pdf =~ "(Styled) Tj"
     assert pdf =~ "/BaseFont /Helvetica-Bold"
     assert pdf =~ "0.2 0.4 0.6 rg"
@@ -537,13 +539,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              }}} =
              HtmlToPdf.render(bad_background_html)
 
+    for invalid_stylesheets <- [
+          [:not_css],
+          ["p { color: red; }"],
+          [{:css, 123}],
+          [{:file, 123}],
+          :not_a_list
+        ] do
+      assert {:error,
+              {:invalid_options,
+               %{
+                 stage: :options,
+                 reason: :invalid_options,
+                 message:
+                   "stylesheets option must be a list of {:css, css} or {:file, path} tuples"
+               }}} = HtmlToPdf.render("<p>Hello</p>", stylesheets: invalid_stylesheets)
+    end
+
+    missing_stylesheet =
+      Path.join(System.tmp_dir!(), "native-elixir-pdf-missing-stylesheet.css")
+
+    File.rm(missing_stylesheet)
+
     assert {:error,
             {:invalid_document,
              %{
                stage: :style,
                reason: :invalid_document,
-               message: "configured stylesheet must be inline CSS or a readable file path"
-             }}} = HtmlToPdf.render("<p>Hello</p>", stylesheets: [:not_css])
+               message: "configured stylesheet file could not be read"
+             }}} =
+             HtmlToPdf.render("<p>Hello</p>",
+               stylesheets: [{:file, missing_stylesheet}]
+             )
 
     assert {:error,
             {:invalid_options,

@@ -79,7 +79,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
   test "decorate accepts plain-text templates and configured stylesheet rules" do
     assert {:ok, [page]} =
              PageFurniture.decorate(pages(1), layout_tree(),
-               stylesheets: [".accent { color: red; font-size: 8pt; }"],
+               stylesheets: [{:css, ".accent { color: red; font-size: 8pt; }"}],
                page_furniture: [
                  header: "<span class=\"accent\">Plain {{page}}</span>"
                ]

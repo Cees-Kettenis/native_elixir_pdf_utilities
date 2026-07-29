@@ -96,12 +96,15 @@ Use `render_file/3` when the HTML already lives on disk and the result should be
     "/tmp/invoice.pdf",
     page_size: :a4,
     margin: "18mm",
-    stylesheets: ["priv/static/templates/invoice.css"],
+    stylesheets: [{:file, "priv/static/templates/invoice.css"}],
     base_url: "priv/static"
   )
 ```
 
 Configured stylesheets are loaded before embedded `<style>` tags. This lets shared print CSS define defaults while the template keeps document-specific overrides close to the markup.
+Use `{:css, css}` for inline configured CSS and `{:file, path}` for a local
+stylesheet. Bare strings are rejected so the renderer never has to guess
+whether a value is CSS or a filesystem path.
 
 ## Running Headers, Footers, and Page Numbers
 

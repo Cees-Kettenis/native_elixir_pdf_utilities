@@ -53,7 +53,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   Computes styles and returns detailed CSS/document diagnostics when validation fails.
   """
   @spec compute_detailed(term(), [render_option()]) ::
-          {:ok, styled_tree()} | {:error, {:invalid_css | :invalid_document, map()}}
+          {:ok, styled_tree()}
+          | {:error, {:invalid_css | :invalid_document | :invalid_options, map()}}
   def compute_detailed(dom, opts \\ []) do
     case {dom, opts} do
       {%{type: :document, children: children}, opts} when is_list(opts) and is_list(children) ->
@@ -112,6 +113,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           {:error, {:font_load_failed, sources}} ->
             {:error, font_load_error(sources)}
 
+          {:error, :invalid_stylesheet_options} ->
+            {:error, style_error_detail(dom, opts)}
+
           {:error, :invalid_document} ->
             case Keyword.keyword?(opts) do
               true ->
@@ -141,7 +145,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   @doc false
   @spec load_stylesheets(term(), [render_option()]) ::
-          {:ok, [stylesheet_entry()]} | {:error, :invalid_document}
+          {:ok, [stylesheet_entry()]}
+          | {:error, :invalid_document | :invalid_stylesheet_options}
   def load_stylesheets(dom, opts) do
     case {dom, opts} do
       {%{type: :document, children: children}, opts} when is_list(children) and is_list(opts) ->
@@ -694,16 +699,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     parsed =
       Enum.reduce_while(stylesheets, {:ok, [], initial_order}, fn stylesheet,
                                                                   {:ok, acc, next_order} ->
-        with {:ok, stylesheet} <- stylesheet_source(stylesheet),
-             {:ok, rules} <- CssParser.parse(stylesheet) do
-          ordered_rules =
-            rules
-            |> Enum.with_index(next_order)
-            |> Enum.map(fn {rule, order} -> %{rule | order: order} end)
+        case CssParser.parse(stylesheet) do
+          {:ok, rules} ->
+            ordered_rules =
+              rules
+              |> Enum.with_index(next_order)
+              |> Enum.map(fn {rule, order} -> %{rule | order: order} end)
 
-          {:cont, {:ok, acc ++ ordered_rules, next_order + length(rules)}}
-        else
-          _ ->
+            {:cont, {:ok, acc ++ ordered_rules, next_order + length(rules)}}
+
+          {:error, :invalid_css} ->
             {:halt, {:error, :invalid_document}}
         end
       end)
@@ -716,20 +721,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp stylesheet_source(stylesheet) do
     case stylesheet do
-      stylesheet when is_binary(stylesheet) ->
-        case String.contains?(stylesheet, "{") do
-          true ->
-            {:ok, stylesheet}
+      {:css, css} when is_binary(css) ->
+        {:ok, css}
 
-          false ->
-            case File.read(stylesheet) do
-              {:ok, css} -> {:ok, css}
-              {:error, _reason} -> {:error, :invalid_document}
-            end
+      {:file, path} when is_binary(path) ->
+        case File.read(path) do
+          {:ok, css} -> {:ok, css}
+          {:error, _reason} -> {:error, :invalid_document}
         end
 
       _ ->
-        {:error, :invalid_document}
+        {:error, :invalid_stylesheet_options}
     end
   end
 
@@ -748,31 +750,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         end
 
       _ ->
-        {:error, :invalid_document}
+        {:error, :invalid_stylesheet_options}
     end
   end
 
   defp configured_stylesheet_entries(stylesheets, base_url) do
     Enum.reduce_while(stylesheets, {:ok, []}, fn stylesheet, {:ok, acc} ->
       case stylesheet do
-        stylesheet when is_binary(stylesheet) ->
-          case String.contains?(stylesheet, "{") do
-            true ->
-              {:cont, {:ok, acc ++ [%{css: stylesheet, base_url: base_url}]}}
+        {:css, css} when is_binary(css) ->
+          {:cont, {:ok, acc ++ [%{css: css, base_url: base_url}]}}
 
-            false ->
-              case File.read(stylesheet) do
-                {:ok, css} ->
-                  entry = %{css: css, base_url: stylesheet |> Path.expand() |> Path.dirname()}
-                  {:cont, {:ok, acc ++ [entry]}}
+        {:file, path} when is_binary(path) ->
+          case File.read(path) do
+            {:ok, css} ->
+              entry = %{css: css, base_url: path |> Path.expand() |> Path.dirname()}
+              {:cont, {:ok, acc ++ [entry]}}
 
-                {:error, _reason} ->
-                  {:halt, {:error, :invalid_document}}
-              end
+            {:error, _reason} ->
+              {:halt, {:error, :invalid_document}}
           end
 
         _ ->
-          {:halt, {:error, :invalid_document}}
+          {:halt, {:error, :invalid_stylesheet_options}}
       end
     end)
   end
@@ -949,6 +948,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             {:ok, source} ->
               {:cont, {:ok, acc ++ [{:configured, source}]}}
 
+            {:error, :invalid_stylesheet_options} ->
+              {:halt,
+               {:error,
+                {:invalid_options,
+                 %{
+                   stage: :options,
+                   reason: :invalid_options,
+                   message:
+                     "stylesheets option must be a list of {:css, css} or {:file, path} tuples"
+                 }}}}
+
             {:error, :invalid_document} ->
               {:halt,
                {:error,
@@ -956,17 +966,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                  %{
                    stage: :style,
                    reason: :invalid_document,
-                   message: "configured stylesheet must be inline CSS or a readable file path"
+                   message: "configured stylesheet file could not be read"
                  }}}}
           end
         end)
 
       _ ->
         {:error,
-         {:invalid_document,
+         {:invalid_options,
           %{
-            stage: :style,
-            reason: :invalid_document,
+            stage: :options,
+            reason: :invalid_options,
             message: "stylesheets option must be a list"
           }}}
     end

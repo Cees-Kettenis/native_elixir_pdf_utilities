@@ -66,11 +66,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
               optional(:header) => page_furniture_variants(),
               optional(:footer) => page_furniture_variants()
             }
+  @typedoc "An explicitly tagged inline stylesheet or local stylesheet file."
+  @type stylesheet_source :: {:css, String.t()} | {:file, String.t()}
   @type render_option ::
           {:page_size, page_size()}
           | {:margin, page_margin()}
           | {:base_url, String.t() | nil}
-          | {:stylesheets, [String.t()]}
+          | {:stylesheets, [stylesheet_source()]}
           | {:default_font, String.t()}
           | {:fonts, [map() | keyword() | {String.t(), String.t()}]}
           | {:metadata, pdf_metadata()}
@@ -128,6 +130,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   four absolute lengths, or a map with `:top`, `:right`, `:bottom`, and `:left`
   values. Explicit renderer `:page_size` and `:margin` options override
   stylesheet `@page` defaults.
+
+  `:stylesheets` accepts a list of `{:css, css}` and `{:file, path}` tuples.
+  The explicit tag determines whether content is parsed directly or read from
+  the local filesystem; bare strings are rejected.
   """
   @spec render(String.t(), [render_option()]) ::
           {:ok, binary()} | {:error, detailed_error_reason()}
@@ -224,11 +230,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           effective_opts = Keyword.merge(page_options, opts)
           {:ok, metadata_options(dom, effective_opts)}
         else
+          {:error, :invalid_stylesheet_options} ->
+            Diagnostics.error(
+              :options,
+              :invalid_options,
+              "stylesheets option must be a list of {:css, css} or {:file, path} tuples"
+            )
+
           {:error, :invalid_document} ->
             Diagnostics.error(
               :style,
               :invalid_document,
-              "configured stylesheet must be inline CSS or a readable file path"
+              "configured stylesheet file could not be read"
             )
 
           {:error, {_reason, _diagnostic}} = error ->
