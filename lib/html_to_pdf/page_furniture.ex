@@ -12,6 +12,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
+  alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
   @type page :: NativeElixirPdfUtilities.HtmlToPdf.Pagination.page()
@@ -35,26 +36,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
   Adds configured running headers and footers to paginated pages.
 
   Omitted, `nil`, and `false` page furniture leave pages unchanged. Configured
-  templates must fit inside the numeric margin in `layout_tree`.
+  templates must fit inside the corresponding top or bottom margin in
+  `layout_tree`.
   """
   @spec decorate([page()], layout_tree(), [render_option()]) ::
           {:ok, [page()]} | {:error, detailed_error()}
   def decorate(pages, layout_tree, opts) do
     case {pages, layout_tree, opts} do
-      {pages, %{page_size: page_size, margin: margin}, opts}
-      when is_list(pages) and is_list(opts) and is_number(margin) ->
-        case {Keyword.keyword?(opts), valid_layout_context?(pages, page_size, margin)} do
-          {true, true} ->
-            with {:ok, furniture} <- normalize(Keyword.get(opts, :page_furniture)),
-                 {:ok, decorated} <-
-                   decorate_pages(pages, page_size, margin, furniture, opts) do
-              {:ok, decorated}
+      {pages, %{page_size: page_size} = layout_tree, opts}
+      when is_list(pages) and is_list(opts) ->
+        margin = Map.get(layout_tree, :margins, Map.get(layout_tree, :margin, :missing))
+
+        case PageGeometry.normalize_margins(margin) do
+          {:ok, margins} ->
+            case {Keyword.keyword?(opts), valid_layout_context?(pages, page_size, margins)} do
+              {true, true} ->
+                with {:ok, furniture} <- normalize(Keyword.get(opts, :page_furniture)),
+                     {:ok, decorated} <-
+                       decorate_pages(pages, page_size, margins, furniture, opts) do
+                  {:ok, decorated}
+                end
+
+              {false, _valid_context} ->
+                invalid_options("page furniture options require a keyword list")
+
+              {_keyword_options, false} ->
+                invalid_layout()
             end
 
-          {false, _valid_context} ->
-            invalid_options("page furniture options require a keyword list")
-
-          {_keyword_options, false} ->
+          {:error, :invalid_margin} ->
             invalid_layout()
         end
 
@@ -82,8 +92,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
     end
   end
 
-  defp valid_layout_context?(pages, page_size, margin) do
-    valid_page_size?(page_size) and margin >= 0 and
+  defp valid_layout_context?(pages, page_size, margins) do
+    valid_page_size?(page_size) and PageGeometry.valid_printable_area?(page_size, margins) and
       Enum.all?(pages, fn page ->
         case page do
           %{size: ^page_size, boxes: boxes} when is_list(boxes) -> true
@@ -166,11 +176,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
     )
   end
 
-  defp decorate_pages(pages, _page_size, _margin, nil, _opts) do
+  defp decorate_pages(pages, _page_size, _margins, nil, _opts) do
     {:ok, pages}
   end
 
-  defp decorate_pages(pages, page_size, margin, furniture, opts) do
+  defp decorate_pages(pages, page_size, margins, furniture, opts) do
     total_pages = length(pages)
 
     pages
@@ -183,7 +193,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
                page_number,
                total_pages,
                page_size,
-               margin,
+               margins,
                opts
              ),
            {:ok, footer_boxes} <-
@@ -193,7 +203,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
                page_number,
                total_pages,
                page_size,
-               margin,
+               margins,
                opts
              ) do
         decorated_page = %{page | boxes: page.boxes ++ header_boxes ++ footer_boxes}
@@ -220,7 +230,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
     end
   end
 
-  defp render_position(position, template, page_number, total_pages, page_size, margin, opts) do
+  defp render_position(position, template, page_number, total_pages, page_size, margins, opts) do
     case template do
       template when template in [nil, false] ->
         {:ok, []}
@@ -235,14 +245,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
         furniture_opts =
           opts
           |> Keyword.put(:page_size, page_size)
-          |> Keyword.put(:margin, margin)
+          |> Keyword.put(:margin, margins)
 
         with {:ok, dom} <- HtmlParser.parse_detailed(html),
              {:ok, styled_tree} <- Style.compute_detailed(dom, furniture_opts),
              {:ok, styled_tree} <- FontFallback.resolve(styled_tree) do
           case apply(Layout, :layout, [styled_tree, furniture_opts]) do
             {:ok, furniture_layout} ->
-              place(position, furniture_layout.boxes, page_size, margin)
+              place(position, furniture_layout.boxes, page_size, margins)
 
             {:error, reason} ->
               Diagnostics.error(
@@ -257,7 +267,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
     end
   end
 
-  defp place(position, boxes, {_page_width, page_height}, margin) do
+  defp place(position, boxes, {_page_width, page_height}, margins) do
     drawable_boxes = Enum.reject(boxes, &match?(%{type: :page_break}, &1))
     bounds = Enum.map(drawable_boxes, &box_bounds/1)
 
@@ -270,16 +280,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
         bottom = bounds |> Enum.map(&elem(&1, 1)) |> Enum.min()
         height = top - bottom
 
-        case height <= margin + 0.0001 do
+        available_margin = if position == :header, do: margins.top, else: margins.bottom
+
+        case height <= available_margin + 0.0001 do
           true ->
-            target_top = if position == :header, do: page_height, else: margin
+            target_top = if position == :header, do: page_height, else: margins.bottom
             {:ok, shift_boxes(drawable_boxes, target_top - top)}
 
           false ->
             Diagnostics.error(
               :layout,
               :invalid_layout,
-              "#{position} page furniture height #{format_number(height)}pt exceeds the #{format_number(margin)}pt page margin",
+              "#{position} page furniture height #{format_number(height)}pt exceeds the #{format_number(available_margin)}pt page margin",
               operation: :decorate_pages,
               module: __MODULE__
             )

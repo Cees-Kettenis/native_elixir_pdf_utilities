@@ -416,6 +416,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
              )
   end
 
+  test "paginate uses asymmetric top and bottom page margins" do
+    margins = %{top: 10.0, right: 5.0, bottom: 30.0, left: 15.0}
+
+    layout_tree = %{
+      type: :layout,
+      page_size: {100.0, 100.0},
+      margin: margins,
+      margins: margins,
+      boxes: [
+        text_box("First", 78.0, {:block, 1}),
+        text_box("Second", 50.0, {:block, 2}),
+        text_box("Third", 20.0, {:block, 3})
+      ]
+    }
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+    assert Enum.map(first_page.boxes, & &1.text) == ["First", "Second"]
+    assert Enum.map(second_page.boxes, & &1.text) == ["Third"]
+    assert_in_delta hd(second_page.boxes).y, 78.0, 0.0001
+
+    assert {:error, {:invalid_layout, %{stage: :pagination}}} =
+             Pagination.paginate(
+               %{layout_tree | margins: %{margins | left: 50.0, right: 50.0}},
+               []
+             )
+  end
+
   defp text_box(text, y, flow_id, extra \\ %{}) do
     Map.merge(
       %{

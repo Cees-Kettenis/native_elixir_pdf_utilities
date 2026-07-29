@@ -22,12 +22,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
   alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
+  alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
   alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Diagnostics
 
-  @type page_size :: :a4 | :letter | {number(), number()}
+  @type page_size :: PageGeometry.page_size_input()
+  @type page_margin :: PageGeometry.margin_input()
   @type pdf_metadata ::
           keyword()
           | %{
@@ -65,8 +67,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
               optional(:footer) => page_furniture_variants()
             }
   @type render_option ::
-          {:page_size, page_size() | {number(), number()}}
-          | {:margin, String.t() | number()}
+          {:page_size, page_size()}
+          | {:margin, page_margin()}
           | {:base_url, String.t() | nil}
           | {:stylesheets, [String.t()]}
           | {:default_font, String.t()}
@@ -115,10 +117,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   Furniture is disabled when `:page_furniture` is omitted, `nil`, or `false`.
   Enabled furniture must fit inside the page margin.
 
-  `:page_size` accepts `:a4`, `:letter`, or a positive `{width, height}` tuple.
-  Tuple values up to `20 x 20` are interpreted as inches for compatibility with
+  `:page_size` accepts the CSS named sizes `:a5`, `:a4`, `:a3`, `:b5`, `:b4`,
+  `:jis_b5`, `:jis_b4`, `:letter`, `:legal`, and `:ledger`, optionally paired
+  with `:portrait` or `:landscape`, or a positive `{width, height}` tuple. Tuple
+  values up to `20 x 20` are interpreted as inches for compatibility with
   ChromicPDF-style custom label sizes; larger tuples are interpreted as PDF
-  points.
+  points. CSS two-length strings retain their declared units.
+
+  `:margin` accepts a nonnegative point number, a CSS string containing one to
+  four absolute lengths, or a map with `:top`, `:right`, `:bottom`, and `:left`
+  values. Explicit renderer `:page_size` and `:margin` options override
+  stylesheet `@page` defaults.
   """
   @spec render(String.t(), [render_option()]) ::
           {:ok, binary()} | {:error, detailed_error_reason()}
@@ -235,7 +244,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
     Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, acc} ->
       case CssParser.page_options(entry.css) do
         {:ok, page_options} ->
-          {:cont, {:ok, Keyword.merge(acc, page_options)}}
+          {:cont, {:ok, PageGeometry.merge_page_options(acc, page_options)}}
 
         {:error, :invalid_css} ->
           {:error, error} = CssParser.parse_detailed(entry.css)

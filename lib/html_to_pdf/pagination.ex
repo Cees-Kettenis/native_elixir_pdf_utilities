@@ -12,6 +12,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   @type error_reason :: :invalid_layout
 
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
 
   @doc """
   Splits a layout tree into PDF pages.
@@ -36,35 +37,45 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   end
 
   defp paginate_boxes(layout_tree, page_size, boxes) do
-    margin = Map.get(layout_tree, :margin, 0.0)
+    margin = Map.get(layout_tree, :margins, Map.get(layout_tree, :margin, 0.0))
 
-    case valid_layout_geometry?(page_size, margin) do
-      true ->
-        {_page_width, page_height} = page_size
-        content_height = page_height - margin * 2
+    case PageGeometry.normalize_margins(margin) do
+      {:ok, margins} ->
+        case PageGeometry.valid_printable_area?(page_size, margins) do
+          true ->
+            {_page_width, page_height} = page_size
+            content_height = page_height - margins.top - margins.bottom
 
-        groups =
-          boxes
-          |> flow_groups()
-          |> Enum.flat_map(&fragment_flow_group(&1, content_height))
+            groups =
+              boxes
+              |> flow_groups()
+              |> Enum.flat_map(&fragment_flow_group(&1, content_height))
 
-        headers = repeated_table_headers(groups)
-        {:ok, groups_to_pages(groups, headers, page_size, margin)}
+            headers = repeated_table_headers(groups)
+            {:ok, groups_to_pages(groups, headers, page_size, margins)}
 
-      false ->
-        Diagnostics.error(
-          :pagination,
-          :invalid_layout,
-          "pagination requires a positive page size and margin that leaves a positive printable area",
-          operation: :paginate,
-          module: __MODULE__
-        )
+          false ->
+            invalid_layout_geometry()
+        end
+
+      {:error, :invalid_margin} ->
+        invalid_layout_geometry()
     end
   end
 
-  defp groups_to_pages(groups, headers, page_size, margin) do
+  defp invalid_layout_geometry do
+    Diagnostics.error(
+      :pagination,
+      :invalid_layout,
+      "pagination requires a positive page size and margins that leave a positive printable area",
+      operation: :paginate,
+      module: __MODULE__
+    )
+  end
+
+  defp groups_to_pages(groups, headers, page_size, margins) do
     {_width, page_height} = page_size
-    content_top = page_height - margin
+    content_top = page_height - margins.top
 
     initial_state = %{
       pages: [],
@@ -75,7 +86,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
     final_state =
       Enum.reduce(groups, initial_state, fn group, state ->
-        place_group(group, state, headers, page_size, margin)
+        place_group(group, state, headers, page_size, margins)
       end)
 
     pages =
@@ -90,10 +101,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     end
   end
 
-  defp place_group(group, state, headers, page_size, margin) do
+  defp place_group(group, state, headers, page_size, margins) do
     state =
       case Map.get(group, :break_before) do
-        :page -> page_break(state, page_size, margin)
+        :page -> page_break(state, page_size, margins)
         _ -> state
       end
 
@@ -102,10 +113,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     group_bottom = target_top - group.height
 
     state =
-      case state.current_boxes != [] and group.height > 0 and group_bottom < margin do
+      case state.current_boxes != [] and group.height > 0 and group_bottom < margins.bottom do
         true ->
           state
-          |> page_break(page_size, margin)
+          |> page_break(page_size, margins)
           |> repeat_table_header(group, headers)
 
         false ->
@@ -134,7 +145,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       end
 
     case Map.get(group, :break_after) do
-      :page -> page_break(state, page_size, margin)
+      :page -> page_break(state, page_size, margins)
       _ -> state
     end
   end
@@ -162,9 +173,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     end
   end
 
-  defp page_break(state, page_size, margin) do
+  defp page_break(state, page_size, margins) do
     {_width, page_height} = page_size
-    content_top = page_height - margin
+    content_top = page_height - margins.top
 
     pages =
       case state.current_boxes do
@@ -317,18 +328,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
       true ->
         target_top
-    end
-  end
-
-  defp valid_layout_geometry?(page_size, margin) do
-    case {page_size, margin} do
-      {{width, height}, margin}
-      when is_number(width) and is_number(height) and is_number(margin) ->
-        width > 0 and height > 0 and margin >= 0 and margin * 2 < width and
-          margin * 2 < height
-
-      _ ->
-        false
     end
   end
 end

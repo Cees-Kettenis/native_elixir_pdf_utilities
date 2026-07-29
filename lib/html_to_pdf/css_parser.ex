@@ -10,6 +10,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   can validate values against the renderer's supported property set.
   """
 
+  alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
+
   @type declaration :: {String.t(), String.t()} | {String.t(), String.t(), :important}
   @type selector_part :: %{
           tag: String.t() | nil,
@@ -35,7 +37,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           style: :normal | :italic
         }
   @type page_option ::
-          {:page_size, :a4 | :letter | {number(), number()}} | {:margin, String.t() | number()}
+          {:page_size, PageGeometry.page_size_input()}
+          | {:margin, PageGeometry.margin_input()}
 
   @page_context_properties [
     "background",
@@ -205,10 +208,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   Extracts renderer page defaults from simple `@page` rules.
 
   Valid page-context properties are accepted even when the renderer does not
-  apply them yet. Rendering currently consumes a single-value `margin` and
-  common `size` values such as `A4`, `A4 landscape`, `letter`, and
-  `letter landscape`. Malformed declarations, unknown properties, and invalid
-  paged-media descriptor values return `{:error, :invalid_css}`.
+  apply them yet. Rendering consumes accepted named and explicit two-length
+  `size` values, portrait and landscape orientations, one-to-four-value
+  `margin` shorthands, and the four margin longhands. Malformed declarations,
+  unknown properties, and invalid paged-media descriptor values return
+  `{:error, :invalid_css}`.
   """
   @spec page_options(String.t()) :: {:ok, [page_option()]} | {:error, :invalid_css}
   def page_options(css) do
@@ -558,7 +562,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     |> Enum.reduce_while({:ok, []}, fn block, {:ok, acc} ->
       case page_options_from(block) do
         {:ok, page_options} ->
-          {:cont, {:ok, Keyword.merge(acc, page_options)}}
+          {:cont, {:ok, PageGeometry.merge_page_options(acc, page_options)}}
 
         {:error, source} ->
           {:halt, {:error, {:invalid_css, declaration_error_detail(diagnostic_css, source)}}}
@@ -587,9 +591,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   defp put_page_option(options, property, value, source) do
     case page_declaration_option(property, value) do
-      {:ok, nil} -> {:cont, {:ok, options}}
-      {:ok, {key, option}} -> {:cont, {:ok, Keyword.put(options, key, option)}}
-      :error -> {:halt, {:error, source}}
+      {:ok, nil} ->
+        {:cont, {:ok, options}}
+
+      {:ok, {:margin_side, side, option}} ->
+        margin =
+          options
+          |> Keyword.get(:margin)
+          |> PageGeometry.merge_margin_defaults(%{side => option})
+
+        {:cont, {:ok, Keyword.put(options, :margin, margin)}}
+
+      {:ok, {key, option}} ->
+        {:cont, {:ok, Keyword.put(options, key, option)}}
+
+      :error ->
+        {:halt, {:error, source}}
     end
   end
 
@@ -621,8 +638,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
       property when property in ["margin-top", "margin-right", "margin-bottom", "margin-left"] ->
         case valid_page_margin?(value, 1) do
-          true -> {:ok, nil}
-          false -> :error
+          true ->
+            case PageGeometry.css_margin_option(value) do
+              nil -> {:ok, nil}
+              margin -> {:ok, {:margin_side, page_margin_side(property), margin}}
+            end
+
+          false ->
+            :error
         end
 
       "page-orientation" ->
@@ -738,35 +761,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   end
 
   defp page_size_option(value) do
-    tokens = value |> String.trim() |> String.downcase() |> String.split(~r/\s+/u, trim: true)
-
-    case tokens do
-      ["a4"] -> :a4
-      ["a4", "portrait"] -> :a4
-      ["portrait", "a4"] -> :a4
-      ["a4", "landscape"] -> {841.89, 595.28}
-      ["landscape", "a4"] -> {841.89, 595.28}
-      ["letter"] -> :letter
-      ["letter", "portrait"] -> :letter
-      ["portrait", "letter"] -> :letter
-      ["letter", "landscape"] -> {792.0, 612.0}
-      ["landscape", "letter"] -> {792.0, 612.0}
-      _ -> nil
-    end
+    PageGeometry.css_page_size_option(value)
   end
 
   defp page_margin_option(value) do
-    normalized = String.trim(value)
+    PageGeometry.css_margin_option(value)
+  end
 
-    cond do
-      normalized == "0" ->
-        0.0
-
-      String.match?(normalized, ~r/^\d+(?:\.\d+)?(?:pt|px|mm|cm|in)$/u) ->
-        normalized
-
-      true ->
-        nil
+  defp page_margin_side(property) do
+    case property do
+      "margin-top" -> :top
+      "margin-right" -> :right
+      "margin-bottom" -> :bottom
+      "margin-left" -> :left
     end
   end
 

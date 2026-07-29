@@ -168,6 +168,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert override_pdf =~ "0 88 200 12 re"
   end
 
+  test "render applies complete page geometry and explicit option precedence" do
+    html = """
+    <style>
+      @page {
+        size: A5 landscape;
+        margin: 10pt 20pt 30pt 40pt;
+        margin-left: 50pt;
+      }
+    </style>
+    <div style="height: 10pt; border: 1pt solid #000000">Geometry</div>
+    """
+
+    assert {:ok, css_pdf} = HtmlToPdf.render(html)
+    assert css_pdf =~ "/MediaBox [0 0 595.28 419.53]"
+    assert css_pdf =~ "50 397.53 525.28 12 re"
+
+    assert {:ok, override_pdf} =
+             HtmlToPdf.render(html,
+               page_size: {200, 100},
+               margin: "1pt 2pt 3pt 4pt"
+             )
+
+    assert override_pdf =~ "/MediaBox [0 0 200 100]"
+    assert override_pdf =~ "4 87 194 12 re"
+  end
+
   test "render uses page CSS defaults from configured stylesheets" do
     assert {:ok, inline_pdf} =
              HtmlToPdf.render("<p>Configured page</p>",
@@ -187,6 +213,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert file_pdf =~ "/MediaBox [0 0 841.89 595.28]"
   after
     File.rm(Path.join(System.tmp_dir!(), "native-elixir-pdf-configured-page-options.css"))
+  end
+
+  test "render cascades page-margin longhands across configured and embedded stylesheets" do
+    html = """
+    <style>
+      @page { margin-left: 40pt; margin-bottom: 30pt; }
+    </style>
+    <div style="height: 10pt; border: 1pt solid #000000">Cascade</div>
+    """
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(html,
+               page_size: {200, 100},
+               stylesheets: ["@page { margin: 10pt 20pt; }"]
+             )
+
+    assert pdf =~ "40 78 140 12 re"
   end
 
   test "render returns detailed diagnostics for invalid page declarations" do

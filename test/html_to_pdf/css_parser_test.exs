@@ -283,7 +283,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
              {:ok, []}
   end
 
-  test "page_options accepts valid page-context properties that are not rendered yet" do
+  test "page_options applies resolvable geometry and accepts remaining page-context properties" do
     css = """
     @page {
       size: 210mm 297mm !important;
@@ -306,7 +306,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     }
     """
 
-    assert CssParser.page_options(css) == {:ok, []}
+    assert CssParser.page_options(css) ==
+             {:ok, [margin: %{top: "100px"}, page_size: "210mm 297mm"]}
+
     assert CssParser.parse(css) == {:ok, []}
 
     for size <- [
@@ -351,6 +353,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert CssParser.page_options("@page { size: initial; }") == {:ok, []}
     assert CssParser.page_options("@page { size: var(--page-size); }") == {:ok, []}
     assert CssParser.page_options("@page { size: A4 !important; }") == {:ok, page_size: :a4}
+  end
+
+  test "page_options cascades margin shorthands and longhands across page rules" do
+    css = """
+    @page {
+      margin: 1pt 2pt 3pt;
+      margin-left: 4pt;
+    }
+    @page {
+      margin-top: 5pt;
+      margin-right: auto;
+      margin-right: 6pt;
+    }
+    """
+
+    assert CssParser.page_options(css) ==
+             {:ok,
+              [
+                margin: %{top: "5pt", right: "6pt", bottom: 3.0, left: "4pt"}
+              ]}
   end
 
   test "page_options recognizes CSS Paged Media page-context properties" do

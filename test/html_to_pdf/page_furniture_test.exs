@@ -162,6 +162,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
     assert {:error, {:invalid_layout, %{stage: :layout}}} =
              PageFurniture.decorate(:not_pages, layout_tree(), [])
 
+    assert {:error, {:invalid_layout, %{stage: :layout}}} =
+             PageFurniture.decorate(pages(1), %{layout_tree() | margin: :invalid}, [])
+
     invalid_page_size_layout = %{layout_tree() | page_size: :a4}
 
     assert {:error, {:invalid_layout, %{stage: :layout}}} =
@@ -207,6 +210,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
              )
 
     assert furniture_texts(empty_page) == ["Body 1"]
+  end
+
+  test "decorate places furniture inside asymmetric page margins" do
+    margins = %{top: 20.0, right: 10.0, bottom: 10.0, left: 30.0}
+
+    asymmetric_layout =
+      layout_tree()
+      |> Map.put(:margin, margins)
+      |> Map.put(:margins, margins)
+
+    assert {:ok, [page]} =
+             PageFurniture.decorate(pages(1), asymmetric_layout,
+               page_furniture: [
+                 header: furniture_html("Header", 12),
+                 footer: furniture_html("Footer", 8)
+               ]
+             )
+
+    header = Enum.find(page.boxes, &(&1.type == :text and &1.text == "Header"))
+    footer = Enum.find(page.boxes, &(&1.type == :text and &1.text == "Footer"))
+    assert_in_delta header.x, 30.0, 0.0001
+    assert_in_delta footer.x, 30.0, 0.0001
+    assert header.y > 80.0
+    assert footer.y >= 0.0
+
+    assert {:error,
+            {:invalid_layout,
+             %{message: "footer page furniture height 12.0pt exceeds the 10.0pt page margin"}}} =
+             PageFurniture.decorate(pages(1), asymmetric_layout,
+               page_furniture: [
+                 footer:
+                   "<div style=\"height: 12pt; background: #eeeeee; font-size: 8pt\">Too tall</div>"
+               ]
+             )
   end
 
   defp pages(count) do

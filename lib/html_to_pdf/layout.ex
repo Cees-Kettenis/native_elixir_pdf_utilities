@@ -8,12 +8,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
 
   @type box :: map()
   @type layout_tree :: %{
           type: :layout,
           page_size: term(),
           margin: term(),
+          margins: PageGeometry.margins(),
           boxes: [box()]
         }
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
@@ -26,21 +28,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   def layout(styled_tree, opts \\ []) do
     case {styled_tree, opts} do
       {%{type: :document, children: children}, opts} when is_list(children) and is_list(opts) ->
-        with {:ok, page_size} <- page_size(Keyword.get(opts, :page_size, :a4)),
-             {:ok, margin} <- margin(Keyword.get(opts, :margin, 0)),
-             :ok <- validate_printable_area(page_size, margin),
-             {:ok, boxes} <- layout_blocks(children, page_size, margin) do
+        with {:ok, page_size} <-
+               PageGeometry.normalize_page_size(Keyword.get(opts, :page_size, :a4)),
+             {:ok, margins} <- PageGeometry.normalize_margins(Keyword.get(opts, :margin, 0)),
+             true <- PageGeometry.valid_printable_area?(page_size, margins),
+             {:ok, boxes} <- layout_blocks(children, page_size, margins) do
           {page_width, page_height} = page_size
 
           {:ok,
            %{
              type: :layout,
              page_size: page_size,
-             margin: margin,
+             margin: PageGeometry.compact_margins(margins),
+             margins: margins,
              boxes: boxes,
-             content_width: page_width - margin * 2,
-             content_height: page_height - margin * 2
+             content_width: page_width - margins.left - margins.right,
+             content_height: page_height - margins.top - margins.bottom
            }}
+        else
+          false -> {:error, :invalid_margin}
+          {:error, reason} -> {:error, reason}
         end
 
       _ ->
@@ -48,16 +55,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  @spec layout_blocks([term()], {number(), number()}, number()) ::
+  @spec layout_blocks([term()], {number(), number()}, PageGeometry.margins()) ::
           {:ok, [box()]} | {:error, :invalid_layout}
-  defp layout_blocks(children, page_size, margin) do
+  defp layout_blocks(children, page_size, margins) do
     {page_width, page_height} = page_size
 
     result =
-      Enum.reduce(children, {:ok, [], page_height - margin}, fn child, acc ->
+      Enum.reduce(children, {:ok, [], page_height - margins.top}, fn child, acc ->
         case acc do
           {:ok, boxes, y} ->
-            case layout_block(child, margin, y, page_width - margin * 2) do
+            case layout_block(
+                   child,
+                   margins.left,
+                   y,
+                   page_width - margins.left - margins.right
+                 ) do
               {:ok, block_boxes, next_y} -> {:ok, boxes ++ block_boxes, next_y}
               {:error, reason} -> {:error, reason}
             end
@@ -3482,67 +3494,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp edges(top, right, bottom, left) do
     %{top: top, right: right, bottom: bottom, left: left}
-  end
-
-  defp page_size(page_size) do
-    case page_size do
-      :a4 ->
-        {:ok, {595.28, 841.89}}
-
-      :letter ->
-        {:ok, {612.0, 792.0}}
-
-      {width, height} when is_number(width) and is_number(height) and width > 0 and height > 0 ->
-        {:ok, normalize_custom_page_size(width, height)}
-
-      _ ->
-        {:error, :invalid_page_size}
-    end
-  end
-
-  defp normalize_custom_page_size(width, height) do
-    case width <= 20 and height <= 20 do
-      true -> {width * 72.0, height * 72.0}
-      false -> {width * 1.0, height * 1.0}
-    end
-  end
-
-  defp margin(margin) do
-    case margin do
-      margin when is_number(margin) and margin >= 0 ->
-        {:ok, margin * 1.0}
-
-      margin when is_binary(margin) ->
-        case Regex.run(~r/^\s*(\d+(?:\.\d+)?)(pt|px|mm|cm|in)\s*$/u, margin) do
-          [_, value, unit] ->
-            {number, ""} = Float.parse(value)
-            {:ok, number * points_per_unit(unit)}
-
-          _ ->
-            {:error, :invalid_margin}
-        end
-
-      _ ->
-        {:error, :invalid_margin}
-    end
-  end
-
-  defp validate_printable_area(page_size, margin) do
-    {page_width, page_height} = page_size
-
-    case margin * 2 < page_width and margin * 2 < page_height do
-      true -> :ok
-      false -> {:error, :invalid_margin}
-    end
-  end
-
-  defp points_per_unit(unit) do
-    case unit do
-      "pt" -> 1.0
-      "px" -> 0.75
-      "mm" -> 72.0 / 25.4
-      "cm" -> 72.0 / 2.54
-      "in" -> 72.0
-    end
   end
 end

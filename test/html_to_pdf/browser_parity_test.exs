@@ -40,6 +40,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     {"table_separate_borders.html", max_changed_ratio: 0.12, max_average_delta: 0.03},
     {"nested_table_grid_flex.html", max_changed_ratio: 0.14, max_average_delta: 0.035},
     {"nested_table_collapsed_borders.html", max_changed_ratio: 0.14, max_average_delta: 0.035},
+    {"page_geometry_asymmetric.html", max_changed_ratio: 0.10, max_average_delta: 0.025},
     {"page_rules_landscape.html",
      render_opts: [margin: 0], max_changed_ratio: 0.08, max_average_delta: 0.02},
     {"page_furniture.html",

@@ -1208,6 +1208,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert_in_delta in_layout.margin, 72.0, 0.0001
   end
 
+  test "layout resolves named sizes orientations and four-sided page margins" do
+    assert {:ok, layout} =
+             Layout.layout(document([]),
+               page_size: {:a5, :landscape},
+               margin: "10pt 20pt 30pt 40pt"
+             )
+
+    assert layout.page_size == {595.28, 419.53}
+    assert layout.margin == %{top: 10.0, right: 20.0, bottom: 30.0, left: 40.0}
+    assert layout.margins == layout.margin
+    assert_in_delta layout.content_width, 535.28, 0.0001
+    assert_in_delta layout.content_height, 379.53, 0.0001
+
+    assert {:ok, point_layout} =
+             Layout.layout(document([]), page_size: "10pt 12pt", margin: %{left: "2pt"})
+
+    assert point_layout.page_size == {10.0, 12.0}
+    assert point_layout.margins == %{top: 0.0, right: 0.0, bottom: 0.0, left: 2.0}
+  end
+
   test "layout handles image sizing variants and display none blocks" do
     base_style = image_style(image_fixture(20.0, 10.0))
 
@@ -3554,6 +3574,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert Layout.layout(%{type: :document, children: []},
              page_size: {100, 100},
              margin: 60
+           ) == {:error, :invalid_margin}
+
+    assert Layout.layout(%{type: :document, children: []},
+             page_size: {100, 100},
+             margin: %{top: 60, bottom: 40}
+           ) == {:error, :invalid_margin}
+
+    assert Layout.layout(%{type: :document, children: []},
+             page_size: {100, 100},
+             margin: %{left: 70, right: 30}
            ) == {:error, :invalid_margin}
 
     assert {:ok, narrow_layout} =
