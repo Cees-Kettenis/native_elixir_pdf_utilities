@@ -520,6 +520,24 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert span.end_y == 16.0
   end
 
+  test "extract_spans resolves an inherited indirect page rotation" do
+    pdf =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2,
+         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] /Rotate 6 0 R /Resources 4 0 R >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>"},
+        {4, "<< /Font << /F1 5 0 R >> >>"},
+        {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+        {6, "90"},
+        {7, stream_object("", "BT /F1 12 Tf 1 0 0 1 10 20 Tm (A) Tj ET")}
+      ])
+
+    assert {:ok, %{pages: [%{rotation: 90, spans: [span]}]}} = Text.extract_spans(pdf)
+    assert span.x == 20.0
+    assert span.y == 10.0
+  end
+
   test "extract_spans indexes multiple content streams and nested transformed Forms" do
     objects = [
       {1, "<< /Type /Catalog /Pages 2 0 R >>"},

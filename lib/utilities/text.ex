@@ -298,7 +298,9 @@ defmodule NativeElixirPdfUtilities.Text do
     with {:ok, dictionary} <- Reader.dictionary(document, {:ref, page.ref}),
          {:ok, content_refs} <- content_refs(Map.get(dictionary, "Contents"), page.ref),
          {:ok, media_box} <- Reader.resolve(document, page.media_box),
-         {:ok, initial_state} <- text_state(%{page | media_box: media_box}, page_number) do
+         {:ok, rotation} <- Reader.resolve(document, page.rotate),
+         {:ok, initial_state} <-
+           text_state(%{page | media_box: media_box, rotate: rotation}, page_number) do
       Enum.reduce_while(content_refs, {:ok, initial_state, []}, fn content_ref,
                                                                    {:ok, state, spans} ->
         with {:ok, content} <- Reader.decoded_stream(document, content_ref),
