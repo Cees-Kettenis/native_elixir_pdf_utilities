@@ -1203,7 +1203,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert_in_delta elem(inch_page_layout.page_size, 1), 107.71632, 0.0001
 
     assert {:ok, in_layout} =
-             Layout.layout(document([paragraph("Inch")]), page_size: {100, 80}, margin: "1in")
+             Layout.layout(document([paragraph("Inch")]), page_size: {200, 180}, margin: "1in")
 
     assert_in_delta in_layout.margin, 72.0, 0.0001
   end
@@ -3545,6 +3545,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert Layout.layout(%{type: :document, children: []}, margin: "1em") ==
              {:error, :invalid_margin}
+
+    assert Layout.layout(%{type: :document, children: []},
+             page_size: {100, 100},
+             margin: 50
+           ) == {:error, :invalid_margin}
+
+    assert Layout.layout(%{type: :document, children: []},
+             page_size: {100, 100},
+             margin: 60
+           ) == {:error, :invalid_margin}
+
+    assert {:ok, narrow_layout} =
+             Layout.layout(%{type: :document, children: []},
+               page_size: {100, 100},
+               margin: 49
+             )
+
+    assert narrow_layout.content_width == 2.0
+    assert narrow_layout.content_height == 2.0
 
     assert {:ok, pt_margin_layout} = Layout.layout(document([paragraph("pt")]), margin: "10pt")
     assert_in_delta pt_margin_layout.margin, 10.0, 0.0001

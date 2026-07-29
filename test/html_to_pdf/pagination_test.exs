@@ -390,6 +390,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
                %{type: :layout, page_size: {100, 100}, margin: -1, boxes: []},
                []
              )
+
+    assert {:error,
+            {:invalid_layout,
+             %{stage: :pagination, reason: :invalid_layout, operation: :paginate}}} =
+             Pagination.paginate(
+               %{type: :layout, page_size: :a4, margin: 10, boxes: []},
+               []
+             )
+
+    for margin <- [50, 60] do
+      assert {:error,
+              {:invalid_layout,
+               %{stage: :pagination, reason: :invalid_layout, operation: :paginate}}} =
+               Pagination.paginate(
+                 %{type: :layout, page_size: {100, 100}, margin: margin, boxes: []},
+                 []
+               )
+    end
+
+    assert {:ok, [%{size: {100, 100}, boxes: []}]} =
+             Pagination.paginate(
+               %{type: :layout, page_size: {100, 100}, margin: 49, boxes: []},
+               []
+             )
   end
 
   defp text_box(text, y, flow_id, extra \\ %{}) do

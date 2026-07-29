@@ -288,7 +288,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   end
 
   defp layout_message(reason) do
-    "layout failed: #{reason}"
+    case reason do
+      :invalid_margin ->
+        "layout failed: margin must be non-negative and leave a positive printable area"
+
+      reason ->
+        "layout failed: #{reason}"
+    end
   end
 
   defp file_error(reason, operation, source) do

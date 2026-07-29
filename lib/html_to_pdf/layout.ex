@@ -28,6 +28,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       {%{type: :document, children: children}, opts} when is_list(children) and is_list(opts) ->
         with {:ok, page_size} <- page_size(Keyword.get(opts, :page_size, :a4)),
              {:ok, margin} <- margin(Keyword.get(opts, :margin, 0)),
+             :ok <- validate_printable_area(page_size, margin),
              {:ok, boxes} <- layout_blocks(children, page_size, margin) do
           {page_width, page_height} = page_size
 
@@ -3523,6 +3524,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       _ ->
         {:error, :invalid_margin}
+    end
+  end
+
+  defp validate_printable_area(page_size, margin) do
+    {page_width, page_height} = page_size
+
+    case margin * 2 < page_width and margin * 2 < page_height do
+      true -> :ok
+      false -> {:error, :invalid_margin}
     end
   end
 

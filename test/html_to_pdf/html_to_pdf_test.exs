@@ -406,8 +406,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              %{
                stage: :layout,
                reason: :invalid_margin,
-               message: "layout failed: invalid_margin"
+               message:
+                 "layout failed: margin must be non-negative and leave a positive printable area"
              }}} = HtmlToPdf.render("<p>Hello</p>", margin: -1)
+
+    assert {:error,
+            {:invalid_margin,
+             %{
+               stage: :layout,
+               reason: :invalid_margin,
+               message:
+                 "layout failed: margin must be non-negative and leave a positive printable area"
+             }}} = HtmlToPdf.render("<p>Hello</p>", page_size: {100, 100}, margin: 50)
+
+    assert {:error, {:invalid_margin, %{stage: :layout, reason: :invalid_margin}}} =
+             HtmlToPdf.render("<p>Hello</p>", page_size: {100, 100}, margin: 60)
   end
 
   test "render asserts detailed failure shapes for public error categories" do
