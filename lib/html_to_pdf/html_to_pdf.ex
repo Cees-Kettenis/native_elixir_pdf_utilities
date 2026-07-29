@@ -73,7 +73,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | {:margin, page_margin()}
           | {:base_url, String.t() | nil}
           | {:stylesheets, [stylesheet_source()]}
-          | {:default_font, String.t()}
+          | {:default_font, String.t() | [String.t()]}
           | {:fonts, [map() | keyword() | {String.t(), String.t()}]}
           | {:metadata, pdf_metadata()}
           | {:page_furniture, page_furniture() | false | nil}

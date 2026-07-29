@@ -1145,7 +1145,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert {:ok, styled_tree} =
              Style.compute(dom,
                fonts: [%{family: "Fixture Sans", path: ttf_font_path!()}],
-               default_font: "Missing, Helvetica"
+               default_font: ["Missing", "Helvetica"]
              )
 
     [paragraph] = styled_tree.children
