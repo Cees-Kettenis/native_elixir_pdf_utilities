@@ -701,39 +701,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp resolve_grid_columns(tracks, column_intrinsics, available_size, gap) do
-    gap_total = gap * max(length(tracks) - 1, 0)
-
-    fixed_size =
-      tracks
-      |> Enum.with_index()
-      |> Enum.reduce(0.0, fn {track, index}, acc ->
-        case track do
-          {:length, length} -> acc + length
-          :auto -> acc + Enum.at(column_intrinsics, index, 0.0)
-          {:fr, _fraction} -> acc
-        end
-      end)
-
-    total_fraction =
-      Enum.reduce(tracks, 0.0, fn track, acc ->
-        case track do
-          {:fr, fraction} -> acc + fraction
-          _ -> acc
-        end
-      end)
-
-    remaining = max(available_size - fixed_size - gap_total, 0.0)
-
-    tracks
-    |> Enum.with_index()
-    |> Enum.map(fn {track, index} ->
-      case track do
-        {:length, length} -> length
-        {:fr, fraction} when total_fraction > 0 -> remaining * fraction / total_fraction
-        {:fr, _fraction} -> 0.0
-        :auto -> Enum.at(column_intrinsics, index, 0.0)
-      end
-    end)
+    resolve_grid_track_sizes(tracks, column_intrinsics, available_size, gap, :column)
   end
 
   defp grid_row_intrinsics(items, row_count) do
@@ -788,52 +756,165 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp resolve_grid_rows(tracks, row_intrinsics, gap, available_height, align_content) do
-    fraction_total =
-      Enum.reduce(tracks, 0.0, fn track, acc ->
-        case track do
-          {:fr, fraction} -> acc + fraction
-          _ -> acc
-        end
-      end)
-
-    fixed_size =
-      tracks
-      |> Enum.with_index()
-      |> Enum.reduce(0.0, fn {track, index}, acc ->
-        intrinsic = Enum.at(row_intrinsics, index, 0.0)
-
-        case track do
-          {:length, length} -> acc + length
-          :auto -> acc + intrinsic
-          {:fr, _fraction} -> acc
-        end
-      end)
-
-    gap_total = gap * max(length(tracks) - 1, 0)
-    remaining = max((available_height || fixed_size) - fixed_size - gap_total, 0.0)
-
     row_sizes =
+      resolve_grid_track_sizes(tracks, row_intrinsics, available_height, gap, :row)
+
+    stretch_grid_rows(row_sizes, tracks, gap, available_height, align_content)
+  end
+
+  defp resolve_grid_track_sizes(tracks, intrinsics, available_size, gap, axis) do
+    track_data =
       tracks
       |> Enum.with_index()
       |> Enum.map(fn {track, index} ->
-        intrinsic = Enum.at(row_intrinsics, index, 0.0)
+        intrinsic = Enum.at(intrinsics, index, 0.0)
+        fraction = grid_track_fraction(track)
 
-        case track do
-          {:length, length} ->
-            length
+        %{
+          fixed_size: grid_fixed_track_size(track, intrinsic),
+          fraction: fraction,
+          index: index,
+          minimum:
+            case fraction do
+              nil -> 0.0
+              _fraction -> grid_flexible_track_minimum(track, intrinsic, axis)
+            end
+        }
+      end)
 
-          :auto ->
-            intrinsic
-
-          {:fr, fraction} when fraction_total > 0 ->
-            max(intrinsic, remaining * fraction / fraction_total)
-
-          {:fr, _fraction} ->
-            intrinsic
+    fixed_total =
+      Enum.reduce(track_data, 0.0, fn data, total ->
+        case data.fraction do
+          nil -> total + data.fixed_size
+          _fraction -> total
         end
       end)
 
-    stretch_grid_rows(row_sizes, tracks, gap, available_height, align_content)
+    flexible_tracks = Enum.reject(track_data, &is_nil(&1.fraction))
+    minimum_total = Enum.reduce(flexible_tracks, 0.0, &(&1.minimum + &2))
+    gap_total = gap * max(length(tracks) - 1, 0)
+
+    track_space =
+      case available_size do
+        size when is_number(size) -> max(size - gap_total, 0.0)
+        _ -> fixed_total + minimum_total
+      end
+
+    flexible_sizes =
+      distribute_flexible_grid_tracks(flexible_tracks, max(track_space - fixed_total, 0.0))
+
+    Enum.map(track_data, fn data ->
+      case data.fraction do
+        nil -> data.fixed_size
+        _fraction -> Map.fetch!(flexible_sizes, data.index)
+      end
+    end)
+  end
+
+  defp grid_track_fraction(track) do
+    case track do
+      {:fr, fraction} -> fraction
+      {:minmax, _minimum, {:fr, fraction}} -> fraction
+      _ -> nil
+    end
+  end
+
+  defp grid_fixed_track_size(track, intrinsic) do
+    case track do
+      {:length, length} ->
+        length
+
+      :auto ->
+        intrinsic
+
+      {:fr, _fraction} ->
+        0.0
+
+      {:minmax, minimum, maximum} ->
+        minimum_size = grid_minimum_track_size(minimum, intrinsic)
+
+        case maximum do
+          {:length, length} -> max(minimum_size, length)
+          :auto -> max(minimum_size, intrinsic)
+          {:fr, _fraction} -> minimum_size
+        end
+    end
+  end
+
+  defp grid_flexible_track_minimum(track, intrinsic, axis) do
+    minimum =
+      case track do
+        {:fr, _fraction} -> 0.0
+        {:minmax, minimum, {:fr, _fraction}} -> grid_minimum_track_size(minimum, intrinsic)
+      end
+
+    case axis do
+      :row -> max(minimum, intrinsic)
+      :column -> minimum
+    end
+  end
+
+  defp grid_minimum_track_size(minimum, intrinsic) do
+    case minimum do
+      {:length, length} -> length
+      :auto -> intrinsic
+    end
+  end
+
+  defp distribute_flexible_grid_tracks(tracks, available_size) do
+    {zero_fraction_tracks, flexible_tracks} =
+      Enum.split_with(tracks, &(&1.fraction <= 0))
+
+    resolved =
+      Map.new(zero_fraction_tracks, fn track ->
+        {track.index, track.minimum}
+      end)
+
+    remaining =
+      max(
+        available_size -
+          Enum.reduce(zero_fraction_tracks, 0.0, &(&1.minimum + &2)),
+        0.0
+      )
+
+    case flexible_tracks do
+      [] ->
+        resolved
+
+      flexible_tracks ->
+        fraction_total = Enum.reduce(flexible_tracks, 0.0, &(&1.fraction + &2))
+        fraction_unit = remaining / fraction_total
+
+        {constrained_tracks, unconstrained_tracks} =
+          Enum.split_with(
+            flexible_tracks,
+            &(fraction_unit * &1.fraction < &1.minimum)
+          )
+
+        case constrained_tracks do
+          [] ->
+            Enum.reduce(unconstrained_tracks, resolved, fn track, sizes ->
+              Map.put(sizes, track.index, fraction_unit * track.fraction)
+            end)
+
+          constrained_tracks ->
+            constrained_size =
+              Enum.reduce(constrained_tracks, 0.0, &(&1.minimum + &2))
+
+            constrained_sizes =
+              Enum.reduce(constrained_tracks, resolved, fn track, sizes ->
+                Map.put(sizes, track.index, track.minimum)
+              end)
+
+            Map.merge(
+              constrained_sizes,
+              distribute_flexible_grid_tracks(
+                unconstrained_tracks,
+                max(remaining - constrained_size, 0.0)
+              )
+            )
+        end
+    end
   end
 
   defp stretch_grid_rows(row_sizes, tracks, gap, available_height, align_content) do

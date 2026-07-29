@@ -35,6 +35,20 @@
       .span-col { grid-column: 1 / span 2; }
       .area { grid-area: 2 / 2 / 4 / 4; align-self: start; justify-self: end; }
       .placed { grid-column-start: 3; grid-column-end: 4; grid-row-start: 1; grid-row-end: 2; }
+      .minimum-grid {
+        display: grid;
+        width: 100pt;
+        height: 50pt;
+        grid-template-columns: repeat(2, minmax(80pt, 1fr));
+        grid-template-rows: repeat(2, minmax(40pt, 1fr));
+        margin-top: 12pt;
+        border: 2pt solid #9f1239;
+      }
+      .minimum-grid > div {
+        padding: 3pt;
+        border: 1pt solid #e11d48;
+        background-color: #ffe4e6;
+      }
     </style>
   </head>
   <body>
@@ -45,6 +59,12 @@
         <div>auto one</div>
         <div class="area">grid area content wraps inside placed area</div>
         <div>auto two</div>
+      </section>
+      <section class="minimum-grid">
+        <div>minimum one</div>
+        <div>minimum two</div>
+        <div>minimum three</div>
+        <div>minimum four</div>
       </section>
     </main>
   </body>

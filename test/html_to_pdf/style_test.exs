@@ -243,6 +243,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert style_for!("div", "border-right: 0").border_widths.right == 0.0
     assert style_for!("div", "display: grid; grid-template-columns: 1fr  auto").display == :grid
 
+    minmax =
+      style_for!(
+        "div",
+        "display: grid; grid-template-columns: minmax(80pt, 1fr) minmax(auto, 120pt)"
+      )
+
+    assert minmax.grid_template_columns == [
+             {:minmax, {:length, 80.0}, {:fr, 1.0}},
+             {:minmax, :auto, {:length, 120.0}}
+           ]
+
     assert style_for!("div", "width: min(100%, min(10px, 20px))").width ==
              {:min, [{:percent, 1.0}, {:min, [7.5, 15.0]}]}
 
@@ -262,6 +273,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "page-break-inside: always",
       "float: left",
       "display: grid; grid-template-columns: minmax()",
+      "display: grid; grid-template-columns: minmax(1fr, 2fr)",
+      "display: grid; grid-template-columns: minmax(minmax(0, 1fr), 2fr)",
       "width: min(100%, nope)",
       "width: min()",
       "width: min",
@@ -400,7 +413,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert_in_delta element.style.border_radius, 4.8, 0.0001
     assert_in_delta element.style.row_gap, 7.2, 0.0001
     assert_in_delta element.style.column_gap, 7.2, 0.0001
-    assert element.style.grid_template_columns == [length: 24.0, length: 72.0]
+
+    assert element.style.grid_template_columns == [
+             {:length, 24.0},
+             {:minmax, {:length, 48.0}, {:length, 72.0}}
+           ]
+
     assert element.style.font_size == 12.0
     assert element.style.line_height == 24.0
     assert_in_delta element.style.letter_spacing, 2.4, 0.0001

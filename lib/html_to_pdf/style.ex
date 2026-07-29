@@ -2285,8 +2285,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp parse_minmax_grid_track(value) do
     case Regex.named_captures(~r/^minmax\((?<min>.+)\s*,\s*(?<max>.+)\)$/u, value) do
-      %{"max" => max_track} -> parse_grid_track(max_track)
-      _ -> :error
+      %{"min" => min_track, "max" => max_track} ->
+        with {:ok, minimum} <- parse_grid_track(min_track),
+             {:ok, maximum} <- parse_grid_track(max_track) do
+          minimum_valid = minimum == :auto or match?({:length, _length}, minimum)
+
+          maximum_valid =
+            maximum == :auto or
+              match?({:length, _length}, maximum) or
+              match?({:fr, _fraction}, maximum)
+
+          case minimum_valid and maximum_valid do
+            true -> {:ok, {:minmax, minimum, maximum}}
+            false -> :error
+          end
+        end
+
+      _ ->
+        :error
     end
   end
 

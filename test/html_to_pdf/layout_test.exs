@@ -1120,6 +1120,123 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert_in_delta second.y, 63.0, 0.0001
   end
 
+  test "layout enforces minmax bounds and redistributes fractional tracks" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{
+            "style" => """
+            display: grid;
+            width: 100pt;
+            height: 50pt;
+            grid-template-columns: repeat(2, minmax(80pt, 1fr));
+            grid-template-rows: repeat(2, minmax(40pt, 1fr));
+            """
+          },
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "grid-column: 1 / 2; grid-row: 1 / 2"},
+              children: [%{type: :text, text: "A"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{"style" => "grid-column: 2 / 3; grid-row: 2 / 3"},
+              children: [%{type: :text, text: "B"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom)
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 140}, margin: 10)
+
+    [first, second] = layout_tree.boxes
+
+    assert first.text == "A"
+    assert second.text == "B"
+    assert_in_delta second.x - first.x, 80.0, 0.0001
+    assert_in_delta first.y - second.y, 40.0, 0.0001
+
+    redistribution_dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{
+            "style" =>
+              "display: grid; width: 200pt; grid-template-columns: minmax(150pt, 1fr) 1fr"
+          },
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{},
+              children: [%{type: :text, text: "C"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{},
+              children: [%{type: :text, text: "D"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, redistribution_tree} = Style.compute(redistribution_dom)
+
+    assert {:ok, redistribution_layout} =
+             Layout.layout(redistribution_tree, page_size: {240, 100}, margin: 10)
+
+    [constrained, redistributed] = redistribution_layout.boxes
+    assert_in_delta redistributed.x - constrained.x, 150.0, 0.0001
+
+    fixed_bounds_dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{
+            "style" =>
+              "display: grid; width: 100pt; grid-template-columns: minmax(auto, 30pt) minmax(20pt, auto)"
+          },
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{},
+              children: [%{type: :text, text: "E"}]
+            },
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{},
+              children: [%{type: :text, text: "F"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, fixed_bounds_tree} = Style.compute(fixed_bounds_dom)
+
+    assert {:ok, fixed_bounds_layout} =
+             Layout.layout(fixed_bounds_tree, page_size: {140, 100}, margin: 10)
+
+    [fixed_maximum, auto_maximum] = fixed_bounds_layout.boxes
+    assert_in_delta auto_maximum.x - fixed_maximum.x, 30.0, 0.0001
+  end
+
   test "layout auto places grid items and adds implicit tracks deterministically" do
     dom = %{
       type: :document,
