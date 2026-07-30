@@ -1,7 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
   use ExUnit.Case
 
-  alias NativeElixirPdfUtilities.HtmlToPdf.Style
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
   test "compute applies default paragraph styles" do
     dom = %{
@@ -423,6 +423,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert element.style.line_height == 24.0
     assert_in_delta element.style.letter_spacing, 2.4, 0.0001
     assert root_relative_line_height.style.line_height == 24.0
+  end
+
+  test "rem resolution scales without traversing runtime font payloads per element" do
+    cell =
+      ~s(<td style="font-size: 0.9rem; padding: 0.25rem; border-width: 0.05rem"><span>Item</span></td>)
+
+    row = "<tr>" <> String.duplicate(cell, 6) <> "</tr>"
+
+    reductions_for = fn row_count ->
+      html = "<table><tbody>" <> String.duplicate(row, row_count) <> "</tbody></table>"
+      assert {:ok, dom} = HtmlParser.parse(html)
+      {:reductions, before_reductions} = Process.info(self(), :reductions)
+      assert {:ok, _styled_tree} = Style.compute(dom, [])
+      {:reductions, after_reductions} = Process.info(self(), :reductions)
+      after_reductions - before_reductions
+    end
+
+    one_row_reductions = reductions_for.(1)
+    twelve_row_reductions = reductions_for.(12)
+
+    assert twelve_row_reductions - one_row_reductions < 5_000_000
+    assert twelve_row_reductions < 20_000_000
   end
 
   test "compute resolves font-relative semantic margins against final font size" do

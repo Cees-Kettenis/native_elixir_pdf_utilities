@@ -26,6 +26,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     :outset
   ]
   @medium_border_width 2.25
+  @rem_opaque_style_keys [:_font_registry, :font_face, :image, :svg_image]
 
   @type text_node :: %{type: :text, text: String.t(), style: map()}
   @type styled_element :: %{
@@ -1298,7 +1299,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
     with {:ok, style} <- apply_declaration_list(style, custom_property_declarations),
          {:ok, style} <- apply_declaration_list(style, foundational_declarations) do
-      style = resolve_rem_values(style)
+      style = resolve_rem_font_size(style)
 
       style =
         case Map.get(style, :_root_element, false) do
@@ -1815,7 +1816,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp resolve_rem_values(style) do
     root_font_size = Map.fetch!(style, :_root_font_size)
-    resolve_rem_term(style, root_font_size)
+
+    style
+    |> Enum.map(fn {key, value} ->
+      case key in @rem_opaque_style_keys do
+        true -> {key, value}
+        false -> {key, resolve_rem_term(value, root_font_size)}
+      end
+    end)
+    |> Map.new()
+  end
+
+  defp resolve_rem_font_size(style) do
+    case Map.get(style, :font_size) do
+      {:rem, multiplier} when is_number(multiplier) ->
+        Map.put(style, :font_size, multiplier * Map.fetch!(style, :_root_font_size))
+
+      _ ->
+        style
+    end
   end
 
   defp resolve_rem_term(term, root_font_size) do
