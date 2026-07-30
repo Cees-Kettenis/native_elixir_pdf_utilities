@@ -1,5 +1,108 @@
 # Changelog
 
+## 0.8.0 - 2026-07-30
+
+### Added
+
+- Added opt-in running page furniture through `:page_furniture`, with
+  independently configured headers and footers, `:default`, `:first`, `:odd`,
+  and `:even` variants, first-page-only and except-first-page behavior, and
+  `{{page}}` and `{{pages}}` tokens.
+- Added complete supported page geometry shared by renderer options and bare
+  `@page` rules: named and explicit page sizes, portrait and landscape forms,
+  one-to-four-value margins, margin longhands, asymmetric layout, and explicit
+  renderer-option precedence.
+- Added bundled DejaVu Sans regular, bold, oblique, and bold-oblique fonts for
+  deterministic Unicode glyph fallback after requested and configured font
+  families.
+- Added browser-parity coverage for page furniture, page-number tokens,
+  asymmetric page geometry, paragraph fragmentation, border variants, flex and
+  grid constraints, HTML character references, and multi-row table headers.
+
+### Changed
+
+- Changed `:stylesheets` entries to require explicit `{:css, css}` or
+  `{:file, path}` tags. Bare strings are rejected so empty or comment-only CSS
+  cannot be mistaken for a path and file access is always explicit.
+- Changed font loading to reuse successful parsed font files through a
+  supervised, bounded, process-wide cache. Cache entries invalidate when file
+  metadata changes, concurrent cold loads are deduplicated, failed parses are
+  not retained, and no host-application configuration is required.
+- Changed the package metadata and documentation to identify the MIT,
+  Bitstream Vera, and BSD 3-Clause licenses used by the source, bundled DejaVu
+  fonts, and generated WHATWG character-reference data.
+- Documented that repeated page furniture uses the explicit renderer option;
+  CSS `position: fixed` remains deferred until positioned layout can remove
+  elements from normal flow and apply offsets correctly.
+
+### Fixed
+
+- Fixed CSS cascade precedence so stylesheet `!important` declarations beat
+  normal inline declarations, while inline `!important` declarations retain
+  priority over important stylesheet declarations.
+- Fixed table `rowspan` layout to reserve occupied columns and span the combined
+  height of all covered rows.
+- Fixed paragraphs taller than the remaining or complete printable page being
+  clipped or kept together indefinitely; pagination now fragments them at
+  complete visual lines, including oversized `break-inside: avoid` paragraphs.
+- Fixed paginated tables repeating only one header row; all `<thead>` rows now
+  repeat together when the table body continues.
+- Fixed Unicode text being rejected or encoded with the wrong face by resolving
+  each grapheme through the selected, requested, configured, and bundled
+  fallback fonts before layout.
+- Fixed text extraction across nested `q` and `Q` operators so saved graphics
+  and text state is restored in LIFO order.
+- Fixed Type 0 text width calculation by mapping source codes through the
+  Encoding CMap before applying descendant CID widths, with strict diagnostics
+  and resource limits for unsupported or malformed CMaps.
+- Fixed merging pages with inherited or indirect `MediaBox`, `CropBox`,
+  `Resources`, `Rotate`, `BleedBox`, `TrimBox`, `ArtBox`, and `UserUnit` values
+  by materializing the nearest effective page-tree values.
+- Fixed the shared reader accepting duplicate page-tree references or
+  inconsistent descendant `/Count` values.
+- Fixed ASCII85 decoding of delimiters, whitespace, `z` groups, partial final
+  groups, and values that overflow the 32-bit group range.
+- Fixed HTML named and numeric character references using the complete WHATWG
+  table, including legacy semicolon rules, invalid numeric normalization,
+  multi-code-point references, non-breaking spaces, and decode-once behavior.
+- Fixed CSS custom properties being resolved before their cascade completed;
+  ordinary declarations now use the final winning custom-property values.
+- Fixed `none`, `hidden`, `dotted`, `dashed`, `solid`, `double`, `groove`,
+  `ridge`, `inset`, and `outset` borders, including independent side styles and
+  transparent border spacing.
+- Fixed valid page-context declarations being rejected and malformed `size`,
+  margin, orientation, marks, bleed, unknown, and incomplete declarations
+  lacking actionable CSS diagnostics.
+- Fixed zero, negative, or excessive margins being accepted when they leave no
+  positive printable page area.
+- Fixed merged output corrupting PDF names that require `#xx` escaping,
+  including whitespace, delimiters, literal `#`, control bytes, and
+  non-printable bytes.
+- Fixed unsupported named or pseudo-page selectors and misspelled `@page`
+  at-rules being silently applied to every page; they now return strict
+  diagnostics.
+- Fixed declaration-order-dependent computed CSS values by resolving `em`,
+  `rem`, `currentColor`, relative semantic margins, custom properties, and
+  inherited line heights against the element's final computed style.
+- Fixed grid `minmax()` tracks discarding their minimum and added redistribution
+  when fractional tracks reach a minimum bound.
+- Fixed flex grow and shrink distribution overwriting item `min-width`,
+  `max-width`, `min-height`, and `max-height` constraints.
+- Fixed text extraction rejecting valid inherited indirect page `/Rotate`
+  values.
+- Fixed merge failures replacing the reader's machine-readable reason and
+  diagnostic stage; callers can again distinguish encryption, page-tree,
+  resource-limit, malformed-input, and unsupported-feature failures.
+- Fixed valid empty or comment-only inline stylesheets and paths containing
+  braces being misclassified by replacing content-based guessing with explicit
+  stylesheet source tags.
+- Fixed the public `:default_font` typespec so its documented fallback-list form
+  accepts `[String.t()]`.
+- Fixed a severe CSS `rem` performance regression that recursively traversed
+  complete font registries and decoded runtime payloads for every element.
+  Runtime font and image data is now opaque to CSS length resolution, with a
+  deterministic reductions-based regression test.
+
 ## 0.7.0 - 2026-07-23
 
 ### Added

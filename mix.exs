@@ -4,7 +4,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
   def project do
     [
       app: :native_elixir_pdf_utilities,
-      version: "0.7.0",
+      version: "0.8.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       description:
@@ -47,7 +47,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
     [
       name: "native_elixir_pdf_utilities",
       files: ~w(lib assets priv docs mix.exs README.md CHANGELOG.md LICENSE),
-      licenses: ["MIT"],
+      licenses: ["MIT", "Bitstream-Vera", "BSD-3-Clause"],
       links: %{"GitHub" => "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"}
     ]
   end
@@ -58,6 +58,8 @@ defmodule NativeElixirPdfUtilities.MixProject do
       extras: [
         "README.md",
         "LICENSE",
+        {"priv/fonts/dejavu/LICENSE.txt", [title: "DejaVu Fonts License"]},
+        {"priv/licenses/WHATWG-BSD-3-Clause.txt", [title: "WHATWG Entity Data License"]},
         "CHANGELOG.md",
         "docs/diagnostics.md",
         "docs/pdf-reader.md",
@@ -67,7 +69,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
         "docs/html-to-pdf-browser-parity-coverage.md",
         "docs/html-to-pdf-examples.md"
       ],
-      source_ref: "v0.7.0",
+      source_ref: "v0.8.0",
       source_url: "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"
     ]
   end

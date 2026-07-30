@@ -33,7 +33,7 @@ See the [documentation](https://github.com/Cees-Kettenis/native_elixir_pdf_utili
 ```elixir
 def deps do
   [
-    {:native_elixir_pdf_utilities, "~> 0.7.0"}
+    {:native_elixir_pdf_utilities, "~> 0.8.0"}
   ]
 end
 ```
@@ -53,5 +53,7 @@ For HTML/CSS to PDF changes, also open representative rendered PDFs and compare 
 ## License
 
 The library source is MIT licensed. See [LICENSE](LICENSE). Bundled DejaVu font
-files retain their own permissive license in
-[`priv/fonts/dejavu/LICENSE.txt`](priv/fonts/dejavu/LICENSE.txt).
+files use the Bitstream Vera license in
+[`priv/fonts/dejavu/LICENSE.txt`](priv/fonts/dejavu/LICENSE.txt). Generated
+WHATWG character-reference data retains its BSD 3-Clause license in
+[`priv/licenses/WHATWG-BSD-3-Clause.txt`](priv/licenses/WHATWG-BSD-3-Clause.txt).

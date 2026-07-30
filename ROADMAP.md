@@ -19,45 +19,6 @@ breaking API changes are allowed, but they should be explained clearly in
 
 ## Milestones
 
-### 0.8.0 - Running Headers, Footers, and Page Numbers
-
-Milestone goal: add first-class repeated page furniture for reports, invoices, statements,
-contracts, and exports.
-
-#### Scope
-
-- Add running headers and footers during HTML-to-PDF rendering.
-- Add page numbers during HTML-to-PDF rendering.
-- Add page number tokens for current page and total pages.
-- Add options for first-page-only or except-first-page headers and footers.
-- Add options for odd and even page headers and footers.
-- Complete page geometry support shared by `@page` rules and renderer options:
-  - support the accepted named page sizes and explicit two-length page sizes
-  - support portrait and landscape forms of the `size` descriptor
-  - support one-to-four-value page margins
-  - support `margin-top`, `margin-right`, `margin-bottom`, and `margin-left`
-  - preserve explicit renderer options as overrides of stylesheet `@page`
-    defaults
-- Evaluate `position: fixed` for repeated page furniture; implement it here if
-  it fits the renderer model, otherwise document it as deferred.
-
-#### Design Notes
-
-- Document header, footer, page number, and page furniture behavior.
-- Use the resolved four-sided page margins consistently for body layout,
-  pagination, and page-furniture placement.
-- Keep accepted page-context properties outside this geometry scope documented
-  as compatibility no-ops until their owning roadmap milestone implements them.
-
-#### Completion Criteria
-
-- Add focused layout, pagination, and PDF writer tests for page furniture.
-- Add or update browser parity fixtures for headers, footers, and page numbers.
-- Add focused parser, layout, pagination, and page-furniture tests for named and
-  custom page sizes, orientation, asymmetric margins, longhand margins, and
-  renderer-option precedence.
-- Add or update browser parity fixtures for visible page geometry.
-
 ### 0.9.0 - Generated Content, Selectors, and Counters
 
 Milestone goal: expand the CSS features commonly used by existing document templates.
