@@ -7,6 +7,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   they are available.
   """
 
+  alias NativeElixirPdfUtilities.HtmlToPdf.FontCache
+
   @type font_style :: :normal | :italic
   @type registry :: %{embedded: [embedded_font()], fallback: [embedded_font()]}
   @type built_in_font :: %{type: :built_in, family: String.t(), pdf_name: String.t()}
@@ -351,11 +353,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
   defp load_first_supported_font(paths) do
     Enum.reduce_while(paths, :error, fn path, :error ->
-      with {:ok, data} <- File.read(path),
-           {:ok, parsed} <- parse_ttf(data) do
-        {:halt, {:ok, data, parsed}}
-      else
-        _ -> {:cont, :error}
+      result =
+        FontCache.fetch(path, fn absolute_path ->
+          with {:ok, data} <- File.read(absolute_path),
+               {:ok, parsed} <- parse_ttf(data) do
+            {:ok, {data, parsed}}
+          else
+            _ -> :error
+          end
+        end)
+
+      case result do
+        {:ok, {data, parsed}} -> {:halt, {:ok, data, parsed}}
+        :error -> {:cont, :error}
       end
     end)
   end

@@ -366,11 +366,24 @@ Milestone goal: harden the library behavior that will be difficult to change aft
 
 ### 0.18.0 - Optimization and Archive-Friendly Output
 
-Milestone goal: improve output size and archive readiness without claiming full PDF/A
-compliance before the library can validate it properly.
+Milestone goal: improve render-time scaling, memory use, output size, and archive
+readiness without claiming full PDF/A compliance before the library can validate
+it properly.
 
 #### Scope
 
+- Improve HTML-to-PDF runtime and memory scaling:
+  - store embedded-font glyph widths in a constant-time lookup structure
+  - cache font-fallback candidates by family, weight, and style within a render
+  - construct fallback runs and inline layout collections without repeated list
+    appends, last-element updates, or binary concatenation
+  - cache repeated text measurements and avoid recomputing complete line widths
+    while wrapping each token
+  - reuse table intrinsic measurements and precompute column geometry instead of
+    repeatedly traversing column lists
+  - collect PDF-writer text and resource data in linear passes
+  - separate the complete font registry from per-element style maps and carry
+    lightweight font identifiers through style and layout trees
 - Add conservative compression and optimization:
   - compress uncompressed streams
   - deduplicate repeated images where safe
@@ -385,6 +398,10 @@ compliance before the library can validate it properly.
 #### Design Notes
 
 - Ensure optimization does not intentionally change visual output.
+- Measure runtime work with deterministic BEAM reductions in addition to
+  wall-clock benchmarks.
+- Preserve browser-parity coverage while changing style, text, font, and table
+  internals.
 - Document the difference between archive-friendly output and full PDF/A
   compliance.
 - Treat strict PDF/A validation and claims of fully validated archival output as
@@ -393,6 +410,10 @@ compliance before the library can validate it properly.
 #### Completion Criteria
 
 - Add optimization fixture tests that confirm output remains readable.
+- Add production-shaped text and table benchmarks that bound per-element and
+  per-token scaling.
+- Confirm optimized rendering preserves existing CSS, font-fallback, layout,
+  pagination, and browser-parity results.
 - Add fixture coverage for best-effort archive-friendly output.
 
 ### 0.19.0 - Documentation, Fixtures, and Release Polish
