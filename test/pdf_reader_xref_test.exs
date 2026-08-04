@@ -445,8 +445,12 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
     body <> xref_stream <> "startxref\n#{xref_offset}\n%%EOF\n"
   end
 
-  defp unsigned(_value, 0), do: <<>>
-  defp unsigned(value, width), do: <<value::unsigned-big-integer-size(width * 8)>>
+  defp unsigned(value, width) do
+    case width do
+      0 -> <<>>
+      width -> <<value::unsigned-big-integer-size(width * 8)>>
+    end
+  end
 
   defp classic_entry(offset, generation, marker) do
     String.pad_leading(Integer.to_string(offset), 10, "0") <>

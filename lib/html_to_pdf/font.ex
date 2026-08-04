@@ -493,8 +493,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     end
   end
 
-  defp parsed_weight({weight, ""}) when weight >= 100 and weight <= 900, do: {:ok, weight}
-  defp parsed_weight(_parsed), do: :error
+  defp parsed_weight(parsed) do
+    case parsed do
+      {weight, ""} when weight >= 100 and weight <= 900 -> {:ok, weight}
+      _ -> :error
+    end
+  end
 
   defp font_style(style) do
     case style do

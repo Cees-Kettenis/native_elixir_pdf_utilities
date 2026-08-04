@@ -1460,20 +1460,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     |> Enum.map(&resolve_flex_line(&1, available_main, constraint_available_main, gap))
   end
 
-  defp append_flex_item_to_lines([], item, _wrap, _available_main, _gap) do
-    [%{items: [item], base_main: item.outer_main}]
-  end
-
   defp append_flex_item_to_lines(lines, item, wrap, available_main, gap) do
-    [line | previous] = Enum.reverse(lines)
-    next_base = line.base_main + gap + item.outer_main
+    case lines do
+      [] ->
+        [%{items: [item], base_main: item.outer_main}]
 
-    case wrap == :wrap and line.items != [] and next_base > available_main do
-      true ->
-        Enum.reverse(previous) ++ [line, %{items: [item], base_main: item.outer_main}]
+      lines ->
+        [line | previous] = Enum.reverse(lines)
+        next_base = line.base_main + gap + item.outer_main
 
-      false ->
-        Enum.reverse(previous) ++ [%{line | items: line.items ++ [item], base_main: next_base}]
+        case wrap == :wrap and line.items != [] and next_base > available_main do
+          true ->
+            Enum.reverse(previous) ++ [line, %{items: [item], base_main: item.outer_main}]
+
+          false ->
+            Enum.reverse(previous) ++
+              [%{line | items: line.items ++ [item], base_main: next_base}]
+        end
     end
   end
 
@@ -2681,8 +2684,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
          border_collapse,
          last_cell?,
          last_row?
-       )
-       when is_list(children) do
+       ) do
     padding = Map.get(style, :padding, edges(0.0))
     border_widths = Map.get(style, :border_widths, edges(0.0))
     content_x = x + border_widths.left + padding.left
@@ -3405,16 +3407,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     {boxes, inline_content_height(runs, lines, line_height)}
   end
 
-  defp inline_content_height(runs, width, line_height) when is_number(width) do
-    runs
-    |> inline_lines(width)
-    |> then(&inline_content_height(runs, &1, line_height))
-  end
+  defp inline_content_height(runs, width_or_lines, line_height) do
+    case width_or_lines do
+      width when is_number(width) ->
+        runs
+        |> inline_lines(width)
+        |> then(&inline_content_height(runs, &1, line_height))
 
-  defp inline_content_height(runs, lines, line_height) when is_list(lines) do
-    case runs do
-      [] -> 0.0
-      _ -> line_height * max(length(lines), 1)
+      lines when is_list(lines) ->
+        case runs do
+          [] -> 0.0
+          _ -> line_height * max(length(lines), 1)
+        end
     end
   end
 

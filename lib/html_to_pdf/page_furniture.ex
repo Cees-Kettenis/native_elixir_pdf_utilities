@@ -176,42 +176,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
     )
   end
 
-  defp decorate_pages(pages, _page_size, _margins, nil, _opts) do
-    {:ok, pages}
-  end
-
   defp decorate_pages(pages, page_size, margins, furniture, opts) do
-    total_pages = length(pages)
+    case furniture do
+      nil ->
+        {:ok, pages}
 
-    pages
-    |> Enum.with_index(1)
-    |> Enum.reduce_while({:ok, []}, fn {page, page_number}, {:ok, decorated} ->
-      with {:ok, header_boxes} <-
-             render_position(
-               :header,
-               select_template(furniture.header, page_number),
-               page_number,
-               total_pages,
-               page_size,
-               margins,
-               opts
-             ),
-           {:ok, footer_boxes} <-
-             render_position(
-               :footer,
-               select_template(furniture.footer, page_number),
-               page_number,
-               total_pages,
-               page_size,
-               margins,
-               opts
-             ) do
-        decorated_page = %{page | boxes: page.boxes ++ header_boxes ++ footer_boxes}
-        {:cont, {:ok, decorated ++ [decorated_page]}}
-      else
-        {:error, {_reason, _diagnostic}} = error -> {:halt, error}
-      end
-    end)
+      furniture ->
+        total_pages = length(pages)
+
+        pages
+        |> Enum.with_index(1)
+        |> Enum.reduce_while({:ok, []}, fn {page, page_number}, {:ok, decorated} ->
+          with {:ok, header_boxes} <-
+                 render_position(
+                   :header,
+                   select_template(furniture.header, page_number),
+                   page_number,
+                   total_pages,
+                   page_size,
+                   margins,
+                   opts
+                 ),
+               {:ok, footer_boxes} <-
+                 render_position(
+                   :footer,
+                   select_template(furniture.footer, page_number),
+                   page_number,
+                   total_pages,
+                   page_size,
+                   margins,
+                   opts
+                 ) do
+            decorated_page = %{page | boxes: page.boxes ++ header_boxes ++ footer_boxes}
+            {:cont, {:ok, decorated ++ [decorated_page]}}
+          else
+            {:error, {_reason, _diagnostic}} = error -> {:halt, error}
+          end
+        end)
+    end
   end
 
   defp select_template(variants, page_number) do

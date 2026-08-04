@@ -254,17 +254,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
   Returns whether a four-sided margin leaves positive printable page geometry.
   """
   @spec valid_printable_area?({number(), number()}, margins()) :: boolean()
-  def valid_printable_area?(
-        {page_width, page_height},
-        %{top: top, right: right, bottom: bottom, left: left}
-      )
+  def valid_printable_area?(page_size, margins) do
+    case {page_size, margins} do
+      {{page_width, page_height}, %{top: top, right: right, bottom: bottom, left: left}}
       when is_number(page_width) and is_number(page_height) and is_number(top) and
-             is_number(right) and is_number(bottom) and is_number(left) do
-    page_width > 0 and page_height > 0 and Enum.all?([top, right, bottom, left], &(&1 >= 0)) and
-      left + right < page_width and top + bottom < page_height
-  end
+             is_number(right) and is_number(bottom) and is_number(left) ->
+        page_width > 0 and page_height > 0 and
+          Enum.all?([top, right, bottom, left], &(&1 >= 0)) and
+          left + right < page_width and top + bottom < page_height
 
-  def valid_printable_area?(_page_size, _margins), do: false
+      _ ->
+        false
+    end
+  end
 
   defp normalize_css_page_size(page_size) do
     tokens =

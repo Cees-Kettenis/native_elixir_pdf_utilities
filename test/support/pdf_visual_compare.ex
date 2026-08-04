@@ -210,54 +210,59 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     end
   end
 
-  defp maybe_inject_chromium_page_css(html, nil) do
-    html
-  end
-
   defp maybe_inject_chromium_page_css(html, page_size) do
-    inject_chromium_page_css(html, page_size)
-  end
-
-  defp maybe_inject_chromium_page_furniture(html, nil, _margin) do
-    html
-  end
-
-  defp maybe_inject_chromium_page_furniture(html, page_furniture, margin)
-       when is_list(page_furniture) and is_number(margin) do
-    header = Keyword.get(page_furniture, :header, "")
-    footer = Keyword.get(page_furniture, :footer, "")
-
-    furniture = """
-    <style>
-      .browser-parity-running-header,
-      .browser-parity-running-footer {
-        position: fixed;
-        left: 0;
-        right: 0;
-      }
-      .browser-parity-running-header { top: -#{margin}pt; }
-      .browser-parity-running-footer { bottom: -#{margin}pt; }
-    </style>
-    <div class="browser-parity-running-header">#{header}</div>
-    <div class="browser-parity-running-footer">#{footer}</div>
-    """
-
-    case Regex.run(~r/<body\b[^>]*>/iu, html) do
-      [body_tag] -> String.replace(html, body_tag, body_tag <> "\n" <> furniture, global: false)
-      _ -> furniture <> "\n" <> html
+    case page_size do
+      nil -> html
+      page_size -> inject_chromium_page_css(html, page_size)
     end
   end
 
-  defp maybe_inject_chromium_page_margin_css(html, nil) do
-    html
+  defp maybe_inject_chromium_page_furniture(html, page_furniture, margin) do
+    case {page_furniture, margin} do
+      {nil, _margin} ->
+        html
+
+      {page_furniture, margin} when is_list(page_furniture) and is_number(margin) ->
+        header = Keyword.get(page_furniture, :header, "")
+        footer = Keyword.get(page_furniture, :footer, "")
+
+        furniture = """
+        <style>
+          .browser-parity-running-header,
+          .browser-parity-running-footer {
+            position: fixed;
+            left: 0;
+            right: 0;
+          }
+          .browser-parity-running-header { top: -#{margin}pt; }
+          .browser-parity-running-footer { bottom: -#{margin}pt; }
+        </style>
+        <div class="browser-parity-running-header">#{header}</div>
+        <div class="browser-parity-running-footer">#{footer}</div>
+        """
+
+        case Regex.run(~r/<body\b[^>]*>/iu, html) do
+          [body_tag] ->
+            String.replace(html, body_tag, body_tag <> "\n" <> furniture, global: false)
+
+          _ ->
+            furniture <> "\n" <> html
+        end
+    end
   end
 
-  defp maybe_inject_chromium_page_margin_css(html, css) when is_binary(css) do
-    style = "<style>\n#{css}\n</style>"
+  defp maybe_inject_chromium_page_margin_css(html, css) do
+    case css do
+      nil ->
+        html
 
-    case Regex.run(~r/<head\b[^>]*>/iu, html) do
-      [head_tag] -> String.replace(html, head_tag, head_tag <> "\n" <> style, global: false)
-      _ -> style <> "\n" <> html
+      css when is_binary(css) ->
+        style = "<style>\n#{css}\n</style>"
+
+        case Regex.run(~r/<head\b[^>]*>/iu, html) do
+          [head_tag] -> String.replace(html, head_tag, head_tag <> "\n" <> style, global: false)
+          _ -> style <> "\n" <> html
+        end
     end
   end
 
@@ -482,11 +487,15 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     }
   end
 
-  defp max_stat([], _key), do: 0.0
-
   defp max_stat(stats, key) do
-    stats
-    |> Enum.map(&Map.fetch!(&1, key))
-    |> Enum.max()
+    case stats do
+      [] ->
+        0.0
+
+      stats ->
+        stats
+        |> Enum.map(&Map.fetch!(&1, key))
+        |> Enum.max()
+    end
   end
 end

@@ -551,8 +551,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end
   end
 
-  defp parsed_font_weight({weight, ""}) when weight >= 100 and weight <= 900, do: {:ok, weight}
-  defp parsed_font_weight(_parsed), do: {:error, :invalid_css}
+  defp parsed_font_weight(parsed) do
+    case parsed do
+      {weight, ""} when weight >= 100 and weight <= 900 -> {:ok, weight}
+      _ -> {:error, :invalid_css}
+    end
+  end
 
   defp font_style_descriptor(declarations) do
     case declarations |> Enum.reverse() |> List.keyfind("font-style", 0) do
@@ -952,83 +956,93 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end
   end
 
-  defp parse_selector_modifiers("", part), do: {:ok, part}
-
   defp parse_selector_modifiers(modifiers, part) do
-    cond do
-      captures =
-          Regex.named_captures(
-            ~r/^(?<prefix>[#.])(?<name>[a-zA-Z_-][a-zA-Z0-9_-]*)(?<rest>.*)$/u,
-            modifiers
-          ) ->
-        %{"prefix" => prefix, "name" => name, "rest" => rest} = captures
+    case modifiers do
+      "" ->
+        {:ok, part}
 
-        case {prefix, part.id} do
-          {"#", nil} -> parse_selector_modifiers(rest, %{part | id: name})
-          {"#", _id} -> {:error, :invalid_css}
-          {".", _id} -> parse_selector_modifiers(rest, %{part | classes: part.classes ++ [name]})
-        end
+      _ ->
+        cond do
+          captures =
+              Regex.named_captures(
+                ~r/^(?<prefix>[#.])(?<name>[a-zA-Z_-][a-zA-Z0-9_-]*)(?<rest>.*)$/u,
+                modifiers
+              ) ->
+            %{"prefix" => prefix, "name" => name, "rest" => rest} = captures
 
-      captures =
-          Regex.named_captures(
-            ~r/^\[\s*(?<name>[a-zA-Z_][a-zA-Z0-9_:-]*)(?:\s*=\s*(?<value>"[^"]*"|'[^']*'|[^\]\s]+))?\s*\](?<rest>.*)$/u,
-            modifiers
-          ) ->
-        %{"name" => name, "value" => value, "rest" => rest} = captures
-        name = String.downcase(name)
+            case {prefix, part.id} do
+              {"#", nil} ->
+                parse_selector_modifiers(rest, %{part | id: name})
 
-        attribute =
-          case value do
-            "" -> {:present, name}
-            value -> {:equals, name, unquote_selector_value(value)}
-          end
+              {"#", _id} ->
+                {:error, :invalid_css}
 
-        parse_selector_modifiers(rest, %{part | attributes: part.attributes ++ [attribute]})
+              {".", _id} ->
+                parse_selector_modifiers(rest, %{part | classes: part.classes ++ [name]})
+            end
 
-      captures =
-          Regex.named_captures(
-            ~r/^:(?<pseudo>first-child|last-child|first-of-type|last-of-type|root)(?<rest>.*)$/u,
-            modifiers
-          ) ->
-        %{"pseudo" => pseudo, "rest" => rest} = captures
+          captures =
+              Regex.named_captures(
+                ~r/^\[\s*(?<name>[a-zA-Z_][a-zA-Z0-9_:-]*)(?:\s*=\s*(?<value>"[^"]*"|'[^']*'|[^\]\s]+))?\s*\](?<rest>.*)$/u,
+                modifiers
+              ) ->
+            %{"name" => name, "value" => value, "rest" => rest} = captures
+            name = String.downcase(name)
 
-        parse_selector_modifiers(rest, %{
-          part
-          | pseudo_classes: part.pseudo_classes ++ [pseudo_class(pseudo)]
-        })
+            attribute =
+              case value do
+                "" -> {:present, name}
+                value -> {:equals, name, unquote_selector_value(value)}
+              end
 
-      captures =
-          Regex.named_captures(
-            ~r/^:nth-child\(\s*(?<index>odd|even|[1-9]\d*)\s*\)(?<rest>.*)$/u,
-            modifiers
-          ) ->
-        %{"index" => index, "rest" => rest} = captures
+            parse_selector_modifiers(rest, %{part | attributes: part.attributes ++ [attribute]})
 
-        index =
-          case index do
-            "odd" -> :odd
-            "even" -> :even
-            index -> String.to_integer(index)
-          end
+          captures =
+              Regex.named_captures(
+                ~r/^:(?<pseudo>first-child|last-child|first-of-type|last-of-type|root)(?<rest>.*)$/u,
+                modifiers
+              ) ->
+            %{"pseudo" => pseudo, "rest" => rest} = captures
 
-        parse_selector_modifiers(rest, %{
-          part
-          | pseudo_classes: part.pseudo_classes ++ [{:nth_child, index}]
-        })
+            parse_selector_modifiers(rest, %{
+              part
+              | pseudo_classes: part.pseudo_classes ++ [pseudo_class(pseudo)]
+            })
 
-      captures = Regex.named_captures(~r/^:not\((?<selector>[^()]*)\)(?<rest>.*)$/u, modifiers) ->
-        %{"selector" => selector, "rest" => rest} = captures
+          captures =
+              Regex.named_captures(
+                ~r/^:nth-child\(\s*(?<index>odd|even|[1-9]\d*)\s*\)(?<rest>.*)$/u,
+                modifiers
+              ) ->
+            %{"index" => index, "rest" => rest} = captures
 
-        case parse_simple_selector(String.trim(selector)) do
-          {:ok, %{pseudo_element: nil} = negated} ->
-            parse_selector_modifiers(rest, %{part | negations: part.negations ++ [negated]})
+            index =
+              case index do
+                "odd" -> :odd
+                "even" -> :even
+                index -> String.to_integer(index)
+              end
 
-          _ ->
+            parse_selector_modifiers(rest, %{
+              part
+              | pseudo_classes: part.pseudo_classes ++ [{:nth_child, index}]
+            })
+
+          captures =
+              Regex.named_captures(~r/^:not\((?<selector>[^()]*)\)(?<rest>.*)$/u, modifiers) ->
+            %{"selector" => selector, "rest" => rest} = captures
+
+            case parse_simple_selector(String.trim(selector)) do
+              {:ok, %{pseudo_element: nil} = negated} ->
+                parse_selector_modifiers(rest, %{part | negations: part.negations ++ [negated]})
+
+              _ ->
+                {:error, :invalid_css}
+            end
+
+          true ->
             {:error, :invalid_css}
         end
-
-      true ->
-        {:error, :invalid_css}
     end
   end
 
@@ -1059,12 +1073,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end
   end
 
-  defp pseudo_element("") do
-    nil
-  end
-
   defp pseudo_element(pseudo_element) do
     case pseudo_element do
+      "" -> nil
       "::before" -> :before
       "::after" -> :after
     end
@@ -1080,16 +1091,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end
   end
 
-  defp tag_name("") do
-    nil
-  end
-
-  defp tag_name("*") do
-    nil
-  end
-
   defp tag_name(tag) do
-    String.downcase(tag)
+    case tag do
+      tag when tag in ["", "*"] -> nil
+      tag -> String.downcase(tag)
+    end
   end
 
   defp parse_declaration(declaration) do

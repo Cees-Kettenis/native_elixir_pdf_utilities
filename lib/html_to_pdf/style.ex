@@ -371,8 +371,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end)
   end
 
-  defp content_parts(parts) when is_list(parts), do: parts
-  defp content_parts(_content), do: []
+  defp content_parts(content) do
+    case content do
+      parts when is_list(parts) -> parts
+      _ -> []
+    end
+  end
 
   defp fragment_root_style(children, base_style, rules, opts) do
     case Enum.any?(children, &document_container?/1) do
@@ -3674,53 +3678,46 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp png_unfilter_bytes(
-         _filter,
-         "",
-         "",
-         _bytes_per_pixel,
-         _index,
-         _left_window,
-         _up_left_window,
-         acc
-       ) do
-    acc
-    |> Enum.reverse()
-    |> :binary.list_to_bin()
-  end
-
-  defp png_unfilter_bytes(
          filter,
-         <<byte, row_rest::binary>>,
-         <<up, previous_rest::binary>>,
+         row,
+         previous,
          bytes_per_pixel,
          index,
          left_window,
          up_left_window,
          acc
        ) do
-    left = if index >= bytes_per_pixel, do: hd(left_window), else: 0
-    up_left = if index >= bytes_per_pixel, do: hd(up_left_window), else: 0
+    case {row, previous} do
+      {"", ""} ->
+        acc
+        |> Enum.reverse()
+        |> :binary.list_to_bin()
 
-    predictor =
-      case filter do
-        1 -> left
-        2 -> up
-        3 -> div(left + up, 2)
-        4 -> png_paeth(left, up, up_left)
-      end
+      {<<byte, row_rest::binary>>, <<up, previous_rest::binary>>} ->
+        left = if index >= bytes_per_pixel, do: hd(left_window), else: 0
+        up_left = if index >= bytes_per_pixel, do: hd(up_left_window), else: 0
 
-    decoded = rem(byte + predictor, 256)
+        predictor =
+          case filter do
+            1 -> left
+            2 -> up
+            3 -> div(left + up, 2)
+            4 -> png_paeth(left, up, up_left)
+          end
 
-    png_unfilter_bytes(
-      filter,
-      row_rest,
-      previous_rest,
-      bytes_per_pixel,
-      index + 1,
-      png_window_push(left_window, decoded, bytes_per_pixel),
-      png_window_push(up_left_window, up, bytes_per_pixel),
-      [decoded | acc]
-    )
+        decoded = rem(byte + predictor, 256)
+
+        png_unfilter_bytes(
+          filter,
+          row_rest,
+          previous_rest,
+          bytes_per_pixel,
+          index + 1,
+          png_window_push(left_window, decoded, bytes_per_pixel),
+          png_window_push(up_left_window, up, bytes_per_pixel),
+          [decoded | acc]
+        )
+    end
   end
 
   defp png_window_push(window, byte, bytes_per_pixel) do

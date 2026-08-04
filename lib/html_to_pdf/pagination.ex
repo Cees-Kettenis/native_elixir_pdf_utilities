@@ -192,23 +192,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     |> Enum.map(&flow_group/1)
   end
 
-  defp chunk_box(box, []) do
-    {:cont, [box]}
-  end
+  defp chunk_box(box, chunk) do
+    case chunk do
+      [] ->
+        {:cont, [box]}
 
-  defp chunk_box(box, [previous | _rest] = chunk) do
-    case Map.get(box, :flow_id, box) == Map.get(previous, :flow_id, previous) do
-      true -> {:cont, [box | chunk]}
-      false -> {:cont, Enum.reverse(chunk), [box]}
+      [previous | _rest] ->
+        case Map.get(box, :flow_id, box) == Map.get(previous, :flow_id, previous) do
+          true -> {:cont, [box | chunk]}
+          false -> {:cont, Enum.reverse(chunk), [box]}
+        end
     end
   end
 
-  defp finish_chunk([]) do
-    {:cont, []}
-  end
-
   defp finish_chunk(chunk) do
-    {:cont, Enum.reverse(chunk), []}
+    case chunk do
+      [] -> {:cont, []}
+      chunk -> {:cont, Enum.reverse(chunk), []}
+    end
   end
 
   defp flow_group(boxes) do
@@ -308,12 +309,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     end)
   end
 
-  defp vertical_gap(nil, _top) do
-    0.0
-  end
-
   defp vertical_gap(previous_bottom, top) do
-    max(previous_bottom - top, 0.0)
+    case previous_bottom do
+      nil -> 0.0
+      previous_bottom -> max(previous_bottom - top, 0.0)
+    end
   end
 
   defp target_group_top(state, group, gap) do
