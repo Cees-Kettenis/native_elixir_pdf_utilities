@@ -3,8 +3,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   Strict CSS parser for the native HTML-to-PDF renderer.
 
   The parser accepts the document-oriented selector subset used by the style
-  cascade: element, class, id, element.class, descendant, child, and comma
-  groups. Bare `@page { ... }` and simple `@font-face` rules are accepted
+  cascade: element, class, id, attribute presence/equality, descendant, child,
+  supported positional and negation pseudo-classes, `::before`, `::after`, and
+  comma groups. Bare `@page { ... }` and simple `@font-face` rules are accepted
   outside the style cascade, and `@media print` rules are included in the
   active print cascade. Page selectors, named-page preludes, and misspelled
   `@page` at-rules are rejected. Declarations are kept as normalized
@@ -19,7 +20,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           tag: String.t() | nil,
           id: String.t() | nil,
           classes: [String.t()],
-          pseudo_classes: [:first_child | :last_child | :root | {:nth_child, pos_integer()}],
+          attributes: [
+            {:present, String.t()} | {:equals, String.t(), String.t()}
+          ],
+          pseudo_classes: [
+            :first_child
+            | :last_child
+            | :first_of_type
+            | :last_of_type
+            | :root
+            | {:nth_child, pos_integer() | :odd | :even}
+          ],
+          negations: [selector_part()],
+          pseudo_element: nil | :before | :after,
           combinator: nil | :descendant | :child
         }
   @type selector :: %{
@@ -901,7 +914,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         {:error, :invalid_css}
 
       {:ok, parts, nil} ->
-        {:ok, %{parts: parts, specificity: specificity(parts)}}
+        case Enum.drop(parts, -1) |> Enum.any?(&(not is_nil(&1.pseudo_element))) do
+          true -> {:error, :invalid_css}
+          false -> {:ok, %{parts: parts, specificity: specificity(parts)}}
+        end
 
       {:error, reason} ->
         {:error, reason}
@@ -911,17 +927,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   defp parse_simple_selector(selector) do
     captures =
       Regex.named_captures(
-        ~r/^(?<tag>\*|[a-zA-Z][a-zA-Z0-9]*)?(?<modifiers>(?:[#.][a-zA-Z_-][a-zA-Z0-9_-]*)*)(?<pseudo>:(?:first-child|last-child|root|nth-child\([1-9]\d*\)))?$/u,
+        ~r/^(?<tag>\*|[a-zA-Z][a-zA-Z0-9]*)?(?<modifiers>.*?)(?<pseudo_element>::(?:before|after))?$/u,
         selector
       )
 
     case captures do
-      %{"tag" => tag, "modifiers" => modifiers, "pseudo" => pseudo} ->
+      %{"tag" => tag, "modifiers" => modifiers, "pseudo_element" => pseudo_element}
+      when tag != "" or modifiers != "" ->
         part = %{
           tag: tag_name(tag),
           id: nil,
           classes: [],
-          pseudo_classes: pseudo_classes(pseudo),
+          attributes: [],
+          pseudo_classes: [],
+          negations: [],
+          pseudo_element: pseudo_element(pseudo_element),
           combinator: nil
         }
 
@@ -935,49 +955,128 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   defp parse_selector_modifiers("", part), do: {:ok, part}
 
   defp parse_selector_modifiers(modifiers, part) do
-    captures = Regex.scan(~r/([#.])([a-zA-Z_-][a-zA-Z0-9_-]*)/u, modifiers)
-    modifier_captures_to_part(captures, part)
-  end
+    cond do
+      captures =
+          Regex.named_captures(
+            ~r/^(?<prefix>[#.])(?<name>[a-zA-Z_-][a-zA-Z0-9_-]*)(?<rest>.*)$/u,
+            modifiers
+          ) ->
+        %{"prefix" => prefix, "name" => name, "rest" => rest} = captures
 
-  defp modifier_captures_to_part(captures, part) do
-    Enum.reduce_while(captures, {:ok, part}, fn [_, prefix, name], {:ok, acc} ->
-      case {prefix, acc.id} do
-        {"#", nil} -> {:cont, {:ok, %{acc | id: name}}}
-        {"#", _id} -> {:halt, {:error, :invalid_css}}
-        {".", _id} -> {:cont, {:ok, %{acc | classes: acc.classes ++ [name]}}}
-      end
-    end)
+        case {prefix, part.id} do
+          {"#", nil} -> parse_selector_modifiers(rest, %{part | id: name})
+          {"#", _id} -> {:error, :invalid_css}
+          {".", _id} -> parse_selector_modifiers(rest, %{part | classes: part.classes ++ [name]})
+        end
+
+      captures =
+          Regex.named_captures(
+            ~r/^\[\s*(?<name>[a-zA-Z_][a-zA-Z0-9_:-]*)(?:\s*=\s*(?<value>"[^"]*"|'[^']*'|[^\]\s]+))?\s*\](?<rest>.*)$/u,
+            modifiers
+          ) ->
+        %{"name" => name, "value" => value, "rest" => rest} = captures
+        name = String.downcase(name)
+
+        attribute =
+          case value do
+            "" -> {:present, name}
+            value -> {:equals, name, unquote_selector_value(value)}
+          end
+
+        parse_selector_modifiers(rest, %{part | attributes: part.attributes ++ [attribute]})
+
+      captures =
+          Regex.named_captures(
+            ~r/^:(?<pseudo>first-child|last-child|first-of-type|last-of-type|root)(?<rest>.*)$/u,
+            modifiers
+          ) ->
+        %{"pseudo" => pseudo, "rest" => rest} = captures
+
+        parse_selector_modifiers(rest, %{
+          part
+          | pseudo_classes: part.pseudo_classes ++ [pseudo_class(pseudo)]
+        })
+
+      captures =
+          Regex.named_captures(
+            ~r/^:nth-child\(\s*(?<index>odd|even|[1-9]\d*)\s*\)(?<rest>.*)$/u,
+            modifiers
+          ) ->
+        %{"index" => index, "rest" => rest} = captures
+
+        index =
+          case index do
+            "odd" -> :odd
+            "even" -> :even
+            index -> String.to_integer(index)
+          end
+
+        parse_selector_modifiers(rest, %{
+          part
+          | pseudo_classes: part.pseudo_classes ++ [{:nth_child, index}]
+        })
+
+      captures = Regex.named_captures(~r/^:not\((?<selector>[^()]*)\)(?<rest>.*)$/u, modifiers) ->
+        %{"selector" => selector, "rest" => rest} = captures
+
+        case parse_simple_selector(String.trim(selector)) do
+          {:ok, %{pseudo_element: nil} = negated} ->
+            parse_selector_modifiers(rest, %{part | negations: part.negations ++ [negated]})
+
+          _ ->
+            {:error, :invalid_css}
+        end
+
+      true ->
+        {:error, :invalid_css}
+    end
   end
 
   defp specificity(parts) do
     Enum.reduce(parts, {0, 0, 0}, fn part, {ids, classes, elements} ->
       id_count = if is_nil(part.id), do: 0, else: 1
       element_count = if is_nil(part.tag), do: 0, else: 1
-      class_count = length(part.classes) + length(part.pseudo_classes)
-      {ids + id_count, classes + class_count, elements + element_count}
+      pseudo_element_count = if is_nil(part.pseudo_element), do: 0, else: 1
+      class_count = length(part.classes) + length(part.attributes) + length(part.pseudo_classes)
+
+      {negation_ids, negation_classes, negation_elements} = specificity(part.negations)
+
+      {
+        ids + id_count + negation_ids,
+        classes + class_count + negation_classes,
+        elements + element_count + pseudo_element_count + negation_elements
+      }
     end)
   end
 
-  defp pseudo_classes(pseudo) do
+  defp pseudo_class(pseudo) do
     case pseudo do
-      ":first-child" ->
-        [:first_child]
+      "first-child" -> :first_child
+      "last-child" -> :last_child
+      "first-of-type" -> :first_of_type
+      "last-of-type" -> :last_of_type
+      "root" -> :root
+    end
+  end
 
-      ":last-child" ->
-        [:last_child]
+  defp pseudo_element("") do
+    nil
+  end
 
-      ":root" ->
-        [:root]
+  defp pseudo_element(pseudo_element) do
+    case pseudo_element do
+      "::before" -> :before
+      "::after" -> :after
+    end
+  end
 
-      pseudo ->
-        case Regex.named_captures(~r/^:nth-child\((?<index>[1-9]\d*)\)$/u, pseudo || "") do
-          %{"index" => index} ->
-            {index, ""} = Integer.parse(index)
-            [{:nth_child, index}]
+  defp unquote_selector_value(value) do
+    case value do
+      <<quote, inner::binary>> when quote in [?", ?'] ->
+        binary_part(inner, 0, byte_size(inner) - 1)
 
-          _ ->
-            []
-        end
+      value ->
+        value
     end
   end
 

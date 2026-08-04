@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 13pt;
+        color: #111827;
+      }
+      .sheet {
+        width: 595pt;
+        padding: 24pt;
+        box-sizing: border-box;
+        counter-reset: section 0 figure 4;
+      }
+      h2 { width: 360pt; margin: 0 0 8pt 0; font-size: 15pt; line-height: 18pt; }
+      h2::before { counter-increment: section; content: "Section " counter(section) ": "; color: #1d4ed8; }
+      .figure { width: 360pt; margin-bottom: 8pt; padding: 6pt; border: 1pt solid #94a3b8; }
+      .figure { counter-increment: figure; }
+      .figure::before { content: "Figure " counter(figure) " — " attr(data-label) ": "; font-weight: 700; }
+      .figure[data-tone=blue]:not(.muted) { background-color: #dbeafe; }
+      .figure:nth-child(odd) { border-left: 4pt solid #0f766e; }
+      .figure:nth-child(even) { border-left: 4pt solid #7c3aed; }
+      h2:first-of-type { color: #0f766e; }
+      h2:last-of-type { border-bottom: 1pt solid #0f766e; }
+      .status::after { content: " [" attr(data-status) "]"; color: #991b1b; }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <h2>Overview</h2>
+      <div class="figure" data-label="Architecture" data-tone="blue">Native pipeline</div>
+      <div class="figure muted" data-label="Fallback" data-tone="blue">Font resolution</div>
+      <h2>Results</h2>
+      <p class="status" data-status="approved">Generated labels and counters</p>
+    </main>
+  </body>
+</html>

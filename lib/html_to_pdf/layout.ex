@@ -239,6 +239,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp layout_flow_child(child, style, x, y, width) do
     case child do
       %{type: :text, text: text} when is_binary(text) ->
+        text = normalize_inline_whitespace(text, child.style)
+
         case trim_inline_whitespace(text) do
           "" ->
             {:ok, [], y}
@@ -446,6 +448,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp grid_item(child, index) do
     case child do
       %{type: :text, text: text} when is_binary(text) ->
+        text = normalize_inline_whitespace(text, child.style)
+
         case trim_inline_whitespace(text) do
           "" ->
             {:ok, nil}
@@ -1228,7 +1232,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp flex_item(child, index, main_axis, available_main, available_cross) do
     case child do
       %{type: :text, text: text} when is_binary(text) ->
-        case text |> collapse_inline_whitespace() |> trim_inline_whitespace() do
+        case text |> normalize_inline_whitespace(child.style) |> trim_inline_whitespace() do
           "" ->
             {:ok, nil}
 
@@ -2048,7 +2052,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp flex_child_intrinsic_width(child) do
     case child do
       %{type: :text, text: text, style: style} when is_binary(text) ->
-        text |> trim_inline_whitespace() |> text_width(style)
+        text
+        |> normalize_inline_whitespace(style)
+        |> trim_inline_whitespace()
+        |> text_width(style)
 
       %{type: :element, style: %{display: :none}} ->
         0.0
@@ -3412,9 +3419,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp inline_lines(runs, width) do
-    Enum.reduce(runs, [[]], fn run, lines ->
-      run.text
-      |> String.split("\n", trim: false)
+    runs
+    |> Enum.reduce([[]], fn run, lines ->
+      parts = String.split(run.text, "\n", trim: false)
+
+      parts
       |> Enum.with_index()
       |> Enum.reduce(lines, fn {part, index}, acc ->
         acc =
@@ -3423,12 +3432,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             _ -> append_wrapped_inline_text(acc, %{run | text: part}, width)
           end
 
-        case index < length(String.split(run.text, "\n", trim: false)) - 1 do
+        case index < length(parts) - 1 do
           true -> acc ++ [[]]
           false -> acc
         end
       end)
     end)
+    |> Enum.map(&trim_trailing_inline_whitespace/1)
+  end
+
+  defp trim_trailing_inline_whitespace(line_runs) do
+    trailing_run_count =
+      line_runs
+      |> Enum.reverse()
+      |> Enum.find_index(&(trim_inline_whitespace(&1.text) != ""))
+
+    case trailing_run_count do
+      nil ->
+        []
+
+      trailing_run_count ->
+        line_runs
+        |> Enum.take(length(line_runs) - trailing_run_count)
+        |> List.update_at(-1, fn run ->
+          %{run | text: String.replace(run.text, ~r/[ \t\f\r]+$/u, "")}
+        end)
+    end
   end
 
   defp append_wrapped_inline_text(lines, run, width) do
@@ -3521,13 +3550,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp append_inline_run(child, runs) do
     case child do
       %{type: :text, text: text, style: style} when is_binary(text) and is_map(style) ->
-        {:ok, runs ++ [%{text: collapse_inline_whitespace(text), style: style}]}
+        text = normalize_inline_whitespace(text, style)
+        {:ok, append_whitespace_collapsed_run(runs, text, style)}
 
       %{type: :element, style: %{display: :inline}, children: children}
       when is_list(children) ->
         case inline_runs(children) do
-          {:ok, child_runs} -> {:ok, runs ++ child_runs}
-          {:error, reason} -> {:error, reason}
+          {:ok, child_runs} ->
+            {:ok,
+             Enum.reduce(child_runs, runs, fn run, acc ->
+               append_whitespace_collapsed_run(acc, run.text, run.style)
+             end)}
+
+          {:error, reason} ->
+            {:error, reason}
         end
 
       %{type: :element, style: %{display: :line_break} = style, children: []} ->
@@ -3538,8 +3574,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp collapse_inline_whitespace(text) do
-    String.replace(text, ~r/[ \t\n\f\r]+/u, " ")
+  defp normalize_inline_whitespace(text, style) do
+    normalized_newlines = String.replace(text, ~r/\r\n?|\n/u, "\n")
+
+    case Map.get(style, :white_space, :normal) do
+      :pre_line ->
+        normalized_newlines
+        |> String.split("\n", trim: false)
+        |> Enum.map(&String.replace(&1, ~r/[ \t\f]+/u, " "))
+        |> Enum.join("\n")
+
+      _ ->
+        String.replace(normalized_newlines, ~r/[ \t\n\f]+/u, " ")
+    end
+  end
+
+  defp append_whitespace_collapsed_run(runs, text, style) do
+    text =
+      case List.last(runs) do
+        %{text: previous_text} ->
+          case Regex.match?(~r/[ \t\n\f\r]$/u, previous_text) do
+            true -> String.replace(text, ~r/^[ \t\f]+/u, "")
+            false -> text
+          end
+
+        _ ->
+          text
+      end
+
+    runs ++ [%{text: text, style: style}]
   end
 
   defp trim_inline_whitespace(text) do
@@ -3683,7 +3746,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       :font_style,
       :font_weight,
       :letter_spacing,
-      :line_height
+      :line_break,
+      :line_height,
+      :text_align,
+      :white_space
     ])
   end
 

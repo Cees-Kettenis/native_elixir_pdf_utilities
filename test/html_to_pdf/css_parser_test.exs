@@ -63,6 +63,52 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert List.last(nth_selector.parts).pseudo_classes == [{:nth_child, 2}]
   end
 
+  test "parse accepts document attribute, negation, positional, and generated-content selectors" do
+    assert {:ok, [attribute_rule, positional_rule, type_rule, generated_rule]} =
+             CssParser.parse("""
+             [data-kind][role='note']:not(.muted) { color: red; }
+             tbody > tr:nth-child(odd), tbody > tr:nth-child(even) { color: blue; }
+             section:first-of-type, section:last-of-type { margin-bottom: 0; }
+             figure[data-label]::before { content: attr(data-label); }
+             """)
+
+    [attribute_selector] = attribute_rule.selectors
+    [attribute_part] = attribute_selector.parts
+
+    assert attribute_part.attributes == [
+             {:present, "data-kind"},
+             {:equals, "role", "note"}
+           ]
+
+    assert [%{classes: ["muted"]}] = attribute_part.negations
+    assert attribute_selector.specificity == {0, 3, 0}
+
+    assert Enum.map(positional_rule.selectors, fn selector ->
+             List.last(selector.parts).pseudo_classes
+           end) == [[{:nth_child, :odd}], [{:nth_child, :even}]]
+
+    assert Enum.map(type_rule.selectors, fn selector ->
+             List.last(selector.parts).pseudo_classes
+           end) == [[:first_of_type], [:last_of_type]]
+
+    [generated_selector] = generated_rule.selectors
+    assert List.last(generated_selector.parts).pseudo_element == :before
+    assert generated_selector.specificity == {0, 1, 2}
+  end
+
+  test "parse keeps unsupported selector diagnostics strict" do
+    for css <- [
+          "p:not(div span) { color: red; }",
+          "p:not() { color: red; }",
+          "p::before span { color: red; }",
+          "p:nth-child(2n) { color: red; }",
+          "p[data-kind^=note] { color: red; }",
+          "p::marker { color: red; }"
+        ] do
+      assert CssParser.parse(css) == {:error, :invalid_css}
+    end
+  end
+
   test "parse accepts root custom properties and important declarations" do
     assert {:ok, [root_rule, hidden_rule]} =
              CssParser.parse("""

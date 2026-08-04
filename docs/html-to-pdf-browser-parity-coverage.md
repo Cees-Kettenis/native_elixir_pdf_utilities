@@ -10,7 +10,7 @@ CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity
 
 ## Current Result
 
-The browser-parity suite contains 25 synthetic HTML fixtures, 4 real production environment document fixtures, and guard tests that ensure every fixture has configured thresholds.
+The browser-parity suite contains 31 synthetic HTML fixtures, 4 real production environment document fixtures, and guard tests that ensure every fixture has configured thresholds.
 
 Current status: passing. The full suite passes with:
 
@@ -28,6 +28,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `box_sizing_and_margins.html` | `box-sizing`, min/max width, percentage width, negative margins, clamped block sizing |
 | `break_variants.html` | `break-before`, `break-after`, `page-break-before`, `page-break-inside`, auto and forced break values |
 | `css_cascade_selectors.html` | universal, element, class, id, child, descendant, `:first-child`, `:last-child`, `:nth-child`, `!important`, forward-referenced custom properties, `display: none` |
+| `generated_content_counters.html` | attribute selectors, `:not()`, odd/even and type-position selectors, `::before`, `::after`, `attr()`, named counter reset/increment/output |
 | `css_remaining_supported_values.html` | grouped selectors, source order, inline style priority, inheritance, inline flex/grid, `min()`, named colors, no-op `overflow`/`position`, side padding/borders, `vertical-align`, `line-break`, `word-wrap` |
 | `display_lists_and_inline_block.html` | inline-block layout, hidden elements, unordered lists, ordered lists, list item spacing |
 | `fonts_and_print_media.html` | local CSS `@font-face`, print-only media cascade, embedded font output, bundled Unicode glyph fallback from a built-in font |
@@ -52,6 +53,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `table_separate_borders.html` | separate borders, captions, headers, cell padding, `colspan`, right-aligned table content |
 | `text_style_variants.html` | `rgb()`, `rgba()`, `currentColor`, nested custom properties, inherited unitless line height, transparent borders, white-space, word breaking, letter spacing, text transforms |
 | `units_and_sizing.html` | `pt`, `px`, `mm`, `cm`, `in`, root-font-relative `rem`, percentages, `aspect-ratio`, fixed height, min-height |
+| `whitespace_pre_line.html` | default whitespace collapse, `white-space: pre-line`, `<br>`, literal escaped newline text, centered and right-aligned lines |
 
 ## Production Fixture Catalog
 
@@ -85,19 +87,20 @@ Current production fixture parity:
 | Lists: `ul`, `ol`, `li` | Passing | `display_lists_and_inline_block.html` |
 | Tables: `table`, `caption`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td` | Passing | Table fixtures, especially `table_rowspan_tfoot.html` |
 | Images: 8-bit non-interlaced RGB/RGBA PNG, JPEG, SVG data URIs | Passing | `images_data_uris.html` |
-| Attributes: `id`, `class`, `style`, `lang`, metadata attributes, `href`, `src`, `alt`, `colspan`, `rowspan` | Passing | `css_cascade_selectors.html`, `html_semantics_typography.html`, `links_entities_and_protocols.html`, `images_data_uris.html`, table fixtures |
+| Attributes: `id`, `class`, `style`, `title`, `role`, `data-*`, `aria-*`, `lang`, metadata attributes, `href`, `src`, `alt`, `colspan`, `rowspan` | Passing | `generated_content_counters.html`, `css_cascade_selectors.html`, `html_semantics_typography.html`, `links_entities_and_protocols.html`, `images_data_uris.html`, table fixtures |
 | Link protocols: `https`, `http`, `mailto` | Passing | `links_entities_and_protocols.html` |
 
 ## CSS Coverage
 
 | Feature | Status | Fixtures |
 | --- | --- | --- |
-| Selectors: universal, element, class, id, `element.class`, descendant, direct child, comma groups, `:root`, `:first-child`, `:last-child`, `:nth-child(n)` | Passing | `css_cascade_selectors.html`, `css_remaining_supported_values.html` |
+| Selectors: universal, element, class, id, element/class, attribute presence/equality, descendant, direct child, comma groups, `:not()`, `:root`, child position, type position, `::before`, `::after` | Passing | `generated_content_counters.html`, `css_cascade_selectors.html`, `css_remaining_supported_values.html` |
+| Generated content and counters: quoted content, `attr()`, `counter()`, reset, increment | Passing | `generated_content_counters.html` |
 | Cascade: specificity, source order, inline style priority, `!important`, inheritance, recursively resolved custom properties via `var()` | Passing | `css_cascade_selectors.html`, `css_remaining_supported_values.html`, `text_style_variants.html` |
 | Units: `pt`, `px`, root-font-relative `rem`, `mm`, `cm`, `in`, percentages, unitless `0` | Passing | `units_and_sizing.html`, reset rules across fixtures |
 | Display: `block`, `inline`, `inline-block`, `none`, `flex`, `inline-flex`, `grid`, `inline-grid` | Passing | `display_lists_and_inline_block.html`, `css_remaining_supported_values.html`, flex/grid fixtures |
 | Box model: width/height, min/max width/height, `min()`, `aspect-ratio`, `box-sizing`, margin, negative margin, padding, side-specific padding, borders, border radius, border collapse, background, overflow, position | Passing | `block_box_model.html`, `box_sizing_and_margins.html`, `css_remaining_supported_values.html`, table fixtures |
-| Text: color, font family/size/weight/style, relative and absolute line-height inheritance, text alignment, transform, vertical align, line breaking, word breaking, white-space, letter spacing | Passing | `inline_text_flow.html`, `text_style_variants.html`, `css_remaining_supported_values.html`, table fixtures |
+| Text: color, font family/size/weight/style, relative and absolute line-height inheritance, left/center/right alignment, transform, vertical align, line breaking, word breaking, default and `pre-line` whitespace, letter spacing | Passing | `whitespace_pre_line.html`, `inline_text_flow.html`, `text_style_variants.html`, `css_remaining_supported_values.html`, table fixtures |
 | Colors: hex, named colors, `rgb()`, `rgba()`, `currentColor`, transparent | Passing | `text_style_variants.html`, `css_remaining_supported_values.html` |
 | Page rules and breaks: `@page`, `@media print`, `break-before`, `break-after`, `page-break-before`, `page-break-after`, `page-break-inside` | Passing | `page_geometry_asymmetric.html`, `page_rules_landscape.html`, `fonts_and_print_media.html`, `pagination_breaks.html`, `break_variants.html` |
 | Flexbox subset: direction, wrap, gap, row/column gap, justify/align, order, grow/shrink/basis, main-axis min/max freezing and redistribution, `flex`, inline flex | Passing | `flex_direction_and_justification.html`, `flex_grid_alignment.html`, `css_remaining_supported_values.html` |

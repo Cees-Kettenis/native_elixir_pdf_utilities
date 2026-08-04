@@ -82,6 +82,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
               }}
   end
 
+  test "parse accepts generated-content and attribute-selector metadata" do
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               ~s(<p data-label="Status" aria-label="Current status" role="note" title="Ready">Complete</p>)
+             )
+
+    [paragraph] = dom.children
+
+    assert paragraph.attributes == %{
+             "aria-label" => "Current status",
+             "data-label" => "Status",
+             "role" => "note",
+             "title" => "Ready"
+           }
+  end
+
   test "parse accepts structural html head and body tags" do
     assert {:ok, dom} =
              HtmlParser.parse(
@@ -443,7 +459,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert HtmlParser.parse("<p>Hello</>") == {:error, :unsupported_html}
     assert HtmlParser.parse("<p style=color:red>Hello</p>") == {:error, :unsupported_html}
     assert HtmlParser.parse(~s(<p style="a" style="b">Hello</p>)) == {:error, :unsupported_html}
-    assert HtmlParser.parse(~s(<p data-copy="yes">Hello</p>)) == {:error, :unsupported_html}
+    assert HtmlParser.parse(~S|<p onclick="run()">Hello</p>|) == {:error, :unsupported_html}
 
     assert HtmlParser.parse(~s(<a href="https://example.com">No block</a>)) ==
              {:error, :unsupported_html}

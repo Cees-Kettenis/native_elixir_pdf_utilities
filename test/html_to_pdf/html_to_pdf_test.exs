@@ -135,6 +135,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "0 0 1 rg"
   end
 
+  test "render writes generated attributes and counters into PDF text runs" do
+    html = """
+    <style>
+      body { counter-reset: section 0; }
+      h2::before { counter-increment: section; content: "Section " counter(section) ": "; }
+      [data-status=ready]:not(.hidden)::after { content: " [" attr(data-status) "]"; }
+    </style>
+    <h2 data-status="ready">Overview</h2>
+    <h2 data-status="ready">Details</h2>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert pdf =~ "(Section 1: ) Tj"
+    assert pdf =~ "(Section 2: ) Tj"
+    assert length(Regex.scan(~r/\( \[ready\]\) Tj/, pdf)) == 2
+    assert pdf =~ "(Overview) Tj"
+    assert pdf =~ "(Details) Tj"
+  end
+
   test "render converts block box styling to PDF drawing commands" do
     html =
       ~s(<p style="margin: 2pt; padding: 3pt; border: 1pt solid red; border-radius: 2pt; background-color: #eeeeee">Boxed</p>)

@@ -3,9 +3,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   Style computation for the native HTML-to-PDF renderer.
 
   This module applies defaults, inheritance, font resolution, and the CSS
-  cascade for the supported text, box, list, link, table, page-break, flexbox,
-  grid, image, and embedded-font styling subset. Unsupported properties or
-  invalid values fail the render instead of being ignored.
+  cascade for the supported text, generated-content, named-counter, selector,
+  box, list, link, table, page-break, flexbox, grid, image, and embedded-font
+  styling subset. Unsupported properties or invalid values fail the render
+  instead of being ignored.
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
@@ -85,7 +86,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             line_height: 14.4,
             line_height_normal: true,
             text_align: :left,
-            text_transform: :none
+            text_transform: :none,
+            white_space: :normal
           }
 
           result =
@@ -94,8 +96,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                 {:ok, %{type: :document, children: []}}
 
               {:ok, root_style} ->
-                with {:ok, styled_children} <-
-                       style_children(children, root_style, rules, [], opts) do
+                with {:ok, styled_children, _counters} <-
+                       style_children(children, root_style, rules, [], opts, %{}) do
                   {:ok, %{type: :document, children: styled_children}}
                 end
 
@@ -161,16 +163,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp style_children(children, inherited_style, rules, ancestors, opts) do
-    Enum.reduce_while(children, {:ok, []}, fn child, {:ok, acc} ->
-      case style_node(child, inherited_style, rules, ancestors, opts) do
-        {:ok, styled_children} -> {:cont, {:ok, acc ++ styled_children}}
-        {:error, reason} -> {:halt, {:error, reason}}
+  defp style_children(children, inherited_style, rules, ancestors, opts, counters) do
+    Enum.reduce_while(children, {:ok, [], counters}, fn child, {:ok, acc, counters} ->
+      case style_node(child, inherited_style, rules, ancestors, opts, counters) do
+        {:ok, styled_children, counters} ->
+          {:cont, {:ok, acc ++ styled_children, counters}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp style_node(node, inherited_style, rules, ancestors, opts) do
+  defp style_node(node, inherited_style, rules, ancestors, opts, counters) do
     case node do
       %{type: :text, text: text} when is_binary(text) ->
         {:ok,
@@ -180,32 +185,56 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
              text: transform_text(text, Map.get(inherited_style, :text_transform, :none)),
              style: text_style(inherited_style)
            }
-         ]}
+         ], counters}
 
       %{type: :element, tag: tag, attributes: attributes, children: children}
       when is_binary(tag) and is_map(attributes) and is_list(children) ->
         case tag do
           tag when tag in ["style", "meta", "title"] ->
-            {:ok, []}
+            {:ok, [], counters}
 
           "head" ->
-            {:ok, []}
+            {:ok, [], counters}
 
           tag when tag in ["html", "body"] ->
             with {:ok, element_style} <-
                    element_style(node, inherited_style, rules, ancestors, opts) do
               case Map.get(element_style, :display) do
                 :none ->
-                  {:ok, []}
+                  {:ok, [], counters}
 
                 _ ->
-                  style_children(
-                    children,
-                    text_style(element_style),
-                    rules,
-                    [node | ancestors],
-                    opts
-                  )
+                  counters = apply_counter_operations(element_style, counters)
+
+                  with {:ok, before, counters} <-
+                         generated_content_node(
+                           node,
+                           :before,
+                           element_style,
+                           rules,
+                           ancestors,
+                           counters
+                         ),
+                       {:ok, styled_children, counters} <-
+                         style_children(
+                           children,
+                           text_style(element_style),
+                           rules,
+                           [node | ancestors],
+                           opts,
+                           counters
+                         ),
+                       {:ok, after_content, counters} <-
+                         generated_content_node(
+                           node,
+                           :after,
+                           element_style,
+                           rules,
+                           ancestors,
+                           counters
+                         ) do
+                    {:ok, before ++ styled_children ++ after_content, counters}
+                  end
               end
             end
 
@@ -214,16 +243,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                    element_style(node, inherited_style, rules, ancestors, opts) do
               case Map.get(element_style, :display) do
                 :none ->
-                  {:ok, [%{type: :element, tag: tag, style: element_style, children: []}]}
+                  {:ok, [%{type: :element, tag: tag, style: element_style, children: []}],
+                   counters}
 
                 _ ->
-                  with {:ok, styled_children} <-
+                  counters = apply_counter_operations(element_style, counters)
+
+                  with {:ok, before, counters} <-
+                         generated_content_node(
+                           node,
+                           :before,
+                           element_style,
+                           rules,
+                           ancestors,
+                           counters
+                         ),
+                       {:ok, styled_children, counters} <-
                          style_children(
                            children,
                            text_style(element_style),
                            rules,
                            [node | ancestors],
-                           opts
+                           opts,
+                           counters
+                         ),
+                       {:ok, after_content, counters} <-
+                         generated_content_node(
+                           node,
+                           :after,
+                           element_style,
+                           rules,
+                           ancestors,
+                           counters
                          ) do
                     {:ok,
                      [
@@ -231,9 +282,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                          type: :element,
                          tag: tag,
                          style: element_style,
-                         children: styled_children
+                         children: before ++ styled_children ++ after_content
                        }
-                     ]}
+                     ], counters}
                   end
               end
             end
@@ -243,6 +294,85 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:error, :invalid_document}
     end
   end
+
+  defp generated_content_node(node, pseudo_element, inherited_style, rules, ancestors, counters) do
+    case matching_declarations(rules, node, ancestors, pseudo_element) do
+      [] ->
+        {:ok, [], counters}
+
+      _matched_declarations ->
+        generated_style =
+          inherited_style
+          |> text_style()
+          |> Map.put(:display, :inline)
+
+        case apply_author_styles(
+               generated_style,
+               node,
+               ancestors,
+               rules,
+               pseudo_element
+             ) do
+          {:ok, style} ->
+            counters = apply_counter_operations(style, counters)
+
+            text =
+              generated_content_text(Map.get(style, :content, :none), node.attributes, counters)
+
+            case {Map.get(style, :display), text} do
+              {:none, _text} ->
+                {:ok, [], counters}
+
+              {_display, ""} ->
+                {:ok, [], counters}
+
+              {_display, text} ->
+                child = %{
+                  type: :text,
+                  text: transform_text(text, Map.get(style, :text_transform, :none)),
+                  style: text_style(style)
+                }
+
+                {:ok,
+                 [
+                   %{
+                     type: :element,
+                     tag: "::#{pseudo_element}",
+                     style: style,
+                     children: [child]
+                   }
+                 ], counters}
+            end
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  defp apply_counter_operations(style, counters) do
+    counters =
+      Enum.reduce(Map.get(style, :counter_reset, []), counters, fn {name, value}, acc ->
+        Map.put(acc, name, value)
+      end)
+
+    Enum.reduce(Map.get(style, :counter_increment, []), counters, fn {name, increment}, acc ->
+      Map.update(acc, name, increment, &(&1 + increment))
+    end)
+  end
+
+  defp generated_content_text(content, attributes, counters) do
+    Enum.map_join(content_parts(content), "", fn part ->
+      case part do
+        {:string, text} -> text
+        {:attr, name} -> Map.get(attributes, name, "")
+        {:counter, name} -> counters |> Map.get(name, 0) |> Integer.to_string()
+      end
+    end)
+  end
+
+  defp content_parts(parts) when is_list(parts), do: parts
+  defp content_parts(_content), do: []
 
   defp fragment_root_style(children, base_style, rules, opts) do
     case Enum.any?(children, &document_container?/1) do
@@ -501,7 +631,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       :line_height_normal,
       :link_url,
       :text_align,
-      :text_transform
+      :text_transform,
+      :white_space
     ])
   end
 
@@ -1111,12 +1242,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp apply_author_styles(style, node, ancestors, rules) do
-    case CssParser.parse_declarations(Map.get(node.attributes, "style", "")) do
+  defp apply_author_styles(style, node, ancestors, rules, pseudo_element \\ nil) do
+    inline_style =
+      case pseudo_element do
+        nil -> Map.get(node.attributes, "style", "")
+        _pseudo_element -> ""
+      end
+
+    case CssParser.parse_declarations(inline_style) do
       {:ok, inline_declarations} ->
         declarations =
           rules
-          |> matching_declarations(node, ancestors)
+          |> matching_declarations(node, ancestors, pseudo_element)
           |> Kernel.++(
             inline_declarations
             |> Enum.with_index()
@@ -1160,10 +1297,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp matching_declarations(rules, node, ancestors) do
+  defp matching_declarations(rules, node, ancestors, pseudo_element) do
     rules
     |> Enum.flat_map(fn rule ->
-      case matching_specificity(rule.selectors, node, ancestors) do
+      case matching_specificity(rule.selectors, node, ancestors, pseudo_element) do
         nil ->
           []
 
@@ -1184,17 +1321,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end)
   end
 
-  defp matching_specificity(selectors, node, ancestors) do
+  defp matching_specificity(selectors, node, ancestors, pseudo_element) do
     selectors
-    |> Enum.filter(&matches_selector?(&1, node, ancestors))
+    |> Enum.filter(&matches_selector?(&1, node, ancestors, pseudo_element))
     |> Enum.map(& &1.specificity)
     |> Enum.max(fn -> nil end)
   end
 
-  defp matches_selector?(selector, node, ancestors) do
-    selector.parts
-    |> Enum.reverse()
-    |> match_selector_parts(node, ancestors)
+  defp matches_selector?(selector, node, ancestors, pseudo_element) do
+    [rightmost | _remaining] = parts = Enum.reverse(selector.parts)
+
+    rightmost.pseudo_element == pseudo_element and
+      match_selector_parts(parts, node, ancestors)
   end
 
   defp match_selector_parts(parts, node, ancestors) do
@@ -1235,11 +1373,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     tag_matches? = is_nil(part.tag) or Map.get(node, :tag) == part.tag
     id_matches? = is_nil(part.id) or Map.get(attributes, "id") == part.id
     classes_match? = Enum.all?(part.classes, &(&1 in classes))
+    attributes_match? = Enum.all?(part.attributes, &attribute_selector_matches?(&1, attributes))
 
     pseudo_classes_match? =
       Enum.all?(part.pseudo_classes, &pseudo_class_matches?(&1, node, ancestors))
 
-    tag_matches? and id_matches? and classes_match? and pseudo_classes_match?
+    negations_match? =
+      Enum.all?(part.negations, &(not matches_simple_selector?(&1, node, ancestors)))
+
+    tag_matches? and id_matches? and classes_match? and attributes_match? and
+      pseudo_classes_match? and negations_match?
+  end
+
+  defp attribute_selector_matches?(attribute_selector, attributes) do
+    case attribute_selector do
+      {:present, name} -> Map.has_key?(attributes, name)
+      {:equals, name, value} -> Map.get(attributes, name) == value
+    end
   end
 
   defp pseudo_class_matches?(pseudo_class, node, ancestors) do
@@ -1271,13 +1421,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             false
         end
 
-      {:nth_child, index} ->
+      :first_of_type ->
         case ancestors do
           [%{children: children} | _rest] when is_list(children) ->
             children
-            |> Enum.filter(&match?(%{type: :element}, &1))
-            |> Enum.at(index - 1)
+            |> Enum.filter(&(match?(%{type: :element}, &1) and &1.tag == node.tag))
+            |> List.first()
             |> Kernel.==(node)
+
+          _ ->
+            false
+        end
+
+      :last_of_type ->
+        case ancestors do
+          [%{children: children} | _rest] when is_list(children) ->
+            children
+            |> Enum.filter(&(match?(%{type: :element}, &1) and &1.tag == node.tag))
+            |> List.last()
+            |> Kernel.==(node)
+
+          _ ->
+            false
+        end
+
+      {:nth_child, index} ->
+        case ancestors do
+          [%{children: children} | _rest] when is_list(children) ->
+            element_index =
+              children
+              |> Enum.filter(&match?(%{type: :element}, &1))
+              |> Enum.find_index(&(&1 == node))
+
+            case {index, element_index} do
+              {:odd, element_index} -> rem(element_index + 1, 2) == 1
+              {:even, element_index} -> rem(element_index + 1, 2) == 0
+              {index, element_index} -> element_index + 1 == index
+            end
 
           _ ->
             false
@@ -1472,6 +1652,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       "text-transform" ->
         put_text_transform(style, value)
+
+      "content" ->
+        put_generated_content(style, value)
+
+      "counter-reset" ->
+        put_counter_values(style, :counter_reset, value, 0)
+
+      "counter-increment" ->
+        put_counter_values(style, :counter_increment, value, 1)
 
       "letter-spacing" ->
         put_letter_spacing(style, value)
@@ -1894,6 +2083,88 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
+  defp put_generated_content(style, value) do
+    normalized = String.trim(value)
+
+    case String.downcase(normalized) do
+      keyword when keyword in ["none", "normal"] ->
+        {:ok, Map.put(style, :content, :none)}
+
+      _ ->
+        token_regex =
+          ~r/\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|attr\(\s*[a-zA-Z_][a-zA-Z0-9_:-]*\s*\)|counter\(\s*[a-zA-Z_][a-zA-Z0-9_-]*\s*\))/u
+
+        tokens = Regex.scan(token_regex, normalized)
+        parsed_source = Enum.map_join(tokens, "", &List.first/1) |> String.trim()
+
+        case tokens != [] and parsed_source == normalized do
+          true ->
+            parts =
+              Enum.map(tokens, fn [_, token] ->
+                cond do
+                  String.starts_with?(token, ["\"", "'"]) ->
+                    text = String.slice(token, 1, String.length(token) - 2)
+                    {:string, String.replace(text, ~r/\\([\\"'])/u, "\\1")}
+
+                  String.starts_with?(token, "attr(") ->
+                    [_, name] = Regex.run(~r/^attr\(\s*([a-zA-Z_][a-zA-Z0-9_:-]*)\s*\)$/u, token)
+                    {:attr, String.downcase(name)}
+
+                  String.starts_with?(token, "counter(") ->
+                    [_, name] =
+                      Regex.run(~r/^counter\(\s*([a-zA-Z_][a-zA-Z0-9_-]*)\s*\)$/u, token)
+
+                    {:counter, name}
+                end
+              end)
+
+            {:ok, Map.put(style, :content, parts)}
+
+          false ->
+            {:error, :invalid_document}
+        end
+    end
+  end
+
+  defp put_counter_values(style, property, value, default_value) do
+    tokens = value |> String.trim() |> String.split(~r/\s+/u, trim: true)
+
+    case tokens do
+      ["none"] ->
+        {:ok, Map.put(style, property, [])}
+
+      tokens ->
+        result =
+          Enum.reduce_while(tokens, {:ok, [], false}, fn token, {:ok, values, integer_allowed?} ->
+            identifier? =
+              token != "none" and Regex.match?(~r/^[a-zA-Z_][a-zA-Z0-9_-]*$/u, token)
+
+            cond do
+              identifier? ->
+                {:cont, {:ok, values ++ [{token, default_value}], true}}
+
+              integer_allowed? ->
+                case Integer.parse(token) do
+                  {integer, ""} ->
+                    {name, _old_value} = List.last(values)
+                    {:cont, {:ok, List.replace_at(values, -1, {name, integer}), false}}
+
+                  _ ->
+                    {:halt, :error}
+                end
+
+              true ->
+                {:halt, :error}
+            end
+          end)
+
+        case result do
+          {:ok, values, _integer_allowed?} -> {:ok, Map.put(style, property, values)}
+          :error -> {:error, :invalid_document}
+        end
+    end
+  end
+
   defp put_letter_spacing(style, value) do
     case value |> String.trim() |> String.downcase() do
       "normal" ->
@@ -1912,11 +2183,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     normalized = value |> String.trim() |> String.downcase()
 
     case {property, normalized} do
-      {"white-space", value} when value in ["normal", "pre-line"] ->
-        {:ok, style}
+      {"white-space", "normal"} ->
+        {:ok, Map.put(style, :white_space, :normal)}
+
+      {"white-space", "pre-line"} ->
+        {:ok, Map.put(style, :white_space, :pre_line)}
 
       {"white-space", "nowrap"} ->
-        {:ok, Map.put(style, :line_break, :normal)}
+        {:ok, style |> Map.put(:white_space, :normal) |> Map.put(:line_break, :normal)}
 
       {property, "break-word"} when property in ["word-break", "word-wrap", "overflow-wrap"] ->
         {:ok, Map.put(style, :line_break, :break_word)}

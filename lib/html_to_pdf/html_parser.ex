@@ -5,8 +5,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   Supports a strict subset of document-oriented HTML: structural
   html/head/body/style tags, paragraphs, headings, inline emphasis/color
   containers, div containers for flex/grid layouts, lists, links, tables,
-  images, and CSS-targeting attributes. Unsupported or malformed markup returns
-  an error instead of guessing at browser behavior.
+  images, and CSS-targeting attributes, including `data-*` and `aria-*`
+  metadata used by attribute selectors and generated content. Unsupported or
+  malformed markup returns an error instead of guessing at browser behavior.
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlEntities
@@ -220,6 +221,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
           {:cont, {:ok, Map.put(acc, name, value)}}
 
         {"class", _, false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"title", _, false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"role", _, false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, _, false}
+        when is_binary(name) and
+               (binary_part(name, 0, min(byte_size(name), 5)) == "data-" or
+                  binary_part(name, 0, min(byte_size(name), 5)) == "aria-") ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
         {"lang", "html", false} ->

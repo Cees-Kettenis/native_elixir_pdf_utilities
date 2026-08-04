@@ -80,8 +80,127 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     text_boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
 
-    assert Enum.map(text_boxes, & &1.text) == ["A\u00A0B ", "C"]
+    assert Enum.map(text_boxes, & &1.text) == ["A\u00A0B", "C"]
     assert Enum.at(text_boxes, 0).y > Enum.at(text_boxes, 1).y
+  end
+
+  test "layout preserves normalized LF, CRLF, and CR breaks only for white-space pre-line" do
+    for newline <- ["\n", "\r\n", "\r"] do
+      html =
+        "<p style=\"white-space: pre-line; margin: 0\">Alpha#{newline}  Beta</p>" <>
+          "<p style=\"white-space: normal; margin: 0\">Gamma#{newline}  Delta</p>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled_tree} = Style.compute(dom)
+      assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 120}, margin: 10)
+
+      text_boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
+
+      assert Enum.map(text_boxes, & &1.text) == ["Alpha", "Beta", "Gamma Delta"]
+      assert Enum.at(text_boxes, 0).y > Enum.at(text_boxes, 1).y
+    end
+  end
+
+  test "layout keeps explicit br breaks and treats escaped newline sequences as text" do
+    html =
+      ~S|<p style="margin: 0">A<br>B\nC\r\nD</p>|
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom)
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 100}, margin: 10)
+
+    text_boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
+    assert Enum.map(text_boxes, & &1.text) == ["A", ~S|B\nC\r\nD|]
+    assert Enum.at(text_boxes, 0).y > Enum.at(text_boxes, 1).y
+  end
+
+  test "layout collapses default HTML whitespace across inline element boundaries" do
+    html = "<p style=\"margin: 0\">Alpha \n <strong>  Beta</strong>\r\n <span> Gamma</span></p>"
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom)
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 100}, margin: 10)
+
+    text_boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
+    assert Enum.map_join(text_boxes, "", & &1.text) == "Alpha Beta Gamma"
+    assert text_boxes |> Enum.map(& &1.y) |> Enum.uniq() |> length() == 1
+  end
+
+  test "layout positions generated content and aligns complete lines left center and right" do
+    html = """
+    <style>
+      body { counter-reset: section; }
+      h1::before { counter-increment: section; content: counter(section) ". "; }
+    </style>
+    <h1 style="font-size: 10pt; width: 100pt; margin: 0; text-align: left">Left</h1>
+    <h1 style="font-size: 10pt; width: 100pt; margin: 0; text-align: center">Center</h1>
+    <h1 style="font-size: 10pt; width: 100pt; margin: 0; text-align: right">Right</h1>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom)
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {140, 120}, margin: 10)
+
+    [left_number, left, center_number, center, right_number, right] =
+      Enum.filter(layout_tree.boxes, &(&1.type == :text))
+
+    assert Enum.map([left_number, center_number, right_number], & &1.text) == [
+             "1. ",
+             "2. ",
+             "3. "
+           ]
+
+    assert left_number.x == 10
+    assert center_number.x > left_number.x
+    assert right_number.x > center_number.x
+
+    assert_in_delta center_number.x,
+                    10 + (100 - center_number.annotation_width - center.annotation_width) / 2,
+                    0.001
+
+    assert_in_delta right_number.x,
+                    10 + 100 - right_number.annotation_width - right.annotation_width,
+                    0.001
+
+    assert left.text == "Left"
+    assert center.text == "Center"
+    assert right.text == "Right"
+  end
+
+  test "layout alignment ignores trailing collapsed whitespace on mixed and wrapped lines" do
+    html = """
+    <p style="font-size: 10pt; line-height: 12pt; width: 100pt; margin: 0; text-align: right">Right <strong>edge</strong>
+    </p>
+    <p style="font-size: 10pt; line-height: 12pt; width: 100pt; margin: 0; text-align: center">Centered <em>line</em>
+    </p>
+    <p style="font-size: 10pt; line-height: 12pt; width: 60pt; margin: 0; text-align: right">Alpha Beta Gamma Delta</p>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom)
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {140, 120}, margin: 10)
+
+    line_boxes =
+      layout_tree.boxes
+      |> Enum.filter(&(&1.type == :text))
+      |> Enum.chunk_by(& &1.y)
+
+    [right_line, center_line | wrapped_lines] = line_boxes
+
+    assert Enum.map_join(right_line, "", & &1.text) == "Right edge"
+    assert_in_delta List.last(right_line).x + List.last(right_line).annotation_width, 110, 0.001
+
+    assert Enum.map_join(center_line, "", & &1.text) == "Centered line"
+    center_start = hd(center_line).x
+    center_end = List.last(center_line).x + List.last(center_line).annotation_width
+    assert_in_delta center_start - 10, 110 - center_end, 0.001
+
+    assert length(wrapped_lines) >= 2
+
+    for line <- wrapped_lines do
+      refute String.ends_with?(List.last(line).text, " ")
+      assert_in_delta List.last(line).x + List.last(line).annotation_width, 70, 0.001
+    end
   end
 
   test "layout includes letter spacing in text measurements" do
@@ -2345,8 +2464,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert "Grid Table" in rendered_text
     assert "Flex Table" in rendered_text
-    assert Enum.join(rendered_text, "") =~ "Direct Flex A"
-    assert Enum.join(rendered_text, "") =~ "Direct Flex B"
+    assert Enum.join(rendered_text, " ") =~ "Direct Flex A"
+    assert Enum.join(rendered_text, " ") =~ "Direct Flex B"
     assert "Neighbor" in rendered_text
   end
 
@@ -3484,9 +3603,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     lines = layout_tree.boxes |> Enum.filter(&(&1.type == :text)) |> Enum.map(& &1.text)
 
-    assert "ZIPPER-AUTOLOCKING " in lines
+    assert "ZIPPER-AUTOLOCKING" in lines
     refute Enum.any?(lines, &String.starts_with?(&1, "PPER-"))
-    refute "R-AUTOLOCKING " in lines
+    refute "R-AUTOLOCKING" in lines
 
     assert {:ok, emergency_tree} =
              Style.compute(%{

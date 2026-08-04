@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 14pt;
+        color: #111827;
+      }
+      .sheet { width: 595pt; padding: 24pt; box-sizing: border-box; }
+      .sample { width: 300pt; margin: 0 0 10pt 0; padding: 6pt; border: 1pt solid #94a3b8; }
+      .pre-line { white-space: pre-line; }
+      .center { text-align: center; }
+      .right { text-align: right; }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <p class="sample">Default whitespace
+        collapses across raw source lines.</p>
+      <p class="sample pre-line">Pre-line preserves this break.
+Second line collapses     repeated spaces.
+Third line remains visible.</p>
+      <p class="sample center">Centered <strong>mixed-style line</strong>
+      <br>Centered after br</p>
+      <p class="sample right">Right aligned <em>mixed-style line</em>
+      <br>Right aligned after br</p>
+      <p class="sample pre-line">Literal \n and \r\n remain plain text.</p>
+    </main>
+  </body>
+</html>

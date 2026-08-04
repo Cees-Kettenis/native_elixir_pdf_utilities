@@ -1353,6 +1353,256 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert second.style.color == {0, 0, 0}
   end
 
+  test "compute applies attribute, negation, odd/even, and type-position selectors" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [
+            %{
+              type: :text,
+              text: """
+              [data-kind][role=note]:not(.muted) { color: red; }
+              div > p:nth-child(odd) { font-weight: bold; }
+              div > p:nth-child(even) { font-style: italic; }
+              p:first-of-type { font-size: 14pt; }
+              p:last-of-type { text-align: right; }
+              """
+            }
+          ]
+        },
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{},
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{},
+              children: [%{type: :text, text: "Lead"}]
+            },
+            %{
+              type: :element,
+              tag: "p",
+              attributes: %{"data-kind" => "callout", "role" => "note"},
+              children: [%{type: :text, text: "First paragraph"}]
+            },
+            %{
+              type: :element,
+              tag: "p",
+              attributes: %{
+                "class" => "muted",
+                "data-kind" => "callout",
+                "role" => "note"
+              },
+              children: [%{type: :text, text: "Last paragraph"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [container] = styled_tree.children
+    [_span, first, last] = container.children
+
+    assert first.style.color == {1, 0, 0}
+    assert first.style.font_style == :italic
+    assert first.style.font_size == 14.0
+    assert last.style.color == {0, 0, 0}
+    assert last.style.font_weight == 700
+    assert last.style.text_align == :right
+  end
+
+  test "compute inserts before and after content without applying pseudo styles to the element" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [
+            %{
+              type: :text,
+              text: """
+              [data-label]::before { content: "Label: " attr(data-label) " "; color: red; }
+              p::after { content: "."; font-weight: bold; }
+              """
+            }
+          ]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"data-label" => "Status"},
+          children: [%{type: :text, text: "Ready"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [paragraph] = styled_tree.children
+    [before, text, after_content] = paragraph.children
+    [before_text] = before.children
+    [after_text] = after_content.children
+
+    assert before.tag == "::before"
+    assert before_text.text == "Label: Status "
+    assert before_text.style.color == {1, 0, 0}
+    assert text.text == "Ready"
+    assert text.style.color == {0, 0, 0}
+    assert after_content.tag == "::after"
+    assert after_text.text == "."
+    assert after_text.style.font_weight == 700
+    assert paragraph.style.color == {0, 0, 0}
+  end
+
+  test "compute evaluates reset and increment counters in document order" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [
+            %{
+              type: :text,
+              text: """
+              body { counter-reset: section 0 figure 4; }
+              h1::before { counter-increment: section; content: "Section " counter(section) ": "; }
+              .figure { counter-increment: figure; }
+              .figure::before { content: "Figure " counter(figure) " — "; }
+              """
+            }
+          ]
+        },
+        %{
+          type: :element,
+          tag: "body",
+          attributes: %{},
+          children: [
+            %{
+              type: :element,
+              tag: "h1",
+              attributes: %{},
+              children: [%{type: :text, text: "Overview"}]
+            },
+            %{
+              type: :element,
+              tag: "h1",
+              attributes: %{},
+              children: [%{type: :text, text: "Details"}]
+            },
+            %{
+              type: :element,
+              tag: "div",
+              attributes: %{"class" => "figure"},
+              children: [%{type: :text, text: "Architecture"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [first_heading, second_heading, figure] = styled_tree.children
+    [first_number | _children] = first_heading.children
+    [second_number | _children] = second_heading.children
+    [figure_number | _children] = figure.children
+
+    assert hd(first_number.children).text == "Section 1: "
+    assert hd(second_number.children).text == "Section 2: "
+    assert hd(figure_number.children).text == "Figure 5 — "
+  end
+
+  test "compute rejects malformed generated content and counter values" do
+    for css <- [
+          ~S|p::before { content: attr(); }|,
+          ~S|p::before { content: counters(section); }|,
+          ~S|p { counter-reset: section nope!; }|,
+          ~S|p { counter-increment: 1; }|,
+          ~S|p { counter-reset: section 1 2; }|,
+          ~S|p { counter-increment: none 1; }|
+        ] do
+      dom = %{
+        type: :document,
+        children: [
+          %{
+            type: :element,
+            tag: "style",
+            attributes: %{},
+            children: [%{type: :text, text: css}]
+          },
+          %{
+            type: :element,
+            tag: "p",
+            attributes: %{},
+            children: [%{type: :text, text: "Text"}]
+          }
+        ]
+      }
+
+      assert Style.compute(dom, []) == {:error, :invalid_document}
+    end
+  end
+
+  test "compute omits none, empty, and display-none generated content" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [
+            %{
+              type: :text,
+              text: """
+              p::before { content: "Hidden"; display: none; }
+              p::after { content: ""; }
+              span::before { content: none; }
+              """
+            }
+          ]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{},
+          children: [%{type: :text, text: "Paragraph"}]
+        },
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{},
+          children: [
+            %{
+              type: :element,
+              tag: "span",
+              attributes: %{},
+              children: [%{type: :text, text: "Span"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [paragraph, container] = styled_tree.children
+    [span] = container.children
+
+    assert Enum.map(paragraph.children, &Map.get(&1, :text)) == ["Paragraph"]
+    assert Enum.map(span.children, &Map.get(&1, :text)) == ["Span"]
+    assert style_for!("p", "counter-reset: none").counter_reset == []
+    assert style_for!("p", "counter-increment: none").counter_increment == []
+  end
+
   test "compute accepts root custom properties and table cell layout hints" do
     dom = %{
       type: :document,

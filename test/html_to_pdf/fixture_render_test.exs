@@ -116,7 +116,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
     last_description_line = Enum.find(texts, &String.contains?(&1.text, "COLOR; 91B"))
     metric_label = Enum.find(texts, &(&1.text == "M. USED"))
 
-    assert "ZIPPER-AUTOLOCKING WITH PULLER FOR " in lines
+    assert "ZIPPER-AUTOLOCKING WITH PULLER FOR" in lines
     assert last_description_line
     assert metric_label
     assert metric_label.y < last_description_line.y - last_description_line.line_height
