@@ -33,22 +33,24 @@ See the [documentation](https://github.com/Cees-Kettenis/native_elixir_pdf_utili
 ```elixir
 def deps do
   [
-    {:native_elixir_pdf_utilities, "~> 0.8.0"}
+    {:native_elixir_pdf_utilities, "~> 0.9.0"}
   ]
 end
 ```
 
 ## Development
 
-Run the project checks before contributing:
+Run the complete supported-version quality matrix before contributing:
 
 ```bash
-mise exec -- mix test
-MIX_ENV=test mise exec -- mix dialyzer
-mise exec -- mix format
+./scripts/quality-matrix
 ```
 
-For HTML/CSS to PDF changes, also open representative rendered PDFs and compare layout visually across single-page, multi-page, table, flexbox, grid, image, and embedded-font examples.
+The matrix compiles and tests the supported Elixir versions, enforces formatting
+and 100% coverage, runs Dialyzer, and compares HTML-to-PDF fixtures with
+Chromium. See the
+[contribution guide](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/CONTRIBUTING.md)
+for prerequisites, quicker installed-version checks, and result interpretation.
 
 ## License
 

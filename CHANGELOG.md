@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.9.0 - 2026-08-07
+
+### Added
+
+- Added generated CSS content for `::before` and `::after`, including quoted
+  `content` fragments and `attr(...)` values.
+- Added attribute-presence and attribute-equality selectors, `:not(...)`,
+  odd/even `:nth-child(...)`, and `:first-of-type` and `:last-of-type`
+  selectors for document templates.
+- Added named CSS counters through `counter-reset`, `counter-increment`, and
+  `counter(name)`, including multiple counters and explicit integer values.
+- Added browser-parity fixtures for generated content, counters, the expanded
+  selector set, and `white-space: pre-line` rendering.
+- Added a local quality matrix and matching GitHub Actions coverage for the
+  supported Elixir 1.19 and 1.20 runtimes. The matrix checks compilation,
+  formatting, unused dependencies, 100% test coverage, Dialyzer, and Chromium
+  browser parity.
+- Added code-style regression checks for the library's documented public API
+  and function-head conventions.
+
+### Changed
+
+- Changed the minimum supported Elixir version from 1.18 to 1.19.
+- Changed inline whitespace layout to collapse ordinary HTML whitespace across
+  element boundaries, preserve normalized CRLF, CR, and LF line breaks with
+  `white-space: pre-line`, retain explicit `<br>` breaks, and treat literal
+  escaped newline sequences as text.
+- Updated GitHub Actions dependencies to Node 24-compatible releases.
+- Refactored HTML-to-PDF parser, style, layout, pagination, page-geometry, page
+  furniture, and PDF visual-comparison internals without changing their public
+  APIs.
+
+### Fixed
+
+- Fixed `rgba()`, eight-digit hexadecimal, and `transparent` CSS colors losing
+  their alpha values. Text, backgrounds, and borders now write the required PDF
+  transparency graphics states, including shaded border variants.
+- Fixed PDF merging misclassifying an object as a page when `/Type /Page`
+  appeared only in a nested dictionary. Page-tree traversal now uses the shared
+  reader's semantic dictionaries and resolves indirect `/Kids` and `/Count`
+  values.
+- Fixed stream tokenization allowing a nested dictionary's `/Length` to replace
+  or leak into the enclosing stream dictionary's length.
+- Fixed source-order text extraction inserting spaces between consecutive PDF
+  text-showing operations. Operator-defined continuity is now preserved across
+  `Tj` and `TJ` operands and exposed through each span's `joins_previous?`
+  field, while positioning, text-object, Form XObject, and graphics-matrix
+  boundaries still begin separate segments.
+
 ## 0.8.0 - 2026-07-30
 
 ### Added
