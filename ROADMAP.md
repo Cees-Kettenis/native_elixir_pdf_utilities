@@ -70,7 +70,57 @@ Milestone goal: expand the CSS features commonly used by existing document templ
 - Add or update browser parity fixtures for visible `white-space: pre-line`
   rendering.
 
-### 0.10.0 - Static HTML Form Rendering
+### 0.10.0 - Layered PDF Validation
+
+Milestone goal: centralize shared PDF structural validation and keep
+operation-specific validation in focused text and merge modules.
+
+#### Scope
+
+- Add a shared PDF validator for reusable document invariants, including:
+  - catalog and page-tree structure
+  - indirect-reference resolution and cycles
+  - page identity, `/Kids`, `/Count`, and inherited page values
+  - stream dictionary structure shared by PDF-consuming operations
+- Add a text validator for extraction-specific requirements, including content
+  streams, resources, fonts, encodings, CMaps, and supported text operations.
+- Add a merge validator for rewrite-specific requirements, including page
+  materialization, serializable object graphs, generations, and reference
+  remapping.
+- Return prepared validated contexts that downstream operations can consume
+  without repeating traversal or reinterpreting raw tokens.
+- Migrate scattered validation from merge and text extraction into the
+  appropriate validator while preserving the shared diagnostics contract.
+
+#### Design Notes
+
+- Keep byte parsing, xref/object loading, resource limits, and parsing safety in
+  the shared reader. Validators operate on its parsed document model and must
+  not parse the PDF a second time.
+- Keep dependencies one-directional: operation validators may depend on the
+  shared PDF validator, while the shared validator must not depend on merge or
+  text extraction.
+- Use validated semantic values for decisions such as page identity and page
+  traversal. Raw tokens may be retained for faithful serialization, but must
+  not become a second source of semantic truth.
+- Preserve existing diagnostic tuple shapes and actionable stages, reasons,
+  messages, operations, modules, and source details.
+- Keep validation pure and deterministic so it can be audited independently of
+  execution and PDF writing.
+
+#### Completion Criteria
+
+- Add focused validator tests for shared, text-specific, and merge-specific
+  valid and invalid inputs.
+- Add reader-to-validator-to-operation invariant tests that prove accepted
+  inputs cannot later fail through unchecked pattern matches or exceptions.
+- Add generated/property tests for indirect values, nested dictionaries,
+  object generations, page-tree depth, and reference remapping.
+- Document the validation boundaries and which module owns each invariant.
+- Preserve existing public return shapes, 100% test coverage, and all normal
+  quality gates.
+
+### 0.11.0 - Static HTML Form Rendering
 
 Milestone goal: render common HTML form controls as static PDF content for government
 forms, applications, inspections, and contracts.
@@ -98,7 +148,7 @@ forms, applications, inspections, and contracts.
 - Add browser parity fixtures for visible static form rendering.
 - Add or update a realistic government-style form fixture.
 
-### 0.11.0 - Positioning, Image Fitting, and Asset Inputs
+### 0.12.0 - Positioning, Image Fitting, and Asset Inputs
 
 Milestone goal: support fixed-size template regions while keeping asset handling explicit
 and safe.
@@ -143,7 +193,7 @@ and safe.
 - Add browser parity fixtures for visible layout and painting changes.
 - Add or update realistic invoice, statement, and multi-page report fixtures.
 
-### 0.12.0 - PDF Information and Metadata
+### 0.13.0 - PDF Information and Metadata
 
 Milestone goal: expose reliable document inspection and metadata operations on top of the
 shared PDF reader.
@@ -180,7 +230,7 @@ shared PDF reader.
   encryption status, and diagnostic failures.
 - Preserve 100% test coverage for public modules.
 
-### 0.13.0 - Page Transforms and Document Assembly
+### 0.14.0 - Page Transforms and Document Assembly
 
 Milestone goal: let applications assemble, split, rearrange, and rotate PDF documents
 after rendering or receiving them.
@@ -201,7 +251,7 @@ after rendering or receiving them.
 - Add unit tests for page range validation, page picking, deletion, and rotation.
 - Add regression fixtures for realistic merged and multi-page PDFs.
 
-### 0.14.0 - Bookmarks and Outlines
+### 0.15.0 - Bookmarks and Outlines
 
 Milestone goal: support navigation metadata for generated reports and assembled document
 packets.
@@ -219,7 +269,7 @@ packets.
 
 - Add unit and fixture tests for outline creation and outline preservation.
 
-### 0.15.0 - Stamping and Existing-PDF Page Numbers
+### 0.16.0 - Stamping and Existing-PDF Page Numbers
 
 Milestone goal: add common overlay workflows for drafts, approvals, internal documents,
 branded output, and assembled packets.
@@ -240,7 +290,7 @@ branded output, and assembled packets.
 - Add unit and fixture tests for stamping and page numbering.
 - Add visual regression coverage for stamping and watermarking behavior.
 
-### 0.16.0 - PDF Forms and Attachments
+### 0.17.0 - PDF Forms and Attachments
 
 Milestone goal: support common operational document workflows involving existing PDF
 forms and bundled sidecar files.
@@ -262,7 +312,7 @@ forms and bundled sidecar files.
 - Add unit and fixture tests for form filling, flattening, and attachments.
 - Verify form-filled PDFs remain readable by the shared PDF reader.
 
-### 0.17.0 - Resource Limits and API Boundary
+### 0.18.0 - Resource Limits and API Boundary
 
 Milestone goal: harden the library behavior that will be difficult to change after
 `1.0.0`.
@@ -325,7 +375,7 @@ Milestone goal: harden the library behavior that will be difficult to change aft
 - Add doctests for public examples where they can run without external browser
   tooling.
 
-### 0.18.0 - Optimization and Archive-Friendly Output
+### 0.19.0 - Optimization and Archive-Friendly Output
 
 Milestone goal: improve render-time scaling, memory use, output size, and archive
 readiness without claiming full PDF/A compliance before the library can validate
@@ -377,7 +427,7 @@ it properly.
   pagination, and browser-parity results.
 - Add fixture coverage for best-effort archive-friendly output.
 
-### 0.19.0 - Documentation, Fixtures, and Release Polish
+### 0.20.0 - Documentation, Fixtures, and Release Polish
 
 Milestone goal: remove small documentation and example friction before the release
 candidate.
@@ -408,7 +458,7 @@ candidate.
 - Confirm README, HexDocs guide links, changelog links, and roadmap links are
   valid.
 
-### 0.20.0 - Complete PNG Decoding and CMYK JPEG Handling
+### 0.21.0 - Complete PNG Decoding and CMYK JPEG Handling
 
 Milestone goal: make the renderer's PNG support cover conforming PNG image
 variants and make four-component JPEG rendering predictable, while preserving
@@ -476,7 +526,7 @@ strict input validation and bounded resource use.
 - Confirm grayscale and three-component JPEG rendering remains unchanged.
 - Preserve 100% test coverage and pass the full HTML-to-PDF quality gate.
 
-### 0.21.0 - Release Candidate and API Freeze
+### 0.22.0 - Release Candidate and API Freeze
 
 Milestone goal: stop expanding scope and harden the public API before `1.0.0`.
 

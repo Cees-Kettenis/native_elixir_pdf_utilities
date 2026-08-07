@@ -120,7 +120,7 @@ plus the same PNG subset and JPEGs from absolute local paths and
 `base_url`-relative paths. SVG data URIs are rasterized to PNG with the
 lightweight `resvg` NIF using local in-process rendering; remote URLs and unsafe
 relative paths are rejected. Greyscale, indexed-color, 16-bit, and
-Adam7-interlaced PNG decoding is scheduled for `0.20.0`.
+Adam7-interlaced PNG decoding is scheduled for `0.21.0`.
 
 Fonts support built-in PDF fonts (`Helvetica`, `Courier`, `Times-Roman` and their bold/italic variants), explicit font options, local CSS `@font-face` declarations, and bundled DejaVu Sans regular, bold, oblique, and bold-oblique fallback faces. Relative `@font-face` URLs resolve against the containing stylesheet directory or `:base_url`; HTTP(S), data URLs, `local(...)`-only sources, WOFF, WOFF2, and CFF-flavored OpenType fonts are rejected. Convert unsupported web fonts to TTF before rendering.
 

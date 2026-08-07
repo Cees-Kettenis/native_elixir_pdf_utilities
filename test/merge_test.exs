@@ -145,6 +145,47 @@ defmodule NativeElixirPdfUtilities.MergeTest do
     assert hd(merged_document.pages).media_box == [0, 0, 200, 300]
   end
 
+  test "does not classify a nested Type Page value as a page object" do
+    pdf =
+      merge_pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources <<>> /PieceInfo 5 0 R >>"},
+        {5, "<< /Meta << /Type /Page >> >>"}
+      ])
+
+    assert {:ok, source_document} = Reader.read(pdf)
+    assert length(source_document.pages) == 1
+
+    assert {:ok, merged} = Merge.merge([pdf])
+    assert {:ok, merged_document} = Reader.read(merged)
+    assert length(merged_document.pages) == 1
+
+    assert Enum.any?(merged_document.objects, fn {_ref, object} ->
+             object.value == %{"Meta" => %{"Type" => {:name, "Page"}}}
+           end)
+  end
+
+  test "resolves an indirect Pages Kids array through the shared reader model" do
+    pdf =
+      merge_pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids 4 0 R /Count 5 0 R /MediaBox [0 0 200 300] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R >>"},
+        {4, "[3 0 R]"},
+        {5, "1"}
+      ])
+
+    assert {:ok, source_document} = Reader.read(pdf)
+    assert length(source_document.pages) == 1
+
+    assert {:ok, merged} = Merge.merge([pdf])
+    assert {:ok, merged_document} = Reader.read(merged)
+    assert [page] = merged_document.pages
+    assert page.media_box == [0, 0, 200, 300]
+  end
+
   test "handles sparse and unusual object bodies without changing stream bytes" do
     pdf =
       merge_pdf([

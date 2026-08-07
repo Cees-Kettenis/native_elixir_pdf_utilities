@@ -193,16 +193,6 @@ defmodule NativeElixirPdfUtilities.Merge do
     end
   end
 
-  # Best-effort predicate to detect a Page dictionary by scanning for /Type /Page.
-  defp object_is_page?(tokens) do
-    # Best-effort: look for /Type /Page anywhere
-    Enum.chunk_every(tokens, 2, 1, :discard)
-    |> Enum.any?(fn
-      [{:name, "Type"}, {:name, "Page"}] -> true
-      _ -> false
-    end)
-  end
-
   # Resolve inheritable page attributes through the complete /Pages tree.
   defp page_inheritances(document, objects, root_pages_id) do
     object_by_id = Map.new(objects, &{&1.obj, &1})
@@ -232,14 +222,15 @@ defmodule NativeElixirPdfUtilities.Merge do
       rotate: inherited_attribute(dictionary, tokens, "Rotate", inherited.rotate)
     }
 
-    case object_is_page?(tokens) do
-      true ->
+    case Map.get(dictionary, "Type") do
+      {:name, "Page"} ->
         with {:ok, attributes} <- resolve_page_attributes(document, object.obj, attributes) do
           {:ok, Map.put(page_attributes, object.obj, attributes)}
         end
 
-      false ->
-        page_child_references(tokens)
+      {:name, "Pages"} ->
+        document
+        |> page_child_references(dictionary)
         |> Enum.reduce_while({:ok, page_attributes}, fn child_id, {:ok, acc} ->
           case collect_page_inheritances(child_id, object_by_id, document, attributes, acc) do
             {:ok, acc} -> {:cont, {:ok, acc}}
@@ -358,13 +349,14 @@ defmodule NativeElixirPdfUtilities.Merge do
     end
   end
 
-  defp page_child_references(tokens) do
-    [:lbracket | children] = find_value_after_name(tokens, "Kids")
+  defp page_child_references(document, dictionary) do
+    {:ok, children} = Reader.resolve(document, Map.get(dictionary, "Kids"))
 
-    children
-    |> Enum.drop(-1)
-    |> Enum.chunk_every(3)
-    |> Enum.map(fn [{:int, object_id}, {:int, _generation}, :R] -> object_id end)
+    Enum.map(children, fn child ->
+      case child do
+        {:ref, {object_id, _generation}} -> object_id
+      end
+    end)
   end
 
   # Find the value tokens immediately following a given name key in a token list.
@@ -415,24 +407,18 @@ defmodule NativeElixirPdfUtilities.Merge do
 
   # Build a page-rewrite context for Page objects, else nil.
   defp page_injection_ctx(object, %{inherited: inheritances}, parent_id) do
-    if object_is_page?(object.tokens) do
-      inherited =
-        Map.get(inheritances, object.obj, %{
-          resources: nil,
-          mediabox: nil,
-          cropbox: nil,
-          rotate: nil
-        })
+    case Map.fetch(inheritances, object.obj) do
+      {:ok, inherited} ->
+        %{
+          parent_id: parent_id,
+          resources_tokens: inherited.resources,
+          mediabox_tokens: inherited.mediabox,
+          cropbox_tokens: inherited.cropbox,
+          rotate_tokens: inherited.rotate
+        }
 
-      %{
-        parent_id: parent_id,
-        resources_tokens: inherited.resources,
-        mediabox_tokens: inherited.mediabox,
-        cropbox_tokens: inherited.cropbox,
-        rotate_tokens: inherited.rotate
-      }
-    else
-      nil
+      :error ->
+        nil
     end
   end
 
