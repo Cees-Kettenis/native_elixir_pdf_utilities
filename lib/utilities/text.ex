@@ -1532,7 +1532,7 @@ defmodule NativeElixirPdfUtilities.Text do
           end)
 
         if candidate do
-          <<code::binary-size(candidate), rest::binary>> = bytes
+          <<code::binary-size(^candidate), rest::binary>> = bytes
 
           case Map.get(cmap.mappings, code) do
             nil ->

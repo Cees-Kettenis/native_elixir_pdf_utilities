@@ -11,19 +11,51 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  quality:
+  runtime-matrix:
     runs-on: ubuntu-latest
-    container:
-      image: sigdevelopers/sigportal-ci:v2.6
-    env:
-      MIX_ENV: test
+    outputs:
+      matrix: ${{ steps.runtimes.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install test fonts
+      - name: Load supported runtimes
+        id: runtimes
+        run: |
+          jq -e '
+            .include as $runtimes |
+            ($runtimes | type == "array" and length > 0) and
+            (($runtimes | map(select(.canonical == true)) | length) == 1) and
+            (($runtimes | map(.elixir) | unique | length) == ($runtimes | length))
+          ' ci/runtime-matrix.json >/dev/null
+          echo "matrix=$(jq -c . ci/runtime-matrix.json)" >> "${GITHUB_OUTPUT}"
+
+  supported-elixir:
+    name: Elixir ${{ matrix.elixir }}
+    needs: runtime-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.runtime-matrix.outputs.matrix) }}
+    container:
+      image: ${{ matrix.image }}
+    env:
+      MIX_ENV: test
+      CHROMIUM_BIN: /usr/bin/chromium
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify container runtime
+        id: runtime
+        run: |
+          elixir --version
+          elixir --version | grep -F "Elixir ${{ matrix.elixir }}."
+          runtime_id="$(elixir -e 'IO.write("#{System.version()}-erts-#{:erlang.system_info(:version)}")')"
+          echo "cache-key=${runtime_id}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install test and browser comparison tools
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends fonts-dejavu-core fonts-liberation
+          apt-get install -y --no-install-recommends chromium fonts-dejavu-core fonts-liberation poppler-utils
           rm -rf /var/lib/apt/lists/*
 
       - name: Restore Mix and Dialyzer caches
@@ -33,74 +65,49 @@ jobs:
             deps
             _build
             priv/plts
-          key: elixir-${{ hashFiles('mix.lock') }}
+          key: mix-elixir-${{ steps.runtime.outputs.cache-key }}-${{ hashFiles('mix.lock') }}
           restore-keys: |
-            elixir-
+            mix-elixir-${{ steps.runtime.outputs.cache-key }}-
 
       - name: Install dependencies
         run: mix deps.get
 
-      - name: Compile with warnings as errors
+      - name: Compile dependencies
+        run: mix deps.compile
+
+      - name: Compile project with warnings as errors
         run: mix compile --warnings-as-errors
 
+      # Formatting is checked on one canonical runtime because formatter output
+      # may intentionally change between Elixir releases.
       - name: Check formatting and dependencies
+        if: matrix.canonical
         run: |
           mix format --check-formatted
           mix deps.unlock --check-unused
 
-      - name: Run unit tests
-        run: mix test --warnings-as-errors
-
-      - name: Enforce 100% test coverage
+      - name: Run tests and enforce 100% coverage
         run: mix test --cover --warnings-as-errors
 
       - name: Run Dialyzer
         run: mix dialyzer --no-compile
 
+      - name: Run Chromium browser parity tests
+        id: browser-parity
+        run: mix test.browser_parity --warnings-as-errors
+
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
+          name: coverage-report-elixir-${{ matrix.elixir }}
           path: cover
           retention-days: 7
 
-  browser-parity:
-    runs-on: ubuntu-latest
-    container:
-      image: sigdevelopers/sigportal-ci:v2.6
-    env:
-      MIX_ENV: test
-      CHROMIUM_BIN: /usr/bin/chromium
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install browser comparison tools
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends chromium fonts-dejavu-core poppler-utils
-          rm -rf /var/lib/apt/lists/*
-
-      - name: Restore Mix cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            deps
-            _build
-          key: browser-parity-${{ hashFiles('mix.lock') }}
-          restore-keys: |
-            browser-parity-
-
-      - name: Install dependencies
-        run: mix deps.get
-
-      - name: Run Chromium browser parity tests
-        run: mix test.browser_parity --warnings-as-errors
-
-      - name: Upload browser parity artifacts
-        if: always()
+      - name: Upload failed browser parity artifacts
+        if: failure() && steps.browser-parity.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
-          name: browser-parity-artifacts
+          name: browser-parity-artifacts-elixir-${{ matrix.elixir }}
           path: tmp/browser_parity
           retention-days: 7

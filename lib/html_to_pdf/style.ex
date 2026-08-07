@@ -3672,7 +3672,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, Enum.reverse(rows)}
 
       false ->
-        <<filter, row::binary-size(row_size), rest::binary>> = data
+        <<filter, row::binary-size(^row_size), rest::binary>> = data
 
         with {:ok, decoded} <- png_unfilter_row(filter, row, previous, bytes_per_pixel) do
           png_rows(

@@ -76,11 +76,9 @@ Use case/cond/with or clearly named private functions instead of hidden branchin
 
 ## Quality Gates
 
-All changes must pass the following commands so execute them:
-
-- `mise exec -- mix test`
-- `MIX_ENV=test mise exec -- mix dialyzer`
-- `mise exec -- mix format`
-- `mise exec -- mix test --cover` should be at 100% for this library
-
-If warnings or errors are introduced, they must be resolved before considering the work complete.
+Run `./scripts/quality-matrix` for every change. Do not consider agent-authored
+work complete or push it unless the matrix succeeds. Inspect every `FAIL` or
+`WARN` entry and its referenced log; resolve project warnings and identify any
+third-party warning explicitly when handing work back. Do not substitute
+host-only Mix commands for the matrix. Platform setup, output interpretation,
+and the supported-version policy are documented in `CONTRIBUTING.md`.

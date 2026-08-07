@@ -4,25 +4,74 @@ Thanks for contributing to Native Elixir PDF Utilities.
 
 ## Development Setup
 
-1. Install `mise`.
-2. Install the configured toolchain:
+1. Install Elixir 1.19 or newer using `mise` or a platform-appropriate Elixir
+   installation method.
+2. When using `mise`, install the configured toolchain:
    - `mise install`
 3. Fetch dependencies:
-   - `mise exec -- mix deps.get`
+   - `mix deps.get`
 
 ## Build and Test
 
-- Run tests:
-  - `mise exec -- mix test`
-- Run coverage:
-  - `mise exec -- mix test --cover`
-  - Coverage must remain at 100%.
-- Run Dialyzer:
-  - `MIX_ENV=test mise exec -- mix dialyzer`
-- Format code:
-  - `mise exec -- mix format`
-- Run browser parity tests after HTML-to-PDF rendering changes:
-  - `CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity`
+Local validation is required before a change is considered ready for a pull
+request. GitHub Actions confirms the local work; it is not a substitute for
+running the applicable checks before submission.
+
+For quick feedback on the installed Elixir version, run:
+
+- `mix format --check-formatted`
+- `mix test --cover --warnings-as-errors`
+- `MIX_ENV=test mix dialyzer`
+
+For HTML-to-PDF rendering changes, also run browser parity when Chromium is
+available:
+
+- `CHROMIUM_BIN=/path/to/chromium mix test.browser_parity --warnings-as-errors`
+
+Before a maintainer considers a change PR-ready, run the complete supported
+Elixir matrix:
+
+- `./scripts/quality-matrix`
+
+If a contributor cannot run the complete matrix on their host, they should run
+the installed-version checks and say so clearly. A maintainer must then run the
+complete matrix locally before marking the change ready; passing remote CI
+alone does not replace that local validation.
+
+### Local Matrix Platform Support
+
+The matrix helper requires Docker, `jq`, and Bash 4 or newer.
+
+| Platform | Support and requirements |
+| --- | --- |
+| Linux | Supported directly with Docker, `jq`, and Bash 4+. |
+| macOS | Supported with Docker Desktop, `jq`, and Bash 4+. The Bash 3 version bundled with macOS is not sufficient; install a current Bash version first. |
+| Windows | Supported through WSL2 with Docker Desktop integration. Run the helper inside WSL. Native PowerShell and Command Prompt are not currently supported by the helper. |
+
+The helper uses the runtime definitions in `ci/runtime-matrix.json`, retains
+full stage logs under `.quality/logs/`, and prints a final summary table.
+GitHub Actions reads the same runtime definitions.
+
+### Matrix Results
+
+- `FAIL` means the change is not ready. Open the referenced stage log and fix
+  the failure.
+- `WARN` in the project `compile`, `coverage`, `dialyzer`, or `parity` stages
+  must be investigated and resolved when it originates in this library.
+- `WARN` in `dependency_compile` originates while compiling third-party code.
+  Identify the dependency and warning explicitly, then decide whether an
+  upgrade or upstream fix is available. The matrix may still exit successfully
+  so an unavoidable dependency warning does not block unrelated work.
+- `N/A` means a release-dependent check intentionally ran elsewhere. Formatting
+  is checked only on the canonical Elixir runtime because formatter output can
+  differ between releases.
+
+The matrix compiles with warnings as errors, enforces 100% test coverage, runs
+Dialyzer, and runs Chromium browser parity for every configured Elixir runtime.
+The support policy becomes a rolling three-minor window when the Elixir 1.21
+container is available. The currently tested window is Elixir 1.19 and 1.20;
+adding 1.21 to `ci/runtime-matrix.json` will add the third local and CI lane.
+
 - Generate documentation locally:
   - `mise exec -- mix docs`
 
@@ -35,7 +84,9 @@ Thanks for contributing to Native Elixir PDF Utilities.
   relevant parser/style/layout/pagination/PDF tests and add or update browser
   parity fixtures when the feature affects visible rendering.
 - Update `README.md` when public behavior, options, or examples change.
-- Ensure tests, 100% coverage, Dialyzer, and formatting pass before opening a PR.
+- Complete the applicable local checks before opening a PR, and complete the
+  full local matrix before the change is marked ready. All required GitHub
+  Actions jobs must also pass before the PR can be accepted.
 
 ## Versioning Guidelines
 

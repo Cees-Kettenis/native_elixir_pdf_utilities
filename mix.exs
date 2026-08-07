@@ -5,7 +5,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
     [
       app: :native_elixir_pdf_utilities,
       version: "0.8.0",
-      elixir: "~> 1.18",
+      elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       description:
         "Pure Elixir PDF utilities for tokenizing, merging, text extraction, and native HTML/CSS rendering.",

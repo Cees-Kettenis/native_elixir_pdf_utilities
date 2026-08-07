@@ -22,4 +22,7 @@ native_elixir_pdf_utilities-*.tar
 # Temporary files, for example, from tests.
 /tmp/
 
+# Local multi-runtime quality logs and build caches.
+/.quality/
+
 .elixir_ls/

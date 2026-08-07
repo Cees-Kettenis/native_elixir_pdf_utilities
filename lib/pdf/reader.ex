@@ -389,8 +389,8 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp xref_stream_entry(record, type_width, field_width, generation_width) do
-    <<type_bytes::binary-size(type_width), field_bytes::binary-size(field_width),
-      generation_bytes::binary-size(generation_width)>> = record
+    <<type_bytes::binary-size(^type_width), field_bytes::binary-size(^field_width),
+      generation_bytes::binary-size(^generation_width)>> = record
 
     type = if type_width == 0, do: 1, else: :binary.decode_unsigned(type_bytes)
     field = if field_width == 0, do: 0, else: :binary.decode_unsigned(field_bytes)
@@ -1216,7 +1216,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
         count = length + 1
 
         if byte_size(rest) >= count do
-          <<literal::binary-size(count), rest::binary>> = rest
+          <<literal::binary-size(^count), rest::binary>> = rest
           decoded_size = decoded_size + count
 
           if decoded_size > limit do
@@ -1289,7 +1289,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     if bit_offset + width > bit_size(data) do
       error(:filter, :invalid_pdf_input, "LZWDecode data ends before its end code", object: ref)
     else
-      <<_::bitstring-size(bit_offset), code::unsigned-big-integer-size(width), _::bitstring>> =
+      <<_::bitstring-size(^bit_offset), code::unsigned-big-integer-size(^width), _::bitstring>> =
         data
 
       case code do
@@ -1398,7 +1398,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       columns = Map.get(parameters, "Columns", 1)
 
       rows =
-        for <<row::binary-size(row_bytes) <- data>>,
+        for <<row::binary-size(^row_bytes) <- data>>,
           do: tiff_row(row, colors, bits, columns)
 
       {:ok, IO.iodata_to_binary(rows)}
@@ -1415,11 +1415,11 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     sample_count = colors * columns
     sample_bits = sample_count * bits
     padding_bits = bit_size(row) - sample_bits
-    <<samples::bitstring-size(sample_bits), padding::bitstring-size(padding_bits)>> = row
+    <<samples::bitstring-size(^sample_bits), padding::bitstring-size(^padding_bits)>> = row
 
     {decoded, _values} =
       samples
-      |> then(fn samples -> for <<sample::unsigned-big-size(bits) <- samples>>, do: sample end)
+      |> then(fn samples -> for <<sample::unsigned-big-size(^bits) <- samples>>, do: sample end)
       |> Enum.with_index()
       |> Enum.reduce({[], %{}}, fn {sample, index}, {decoded, values} ->
         value = rem(sample + Map.get(values, index - colors, 0), 1 <<< bits)
@@ -1454,7 +1454,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
       _ ->
         if byte_size(data) >= row_bytes + 1 do
-          <<filter, encoded::binary-size(row_bytes), rest::binary>> = data
+          <<filter, encoded::binary-size(^row_bytes), rest::binary>> = data
 
           case png_row(filter, encoded, previous, bytes_per_pixel) do
             {:ok, row} ->
