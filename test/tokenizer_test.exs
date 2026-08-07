@@ -125,6 +125,21 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
            ] = toks(input)
   end
 
+  test "stream length belongs to the enclosing dictionary rather than nested dictionaries" do
+    cases = [
+      {"<< /Metadata << /Length 1 >> /Length 3 >> stream\nabc\nendstream", :length},
+      {"<< /Length 3 /Metadata << /Length 1 >> >> stream\nabc\nendstream", :length},
+      {"<< /Metadata << /Length 1 >> >> stream\nabc\nendstream", :scanned}
+    ]
+
+    for {input, expected_mode} <- cases do
+      spans = Tokenizer.tokenize_all_with_spans(Tokenizer.new(input))
+
+      assert {{:stream_data, "abc"}, %{stream_mode?: ^expected_mode}} =
+               Enum.find(spans, fn {token, _span} -> match?({:stream_data, _}, token) end)
+    end
+  end
+
   test "stream data supports CRLF and is clamped to remaining bytes" do
     assert [
              :dict_start,
@@ -207,7 +222,32 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
     {_, st} = Tokenizer.next(st)
     assert Tokenizer.pending_stream_length(st) == {:indirect, {9, 0}}
 
+    for input <- [
+          "<< /Metadata << /Length 1 >> /Length 9 0 R >> stream\nabc\nendstream",
+          "<< /Length 9 0 R /Metadata << /Length 1 >> >> stream\nabc\nendstream"
+        ] do
+      st =
+        Enum.reduce_while(1..20, Tokenizer.new(input), fn _step, st ->
+          case Tokenizer.next(st) do
+            {:stream, st} -> {:halt, st}
+            {_token, st} -> {:cont, st}
+          end
+        end)
+
+      assert Tokenizer.pending_stream_length(st) == {:indirect, {9, 0}}
+    end
+
     assert Tokenizer.pending_stream_length(Tokenizer.new("stream\nabc")) == :unknown
+  end
+
+  test "a stray dictionary close does not retain an earlier stream length" do
+    assert toks("<< /Length 1 >> >>") == [
+             :dict_start,
+             {:name, "Length"},
+             {:int, 1},
+             :dict_end,
+             :dict_end
+           ]
   end
 
   test "skips a comment that ends at end of input" do

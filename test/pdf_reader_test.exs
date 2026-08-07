@@ -304,6 +304,28 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
     assert Reader.decoded_stream(document, {:ref, {3, 0}}) == {:ok, decoded}
   end
 
+  test "uses the stream dictionary Length instead of nested Length keys" do
+    direct =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [] /Count 0 >>"},
+        {3, stream_object("/Metadata << /Length 1 >> /Length 3", "abc", false)}
+      ])
+
+    indirect =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [] /Count 0 >>"},
+        {3, stream_object("/Metadata << /Length 1 >> /Length 4 0 R", "abc", false)},
+        {4, "3"}
+      ])
+
+    for input <- [direct, indirect] do
+      assert {:ok, document} = Reader.read(input)
+      assert Reader.decoded_stream(document, {:ref, {3, 0}}) == {:ok, "abc"}
+    end
+  end
+
   test "rejects malformed stream metadata and filter declarations" do
     cases = [
       {"/Length /bad", :invalid_pdf_input},

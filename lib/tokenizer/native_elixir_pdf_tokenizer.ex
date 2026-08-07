@@ -22,11 +22,9 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
             pos: 0,
             size: 0,
             dict_depth: 0,
-            last_name: nil,
+            length_scopes: [],
             last_length: nil,
             last_length_ref: nil,
-            pending_length_first: nil,
-            pending_length_second: nil,
             in_stream: false
 
   @type t :: %__MODULE__{bin: binary(), pos: non_neg_integer(), size: non_neg_integer()}
@@ -531,7 +529,7 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
   defp parse_gt(%__MODULE__{} = st) do
     if st.pos + 1 < st.size and :binary.at(st.bin, st.pos + 1) == ?> do
       st2 = bump(st, 2)
-      st3 = maybe_finalize_pending_length(st2)
+      st3 = close_length_scope(st2)
       {:dict_end, dec_dict_depth(st3)}
     else
       {{:error, {:unexpected_gt, st.pos}}, bump(st, 1)}
@@ -654,10 +652,7 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
           st2
           | in_stream: false,
             last_length: nil,
-            last_length_ref: nil,
-            pending_length_first: nil,
-            pending_length_second: nil,
-            last_name: nil
+            last_length_ref: nil
         }
 
         {{:stream_data, data}, st3}
@@ -670,10 +665,7 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
           st2
           | in_stream: false,
             last_length: nil,
-            last_length_ref: nil,
-            pending_length_first: nil,
-            pending_length_second: nil,
-            last_name: nil
+            last_length_ref: nil
         }
 
         {{:stream_data, data}, st3}
@@ -786,9 +778,17 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
 
   # ===== State helpers =====
 
-  # Track nested dictionary depth (used to detect /Length inside dicts).
+  # Track nested dictionary depth and give each dictionary its own /Length state.
   defp inc_dict_depth(%__MODULE__{} = st) do
-    %{st | dict_depth: st.dict_depth + 1}
+    scope = %{
+      last_name: nil,
+      length: nil,
+      length_ref: nil,
+      pending_first: nil,
+      pending_second: nil
+    }
+
+    %{st | dict_depth: st.dict_depth + 1, length_scopes: [scope | st.length_scopes]}
   end
 
   defp dec_dict_depth(%__MODULE__{} = st) do
@@ -797,61 +797,94 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
 
   # Remember the last seen name; special handling for /Length to latch following number/ref.
   defp put_last_name(%__MODULE__{} = st, name) do
-    st2 = maybe_finalize_pending_length(st)
+    case st.length_scopes do
+      [scope | scopes] ->
+        scope = finalize_length_scope(scope)
 
-    if name == "Length" do
-      %{
-        st2
-        | last_name: name,
-          pending_length_first: nil,
-          pending_length_second: nil,
-          last_length_ref: nil
-      }
-    else
-      %{st2 | last_name: name}
+        scope =
+          if name == "Length" do
+            %{
+              scope
+              | last_name: name,
+                pending_first: nil,
+                pending_second: nil,
+                length_ref: nil
+            }
+          else
+            %{scope | last_name: name}
+          end
+
+        %{st | length_scopes: [scope | scopes]}
+
+      [] ->
+        st
     end
   end
 
   # If inside a dict and after /Length, capture an immediate integer as the stream length.
   defp maybe_capture_length_int(%__MODULE__{} = st, int_val) do
-    if st.dict_depth > 0 and st.last_name == "Length" do
-      cond do
-        is_nil(st.pending_length_first) -> %{st | pending_length_first: int_val}
-        is_nil(st.pending_length_second) -> %{st | pending_length_second: int_val}
-        true -> st
-      end
-    else
-      st
+    case st.length_scopes do
+      [%{last_name: "Length"} = scope | scopes] ->
+        scope =
+          cond do
+            is_nil(scope.pending_first) -> %{scope | pending_first: int_val}
+            is_nil(scope.pending_second) -> %{scope | pending_second: int_val}
+            true -> scope
+          end
+
+        %{st | length_scopes: [scope | scopes]}
+
+      _ ->
+        st
     end
   end
 
   # If we saw two ints followed by R after /Length, store it as an indirect reference hint.
   defp maybe_capture_length_ref_on_R(%__MODULE__{} = st) do
-    if st.dict_depth > 0 and st.last_name == "Length" and not is_nil(st.pending_length_first) and
-         not is_nil(st.pending_length_second) do
-      %{
+    case st.length_scopes do
+      [
+        %{last_name: "Length", pending_first: first, pending_second: second} = scope
+        | scopes
+      ]
+      when is_integer(first) and is_integer(second) ->
+        scope = %{
+          scope
+          | length_ref: {first, second},
+            pending_first: nil,
+            pending_second: nil
+        }
+
+        %{st | length_scopes: [scope | scopes]}
+
+      _ ->
         st
-        | last_length_ref: {st.pending_length_first, st.pending_length_second},
-          pending_length_first: nil,
-          pending_length_second: nil
-      }
-    else
-      st
     end
   end
 
-  # When leaving a context where /Length is complete, finalize pending direct length if present.
-  defp maybe_finalize_pending_length(%__MODULE__{} = st) do
-    if st.dict_depth > 0 and st.last_name == "Length" and is_nil(st.last_length_ref) and
-         is_nil(st.last_length) and is_integer(st.pending_length_first) do
-      %{
-        st
-        | last_length: st.pending_length_first,
-          pending_length_first: nil,
-          pending_length_second: nil
-      }
+  # Publish only the /Length belonging to the dictionary that just closed.
+  defp close_length_scope(%__MODULE__{} = st) do
+    case st.length_scopes do
+      [scope | scopes] ->
+        scope = finalize_length_scope(scope)
+
+        %{
+          st
+          | length_scopes: scopes,
+            last_length: scope.length,
+            last_length_ref: scope.length_ref
+        }
+
+      [] ->
+        %{st | last_length: nil, last_length_ref: nil}
+    end
+  end
+
+  defp finalize_length_scope(scope) do
+    if scope.last_name == "Length" and is_nil(scope.length_ref) and is_nil(scope.length) and
+         is_integer(scope.pending_first) do
+      %{scope | length: scope.pending_first, pending_first: nil, pending_second: nil}
     else
-      st
+      scope
     end
   end
 end
