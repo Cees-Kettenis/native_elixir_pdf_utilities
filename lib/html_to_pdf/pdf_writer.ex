@@ -95,11 +95,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   defp valid_box?(box) do
     case box do
-      %{type: :text, text: text, x: x, y: y, font_size: font_size, font: font, color: {r, g, b}}
+      %{type: :text, text: text, x: x, y: y, font_size: font_size, font: font, color: color}
       when is_binary(text) and is_number(x) and is_number(y) and is_number(font_size) and
              font_size > 0 and
-             is_binary(font) and is_number(r) and is_number(g) and is_number(b) ->
-        valid_font_box?(box) and valid_link_box?(box)
+             is_binary(font) ->
+        valid_color?(color) and valid_font_box?(box) and valid_link_box?(box)
 
       %{
         type: :rect,
@@ -154,8 +154,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp valid_optional_color?(color) do
     case color do
       nil -> true
-      {r, g, b} when is_number(r) and is_number(g) and is_number(b) -> true
-      _ -> false
+      color -> valid_color?(color)
+    end
+  end
+
+  defp valid_color?(color) do
+    case color do
+      {red, green, blue}
+      when is_number(red) and is_number(green) and is_number(blue) ->
+        true
+
+      {red, green, blue, alpha}
+      when is_number(red) and is_number(green) and is_number(blue) and is_number(alpha) and
+             alpha >= 0 and alpha <= 1 ->
+        true
+
+      _ ->
+        false
     end
   end
 
@@ -258,11 +273,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp pages_to_pdf(pages, metadata) do
     {font_resources, next_object_id} = font_resources(pages, 3)
     image_resources = image_resources(pages, next_object_id)
-    first_page_object_id = next_object_id + image_object_count(image_resources)
+    graphics_state_object_id = next_object_id + image_object_count(image_resources)
+    graphics_state_resources = graphics_state_resources(pages, graphics_state_object_id)
+    first_page_object_id = graphics_state_object_id + map_size(graphics_state_resources)
     pages_object_id = 2
 
     {page_entries, next_object_id} =
-      page_entries(pages, pages_object_id, font_resources, image_resources, first_page_object_id)
+      page_entries(
+        pages,
+        pages_object_id,
+        font_resources,
+        image_resources,
+        graphics_state_resources,
+        first_page_object_id
+      )
 
     page_object_ids = Enum.map(page_entries, & &1.page_object_id)
 
@@ -275,10 +299,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
              pages_object_id,
              font_resources,
              image_resources,
+             graphics_state_resources,
              entry.content_object_id,
              Enum.map(entry.annotation_objects, fn {object_id, _annotation} -> object_id end)
            )},
-          {entry.content_object_id, content_object(entry.page, font_resources, image_resources)}
+          {entry.content_object_id,
+           content_object(
+             entry.page,
+             font_resources,
+             image_resources,
+             graphics_state_resources
+           )}
         ] ++ annotation_objects(entry.annotation_objects)
       end)
 
@@ -286,7 +317,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       [
         {1, "<< /Type /Catalog /Pages #{pages_object_id} 0 R >>"},
         {pages_object_id, pages_object(page_object_ids)}
-      ] ++ font_objects(font_resources) ++ image_objects(image_resources) ++ page_objects
+      ] ++
+        font_objects(font_resources) ++
+        image_objects(image_resources) ++
+        graphics_state_objects(graphics_state_resources) ++ page_objects
 
     case map_size(metadata) do
       0 ->
@@ -448,6 +482,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
          pages_object_id,
          font_resources,
          image_resources,
+         graphics_state_resources,
          first_page_object_id
        ) do
     {entries, next_object_id} =
@@ -466,6 +501,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           pages_object_id: pages_object_id,
           font_resources: font_resources,
           image_resources: image_resources,
+          graphics_state_resources: graphics_state_resources,
           annotation_objects: annotation_objects
         }
 
@@ -480,16 +516,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
          pages_object_id,
          font_resources,
          image_resources,
+         graphics_state_resources,
          content_object_id,
          annotation_object_ids
        ) do
     {width, height} = page.size
     fonts = font_resource_dictionary(font_resources)
     xobjects = xobject_resource_dictionary(image_resources)
+    graphics_states = graphics_state_resource_dictionary(graphics_state_resources)
     annotations = annotation_dictionary(annotation_object_ids)
 
     """
-    << /Type /Page /Parent #{pages_object_id} 0 R /MediaBox [0 0 #{format_number(width)} #{format_number(height)}] /Resources << /Font << #{fonts} >>#{xobjects} >> /Contents #{content_object_id} 0 R#{annotations} >>
+    << /Type /Page /Parent #{pages_object_id} 0 R /MediaBox [0 0 #{format_number(width)} #{format_number(height)}] /Resources << /Font << #{fonts} >>#{xobjects}#{graphics_states} >> /Contents #{content_object_id} 0 R#{annotations} >>
     """
     |> String.trim()
   end
@@ -505,8 +543,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp content_object(page, font_resources, image_resources) do
-    content = content_stream(page.boxes, font_resources, image_resources)
+  defp content_object(page, font_resources, image_resources, graphics_state_resources) do
+    content =
+      content_stream(page.boxes, font_resources, image_resources, graphics_state_resources)
+
     length = byte_size(content)
 
     """
@@ -518,14 +558,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     |> String.trim()
   end
 
-  defp content_stream(boxes, font_resources, image_resources) do
+  defp content_stream(boxes, font_resources, image_resources, graphics_state_resources) do
     Enum.map_join(boxes, "\n", fn box ->
       case box.type do
         :text ->
-          text_stream(box, font_resources)
+          text_stream(box, font_resources, graphics_state_resources)
 
         :rect ->
-          rect_stream(box)
+          rect_stream(box, graphics_state_resources)
 
         :image ->
           image_stream(box, image_resources)
@@ -562,33 +602,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     |> String.trim()
   end
 
-  defp text_stream(box, font_resources) do
-    {r, g, b} = box.color
+  defp text_stream(box, font_resources, graphics_state_resources) do
+    {red, green, blue} = color_channels(box.color)
     font_resource = Map.fetch!(font_resources, font_key(box))
     text_operator = text_operator(box, font_resource)
 
-    [
-      "BT",
-      " /",
-      font_resource.name,
-      " ",
-      format_number(box.font_size),
-      " Tf",
-      " ",
-      format_number(r),
-      " ",
-      format_number(g),
-      " ",
-      format_number(b),
-      " rg",
-      " ",
-      format_number(box.x),
-      " ",
-      format_number(box.y),
-      " Td",
-      text_operator,
-      " ET"
-    ]
+    text =
+      [
+        "BT",
+        " /",
+        font_resource.name,
+        " ",
+        format_number(box.font_size),
+        " Tf",
+        " ",
+        format_number(red),
+        " ",
+        format_number(green),
+        " ",
+        format_number(blue),
+        " rg",
+        " ",
+        format_number(box.x),
+        " ",
+        format_number(box.y),
+        " Td",
+        text_operator,
+        " ET"
+      ]
+
+    case opacity_resource(box.color, :fill, graphics_state_resources) do
+      nil -> text
+      resource -> ["q /", resource.name, " gs "] ++ text ++ [" Q"]
+    end
   end
 
   defp text_operator(box, font_resource) do
@@ -610,16 +656,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp rect_stream(box) do
+  defp rect_stream(box, graphics_state_resources) do
     case side_specific_border?(box) do
       true ->
-        side_specific_rect_stream(box)
+        side_specific_rect_stream(box, graphics_state_resources)
 
       false ->
         border_style = uniform_border_style(box)
 
         graphics_state =
           ["q"]
+          |> put_opacity(box.fill_color, :fill, graphics_state_resources)
+          |> put_opacity(box.stroke_color, :stroke, graphics_state_resources)
           |> put_fill_color(box.fill_color)
           |> put_stroke_color(
             box.stroke_color,
@@ -656,6 +704,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       {r, g, b} ->
         parts ++ [format_number(r), format_number(g), format_number(b), "rg"]
 
+      {r, g, b, _alpha} ->
+        parts ++ [format_number(r), format_number(g), format_number(b), "rg"]
+
       nil ->
         parts
     end
@@ -664,6 +715,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp put_stroke_color(parts, color, stroke_width, visible? \\ true) do
     case {color, stroke_width > 0 and visible?} do
       {{r, g, b}, true} ->
+        parts ++
+          [
+            format_number(r),
+            format_number(g),
+            format_number(b),
+            "RG",
+            format_number(stroke_width),
+            "w"
+          ]
+
+      {{r, g, b, _alpha}, true} ->
         parts ++
           [
             format_number(r),
@@ -763,7 +825,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp side_specific_rect_stream(box) do
+  defp side_specific_rect_stream(box, graphics_state_resources) do
     fill_parts =
       case box.fill_color do
         nil ->
@@ -771,6 +833,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
         _ ->
           ["q"]
+          |> put_opacity(box.fill_color, :fill, graphics_state_resources)
           |> put_fill_color(box.fill_color)
           |> Kernel.++([rect_path(box), "f", "Q"])
       end
@@ -778,7 +841,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     stroke_parts =
       box.border_widths
       |> Enum.flat_map(fn {side, stroke_width} ->
-        border_side_stream(box, side, stroke_width)
+        border_side_stream(box, side, stroke_width, graphics_state_resources)
       end)
 
     Enum.join(fill_parts ++ stroke_parts, " ")
@@ -802,7 +865,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     border_side_style(box, :top)
   end
 
-  defp border_side_stream(box, side, stroke_width) do
+  defp border_side_stream(box, side, stroke_width, graphics_state_resources) do
     border_style = border_side_style(box, side)
     color = border_side_color(box, side)
 
@@ -819,15 +882,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       {true, :double, color} ->
         line_width = stroke_width / 3
 
-        border_stroke(box, side, line_width, color, :solid, 0.0) ++
-          border_stroke(box, side, line_width, color, :solid, stroke_width * 2 / 3)
+        border_stroke(box, side, line_width, color, :solid, 0.0, graphics_state_resources) ++
+          border_stroke(
+            box,
+            side,
+            line_width,
+            color,
+            :solid,
+            stroke_width * 2 / 3,
+            graphics_state_resources
+          )
 
       {true, border_style, color} when border_style in [:groove, :ridge] ->
         line_width = stroke_width / 2
         {outer_color, inner_color} = relief_pair(color, side, border_style)
 
-        border_stroke(box, side, line_width, outer_color, :solid, 0.0) ++
-          border_stroke(box, side, line_width, inner_color, :solid, line_width)
+        border_stroke(
+          box,
+          side,
+          line_width,
+          outer_color,
+          :solid,
+          0.0,
+          graphics_state_resources
+        ) ++
+          border_stroke(
+            box,
+            side,
+            line_width,
+            inner_color,
+            :solid,
+            line_width,
+            graphics_state_resources
+          )
 
       {true, border_style, color} when border_style in [:inset, :outset] ->
         border_stroke(
@@ -836,16 +923,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           stroke_width,
           relief_color(color, side, border_style),
           :solid,
-          0.0
+          0.0,
+          graphics_state_resources
         )
 
       {true, border_style, color} ->
-        border_stroke(box, side, stroke_width, color, border_style, 0.0)
+        border_stroke(
+          box,
+          side,
+          stroke_width,
+          color,
+          border_style,
+          0.0,
+          graphics_state_resources
+        )
     end
   end
 
-  defp border_stroke(box, side, stroke_width, color, border_style, inset) do
+  defp border_stroke(
+         box,
+         side,
+         stroke_width,
+         color,
+         border_style,
+         inset,
+         graphics_state_resources
+       ) do
     ["q"]
+    |> put_opacity(color, :stroke, graphics_state_resources)
     |> put_stroke_color(color, stroke_width)
     |> put_stroke_pattern(border_style, stroke_width)
     |> Kernel.++([border_side_path(box, side, inset), "S", "Q"])
@@ -882,16 +987,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp shade_color({r, g, b}, amount) do
-    {r * amount, g * amount, b * amount}
+  defp shade_color(color, amount) do
+    case color do
+      {red, green, blue} ->
+        {red * amount, green * amount, blue * amount}
+
+      {red, green, blue, alpha} ->
+        {red * amount, green * amount, blue * amount, alpha}
+    end
   end
 
-  defp tint_color({r, g, b}, amount) do
-    {
-      r + (1 - r) * amount,
-      g + (1 - g) * amount,
-      b + (1 - b) * amount
-    }
+  defp tint_color(color, amount) do
+    case color do
+      {red, green, blue} ->
+        {
+          red + (1 - red) * amount,
+          green + (1 - green) * amount,
+          blue + (1 - blue) * amount
+        }
+
+      {red, green, blue, alpha} ->
+        {
+          red + (1 - red) * amount,
+          green + (1 - green) * amount,
+          blue + (1 - blue) * amount,
+          alpha
+        }
+    end
   end
 
   defp border_side_path(box, side, inset) do
@@ -945,6 +1067,93 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         border_side_style(box, side) not in [:none, :hidden] and
         not is_nil(border_side_color(box, side))
     end)
+  end
+
+  defp graphics_state_resources(pages, first_object_id) do
+    pages
+    |> Enum.flat_map(& &1.boxes)
+    |> Enum.flat_map(fn box ->
+      case box.type do
+        :text ->
+          opacity_resource_keys(box.color, :fill)
+
+        :rect ->
+          border_colors =
+            case Map.get(box, :border_colors) do
+              colors when is_map(colors) -> Map.values(colors)
+              _ -> []
+            end
+
+          opacity_resource_keys(box.fill_color, :fill) ++
+            Enum.flat_map([box.stroke_color | border_colors], fn color ->
+              opacity_resource_keys(color, :stroke)
+            end)
+
+        :image ->
+          []
+      end
+    end)
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> Enum.with_index()
+    |> Map.new(fn {{kind, alpha} = key, index} ->
+      {key,
+       %{
+         name: "GS#{index + 1}",
+         object_id: first_object_id + index,
+         kind: kind,
+         alpha: alpha
+       }}
+    end)
+  end
+
+  defp opacity_resource_keys(color, kind) do
+    case color_alpha(color) do
+      alpha when is_number(alpha) and alpha < 1.0 -> [{kind, alpha * 1.0}]
+      _ -> []
+    end
+  end
+
+  defp graphics_state_objects(graphics_state_resources) do
+    graphics_state_resources
+    |> Map.values()
+    |> Enum.sort_by(& &1.object_id)
+    |> Enum.map(fn resource ->
+      alpha_key = if resource.kind == :fill, do: "/ca", else: "/CA"
+
+      {resource.object_id, "<< /Type /ExtGState #{alpha_key} #{format_number(resource.alpha)} >>"}
+    end)
+  end
+
+  defp put_opacity(parts, color, kind, graphics_state_resources) do
+    case opacity_resource(color, kind, graphics_state_resources) do
+      nil -> parts
+      resource -> parts ++ ["/#{resource.name}", "gs"]
+    end
+  end
+
+  defp opacity_resource(color, kind, graphics_state_resources) do
+    case color_alpha(color) do
+      alpha when is_number(alpha) and alpha < 1.0 ->
+        Map.fetch!(graphics_state_resources, {kind, alpha * 1.0})
+
+      _ ->
+        nil
+    end
+  end
+
+  defp color_alpha(color) do
+    case color do
+      {_red, _green, _blue, alpha} -> alpha
+      _ -> 1.0
+    end
+  end
+
+  defp color_channels(color) do
+    case color do
+      {red, green, blue} -> {red, green, blue}
+      {red, green, blue, _alpha} -> {red, green, blue}
+    end
   end
 
   defp font_resources(pages, first_object_id) do
@@ -1209,6 +1418,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           end)
 
         " /XObject << #{resources} >>"
+    end
+  end
+
+  defp graphics_state_resource_dictionary(graphics_state_resources) do
+    case map_size(graphics_state_resources) do
+      0 ->
+        ""
+
+      _ ->
+        resources =
+          graphics_state_resources
+          |> Map.values()
+          |> Enum.sort_by(& &1.object_id)
+          |> Enum.map_join(" ", fn resource ->
+            "/#{resource.name} #{resource.object_id} 0 R"
+          end)
+
+        " /ExtGState << #{resources} >>"
     end
   end
 

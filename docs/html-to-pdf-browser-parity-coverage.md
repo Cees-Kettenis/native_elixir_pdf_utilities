@@ -51,7 +51,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `table_pagination_headers.html` | table overflow pagination, repeated multi-row header expectations, page breaks around table rows |
 | `table_rowspan_tfoot.html` | `rowspan`, `tfoot`, vertical alignment, footer rows, `colspan` totals |
 | `table_separate_borders.html` | separate borders, captions, headers, cell padding, `colspan`, right-aligned table content |
-| `text_style_variants.html` | `rgb()`, `rgba()`, `currentColor`, nested custom properties, inherited unitless line height, transparent borders, white-space, word breaking, letter spacing, text transforms |
+| `text_style_variants.html` | `rgb()`, `rgba()` text and backgrounds, transparent text and borders, `currentColor`, nested custom properties, inherited unitless line height, white-space, word breaking, letter spacing, text transforms |
 | `units_and_sizing.html` | `pt`, `px`, `mm`, `cm`, `in`, root-font-relative `rem`, percentages, `aspect-ratio`, fixed height, min-height |
 | `whitespace_pre_line.html` | default whitespace collapse, `white-space: pre-line`, `<br>`, literal escaped newline text, centered and right-aligned lines |
 

@@ -268,6 +268,89 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "BT /F1 12 Tf 0 0 0 rg 15 35 Td (Boxed) Tj ET"
   end
 
+  test "render writes deduplicated fill and stroke opacity graphics states" do
+    pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes: [
+          %{
+            type: :rect,
+            x: 10.0,
+            y: 20.0,
+            width: 40.0,
+            height: 30.0,
+            fill_color: {1, 0, 0, 0.5},
+            stroke_color: {0, 0, 1, 0.25},
+            stroke_width: 2.0,
+            border_radius: 0.0
+          },
+          %{
+            type: :text,
+            text: "Hidden",
+            x: 15.0,
+            y: 35.0,
+            font: "Helvetica",
+            font_size: 12.0,
+            color: {0, 0, 0, 0.0}
+          },
+          %{
+            type: :text,
+            text: "Faded",
+            x: 15.0,
+            y: 50.0,
+            font: "Helvetica",
+            font_size: 12.0,
+            color: {0, 0, 0, 0.5}
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, pdf} = PdfWriter.render(pages, [])
+    assert pdf =~ "/ExtGState <<"
+    assert pdf =~ "<< /Type /ExtGState /ca 0 >>"
+    assert pdf =~ "<< /Type /ExtGState /ca 0.5 >>"
+    assert pdf =~ "<< /Type /ExtGState /CA 0.25 >>"
+    assert length(Regex.scan(~r/<< \/Type \/ExtGState \/ca 0\.5 >>/, pdf)) == 1
+    assert pdf =~ ~r/q \/GS\d+ gs \/GS\d+ gs 1 0 0 rg 0 0 1 RG 2 w/
+    assert pdf =~ ~r/q \/GS\d+ gs BT \/F1 12 Tf 0 0 0 rg 15 35 Td \(Hidden\) Tj ET Q/
+    assert pdf =~ ~r/q \/GS\d+ gs BT \/F1 12 Tf 0 0 0 rg 15 50 Td \(Faded\) Tj ET Q/
+  end
+
+  test "render preserves opacity while shading side-specific border colors" do
+    pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes: [
+          %{
+            type: :rect,
+            x: 10.0,
+            y: 20.0,
+            width: 40.0,
+            height: 30.0,
+            fill_color: nil,
+            stroke_color: {0.4, 0.6, 0.8, 0.5},
+            stroke_width: 4.0,
+            border_widths: %{top: 4.0, right: 4.0, bottom: 4.0, left: 4.0},
+            border_colors: %{
+              top: {0.4, 0.6, 0.8, 0.5},
+              right: {0.4, 0.6, 0.8, 0.5},
+              bottom: {0.4, 0.6, 0.8, 0.5},
+              left: {0.4, 0.6, 0.8, 0.5}
+            },
+            border_styles: %{top: :groove, right: :ridge, bottom: :inset, left: :outset},
+            border_radius: 0.0
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, pdf} = PdfWriter.render(pages, [])
+    assert pdf =~ "<< /Type /ExtGState /CA 0.5 >>"
+    assert pdf =~ ~r/q \/GS\d+ gs 0\.2 0\.3 0\.4 RG/
+    assert pdf =~ ~r/q \/GS\d+ gs 0\.7 0\.8 0\.9 RG/
+  end
+
   test "render writes fill-only and stroke-only rectangle boxes" do
     pages = [
       %{
@@ -708,6 +791,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     invalid_boxes = [
       %{type: :text, text: "Bad", x: 1, y: 1, font: "Helvetica", font_size: -1, color: {0, 0, 0}},
       %{type: :text, text: "Bad", x: 1, y: 1, font: "Helvetica", font_size: 12, color: :red},
+      %{
+        type: :text,
+        text: "Bad",
+        x: 1,
+        y: 1,
+        font: "Helvetica",
+        font_size: 12,
+        color: {0, 0, 0, 2}
+      },
       %{
         type: :text,
         text: "Bad",

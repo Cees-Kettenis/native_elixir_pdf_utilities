@@ -23,7 +23,11 @@
         background-color: #f8fafc;
       }
       .caps { text-transform: uppercase; color: rgb(153, 27, 27); }
-      .lower { text-transform: lowercase; color: rgba(29, 78, 216, 0.8); }
+      .lower {
+        text-transform: lowercase;
+        color: rgba(29, 78, 216, 0.8);
+        background-color: rgba(250, 204, 21, 0.35);
+      }
       .nowrap { white-space: nowrap; overflow-wrap: normal; }
       .break-word { width: 140pt; overflow-wrap: break-word; word-break: break-word; }
       .spaced { letter-spacing: 1pt; }
@@ -38,6 +42,7 @@
       .inherited-line-height { font-size: 10pt; line-height: 2; }
       .inherited-line-height span { font-size: 15pt; }
       .transparent { border-color: transparent; background-color: transparent; }
+      .transparent-text { color: transparent; background-color: #e2e8f0; }
     </style>
   </head>
   <body>
@@ -51,6 +56,7 @@
       <p class="row nested-variable">nested custom property</p>
       <p class="row inherited-line-height"><span>inherited unitless line height</span></p>
       <p class="row transparent">transparent border accepted</p>
+      <p class="row transparent-text">this text is transparent</p>
     </main>
   </body>
 </html>

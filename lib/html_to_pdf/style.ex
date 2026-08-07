@@ -1552,7 +1552,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         with {:ok, color} <-
                parse_color(value, Map.get(style, :_inherited_color, Map.fetch!(style, :color))) do
           case color do
-            :transparent -> {:ok, style}
+            :transparent -> {:ok, Map.put(style, :color, {0, 0, 0, 0.0})}
             color -> {:ok, Map.put(style, :color, color)}
           end
         end
@@ -2822,9 +2822,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       Regex.match?(~r/^#[0-9a-f]{8}$/u, normalized) ->
         <<"#", red::binary-size(2), green::binary-size(2), blue::binary-size(2),
-          _alpha::binary-size(2)>> = normalized
+          alpha::binary-size(2)>> = normalized
 
-        {:ok, {hex_to_pdf_color(red), hex_to_pdf_color(green), hex_to_pdf_color(blue)}}
+        {:ok,
+         color_with_alpha(
+           {hex_to_pdf_color(red), hex_to_pdf_color(green), hex_to_pdf_color(blue)},
+           hex_to_pdf_color(alpha)
+         )}
 
       Regex.match?(~r/^#[0-9a-f]{3}$/u, normalized) ->
         <<"#", red::binary-size(1), green::binary-size(1), blue::binary-size(1)>> = normalized
@@ -2850,8 +2854,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           [red, green, blue] ->
             parse_rgb_channels(red, green, blue)
 
-          [red, green, blue, _alpha] ->
-            parse_rgb_channels(red, green, blue)
+          [red, green, blue, alpha] ->
+            with {:ok, color} <- parse_rgb_channels(red, green, blue),
+                 {:ok, alpha} <- parse_alpha_channel(alpha) do
+              {:ok, color_with_alpha(color, alpha)}
+            end
 
           _ ->
             :error
@@ -2883,6 +2890,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           {number, ""} -> {:ok, number |> max(0.0) |> min(255.0) |> Kernel./(255.0)}
           _ -> :error
         end
+    end
+  end
+
+  defp parse_alpha_channel(channel) do
+    normalized = String.trim(channel)
+
+    cond do
+      Regex.match?(~r/^\d+(?:\.\d+)?%$/u, normalized) ->
+        {number, "%"} = Float.parse(normalized)
+        {:ok, number |> max(0.0) |> min(100.0) |> Kernel./(100.0)}
+
+      true ->
+        case Float.parse(normalized) do
+          {number, ""} -> {:ok, number |> max(0.0) |> min(1.0)}
+          _ -> :error
+        end
+    end
+  end
+
+  defp color_with_alpha(color, alpha) do
+    case {color, alpha} do
+      {{red, green, blue}, alpha} when alpha < 1.0 -> {red, green, blue, alpha}
+      {color, _alpha} -> color
     end
   end
 
