@@ -76,6 +76,14 @@ Text.extract_spans(pdf, order: :visual)
 Visual ordering changes the span list order but never changes `source_index`,
 so source order can be restored with `Enum.sort_by(spans, & &1.source_index)`.
 
+For `Text.extract(pdf, layout: false)`, consecutive text-showing operands are
+concatenated according to PDF operator execution. For example, `(Hel) Tj (lo)
+Tj` produces `"Hello"`; the extractor does not invent a space between those
+operations. Text-positioning, text-object, Form XObject, and graphics-matrix
+boundaries start a separate source-order segment. The `joins_previous?` span
+field exposes this operator-defined continuity without using coordinate
+tolerances or visual-layout guessing.
+
 ## Rendering modes and visibility
 
 Positioned extraction retains decoded text for all PDF text rendering modes:

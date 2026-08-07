@@ -38,7 +38,32 @@ defmodule NativeElixirPdfUtilities.TextTest do
     pdf =
       page_pdf(content, font_name: "ABC", font: "<< /Type /Font /ToUnicode 7 0 R >>", cmap: cmap)
 
-    assert Text.extract(pdf, layout: false) == {:ok, "A BC (X)"}
+    assert Text.extract(pdf, layout: false) == {:ok, "ABC(X)"}
+  end
+
+  test "source-order extraction follows consecutive text-show operator semantics" do
+    contiguous =
+      page_pdf("BT /F1 12 Tf 1 0 0 1 10 20 Tm (Hel) Tj (lo) Tj [( ) -20 (world)] TJ ET")
+
+    assert Text.extract(contiguous, layout: false) == {:ok, "Hello world"}
+
+    assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(contiguous)
+    assert Enum.map(spans, & &1.text) == ["Hel", "lo", " ", "world"]
+    assert Enum.map(spans, & &1.joins_previous?) == [false, true, true, true]
+
+    positioned =
+      page_pdf("BT /F1 12 Tf 1 0 0 1 10 20 Tm (Left) Tj 1 0 0 1 100 20 Tm (Right) Tj ET")
+
+    assert Text.extract(positioned, layout: false) == {:ok, "Left Right"}
+
+    separate_text_objects = page_pdf("BT /F1 12 Tf (One) Tj ET BT /F1 12 Tf (Two) Tj ET")
+    assert Text.extract(separate_text_objects, layout: false) == {:ok, "One Two"}
+  end
+
+  test "source-order extraction separates visible spans around omitted invisible text" do
+    pdf = page_pdf("BT /F1 12 Tf (Before) Tj 3 Tr (Hidden) Tj 0 Tr (After) Tj ET")
+
+    assert Text.extract(pdf, layout: false) == {:ok, "Before After"}
   end
 
   test "uses inherited resources, multiple content streams, and Form XObjects" do

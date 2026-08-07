@@ -78,8 +78,10 @@ defmodule NativeElixirPdfUtilities.Text do
   `paints_text?` and `adds_to_clip_path?` are derived only from `render_mode`.
   They describe the requested PDF text rendering operation; they do not claim
   that the text is visually visible or clipped. `joins_previous?` identifies a
-  later string operand from the same `TJ` array, preserving the existing
-  source-order string projection behavior.
+  text-showing operand that immediately continues the preceding operand without
+  an intervening text-positioning, text-object, content-form, or graphics-matrix
+  boundary. This follows PDF text-operator execution rather than inferring
+  continuity from display coordinates.
   """
   @type text_span :: %{
           text: String.t(),
@@ -425,6 +427,7 @@ defmodule NativeElixirPdfUtilities.Text do
               state
               |> Map.merge(saved_state)
               |> Map.put(:stack, stack)
+              |> break_text_join()
 
             {:ok, restored_state, spans}
 
@@ -434,15 +437,28 @@ defmodule NativeElixirPdfUtilities.Text do
 
       {"cm", operands} ->
         case numbers(operands, 6) do
-          {:ok, matrix} -> {:ok, %{state | ctm: multiply(matrix, state.ctm)}, spans}
-          :error -> invalid_operator("cm", state, spans, page)
+          {:ok, matrix} ->
+            {:ok,
+             state
+             |> Map.put(:ctm, multiply(matrix, state.ctm))
+             |> break_text_join(), spans}
+
+          :error ->
+            invalid_operator("cm", state, spans, page)
         end
 
       {"BT", []} ->
-        {:ok, %{state | in_text?: true, text_matrix: identity(), line_matrix: identity()}, spans}
+        {:ok,
+         %{
+           state
+           | in_text?: true,
+             text_matrix: identity(),
+             line_matrix: identity(),
+             join_next_span?: false
+         }, spans}
 
       {"ET", []} ->
-        {:ok, %{state | in_text?: false}, spans}
+        {:ok, %{state | in_text?: false, join_next_span?: false}, spans}
 
       {"Tf", [{:name, font_name}, size]} ->
         with {:ok, size} <- number_value(size),
@@ -452,8 +468,12 @@ defmodule NativeElixirPdfUtilities.Text do
 
       {"Tm", operands} ->
         case numbers(operands, 6) do
-          {:ok, matrix} -> {:ok, %{state | text_matrix: matrix, line_matrix: matrix}, spans}
-          :error -> invalid_operator("Tm", state, spans, page)
+          {:ok, matrix} ->
+            {:ok, %{state | text_matrix: matrix, line_matrix: matrix, join_next_span?: false},
+             spans}
+
+          :error ->
+            invalid_operator("Tm", state, spans, page)
         end
 
       {operator, operands} when operator in ["Td", "TD"] ->
@@ -465,7 +485,8 @@ defmodule NativeElixirPdfUtilities.Text do
               state
               | line_matrix: line_matrix,
                 text_matrix: line_matrix,
-                leading: if(operator == "TD", do: -ty, else: state.leading)
+                leading: if(operator == "TD", do: -ty, else: state.leading),
+                join_next_span?: false
             }
 
             {:ok, state, spans}
@@ -476,7 +497,10 @@ defmodule NativeElixirPdfUtilities.Text do
 
       {"T*", []} ->
         line_matrix = translate(state.line_matrix, 0.0, -state.leading)
-        {:ok, %{state | line_matrix: line_matrix, text_matrix: line_matrix}, spans}
+
+        {:ok,
+         %{state | line_matrix: line_matrix, text_matrix: line_matrix, join_next_span?: false},
+         spans}
 
       {"TL", operands} ->
         case numbers(operands, 1) do
@@ -533,7 +557,12 @@ defmodule NativeElixirPdfUtilities.Text do
         end
 
       {"Do", [{:name, name}]} ->
-        execute_form(name, state, spans, document, resources, page, depth)
+        state = break_text_join(state)
+
+        case execute_form(name, state, spans, document, resources, page, depth) do
+          {:ok, state, spans} -> {:ok, break_text_join(state), spans}
+          {:error, _} = form_error -> form_error
+        end
 
       _ ->
         if operator in @validated_operators do
@@ -555,10 +584,15 @@ defmodule NativeElixirPdfUtilities.Text do
     error(:content, :invalid_pdf_input, "#{operator} has invalid operands", page: page)
   end
 
+  defp break_text_join(state) do
+    Map.put(state, :join_next_span?, false)
+  end
+
   defp show(state, spans, string, page) do
     if state.in_text? do
       with {:ok, decoded} <- decode_string(string, state.font, page),
-           {:ok, state, spans} <- add_span(state, spans, decoded, page) do
+           {:ok, state, spans} <-
+             add_span(state, spans, decoded, page, state.join_next_span?) do
         {:ok, state, spans}
       end
     else
@@ -570,35 +604,41 @@ defmodule NativeElixirPdfUtilities.Text do
 
   defp show_array(values, state, spans, page) do
     values
-    |> Enum.reduce_while({:ok, state, spans, false}, fn value, {:ok, state, spans, shown?} ->
-      case number_value(value) do
-        {:ok, value} ->
-          adjustment = -value / 1000.0 * state.font_size * state.horizontal_scale / 100.0
+    |> Enum.reduce_while(
+      {:ok, state, spans, state.join_next_span?},
+      fn value, {:ok, state, spans, joins_previous?} ->
+        case number_value(value) do
+          {:ok, value} ->
+            adjustment = -value / 1000.0 * state.font_size * state.horizontal_scale / 100.0
 
-          {:cont,
-           {:ok, %{state | text_matrix: translate(state.text_matrix, adjustment, 0.0)}, spans,
-            shown?}}
+            {:cont,
+             {:ok, %{state | text_matrix: translate(state.text_matrix, adjustment, 0.0)}, spans,
+              joins_previous?}}
 
-        :error ->
-          case decode_string(value, state.font, page) do
-            {:ok, decoded} ->
-              case add_span(state, spans, decoded, page, shown?) do
-                {:ok, state, spans} -> {:cont, {:ok, state, spans, true}}
-                {:error, _} = span_error -> {:halt, span_error}
-              end
+          :error ->
+            case decode_string(value, state.font, page) do
+              {:ok, decoded} ->
+                case add_span(state, spans, decoded, page, joins_previous?) do
+                  {:ok, state, spans} ->
+                    {:cont, {:ok, state, spans, joins_previous? or decoded.text != ""}}
 
-            {:error, _} = decoding_error ->
-              {:halt, decoding_error}
-          end
+                  {:error, _} = span_error ->
+                    {:halt, span_error}
+                end
+
+              {:error, _} = decoding_error ->
+                {:halt, decoding_error}
+            end
+        end
       end
-    end)
+    )
     |> case do
       {:ok, state, spans, _shown?} -> {:ok, state, spans}
       {:error, _} = array_error -> array_error
     end
   end
 
-  defp add_span(state, spans, decoded, page, join_previous? \\ false) do
+  defp add_span(state, spans, decoded, page, join_previous?) do
     cond do
       decoded.text == "" ->
         {:ok, state, spans}
@@ -635,7 +675,12 @@ defmodule NativeElixirPdfUtilities.Text do
           joins_previous?: join_previous?
         }
 
-        {:ok, %{next_state | next_source_index: state.next_source_index + 1}, [span | spans]}
+        {:ok,
+         %{
+           next_state
+           | next_source_index: state.next_source_index + 1,
+             join_next_span?: true
+         }, [span | spans]}
     end
   end
 
@@ -1524,9 +1569,12 @@ defmodule NativeElixirPdfUtilities.Text do
 
   defp plain_page(spans) do
     spans
-    |> Enum.map_reduce(true, fn span, first? ->
-      separator = if first? or span.joins_previous?, do: "", else: " "
-      {[separator, span.text], false}
+    |> Enum.map_reduce(nil, fn span, previous_source_index ->
+      joins_visible_previous? =
+        span.joins_previous? and previous_source_index == span.source_index - 1
+
+      separator = if is_nil(previous_source_index) or joins_visible_previous?, do: "", else: " "
+      {[separator, span.text], span.source_index}
     end)
     |> elem(0)
     |> IO.iodata_to_binary()
@@ -1619,6 +1667,7 @@ defmodule NativeElixirPdfUtilities.Text do
            rise: 0.0,
            render_mode: 0,
            in_text?: false,
+           join_next_span?: false,
            stack: [],
            next_source_index: 0,
            rotation: rotation,
