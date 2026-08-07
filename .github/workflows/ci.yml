@@ -16,7 +16,7 @@ jobs:
     outputs:
       matrix: ${{ steps.runtimes.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Load supported runtimes
         id: runtimes
@@ -42,7 +42,7 @@ jobs:
       MIX_ENV: test
       CHROMIUM_BIN: /usr/bin/chromium
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Verify container runtime
         id: runtime
@@ -59,7 +59,7 @@ jobs:
           rm -rf /var/lib/apt/lists/*
 
       - name: Restore Mix and Dialyzer caches
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             deps
@@ -98,7 +98,7 @@ jobs:
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report-elixir-${{ matrix.elixir }}
           path: cover
@@ -106,7 +106,7 @@ jobs:
 
       - name: Upload failed browser parity artifacts
         if: failure() && steps.browser-parity.outcome == 'failure'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-parity-artifacts-elixir-${{ matrix.elixir }}
           path: tmp/browser_parity
