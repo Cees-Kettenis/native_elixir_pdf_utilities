@@ -392,6 +392,52 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
     assert Reader.decoded_stream(document, {:ref, {3, 0}}) == {:ok, decoded}
   end
 
+  test "uses an indirect Length to disambiguate endstream bytes inside stream data" do
+    stream = "before\nendstream\nendobj\nafter"
+
+    input =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [] /Count 0 >>"},
+        {3, stream_object("/Length 4 0 R", stream, false)},
+        {4, Integer.to_string(byte_size(stream))}
+      ])
+
+    assert {:ok, document} = Reader.read(input)
+    assert document.objects[{3, 0}].stream == stream
+    assert Reader.decoded_stream(document, {:ref, {3, 0}}) == {:ok, stream}
+
+    for {length, message} <- [
+          {"2", "boundary does not match"},
+          {"/invalid", "does not resolve to a non-negative integer"}
+        ] do
+      malformed =
+        pdf([
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2, "<< /Type /Pages /Kids [] /Count 0 >>"},
+          {3, stream_object("/Length 4 0 R", "abc", false)},
+          {4, length}
+        ])
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Reader.read(malformed)
+      assert diagnostic.stage == :object
+      assert diagnostic.message =~ message
+      assert diagnostic.message =~ "object 3 0"
+    end
+
+    malformed_prefix =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [] /Count 0 >>"},
+        {3, "<< /Length 4 0 R >> false\nstream\nabc\nendstream"},
+        {4, "3"}
+      ])
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} = Reader.read(malformed_prefix)
+    assert diagnostic.stage == :object
+    assert diagnostic.message =~ "indirect object boundary is malformed"
+  end
+
   test "uses the stream dictionary Length instead of nested Length keys" do
     direct =
       pdf([

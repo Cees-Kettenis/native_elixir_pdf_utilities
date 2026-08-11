@@ -510,6 +510,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       |> Enum.sort()
 
     with {:ok, objects} <- load_uncompressed_objects(pdf, uncompressed, %{}),
+         {:ok, objects} <- materialize_indirect_streams(pdf, objects),
          {:ok, objects} <- load_compressed_objects(xref, objects) do
       {:ok, objects}
     end
@@ -554,20 +555,43 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
         [_, object_text, generation_text] ->
           object = String.to_integer(object_text)
           generation = String.to_integer(generation_text)
-          tokens = Tokenizer.new(slice) |> Tokenizer.tokenize_all()
+          ref = {object, generation}
 
-          [{:int, ^object}, {:int, ^generation}, :obj | rest] = tokens
-          {body, tail} = Enum.split_while(rest, &(&1 != :endobj))
+          case indirect_stream_source(slice, offset, limit) do
+            {:ok, prefix, source} ->
+              with true <- generation in 0..65_535,
+                   [{:int, ^object}, {:int, ^generation}, :obj | body] <- prefix,
+                   false <- Enum.any?(body, &match?({:error, _}, &1)),
+                   {:ok, value, [:stream]} <- parse_value(body),
+                   true <- is_map(value),
+                   true <- Map.get(value, "Length") == {:ref, source.length_ref} do
+                {:ok, ref,
+                 %{
+                   value: value,
+                   stream: nil,
+                   offset: offset,
+                   tokens: body,
+                   pending_stream: source
+                 }}
+              else
+                _ -> error(:object, :invalid_pdf_input, "indirect object boundary is malformed")
+              end
 
-          with true <- generation in 0..65_535,
-               [_endobj | _] <- tail,
-               false <- Enum.any?(body, &match?({:error, _}, &1)),
-               {:ok, value, value_rest} <- parse_value(body),
-               {:ok, stream, []} <- parse_optional_stream(value_rest) do
-            ref = {object, generation}
-            {:ok, ref, %{value: value, stream: stream, offset: offset, tokens: body}}
-          else
-            _ -> error(:object, :invalid_pdf_input, "indirect object boundary is malformed")
+            :none ->
+              tokens = Tokenizer.new(slice) |> Tokenizer.tokenize_all()
+
+              [{:int, ^object}, {:int, ^generation}, :obj | rest] = tokens
+              {body, tail} = Enum.split_while(rest, &(&1 != :endobj))
+
+              with true <- generation in 0..65_535,
+                   [_endobj | _] <- tail,
+                   false <- Enum.any?(body, &match?({:error, _}, &1)),
+                   {:ok, value, value_rest} <- parse_value(body),
+                   {:ok, stream, []} <- parse_optional_stream(value_rest) do
+                {:ok, ref, %{value: value, stream: stream, offset: offset, tokens: body}}
+              else
+                _ -> error(:object, :invalid_pdf_input, "indirect object boundary is malformed")
+              end
           end
 
         _ ->
@@ -575,6 +599,93 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       end
     else
       error(:xref, :invalid_pdf_input, "indirect object offset is outside the PDF")
+    end
+  end
+
+  defp indirect_stream_source(slice, offset, limit) do
+    slice
+    |> Tokenizer.new()
+    |> find_indirect_stream([], offset, limit)
+  end
+
+  defp find_indirect_stream(tokenizer, tokens, offset, limit) do
+    {{token, _span}, tokenizer} = Tokenizer.next_with_span(tokenizer)
+
+    case token do
+      :stream ->
+        case Tokenizer.pending_stream_length(tokenizer) do
+          {:indirect, length_ref} ->
+            {{_stream_data, span}, _tokenizer} = Tokenizer.next_with_span(tokenizer)
+
+            {:ok, Enum.reverse([:stream | tokens]),
+             %{from: offset + span.from, limit: limit, length_ref: length_ref}}
+
+          _ ->
+            :none
+        end
+
+      {:eof, nil} ->
+        :none
+
+      _ ->
+        find_indirect_stream(tokenizer, [token | tokens], offset, limit)
+    end
+  end
+
+  defp materialize_indirect_streams(pdf, objects) do
+    Enum.reduce_while(objects, {:ok, %{}}, fn {ref, parsed}, {:ok, resolved} ->
+      case Map.pop(parsed, :pending_stream) do
+        {nil, parsed} ->
+          {:cont, {:ok, Map.put(resolved, ref, parsed)}}
+
+        {source, parsed} ->
+          case materialize_indirect_stream(pdf, objects, ref, parsed, source) do
+            {:ok, parsed} -> {:cont, {:ok, Map.put(resolved, ref, parsed)}}
+            {:error, _} = stream_error -> {:halt, stream_error}
+          end
+      end
+    end)
+  end
+
+  defp materialize_indirect_stream(pdf, objects, ref, parsed, source) do
+    result =
+      PdfValidator.resolve(%{objects: objects}, {:ref, source.length_ref},
+        operation: :read,
+        module: __MODULE__
+      )
+
+    case result do
+      {:ok, length} when is_integer(length) and length >= 0 ->
+        with true <- source.from + length <= source.limit,
+             data <- binary_part(pdf, source.from, length),
+             tail_length = source.limit - source.from - length,
+             tail <- binary_part(pdf, source.from + length, tail_length),
+             tokenizer = Tokenizer.new(tail),
+             {:endstream, tokenizer} <- Tokenizer.next(tokenizer),
+             {:endobj, _tokenizer} <- Tokenizer.next(tokenizer) do
+          {:ok,
+           %{
+             parsed
+             | stream: data,
+               tokens: parsed.tokens ++ [{:stream_data, data}, :endstream]
+           }}
+        else
+          _ ->
+            error(
+              :object,
+              :invalid_pdf_input,
+              "indirect stream boundary does not match its Length",
+              object: ref
+            )
+        end
+
+      _ ->
+        error(
+          :object,
+          :invalid_pdf_input,
+          "indirect stream Length does not resolve to a non-negative integer",
+          object: ref
+        )
     end
   end
 
