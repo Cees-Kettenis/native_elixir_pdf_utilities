@@ -22,7 +22,7 @@ defmodule NativeElixirPdfUtilities.Text do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Pdf.TextEncoding
-  alias NativeElixirPdfUtilities.Tokenizer
+  alias NativeElixirPdfUtilities.Validators.TextValidator
   import Bitwise
 
   @max_cmap_bytes 1_000_000
@@ -40,7 +40,6 @@ defmodule NativeElixirPdfUtilities.Text do
     :rise,
     :render_mode
   ]
-  @validated_operators ~w(q Q cm BT ET Tf Tm Td TD T* TL Tc Tw Tz Tr Ts Tj TJ ' " Do)
 
   @typedoc "Options for reconstructed string extraction."
   @type extract_option :: {:layout, boolean()}
@@ -153,8 +152,9 @@ defmodule NativeElixirPdfUtilities.Text do
         error(:options, :invalid_options, "layout option must be a boolean")
 
       true ->
-        with {:ok, document} <- Reader.read(pdf_binary),
-             {:ok, pages} <- extract_pages(document) do
+        with {:ok, pdf_context} <- Reader.read_validated(pdf_binary),
+             {:ok, text_context} <- TextValidator.prepare(pdf_context),
+             {:ok, pages} <- extract_pages(text_context) do
           visible_pages =
             pages
             |> Enum.map(fn page -> Enum.filter(page.spans, & &1.paints_text?) end)
@@ -221,8 +221,9 @@ defmodule NativeElixirPdfUtilities.Text do
         )
 
       true ->
-        with {:ok, document} <- Reader.read(pdf_binary),
-             {:ok, pages} <- extract_pages(document) do
+        with {:ok, pdf_context} <- Reader.read_validated(pdf_binary),
+             {:ok, text_context} <- TextValidator.prepare(pdf_context),
+             {:ok, pages} <- extract_pages(text_context) do
           pages =
             if Keyword.get(opts, :order, :source) == :visual do
               Enum.map(pages, fn page -> %{page | spans: visual_spans(page.spans)} end)
@@ -281,11 +282,10 @@ defmodule NativeElixirPdfUtilities.Text do
     end
   end
 
-  defp extract_pages(document) do
-    document.pages
-    |> Enum.with_index(1)
-    |> Enum.reduce_while({:ok, []}, fn {page, page_number}, {:ok, pages} ->
-      case extract_page(document, page, page_number) do
+  defp extract_pages(text_context) do
+    text_context.pages
+    |> Enum.reduce_while({:ok, []}, fn page, {:ok, pages} ->
+      case extract_page(text_context.document, page) do
         {:ok, page} -> {:cont, {:ok, [page | pages]}}
         {:error, _} = extraction_error -> {:halt, extraction_error}
       end
@@ -296,122 +296,54 @@ defmodule NativeElixirPdfUtilities.Text do
     end
   end
 
-  defp extract_page(document, page, page_number) do
-    with {:ok, dictionary} <- Reader.dictionary(document, {:ref, page.ref}),
-         {:ok, content_refs} <- content_refs(Map.get(dictionary, "Contents"), page.ref),
-         {:ok, media_box} <- Reader.resolve(document, page.media_box),
-         {:ok, rotation} <- Reader.resolve(document, page.rotate),
-         {:ok, initial_state} <-
-           text_state(%{page | media_box: media_box, rotate: rotation}, page_number) do
-      Enum.reduce_while(content_refs, {:ok, initial_state, []}, fn content_ref,
-                                                                   {:ok, state, spans} ->
-        with {:ok, content} <- Reader.decoded_stream(document, content_ref),
-             {:ok, state, new_spans} <-
-               interpret(content, document, page.resources, state, page_number, 0) do
+  defp extract_page(document, page) do
+    initial_state = text_state(page)
+
+    Enum.reduce_while(page.contents, {:ok, initial_state, []}, fn operations,
+                                                                  {:ok, state, spans} ->
+      case interpret(operations, document, page.resources, state, page.number, 0) do
+        {:ok, state, new_spans} ->
           {:cont, {:ok, state, Enum.reverse(new_spans, spans)}}
-        else
-          {:error, {reason, diagnostic}} ->
-            {:halt, {:error, {reason, with_debug_details(diagnostic, page: page_number)}}}
-        end
-      end)
-      |> case do
-        {:ok, _state, spans} ->
-          {:ok,
-           %{
-             number: page_number,
-             media_box: media_box,
-             rotation: initial_state.rotation,
-             spans: Enum.reverse(spans)
-           }}
 
-        error ->
-          error
+        {:error, {reason, diagnostic}} ->
+          {:halt, {:error, {reason, with_debug_details(diagnostic, page: page.number)}}}
       end
+    end)
+    |> case do
+      {:ok, _state, spans} ->
+        {:ok,
+         %{
+           number: page.number,
+           media_box: page.media_box,
+           rotation: page.rotation,
+           spans: Enum.reverse(spans)
+         }}
+
+      error ->
+        error
     end
   end
 
-  defp content_refs(value, page_ref) do
-    case value do
-      nil ->
-        {:ok, []}
-
-      {:ref, _} = content_ref ->
-        {:ok, [content_ref]}
-
-      content_refs when is_list(content_refs) ->
-        if Enum.all?(content_refs, &match?({:ref, _}, &1)) do
-          {:ok, content_refs}
-        else
-          error(:content, :invalid_pdf_input, "Contents array contains a non-stream reference")
-        end
-
-      _ ->
-        error(:content, :invalid_pdf_input, "page Contents is malformed", object: page_ref)
-    end
-  end
-
-  defp interpret(content, document, resources, state, page_number, depth) do
-    tokens = Tokenizer.new(content) |> Tokenizer.tokenize_all()
-
-    if Enum.any?(tokens, &match?({:error, _}, &1)) do
-      error(:content, :invalid_pdf_input, "content stream contains invalid syntax",
-        page: page_number
-      )
-    else
-      Enum.reduce_while(tokens, {:ok, state, [], []}, fn token, {:ok, state, spans, operands} ->
-        case token do
-          :lbracket ->
-            {:cont, {:ok, state, spans, [:array_start | operands]}}
-
-          :rbracket ->
-            case close_array(operands) do
-              {:ok, operands} ->
-                {:cont, {:ok, state, spans, operands}}
-
-              :error ->
-                {:halt,
-                 error(:content, :invalid_pdf_input, "content array is unbalanced",
-                   page: page_number
-                 )}
-            end
-
-          {:op, operator} ->
-            case apply_operator(
-                   operator,
-                   Enum.reverse(operands),
-                   state,
-                   spans,
-                   document,
-                   resources,
-                   page_number,
-                   depth
-                 ) do
-              {:ok, state, spans} -> {:cont, {:ok, state, spans, []}}
-              {:error, _} = extraction_error -> {:halt, extraction_error}
-            end
-
-          token ->
-            {:cont, {:ok, state, spans, [token | operands]}}
-        end
-      end)
-      |> case do
-        {:ok, state, spans, []} ->
-          {:ok, state, Enum.reverse(spans)}
-
-        {:ok, _state, _spans, _operands} ->
-          error(:content, :invalid_pdf_input, "content stream has dangling operands",
-            page: page_number
-          )
-
-        error ->
-          error
+  defp interpret(operations, document, resources, state, page_number, depth) do
+    Enum.reduce_while(operations, {:ok, state, []}, fn operation, {:ok, state, spans} ->
+      case apply_operator(
+             operation.operator,
+             operation.operands,
+             state,
+             spans,
+             document,
+             resources,
+             page_number,
+             depth
+           ) do
+        {:ok, state, spans} -> {:cont, {:ok, state, spans}}
+        {:error, _} = extraction_error -> {:halt, extraction_error}
       end
+    end)
+    |> case do
+      {:ok, state, spans} -> {:ok, state, Enum.reverse(spans)}
+      {:error, _} = extraction_error -> extraction_error
     end
-  end
-
-  defp close_array(operands) do
-    {values, rest} = Enum.split_while(operands, &(&1 != :array_start))
-    if rest == [], do: :error, else: {:ok, [{:array, Enum.reverse(values)} | tl(rest)]}
   end
 
   defp apply_operator(operator, operands, state, spans, document, resources, page, depth) do
@@ -435,17 +367,11 @@ defmodule NativeElixirPdfUtilities.Text do
             error(:content, :invalid_pdf_input, "Q has no matching q", page: page)
         end
 
-      {"cm", operands} ->
-        case numbers(operands, 6) do
-          {:ok, matrix} ->
-            {:ok,
-             state
-             |> Map.put(:ctm, multiply(matrix, state.ctm))
-             |> break_text_join(), spans}
-
-          :error ->
-            invalid_operator("cm", state, spans, page)
-        end
+      {"cm", matrix} ->
+        {:ok,
+         state
+         |> Map.put(:ctm, multiply(matrix, state.ctm))
+         |> break_text_join(), spans}
 
       {"BT", []} ->
         {:ok,
@@ -461,39 +387,25 @@ defmodule NativeElixirPdfUtilities.Text do
         {:ok, %{state | in_text?: false, join_next_span?: false}, spans}
 
       {"Tf", [{:name, font_name}, size]} ->
-        with {:ok, size} <- number_value(size),
-             {:ok, font} <- resolve_font(document, resources, font_name, page) do
-          {:ok, %{state | font: font, font_size: size * 1.0}, spans}
+        with {:ok, font} <- resolve_font(document, resources, font_name, page) do
+          {:ok, %{state | font: font, font_size: size}, spans}
         end
 
-      {"Tm", operands} ->
-        case numbers(operands, 6) do
-          {:ok, matrix} ->
-            {:ok, %{state | text_matrix: matrix, line_matrix: matrix, join_next_span?: false},
-             spans}
+      {"Tm", matrix} ->
+        {:ok, %{state | text_matrix: matrix, line_matrix: matrix, join_next_span?: false}, spans}
 
-          :error ->
-            invalid_operator("Tm", state, spans, page)
-        end
+      {operator, [tx, ty]} when operator in ["Td", "TD"] ->
+        line_matrix = translate(state.line_matrix, tx, ty)
 
-      {operator, operands} when operator in ["Td", "TD"] ->
-        case numbers(operands, 2) do
-          {:ok, [tx, ty]} ->
-            line_matrix = translate(state.line_matrix, tx, ty)
+        state = %{
+          state
+          | line_matrix: line_matrix,
+            text_matrix: line_matrix,
+            leading: if(operator == "TD", do: -ty, else: state.leading),
+            join_next_span?: false
+        }
 
-            state = %{
-              state
-              | line_matrix: line_matrix,
-                text_matrix: line_matrix,
-                leading: if(operator == "TD", do: -ty, else: state.leading),
-                join_next_span?: false
-            }
-
-            {:ok, state, spans}
-
-          :error ->
-            invalid_operator(operator, state, spans, page)
-        end
+        {:ok, state, spans}
 
       {"T*", []} ->
         line_matrix = translate(state.line_matrix, 0.0, -state.leading)
@@ -502,32 +414,23 @@ defmodule NativeElixirPdfUtilities.Text do
          %{state | line_matrix: line_matrix, text_matrix: line_matrix, join_next_span?: false},
          spans}
 
-      {"TL", operands} ->
-        case numbers(operands, 1) do
-          {:ok, [leading]} -> {:ok, %{state | leading: leading}, spans}
-          :error -> invalid_operator("TL", state, spans, page)
-        end
+      {"TL", [leading]} ->
+        {:ok, %{state | leading: leading}, spans}
 
-      {"Tc", operands} ->
-        update_number("Tc", operands, state, spans, :char_spacing, page)
+      {"Tc", [value]} ->
+        {:ok, %{state | char_spacing: value}, spans}
 
-      {"Tw", operands} ->
-        update_number("Tw", operands, state, spans, :word_spacing, page)
+      {"Tw", [value]} ->
+        {:ok, %{state | word_spacing: value}, spans}
 
-      {"Tz", operands} ->
-        update_number("Tz", operands, state, spans, :horizontal_scale, page)
+      {"Tz", [value]} ->
+        {:ok, %{state | horizontal_scale: value}, spans}
 
-      {"Tr", operands} ->
-        case numbers(operands, 1) do
-          {:ok, [mode]} when mode >= 0 and mode <= 7 and trunc(mode) == mode ->
-            {:ok, %{state | render_mode: trunc(mode)}, spans}
+      {"Tr", [mode]} ->
+        {:ok, %{state | render_mode: mode}, spans}
 
-          _ ->
-            invalid_operator("Tr", state, spans, page)
-        end
-
-      {"Ts", operands} ->
-        update_number("Ts", operands, state, spans, :rise, page)
+      {"Ts", [value]} ->
+        {:ok, %{state | rise: value}, spans}
 
       {"Tj", [string]} ->
         show(state, spans, string, page)
@@ -545,15 +448,10 @@ defmodule NativeElixirPdfUtilities.Text do
         end
 
       {"\"", [word_spacing, char_spacing, string]} ->
-        with {:ok, word_spacing} <- number_value(word_spacing),
-             {:ok, char_spacing} <- number_value(char_spacing) do
-          state = %{state | word_spacing: word_spacing * 1.0, char_spacing: char_spacing * 1.0}
+        state = %{state | word_spacing: word_spacing, char_spacing: char_spacing}
 
-          with {:ok, state, spans} <- apply_operator("T*", [], state, spans, nil, nil, page, 0) do
-            show(state, spans, string, page)
-          end
-        else
-          :error -> invalid_operator("\"", state, spans, page)
+        with {:ok, state, spans} <- apply_operator("T*", [], state, spans, nil, nil, page, 0) do
+          show(state, spans, string, page)
         end
 
       {"Do", [{:name, name}]} ->
@@ -565,23 +463,8 @@ defmodule NativeElixirPdfUtilities.Text do
         end
 
       _ ->
-        if operator in @validated_operators do
-          invalid_operator(operator, state, spans, page)
-        else
-          {:ok, state, spans}
-        end
+        {:ok, state, spans}
     end
-  end
-
-  defp update_number(operator, operands, state, spans, key, page) do
-    case numbers(operands, 1) do
-      {:ok, [value]} -> {:ok, Map.put(state, key, value), spans}
-      :error -> invalid_operator(operator, state, spans, page)
-    end
-  end
-
-  defp invalid_operator(operator, _state, _spans, page) do
-    error(:content, :invalid_pdf_input, "#{operator} has invalid operands", page: page)
   end
 
   defp break_text_join(state) do
@@ -607,7 +490,7 @@ defmodule NativeElixirPdfUtilities.Text do
     |> Enum.reduce_while(
       {:ok, state, spans, state.join_next_span?},
       fn value, {:ok, state, spans, joins_previous?} ->
-        case number_value(value) do
+        case TextValidator.number(value) do
           {:ok, value} ->
             adjustment = -value / 1000.0 * state.font_size * state.horizontal_scale / 100.0
 
@@ -710,10 +593,11 @@ defmodule NativeElixirPdfUtilities.Text do
            {:ok, xobject} <- Reader.dictionary(document, xobject_ref) do
         if name?(Map.get(xobject, "Subtype"), "Form") do
           with {:ok, stream} <- Reader.decoded_stream(document, xobject_ref),
+               {:ok, operations} <- TextValidator.instructions(stream, page),
                {:ok, form_matrix} <- matrix_value(Map.get(xobject, "Matrix"), page),
                {:ok, child_state, child_spans} <-
                  interpret(
-                   stream,
+                   operations,
                    document,
                    Map.get(xobject, "Resources", resources),
                    %{
@@ -934,36 +818,30 @@ defmodule NativeElixirPdfUtilities.Text do
   end
 
   defp decode_string(string, font, page) do
-    case string do
-      {kind, bytes} when kind in [:string, :hex_string] ->
-        cond do
-          is_nil(font) ->
-            error(
-              :text_encoding,
-              :unsupported_text_encoding,
-              "text is shown without an active font",
-              page: page
-            )
+    {_kind, bytes} = string
 
-          font.cmap ->
-            with {:ok, decoded} <- decode_cmap(bytes, font.cmap, page, font.name) do
-              {:ok, Map.put(decoded, :width_codes, width_codes(font, decoded))}
-            end
-
-          name?(Map.get(font.dictionary, "Subtype"), "Type0") ->
-            error(:text_encoding, :unsupported_text_encoding, "Type0 font has no ToUnicode CMap",
-              page: page,
-              font: font.name
-            )
-
-          true ->
-            decode_simple_font(bytes, font, page)
-        end
-
-      _ ->
-        error(:content, :invalid_pdf_input, "text-showing operator has an invalid string",
+    cond do
+      is_nil(font) ->
+        error(
+          :text_encoding,
+          :unsupported_text_encoding,
+          "text is shown without an active font",
           page: page
         )
+
+      font.cmap ->
+        with {:ok, decoded} <- decode_cmap(bytes, font.cmap, page, font.name) do
+          {:ok, Map.put(decoded, :width_codes, width_codes(font, decoded))}
+        end
+
+      name?(Map.get(font.dictionary, "Subtype"), "Type0") ->
+        error(:text_encoding, :unsupported_text_encoding, "Type0 font has no ToUnicode CMap",
+          page: page,
+          font: font.name
+        )
+
+      true ->
+        decode_simple_font(bytes, font, page)
     end
   end
 
@@ -1644,41 +1522,26 @@ defmodule NativeElixirPdfUtilities.Text do
     |> String.trim_trailing()
   end
 
-  defp text_state(page, page_number) do
-    rotation = page.rotate || 0
-
-    case {page.media_box, rotation} do
-      {[left, bottom, right, top] = media_box, rotation}
-      when is_number(left) and is_number(bottom) and is_number(right) and is_number(top) and
-             right > left and top > bottom and is_integer(rotation) and rem(rotation, 90) == 0 ->
-        rotation = Integer.mod(rotation, 360)
-
-        {:ok,
-         %{
-           ctm: identity(),
-           text_matrix: identity(),
-           line_matrix: identity(),
-           font: nil,
-           font_size: 0.0,
-           char_spacing: 0.0,
-           word_spacing: 0.0,
-           horizontal_scale: 100.0,
-           leading: 0.0,
-           rise: 0.0,
-           render_mode: 0,
-           in_text?: false,
-           join_next_span?: false,
-           stack: [],
-           next_source_index: 0,
-           rotation: rotation,
-           page: %{media_box: media_box, rotation: rotation}
-         }}
-
-      _ ->
-        error(:page_tree, :invalid_pdf_input, "page MediaBox or Rotate value is malformed",
-          page: page_number
-        )
-    end
+  defp text_state(page) do
+    %{
+      ctm: identity(),
+      text_matrix: identity(),
+      line_matrix: identity(),
+      font: nil,
+      font_size: 0.0,
+      char_spacing: 0.0,
+      word_spacing: 0.0,
+      horizontal_scale: 100.0,
+      leading: 0.0,
+      rise: 0.0,
+      render_mode: 0,
+      in_text?: false,
+      join_next_span?: false,
+      stack: [],
+      next_source_index: 0,
+      rotation: page.rotation,
+      page: %{media_box: page.media_box, rotation: page.rotation}
+    }
   end
 
   defp display_position(x, y, page) do
@@ -1722,24 +1585,6 @@ defmodule NativeElixirPdfUtilities.Text do
       e * a2 + f * c2 + e2,
       e * b2 + f * d2 + f2
     ]
-
-  defp numbers(values, count) do
-    converted = Enum.map(values, &number_value/1)
-
-    if length(converted) == count and Enum.all?(converted, &match?({:ok, _}, &1)) do
-      {:ok, Enum.map(converted, fn {:ok, value} -> value * 1.0 end)}
-    else
-      :error
-    end
-  end
-
-  defp number_value(value) do
-    case value do
-      {:int, value} -> {:ok, value}
-      {:real, value} -> {:ok, value}
-      _ -> :error
-    end
-  end
 
   defp required_value(dictionary, key, label, page) do
     case Map.get(dictionary, key) do
@@ -1795,7 +1640,7 @@ defmodule NativeElixirPdfUtilities.Text do
        {reason, diagnostic |> Map.put(:operation, operation) |> Map.put(:module, __MODULE__)}}
 
   defp error(stage, reason, message, details \\ []) do
-    {pdf_details, diagnostic_options} = Keyword.split(details, [:object, :page, :font])
+    {pdf_details, diagnostic_options} = Keyword.split(details, [:page, :font])
 
     {:error, {reason, diagnostic}} =
       Diagnostics.error(
@@ -1812,9 +1657,6 @@ defmodule NativeElixirPdfUtilities.Text do
     message =
       Enum.reduce(details, diagnostic.message, fn detail, message ->
         case detail do
-          {:object, {object, generation}} ->
-            "#{message}; object #{object} #{generation}"
-
           {:page, page} ->
             "#{message}; page #{page}"
 

@@ -244,6 +244,16 @@ defmodule NativeElixirPdfUtilities.TextTest do
     refute Map.has_key?(diagnostic, :font)
   end
 
+  test "reports strict decoding failures from strings inside TJ arrays" do
+    custom = "<< /Type /Font /Subtype /Type1 /BaseFont /CustomFont >>"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf [(A)] TJ ET", font: custom)),
+      :unsupported_text_encoding,
+      :text_encoding
+    )
+  end
+
   test "decodes all supported standard simple-font encodings" do
     cases = [
       {"StandardEncoding", <<39>>, "’"},

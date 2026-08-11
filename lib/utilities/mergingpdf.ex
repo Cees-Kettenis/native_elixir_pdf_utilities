@@ -17,6 +17,7 @@ defmodule NativeElixirPdfUtilities.Merge do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Tokenizer
+  alias NativeElixirPdfUtilities.Validators.MergeValidator
 
   @type pdf_bin :: binary()
   @typedoc "A single token as produced by `NativeElixirPdfUtilities.Tokenizer`."
@@ -84,7 +85,10 @@ defmodule NativeElixirPdfUtilities.Merge do
            end
          end) do
       {:ok, inputs} ->
-        build_merged_pdf(Enum.reverse(inputs))
+        with {:ok, inputs} <-
+               inputs |> Enum.reverse() |> MergeValidator.prepare_remapping(3) do
+          build_merged_pdf(inputs)
+        end
 
       {:reader_error, {reader_reason, diagnostic}} ->
         {:error,
@@ -106,15 +110,12 @@ defmodule NativeElixirPdfUtilities.Merge do
   end
 
   defp build_merged_pdf(inputs) do
-    # 2) Assign id offsets so object ids won't collide; reserve 1,2 for Pages,Catalog
-    {inputs2, _next_id} = assign_offsets(inputs, 3)
-
     # 3) Collect all page ids in new numbering (flatten Pages)
     page_ids =
-      inputs2
+      inputs
       |> Enum.flat_map(fn %{pages: pages, map: map} ->
         Enum.map(pages, fn {object, generation} ->
-          {Map.fetch!(map, object), generation}
+          {Map.fetch!(map, {object, generation}), generation}
         end)
       end)
       |> Enum.reduce({[], MapSet.new()}, fn id, {acc, seen} ->
@@ -136,9 +137,9 @@ defmodule NativeElixirPdfUtilities.Merge do
       add_object(pieces, offsets, pos, catalog_obj_id, 0, render_catalog)
 
     {pieces, offsets, pos} =
-      Enum.reduce(inputs2, {pieces, offsets, pos}, fn input = %{objects: objs, map: map}, acc ->
+      Enum.reduce(inputs, {pieces, offsets, pos}, fn input = %{objects: objs, map: map}, acc ->
         Enum.reduce(objs, acc, fn obj, {pieces, offsets, pos} ->
-          new_id = Map.fetch!(map, obj.obj)
+          new_id = Map.fetch!(map, {obj.obj, obj.gen})
           page_ctx = page_injection_ctx(obj, input, pages_obj_id)
           body = render_object_body(obj.tokens, map, page_ctx)
           add_object(pieces, offsets, pos, new_id, obj.gen, body)
@@ -157,251 +158,12 @@ defmodule NativeElixirPdfUtilities.Merge do
 
   # Index a PDF binary into objects, page ids and inherited attributes.
   defp index_pdf(bin) do
-    case Reader.read(bin) do
-      {:ok, document} ->
-        {:ok, catalog} = Reader.dictionary(document, Map.fetch!(document.trailer, "Root"))
-        {:ref, {root_pages, _generation}} = Map.fetch!(catalog, "Pages")
-
-        objects =
-          document.objects
-          |> Enum.reject(fn {_ref, object} -> structural_reader_object?(object.value) end)
-          |> Enum.map(fn {{object, generation}, parsed} ->
-            %{obj: object, gen: generation, tokens: parsed.tokens, value: parsed.value}
-          end)
-          |> Enum.sort_by(&{&1.obj, &1.gen})
-
-        with {:ok, inherited} <- page_inheritances(document, objects, root_pages) do
-          {:ok,
-           %{
-             objects: objects,
-             pages: Enum.map(document.pages, & &1.ref),
-             root_pages: root_pages,
-             inherited: inherited,
-             max_obj: Enum.reduce(objects, 0, fn object, maximum -> max(maximum, object.obj) end)
-           }}
-        end
+    case Reader.read_validated(bin) do
+      {:ok, pdf_context} ->
+        MergeValidator.prepare(pdf_context)
 
       {:error, error} ->
         {:reader_error, error}
-    end
-  end
-
-  defp structural_reader_object?(value) do
-    case value do
-      %{"Type" => {:name, type}} when type in ["XRef", "ObjStm"] -> true
-      _ -> false
-    end
-  end
-
-  # Resolve inheritable page attributes through the complete /Pages tree.
-  defp page_inheritances(document, objects, root_pages_id) do
-    object_by_id = Map.new(objects, &{&1.obj, &1})
-
-    collect_page_inheritances(
-      root_pages_id,
-      object_by_id,
-      document,
-      %{resources: nil, mediabox: nil, cropbox: nil, rotate: nil},
-      %{}
-    )
-  end
-
-  defp collect_page_inheritances(
-         object_id,
-         object_by_id,
-         document,
-         inherited,
-         page_attributes
-       ) do
-    %{tokens: tokens, value: dictionary} = object = Map.fetch!(object_by_id, object_id)
-
-    attributes = %{
-      resources: inherited_attribute(dictionary, tokens, "Resources", inherited.resources),
-      mediabox: inherited_attribute(dictionary, tokens, "MediaBox", inherited.mediabox),
-      cropbox: inherited_attribute(dictionary, tokens, "CropBox", inherited.cropbox),
-      rotate: inherited_attribute(dictionary, tokens, "Rotate", inherited.rotate)
-    }
-
-    case Map.get(dictionary, "Type") do
-      {:name, "Page"} ->
-        with {:ok, attributes} <- resolve_page_attributes(document, object.obj, attributes) do
-          {:ok, Map.put(page_attributes, object.obj, attributes)}
-        end
-
-      {:name, "Pages"} ->
-        document
-        |> page_child_references(dictionary)
-        |> Enum.reduce_while({:ok, page_attributes}, fn child_id, {:ok, acc} ->
-          case collect_page_inheritances(child_id, object_by_id, document, attributes, acc) do
-            {:ok, acc} -> {:cont, {:ok, acc}}
-            {:error, _} = inheritance_error -> {:halt, inheritance_error}
-          end
-        end)
-    end
-  end
-
-  defp inherited_attribute(dictionary, tokens, name, inherited) do
-    value_tokens = find_value_after_name(tokens, name)
-
-    case is_map(dictionary) and Map.has_key?(dictionary, name) do
-      true ->
-        %{value: Map.fetch!(dictionary, name), tokens: value_tokens}
-
-      false ->
-        inherited
-    end
-  end
-
-  defp resolve_page_attributes(document, page, attributes) do
-    with {:ok, mediabox} <-
-           resolved_rectangle(document, attributes.mediabox, "MediaBox", page, :required),
-         {:ok, cropbox} <-
-           resolved_rectangle(document, attributes.cropbox, "CropBox", page, :optional),
-         {:ok, rotate} <- resolved_rotation(document, attributes.rotate, page) do
-      {:ok,
-       %{
-         resources: attribute_tokens(attributes.resources),
-         mediabox: mediabox,
-         cropbox: cropbox,
-         rotate: rotate
-       }}
-    end
-  end
-
-  defp resolved_rectangle(document, attribute, name, page, requirement) do
-    case attribute do
-      nil when requirement == :optional ->
-        {:ok, nil}
-
-      nil ->
-        Diagnostics.error(
-          :page_tree,
-          :invalid_pdf_input,
-          "page #{page} is missing an effective #{name}",
-          source: "page #{page}"
-        )
-
-      %{value: value} ->
-        with {:ok, value} <- Reader.resolve(document, value),
-             true <- is_list(value) and length(value) == 4,
-             {:ok, numbers} <- resolve_rectangle_numbers(document, value) do
-          {:ok, [:lbracket | Enum.map(numbers, &number_token/1)] ++ [:rbracket]}
-        else
-          _ ->
-            Diagnostics.error(
-              :page_tree,
-              :invalid_pdf_input,
-              "page #{page} has a malformed effective #{name}",
-              source: "page #{page}"
-            )
-        end
-    end
-  end
-
-  defp resolve_rectangle_numbers(document, values) do
-    Enum.reduce_while(values, {:ok, []}, fn value, {:ok, numbers} ->
-      case Reader.resolve(document, value) do
-        {:ok, number} when is_number(number) ->
-          {:cont, {:ok, [number | numbers]}}
-
-        _ ->
-          {:halt, :error}
-      end
-    end)
-    |> case do
-      {:ok, numbers} -> {:ok, Enum.reverse(numbers)}
-      :error -> :error
-    end
-  end
-
-  defp resolved_rotation(document, attribute, page) do
-    case attribute do
-      nil ->
-        {:ok, nil}
-
-      %{value: value} ->
-        case Reader.resolve(document, value) do
-          {:ok, rotate} when is_integer(rotate) and rem(rotate, 90) == 0 ->
-            {:ok, [{:int, rotate}]}
-
-          _ ->
-            Diagnostics.error(
-              :page_tree,
-              :invalid_pdf_input,
-              "page #{page} has a malformed effective Rotate",
-              source: "page #{page}"
-            )
-        end
-    end
-  end
-
-  defp attribute_tokens(attribute) do
-    case attribute do
-      nil -> nil
-      %{tokens: tokens} -> tokens
-    end
-  end
-
-  defp number_token(number) do
-    case number do
-      number when is_integer(number) -> {:int, number}
-      number -> {:real, number}
-    end
-  end
-
-  defp page_child_references(document, dictionary) do
-    {:ok, children} = Reader.resolve(document, Map.get(dictionary, "Kids"))
-
-    Enum.map(children, fn child ->
-      case child do
-        {:ref, {object_id, _generation}} -> object_id
-      end
-    end)
-  end
-
-  # Find the value tokens immediately following a given name key in a token list.
-  defp find_value_after_name(tokens, name) do
-    case Enum.split_while(tokens, fn t -> t != {:name, name} end) do
-      {_prefix, []} ->
-        nil
-
-      {_prefix, [_name | rest]} ->
-        {value, _rest} = read_value_tokens(rest)
-        value
-    end
-  end
-
-  # Read a single value (dict/array/ref/atom) from a token stream and also return the rest.
-  defp read_value_tokens(tokens) do
-    case tokens do
-      [:dict_start | rest] ->
-        take_until_matching(rest, :dict_start, :dict_end, 1, [:dict_start])
-
-      [:lbracket | rest] ->
-        take_until_matching(rest, :lbracket, :rbracket, 1, [:lbracket])
-
-      [{:int, a}, {:int, b}, :R | rest] ->
-        {[{:int, a}, {:int, b}, :R], rest}
-
-      [tok | rest] ->
-        {[tok], rest}
-    end
-  end
-
-  # Collect a balanced dictionary or array value while preserving nested tokens.
-  defp take_until_matching(tokens, opening, closing, depth, acc) do
-    case tokens do
-      [^opening | rest] ->
-        take_until_matching(rest, opening, closing, depth + 1, [opening | acc])
-
-      [^closing | rest] when depth == 1 ->
-        {Enum.reverse([closing | acc]), rest}
-
-      [^closing | rest] ->
-        take_until_matching(rest, opening, closing, depth - 1, [closing | acc])
-
-      [token | rest] ->
-        take_until_matching(rest, opening, closing, depth, [token | acc])
     end
   end
 
@@ -420,22 +182,6 @@ defmodule NativeElixirPdfUtilities.Merge do
       :error ->
         nil
     end
-  end
-
-  # Assign id ranges to each input to avoid collisions; returns inputs augmented with :map.
-  defp assign_offsets(inputs, start_id) do
-    Enum.map_reduce(inputs, start_id, fn %{max_obj: max_obj} = input, next_id ->
-      base = next_id
-      map = fn orig -> base + orig end
-      # Build id map for all ids 1..max_obj that actually appear
-      ids_present = MapSet.new(Enum.map(input.objects, & &1.obj))
-
-      id_map =
-        ids_present
-        |> Enum.into(%{}, fn id -> {id, map.(id)} end)
-
-      {Map.put(input, :map, id_map), base + max_obj + 1}
-    end)
   end
 
   # === Rendering ===
@@ -545,7 +291,7 @@ defmodule NativeElixirPdfUtilities.Merge do
 
   # Drop a key (and its value) from a flat dict token list if present.
   defp drop_key(tokens, name) do
-    case split_on_name(tokens, name) do
+    case MergeValidator.split_dictionary_value(tokens, name) do
       {:ok, left, _val, right} -> left ++ right
       :error -> tokens
     end
@@ -554,7 +300,7 @@ defmodule NativeElixirPdfUtilities.Merge do
   # Put or replace a key with the given value tokens, appending near the end by default.
   defp put_key(tokens, name, value_tokens) do
     # Put/replace near the end so it’s visible
-    case split_on_name(tokens, name) do
+    case MergeValidator.split_dictionary_value(tokens, name) do
       {:ok, left, _old, right} -> left ++ [{:name, name} | value_tokens] ++ right
       :error -> tokens ++ [{:name, name} | value_tokens]
     end
@@ -574,7 +320,7 @@ defmodule NativeElixirPdfUtilities.Merge do
 
   # Keep existing /Resources if non-empty; otherwise inject inherited /Resources when available.
   defp ensure_resources(tokens, inh_res) do
-    case split_on_name(tokens, "Resources") do
+    case MergeValidator.split_dictionary_value(tokens, "Resources") do
       {:ok, left, val, right} when is_list(val) and val != [] ->
         left ++ [{:name, "Resources"} | val] ++ right
 
@@ -584,19 +330,6 @@ defmodule NativeElixirPdfUtilities.Merge do
         else
           tokens
         end
-    end
-  end
-
-  # Split a flat dict token list on a name key; returns left, value tokens, right or :error.
-  defp split_on_name(tokens, name) do
-    # returns {:ok, left, value_tokens, right} or :error
-    case Enum.split_while(tokens, fn t -> t != {:name, name} end) do
-      {_left, []} ->
-        :error
-
-      {left, [_name | rest]} ->
-        {val, rest2} = read_value_tokens(rest)
-        {:ok, left, val, rest2}
     end
   end
 
@@ -618,7 +351,7 @@ defmodule NativeElixirPdfUtilities.Merge do
         do_render_tokens(rest, id_map, [io | add_sep(acc)], nil)
 
       [{:int, obj}, {:int, gen}, :R | rest] ->
-        new_obj = Map.get(id_map, obj, obj)
+        new_obj = Map.fetch!(id_map, {obj, gen})
         io = [Integer.to_string(new_obj), " ", Integer.to_string(gen), " R"]
         do_render_tokens(rest, id_map, [io | add_sep(acc)], nil)
 

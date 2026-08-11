@@ -9,11 +9,11 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Tokenizer
+  alias NativeElixirPdfUtilities.Validators.PdfValidator
   import Bitwise
 
   @max_input_bytes 50_000_000
   @max_objects 100_000
-  @max_pages 10_000
   @max_decoded_stream_bytes 25_000_000
   @max_decompression_ratio 100
 
@@ -60,6 +60,21 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   """
   @spec read(binary()) :: {:ok, document()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def read(pdf) do
+    with {:ok, context} <- read_validated(pdf) do
+      {:ok, context.document}
+    end
+  end
+
+  @doc """
+  Parses and semantically validates a PDF into a reusable prepared context.
+
+  PDF-consuming operations can use this function to retain the shared catalog,
+  page-tree, reference, and inherited-value work performed for `read/1`.
+  """
+  @spec read_validated(binary()) ::
+          {:ok, PdfValidator.context()}
+          | {:error, {error_reason(), Diagnostics.diagnostic()}}
+  def read_validated(pdf) do
     case pdf do
       pdf when is_binary(pdf) ->
         with :ok <- validate_header(pdf),
@@ -68,8 +83,13 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
              :ok <- validate_xref(xref, trailer, pdf),
              :ok <- reject_encryption(trailer),
              {:ok, objects} <- load_objects(pdf, xref),
-             {:ok, pages} <- collect_pages(objects, trailer) do
-          {:ok, %{binary: pdf, objects: objects, trailer: trailer, pages: pages, xref: xref}}
+             {:ok, context} <-
+               PdfValidator.validate(
+                 %{binary: pdf, objects: objects, trailer: trailer, xref: xref},
+                 operation: :read,
+                 module: __MODULE__
+               ) do
+          {:ok, context}
         else
           {:error, {_reason, _diagnostic}} = reader_error -> reader_error
         end
@@ -85,13 +105,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   @spec resolve(document(), value()) ::
           {:ok, value()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def resolve(document, value) do
-    case value do
-      {:ref, ref} ->
-        resolve_reference(document, ref, %{})
-
-      value ->
-        {:ok, value}
-    end
+    PdfValidator.resolve(document, value, operation: :read, module: __MODULE__)
   end
 
   @doc """
@@ -100,19 +114,17 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   @spec decoded_stream(document(), value()) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def decoded_stream(document, value) do
-    case value do
-      {:ref, ref} ->
-        with {:ok, stream_ref, %{value: dictionary, stream: stream}} <-
-               resolve_stream_object(document, ref, %{}),
-             true <- is_map(dictionary) and is_binary(stream) do
-          decode_stream(stream, dictionary, document, stream_ref)
-        else
-          false -> error(:stream, :invalid_pdf_input, "object is not a stream", object: ref)
-          {:error, _} = stream_error -> stream_error
-        end
-
-      _ ->
-        error(:stream, :invalid_pdf_input, "stream must be an indirect object")
+    with {:ok, stream_context} <-
+           PdfValidator.validate_stream(document, value,
+             operation: :read,
+             module: __MODULE__
+           ) do
+      decode_stream(
+        stream_context.stream,
+        stream_context.dictionary,
+        document,
+        stream_context.ref
+      )
     end
   end
 
@@ -122,13 +134,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   @spec dictionary(document(), value()) ::
           {:ok, map()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def dictionary(document, value) do
-    with {:ok, value} <- resolve(document, value),
-         true <- is_map(value) do
-      {:ok, value}
-    else
-      false -> error(:resolution, :invalid_pdf_input, "expected a PDF dictionary")
-      {:error, _} = error -> error
-    end
+    PdfValidator.dictionary(document, value, operation: :read, module: __MODULE__)
   end
 
   @doc """
@@ -137,15 +143,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   @spec fetch(document(), value(), binary()) ::
           {:ok, value() | nil} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def fetch(document, dictionary, key) do
-    case key do
-      key when is_binary(key) ->
-        with {:ok, dictionary} <- dictionary(document, dictionary) do
-          {:ok, Map.get(dictionary, key)}
-        end
-
-      _ ->
-        error(:resolution, :invalid_pdf_input, "dictionary key must be a binary")
-    end
+    PdfValidator.fetch(document, dictionary, key, operation: :read, module: __MODULE__)
   end
 
   defp validate_header(pdf) do
@@ -696,207 +694,8 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp resolve_reference(document, ref, seen) do
-    if Map.has_key?(seen, ref) do
-      error(:resolution, :invalid_pdf_input, "indirect reference chain contains a cycle",
-        object: ref
-      )
-    else
-      case Map.get(document.objects, ref) do
-        %{value: {:ref, next_ref}} ->
-          resolve_reference(document, next_ref, Map.put(seen, ref, true))
-
-        %{value: value} ->
-          {:ok, value}
-
-        nil ->
-          error(:resolution, :invalid_pdf_input, "indirect object reference is missing",
-            object: ref
-          )
-      end
-    end
-  end
-
-  defp resolve_stream_object(document, ref, seen) do
-    if Map.has_key?(seen, ref) do
-      error(:resolution, :invalid_pdf_input, "indirect stream reference contains a cycle",
-        object: ref
-      )
-    else
-      case Map.get(document.objects, ref) do
-        %{value: {:ref, next_ref}, stream: nil} ->
-          resolve_stream_object(document, next_ref, Map.put(seen, ref, true))
-
-        %{stream: _stream} = object ->
-          {:ok, ref, object}
-
-        nil ->
-          error(:resolution, :invalid_pdf_input, "stream reference is missing", object: ref)
-      end
-    end
-  end
-
-  defp collect_pages(objects, trailer) do
-    document = %{objects: objects}
-
-    with {:ok, catalog} <- resolve(document, Map.get(trailer, "Root")),
-         true <- is_map(catalog),
-         true <- name?(Map.get(catalog, "Type"), "Catalog"),
-         {:ok, pages_ref} <- required_ref(catalog, "Pages"),
-         {:ok, _seen, pages, _count} <-
-           walk_page_tree(document, pages_ref, nil, nil, nil, %{}, %{}, []) do
-      {:ok, Enum.reverse(pages)}
-    else
-      false -> error(:page_tree, :invalid_pdf_input, "catalog object is malformed")
-      {:error, _} = error -> error
-    end
-  end
-
-  defp walk_page_tree(
-         document,
-         {:ref, ref} = page_ref,
-         inherited_resources,
-         inherited_rotate,
-         inherited_media_box,
-         ancestors,
-         seen,
-         pages
-       ) do
-    cond do
-      Map.has_key?(ancestors, ref) ->
-        error(:page_tree, :invalid_pdf_input, "page tree contains a cycle", object: ref)
-
-      Map.has_key?(seen, ref) ->
-        error(
-          :page_tree,
-          :invalid_pdf_input,
-          "page tree contains a duplicate reference",
-          object: ref
-        )
-
-      length(pages) >= @max_pages ->
-        error(:limits, :resource_limit_exceeded, "PDF page count exceeds the limit")
-
-      true ->
-        with {:ok, dictionary} <- dictionary(document, page_ref) do
-          resources = Map.get(dictionary, "Resources", inherited_resources)
-          rotate = Map.get(dictionary, "Rotate", inherited_rotate)
-          media_box = Map.get(dictionary, "MediaBox", inherited_media_box)
-          ancestors = Map.put(ancestors, ref, true)
-          seen = Map.put(seen, ref, true)
-
-          case Map.get(dictionary, "Type") do
-            {:name, "Page"} ->
-              {:ok, seen,
-               [
-                 %{ref: ref, resources: resources, rotate: rotate, media_box: media_box}
-                 | pages
-               ], 1}
-
-            {:name, "Pages"} ->
-              with {:ok, declared_count} <- page_tree_count(document, dictionary, ref),
-                   {:ok, seen, pages, actual_count} <-
-                     walk_kids(
-                       document,
-                       Map.get(dictionary, "Kids"),
-                       resources,
-                       rotate,
-                       media_box,
-                       ancestors,
-                       seen,
-                       pages
-                     ),
-                   :ok <- validate_page_tree_count(declared_count, actual_count, ref) do
-                {:ok, seen, pages, actual_count}
-              end
-
-            _ ->
-              error(:page_tree, :invalid_pdf_input, "page tree node has an invalid Type",
-                object: ref
-              )
-          end
-        else
-          {:error, _} = error ->
-            error
-        end
-    end
-  end
-
-  defp walk_kids(document, kids, resources, rotate, media_box, ancestors, seen, pages) do
-    with {:ok, kids} <- resolve(document, kids) do
-      case kids do
-        kids when is_list(kids) ->
-          Enum.reduce_while(kids, {:ok, seen, pages, 0}, fn kid, {:ok, seen, pages, count} ->
-            case kid do
-              {:ref, _} ->
-                case walk_page_tree(
-                       document,
-                       kid,
-                       resources,
-                       rotate,
-                       media_box,
-                       ancestors,
-                       seen,
-                       pages
-                     ) do
-                  {:ok, seen, pages, child_count} ->
-                    {:cont, {:ok, seen, pages, count + child_count}}
-
-                  {:error, _} = page_error ->
-                    {:halt, page_error}
-                end
-
-              _ ->
-                {:halt,
-                 error(
-                   :page_tree,
-                   :invalid_pdf_input,
-                   "Pages Kids array contains a non-reference"
-                 )}
-            end
-          end)
-
-        _ ->
-          error(:page_tree, :invalid_pdf_input, "Pages node is missing a valid Kids array")
-      end
-    end
-  end
-
-  defp page_tree_count(document, dictionary, ref) do
-    case resolve(document, Map.get(dictionary, "Count")) do
-      {:ok, count} when is_integer(count) and count >= 0 ->
-        {:ok, count}
-
-      _ ->
-        error(:page_tree, :invalid_pdf_input, "Pages node is missing a valid Count", object: ref)
-    end
-  end
-
-  defp validate_page_tree_count(declared_count, actual_count, ref) do
-    case declared_count == actual_count do
-      true ->
-        :ok
-
-      false ->
-        error(
-          :page_tree,
-          :invalid_pdf_input,
-          "Pages node Count #{declared_count} does not match #{actual_count} descendant pages",
-          object: ref
-        )
-    end
-  end
-
-  defp required_ref(dictionary, key) do
-    case Map.get(dictionary, key) do
-      {:ref, _} = ref -> {:ok, ref}
-      _ -> error(:page_tree, :invalid_pdf_input, "required #{key} reference is missing")
-    end
-  end
-
   defp decode_stream(stream, dictionary, document, ref) do
-    with :ok <- validate_stream_length(stream, dictionary, document, ref),
-         {:ok, filter_value} <- resolve(document, Map.get(dictionary, "Filter")),
+    with {:ok, filter_value} <- resolve(document, Map.get(dictionary, "Filter")),
          {:ok, parameter_value} <- resolve(document, Map.get(dictionary, "DecodeParms")),
          {:ok, filters} <- filter_list(filter_value),
          {:ok, parameters} <- parameter_list(document, parameter_value, length(filters)),
@@ -907,27 +706,6 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       {:ok, decoded}
     else
       {:error, _} = error -> error
-    end
-  end
-
-  defp validate_stream_length(stream, dictionary, document, ref) do
-    case Map.get(dictionary, "Length") do
-      length when is_integer(length) and length == byte_size(stream) ->
-        :ok
-
-      {:ref, _} = length_ref ->
-        with {:ok, length} <- resolve(document, length_ref),
-             true <- is_integer(length) and length == byte_size(stream) do
-          :ok
-        else
-          _ ->
-            error(:stream, :invalid_pdf_input, "stream length does not match stream bytes",
-              object: ref
-            )
-        end
-
-      _ ->
-        error(:stream, :invalid_pdf_input, "stream has an invalid Length", object: ref)
     end
   end
 
@@ -1545,10 +1323,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp name?(value, expected) do
-    case value do
-      {:name, name} -> name == expected
-      _ -> false
-    end
+    match?({:name, ^expected}, value)
   end
 
   defp hex_digit?(byte), do: byte in ?0..?9 or byte in ?A..?F or byte in ?a..?f
