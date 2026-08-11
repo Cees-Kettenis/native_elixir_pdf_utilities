@@ -148,6 +148,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
              resolved_rectangle(document, page.media_box, "MediaBox", page_number),
            {:ok, crop_box} <- optional_rectangle(document, page.crop_box, "CropBox", page_number),
            {:ok, rotate} <- resolved_rotation(document, page.rotate, page_number),
+           :ok <- validate_resources(document, page.resources, page_number),
            {:ok, resources} <- inherited_tokens(page, "Resources", object_by_ref),
            {:ok, _page_object} <- fetch_object(object_by_ref, page.ref) do
         prepared = %{
@@ -215,6 +216,21 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
               source: "page #{page}"
             )
         end
+    end
+  end
+
+  defp validate_resources(document, value, page) do
+    case PdfValidator.resolve(document, value) do
+      {:ok, resources} when is_map(resources) or is_nil(resources) ->
+        :ok
+
+      _ ->
+        Diagnostics.error(
+          :page_tree,
+          :invalid_pdf_input,
+          "page #{page} has malformed effective Resources",
+          source: "page #{page}"
+        )
     end
   end
 

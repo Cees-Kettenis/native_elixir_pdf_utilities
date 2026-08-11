@@ -224,7 +224,7 @@ defmodule NativeElixirPdfUtilities.MergeTest do
         {1, "<< /Type /Catalog /Pages 2 0 R >>"},
         {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
         {3,
-         "<< /Type /Page /Parent 2 0 R /MediaBox [1 2 300 400] /Resources [] /Contents 10 0 R >>"},
+         "<< /Type /Page /Parent 2 0 R /MediaBox [1 2 300 400] /Resources <<>> /Contents 10 0 R >>"},
         {4,
          "<< /Flag true /Other false /Nothing null /Real 1.25 /One 1.0 /Name /AName /Hex <0F> /Literal (a\\n\\r\\t\\b\\f\\(\\)\\\\\\001) /Ref 3 0 R >>"},
         {10,
@@ -303,14 +303,14 @@ defmodule NativeElixirPdfUtilities.MergeTest do
     pdf =
       merge_pdf([
         {1, "<< /Type /Catalog /Pages 2 0 R >>"},
-        {2, "<< /Type /Pages /Kids [ 3 0 R ] /Count 1 /Resources [] >>"},
-        {3, "<< /Type /Page /Parent 2 0 R /Resources [] /MediaBox [ 0 0 200 300 ] >>"}
+        {2, "<< /Type /Pages /Kids [ 3 0 R ] /Count 1 /Resources null >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Resources null /MediaBox [ 0 0 200 300 ] >>"}
       ])
 
     assert {:ok, merged} = Merge.merge([pdf])
 
     assert merged =~ "/MediaBox [ 0 0 200 300 ]"
-    assert merged =~ "/Resources [ ]"
+    assert merged =~ "/Resources null"
   end
 
   test "handles nested page dictionaries" do
@@ -424,6 +424,54 @@ defmodule NativeElixirPdfUtilities.MergeTest do
     assert dictionary["MediaBox"] == [0, 0, 200, 100]
     refute Map.has_key?(dictionary, "CropBox")
     refute Map.has_key?(dictionary, "Rotate")
+  end
+
+  test "requires effective Resources to resolve to a dictionary or null" do
+    valid_cases = [
+      {"", "", []},
+      {"/Resources null", "", []},
+      {"", "/Resources << /Marker /Direct >>", []},
+      {"/Resources 4 0 R", "", [{4, "<< /Marker /Indirect >>"}]},
+      {"", "/Resources 4 0 R", [{4, "null"}]}
+    ]
+
+    for {inherited_resources, page_resources, additional_objects} <- valid_cases do
+      pdf =
+        merge_pdf(
+          [
+            {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+            {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 #{inherited_resources} >>"},
+            {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] #{page_resources} >>"}
+          ] ++ additional_objects
+        )
+
+      assert {:ok, merged} = Merge.merge([pdf])
+      assert {:ok, document} = Reader.read(merged)
+      assert [page] = document.pages
+      assert {:ok, resolved} = Reader.resolve(document, page.resources)
+      assert is_map(resolved) or is_nil(resolved)
+    end
+
+    invalid_cases = [
+      {"/Resources /Bogus", "", []},
+      {"", "/Resources 4 0 R", [{4, "[/Bogus]"}]}
+    ]
+
+    for {inherited_resources, page_resources, additional_objects} <- invalid_cases do
+      pdf =
+        merge_pdf(
+          [
+            {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+            {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 #{inherited_resources} >>"},
+            {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] #{page_resources} >>"}
+          ] ++ additional_objects
+        )
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Merge.merge([pdf])
+      assert diagnostic.stage == :merge
+      assert diagnostic.source == "page 3"
+      assert diagnostic.message =~ "page 3 has malformed effective Resources"
+    end
   end
 
   test "rejects missing or malformed effective page geometry" do
