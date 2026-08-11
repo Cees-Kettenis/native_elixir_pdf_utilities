@@ -159,6 +159,16 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert_error(Text.extract(:not_a_pdf), :invalid_pdf_input, :input)
     assert_error(Text.extract("%PDF-1.7", [:not_a_keyword]), :invalid_options, :options)
 
+    assert {:error,
+            {:invalid_options,
+             %{
+               stage: :options,
+               reason: :invalid_options,
+               operation: :extract,
+               module: Text,
+               message: "extract options contain unsupported keys: [:layuot]"
+             }}} = Text.extract("%PDF-1.7", layuot: true)
+
     assert {:error, {:invalid_path, %{stage: :file, operation: :extract_file, module: Text}}} =
              Text.extract_file(:not_a_path)
 

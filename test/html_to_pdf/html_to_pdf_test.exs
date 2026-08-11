@@ -602,6 +602,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              }}} = HtmlToPdf.render("<p>Hello</p>", [:not_options])
 
     assert {:error,
+            {:invalid_options,
+             %{
+               stage: :options,
+               reason: :invalid_options,
+               operation: :render,
+               module: NativeElixirPdfUtilities.HtmlToPdf,
+               message: "render options contain unsupported keys: [:margni]"
+             }}} = HtmlToPdf.render("<p>Hello</p>", margni: 10)
+
+    assert {:error,
             {:invalid_path,
              %{
                stage: :file,

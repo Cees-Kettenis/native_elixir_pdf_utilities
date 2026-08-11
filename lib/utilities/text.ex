@@ -31,6 +31,7 @@ defmodule NativeElixirPdfUtilities.Text do
   @max_cid_width_entries 65_536
   @max_form_depth 20
   @max_text_spans 25_000
+  @extract_option_keys [:layout]
   @graphics_state_fields [
     :ctm,
     :font,
@@ -149,6 +150,20 @@ defmodule NativeElixirPdfUtilities.Text do
 
       not Keyword.keyword?(opts) ->
         error(:options, :invalid_options, "extract options must be a keyword list")
+
+      Enum.any?(Keyword.keys(opts), &(&1 not in @extract_option_keys)) ->
+        unknown =
+          opts
+          |> Keyword.keys()
+          |> Enum.reject(&(&1 in @extract_option_keys))
+          |> Enum.uniq()
+          |> Enum.sort()
+
+        error(
+          :options,
+          :invalid_options,
+          "extract options contain unsupported keys: #{inspect(unknown)}"
+        )
 
       not is_boolean(Keyword.get(opts, :layout, true)) ->
         error(:options, :invalid_options, "layout option must be a boolean")

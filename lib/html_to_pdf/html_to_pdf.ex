@@ -28,6 +28,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Diagnostics
 
+  @render_option_keys [
+    :page_size,
+    :margin,
+    :base_url,
+    :stylesheets,
+    :default_font,
+    :fonts,
+    :metadata,
+    :page_furniture
+  ]
+
   @type page_size :: PageGeometry.page_size_input()
   @type page_margin :: PageGeometry.margin_input()
   @type pdf_metadata ::
@@ -225,27 +236,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   defp effective_render_options_detailed(dom, opts) do
     case Keyword.keyword?(opts) do
       true ->
-        with {:ok, stylesheet_entries} <- Style.load_stylesheets(dom, opts),
-             {:ok, page_options} <- page_options_from_stylesheets(stylesheet_entries) do
-          effective_opts = Keyword.merge(page_options, opts)
-          {:ok, metadata_options(dom, effective_opts)}
-        else
-          {:error, :invalid_stylesheet_options} ->
+        unknown =
+          opts
+          |> Keyword.keys()
+          |> Enum.reject(&(&1 in @render_option_keys))
+          |> Enum.uniq()
+          |> Enum.sort()
+
+        case unknown do
+          [] ->
+            with {:ok, stylesheet_entries} <- Style.load_stylesheets(dom, opts),
+                 {:ok, page_options} <- page_options_from_stylesheets(stylesheet_entries) do
+              effective_opts = Keyword.merge(page_options, opts)
+              {:ok, metadata_options(dom, effective_opts)}
+            else
+              {:error, :invalid_stylesheet_options} ->
+                Diagnostics.error(
+                  :options,
+                  :invalid_options,
+                  "stylesheets option must be a list of {:css, css} or {:file, path} tuples"
+                )
+
+              {:error, :invalid_document} ->
+                Diagnostics.error(
+                  :style,
+                  :invalid_document,
+                  "configured stylesheet file could not be read"
+                )
+
+              {:error, {_reason, _diagnostic}} = error ->
+                error
+            end
+
+          unknown ->
             Diagnostics.error(
               :options,
               :invalid_options,
-              "stylesheets option must be a list of {:css, css} or {:file, path} tuples"
+              "render options contain unsupported keys: #{inspect(unknown)}"
             )
-
-          {:error, :invalid_document} ->
-            Diagnostics.error(
-              :style,
-              :invalid_document,
-              "configured stylesheet file could not be read"
-            )
-
-          {:error, {_reason, _diagnostic}} = error ->
-            error
         end
 
       false ->
