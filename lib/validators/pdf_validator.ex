@@ -15,6 +15,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   alias NativeElixirPdfUtilities.Pdf.Reader
 
   @max_pages 10_000
+  @max_page_tree_depth 1_000
   @inheritable_page_keys ["Resources", "MediaBox", "CropBox", "Rotate"]
 
   @typedoc "An indirect PDF object reference."
@@ -108,21 +109,22 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     case document do
       %{objects: objects, trailer: trailer} when is_map(objects) and is_map(trailer) ->
         root = Map.get(trailer, "Root")
+        traversal = %{seen: %{}, pages: [], page_count: 0}
 
         with {:ok, catalog} <- dictionary(document, root, opts),
              true <- named?(Map.get(catalog, "Type"), "Catalog"),
              {:ok, page_tree_ref} <- required_reference(catalog, "Pages", opts),
-             {:ok, _seen, pages, _count} <-
+             {:ok, traversal, _descendant_count} <-
                walk_page_tree(
                  document,
                  page_tree_ref,
                  %{},
                  %{},
-                 %{},
-                 [],
+                 traversal,
+                 0,
                  opts
                ) do
-          pages = Enum.reverse(pages)
+          pages = Enum.reverse(traversal.pages)
 
           reader_pages =
             Enum.map(pages, fn page ->
@@ -253,14 +255,22 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
-  defp walk_page_tree(document, page_ref, inherited, ancestors, seen, pages, opts) do
+  defp walk_page_tree(
+         document,
+         page_ref,
+         inherited,
+         ancestors,
+         traversal,
+         depth,
+         opts
+       ) do
     ref = reference_identity(page_ref)
 
     cond do
       Map.has_key?(ancestors, ref) ->
         error(:page_tree, :invalid_pdf_input, "page tree contains a cycle", opts, object: ref)
 
-      Map.has_key?(seen, ref) ->
+      Map.has_key?(traversal.seen, ref) ->
         error(
           :page_tree,
           :invalid_pdf_input,
@@ -269,14 +279,19 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           object: ref
         )
 
-      length(pages) >= @max_pages ->
+      depth >= @max_page_tree_depth ->
+        error(:limits, :resource_limit_exceeded, "PDF page tree depth exceeds the limit", opts,
+          object: ref
+        )
+
+      traversal.page_count >= @max_pages ->
         error(:limits, :resource_limit_exceeded, "PDF page count exceeds the limit", opts)
 
       true ->
         with {:ok, dictionary} <- dictionary(document, page_ref, opts) do
           inherited = inherit_page_values(dictionary, ref, inherited)
           ancestors = Map.put(ancestors, ref, true)
-          seen = Map.put(seen, ref, true)
+          traversal = %{traversal | seen: Map.put(traversal.seen, ref, true)}
 
           case Map.get(dictionary, "Type") do
             {:name, "Page"} ->
@@ -290,23 +305,29 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
                 inherited: inherited
               }
 
-              {:ok, seen, [page | pages], 1}
+              traversal = %{
+                traversal
+                | pages: [page | traversal.pages],
+                  page_count: traversal.page_count + 1
+              }
+
+              {:ok, traversal, 1}
 
             {:name, "Pages"} ->
               with {:ok, declared_count} <- page_tree_count(document, dictionary, ref, opts),
                    {:ok, kids} <- page_tree_kids(document, dictionary, opts),
-                   {:ok, seen, pages, actual_count} <-
+                   {:ok, traversal, actual_count} <-
                      walk_kids(
                        document,
                        kids,
                        inherited,
                        ancestors,
-                       seen,
-                       pages,
+                       traversal,
+                       depth + 1,
                        opts
                      ),
                    :ok <- validate_page_tree_count(declared_count, actual_count, ref, opts) do
-                {:ok, seen, pages, actual_count}
+                {:ok, traversal, actual_count}
               end
 
             _ ->
@@ -318,28 +339,40 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
-  defp walk_kids(document, kids, inherited, ancestors, seen, pages, opts) do
-    Enum.reduce_while(kids, {:ok, seen, pages, 0}, fn kid, {:ok, seen, pages, count} ->
-      case reference_identity(kid) do
-        nil ->
-          {:halt,
-           error(
-             :page_tree,
-             :invalid_pdf_input,
-             "Pages Kids array contains a non-reference",
-             opts
-           )}
+  defp walk_kids(document, kids, inherited, ancestors, traversal, depth, opts) do
+    Enum.reduce_while(
+      kids,
+      {:ok, traversal, 0},
+      fn kid, {:ok, traversal, descendant_count} ->
+        case reference_identity(kid) do
+          nil ->
+            {:halt,
+             error(
+               :page_tree,
+               :invalid_pdf_input,
+               "Pages Kids array contains a non-reference",
+               opts
+             )}
 
-        _ref ->
-          case walk_page_tree(document, kid, inherited, ancestors, seen, pages, opts) do
-            {:ok, seen, pages, child_count} ->
-              {:cont, {:ok, seen, pages, count + child_count}}
+          _ref ->
+            case walk_page_tree(
+                   document,
+                   kid,
+                   inherited,
+                   ancestors,
+                   traversal,
+                   depth,
+                   opts
+                 ) do
+              {:ok, traversal, child_count} ->
+                {:cont, {:ok, traversal, descendant_count + child_count}}
 
-            {:error, _} = page_error ->
-              {:halt, page_error}
-          end
+              {:error, _} = page_error ->
+                {:halt, page_error}
+            end
+        end
       end
-    end)
+    )
   end
 
   defp page_tree_kids(document, dictionary, opts) do

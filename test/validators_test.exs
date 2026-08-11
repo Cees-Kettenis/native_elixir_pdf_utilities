@@ -61,6 +61,17 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
     end
   end
 
+  test "limits page-tree depth before recursive traversal becomes unsafe" do
+    assert {:ok, %{pages: [_page]}} =
+             999 |> nested_page_document() |> PdfValidator.validate()
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             1_000 |> nested_page_document() |> PdfValidator.validate()
+
+    assert diagnostic.stage == :limits
+    assert diagnostic.message == "PDF page tree depth exceeds the limit; object 1002 0"
+  end
+
   test "shared validator utilities diagnose malformed contexts and nested values" do
     assert {:error, {:invalid_pdf_input, %{stage: :validation}}} = PdfValidator.validate(%{})
 
