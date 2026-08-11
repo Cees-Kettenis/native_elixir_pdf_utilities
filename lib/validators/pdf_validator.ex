@@ -118,6 +118,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
                walk_page_tree(
                  document,
                  page_tree_ref,
+                 nil,
                  %{},
                  %{},
                  traversal,
@@ -258,6 +259,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   defp walk_page_tree(
          document,
          page_ref,
+         expected_parent,
          inherited,
          ancestors,
          traversal,
@@ -288,7 +290,8 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         error(:limits, :resource_limit_exceeded, "PDF page count exceeds the limit", opts)
 
       true ->
-        with {:ok, dictionary} <- dictionary(document, page_ref, opts) do
+        with {:ok, dictionary} <- dictionary(document, page_ref, opts),
+             :ok <- validate_page_tree_parent(dictionary, ref, expected_parent, opts) do
           inherited = inherit_page_values(dictionary, ref, inherited)
           ancestors = Map.put(ancestors, ref, true)
           traversal = %{traversal | seen: Map.put(traversal.seen, ref, true)}
@@ -323,6 +326,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
                        inherited,
                        ancestors,
                        traversal,
+                       ref,
                        depth + 1,
                        opts
                      ),
@@ -339,7 +343,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
-  defp walk_kids(document, kids, inherited, ancestors, traversal, depth, opts) do
+  defp walk_kids(document, kids, inherited, ancestors, traversal, parent_ref, depth, opts) do
     Enum.reduce_while(
       kids,
       {:ok, traversal, 0},
@@ -358,6 +362,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
             case walk_page_tree(
                    document,
                    kid,
+                   parent_ref,
                    inherited,
                    ancestors,
                    traversal,
@@ -397,6 +402,58 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         error(:page_tree, :invalid_pdf_input, "Pages node is missing a valid Count", opts,
           object: ref
         )
+    end
+  end
+
+  defp validate_page_tree_parent(dictionary, ref, expected_parent, opts) do
+    case expected_parent do
+      nil ->
+        case Map.has_key?(dictionary, "Parent") do
+          false ->
+            :ok
+
+          true ->
+            error(
+              :page_tree,
+              :invalid_pdf_input,
+              "page tree root must not declare Parent",
+              opts,
+              object: ref
+            )
+        end
+
+      expected_parent ->
+        case Map.fetch(dictionary, "Parent") do
+          {:ok, {:ref, ^expected_parent}} ->
+            :ok
+
+          :error ->
+            error(
+              :page_tree,
+              :invalid_pdf_input,
+              "page tree node is missing its required Parent",
+              opts,
+              object: ref
+            )
+
+          {:ok, {:ref, _parent}} ->
+            error(
+              :page_tree,
+              :invalid_pdf_input,
+              "page tree node Parent does not match its containing Pages node",
+              opts,
+              object: ref
+            )
+
+          {:ok, _parent} ->
+            error(
+              :page_tree,
+              :invalid_pdf_input,
+              "page tree node has a malformed Parent",
+              opts,
+              object: ref
+            )
+        end
     end
   end
 

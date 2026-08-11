@@ -72,6 +72,18 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
     assert diagnostic.message == "PDF page tree depth exceeds the limit; object 1002 0"
   end
 
+  test "page-tree Parent validation includes indirect-object generations" do
+    document =
+      shared_document()
+      |> put_in([:objects, {3, 0}, :value, "Parent"], {:ref, {2, 1}})
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} = PdfValidator.validate(document)
+    assert diagnostic.stage == :page_tree
+
+    assert diagnostic.message ==
+             "page tree node Parent does not match its containing Pages node; object 3 0"
+  end
+
   test "shared validator utilities diagnose malformed contexts and nested values" do
     assert {:error, {:invalid_pdf_input, %{stage: :validation}}} = PdfValidator.validate(%{})
 
@@ -465,6 +477,12 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
           "Count" => 1,
           "MediaBox" => [0, 0, 100, 100]
         }
+
+        dictionary =
+          case level do
+            0 -> dictionary
+            _ -> Map.put(dictionary, "Parent", {:ref, {object_number - 1, 0}})
+          end
 
         Map.put(objects, {object_number, 0}, object(dictionary))
       end)

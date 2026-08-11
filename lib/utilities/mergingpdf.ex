@@ -261,7 +261,6 @@ defmodule NativeElixirPdfUtilities.Merge do
 
     dict_inner =
       dict_inner
-      |> drop_key("Parent")
       |> put_key("Parent", [{:generated_reference, parent_id}])
       |> ensure_type_page()
       |> ensure_resources(inh_res)
@@ -286,14 +285,6 @@ defmodule NativeElixirPdfUtilities.Merge do
 
       [token | rest] ->
         do_take_dict(rest, depth, [token | acc], before)
-    end
-  end
-
-  # Drop a key (and its value) from a flat dict token list if present.
-  defp drop_key(tokens, name) do
-    case MergeValidator.split_dictionary_value(tokens, name) do
-      {:ok, left, _val, right} -> left ++ right
-      :error -> tokens
     end
   end
 

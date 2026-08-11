@@ -209,7 +209,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
       pdf([
         {1, "<< /Type /Catalog /Pages 2 0 R >>"},
         {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
-        {3, "<< /Type /Unknown >>"}
+        {3, "<< /Type /Unknown /Parent 2 0 R >>"}
       ])
 
     assert_error(Reader.read(invalid_type), :invalid_pdf_input, :page_tree)
@@ -218,10 +218,71 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
       pdf([
         {1, "<< /Type /Catalog /Pages 2 0 R >>"},
         {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
-        {3, "<< /Type /Pages /Kids [2 0 R] /Count 1 >>"}
+        {3, "<< /Type /Pages /Parent 2 0 R /Kids [2 0 R] /Count 1 >>"}
       ])
 
     assert_error(Reader.read(cycle), :invalid_pdf_input, :page_tree)
+  end
+
+  test "validates exact page-tree Parent relationships" do
+    invalid_parents = [
+      {"", "page tree node is missing its required Parent; object 3 0"},
+      {"/Parent /invalid", "page tree node has a malformed Parent; object 3 0"},
+      {"/Parent 4 0 R",
+       "page tree node Parent does not match its containing Pages node; object 3 0"}
+    ]
+
+    for {parent, message} <- invalid_parents do
+      malformed =
+        pdf([
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+          {3, "<< /Type /Page #{parent} >>"}
+        ])
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Reader.read(malformed)
+      assert diagnostic.stage == :page_tree
+      assert diagnostic.message == message
+    end
+
+    missing_parent =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3, "<< /Type /Page >>"}
+      ])
+
+    assert {:error, {:invalid_pdf_input, merge_diagnostic}} = Merge.merge([missing_parent])
+    assert merge_diagnostic.stage == :page_tree
+    assert merge_diagnostic.operation == :merge
+    assert merge_diagnostic.module == Merge
+    assert merge_diagnostic.message == "page tree node is missing its required Parent; object 3 0"
+
+    root_parent =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Parent 1 0 R /Kids [] /Count 0 >>"}
+      ])
+
+    assert {:error, {:invalid_pdf_input, root_diagnostic}} = Reader.read(root_parent)
+    assert root_diagnostic.stage == :page_tree
+    assert root_diagnostic.message == "page tree root must not declare Parent; object 2 0"
+
+    cross_branch =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>"},
+        {3, "<< /Type /Pages /Parent 2 0 R /Kids [5 0 R] /Count 1 >>"},
+        {4, "<< /Type /Pages /Parent 2 0 R /Kids [6 0 R] /Count 1 >>"},
+        {5, "<< /Type /Page /Parent 4 0 R >>"},
+        {6, "<< /Type /Page /Parent 4 0 R >>"}
+      ])
+
+    assert {:error, {:invalid_pdf_input, cross_branch_diagnostic}} =
+             Reader.read(cross_branch)
+
+    assert cross_branch_diagnostic.message ==
+             "page tree node Parent does not match its containing Pages node; object 5 0"
   end
 
   test "rejects duplicate page-tree references and invalid descendant counts" do

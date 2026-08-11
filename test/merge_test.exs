@@ -304,7 +304,7 @@ defmodule NativeElixirPdfUtilities.MergeTest do
       merge_pdf([
         {1, "<< /Type /Catalog /Pages 2 0 R >>"},
         {2, "<< /Type /Pages /Kids [ 3 0 R ] /Count 1 /Resources [] >>"},
-        {3, "<< /Type /Page /Resources [] /MediaBox [ 0 0 200 300 ] >>"}
+        {3, "<< /Type /Page /Parent 2 0 R /Resources [] /MediaBox [ 0 0 200 300 ] >>"}
       ])
 
     assert {:ok, merged} = Merge.merge([pdf])
@@ -319,7 +319,7 @@ defmodule NativeElixirPdfUtilities.MergeTest do
         {1, "<< /Type /Catalog /Pages 2 0 R >>"},
         {2, "<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>"},
         {3,
-         "<< /Type /Page /Resources << /ProcSet [ /PDF ] /Font << /F1 4 0 R >> >> /MediaBox [ 0.5 0 200.25 300 ] /Contents 5 0 R /AltParent 3 0 R >>"},
+         "<< /Type /Page /Parent 2 0 R /Resources << /ProcSet [ /PDF ] /Font << /F1 4 0 R >> >> /MediaBox [ 0.5 0 200.25 300 ] /Contents 5 0 R /AltParent 3 0 R >>"},
         {4, "<< /Type /Font >>"},
         {5, "<< /Length 2 >> stream\nHi\nendstream"}
       ])
