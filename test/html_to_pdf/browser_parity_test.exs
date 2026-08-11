@@ -9,7 +9,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   @real_fixtures_dir Path.expand("../fixtures/html_to_pdf", __DIR__)
 
   @page_furniture_header """
-  <div style="height: 18pt; padding: 4pt; border-bottom: 1pt solid #1f4b7a; background: #e8f1fa; color: #1f4b7a; font-family: 'DejaVu Sans'; font-size: 8pt; line-height: 10pt">Quarterly report</div>
+  <div style="color: #1f4b7a; font-family: 'DejaVu Sans'; font-size: 8pt; line-height: 24pt">Quarterly report</div>
   """
   @page_furniture_footer """
   <div style="height: 14pt; color: #52606d; font-family: 'DejaVu Sans'; font-size: 8pt; line-height: 10pt; text-align: right">Page {{page}} of {{pages}}</div>

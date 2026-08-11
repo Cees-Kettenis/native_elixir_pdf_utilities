@@ -219,7 +219,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   end
 
   defp flow_group(boxes) do
-    bounds = Enum.map(boxes, &box_bounds/1)
+    bounds = Enum.map(boxes, &PageGeometry.box_vertical_bounds/1)
     top = bounds |> Enum.map(&elem(&1, 0)) |> Enum.max()
     bottom = bounds |> Enum.map(&elem(&1, 1)) |> Enum.min()
     first = hd(boxes)
@@ -250,33 +250,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
       false ->
         [group]
-    end
-  end
-
-  defp box_bounds(box) do
-    case box do
-      %{type: :rect, y: y, height: height} when is_number(y) and is_number(height) ->
-        {y + height, y}
-
-      %{type: :image, y: y, height: height} when is_number(y) and is_number(height) ->
-        {y + height, y}
-
-      %{type: :text, y: y, font_size: font_size, line_height: line_height}
-      when is_number(y) and is_number(font_size) and is_number(line_height) ->
-        {y + font_size, y + font_size - line_height}
-
-      %{type: :text, y: y, font_size: font_size} when is_number(y) and is_number(font_size) ->
-        {y + font_size, y}
-
-      %{type: :text, y: y, line_height: line_height}
-      when is_number(y) and is_number(line_height) ->
-        {y + line_height, y}
-
-      %{type: :page_break, y: y} when is_number(y) ->
-        {y, y}
-
-      _ ->
-        {0.0, 0.0}
     end
   end
 

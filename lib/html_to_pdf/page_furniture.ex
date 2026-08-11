@@ -271,7 +271,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
 
   defp place(position, boxes, {_page_width, page_height}, margins) do
     drawable_boxes = Enum.reject(boxes, &match?(%{type: :page_break}, &1))
-    bounds = Enum.map(drawable_boxes, &box_bounds/1)
+    bounds = Enum.map(drawable_boxes, &PageGeometry.box_vertical_bounds/1)
 
     case bounds do
       [] ->
@@ -298,18 +298,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
               module: __MODULE__
             )
         end
-    end
-  end
-
-  defp box_bounds(box) do
-    case box do
-      %{type: type, y: y, height: height}
-      when type in [:rect, :image] and is_number(y) and is_number(height) ->
-        {y + height, y}
-
-      %{type: :text, y: y, font_size: font_size}
-      when is_number(y) and is_number(font_size) ->
-        {y + font_size, y}
     end
   end
 

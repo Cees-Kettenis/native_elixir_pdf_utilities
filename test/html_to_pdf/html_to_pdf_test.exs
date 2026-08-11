@@ -743,7 +743,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                reason: :invalid_layout,
                operation: :decorate_pages,
                module: NativeElixirPdfUtilities.HtmlToPdf.PageFurniture,
-               message: "footer page furniture height 12.0pt exceeds the 0.0pt page margin"
+               message: "footer page furniture height 14.4pt exceeds the 0.0pt page margin"
              }}} =
              HtmlToPdf.render("<p>Hello</p>", page_furniture: [footer: "Page {{page}}"])
 

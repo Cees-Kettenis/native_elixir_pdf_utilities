@@ -202,4 +202,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometryTest do
 
     refute PageGeometry.valid_printable_area?(:a4, %{})
   end
+
+  test "returns shared vertical bounds for drawable layout boxes" do
+    assert PageGeometry.box_vertical_bounds(%{type: :rect, y: 10, height: 20}) == {30, 10}
+    assert PageGeometry.box_vertical_bounds(%{type: :image, y: 5, height: 8}) == {13, 5}
+
+    assert PageGeometry.box_vertical_bounds(%{
+             type: :text,
+             y: 10,
+             font_size: 8,
+             line_height: 20
+           }) == {18, -2}
+
+    assert PageGeometry.box_vertical_bounds(%{type: :text, y: 10, font_size: 8}) == {18, 10}
+    assert PageGeometry.box_vertical_bounds(%{type: :text, y: 10, line_height: 20}) == {30, 10}
+    assert PageGeometry.box_vertical_bounds(%{type: :page_break, y: 7}) == {7, 7}
+    assert PageGeometry.box_vertical_bounds(%{type: :metadata}) == {0.0, 0.0}
+  end
 end

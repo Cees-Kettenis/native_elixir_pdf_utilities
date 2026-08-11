@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
   use ExUnit.Case
 
   alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
+  alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
 
   @page_size {200.0, 100.0}
   @margin 20.0
@@ -147,6 +148,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
                    "<div style=\"height: 30pt; background: #eeeeee; font-size: 8pt\">Too tall</div>"
                ]
              )
+  end
+
+  test "decorate uses text line height when checking furniture margins" do
+    assert {:ok, [page]} =
+             PageFurniture.decorate(pages(1), layout_tree(),
+               page_furniture: [
+                 header: "<div style=\"font-size: 8pt; line-height: 18pt\">Tall line</div>"
+               ]
+             )
+
+    header = Enum.find(page.boxes, &(&1.type == :text and &1.text == "Tall line"))
+    {top, bottom} = PageGeometry.box_vertical_bounds(header)
+    assert_in_delta top - bottom, 18.0, 0.0001
+    assert bottom >= 80.0
+
+    for position <- [:header, :footer] do
+      assert {:error,
+              {:invalid_layout,
+               %{
+                 stage: :layout,
+                 message: message
+               }}} =
+               PageFurniture.decorate(pages(1), layout_tree(),
+                 page_furniture: [
+                   {position, "<div style=\"font-size: 8pt; line-height: 24pt\">Too tall</div>"}
+                 ]
+               )
+
+      assert message ==
+               "#{position} page furniture height 24.0pt exceeds the 20.0pt page margin"
+    end
   end
 
   test "decorate validates its public layout inputs and template failures" do

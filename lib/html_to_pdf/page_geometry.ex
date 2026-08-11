@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
   @moduledoc """
-  Normalizes page sizes and four-sided page margins for rendering stages.
+  Normalizes page sizes, four-sided page margins, and shared vertical box
+  geometry for rendering stages.
 
   Numeric custom page-size tuples retain the renderer's compatibility rule:
   values up to `20 x 20` are inches and larger values are PDF points. CSS
@@ -265,6 +266,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
 
       _ ->
         false
+    end
+  end
+
+  @doc """
+  Returns the vertical `{top, bottom}` bounds for a drawable layout box.
+
+  Text bounds account for both the font ascent and the full line height so all
+  rendering stages agree about the vertical space occupied by a line.
+  """
+  @spec box_vertical_bounds(term()) :: {number(), number()}
+  def box_vertical_bounds(box) do
+    case box do
+      %{type: type, y: y, height: height}
+      when type in [:rect, :image] and is_number(y) and is_number(height) ->
+        {y + height, y}
+
+      %{type: :text, y: y, font_size: font_size, line_height: line_height}
+      when is_number(y) and is_number(font_size) and is_number(line_height) ->
+        {y + font_size, y + font_size - line_height}
+
+      %{type: :text, y: y, font_size: font_size}
+      when is_number(y) and is_number(font_size) ->
+        {y + font_size, y}
+
+      %{type: :text, y: y, line_height: line_height}
+      when is_number(y) and is_number(line_height) ->
+        {y + line_height, y}
+
+      %{type: :page_break, y: y} when is_number(y) ->
+        {y, y}
+
+      _ ->
+        {0.0, 0.0}
     end
   end
 
