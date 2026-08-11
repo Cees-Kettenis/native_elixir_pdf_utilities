@@ -117,7 +117,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         true ->
           state
           |> page_break(page_size, margins)
-          |> repeat_table_header(group, headers)
+          |> repeat_table_header(group, headers, margins)
 
         false ->
           %{state | current_y: target_top}
@@ -150,7 +150,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     end
   end
 
-  defp repeat_table_header(state, group, headers) do
+  defp repeat_table_header(state, group, headers, margins) do
     case {Map.get(group, :table_id), Map.get(group, :table_section)} do
       {table_id, section} when not is_nil(table_id) and section != :head ->
         case Map.get(headers, table_id) do
@@ -158,14 +158,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
             state
 
           header ->
-            shifted_boxes = shift_boxes(header.boxes, state.current_y - header.top)
+            case state.current_y - header.height - group.height >= margins.bottom do
+              true ->
+                shifted_boxes = shift_boxes(header.boxes, state.current_y - header.top)
 
-            %{
-              state
-              | current_boxes: state.current_boxes ++ shifted_boxes,
-                current_y: state.current_y - header.height,
-                previous_bottom: header.bottom
-            }
+                %{
+                  state
+                  | current_boxes: state.current_boxes ++ shifted_boxes,
+                    current_y: state.current_y - header.height,
+                    previous_bottom: header.bottom
+                }
+
+              false ->
+                state
+            end
         end
 
       _ ->

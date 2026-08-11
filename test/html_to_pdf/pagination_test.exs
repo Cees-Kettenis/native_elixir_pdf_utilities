@@ -365,6 +365,59 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
     assert column_header.y > body_text.y
   end
 
+  test "paginate keeps a near-page-height table row inside the page bounds" do
+    table_id = :near_page_height
+
+    header =
+      text_box("Header", 78.0, {:table_row, table_id, :header}, %{
+        table_id: table_id,
+        table_section: :head,
+        repeat_table_header: true
+      })
+
+    first_row =
+      text_box("First", 60.0, {:table_row, table_id, :first}, %{
+        table_id: table_id,
+        table_section: :body
+      })
+
+    tall_flow_id = {:table_row, table_id, :tall}
+
+    tall_row = [
+      %{
+        type: :rect,
+        x: 10.0,
+        y: -15.0,
+        width: 180.0,
+        height: 70.0,
+        flow_id: tall_flow_id,
+        table_id: table_id,
+        table_section: :body,
+        break_before: :auto,
+        break_after: :auto
+      },
+      text_box("Tall", 35.0, tall_flow_id, %{
+        table_id: table_id,
+        table_section: :body
+      })
+    ]
+
+    layout_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 10.0,
+      boxes: [header, first_row | tall_row]
+    }
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+    assert Enum.map(first_page.boxes, &Map.get(&1, :text, :rect)) == ["Header", "First"]
+    assert Enum.map(second_page.boxes, &Map.get(&1, :text, :rect)) == [:rect, "Tall"]
+
+    tall_background = hd(second_page.boxes)
+    assert_in_delta tall_background.y, 20.0, 0.0001
+    assert tall_background.y >= 10.0
+  end
+
   test "paginate rejects invalid layout trees" do
     assert {:error,
             {:invalid_layout,

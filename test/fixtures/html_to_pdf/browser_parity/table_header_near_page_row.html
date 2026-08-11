@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 9pt;
+        line-height: 11pt;
+        color: #111827;
+      }
+      table {
+        width: 240pt;
+        border-collapse: collapse;
+        page-break-inside: auto;
+      }
+      th, td {
+        padding: 4pt;
+        border: 1pt solid #1f2937;
+        vertical-align: top;
+      }
+      thead tr {
+        height: 24pt;
+      }
+      .lead { height: 30pt; }
+      .near-page {
+        height: 150pt;
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+    </style>
+  </head>
+  <body>
+    <table>
+      <thead>
+        <tr><th>Repeated inventory header</th></tr>
+      </thead>
+      <tbody>
+        <tr class="lead"><td>First-page row</td></tr>
+        <tr class="near-page"><td>Near-page-height row remains intact</td></tr>
+      </tbody>
+    </table>
+  </body>
+</html>
