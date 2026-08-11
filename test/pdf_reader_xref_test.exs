@@ -58,17 +58,46 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
     assert_error(Reader.read(cyclic), :invalid_pdf_input, :xref)
   end
 
+  test "requires object zero to be a free classic xref entry" do
+    in_use_zero =
+      classic_pdf([
+        {0, 0, "(reserved object)"},
+        {1, 0, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"}
+      ])
+
+    assert {:error,
+            {:invalid_pdf_input,
+             %{
+               stage: :xref,
+               message: "xref object 0 must be a free entry with generation 65535"
+             }}} = Reader.read(in_use_zero.pdf)
+
+    valid =
+      classic_pdf([
+        {1, 0, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"}
+      ])
+
+    missing_zero =
+      String.replace(
+        valid.pdf,
+        "xref\n0 3\n" <> classic_entry(0, 65_535, "f"),
+        "xref\n1 2\n",
+        global: false
+      )
+
+    assert_error(Reader.read(missing_zero), :invalid_pdf_input, :xref)
+  end
+
   test "parses xref stream widths and Index ranges and rejects invalid records" do
     assert {:ok, document} = Reader.read(xref_stream_pdf())
     assert document.xref[0] == {:free, 0, 65_535}
     assert match?({:uncompressed, _, 0}, document.xref[3])
 
-    assert {:ok, no_type_field} =
-             Reader.read(xref_stream_pdf(widths: [0, 4, 2], index: [1, 3]))
-
-    assert match?({:uncompressed, _, 0}, no_type_field.xref[1])
-
     malformed = [
+      xref_stream_pdf(widths: [0, 4, 2], index: [1, 3]),
+      xref_stream_pdf(object_zero_type: 1),
       xref_stream_pdf(widths: [1, 4]),
       xref_stream_pdf(widths: [0, 0, 0]),
       xref_stream_pdf(index: [0, 2, 1, 2]),
@@ -352,12 +381,19 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
 
     data =
       Enum.reduce(objects, <<>>, fn object, data ->
-        type = if object == 0, do: 0, else: entry_type
-        offset = if object == 0, do: 0, else: Map.get(offsets, object, 0)
+        type =
+          if object == 0,
+            do: Keyword.get(options, :object_zero_type, 0),
+            else: entry_type
+
+        offset =
+          if object == 0,
+            do: Keyword.get(options, :object_zero_offset, 0),
+            else: Map.get(offsets, object, 0)
 
         generation =
           if object == 0,
-            do: 65_535,
+            do: Keyword.get(options, :object_zero_generation, 65_535),
             else: Keyword.get(options, :generation, 0)
 
         data <>

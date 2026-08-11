@@ -16,6 +16,44 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
     assert diagnostic.module == PdfValidator
   end
 
+  test "shared xref validation requires a valid object-zero free-list head" do
+    pdf = "%PDF-1.7\n"
+    trailer = %{"Size" => 2, "Root" => {:ref, {1, 0}}}
+    valid_entries = %{0 => {:free, 0, 65_535}, 1 => {:uncompressed, 1, 0}}
+
+    assert :ok = PdfValidator.validate_xref(valid_entries, trailer, pdf)
+
+    invalid_entries = [
+      Map.delete(valid_entries, 0),
+      Map.put(valid_entries, 0, {:uncompressed, 1, 0}),
+      Map.put(valid_entries, 0, {:free, 0, 0}),
+      Map.put(valid_entries, 0, {:free, 2, 65_535})
+    ]
+
+    for entries <- invalid_entries do
+      assert {:error,
+              {:invalid_pdf_input,
+               %{
+                 stage: :xref,
+                 reason: :invalid_pdf_input,
+                 message: "xref object 0 must be a free entry with generation 65535"
+               }}} = PdfValidator.validate_xref(entries, trailer, pdf)
+    end
+
+    assert {:error,
+            {:invalid_pdf_input, %{stage: :xref, message: "parsed xref context is malformed"}}} =
+             PdfValidator.validate_xref(:not_entries, trailer, pdf)
+
+    assert {:error,
+            {:invalid_pdf_input,
+             %{stage: :xref, message: "xref entry is outside its declared bounds"}}} =
+             PdfValidator.validate_xref(
+               Map.put(valid_entries, 1, :malformed),
+               trailer,
+               pdf
+             )
+  end
+
   test "shared validation prepares reusable page identity and inherited values" do
     document = shared_document()
 

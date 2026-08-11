@@ -80,7 +80,11 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
         with :ok <- validate_header(pdf),
              {:ok, xref_offset} <- final_xref_offset(pdf),
              {:ok, xref, trailer} <- parse_xref_chain(pdf, xref_offset, %{}, 0),
-             :ok <- validate_xref(xref, trailer, pdf),
+             :ok <-
+               PdfValidator.validate_xref(xref, trailer, pdf,
+                 operation: :read,
+                 module: __MODULE__
+               ),
              :ok <- reject_encryption(trailer),
              {:ok, objects} <- load_objects(pdf, xref),
              {:ok, context} <-
@@ -461,42 +465,6 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
       _ ->
         :error
-    end
-  end
-
-  defp validate_xref(entries, trailer, pdf) do
-    size = Map.get(trailer, "Size")
-
-    cond do
-      not is_integer(size) or size <= 0 or size > @max_objects + 1 ->
-        error(:xref, :invalid_pdf_input, "xref Size is malformed")
-
-      map_size(entries) > @max_objects ->
-        error(:limits, :resource_limit_exceeded, "PDF object count exceeds the limit")
-
-      not match?({:ref, _}, Map.get(trailer, "Root")) ->
-        error(:trailer, :invalid_pdf_input, "trailer does not contain a catalog reference")
-
-      Enum.any?(entries, fn {object, entry} ->
-        object < 0 or object >= size or not valid_xref_entry?(entry, pdf, size)
-      end) ->
-        error(:xref, :invalid_pdf_input, "xref entry is outside its declared bounds")
-
-      true ->
-        :ok
-    end
-  end
-
-  defp valid_xref_entry?(entry, pdf, size) do
-    case entry do
-      {:free, next, generation} ->
-        next >= 0 and next < size and generation in 0..65_535
-
-      {:uncompressed, offset, generation} ->
-        offset >= 0 and offset < byte_size(pdf) and generation in 0..65_535
-
-      {:compressed, object_stream, index} ->
-        object_stream > 0 and object_stream < size and index >= 0
     end
   end
 

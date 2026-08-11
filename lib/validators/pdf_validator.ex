@@ -14,6 +14,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Pdf.Reader
 
+  @max_objects 100_000
   @max_pages 10_000
   @max_page_tree_depth 1_000
   @inheritable_page_keys ["Resources", "MediaBox", "CropBox", "Rotate"]
@@ -33,6 +34,12 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           | {:ref, ref()}
           | [value()]
           | %{optional(binary()) => value()}
+
+  @typedoc "A parsed cross-reference entry."
+  @type xref_entry ::
+          {:free, non_neg_integer(), non_neg_integer()}
+          | {:uncompressed, non_neg_integer(), non_neg_integer()}
+          | {:compressed, pos_integer(), non_neg_integer()}
 
   @typedoc "Diagnostic ownership supplied by the public operation."
   @type diagnostic_option ::
@@ -94,6 +101,61 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           diagnostic
           |> Map.put(:operation, :validate_pdf)
           |> Map.put(:module, __MODULE__)}}
+    end
+  end
+
+  @doc """
+  Validates a parsed cross-reference table and its trailer.
+
+  Object zero must be present as the free-list head with generation 65535.
+  All remaining entries must fit the trailer's declared object and byte bounds.
+  """
+  @spec validate_xref(
+          %{optional(integer()) => xref_entry()},
+          map(),
+          binary(),
+          [diagnostic_option()]
+        ) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_xref(entries, trailer, pdf, opts \\ []) do
+    case {entries, trailer, pdf} do
+      {entries, trailer, pdf} when is_map(entries) and is_map(trailer) and is_binary(pdf) ->
+        size = Map.get(trailer, "Size")
+
+        cond do
+          not is_integer(size) or size <= 0 or size > @max_objects + 1 ->
+            error(:xref, :invalid_pdf_input, "xref Size is malformed", opts)
+
+          map_size(entries) > @max_objects ->
+            error(:limits, :resource_limit_exceeded, "PDF object count exceeds the limit", opts)
+
+          not match?({:ref, _}, Map.get(trailer, "Root")) ->
+            error(
+              :trailer,
+              :invalid_pdf_input,
+              "trailer does not contain a catalog reference",
+              opts
+            )
+
+          not valid_object_zero_entry?(Map.get(entries, 0), size) ->
+            error(
+              :xref,
+              :invalid_pdf_input,
+              "xref object 0 must be a free entry with generation 65535",
+              opts
+            )
+
+          Enum.any?(entries, fn {object, entry} ->
+            not is_integer(object) or object < 0 or object >= size or
+                not valid_xref_entry?(entry, pdf, size)
+          end) ->
+            error(:xref, :invalid_pdf_input, "xref entry is outside its declared bounds", opts)
+
+          true ->
+            :ok
+        end
+
+      _ ->
+        error(:xref, :invalid_pdf_input, "parsed xref context is malformed", opts)
     end
   end
 
@@ -480,6 +542,32 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         false -> inherited
       end
     end)
+  end
+
+  defp valid_object_zero_entry?(entry, size) do
+    case entry do
+      {:free, next, 65_535} when is_integer(next) and next >= 0 and next < size -> true
+      _ -> false
+    end
+  end
+
+  defp valid_xref_entry?(entry, pdf, size) do
+    case entry do
+      {:free, next, generation}
+      when is_integer(next) and is_integer(generation) ->
+        next >= 0 and next < size and generation in 0..65_535
+
+      {:uncompressed, offset, generation}
+      when is_integer(offset) and is_integer(generation) ->
+        offset >= 0 and offset < byte_size(pdf) and generation in 0..65_535
+
+      {:compressed, object_stream, index}
+      when is_integer(object_stream) and is_integer(index) ->
+        object_stream > 0 and object_stream < size and index >= 0
+
+      _ ->
+        false
+    end
   end
 
   defp inherited_value(inherited, key) do
