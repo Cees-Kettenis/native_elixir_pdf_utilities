@@ -941,6 +941,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     end)
   end
 
+  test "render rejects RGB channels outside the normalized color range" do
+    text_box = %{
+      type: :text,
+      text: "Bad color",
+      x: 1,
+      y: 1,
+      font: "Helvetica",
+      font_size: 12,
+      color: {0, 0, 0}
+    }
+
+    invalid_colors = [
+      {-0.01, 0, 0},
+      {0, 1.01, 0},
+      {0, 0, -1},
+      {-0.01, 0, 0, 0.5},
+      {0, 1.01, 0, 0.5},
+      {0, 0, -1, 0.5}
+    ]
+
+    Enum.each(invalid_colors, fn color ->
+      pages = [%{size: {100.0, 100.0}, boxes: [%{text_box | color: color}]}]
+      assert_invalid_pdf_input(PdfWriter.render(pages, []))
+    end)
+  end
+
   defp assert_invalid_pdf_input(result) do
     assert {:error,
             {:invalid_pdf_input,

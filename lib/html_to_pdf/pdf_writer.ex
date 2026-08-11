@@ -160,18 +160,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   defp valid_color?(color) do
     case color do
-      {red, green, blue}
-      when is_number(red) and is_number(green) and is_number(blue) ->
-        true
+      {red, green, blue} ->
+        Enum.all?([red, green, blue], &valid_color_channel?/1)
 
-      {red, green, blue, alpha}
-      when is_number(red) and is_number(green) and is_number(blue) and is_number(alpha) and
-             alpha >= 0 and alpha <= 1 ->
-        true
+      {red, green, blue, alpha} ->
+        Enum.all?([red, green, blue, alpha], &valid_color_channel?/1)
 
       _ ->
         false
     end
+  end
+
+  defp valid_color_channel?(channel) do
+    is_number(channel) and channel >= 0 and channel <= 1
   end
 
   defp valid_image_alpha?(image) do
