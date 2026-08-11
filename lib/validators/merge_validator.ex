@@ -128,24 +128,16 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   end
 
   @doc """
-  Splits a flat dictionary token list around a named value.
+  Splits a dictionary's top-level token list around a named value.
 
   Returns the tokens before the key, the complete value tokens, and the tokens
-  following the value. Missing keys and incomplete values return `:error`.
+  following the value. Names nested inside dictionary or array values are not
+  considered. Missing keys and incomplete values return `:error`.
   """
   @spec split_dictionary_value([Tokenizer.token()], binary()) ::
           {:ok, [Tokenizer.token()], [Tokenizer.token()], [Tokenizer.token()]} | :error
   def split_dictionary_value(tokens, name) do
-    case Enum.split_while(tokens, fn token -> token != {:name, name} end) do
-      {_left, []} ->
-        :error
-
-      {left, [_name | rest]} ->
-        case take_value_tokens(rest) do
-          {:ok, value, remaining} -> {:ok, left, value, remaining}
-          :error -> :error
-        end
-    end
+    split_dictionary_value(tokens, name, [])
   end
 
   defp prepare_page_inheritances(document, pages, object_by_ref) do
@@ -249,15 +241,38 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   end
 
   defp find_value_after_name(tokens, name) do
-    case Enum.split_while(tokens, fn token -> token != {:name, name} end) do
-      {_prefix, []} ->
-        :error
-
-      {_prefix, [_name | rest]} ->
-        case take_value_tokens(rest) do
-          {:ok, value, _remaining} -> {:ok, value}
+    case take_value_tokens(tokens) do
+      {:ok, [:dict_start | dictionary_tokens], _remaining} ->
+        dictionary_tokens
+        |> Enum.drop(-1)
+        |> split_dictionary_value(name)
+        |> case do
+          {:ok, _left, value, _right} -> {:ok, value}
           :error -> :error
         end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp split_dictionary_value(tokens, name, preceding_tokens) do
+    case tokens do
+      [{:name, key} = key_token | rest] ->
+        case take_value_tokens(rest) do
+          {:ok, value, remaining} when key == name ->
+            {:ok, Enum.reverse(preceding_tokens), value, remaining}
+
+          {:ok, value, remaining} ->
+            preceding_tokens = Enum.reverse([key_token | value], preceding_tokens)
+            split_dictionary_value(remaining, name, preceding_tokens)
+
+          :error ->
+            :error
+        end
+
+      _ ->
+        :error
     end
   end
 

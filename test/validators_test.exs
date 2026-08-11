@@ -233,6 +233,24 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
              [{:name, "Before"}, true, {:name, "Value"}, {:int, 4}, false],
              "Value"
            ) == {:ok, [{:name, "Before"}, true], [{:int, 4}], [false]}
+
+    nested_value = [
+      {:name, "Before"},
+      :dict_start,
+      {:name, "Value"},
+      true,
+      :dict_end,
+      {:name, "Value"},
+      :lbracket,
+      {:name, "Value"},
+      :rbracket,
+      {:name, "After"},
+      false
+    ]
+
+    assert MergeValidator.split_dictionary_value(nested_value, "Value") ==
+             {:ok, [{:name, "Before"}, :dict_start, {:name, "Value"}, true, :dict_end],
+              [:lbracket, {:name, "Value"}, :rbracket], [{:name, "After"}, false]}
   end
 
   test "text validation prepares page instructions and reusable numeric values" do

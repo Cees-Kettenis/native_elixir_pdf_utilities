@@ -167,6 +167,38 @@ defmodule NativeElixirPdfUtilities.MergeTest do
            end)
   end
 
+  test "rewrites only top-level page keys when nested dictionaries repeat their names" do
+    pdf =
+      merge_pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2,
+         "<< /Type /Pages /Kids [3 0 R] /Count 1 /Private << /Resources /NestedTreeResources /MediaBox [9 9 9 9] /CropBox [8 8 8 8] /Rotate 270 >> /Resources << /Marker /Tree >> /MediaBox [0 0 200 100] /CropBox [1 2 190 90] /Rotate 90 >>"},
+        {3,
+         "<< /Private << /Type /NestedType /Parent /NestedParent /Resources /NestedPageResources /MediaBox [7 7 7 7] /CropBox [6 6 6 6] /Rotate 180 >> /Type /Page /Parent 2 0 R >>"}
+      ])
+
+    assert {:ok, merged} = Merge.merge([pdf])
+    assert {:ok, document} = Reader.read(merged)
+    assert [page] = document.pages
+    assert page.media_box == [0, 0, 200, 100]
+    assert page.resources == %{"Marker" => {:name, "Tree"}}
+    assert page.rotate == 90
+
+    assert {:ok, dictionary} = Reader.dictionary(document, {:ref, page.ref})
+    assert dictionary["Type"] == {:name, "Page"}
+    assert dictionary["Parent"] == {:ref, {1, 0}}
+    assert dictionary["CropBox"] == [1, 2, 190, 90]
+
+    assert dictionary["Private"] == %{
+             "Type" => {:name, "NestedType"},
+             "Parent" => {:name, "NestedParent"},
+             "Resources" => {:name, "NestedPageResources"},
+             "MediaBox" => [7, 7, 7, 7],
+             "CropBox" => [6, 6, 6, 6],
+             "Rotate" => 180
+           }
+  end
+
   test "resolves an indirect Pages Kids array through the shared reader model" do
     pdf =
       merge_pdf([
