@@ -927,6 +927,36 @@ defmodule NativeElixirPdfUtilities.TextTest do
       )
 
     assert_error(Text.extract(invalid_range), :invalid_pdf_input, :font)
+
+    oversized_range =
+      page_pdf("BT /F1 12 Tf <01> Tj ET",
+        font: font,
+        cmap: cmap,
+        descendant: "<< /Type /Font /Subtype /CIDFontType2 /DW 500 /W [0 1000000000 600] >>"
+      )
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(oversized_range)
+    assert diagnostic.stage == :font
+    assert diagnostic.message == "CID font width entry count exceeds the limit; page 1"
+
+    excessive_aggregate =
+      page_pdf("BT /F1 12 Tf <01> Tj ET",
+        font: font,
+        cmap: cmap,
+        descendant:
+          "<< /Type /Font /Subtype /CIDFontType2 /DW 500 /W [0 40000 500 0 40000 600] >>"
+      )
+
+    assert_error(Text.extract(excessive_aggregate), :resource_limit_exceeded, :font)
+
+    out_of_range =
+      page_pdf("BT /F1 12 Tf <01> Tj ET",
+        font: font,
+        cmap: cmap,
+        descendant: "<< /Type /Font /Subtype /CIDFontType2 /DW 500 /W [65535 [400 500]] >>"
+      )
+
+    assert_error(Text.extract(out_of_range), :invalid_pdf_input, :font)
   end
 
   test "maps Type0 source codes through the Encoding CMap before CID width lookup" do

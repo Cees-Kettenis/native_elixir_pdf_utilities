@@ -27,6 +27,8 @@ defmodule NativeElixirPdfUtilities.Text do
 
   @max_cmap_bytes 1_000_000
   @max_cmap_entries 100_000
+  @max_cid 65_535
+  @max_cid_width_entries 65_536
   @max_form_depth 20
   @max_text_spans 25_000
   @graphics_state_fields [
@@ -778,38 +780,57 @@ defmodule NativeElixirPdfUtilities.Text do
         {:ok, %{}}
 
       values when is_list(values) ->
-        parse_cid_widths(values, %{})
+        parse_cid_widths(values, %{}, 0)
 
       _ ->
         error(:font, :invalid_pdf_input, "CID font W array is malformed")
     end
   end
 
-  defp parse_cid_widths(values, widths) do
+  defp parse_cid_widths(values, widths, entry_count) do
     case values do
       [] ->
         {:ok, widths}
 
       [first, listed | rest] when is_integer(first) and first >= 0 and is_list(listed) ->
-        if Enum.all?(listed, &is_number/1) do
-          listed_widths =
-            listed
-            |> Enum.with_index(first)
-            |> Map.new(fn {width, code} -> {code, width} end)
+        count = length(listed)
 
-          parse_cid_widths(rest, Map.merge(widths, listed_widths))
+        with true <- Enum.all?(listed, &is_number/1),
+             :ok <- validate_cid_width_entries(first, count, entry_count) do
+          listed_widths =
+            Map.new(Enum.with_index(listed, first), fn {width, code} -> {code, width} end)
+
+          parse_cid_widths(rest, Map.merge(widths, listed_widths), entry_count + count)
         else
-          error(:font, :invalid_pdf_input, "CID font listed widths are malformed")
+          false -> error(:font, :invalid_pdf_input, "CID font listed widths are malformed")
+          {:error, _} = width_error -> width_error
         end
 
       [first, last, width | rest]
       when is_integer(first) and first >= 0 and is_integer(last) and last >= first and
              is_number(width) ->
-        range_widths = Map.new(first..last, &{&1, width})
-        parse_cid_widths(rest, Map.merge(widths, range_widths))
+        count = last - first + 1
+
+        with :ok <- validate_cid_width_entries(first, count, entry_count) do
+          range_widths = Map.new(first..last, &{&1, width})
+          parse_cid_widths(rest, Map.merge(widths, range_widths), entry_count + count)
+        end
 
       _ ->
         error(:font, :invalid_pdf_input, "CID font W array is malformed")
+    end
+  end
+
+  defp validate_cid_width_entries(first, count, entry_count) do
+    cond do
+      entry_count + count > @max_cid_width_entries ->
+        error(:font, :resource_limit_exceeded, "CID font width entry count exceeds the limit")
+
+      first > @max_cid or (count > 0 and first + count - 1 > @max_cid) ->
+        error(:font, :invalid_pdf_input, "CID font W array contains an out-of-range CID")
+
+      true ->
+        :ok
     end
   end
 
