@@ -97,6 +97,33 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
     assert Reader.fetch(document, %{"A" => 1}, "A") == {:ok, 1}
   end
 
+  test "public resolver functions diagnose malformed document object records" do
+    malformed_object = %{objects: %{{1, 0} => %{unexpected: true}}}
+
+    for result <- [
+          Reader.resolve(malformed_object, {:ref, {1, 0}}),
+          Reader.dictionary(malformed_object, {:ref, {1, 0}}),
+          Reader.fetch(malformed_object, {:ref, {1, 0}}, "Value")
+        ] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = result
+      assert diagnostic.stage == :resolution
+      assert diagnostic.operation == :read
+      assert diagnostic.module == Reader
+      assert diagnostic.message == "indirect object record is malformed; object 1 0"
+    end
+
+    assert {:error, {:invalid_pdf_input, stream_diagnostic}} =
+             Reader.decoded_stream(
+               %{objects: %{{1, 0} => %{value: 42}}},
+               {:ref, {1, 0}}
+             )
+
+    assert stream_diagnostic.stage == :stream
+    assert stream_diagnostic.operation == :read
+    assert stream_diagnostic.module == Reader
+    assert stream_diagnostic.message == "stream object record is malformed; object 1 0"
+  end
+
   test "rejects malformed headers, final pointers, lexical syntax, and trailers" do
     assert_error(Reader.read("not a pdf"), :invalid_pdf_input, :header)
     assert_error(Reader.read("%PDF-9.0\n"), :invalid_pdf_input, :header)

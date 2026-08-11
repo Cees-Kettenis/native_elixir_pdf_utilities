@@ -440,51 +440,96 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   end
 
   defp resolve_reference(document, ref, seen, opts) do
-    case Map.has_key?(seen, ref) do
-      true ->
+    cond do
+      not valid_ref?(ref) ->
+        error(:resolution, :invalid_pdf_input, "indirect reference is malformed", opts)
+
+      Map.has_key?(seen, ref) ->
         error(:resolution, :invalid_pdf_input, "indirect reference chain contains a cycle", opts,
           object: ref
         )
 
-      false ->
-        case get_in(document, [:objects, ref]) do
-          %{value: {:ref, next_ref}} ->
+      true ->
+        case fetch_object_record(document, ref) do
+          {:ok, %{value: {:ref, next_ref}}} ->
             resolve_reference(document, next_ref, Map.put(seen, ref, true), opts)
 
-          %{value: value} ->
+          {:ok, %{value: value}} ->
             {:ok, value}
 
-          nil ->
+          {:ok, _object} ->
+            error(:resolution, :invalid_pdf_input, "indirect object record is malformed", opts,
+              object: ref
+            )
+
+          :missing ->
             error(:resolution, :invalid_pdf_input, "indirect object reference is missing", opts,
               object: ref
+            )
+
+          :malformed_document ->
+            error(
+              :resolution,
+              :invalid_pdf_input,
+              "parsed PDF document object table is malformed",
+              opts
             )
         end
     end
   end
 
   defp resolve_stream_object(document, ref, seen, opts) do
-    case Map.has_key?(seen, ref) do
-      true ->
+    cond do
+      not valid_ref?(ref) ->
+        error(:resolution, :invalid_pdf_input, "indirect stream reference is malformed", opts)
+
+      Map.has_key?(seen, ref) ->
         error(:resolution, :invalid_pdf_input, "indirect stream reference contains a cycle", opts,
           object: ref
         )
 
-      false ->
-        case get_in(document, [:objects, ref]) do
-          %{value: {:ref, next_ref}, stream: nil} ->
+      true ->
+        case fetch_object_record(document, ref) do
+          {:ok, %{value: {:ref, next_ref}, stream: nil}} ->
             resolve_stream_object(document, next_ref, Map.put(seen, ref, true), opts)
 
-          %{stream: stream} = object when is_binary(stream) ->
+          {:ok, %{stream: stream} = object} when is_binary(stream) ->
             {:ok, ref, object}
 
-          %{stream: _stream} ->
+          {:ok, %{stream: _stream}} ->
             error(:stream, :invalid_pdf_input, "object is not a stream", opts, object: ref)
 
-          nil ->
+          {:ok, _object} ->
+            error(:stream, :invalid_pdf_input, "stream object record is malformed", opts,
+              object: ref
+            )
+
+          :missing ->
             error(:resolution, :invalid_pdf_input, "stream reference is missing", opts,
               object: ref
             )
+
+          :malformed_document ->
+            error(
+              :resolution,
+              :invalid_pdf_input,
+              "parsed PDF document object table is malformed",
+              opts
+            )
         end
+    end
+  end
+
+  defp fetch_object_record(document, ref) do
+    case document do
+      %{objects: objects} when is_map(objects) ->
+        case Map.fetch(objects, ref) do
+          {:ok, object} -> {:ok, object}
+          :error -> :missing
+        end
+
+      _ ->
+        :malformed_document
     end
   end
 
@@ -513,6 +558,17 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     case value do
       {:ref, ref} -> ref
       _ -> nil
+    end
+  end
+
+  defp valid_ref?(ref) do
+    case ref do
+      {object, generation}
+      when is_integer(object) and object >= 0 and is_integer(generation) and generation >= 0 ->
+        true
+
+      _ ->
+        false
     end
   end
 

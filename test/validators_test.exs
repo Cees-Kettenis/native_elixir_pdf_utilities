@@ -96,6 +96,62 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
              PdfValidator.validate(missing_kids)
   end
 
+  test "public validator APIs diagnose malformed document object records" do
+    malformed_object = %{objects: %{{1, 0} => %{unexpected: true}}}
+
+    for result <- [
+          PdfValidator.resolve(malformed_object, {:ref, {1, 0}}),
+          PdfValidator.dictionary(malformed_object, {:ref, {1, 0}}),
+          PdfValidator.fetch(malformed_object, {:ref, {1, 0}}, "Value")
+        ] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = result
+      assert diagnostic.stage == :resolution
+      assert diagnostic.message == "indirect object record is malformed; object 1 0"
+    end
+
+    validation_document =
+      Map.put(malformed_object, :trailer, %{"Root" => {:ref, {1, 0}}})
+
+    assert {:error, {:invalid_pdf_input, validation_diagnostic}} =
+             PdfValidator.validate(validation_document)
+
+    assert validation_diagnostic.stage == :resolution
+    assert validation_diagnostic.message == "indirect object record is malformed; object 1 0"
+
+    assert {:error, {:invalid_pdf_input, stream_diagnostic}} =
+             PdfValidator.validate_stream(
+               %{objects: %{{1, 0} => %{value: 42}}},
+               {:ref, {1, 0}}
+             )
+
+    assert stream_diagnostic.stage == :stream
+    assert stream_diagnostic.message == "stream object record is malformed; object 1 0"
+
+    assert {:error, {:invalid_pdf_input, table_diagnostic}} =
+             PdfValidator.resolve(%{objects: :malformed}, {:ref, {1, 0}})
+
+    assert table_diagnostic.stage == :resolution
+    assert table_diagnostic.message == "parsed PDF document object table is malformed"
+
+    assert {:error, {:invalid_pdf_input, reference_diagnostic}} =
+             PdfValidator.resolve(malformed_object, {:ref, :malformed})
+
+    assert reference_diagnostic.stage == :resolution
+    assert reference_diagnostic.message == "indirect reference is malformed"
+
+    assert {:error, {:invalid_pdf_input, stream_reference_diagnostic}} =
+             PdfValidator.validate_stream(malformed_object, {:ref, :malformed})
+
+    assert stream_reference_diagnostic.stage == :resolution
+    assert stream_reference_diagnostic.message == "indirect stream reference is malformed"
+
+    assert {:error, {:invalid_pdf_input, stream_table_diagnostic}} =
+             PdfValidator.validate_stream(%{objects: :malformed}, {:ref, {1, 0}})
+
+    assert stream_table_diagnostic.stage == :resolution
+    assert stream_table_diagnostic.message == "parsed PDF document object table is malformed"
+  end
+
   test "shared stream validation returns prepared structure without decoding filters" do
     valid = %{
       objects: %{
