@@ -400,6 +400,9 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
     assert decoded_stream("726177>", {:name, "ASCIIHexDecode"}, %{"Predictor" => 1}) ==
              {:ok, "raw"}
 
+    assert decoded_stream(">", {:name, "ASCIIHexDecode"}, %{"Predictor" => 15}) ==
+             {:ok, <<>>}
+
     assert_error(
       decoded_stream("00>", {:name, "ASCIIHexDecode"}, %{"Predictor" => 9}),
       :unsupported_pdf_feature,
@@ -416,6 +419,15 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
     )
 
     assert_error(
+      decoded_stream("000000>", {:name, "ASCIIHexDecode"}, %{
+        "Predictor" => 15,
+        "Columns" => 1
+      }),
+      :invalid_pdf_input,
+      :filter
+    )
+
+    assert_error(
       decoded_stream("00>", {:name, "ASCIIHexDecode"}, %{
         "Predictor" => 2,
         "Colors" => 0
@@ -423,6 +435,24 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
       :invalid_pdf_input,
       :filter
     )
+
+    for {predictor, dimension} <- [
+          {15, "Columns"},
+          {15, "Colors"},
+          {2, "Columns"},
+          {2, "Colors"}
+        ] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               decoded_stream("00>", {:name, "ASCIIHexDecode"}, %{
+                 "Predictor" => predictor,
+                 dimension => 25_000_001
+               })
+
+      assert diagnostic.stage == :limits
+
+      assert diagnostic.message ==
+               "predictor row exceeds the decoded-stream safety limit; object 1 0"
+    end
   end
 
   test "enforces final decoded-stream size and ratio limits" do

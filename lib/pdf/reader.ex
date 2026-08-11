@@ -1214,14 +1214,23 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
   defp png_predictor(data, parameters, ref) do
     with {:ok, row_bytes, bytes_per_pixel} <- predictor_dimensions(parameters, ref) do
-      decode_png_rows(
-        data,
-        row_bytes,
-        bytes_per_pixel,
-        :binary.copy(<<0>>, row_bytes),
-        [],
-        ref
-      )
+      cond do
+        data == <<>> ->
+          {:ok, <<>>}
+
+        byte_size(data) <= row_bytes ->
+          error(:filter, :invalid_pdf_input, "PNG predictor rows are truncated", object: ref)
+
+        true ->
+          decode_png_rows(
+            data,
+            row_bytes,
+            bytes_per_pixel,
+            :binary.copy(<<0>>, row_bytes),
+            [],
+            ref
+          )
+      end
     end
   end
 
@@ -1301,11 +1310,24 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     bits = Map.get(parameters, "BitsPerComponent", 8)
     columns = Map.get(parameters, "Columns", 1)
 
-    if is_integer(colors) and colors > 0 and bits in [1, 2, 4, 8, 16] and
-         is_integer(columns) and columns > 0 do
-      {:ok, div(colors * columns * bits + 7, 8), max(1, div(colors * bits + 7, 8))}
-    else
-      error(:filter, :invalid_pdf_input, "predictor dimensions are invalid", object: ref)
+    case is_integer(colors) and colors > 0 and bits in [1, 2, 4, 8, 16] and
+           is_integer(columns) and columns > 0 do
+      true ->
+        row_bytes = div(colors * columns * bits + 7, 8)
+
+        if row_bytes <= @max_decoded_stream_bytes do
+          {:ok, row_bytes, max(1, div(colors * bits + 7, 8))}
+        else
+          error(
+            :limits,
+            :resource_limit_exceeded,
+            "predictor row exceeds the decoded-stream safety limit",
+            object: ref
+          )
+        end
+
+      false ->
+        error(:filter, :invalid_pdf_input, "predictor dimensions are invalid", object: ref)
     end
   end
 
