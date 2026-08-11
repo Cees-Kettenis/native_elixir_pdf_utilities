@@ -121,6 +121,45 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   end
 
   @doc """
+  Validates balanced graphics-state and text-object scopes across instruction streams.
+
+  The instruction lists are treated as one logical sequence so page scopes may
+  cross `/Contents` stream boundaries. Form XObjects should pass their single
+  instruction list separately because their scopes are independent.
+  """
+  @spec validate_scopes([[instruction()]], pos_integer()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_scopes(contents, page_number) do
+    case is_list(contents) and Enum.all?(contents, &is_list/1) and is_integer(page_number) and
+           page_number > 0 do
+      true ->
+        contents
+        |> Enum.reduce_while({:ok, {0, false}}, fn instructions, {:ok, scope} ->
+          case validate_scope_instructions(instructions, scope, page_number) do
+            {:ok, scope} -> {:cont, {:ok, scope}}
+            {:error, _} = scope_error -> {:halt, scope_error}
+          end
+        end)
+        |> case do
+          {:ok, {0, false}} ->
+            :ok
+
+          {:ok, {_graphics_depth, true}} ->
+            content_error("BT has no matching ET", page_number)
+
+          {:ok, {_graphics_depth, false}} ->
+            content_error("q has no matching Q", page_number)
+
+          {:error, _} = scope_error ->
+            scope_error
+        end
+
+      false ->
+        error(:content, :invalid_pdf_input, "content scope input is malformed")
+    end
+  end
+
+  @doc """
   Converts one PDF numeric token into its semantic number.
   """
   @spec number(term()) :: {:ok, number()} | :error
@@ -295,9 +334,50 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
       end
     end)
     |> case do
-      {:ok, contents} -> {:ok, Enum.reverse(contents)}
-      {:error, _} = content_error -> content_error
+      {:ok, contents} ->
+        contents = Enum.reverse(contents)
+
+        case validate_scopes(contents, page_number) do
+          :ok -> {:ok, contents}
+          {:error, _} = scope_error -> scope_error
+        end
+
+      {:error, _} = content_error ->
+        content_error
     end
+  end
+
+  defp validate_scope_instructions(instructions, scope, page_number) do
+    Enum.reduce_while(instructions, {:ok, scope}, fn instruction, {:ok, scope} ->
+      case {instruction, scope} do
+        {%{operator: "q"}, {graphics_depth, in_text?}} ->
+          {:cont, {:ok, {graphics_depth + 1, in_text?}}}
+
+        {%{operator: "Q"}, {graphics_depth, in_text?}} when graphics_depth > 0 ->
+          {:cont, {:ok, {graphics_depth - 1, in_text?}}}
+
+        {%{operator: "Q"}, {0, _in_text?}} ->
+          {:halt, content_error("Q has no matching q", page_number)}
+
+        {%{operator: "BT"}, {graphics_depth, false}} ->
+          {:cont, {:ok, {graphics_depth, true}}}
+
+        {%{operator: "BT"}, {_graphics_depth, true}} ->
+          {:halt, content_error("BT appears inside a text object", page_number)}
+
+        {%{operator: "ET"}, {graphics_depth, true}} ->
+          {:cont, {:ok, {graphics_depth, false}}}
+
+        {%{operator: "ET"}, {_graphics_depth, false}} ->
+          {:halt, content_error("ET has no matching BT", page_number)}
+
+        {%{operator: operator}, _scope} when is_binary(operator) ->
+          {:cont, {:ok, scope}}
+
+        _ ->
+          {:halt, content_error("content scope instruction is malformed", page_number)}
+      end
+    end)
   end
 
   defp close_array(operands) do

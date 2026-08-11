@@ -87,6 +87,20 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert Text.extract(pdf(objects), layout: false) == {:ok, "First Second Form"}
   end
 
+  test "balances graphics and text scopes across page content streams" do
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents [6 0 R 7 0 R] >>"},
+      {4, "<< /Font << /F1 5 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", "q BT /F1 12 Tf (Across) Tj")},
+      {7, stream_object("", "ET Q")}
+    ]
+
+    assert Text.extract(pdf(objects), layout: false) == {:ok, "Across"}
+  end
+
   test "opens objects stored in an object stream" do
     path = Path.expand("fixtures/pdf_reader/object-stream.pdf", __DIR__)
     assert Text.extract(File.read!(path), layout: false) == {:ok, "Reader milestone fixture"}
@@ -813,6 +827,47 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
       assert match?({:error, {:invalid_pdf_input, %{stage: :content}}}, result),
              "expected invalid content for #{inspect(content)}, got: #{inspect(result)}"
+    end
+  end
+
+  test "rejects unmatched and nested page content scopes" do
+    invalid_streams = [
+      {"q BT /F1 12 Tf (Text) Tj ET", "q has no matching Q"},
+      {"BT /F1 12 Tf (Text) Tj", "BT has no matching ET"},
+      {"ET", "ET has no matching BT"},
+      {"BT BT /F1 12 Tf (Text) Tj ET ET", "BT appears inside a text object"}
+    ]
+
+    for {content, message} <- invalid_streams do
+      assert {:error,
+              {:invalid_pdf_input,
+               %{stage: :content, reason: :invalid_pdf_input, message: diagnostic_message}}} =
+               Text.extract(page_pdf(content))
+
+      assert String.starts_with?(diagnostic_message, message)
+    end
+  end
+
+  test "rejects unclosed graphics and text scopes inside Form XObjects" do
+    for form_content <- [
+          "q BT /F1 12 Tf (Form) Tj ET",
+          "BT /F1 12 Tf (Form) Tj"
+        ] do
+      objects = [
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents 6 0 R >>"},
+        {4, "<< /Font << /F1 5 0 R >> /XObject << /form 7 0 R >> >>"},
+        {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+        {6, stream_object("", "/form Do")},
+        {7,
+         stream_object(
+           "/Type /XObject /Subtype /Form /Resources 4 0 R",
+           form_content
+         )}
+      ]
+
+      assert_error(Text.extract(pdf(objects)), :invalid_pdf_input, :content)
     end
   end
 

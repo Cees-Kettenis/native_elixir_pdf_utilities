@@ -2,7 +2,7 @@
 
 This repository is an Elixir Library
 
-## General Rules
+## General Rules (these are not suggestions)
 
 - Only create a `defp` when it provides a clear improvement, such as:
 - - reducing real code duplication,
@@ -10,6 +10,8 @@ This repository is an Elixir Library
   - naming a non-obvious business rule that improves readability.
 - Prefer inline code over extracting a `defp` when the extracted function is used only once and does not make the calling code easier to understand.
 - Do not duplicate existing helpers for common concerns such as number parsing, date formatting, string cleanup, or similar utility behavior already handled in shared modules.
+- All input, option, document-structure, and semantic validation must be implemented in the appropriate validator module. Validators are the single source of truth for whether data is valid. Public APIs, parsers, readers, writers, and execution modules must delegate to validators and must not duplicate or independently reinterpret validation rules, because duplicated checks can contradict one another. After validation succeeds, downstream code should operate on the validated result and may rely on its guarantees. If validation cannot reasonably live in a validator, explain the reason to the user before implementing it elsewhere.
+- When moving an existing check into a validator, remove the corresponding check from the consuming module. Do not retain a second “defensive” validation path unless it represents an internal invariant rather than caller-input validation.
 
 # Forbidden style:
 

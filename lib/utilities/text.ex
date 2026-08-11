@@ -370,19 +370,15 @@ defmodule NativeElixirPdfUtilities.Text do
         {:ok, %{state | stack: [saved_state | state.stack]}, spans}
 
       {"Q", []} ->
-        case state.stack do
-          [saved_state | stack] ->
-            restored_state =
-              state
-              |> Map.merge(saved_state)
-              |> Map.put(:stack, stack)
-              |> break_text_join()
+        [saved_state | stack] = state.stack
 
-            {:ok, restored_state, spans}
+        restored_state =
+          state
+          |> Map.merge(saved_state)
+          |> Map.put(:stack, stack)
+          |> break_text_join()
 
-          [] ->
-            error(:content, :invalid_pdf_input, "Q has no matching q", page: page)
-        end
+        {:ok, restored_state, spans}
 
       {"cm", matrix} ->
         {:ok,
@@ -611,6 +607,7 @@ defmodule NativeElixirPdfUtilities.Text do
         if name?(Map.get(xobject, "Subtype"), "Form") do
           with {:ok, stream} <- Reader.decoded_stream(document, xobject_ref),
                {:ok, operations} <- TextValidator.instructions(stream, page),
+               :ok <- TextValidator.validate_scopes([operations], page),
                {:ok, form_matrix} <- matrix_value(Map.get(xobject, "Matrix"), page),
                {:ok, child_state, child_spans} <-
                  interpret(
@@ -620,7 +617,9 @@ defmodule NativeElixirPdfUtilities.Text do
                    %{
                      state
                      | ctm: multiply(form_matrix, state.ctm),
-                       stack: []
+                       stack: [],
+                       in_text?: false,
+                       join_next_span?: false
                    },
                    page,
                    depth + 1
