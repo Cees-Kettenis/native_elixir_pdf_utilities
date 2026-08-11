@@ -7,12 +7,17 @@ utilities that need to understand existing files. It sits above
 - The tokenizer converts PDF bytes into lexical tokens. It does not decide
   which revision of an object is active or resolve references.
 - The reader starts at the final `startxref`, follows the document's
-  cross-reference revisions, loads the active objects, resolves indirect
-  references, decodes supported streams, and validates the page tree.
+  cross-reference revisions, and loads the active objects. It then delegates
+  reusable reference, stream, catalog, and page-tree semantics to the layered
+  PDF validator and returns its compatibility document projection.
 
 Application code should normally use `NativeElixirPdfUtilities.Text` or
 `NativeElixirPdfUtilities.Merge`. The reader is public for inspection and for
 building additional PDF utilities on the same parsed document model.
+
+`Reader.read_validated/1` retains the complete shared validation context for a
+PDF-consuming feature. `Reader.read/1` continues to return the existing map
+with `:binary`, `:objects`, `:trailer`, `:pages`, and `:xref` fields.
 
 ## Supported object structures
 
@@ -73,8 +78,10 @@ authoritative.
 
 ## Shared utility behavior
 
-Text extraction and merging both consume the reader model. This means they use
-the same active revision, compressed-object handling, stream validation, page
-tree traversal, encryption detection, and malformed-input diagnostics. New PDF
-inspection or transformation utilities should use the reader instead of
-scanning the complete token stream for indirect objects.
+Text extraction and merging both consume the prepared shared validation
+context. This means they use the same active revision, compressed-object
+handling, stream validation, page-tree traversal, encryption detection, and
+malformed-input diagnostics. New PDF inspection or transformation utilities
+should use `PdfValidator.validate_pdf/1` or `Reader.read_validated/1` instead of
+scanning the complete token stream for indirect objects. See
+[Layered PDF Validation](pdf-validation.md) for invariant ownership.
