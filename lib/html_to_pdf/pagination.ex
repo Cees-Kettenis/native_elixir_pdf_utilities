@@ -13,6 +13,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @doc """
   Splits a layout tree into PDF pages.
@@ -20,57 +21,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   @spec paginate(term(), [render_option()]) ::
           {:ok, [page()]} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def paginate(layout_tree, opts \\ []) do
-    case {layout_tree, opts} do
-      {%{type: :layout, page_size: page_size, boxes: boxes}, opts}
-      when is_list(boxes) and is_list(opts) ->
-        paginate_boxes(layout_tree, page_size, boxes)
+    case HtmlValidator.prepare_pagination(layout_tree, opts) do
+      {:ok, context} ->
+        paginate_boxes(context.page_size, context.boxes, context.margins)
 
-      _ ->
-        Diagnostics.error(
-          :pagination,
-          :invalid_layout,
-          "pagination requires a layout tree with a page size and boxes",
-          operation: :paginate,
-          module: __MODULE__
-        )
+      {:error, {reason, diagnostic}} ->
+        {:error,
+         {reason, Diagnostics.with_context(diagnostic, operation: :paginate, module: __MODULE__)}}
     end
   end
 
-  defp paginate_boxes(layout_tree, page_size, boxes) do
-    margin = Map.get(layout_tree, :margins, Map.get(layout_tree, :margin, 0.0))
+  defp paginate_boxes(page_size, boxes, margins) do
+    {_page_width, page_height} = page_size
+    content_height = page_height - margins.top - margins.bottom
 
-    case PageGeometry.normalize_margins(margin) do
-      {:ok, margins} ->
-        case PageGeometry.valid_printable_area?(page_size, margins) do
-          true ->
-            {_page_width, page_height} = page_size
-            content_height = page_height - margins.top - margins.bottom
+    groups =
+      boxes
+      |> flow_groups()
+      |> Enum.flat_map(&fragment_flow_group(&1, content_height))
 
-            groups =
-              boxes
-              |> flow_groups()
-              |> Enum.flat_map(&fragment_flow_group(&1, content_height))
-
-            headers = repeated_table_headers(groups)
-            {:ok, groups_to_pages(groups, headers, page_size, margins)}
-
-          false ->
-            invalid_layout_geometry()
-        end
-
-      {:error, :invalid_margin} ->
-        invalid_layout_geometry()
-    end
-  end
-
-  defp invalid_layout_geometry do
-    Diagnostics.error(
-      :pagination,
-      :invalid_layout,
-      "pagination requires a positive page size and margins that leave a positive printable area",
-      operation: :paginate,
-      module: __MODULE__
-    )
+    headers = repeated_table_headers(groups)
+    {:ok, groups_to_pages(groups, headers, page_size, margins)}
   end
 
   defp groups_to_pages(groups, headers, page_size, margins) do

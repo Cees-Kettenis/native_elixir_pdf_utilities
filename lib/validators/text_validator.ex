@@ -13,8 +13,10 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Tokenizer
   alias NativeElixirPdfUtilities.Validators.PdfValidator
+  alias NativeElixirPdfUtilities.Validators.TextResourceValidator
 
   @validated_operators ~w(q Q cm BT ET Tf Tm Td TD T* TL Tc Tw Tz Tr Ts Tj TJ ' " Do)
+  @text_showing_operators ~w(Tj TJ ' ")
 
   @typedoc "A validated content instruction with operands in source order."
   @type instruction :: %{required(:operator) => binary(), required(:operands) => [term()]}
@@ -23,7 +25,6 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   @type page_context :: %{
           required(:number) => pos_integer(),
           required(:ref) => PdfValidator.ref(),
-          required(:resources) => PdfValidator.value(),
           required(:media_box) => [number()],
           required(:rotation) => integer(),
           required(:contents) => [[instruction()]]
@@ -34,6 +35,105 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
           required(:document) => PdfValidator.document(),
           required(:pages) => [page_context()]
         }
+
+  @typedoc "A validated public text-extraction request."
+  @type request :: %{
+          required(:pdf) => binary(),
+          required(:options) => %{optional(:layout) => boolean(), optional(:order) => atom()}
+        }
+
+  @doc """
+  Validates and normalizes a public text-extraction request.
+  """
+  @spec validate_request(term(), term(), :extract | :extract_spans) ::
+          {:ok, request()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_request(pdf, opts, operation) do
+    case {pdf, opts, operation} do
+      {pdf, opts, :extract} when is_binary(pdf) and is_list(opts) ->
+        case Keyword.keyword?(opts) do
+          true ->
+            unknown = opts |> Keyword.keys() |> Enum.reject(&(&1 == :layout)) |> Enum.uniq()
+            layout = Keyword.get(opts, :layout, true)
+
+            cond do
+              unknown != [] ->
+                error(
+                  :options,
+                  :invalid_options,
+                  "extract options contain unsupported keys: #{inspect(Enum.sort(unknown))}",
+                  operation: operation
+                )
+
+              not is_boolean(layout) ->
+                error(:options, :invalid_options, "layout option must be a boolean",
+                  operation: operation
+                )
+
+              true ->
+                {:ok, %{pdf: pdf, options: %{layout: layout}}}
+            end
+
+          false ->
+            error(:options, :invalid_options, "extract options must be a keyword list",
+              operation: operation
+            )
+        end
+
+      {pdf, opts, :extract_spans} when is_binary(pdf) and is_list(opts) ->
+        case Keyword.keyword?(opts) do
+          true ->
+            unknown = opts |> Keyword.keys() |> Enum.reject(&(&1 == :order)) |> Enum.uniq()
+            order = Keyword.get(opts, :order, :source)
+
+            cond do
+              unknown != [] ->
+                error(
+                  :options,
+                  :invalid_options,
+                  "extract span options contain an unknown option",
+                  operation: operation
+                )
+
+              order not in [:source, :visual] ->
+                error(:options, :invalid_options, "span order must be :source or :visual",
+                  operation: operation
+                )
+
+              true ->
+                {:ok, %{pdf: pdf, options: %{order: order}}}
+            end
+
+          false ->
+            error(:options, :invalid_options, "extract span options must be a keyword list",
+              operation: operation
+            )
+        end
+
+      {_pdf, _opts, operation} when operation in [:extract, :extract_spans] ->
+        error(:input, :invalid_pdf_input, "PDF input must be a binary", operation: operation)
+
+      _ ->
+        error(:input, :invalid_pdf_input, "text extraction request is malformed")
+    end
+  end
+
+  @doc """
+  Validates a public file-extraction path before file access.
+  """
+  @spec validate_path(term(), atom()) ::
+          {:ok, String.t()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_path(path, operation) do
+    case {path, operation} do
+      {path, operation} when is_binary(path) and is_atom(operation) ->
+        {:ok, path}
+
+      {_path, operation} when is_atom(operation) ->
+        error(:file, :invalid_path, "path must be a string", operation: operation)
+
+      _ ->
+        error(:file, :invalid_path, "file extraction request is malformed")
+    end
+  end
 
   @doc """
   Prepares all resolved pages and their content streams for text extraction.
@@ -260,12 +360,18 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     with {:ok, media_box} <- page_rectangle(document, page.media_box, page_number),
          {:ok, rotation} <- page_rotation(document, page.rotate, page_number),
          {:ok, content_refs} <- content_references(page.dictionary, page.ref),
-         {:ok, contents} <- prepare_contents(document, content_refs, page_number) do
+         {:ok, contents} <- prepare_contents(document, content_refs, page_number),
+         {:ok, contents} <-
+           TextResourceValidator.prepare_contents(
+             document,
+             page.resources,
+             contents,
+             page_number
+           ) do
       {:ok,
        %{
          number: page_number,
          ref: page.ref,
-         resources: page.resources,
          media_box: media_box,
          rotation: rotation,
          contents: contents
@@ -371,6 +477,14 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
         {%{operator: "ET"}, {_graphics_depth, false}} ->
           {:halt, content_error("ET has no matching BT", page_number)}
 
+        {%{operator: operator}, {graphics_depth, in_text?}}
+        when operator in @text_showing_operators and in_text? ->
+          {:cont, {:ok, {graphics_depth, in_text?}}}
+
+        {%{operator: operator}, {_graphics_depth, false}}
+        when operator in @text_showing_operators ->
+          {:halt, content_error("#{operator} appears outside a text object", page_number)}
+
         {%{operator: operator}, _scope} when is_binary(operator) ->
           {:cont, {:ok, scope}}
 
@@ -402,7 +516,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
         reason,
         message,
         Keyword.merge(
-          [operation: :extract, module: __MODULE__],
+          [operation: Keyword.get(details, :operation, :extract), module: __MODULE__],
           diagnostic_options
         )
       )

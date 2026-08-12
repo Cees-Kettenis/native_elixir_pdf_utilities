@@ -8,6 +8,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.FontCache
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type font_style :: :normal | :italic
   @type registry :: %{embedded: [embedded_font()], fallback: [embedded_font()]}
@@ -128,23 +129,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   """
   @spec load_registry(keyword()) :: {:ok, registry()} | :error
   def load_registry(opts) do
-    case Keyword.keyword?(opts) do
-      true ->
-        case Keyword.get(opts, :fonts, []) do
-          fonts when is_list(fonts) ->
-            with {:ok, configured} <- load_fonts(fonts),
-                 {:ok, bundled} <- load_fonts(bundled_font_configs()) do
-              fallback = configured ++ bundled
-              embedded = Enum.uniq_by(fallback, &font_key/1)
-              {:ok, %{embedded: embedded ++ system_fonts(embedded), fallback: fallback}}
-            end
-
-          _ ->
-            :error
-        end
-
-      false ->
-        :error
+    with {:ok, prepared_opts} <- HtmlValidator.prepare_font_options(opts),
+         {:ok, bundled_configs} <- HtmlValidator.prepare_font_configs(bundled_font_configs()),
+         {:ok, configured} <- load_fonts(Keyword.fetch!(prepared_opts, :fonts)),
+         {:ok, bundled} <- load_fonts(bundled_configs) do
+      fallback = configured ++ bundled
+      embedded = Enum.uniq_by(fallback, &font_key/1)
+      {:ok, %{embedded: embedded ++ system_fonts(embedded), fallback: fallback}}
+    else
+      _ -> :error
     end
   end
 
@@ -327,9 +320,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     {String.downcase(font.family), font.weight, font.style}
   end
 
-  defp load_font(font) do
-    with {:ok, family, paths, weight, style} <- font_config(font),
-         {:ok, data, parsed} <- load_first_supported_font(paths) do
+  defp load_font(%{family: family, path: paths, weight: weight, style: style}) do
+    with {:ok, data, parsed} <- load_first_supported_font(paths) do
       hash =
         :crypto.hash(:sha256, [family, data])
         |> Base.encode16(case: :lower)
@@ -376,13 +368,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       |> Enum.map(&{String.downcase(&1.family), &1.weight, &1.style})
       |> MapSet.new()
 
-    system_font_candidates()
-    |> Enum.reject(fn font ->
-      MapSet.member?(explicit_keys, {String.downcase(font.family), font.weight, font.style}) or
-        not File.regular?(font.path)
-    end)
-    |> Enum.uniq_by(&{String.downcase(&1.family), &1.weight, &1.style})
-    |> Enum.reduce([], fn font, acc ->
+    candidates =
+      system_font_candidates()
+      |> Enum.reject(fn font ->
+        MapSet.member?(explicit_keys, {String.downcase(font.family), font.weight, font.style}) or
+          not File.regular?(font.path)
+      end)
+      |> Enum.uniq_by(&{String.downcase(&1.family), &1.weight, &1.style})
+
+    {:ok, prepared} = HtmlValidator.prepare_font_configs(candidates)
+
+    Enum.reduce(prepared, [], fn font, acc ->
       loaded = load_font(font)
       if match?({:ok, _loaded}, loaded), do: acc ++ [elem(loaded, 1)], else: acc
     end)
@@ -423,90 +419,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       ]
     else
       _ -> []
-    end
-  end
-
-  defp font_config(font) do
-    case font do
-      {family, path} when is_binary(family) and is_binary(path) ->
-        {:ok, family, [path], 400, :normal}
-
-      font when is_list(font) ->
-        case Keyword.keyword?(font) do
-          true -> font_config(Map.new(font))
-          false -> :error
-        end
-
-      font when is_map(font) ->
-        family = Map.get(font, :family) || Map.get(font, "family")
-        path = Map.get(font, :path) || Map.get(font, "path")
-        weight = Map.get(font, :weight) || Map.get(font, "weight") || 400
-        style = Map.get(font, :style) || Map.get(font, "style") || :normal
-
-        with true <- is_binary(family) and String.trim(family) != "",
-             {:ok, paths} <- font_paths(path),
-             {:ok, weight} <- font_weight(weight),
-             {:ok, style} <- font_style(style) do
-          {:ok, String.trim(family), paths, weight, style}
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp font_paths(path) do
-    case path do
-      path when is_binary(path) ->
-        if String.trim(path) == "", do: :error, else: {:ok, [path]}
-
-      paths when is_list(paths) ->
-        case paths != [] and Enum.all?(paths, &(is_binary(&1) and String.trim(&1) != "")) do
-          true -> {:ok, paths}
-          false -> :error
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp font_weight(weight) do
-    case weight do
-      weight when is_integer(weight) and weight >= 100 and weight <= 900 ->
-        {:ok, weight}
-
-      weight when is_float(weight) and weight >= 100 and weight <= 900 ->
-        {:ok, weight}
-
-      "normal" ->
-        {:ok, 400}
-
-      "bold" ->
-        {:ok, 700}
-
-      weight when is_binary(weight) ->
-        weight |> String.trim() |> Integer.parse() |> parsed_weight()
-
-      _ ->
-        :error
-    end
-  end
-
-  defp parsed_weight(parsed) do
-    case parsed do
-      {weight, ""} when weight >= 100 and weight <= 900 -> {:ok, weight}
-      _ -> :error
-    end
-  end
-
-  defp font_style(style) do
-    case style do
-      :normal -> {:ok, :normal}
-      :italic -> {:ok, :italic}
-      "normal" -> {:ok, :normal}
-      "italic" -> {:ok, :italic}
-      _ -> :error
     end
   end
 

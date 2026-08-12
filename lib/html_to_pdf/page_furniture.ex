@@ -14,6 +14,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type page :: NativeElixirPdfUtilities.HtmlToPdf.Pagination.page()
   @type layout_tree :: NativeElixirPdfUtilities.HtmlToPdf.Layout.layout_tree()
@@ -29,9 +30,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
           | :unsupported_html
   @type detailed_error :: {error_reason(), Diagnostics.diagnostic()}
 
-  @variant_keys [:default, :first, :odd, :even]
-  @furniture_keys [:header, :footer]
-
   @doc """
   Adds configured running headers and footers to paginated pages.
 
@@ -42,138 +40,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
   @spec decorate([page()], layout_tree(), [render_option()]) ::
           {:ok, [page()]} | {:error, detailed_error()}
   def decorate(pages, layout_tree, opts) do
-    case {pages, layout_tree, opts} do
-      {pages, %{page_size: page_size} = layout_tree, opts}
-      when is_list(pages) and is_list(opts) ->
-        margin = Map.get(layout_tree, :margins, Map.get(layout_tree, :margin, :missing))
-
-        case PageGeometry.normalize_margins(margin) do
-          {:ok, margins} ->
-            case {Keyword.keyword?(opts), valid_layout_context?(pages, page_size, margins)} do
-              {true, true} ->
-                with {:ok, furniture} <- normalize(Keyword.get(opts, :page_furniture)),
-                     {:ok, decorated} <-
-                       decorate_pages(pages, page_size, margins, furniture, opts) do
-                  {:ok, decorated}
-                end
-
-              {false, _valid_context} ->
-                invalid_options("page furniture options require a keyword list")
-
-              {_keyword_options, false} ->
-                invalid_layout()
-            end
-
-          {:error, :invalid_margin} ->
-            invalid_layout()
-        end
-
-      _ ->
-        invalid_layout()
-    end
-  end
-
-  defp normalize(furniture) do
-    case furniture do
-      value when value in [nil, false] ->
-        {:ok, nil}
-
-      furniture when is_list(furniture) ->
-        case Keyword.keyword?(furniture) do
-          true -> normalize_furniture(Map.new(furniture))
-          false -> invalid_options("page_furniture must be a keyword list or map")
-        end
-
-      furniture when is_map(furniture) ->
-        normalize_furniture(furniture)
-
-      _ ->
-        invalid_options("page_furniture must be a keyword list or map")
-    end
-  end
-
-  defp valid_layout_context?(pages, page_size, margins) do
-    valid_page_size?(page_size) and PageGeometry.valid_printable_area?(page_size, margins) and
-      Enum.all?(pages, fn page ->
-        case page do
-          %{size: ^page_size, boxes: boxes} when is_list(boxes) -> true
-          _ -> false
-        end
-      end)
-  end
-
-  defp valid_page_size?(page_size) do
-    case page_size do
-      {width, height} when is_number(width) and is_number(height) and width > 0 and height > 0 ->
-        true
-
-      _ ->
-        false
-    end
-  end
-
-  defp normalize_furniture(furniture) do
-    case Enum.reject(Map.keys(furniture), &(&1 in @furniture_keys)) do
-      [] ->
-        Enum.reduce_while(@furniture_keys, {:ok, %{}}, fn position, {:ok, normalized} ->
-          case normalize_variants(Map.get(furniture, position), position) do
-            {:ok, variants} -> {:cont, {:ok, Map.put(normalized, position, variants)}}
-            {:error, {_reason, _diagnostic}} = error -> {:halt, error}
-          end
-        end)
-
-      unknown ->
-        invalid_options(
-          "page_furniture contains unsupported keys: #{inspect(Enum.sort(unknown))}"
-        )
-    end
-  end
-
-  defp normalize_variants(value, position) do
-    case value do
-      value when value in [nil, false] ->
-        {:ok, %{}}
-
-      template when is_binary(template) ->
-        {:ok, %{default: template}}
-
-      variants when is_list(variants) ->
-        case Keyword.keyword?(variants) do
-          true -> normalize_variant_map(Map.new(variants), position)
-          false -> invalid_variant_options(position)
-        end
-
-      variants when is_map(variants) ->
-        normalize_variant_map(variants, position)
-
-      _ ->
-        invalid_variant_options(position)
-    end
-  end
-
-  defp normalize_variant_map(variants, position) do
-    unknown = Enum.reject(Map.keys(variants), &(&1 in @variant_keys))
-
-    cond do
-      unknown != [] ->
-        invalid_options(
-          "#{position} page furniture contains unsupported keys: #{inspect(Enum.sort(unknown))}"
+    case HtmlValidator.prepare_furniture(pages, layout_tree, opts) do
+      {:ok, context} ->
+        decorate_pages(
+          context.pages,
+          context.page_size,
+          context.margins,
+          context.furniture,
+          context.options
         )
 
-      Enum.all?(variants, fn {_variant, template} ->
-        is_binary(template) or template in [nil, false]
-      end) ->
-        {:ok, variants}
-
-      true ->
-        invalid_variant_options(position)
+      {:error, {reason, diagnostic}} ->
+        {:error,
+         {reason,
+          Diagnostics.with_context(diagnostic,
+            operation: :decorate_pages,
+            module: __MODULE__
+          )}}
     end
-  end
-
-  defp invalid_variant_options(position) do
-    invalid_options(
-      "#{position} page furniture must be HTML or default/first/odd/even HTML variants"
-    )
   end
 
   defp decorate_pages(pages, page_size, margins, furniture, opts) do
@@ -312,23 +196,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
       true -> html
       false -> "<div>#{html}</div>"
     end
-  end
-
-  defp invalid_options(message) do
-    Diagnostics.error(:options, :invalid_options, message,
-      operation: :decorate_pages,
-      module: __MODULE__
-    )
-  end
-
-  defp invalid_layout do
-    Diagnostics.error(
-      :layout,
-      :invalid_layout,
-      "page furniture requires paginated pages and a layout tree with page size and margin",
-      operation: :decorate_pages,
-      module: __MODULE__
-    )
   end
 
   defp format_number(number) do

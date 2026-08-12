@@ -12,6 +12,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @max_decoded_image_bytes 100_000_000
   @border_styles [
@@ -58,8 +59,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           {:ok, styled_tree()}
           | {:error, {:invalid_css | :invalid_document | :invalid_options, map()}}
   def compute_detailed(dom, opts \\ []) do
-    case {dom, opts} do
-      {%{type: :document, children: children}, opts} when is_list(opts) and is_list(children) ->
+    case HtmlValidator.validate_style_input(dom, opts) do
+      {:ok, %{dom: %{type: :document, children: children} = dom, options: opts}} ->
         with {:ok, stylesheet_entries} <- load_stylesheets(dom, opts),
              {:ok, css_fonts} <- stylesheet_fonts(stylesheet_entries),
              {:ok, font_registry} <- font_registry(opts, css_fonts),
@@ -116,33 +117,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           {:error, {:font_load_failed, sources}} ->
             {:error, font_load_error(sources)}
 
-          {:error, :invalid_stylesheet_options} ->
-            {:error, style_error_detail(dom, opts)}
-
           {:error, :invalid_document} ->
-            case Keyword.keyword?(opts) do
-              true ->
-                {:error, style_error_detail(dom, opts)}
-
-              false ->
-                {:error,
-                 {:invalid_document,
-                  %{
-                    stage: :style,
-                    reason: :invalid_document,
-                    message: "style options must be a keyword list"
-                  }}}
-            end
+            {:error, style_error_detail(dom, opts)}
         end
 
-      _ ->
-        {:error,
-         {:invalid_document,
-          %{
-            stage: :style,
-            reason: :invalid_document,
-            message: "document tree must be a parsed HTML document"
-          }}}
+      {:error, {_reason, _diagnostic}} = error ->
+        error
     end
   end
 
@@ -151,14 +131,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           {:ok, [stylesheet_entry()]}
           | {:error, :invalid_document | :invalid_stylesheet_options}
   def load_stylesheets(dom, opts) do
-    case {dom, opts} do
-      {%{type: :document, children: children}, opts} when is_list(children) and is_list(opts) ->
-        case Keyword.keyword?(opts) do
-          true -> stylesheet_entries(children, opts)
-          false -> {:error, :invalid_document}
-        end
+    case HtmlValidator.validate_style_input(dom, opts) do
+      {:ok, %{dom: %{children: children}, options: opts}} ->
+        stylesheet_entries(children, opts)
 
-      _ ->
+      {:error, {:invalid_options, _diagnostic}} ->
+        {:error, :invalid_stylesheet_options}
+
+      {:error, {_reason, _diagnostic}} ->
         {:error, :invalid_document}
     end
   end
@@ -289,9 +269,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               end
             end
         end
-
-      _ ->
-        {:error, :invalid_document}
     end
   end
 
@@ -865,28 +842,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           {:ok, css} -> {:ok, css}
           {:error, _reason} -> {:error, :invalid_document}
         end
-
-      _ ->
-        {:error, :invalid_stylesheet_options}
     end
   end
 
   defp stylesheet_entries(children, opts) do
-    case Keyword.get(opts, :stylesheets, []) do
-      stylesheets when is_list(stylesheets) ->
-        base_url = Keyword.get(opts, :base_url)
+    stylesheets = Keyword.get(opts, :stylesheets, [])
+    base_url = Keyword.get(opts, :base_url)
 
-        with {:ok, configured_entries} <- configured_stylesheet_entries(stylesheets, base_url) do
-          embedded_entries =
-            children
-            |> style_sources()
-            |> Enum.map(&%{css: &1, base_url: base_url})
+    with {:ok, configured_entries} <- configured_stylesheet_entries(stylesheets, base_url) do
+      embedded_entries =
+        children
+        |> style_sources()
+        |> Enum.map(&%{css: &1, base_url: base_url})
 
-          {:ok, configured_entries ++ embedded_entries}
-        end
-
-      _ ->
-        {:error, :invalid_stylesheet_options}
+      {:ok, configured_entries ++ embedded_entries}
     end
   end
 
@@ -905,9 +874,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             {:error, _reason} ->
               {:halt, {:error, :invalid_document}}
           end
-
-        _ ->
-          {:halt, {:error, :invalid_stylesheet_options}}
       end
     end)
   end
@@ -1000,21 +966,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp font_registry(opts, css_fonts) do
     fonts = Keyword.get(opts, :fonts, [])
 
-    case is_list(fonts) do
-      true ->
-        case Font.load_registry(Keyword.put(opts, :fonts, fonts ++ css_fonts)) do
-          {:ok, registry} ->
-            {:ok, registry}
+    case Font.load_registry(Keyword.put(opts, :fonts, fonts ++ css_fonts)) do
+      {:ok, registry} ->
+        {:ok, registry}
 
-          :error when css_fonts != [] ->
-            sources = Enum.flat_map(css_fonts, &Map.get(&1, :path, []))
-            {:error, {:font_load_failed, sources}}
+      :error when css_fonts != [] ->
+        sources = Enum.flat_map(css_fonts, &Map.get(&1, :path, []))
+        {:error, {:font_load_failed, sources}}
 
-          :error ->
-            {:error, :invalid_document}
-        end
-
-      false ->
+      :error ->
         {:error, :invalid_document}
     end
   end
@@ -1084,17 +1044,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             {:ok, source} ->
               {:cont, {:ok, acc ++ [{:configured, source}]}}
 
-            {:error, :invalid_stylesheet_options} ->
-              {:halt,
-               {:error,
-                {:invalid_options,
-                 %{
-                   stage: :options,
-                   reason: :invalid_options,
-                   message:
-                     "stylesheets option must be a list of {:css, css} or {:file, path} tuples"
-                 }}}}
-
             {:error, :invalid_document} ->
               {:halt,
                {:error,
@@ -1106,15 +1055,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                  }}}}
           end
         end)
-
-      _ ->
-        {:error,
-         {:invalid_options,
-          %{
-            stage: :options,
-            reason: :invalid_options,
-            message: "stylesheets option must be a list"
-          }}}
     end
   end
 

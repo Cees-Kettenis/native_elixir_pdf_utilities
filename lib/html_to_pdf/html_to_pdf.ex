@@ -27,17 +27,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Diagnostics
-
-  @render_option_keys [
-    :page_size,
-    :margin,
-    :base_url,
-    :stylesheets,
-    :default_font,
-    :fonts,
-    :metadata,
-    :page_furniture
-  ]
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type page_size :: PageGeometry.page_size_input()
   @type page_margin :: PageGeometry.margin_input()
@@ -168,8 +158,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   @spec render_file(String.t(), String.t(), [render_option()]) ::
           :ok | {:error, detailed_error_reason()}
   def render_file(input_path, output_path, opts \\ []) do
-    case {input_path, output_path} do
-      {input_path, output_path} when is_binary(input_path) and is_binary(output_path) ->
+    case HtmlValidator.validate_paths(input_path, output_path) do
+      {:ok, %{input_path: input_path, output_path: output_path}} ->
         case File.read(input_path) do
           {:ok, html} ->
             case render(html, opts) do
@@ -196,30 +186,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
             file_error(reason, :read, input_path)
         end
 
-      _ ->
-        Diagnostics.error(:file, :invalid_path, "input and output paths must be strings",
-          operation: :render_file,
-          module: __MODULE__
-        )
+      {:error, {reason, diagnostic}} ->
+        {:error,
+         {reason,
+          Diagnostics.with_context(diagnostic, operation: :render_file, module: __MODULE__)}}
     end
   end
 
   defp do_render(html, opts) do
-    case is_binary(html) and not String.valid?(html) do
-      true ->
-        Diagnostics.error(:html, :invalid_encoding, "HTML input must be valid UTF-8")
-
-      false ->
-        with {:ok, dom} <- HtmlParser.parse_detailed(html),
-             {:ok, effective_opts} <- effective_render_options_detailed(dom, opts),
-             {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts),
-             {:ok, styled_tree} <- FontFallback.resolve(styled_tree),
-             {:ok, layout_tree} <- layout_document(styled_tree, effective_opts),
-             {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
-             {:ok, pages} <- PageFurniture.decorate(pages, layout_tree, effective_opts),
-             {:ok, pdf_binary} <- PdfWriter.render(pages, effective_opts) do
-          {:ok, pdf_binary}
-        end
+    with {:ok, request} <- HtmlValidator.validate_render_request(html, opts),
+         {:ok, dom} <- HtmlParser.parse_detailed(request.html),
+         {:ok, effective_opts} <- effective_render_options_detailed(dom, request.options),
+         {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts),
+         {:ok, styled_tree} <- FontFallback.resolve(styled_tree),
+         {:ok, layout_tree} <- layout_document(styled_tree, effective_opts),
+         {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
+         {:ok, pages} <- PageFurniture.decorate(pages, layout_tree, effective_opts),
+         {:ok, pdf_binary} <- PdfWriter.render(pages, effective_opts) do
+      {:ok, pdf_binary}
     end
   end
 
@@ -234,50 +218,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   end
 
   defp effective_render_options_detailed(dom, opts) do
-    case Keyword.keyword?(opts) do
-      true ->
-        unknown =
-          opts
-          |> Keyword.keys()
-          |> Enum.reject(&(&1 in @render_option_keys))
-          |> Enum.uniq()
-          |> Enum.sort()
+    with {:ok, stylesheet_entries} <- Style.load_stylesheets(dom, opts),
+         {:ok, page_options} <- page_options_from_stylesheets(stylesheet_entries) do
+      effective_opts = Keyword.merge(page_options, opts)
+      {:ok, metadata_options(dom, effective_opts)}
+    else
+      {:error, :invalid_document} ->
+        Diagnostics.error(
+          :style,
+          :invalid_document,
+          "configured stylesheet file could not be read"
+        )
 
-        case unknown do
-          [] ->
-            with {:ok, stylesheet_entries} <- Style.load_stylesheets(dom, opts),
-                 {:ok, page_options} <- page_options_from_stylesheets(stylesheet_entries) do
-              effective_opts = Keyword.merge(page_options, opts)
-              {:ok, metadata_options(dom, effective_opts)}
-            else
-              {:error, :invalid_stylesheet_options} ->
-                Diagnostics.error(
-                  :options,
-                  :invalid_options,
-                  "stylesheets option must be a list of {:css, css} or {:file, path} tuples"
-                )
-
-              {:error, :invalid_document} ->
-                Diagnostics.error(
-                  :style,
-                  :invalid_document,
-                  "configured stylesheet file could not be read"
-                )
-
-              {:error, {_reason, _diagnostic}} = error ->
-                error
-            end
-
-          unknown ->
-            Diagnostics.error(
-              :options,
-              :invalid_options,
-              "render options contain unsupported keys: #{inspect(unknown)}"
-            )
-        end
-
-      false ->
-        Diagnostics.error(:options, :invalid_options, "render options must be a keyword list")
+      {:error, {_reason, _diagnostic}} = error ->
+        error
     end
   end
 

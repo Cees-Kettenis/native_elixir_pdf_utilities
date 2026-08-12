@@ -10,19 +10,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Diagnostics
-
-  @border_styles [
-    :none,
-    :hidden,
-    :dotted,
-    :dashed,
-    :solid,
-    :double,
-    :groove,
-    :ridge,
-    :inset,
-    :outset
-  ]
+  alias NativeElixirPdfUtilities.Validators.WriterValidator
 
   @type page :: NativeElixirPdfUtilities.HtmlToPdf.Pagination.page()
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
@@ -34,240 +22,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   @spec render([page()], [render_option()]) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def render(pages, opts \\ []) do
-    case {pages, opts} do
-      {pages, opts} when is_list(pages) and is_list(opts) ->
-        case Keyword.keyword?(opts) do
-          true ->
-            with {:ok, metadata} <- normalize_metadata(Keyword.get(opts, :metadata, [])) do
-              build_pdf(pages, metadata)
-            else
-              :error ->
-                Diagnostics.error(
-                  :pdf,
-                  :invalid_pdf_input,
-                  "PDF metadata must use supported fields and value types",
-                  operation: :write_pdf,
-                  module: __MODULE__
-                )
-            end
+    case WriterValidator.prepare(pages, opts) do
+      {:ok, context} ->
+        {:ok, pages_to_pdf(context.pages, context.metadata)}
 
-          false ->
-            Diagnostics.error(
-              :pdf,
-              :invalid_pdf_input,
-              "PDF writer options must be a keyword list",
-              operation: :write_pdf,
-              module: __MODULE__
-            )
-        end
-
-      _ ->
-        Diagnostics.error(:pdf, :invalid_pdf_input, "PDF writer requires a list of pages",
-          operation: :write_pdf,
-          module: __MODULE__
-        )
-    end
-  end
-
-  defp build_pdf(pages, metadata) do
-    case pages != [] and Enum.all?(pages, &valid_page?/1) do
-      true ->
-        {:ok, pages_to_pdf(pages, metadata)}
-
-      false ->
-        Diagnostics.error(:pdf, :invalid_pdf_input, "PDF writer requires non-empty valid pages",
-          operation: :write_pdf,
-          module: __MODULE__
-        )
-    end
-  end
-
-  defp valid_page?(page) do
-    case page do
-      %{size: {width, height}, boxes: boxes}
-      when is_number(width) and is_number(height) and width > 0 and height > 0 and is_list(boxes) ->
-        Enum.all?(boxes, &valid_box?/1)
-
-      _ ->
-        false
-    end
-  end
-
-  defp valid_box?(box) do
-    case box do
-      %{type: :text, text: text, x: x, y: y, font_size: font_size, font: font, color: color}
-      when is_binary(text) and is_number(x) and is_number(y) and is_number(font_size) and
-             font_size > 0 and
-             is_binary(font) ->
-        valid_color?(color) and valid_font_box?(box) and valid_link_box?(box)
-
-      %{
-        type: :rect,
-        x: x,
-        y: y,
-        width: width,
-        height: height,
-        fill_color: fill_color,
-        stroke_color: stroke_color,
-        stroke_width: stroke_width,
-        border_radius: border_radius
-      }
-      when is_number(x) and is_number(y) and is_number(width) and is_number(height) and
-             width > 0 and height > 0 and is_number(stroke_width) and stroke_width >= 0 and
-             is_number(border_radius) and border_radius >= 0 ->
-        valid_optional_color?(fill_color) and valid_optional_color?(stroke_color) and
-          valid_border_widths?(Map.get(box, :border_widths)) and
-          valid_border_colors?(Map.get(box, :border_colors)) and
-          valid_border_styles?(Map.get(box, :border_styles)) and
-          (not is_nil(fill_color) or visible_border?(box))
-
-      %{type: :image, x: x, y: y, width: width, height: height, image: image}
-      when is_number(x) and is_number(y) and is_number(width) and is_number(height) and
-             width > 0 and height > 0 ->
-        valid_image?(image)
-
-      _ ->
-        false
-    end
-  end
-
-  defp valid_image?(image) do
-    case image do
-      %{
-        format: format,
-        data: data,
-        width_px: width_px,
-        height_px: height_px,
-        color_space: color_space,
-        bits_per_component: 8
-      }
-      when format in [:png, :jpeg] and is_binary(data) and is_integer(width_px) and
-             is_integer(height_px) and width_px > 0 and height_px > 0 and
-             color_space in [:device_gray, :device_rgb, :device_cmyk] ->
-        valid_image_alpha?(image)
-
-      _ ->
-        false
-    end
-  end
-
-  defp valid_optional_color?(color) do
-    case color do
-      nil -> true
-      color -> valid_color?(color)
-    end
-  end
-
-  defp valid_color?(color) do
-    case color do
-      {red, green, blue} ->
-        Enum.all?([red, green, blue], &valid_color_channel?/1)
-
-      {red, green, blue, alpha} ->
-        Enum.all?([red, green, blue, alpha], &valid_color_channel?/1)
-
-      _ ->
-        false
-    end
-  end
-
-  defp valid_color_channel?(channel) do
-    is_number(channel) and channel >= 0 and channel <= 1
-  end
-
-  defp valid_image_alpha?(image) do
-    case Map.get(image, :alpha_data) do
-      nil ->
-        true
-
-      alpha_data when is_binary(alpha_data) ->
-        image.format == :png and byte_size(alpha_data) == image.width_px * image.height_px
-
-      _ ->
-        false
-    end
-  end
-
-  defp valid_border_widths?(border_widths) do
-    case border_widths do
-      nil ->
-        true
-
-      %{top: top, right: right, bottom: bottom, left: left} ->
-        Enum.all?([top, right, bottom, left], &(is_number(&1) and &1 >= 0))
-
-      _ ->
-        false
-    end
-  end
-
-  defp valid_border_colors?(border_colors) do
-    case border_colors do
-      nil ->
-        true
-
-      %{top: top, right: right, bottom: bottom, left: left} ->
-        Enum.all?([top, right, bottom, left], &valid_optional_color?/1)
-
-      _ ->
-        false
-    end
-  end
-
-  defp valid_border_styles?(border_styles) do
-    case border_styles do
-      nil ->
-        true
-
-      %{top: top, right: right, bottom: bottom, left: left} ->
-        Enum.all?([top, right, bottom, left], &(&1 in @border_styles))
-
-      _ ->
-        false
-    end
-  end
-
-  defp valid_link_box?(box) do
-    case Map.get(box, :link_url) do
-      nil ->
-        true
-
-      link_url when is_binary(link_url) ->
-        width = Map.get(box, :annotation_width, Map.get(box, :width))
-        is_number(width) and width > 0 and valid_uri?(link_url)
-
-      _ ->
-        false
-    end
-  end
-
-  defp valid_font_box?(box) do
-    case Map.get(box, :font_face) do
-      %{
-        type: :embedded,
-        id: id,
-        data: data,
-        units_per_em: units_per_em,
-        widths: widths,
-        cmap: cmap
-      }
-      when is_binary(id) and is_binary(data) and is_integer(units_per_em) and units_per_em > 0 and
-             is_list(widths) and is_map(cmap) ->
-        box.font == Font.pdf_name(box.font_face) and Font.supports_text?(box.font_face, box.text)
-
-      %{type: :built_in, pdf_name: pdf_name} when is_binary(pdf_name) ->
-        box.font == pdf_name and pdf_name in built_in_fonts() and
-          Font.supports_text?(box.font_face, box.text)
-
-      nil ->
-        box.font in built_in_fonts() and
-          Font.supports_text?(
-            %{type: :built_in, family: box.font, pdf_name: box.font},
-            box.text
-          )
-
-      _ ->
-        false
+      {:error, {reason, diagnostic}} ->
+        {:error, {reason, Map.put(diagnostic, :module, __MODULE__)}}
     end
   end
 
@@ -330,115 +90,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       _ ->
         objects_to_pdf(objects ++ [{next_object_id, metadata_object(metadata)}], next_object_id)
     end
-  end
-
-  defp normalize_metadata(metadata) do
-    metadata =
-      case metadata do
-        metadata when is_map(metadata) -> metadata
-        metadata when is_list(metadata) -> if Keyword.keyword?(metadata), do: Map.new(metadata)
-        _ -> nil
-      end
-
-    allowed_fields = [:title, :author, :subject, :keywords, :creation_date, :modification_date]
-
-    case is_map(metadata) and Enum.all?(Map.keys(metadata), &(&1 in allowed_fields)) do
-      true ->
-        Enum.reduce_while(metadata, {:ok, %{}}, fn {field, value}, {:ok, acc} ->
-          case normalize_metadata_value(field, value) do
-            {:ok, normalized} -> {:cont, {:ok, Map.put(acc, field, normalized)}}
-            :error -> {:halt, :error}
-          end
-        end)
-
-      false ->
-        :error
-    end
-  end
-
-  defp normalize_metadata_value(field, value) do
-    case {field, value} do
-      {field, value}
-      when field in [:title, :author, :subject] and is_binary(value) ->
-        if String.valid?(value), do: {:ok, value}, else: :error
-
-      {:keywords, value} when is_binary(value) ->
-        if String.valid?(value), do: {:ok, value}, else: :error
-
-      {:keywords, values} when is_list(values) ->
-        case Enum.all?(values, &(is_binary(&1) and String.valid?(&1))) do
-          true -> {:ok, Enum.join(values, ", ")}
-          false -> :error
-        end
-
-      {field, value} when field in [:creation_date, :modification_date] ->
-        pdf_date(value)
-
-      _ ->
-        :error
-    end
-  end
-
-  defp pdf_date(value) do
-    case value do
-      %DateTime{} = date_time ->
-        offset_seconds = date_time.utc_offset + date_time.std_offset
-        sign = if offset_seconds < 0, do: "-", else: "+"
-        offset_seconds = abs(offset_seconds)
-
-        offset_hours =
-          div(offset_seconds, 3600) |> Integer.to_string() |> String.pad_leading(2, "0")
-
-        offset_minutes =
-          div(rem(offset_seconds, 3600), 60) |> Integer.to_string() |> String.pad_leading(2, "0")
-
-        {:ok,
-         "D:#{calendar_date(date_time)}#{calendar_time(date_time)}#{sign}#{offset_hours}'#{offset_minutes}'"}
-
-      %NaiveDateTime{} = date_time ->
-        {:ok, "D:#{calendar_date(date_time)}#{calendar_time(date_time)}"}
-
-      %Date{} = date ->
-        {:ok, "D:#{calendar_date(date)}"}
-
-      value when is_binary(value) ->
-        parsed_iso_date(value)
-
-      _ ->
-        :error
-    end
-  end
-
-  defp parsed_iso_date(value) do
-    case DateTime.from_iso8601(value) do
-      {:ok, date_time, _offset} ->
-        pdf_date(date_time)
-
-      {:error, _reason} ->
-        case NaiveDateTime.from_iso8601(value) do
-          {:ok, date_time} ->
-            pdf_date(date_time)
-
-          {:error, _reason} ->
-            case Date.from_iso8601(value) do
-              {:ok, date} -> pdf_date(date)
-              {:error, _reason} -> :error
-            end
-        end
-    end
-  end
-
-  defp calendar_date(value) do
-    (value.year |> Integer.to_string() |> String.pad_leading(4, "0")) <>
-      two_digits(value.month) <> two_digits(value.day)
-  end
-
-  defp calendar_time(value) do
-    two_digits(value.hour) <> two_digits(value.minute) <> two_digits(value.second)
-  end
-
-  defp two_digits(value) do
-    value |> Integer.to_string() |> String.pad_leading(2, "0")
   end
 
   defp metadata_object(metadata) do
@@ -1047,27 +698,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp paint_operator(box) do
-    case {box.fill_color, visible_border?(box)} do
+    case {box.fill_color, WriterValidator.visible_border?(box)} do
       {nil, true} -> "S"
       {_, true} -> "B"
       {_, false} -> "f"
     end
-  end
-
-  defp visible_border?(box) do
-    border_widths =
-      Map.get(box, :border_widths, %{
-        top: box.stroke_width,
-        right: box.stroke_width,
-        bottom: box.stroke_width,
-        left: box.stroke_width
-      })
-
-    Enum.any?([:top, :right, :bottom, :left], fn side ->
-      Map.fetch!(border_widths, side) > 0 and
-        border_side_style(box, side) not in [:none, :hidden] and
-        not is_nil(border_side_color(box, side))
-    end)
   end
 
   defp graphics_state_resources(pages, first_object_id) do
@@ -1479,27 +1114,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     |> Integer.to_string(16)
     |> String.pad_leading(4, "0")
     |> String.upcase()
-  end
-
-  defp built_in_fonts do
-    [
-      "Courier",
-      "Courier-Bold",
-      "Courier-Oblique",
-      "Courier-BoldOblique",
-      "Helvetica",
-      "Helvetica-Bold",
-      "Helvetica-Oblique",
-      "Helvetica-BoldOblique",
-      "Times-Roman",
-      "Times-Bold",
-      "Times-Italic",
-      "Times-BoldItalic"
-    ]
-  end
-
-  defp valid_uri?(uri) do
-    Regex.match?(~r/^(https?:\/\/[^\s<>]+|mailto:[^\s<>@]+@[^\s<>@]+)$/iu, uri)
   end
 
   defp objects_to_pdf(objects, info_object_id) do

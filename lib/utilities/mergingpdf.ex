@@ -41,33 +41,12 @@ defmodule NativeElixirPdfUtilities.Merge do
   @spec merge([pdf_bin()]) ::
           {:ok, pdf_bin()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def merge(bins) do
-    case bins do
-      [] ->
-        Diagnostics.error(:merge, :empty_pdf_list, "merge/1 expects at least one PDF binary",
-          operation: :merge,
-          module: __MODULE__
-        )
+    case MergeValidator.validate_inputs(bins) do
+      {:ok, bins} ->
+        do_merge(bins)
 
-      bins when is_list(bins) ->
-        case Enum.all?(bins, &is_binary/1) do
-          true ->
-            do_merge(bins)
-
-          false ->
-            Diagnostics.error(
-              :merge,
-              :invalid_pdf_input,
-              "merge/1 expects a list of PDF binaries",
-              operation: :merge,
-              module: __MODULE__
-            )
-        end
-
-      _ ->
-        Diagnostics.error(:merge, :invalid_pdf_input, "merge/1 expects a list of PDF binaries",
-          operation: :merge,
-          module: __MODULE__
-        )
+      {:error, {reason, diagnostic}} ->
+        {:error, {reason, Map.put(diagnostic, :module, __MODULE__)}}
     end
   end
 

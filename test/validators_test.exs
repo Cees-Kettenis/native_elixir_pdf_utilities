@@ -16,6 +16,17 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
     assert diagnostic.module == PdfValidator
   end
 
+  test "public PDF and merge input boundaries are owned by validators" do
+    assert :ok = PdfValidator.validate_input("%PDF-1.7")
+    assert {:error, {:invalid_pdf_input, %{stage: :input}}} = PdfValidator.validate_input(nil)
+
+    assert {:ok, ["one", "two"]} = MergeValidator.validate_inputs(["one", "two"])
+    assert {:error, {:empty_pdf_list, %{stage: :merge}}} = MergeValidator.validate_inputs([])
+
+    assert {:error, {:invalid_pdf_input, %{stage: :merge}}} =
+             MergeValidator.validate_inputs(["one", :invalid])
+  end
+
   test "shared xref validation requires a valid object-zero free-list head" do
     pdf = "%PDF-1.7\n"
     trailer = %{"Size" => 2, "Root" => {:ref, {1, 0}}}
@@ -221,6 +232,48 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
 
     assert {:error, {:invalid_pdf_input, %{stage: :stream}}} =
              PdfValidator.validate_stream(incomplete, {:ref, {1, 0}})
+  end
+
+  test "decoded stream validation prepares canonical filters and parameters" do
+    document = %{
+      objects: %{
+        {1, 0} =>
+          object(
+            %{
+              "Length" => 2,
+              "Filter" => {:name, "Fl"},
+              "DecodeParms" => %{
+                "Predictor" => 12,
+                "Colors" => 3,
+                "BitsPerComponent" => 8,
+                "Columns" => 10
+              }
+            },
+            "ok"
+          )
+      }
+    }
+
+    assert {:ok,
+            %{
+              filters: [
+                %{
+                  name: "FlateDecode",
+                  parameters: %{
+                    "Predictor" => 12,
+                    "Colors" => 3,
+                    "BitsPerComponent" => 8,
+                    "Columns" => 10,
+                    "EarlyChange" => 1
+                  }
+                }
+              ]
+            }} = PdfValidator.prepare_decoded_stream(document, {:ref, {1, 0}})
+
+    invalid = put_in(document.objects[{1, 0}].value["DecodeParms"]["Columns"], 0)
+
+    assert {:error, {:invalid_pdf_input, %{stage: :filter}}} =
+             PdfValidator.prepare_decoded_stream(invalid, {:ref, {1, 0}})
   end
 
   test "merge validation materializes inherited tokens and exact-generation remapping" do

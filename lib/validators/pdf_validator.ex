@@ -78,8 +78,27 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @type stream_context :: %{
           required(:ref) => ref(),
           required(:dictionary) => map(),
-          required(:stream) => binary()
+          required(:stream) => binary(),
+          optional(:filters) => [filter_context()]
         }
+
+  @typedoc "A normalized stream filter and its validated decoding parameters."
+  @type filter_context :: %{
+          required(:name) => binary(),
+          required(:parameters) => map() | nil
+        }
+
+  @doc """
+  Validates the public PDF reader input boundary.
+  """
+  @spec validate_input(term(), [diagnostic_option()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_input(pdf, opts \\ []) do
+    case is_binary(pdf) do
+      true -> :ok
+      false -> error(:input, :invalid_pdf_input, "PDF input must be a binary", opts)
+    end
+  end
 
   @doc """
   Parses and validates a PDF binary into the reusable shared context.
@@ -289,6 +308,28 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   end
 
   @doc """
+  Resolves a stream and prepares its semantic filter chain for byte decoding.
+
+  The returned filter names are canonical and their parameters have validated
+  predictor dimensions and LZW settings. Encoded-byte integrity and resource
+  limits remain the reader's responsibility.
+  """
+  @spec prepare_decoded_stream(document(), value(), [diagnostic_option()]) ::
+          {:ok, stream_context()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_decoded_stream(document, value, opts \\ []) do
+    with {:ok, stream_context} <- validate_stream(document, value, opts),
+         {:ok, filter_value} <-
+           resolve(document, Map.get(stream_context.dictionary, "Filter"), opts),
+         {:ok, parameter_value} <-
+           resolve(document, Map.get(stream_context.dictionary, "DecodeParms"), opts),
+         {:ok, filters} <- filter_names(filter_value, opts),
+         {:ok, parameters} <- filter_parameters(document, parameter_value, length(filters), opts),
+         {:ok, filters} <- prepare_filters(Enum.zip(filters, parameters), opts) do
+      {:ok, Map.put(stream_context, :filters, filters)}
+    end
+  end
+
+  @doc """
   Resolves a fixed-length array whose elements must all be numbers.
 
   Operation validators can use this helper for page rectangles, matrices, and
@@ -315,6 +356,122 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     else
       false -> error(:validation, :invalid_pdf_input, "expected a PDF number array", opts)
       {:error, _} = resolution_error -> resolution_error
+    end
+  end
+
+  defp filter_names(value, opts) do
+    names =
+      case value do
+        nil ->
+          {:ok, []}
+
+        {:name, filter} ->
+          {:ok, [filter]}
+
+        filters when is_list(filters) ->
+          case Enum.all?(filters, &match?({:name, _}, &1)) do
+            true -> {:ok, Enum.map(filters, fn {:name, filter} -> filter end)}
+            false -> :error
+          end
+
+        _ ->
+          :error
+      end
+
+    case names do
+      {:ok, names} -> {:ok, names}
+      :error -> error(:filter, :invalid_pdf_input, "Filter is malformed", opts)
+    end
+  end
+
+  defp filter_parameters(document, parameters, count, opts) do
+    case parameters do
+      nil ->
+        {:ok, List.duplicate(nil, count)}
+
+      parameters when is_map(parameters) and count == 1 ->
+        {:ok, [parameters]}
+
+      parameters when is_list(parameters) and length(parameters) == count ->
+        parameters
+        |> Enum.reduce_while({:ok, []}, fn parameter, {:ok, resolved} ->
+          case resolve(document, parameter, opts) do
+            {:ok, parameter} when is_map(parameter) or is_nil(parameter) ->
+              {:cont, {:ok, [parameter | resolved]}}
+
+            _ ->
+              {:halt, error(:filter, :invalid_pdf_input, "DecodeParms array is malformed", opts)}
+          end
+        end)
+        |> case do
+          {:ok, resolved} -> {:ok, Enum.reverse(resolved)}
+          {:error, _} = parameter_error -> parameter_error
+        end
+
+      _ ->
+        error(:filter, :invalid_pdf_input, "DecodeParms does not match Filter", opts)
+    end
+  end
+
+  defp prepare_filters(filters, opts) do
+    Enum.reduce_while(filters, {:ok, []}, fn {filter, parameters}, {:ok, prepared} ->
+      canonical =
+        case filter do
+          filter when filter in ["FlateDecode", "Fl"] -> "FlateDecode"
+          filter when filter in ["ASCIIHexDecode", "AHx"] -> "ASCIIHexDecode"
+          filter when filter in ["ASCII85Decode", "A85"] -> "ASCII85Decode"
+          filter when filter in ["RunLengthDecode", "RL"] -> "RunLengthDecode"
+          filter when filter in ["LZWDecode", "LZW"] -> "LZWDecode"
+          _ -> nil
+        end
+
+      case canonical do
+        nil ->
+          {:halt,
+           error(
+             :filter,
+             :unsupported_pdf_feature,
+             "unsupported PDF stream filter #{filter}",
+             opts
+           )}
+
+        canonical ->
+          parameters = parameters || %{}
+          predictor = Map.get(parameters, "Predictor", 1)
+          colors = Map.get(parameters, "Colors", 1)
+          bits = Map.get(parameters, "BitsPerComponent", 8)
+          columns = Map.get(parameters, "Columns", 1)
+          early_change = Map.get(parameters, "EarlyChange", 1)
+
+          cond do
+            predictor not in [1, 2, 10, 11, 12, 13, 14, 15] ->
+              {:halt,
+               error(:filter, :unsupported_pdf_feature, "unsupported stream predictor", opts)}
+
+            not is_integer(colors) or colors <= 0 or bits not in [1, 2, 4, 8, 16] or
+              not is_integer(columns) or columns <= 0 ->
+              {:halt,
+               error(:filter, :invalid_pdf_input, "predictor dimensions are invalid", opts)}
+
+            canonical == "LZWDecode" and early_change not in [0, 1] ->
+              {:halt, error(:filter, :invalid_pdf_input, "LZW EarlyChange must be 0 or 1", opts)}
+
+            true ->
+              normalized = %{
+                "Predictor" => predictor,
+                "Colors" => colors,
+                "BitsPerComponent" => bits,
+                "Columns" => columns,
+                "EarlyChange" => early_change
+              }
+
+              {:cont, {:ok, [%{name: canonical, parameters: normalized} | prepared]}}
+          end
+      end
+    end)
+    |> case do
+      {:ok, prepared} -> {:ok, Enum.reverse(prepared)}
+      {:error, _} = filter_error -> filter_error
     end
   end
 

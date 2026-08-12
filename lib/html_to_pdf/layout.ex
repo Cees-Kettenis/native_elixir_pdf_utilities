@@ -9,6 +9,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type box :: map()
   @type layout_tree :: %{
@@ -26,13 +27,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @spec layout(term(), term()) ::
           {:ok, layout_tree()} | {:error, :invalid_layout | :invalid_margin | :invalid_page_size}
   def layout(styled_tree, opts \\ []) do
-    case {styled_tree, opts} do
-      {%{type: :document, children: children}, opts} when is_list(children) and is_list(opts) ->
-        with {:ok, page_size} <-
-               PageGeometry.normalize_page_size(Keyword.get(opts, :page_size, :a4)),
-             {:ok, margins} <- PageGeometry.normalize_margins(Keyword.get(opts, :margin, 0)),
-             true <- PageGeometry.valid_printable_area?(page_size, margins),
-             {:ok, boxes} <- layout_blocks(children, page_size, margins) do
+    case HtmlValidator.prepare_layout(styled_tree, opts) do
+      {:ok, %{children: children, page_size: page_size, margins: margins}} ->
+        with {:ok, boxes} <- layout_blocks(children, page_size, margins) do
           {page_width, page_height} = page_size
 
           {:ok,
@@ -45,13 +42,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
              content_width: page_width - margins.left - margins.right,
              content_height: page_height - margins.top - margins.bottom
            }}
-        else
-          false -> {:error, :invalid_margin}
-          {:error, reason} -> {:error, reason}
         end
 
-      _ ->
-        {:error, :invalid_layout}
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

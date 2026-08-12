@@ -40,6 +40,42 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
         }
 
   @doc """
+  Validates the public merge input boundary.
+  """
+  @spec validate_inputs(term()) ::
+          {:ok, [binary()]} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_inputs(inputs) do
+    case inputs do
+      [] ->
+        Diagnostics.error(:merge, :empty_pdf_list, "merge/1 expects at least one PDF binary",
+          operation: :merge,
+          module: __MODULE__
+        )
+
+      inputs when is_list(inputs) ->
+        case Enum.all?(inputs, &is_binary/1) do
+          true ->
+            {:ok, inputs}
+
+          false ->
+            Diagnostics.error(
+              :merge,
+              :invalid_pdf_input,
+              "merge/1 expects a list of PDF binaries",
+              operation: :merge,
+              module: __MODULE__
+            )
+        end
+
+      _ ->
+        Diagnostics.error(:merge, :invalid_pdf_input, "merge/1 expects a list of PDF binaries",
+          operation: :merge,
+          module: __MODULE__
+        )
+    end
+  end
+
+  @doc """
   Prepares one shared validated PDF context for merge rewriting.
   """
   @spec prepare(PdfValidator.context()) ::
