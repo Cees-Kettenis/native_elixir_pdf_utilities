@@ -243,6 +243,15 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
     assert_error(Reader.read(malformed_header), :invalid_pdf_input, :object_stream)
   end
 
+  test "loads compressed Length objects before materializing ordinary streams" do
+    stream = "length stored in an object stream"
+
+    assert {:ok, document} = Reader.read(compressed_length_pdf(stream))
+    assert document.objects[{3, 0}].stream == stream
+    assert Reader.resolve(document, {:ref, {4, 0}}) == {:ok, byte_size(stream)}
+    assert Reader.decoded_stream(document, {:ref, {3, 0}}) == {:ok, stream}
+  end
+
   test "rejects malformed parser fallbacks, bounds, and resource limits" do
     assert_error(Reader.read(:binary.copy("x", 50_000_001)), :resource_limit_exceeded, :limits)
 
@@ -470,6 +479,59 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
           2 -> <<2, 6::32, 1::16>>
           object when object in 3..5 -> <<0, 0::32, 0::16>>
           object -> <<1, Map.fetch!(offsets, object)::32, 0::16>>
+        end
+      end
+
+    xref_stream =
+      "7 0 obj\n<< /Type /XRef /Size 8 /Root 1 0 R /W [1 4 2] " <>
+        "/Length #{byte_size(entries)} >>\nstream\n" <>
+        entries <> "\nendstream\nendobj\n"
+
+    body <> xref_stream <> "startxref\n#{xref_offset}\n%%EOF\n"
+  end
+
+  defp compressed_length_pdf(stream) do
+    header = "%PDF-1.7\n"
+
+    content_stream =
+      "3 0 obj\n<< /Length 4 0 R >>\nstream\n" <> stream <> "\nendstream\nendobj\n"
+
+    catalog = "<< /Type /Catalog /Pages 2 0 R >>"
+    pages = "<< /Type /Pages /Kids [] /Count 0 >>"
+    length = Integer.to_string(byte_size(stream))
+    pages_offset = byte_size(catalog) + 1
+    length_offset = pages_offset + byte_size(pages) + 1
+    object_stream_header = "1 0 2 #{pages_offset} 4 #{length_offset} "
+    object_stream_data = object_stream_header <> catalog <> "\n" <> pages <> "\n" <> length
+
+    length_object = "5 0 obj\n#{byte_size(object_stream_data)}\nendobj\n"
+
+    object_stream =
+      "6 0 obj\n<< /Type /ObjStm /N 3 /First #{byte_size(object_stream_header)} " <>
+        "/Length 5 0 R >>\nstream\n" <>
+        object_stream_data <> "\nendstream\nendobj\n"
+
+    body = header <> content_stream <> length_object <> object_stream
+    xref_offset = byte_size(body)
+
+    offsets = %{
+      3 => byte_size(header),
+      5 => byte_size(header <> content_stream),
+      6 => byte_size(header <> content_stream <> length_object),
+      7 => xref_offset
+    }
+
+    entries =
+      for object <- 0..7, into: <<>> do
+        case object do
+          0 -> <<0, 0::32, 65_535::16>>
+          1 -> <<2, 6::32, 0::16>>
+          2 -> <<2, 6::32, 1::16>>
+          3 -> <<1, Map.fetch!(offsets, 3)::32, 0::16>>
+          4 -> <<2, 6::32, 2::16>>
+          5 -> <<1, Map.fetch!(offsets, 5)::32, 0::16>>
+          6 -> <<1, Map.fetch!(offsets, 6)::32, 0::16>>
+          7 -> <<1, Map.fetch!(offsets, 7)::32, 0::16>>
         end
       end
 

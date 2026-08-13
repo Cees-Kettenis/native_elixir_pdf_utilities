@@ -456,8 +456,13 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       |> Enum.sort()
 
     with {:ok, objects} <- load_uncompressed_objects(pdf, uncompressed, %{}),
-         {:ok, objects} <- materialize_indirect_streams(pdf, objects),
-         {:ok, objects} <- load_compressed_objects(xref, objects) do
+         {:ok, objects} <-
+           materialize_indirect_streams(pdf, objects, fn parsed ->
+             name?(Map.get(parsed.value, "Type"), "ObjStm")
+           end),
+         {:ok, objects} <- load_compressed_objects(xref, objects),
+         {:ok, objects} <-
+           materialize_indirect_streams(pdf, objects, fn _parsed -> true end) do
       {:ok, objects}
     end
   end
@@ -578,16 +583,23 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp materialize_indirect_streams(pdf, objects) do
+  defp materialize_indirect_streams(pdf, objects, selected?) do
     Enum.reduce_while(objects, {:ok, %{}}, fn {ref, parsed}, {:ok, resolved} ->
       case Map.pop(parsed, :pending_stream) do
         {nil, parsed} ->
           {:cont, {:ok, Map.put(resolved, ref, parsed)}}
 
         {source, parsed} ->
-          case materialize_indirect_stream(pdf, objects, ref, parsed, source) do
-            {:ok, parsed} -> {:cont, {:ok, Map.put(resolved, ref, parsed)}}
-            {:error, _} = stream_error -> {:halt, stream_error}
+          case selected?.(parsed) do
+            true ->
+              case materialize_indirect_stream(pdf, objects, ref, parsed, source) do
+                {:ok, parsed} -> {:cont, {:ok, Map.put(resolved, ref, parsed)}}
+                {:error, _} = stream_error -> {:halt, stream_error}
+              end
+
+            false ->
+              parsed = Map.put(parsed, :pending_stream, source)
+              {:cont, {:ok, Map.put(resolved, ref, parsed)}}
           end
       end
     end)
