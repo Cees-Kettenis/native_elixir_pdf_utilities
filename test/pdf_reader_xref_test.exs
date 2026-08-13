@@ -95,6 +95,11 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
     assert document.xref[0] == {:free, 0, 65_535}
     assert match?({:uncompressed, _, 0}, document.xref[3])
 
+    assert {:ok, indirect_length_document} =
+             Reader.read(xref_stream_pdf(indirect_length: true))
+
+    assert indirect_length_document.xref[4] |> elem(0) == :uncompressed
+
     malformed = [
       xref_stream_pdf(widths: [0, 4, 2], index: [1, 3]),
       xref_stream_pdf(object_zero_type: 1),
@@ -113,6 +118,44 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
       assert {:error, {_reason, diagnostic}} = Reader.read(pdf)
       assert diagnostic.stage in [:xref, :object]
     end
+  end
+
+  test "rejects unsafe indirect xref stream Length objects" do
+    malformed = [
+      xref_stream_pdf(indirect_length: true, length_source: "/bad"),
+      xref_stream_pdf(indirect_length: true, length_source: "1"),
+      xref_stream_pdf(indirect_length: true, data_suffix: <<0>>)
+    ]
+
+    for pdf <- malformed do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Reader.read(pdf)
+      assert diagnostic.stage == :xref
+      assert diagnostic.message =~ "Length reference cannot be resolved safely"
+    end
+
+    assert {:error, {:invalid_pdf_input, unconfirmed_diagnostic}} =
+             Reader.read(xref_stream_pdf(indirect_length: true, length_xref_offset: 0))
+
+    assert unconfirmed_diagnostic.stage == :object
+
+    assert {:ok, _document} =
+             Reader.read(xref_stream_pdf(indirect_length: true, candidate_suffix: "\n4 0 obj\n"))
+
+    repeated_candidates = :binary.copy("4 0 obj\n35\nendobj\n", 1_001)
+
+    assert {:error, {:resource_limit_exceeded, limit_diagnostic}} =
+             Reader.read(
+               xref_stream_pdf(indirect_length: true, candidate_prefix: repeated_candidates)
+             )
+
+    assert limit_diagnostic.stage == :limits
+    assert limit_diagnostic.message == "xref stream Length candidate limit exceeded"
+
+    missing_endobj =
+      xref_stream_pdf()
+      |> String.replace("\nendstream\nendobj\nstartxref", "\nendstream\nstartxref")
+
+    assert_error(Reader.read(missing_endobj), :invalid_pdf_input, :object)
   end
 
   test "validates xref offsets against object headers and boundaries" do
@@ -369,13 +412,16 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
 
   defp xref_stream_pdf(options \\ []) do
     header = "%PDF-1.7\n"
+    candidate_prefix = Keyword.get(options, :candidate_prefix, "")
+    header = header <> candidate_prefix
     object1 = "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
     object2 = "2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"
-    body = header <> object1 <> object2
-    offsets = %{1 => byte_size(header), 2 => byte_size(header <> object1), 3 => byte_size(body)}
     widths = Keyword.get(options, :widths, [1, 4, 2])
-    index = Keyword.get(options, :index, [0, 4])
+    indirect_length? = Keyword.get(options, :indirect_length, false)
+    size = if indirect_length?, do: 5, else: 4
+    index = Keyword.get(options, :index, [0, size])
     entry_type = Keyword.get(options, :entry_type, 1)
+    data_suffix = Keyword.get(options, :data_suffix, <<>>)
 
     objects =
       index
@@ -388,6 +434,29 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
           []
       end)
 
+    row_width = Enum.sum(widths)
+    declared_length = length(objects) * row_width + byte_size(data_suffix)
+
+    length_object =
+      case indirect_length? do
+        true ->
+          source = Keyword.get(options, :length_source, Integer.to_string(declared_length))
+          "4 0 obj\n#{source}\nendobj\n"
+
+        false ->
+          ""
+      end
+
+    base = header <> object1 <> object2
+    body = base <> length_object
+
+    offsets = %{
+      1 => byte_size(header),
+      2 => byte_size(header <> object1),
+      3 => byte_size(body),
+      4 => byte_size(base)
+    }
+
     data =
       Enum.reduce(objects, <<>>, fn object, data ->
         type =
@@ -396,9 +465,11 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
             else: entry_type
 
         offset =
-          if object == 0,
-            do: Keyword.get(options, :object_zero_offset, 0),
-            else: Map.get(offsets, object, 0)
+          case object do
+            0 -> Keyword.get(options, :object_zero_offset, 0)
+            4 -> Keyword.get(options, :length_xref_offset, Map.get(offsets, object, 0))
+            _ -> Map.get(offsets, object, 0)
+          end
 
         generation =
           if object == 0,
@@ -409,18 +480,20 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
           unsigned(type, Enum.at(widths, 0, 0)) <>
           unsigned(offset, Enum.at(widths, 1, 0)) <>
           unsigned(generation, Enum.at(widths, 2, 0))
-      end) <> Keyword.get(options, :data_suffix, <<>>)
+      end) <> data_suffix
 
     type = Keyword.get(options, :type, "XRef")
     index_text = Enum.map_join(index, " ", &to_string/1)
     widths_text = Enum.map_join(widths, " ", &to_string/1)
 
     dictionary =
-      "<< /Type /#{type} /Size 4 /Root 1 0 R /W [#{widths_text}] " <>
-        "/Index [#{index_text}] /Length #{byte_size(data)} >>"
+      "<< /Type /#{type} /Size #{size} /Root 1 0 R /W [#{widths_text}] " <>
+        "/Index [#{index_text}] /Length " <>
+        if(indirect_length?, do: "4 0 R >>", else: "#{byte_size(data)} >>")
 
     xref_object = "3 0 obj\n#{dictionary}\nstream\n" <> data <> "\nendstream\nendobj\n"
-    body <> xref_object <> "startxref\n#{offsets[3]}\n%%EOF\n"
+    candidate_suffix = Keyword.get(options, :candidate_suffix, "")
+    body <> xref_object <> candidate_suffix <> "startxref\n#{offsets[3]}\n%%EOF\n"
   end
 
   defp large_page_pdf(page_count) do

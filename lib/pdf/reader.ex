@@ -15,6 +15,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   @max_objects 100_000
   @max_decoded_stream_bytes 25_000_000
   @max_decompression_ratio 100
+  @max_xref_length_candidates 1_000
 
   @type ref :: {non_neg_integer(), non_neg_integer()}
   @type value ::
@@ -213,7 +214,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     with [:xref | rest] <- tokens,
          {:ok, entries, trailer} <- parse_classic_sections(rest, %{}),
          {:ok, supplemental_entries, supplemental_trailer} <-
-           supplemental_xref_stream(pdf, Map.get(trailer, "XRefStm"), offset) do
+           supplemental_xref_stream(pdf, Map.get(trailer, "XRefStm"), offset, entries) do
       {:ok, Map.merge(entries, supplemental_entries), Map.merge(supplemental_trailer, trailer)}
     else
       {:error, _} = xref_error -> xref_error
@@ -273,26 +274,47 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp supplemental_xref_stream(pdf, stream_offset, classic_offset) do
+  defp supplemental_xref_stream(pdf, stream_offset, classic_offset, classic_entries) do
     case stream_offset do
       nil ->
         {:ok, %{}, %{}}
 
       stream_offset
       when is_integer(stream_offset) and stream_offset >= 0 and stream_offset != classic_offset ->
-        parse_xref_stream(pdf, stream_offset)
+        parse_xref_stream(pdf, stream_offset, classic_entries)
 
       _ ->
         error(:xref, :invalid_pdf_input, "trailer XRefStm offset is malformed")
     end
   end
 
-  defp parse_xref_stream(pdf, offset) do
+  defp parse_xref_stream(pdf, offset, bootstrap_entries \\ %{}) do
     with {:ok, ref, object} <- parse_indirect_object_at(pdf, offset, byte_size(pdf), nil),
-         true <- is_map(object.value) and name?(Map.get(object.value, "Type"), "XRef"),
-         true <- is_binary(object.stream),
-         {:ok, stream_context} <-
-           PdfValidator.prepare_decoded_stream(%{objects: %{ref => object}}, {:ref, ref},
+         true <- is_map(object.value) and name?(Map.get(object.value, "Type"), "XRef") do
+      case Map.get(object, :pending_stream) do
+        nil ->
+          decode_xref_stream_object(object, ref)
+
+        source ->
+          decode_xref_stream_with_indirect_length(
+            pdf,
+            object,
+            ref,
+            source,
+            bootstrap_entries
+          )
+      end
+    else
+      false -> error(:xref, :invalid_pdf_input, "xref stream object is malformed")
+      {:error, _} = xref_error -> xref_error
+    end
+  end
+
+  defp decode_xref_stream_object(object, ref, supporting_objects \\ %{}) do
+    objects = Map.put(supporting_objects, ref, object)
+
+    with {:ok, stream_context} <-
+           PdfValidator.prepare_decoded_stream(%{objects: objects}, {:ref, ref},
              operation: :read,
              module: __MODULE__
            ),
@@ -300,9 +322,140 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
          {:ok, entries} <- xref_stream_entries(decoded, object.value) do
       {:ok, entries, object.value}
     else
-      false -> error(:xref, :invalid_pdf_input, "xref stream object is malformed")
       {:error, _} = xref_error -> xref_error
     end
+  end
+
+  defp decode_xref_stream_with_indirect_length(pdf, object, ref, source, bootstrap_entries) do
+    case xref_length_candidates(pdf, source.length_ref) do
+      {:ok, candidates} ->
+        decoded_candidates =
+          Enum.reduce(candidates, [], fn candidate, decoded_candidates ->
+            objects = %{ref => object, source.length_ref => candidate}
+            pending = Map.delete(object, :pending_stream)
+
+            case materialize_indirect_stream(pdf, objects, ref, pending, source) do
+              {:ok, materialized} ->
+                case decode_xref_stream_object(materialized, ref, objects) do
+                  {:ok, entries, _trailer} = decoded ->
+                    [{decoded, entries, candidate.offset} | decoded_candidates]
+
+                  {:error, _} ->
+                    decoded_candidates
+                end
+
+              {:error, _} ->
+                decoded_candidates
+            end
+          end)
+
+        confirmed =
+          Enum.find(decoded_candidates, fn {_decoded, entries, candidate_offset} ->
+            confirms_xref_length_candidate?(
+              pdf,
+              entries,
+              bootstrap_entries,
+              source.length_ref,
+              candidate_offset
+            )
+          end)
+
+        case {confirmed, decoded_candidates} do
+          {{decoded, _entries, _offset}, _candidates} ->
+            decoded
+
+          {nil, [{decoded, _entries, _offset}]} ->
+            decoded
+
+          _ ->
+            error(
+              :xref,
+              :invalid_pdf_input,
+              "xref stream Length reference cannot be resolved safely",
+              object: ref
+            )
+        end
+
+      {:error, _} = candidate_error ->
+        candidate_error
+    end
+  end
+
+  defp xref_length_candidates(pdf, {object, generation}) do
+    whitespace = "[\\x00\\t\\n\\f\\r ]"
+
+    {:ok, pattern} =
+      Regex.compile(
+        "(?:\\A|#{whitespace})(#{object}#{whitespace}+#{generation}#{whitespace}+obj\\b)"
+      )
+
+    offsets =
+      pattern
+      |> Regex.scan(pdf, return: :index, capture: :all_but_first)
+      |> Enum.map(fn [{offset, _length}] -> offset end)
+      |> Enum.uniq()
+
+    case length(offsets) <= @max_xref_length_candidates do
+      true ->
+        candidates =
+          Enum.reduce(offsets, [], fn offset, candidates ->
+            case candidate_object_limit(pdf, offset) do
+              {:ok, limit} ->
+                case parse_indirect_object_at(pdf, offset, limit, {object, generation}) do
+                  {:ok, {^object, ^generation}, %{value: value, stream: nil} = candidate}
+                  when is_integer(value) and value >= 0 ->
+                    [candidate | candidates]
+
+                  _ ->
+                    candidates
+                end
+
+              :error ->
+                candidates
+            end
+          end)
+
+        {:ok, Enum.reverse(candidates)}
+
+      false ->
+        error(:limits, :resource_limit_exceeded, "xref stream Length candidate limit exceeded")
+    end
+  end
+
+  defp candidate_object_limit(pdf, offset) do
+    tail = binary_part(pdf, offset, byte_size(pdf) - offset)
+
+    case Regex.run(~r/\bendobj\b/, tail, return: :index) do
+      [{end_offset, end_length}] -> {:ok, offset + end_offset + end_length}
+      _ -> :error
+    end
+  end
+
+  defp confirms_xref_length_candidate?(
+         pdf,
+         entries,
+         bootstrap_entries,
+         {object, generation},
+         candidate_offset
+       ) do
+    expected_entries = [Map.get(entries, object), Map.get(bootstrap_entries, object)]
+
+    Enum.any?(expected_entries, fn entry ->
+      case entry do
+        {:uncompressed, xref_offset, ^generation} ->
+          xref_offset <= candidate_offset and
+            pdf_whitespace_between?(pdf, xref_offset, candidate_offset)
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  defp pdf_whitespace_between?(pdf, first, last) do
+    pdf
+    |> binary_part(first, last - first)
+    |> String.match?(~r/\A[\x00\t\n\f\r ]*\z/)
   end
 
   defp xref_stream_entries(data, dictionary) do
