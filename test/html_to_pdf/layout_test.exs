@@ -70,6 +70,46 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert bold.flow_id == second.flow_id
   end
 
+  test "layout preserves padding for auto-sized border-box blocks" do
+    html = """
+    <div style="box-sizing: border-box; padding: 5pt; background: #eee; font-size: 10pt; line-height: 12pt">
+      Auto-sized heading
+    </div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom)
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 100}, margin: 10)
+
+    background = Enum.find(layout_tree.boxes, &(&1.type == :rect and &1.fill_color != nil))
+    text = Enum.find(layout_tree.boxes, &(&1.type == :text))
+
+    assert_in_delta background.width, 180.0, 0.0001
+    assert_in_delta background.height, 22.0, 0.0001
+    assert_in_delta text.x, 15.0, 0.0001
+    assert text.y >= background.y
+    assert text.y <= background.y + background.height
+  end
+
+  test "layout applies size constraints to auto-sized border-box blocks" do
+    html = """
+    <div style="box-sizing: border-box; max-width: 60pt; min-height: 30pt; padding: 5pt; background: #eee; font-size: 10pt; line-height: 12pt">
+      Constrained
+    </div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom)
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 100}, margin: 10)
+
+    background = Enum.find(layout_tree.boxes, &(&1.type == :rect and &1.fill_color != nil))
+    text = Enum.find(layout_tree.boxes, &(&1.type == :text))
+
+    assert_in_delta background.width, 60.0, 0.0001
+    assert_in_delta background.height, 30.0, 0.0001
+    assert_in_delta text.x, 15.0, 0.0001
+  end
+
   test "layout preserves non-breaking spaces and does not wrap across them" do
     html =
       ~s(<p style="font-size: 10pt; line-height: 12pt; width: 24pt; margin: 0">A&nbsp;B C</p>)

@@ -2109,17 +2109,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp resolved_content_size(style, property, available_size, default) do
-    size = resolved_size(style, property, available_size, default)
+    case {Map.get(style, :box_sizing, :content_box), property} do
+      {:border_box, :width} ->
+        box_size = horizontal_box_size(style)
+        default = if is_number(default), do: default + box_size, else: default
+        size = resolved_size(style, property, available_size, default)
+        if is_number(size), do: max(size - box_size, 0.0), else: size
 
-    case {Map.get(style, :box_sizing, :content_box), property, size} do
-      {:border_box, :width, size} when is_number(size) ->
-        max(size - horizontal_box_size(style), 0.0)
-
-      {:border_box, :height, size} when is_number(size) ->
-        max(size - vertical_box_size(style), 0.0)
+      {:border_box, :height} ->
+        box_size = vertical_box_size(style)
+        default = if is_number(default), do: default + box_size, else: default
+        size = resolved_size(style, property, available_size, default)
+        if is_number(size), do: max(size - box_size, 0.0), else: size
 
       _ ->
-        size
+        resolved_size(style, property, available_size, default)
     end
   end
 
