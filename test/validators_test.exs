@@ -44,6 +44,13 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
                pdf
              )
 
+    assert :ok =
+             PdfValidator.validate_xref(
+               valid_entries,
+               Map.put(trailer, "Encrypt", nil),
+               pdf
+             )
+
     invalid_entries = [
       Map.delete(valid_entries, 0),
       Map.put(valid_entries, 0, {:uncompressed, 1, 0}),

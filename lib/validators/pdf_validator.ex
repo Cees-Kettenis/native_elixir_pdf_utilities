@@ -184,7 +184,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           end) ->
             error(:xref, :invalid_pdf_input, "xref entry is outside its declared bounds", opts)
 
-          Map.has_key?(trailer, "Encrypt") ->
+          not is_nil(Map.get(trailer, "Encrypt")) ->
             error(:encryption, :encrypted_pdf, "encrypted PDFs are not supported", opts)
 
           true ->
@@ -652,11 +652,11 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   defp validate_page_tree_parent(document, dictionary, ref, expected_parent, opts) do
     case expected_parent do
       nil ->
-        case Map.has_key?(dictionary, "Parent") do
-          false ->
+        case Map.get(dictionary, "Parent") do
+          nil ->
             :ok
 
-          true ->
+          _parent ->
             error(
               :page_tree,
               :invalid_pdf_input,
@@ -667,8 +667,8 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         end
 
       expected_parent ->
-        case Map.fetch(dictionary, "Parent") do
-          {:ok, {:ref, parent_ref}} ->
+        case Map.get(dictionary, "Parent") do
+          {:ref, parent_ref} ->
             case resolve_reference(document, parent_ref, %{}, opts) do
               {:ok, _parent, ^expected_parent} ->
                 :ok
@@ -683,7 +683,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
                 )
             end
 
-          :error ->
+          nil ->
             error(
               :page_tree,
               :invalid_pdf_input,
@@ -692,7 +692,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
               object: ref
             )
 
-          {:ok, _parent} ->
+          _parent ->
             error(
               :page_tree,
               :invalid_pdf_input,
@@ -722,9 +722,9 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
 
   defp inherit_page_values(dictionary, ref, inherited) do
     Enum.reduce(@inheritable_page_keys, inherited, fn key, inherited ->
-      case Map.has_key?(dictionary, key) do
-        true -> Map.put(inherited, key, %{value: Map.fetch!(dictionary, key), source_ref: ref})
-        false -> inherited
+      case Map.get(dictionary, key) do
+        nil -> inherited
+        value -> Map.put(inherited, key, %{value: value, source_ref: ref})
       end
     end)
   end

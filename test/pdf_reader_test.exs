@@ -31,6 +31,17 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
   test "rejects committed encrypted and malformed fixtures" do
     assert_error(Reader.read(fixture!("encrypted.pdf")), :encrypted_pdf, :encryption)
     assert_error(Reader.read(fixture!("malformed-xref.pdf")), :invalid_pdf_input, :xref)
+
+    null_encrypt =
+      pdf(
+        [
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2, "<< /Type /Pages /Kids [] /Count 0 >>"}
+        ],
+        "/Root 1 0 R /Encrypt null"
+      )
+
+    assert {:ok, _document} = Reader.read(null_encrypt)
   end
 
   test "resolves indirect chains and rejects reference cycles" do
@@ -236,6 +247,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
   test "validates exact page-tree Parent relationships" do
     invalid_parents = [
       {"", "page tree node is missing its required Parent; object 3 0"},
+      {"/Parent null", "page tree node is missing its required Parent; object 3 0"},
       {"/Parent /invalid", "page tree node has a malformed Parent; object 3 0"},
       {"/Parent 4 0 R",
        "page tree node Parent does not match its containing Pages node; object 3 0"}
@@ -276,6 +288,14 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
     assert {:error, {:invalid_pdf_input, root_diagnostic}} = Reader.read(root_parent)
     assert root_diagnostic.stage == :page_tree
     assert root_diagnostic.message == "page tree root must not declare Parent; object 2 0"
+
+    null_root_parent =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Parent null /Kids [] /Count 0 >>"}
+      ])
+
+    assert {:ok, %{pages: []}} = Reader.read(null_root_parent)
 
     cross_branch =
       pdf([
@@ -383,6 +403,18 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
       ])
 
     assert {:ok, %{pages: [_page]}} = Reader.read(indirect)
+  end
+
+  test "inherits page values when a child entry is null" do
+    pdf =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /Resources << /Marker /Inherited >> >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Resources null >>"}
+      ])
+
+    assert {:ok, %{pages: [page]}} = Reader.read(pdf)
+    assert page.resources == %{"Marker" => {:name, "Inherited"}}
   end
 
   test "shared consumers reject page trees rejected by the reader" do
