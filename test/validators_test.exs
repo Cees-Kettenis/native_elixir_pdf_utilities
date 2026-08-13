@@ -358,6 +358,21 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
     assert {:error, {:invalid_pdf_input, %{stage: :serialization}}} =
              MergeValidator.prepare(missing_page_object)
 
+    non_dictionary_page = %{
+      document: %{
+        objects: %{{3, 0} => object({:ref, {4, 0}}, nil, [{:int, 4}, {:int, 0}, :R])}
+      },
+      pages: [merge_page(%{})]
+    }
+
+    assert {:error, {:invalid_pdf_input, rewrite_diagnostic}} =
+             MergeValidator.prepare(non_dictionary_page)
+
+    assert rewrite_diagnostic.stage == :serialization
+
+    assert rewrite_diagnostic.message ==
+             "validated page object is not a dictionary ready for rewriting"
+
     missing_inherited_tokens = %{
       document: %{
         objects: %{

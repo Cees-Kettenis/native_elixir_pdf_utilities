@@ -261,8 +261,14 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           {:ok, value()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def resolve(document, value, opts \\ []) do
     case value do
-      {:ref, ref} -> resolve_reference(document, ref, %{}, opts)
-      value -> {:ok, value}
+      {:ref, ref} ->
+        case resolve_reference(document, ref, %{}, opts) do
+          {:ok, resolved, _terminal_ref} -> {:ok, resolved}
+          {:error, _} = resolution_error -> resolution_error
+        end
+
+      value ->
+        {:ok, value}
     end
   end
 
@@ -503,80 +509,81 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
          depth,
          opts
        ) do
-    ref = reference_identity(page_ref)
+    initial_ref = reference_identity(page_ref)
 
-    cond do
-      Map.has_key?(ancestors, ref) ->
-        error(:page_tree, :invalid_pdf_input, "page tree contains a cycle", opts, object: ref)
+    with {:ok, ref, dictionary} <- referenced_dictionary(document, initial_ref, opts) do
+      cond do
+        Map.has_key?(ancestors, ref) ->
+          error(:page_tree, :invalid_pdf_input, "page tree contains a cycle", opts, object: ref)
 
-      Map.has_key?(traversal.seen, ref) ->
-        error(
-          :page_tree,
-          :invalid_pdf_input,
-          "page tree contains a duplicate reference",
-          opts,
-          object: ref
-        )
+        Map.has_key?(traversal.seen, ref) ->
+          error(
+            :page_tree,
+            :invalid_pdf_input,
+            "page tree contains a duplicate reference",
+            opts,
+            object: ref
+          )
 
-      depth >= @max_page_tree_depth ->
-        error(:limits, :resource_limit_exceeded, "PDF page tree depth exceeds the limit", opts,
-          object: ref
-        )
+        depth >= @max_page_tree_depth ->
+          error(:limits, :resource_limit_exceeded, "PDF page tree depth exceeds the limit", opts,
+            object: ref
+          )
 
-      traversal.page_count >= @max_pages ->
-        error(:limits, :resource_limit_exceeded, "PDF page count exceeds the limit", opts)
+        traversal.page_count >= @max_pages ->
+          error(:limits, :resource_limit_exceeded, "PDF page count exceeds the limit", opts)
 
-      true ->
-        with {:ok, dictionary} <- dictionary(document, page_ref, opts),
-             :ok <- validate_page_tree_parent(dictionary, ref, expected_parent, opts) do
-          inherited = inherit_page_values(dictionary, ref, inherited)
-          ancestors = Map.put(ancestors, ref, true)
-          traversal = %{traversal | seen: Map.put(traversal.seen, ref, true)}
+        true ->
+          with :ok <- validate_page_tree_parent(document, dictionary, ref, expected_parent, opts) do
+            inherited = inherit_page_values(dictionary, ref, inherited)
+            ancestors = Map.put(ancestors, ref, true)
+            traversal = %{traversal | seen: Map.put(traversal.seen, ref, true)}
 
-          case Map.get(dictionary, "Type") do
-            {:name, "Page"} ->
-              page = %{
-                ref: ref,
-                dictionary: dictionary,
-                resources: inherited_value(inherited, "Resources"),
-                rotate: inherited_value(inherited, "Rotate"),
-                media_box: inherited_value(inherited, "MediaBox"),
-                crop_box: inherited_value(inherited, "CropBox"),
-                inherited: inherited
-              }
+            case Map.get(dictionary, "Type") do
+              {:name, "Page"} ->
+                page = %{
+                  ref: ref,
+                  dictionary: dictionary,
+                  resources: inherited_value(inherited, "Resources"),
+                  rotate: inherited_value(inherited, "Rotate"),
+                  media_box: inherited_value(inherited, "MediaBox"),
+                  crop_box: inherited_value(inherited, "CropBox"),
+                  inherited: inherited
+                }
 
-              traversal = %{
-                traversal
-                | pages: [page | traversal.pages],
-                  page_count: traversal.page_count + 1
-              }
+                traversal = %{
+                  traversal
+                  | pages: [page | traversal.pages],
+                    page_count: traversal.page_count + 1
+                }
 
-              {:ok, traversal, 1}
+                {:ok, traversal, 1}
 
-            {:name, "Pages"} ->
-              with {:ok, declared_count} <- page_tree_count(document, dictionary, ref, opts),
-                   {:ok, kids} <- page_tree_kids(document, dictionary, opts),
-                   {:ok, traversal, actual_count} <-
-                     walk_kids(
-                       document,
-                       kids,
-                       inherited,
-                       ancestors,
-                       traversal,
-                       ref,
-                       depth + 1,
-                       opts
-                     ),
-                   :ok <- validate_page_tree_count(declared_count, actual_count, ref, opts) do
-                {:ok, traversal, actual_count}
-              end
+              {:name, "Pages"} ->
+                with {:ok, declared_count} <- page_tree_count(document, dictionary, ref, opts),
+                     {:ok, kids} <- page_tree_kids(document, dictionary, opts),
+                     {:ok, traversal, actual_count} <-
+                       walk_kids(
+                         document,
+                         kids,
+                         inherited,
+                         ancestors,
+                         traversal,
+                         ref,
+                         depth + 1,
+                         opts
+                       ),
+                     :ok <- validate_page_tree_count(declared_count, actual_count, ref, opts) do
+                  {:ok, traversal, actual_count}
+                end
 
-            _ ->
-              error(:page_tree, :invalid_pdf_input, "page tree node has an invalid Type", opts,
-                object: ref
-              )
+              _ ->
+                error(:page_tree, :invalid_pdf_input, "page tree node has an invalid Type", opts,
+                  object: ref
+                )
+            end
           end
-        end
+      end
     end
   end
 
@@ -642,7 +649,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
-  defp validate_page_tree_parent(dictionary, ref, expected_parent, opts) do
+  defp validate_page_tree_parent(document, dictionary, ref, expected_parent, opts) do
     case expected_parent do
       nil ->
         case Map.has_key?(dictionary, "Parent") do
@@ -661,23 +668,26 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
 
       expected_parent ->
         case Map.fetch(dictionary, "Parent") do
-          {:ok, {:ref, ^expected_parent}} ->
-            :ok
+          {:ok, {:ref, parent_ref}} ->
+            case resolve_reference(document, parent_ref, %{}, opts) do
+              {:ok, _parent, ^expected_parent} ->
+                :ok
+
+              _ ->
+                error(
+                  :page_tree,
+                  :invalid_pdf_input,
+                  "page tree node Parent does not match its containing Pages node",
+                  opts,
+                  object: ref
+                )
+            end
 
           :error ->
             error(
               :page_tree,
               :invalid_pdf_input,
               "page tree node is missing its required Parent",
-              opts,
-              object: ref
-            )
-
-          {:ok, {:ref, _parent}} ->
-            error(
-              :page_tree,
-              :invalid_pdf_input,
-              "page tree node Parent does not match its containing Pages node",
               opts,
               object: ref
             )
@@ -775,7 +785,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
             resolve_reference(document, next_ref, Map.put(seen, ref, true), opts)
 
           {:ok, %{value: value}} ->
-            {:ok, value}
+            {:ok, value, ref}
 
           {:ok, _object} ->
             error(:resolution, :invalid_pdf_input, "indirect object record is malformed", opts,
@@ -795,6 +805,16 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
               opts
             )
         end
+    end
+  end
+
+  defp referenced_dictionary(document, ref, opts) do
+    with {:ok, resolved, terminal_ref} <- resolve_reference(document, ref, %{}, opts),
+         true <- is_map(resolved) do
+      {:ok, terminal_ref, resolved}
+    else
+      false -> error(:resolution, :invalid_pdf_input, "expected a PDF dictionary", opts)
+      {:error, _} = resolution_error -> resolution_error
     end
   end
 

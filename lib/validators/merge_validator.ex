@@ -186,7 +186,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
            {:ok, rotate} <- resolved_rotation(document, page.rotate, page_number),
            :ok <- validate_resources(document, page.resources, page_number),
            {:ok, resources} <- inherited_tokens(page, "Resources", object_by_ref),
-           {:ok, _page_object} <- fetch_object(object_by_ref, page.ref) do
+           :ok <- validate_page_rewrite_target(object_by_ref, page.ref) do
         prepared = %{
           resources: resources,
           mediabox: number_tokens(media_box),
@@ -289,6 +289,18 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
     case Map.fetch(object_by_ref, ref) do
       {:ok, object} -> {:ok, object}
       :error -> error(:serialization, "validated page object is unavailable for rewriting")
+    end
+  end
+
+  defp validate_page_rewrite_target(object_by_ref, ref) do
+    with {:ok, object} <- fetch_object(object_by_ref, ref) do
+      case object do
+        %{value: %{"Type" => {:name, "Page"}}, tokens: [:dict_start | _rest]} ->
+          :ok
+
+        _ ->
+          error(:serialization, "validated page object is not a dictionary ready for rewriting")
+      end
     end
   end
 

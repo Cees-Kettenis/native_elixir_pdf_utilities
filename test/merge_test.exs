@@ -218,6 +218,24 @@ defmodule NativeElixirPdfUtilities.MergeTest do
     assert page.media_box == [0, 0, 200, 300]
   end
 
+  test "rewrites the terminal Page dictionary behind an indirect alias" do
+    pdf =
+      merge_pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>"},
+        {3, "4 0 R"},
+        {4, "<< /Type /Page /Parent 2 0 R >>"}
+      ])
+
+    assert {:ok, source_document} = Reader.read(pdf)
+    assert [%{ref: {4, 0}}] = source_document.pages
+
+    assert {:ok, merged} = Merge.merge([pdf])
+    assert {:ok, merged_document} = Reader.read(merged)
+    assert [page] = merged_document.pages
+    assert page.media_box == [0, 0, 200, 300]
+  end
+
   test "handles sparse and unusual object bodies without changing stream bytes" do
     pdf =
       merge_pdf([

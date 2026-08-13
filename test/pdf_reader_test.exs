@@ -214,6 +214,15 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
 
     assert_error(Reader.read(invalid_type), :invalid_pdf_input, :page_tree)
 
+    non_dictionary_kid =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3, "42"}
+      ])
+
+    assert_error(Reader.read(non_dictionary_kid), :invalid_pdf_input, :resolution)
+
     cycle =
       pdf([
         {1, "<< /Type /Catalog /Pages 2 0 R >>"},
@@ -283,6 +292,16 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
 
     assert cross_branch_diagnostic.message ==
              "page tree node Parent does not match its containing Pages node; object 5 0"
+
+    aliased_parent =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "7 0 R"},
+        {3, "<< /Type /Page /Parent 2 0 R >>"},
+        {7, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"}
+      ])
+
+    assert {:ok, %{pages: [%{ref: {3, 0}}]}} = Reader.read(aliased_parent)
   end
 
   test "rejects duplicate page-tree references and invalid descendant counts" do
@@ -298,6 +317,19 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
 
     assert duplicate_diagnostic.stage == :page_tree
     assert duplicate_diagnostic.message == "page tree contains a duplicate reference; object 3 0"
+
+    duplicate_aliases =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>"},
+        {3, "5 0 R"},
+        {4, "5 0 R"},
+        {5, "<< /Type /Page /Parent 2 0 R >>"}
+      ])
+
+    assert {:error, {:invalid_pdf_input, alias_diagnostic}} = Reader.read(duplicate_aliases)
+    assert alias_diagnostic.stage == :page_tree
+    assert alias_diagnostic.message == "page tree contains a duplicate reference; object 5 0"
 
     duplicate_branch =
       pdf([
