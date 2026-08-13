@@ -27,8 +27,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @spec layout(term(), term()) ::
           {:ok, layout_tree()} | {:error, :invalid_layout | :invalid_margin | :invalid_page_size}
   def layout(styled_tree, opts \\ []) do
-    case HtmlValidator.prepare_layout(styled_tree, opts) do
-      {:ok, %{children: children, page_size: page_size, margins: margins}} ->
+    page_size =
+      case Keyword.keyword?(opts) do
+        true -> PageGeometry.normalize_page_size(Keyword.get(opts, :page_size, :a4))
+        false -> {:error, :invalid_page_size}
+      end
+
+    margins =
+      case Keyword.keyword?(opts) do
+        true -> PageGeometry.normalize_margins(Keyword.get(opts, :margin, 0))
+        false -> {:error, :invalid_margin}
+      end
+
+    case HtmlValidator.validate_layout_input(styled_tree, opts, page_size, margins) do
+      :ok ->
+        {:ok, page_size} = page_size
+        {:ok, margins} = margins
+        children = styled_tree.children
+
         with {:ok, boxes} <- layout_blocks(children, page_size, margins) do
           {page_width, page_height} = page_size
 
@@ -55,21 +71,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     {page_width, page_height} = page_size
 
     result =
-      Enum.reduce(children, {:ok, [], page_height - margins.top}, fn child, acc ->
-        case acc do
-          {:ok, boxes, y} ->
-            case layout_block(
-                   child,
-                   margins.left,
-                   y,
-                   page_width - margins.left - margins.right
-                 ) do
-              {:ok, block_boxes, next_y} -> {:ok, boxes ++ block_boxes, next_y}
-              {:error, reason} -> {:error, reason}
-            end
-
-          {:error, reason} ->
-            {:error, reason}
+      Enum.reduce_while(children, {:ok, [], page_height - margins.top}, fn child,
+                                                                           {:ok, boxes, y} ->
+        case layout_block(
+               child,
+               margins.left,
+               y,
+               page_width - margins.left - margins.right
+             ) do
+          {:ok, block_boxes, next_y} -> {:cont, {:ok, boxes ++ block_boxes, next_y}}
+          {:error, reason} -> {:halt, {:error, reason}}
         end
       end)
 
@@ -464,9 +475,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {:ok, runs} -> {:ok, build_grid_item(style, runs, index)}
           {:error, _reason} -> build_grid_block_item(style, children, index)
         end
-
-      _ ->
-        {:error, :invalid_layout}
     end
   end
 
@@ -1260,9 +1268,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               available_cross
             )
         end
-
-      _ ->
-        {:error, :invalid_layout}
     end
   end
 
@@ -2071,9 +2076,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {:error, _reason} ->
             flex_block_intrinsic_width(children) + horizontal_box_size(style)
         end
-
-      _ ->
-        0.0
     end
   end
 
@@ -2409,9 +2411,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
           {:ok, background_box ++ text_boxes, box_top - box_height - margin.bottom}
         end
-
-      _ ->
-        {:error, :invalid_layout}
     end
   end
 

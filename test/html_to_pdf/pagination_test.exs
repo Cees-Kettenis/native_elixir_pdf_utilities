@@ -419,6 +419,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
   end
 
   test "paginate rejects invalid layout trees" do
+    assert {:error, {:invalid_layout, %{stage: :pagination}}} =
+             Pagination.paginate(:not_a_layout, [])
+
     assert {:error,
             {:invalid_layout,
              %{

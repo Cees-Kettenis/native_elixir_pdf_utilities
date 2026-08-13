@@ -12,7 +12,6 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   import Bitwise
 
-  @max_input_bytes 50_000_000
   @max_objects 100_000
   @max_decoded_stream_bytes 25_000_000
   @max_decompression_ratio 100
@@ -76,7 +75,6 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def read_validated(pdf) do
     with :ok <- PdfValidator.validate_input(pdf, operation: :read, module: __MODULE__),
-         :ok <- validate_header(pdf),
          {:ok, xref_offset} <- final_xref_offset(pdf),
          {:ok, xref, trailer} <- parse_xref_chain(pdf, xref_offset, %{}, 0),
          :ok <-
@@ -84,7 +82,6 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
              operation: :read,
              module: __MODULE__
            ),
-         :ok <- reject_encryption(trailer),
          {:ok, objects} <- load_objects(pdf, xref),
          {:ok, context} <-
            PdfValidator.validate(
@@ -138,19 +135,6 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           {:ok, value() | nil} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def fetch(document, dictionary, key) do
     PdfValidator.fetch(document, dictionary, key, operation: :read, module: __MODULE__)
-  end
-
-  defp validate_header(pdf) do
-    cond do
-      byte_size(pdf) > @max_input_bytes ->
-        error(:limits, :resource_limit_exceeded, "PDF input exceeds the byte limit")
-
-      Regex.match?(~r/\A%PDF-(1\.[0-7]|2\.0)(?:\s|\r|\n)/, pdf) ->
-        :ok
-
-      true ->
-        error(:header, :invalid_pdf_input, "PDF header is missing or has an unsupported version")
-    end
   end
 
   defp final_xref_offset(pdf) do
@@ -762,14 +746,6 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
            )}
       end
     end)
-  end
-
-  defp reject_encryption(trailer) do
-    if Map.has_key?(trailer, "Encrypt") do
-      error(:encryption, :encrypted_pdf, "encrypted PDFs are not supported")
-    else
-      :ok
-    end
   end
 
   defp decode_stream(stream, filters, ref) do

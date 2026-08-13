@@ -182,6 +182,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
   end
 
   test "decorate validates its public layout inputs and template failures" do
+    assert {:error, {:invalid_layout, %{stage: :layout}}} =
+             PageFurniture.decorate([], :not_a_layout, [])
+
     assert {:error,
             {:invalid_layout,
              %{

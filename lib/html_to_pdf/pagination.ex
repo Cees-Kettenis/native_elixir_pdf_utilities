@@ -21,9 +21,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   @spec paginate(term(), [render_option()]) ::
           {:ok, [page()]} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def paginate(layout_tree, opts \\ []) do
-    case HtmlValidator.prepare_pagination(layout_tree, opts) do
-      {:ok, context} ->
-        paginate_boxes(context.page_size, context.boxes, context.margins)
+    margins =
+      case layout_tree do
+        layout_tree when is_map(layout_tree) ->
+          layout_tree
+          |> Map.get(:margins, Map.get(layout_tree, :margin, 0.0))
+          |> PageGeometry.normalize_margins()
+
+        _ ->
+          {:error, :invalid_margin}
+      end
+
+    case HtmlValidator.validate_pagination_input(layout_tree, opts, margins) do
+      :ok ->
+        {:ok, margins} = margins
+        paginate_boxes(layout_tree.page_size, layout_tree.boxes, margins)
 
       {:error, {reason, diagnostic}} ->
         {:error,

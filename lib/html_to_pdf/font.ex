@@ -120,6 +120,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     }
   ]
 
+  @doc false
+  @spec normalize_options(term()) :: {:ok, keyword()} | :error
+  def normalize_options(opts) do
+    case Keyword.keyword?(opts) do
+      true ->
+        case normalize_configs(Keyword.get(opts, :fonts, [])) do
+          {:ok, fonts} -> {:ok, Keyword.put(opts, :fonts, fonts)}
+          :error -> :error
+        end
+
+      false ->
+        :error
+    end
+  end
+
+  @doc false
+  @spec normalize_configs(term()) :: {:ok, [map()]} | :error
+  def normalize_configs(fonts) do
+    case is_list(fonts) do
+      true ->
+        Enum.reduce_while(fonts, {:ok, []}, fn font, {:ok, prepared} ->
+          case normalize_config(font) do
+            {:ok, normalized} -> {:cont, {:ok, prepared ++ [normalized]}}
+            :error -> {:halt, :error}
+          end
+        end)
+
+      false ->
+        :error
+    end
+  end
+
   @doc """
   Loads explicit TTF font options into a registry.
 
@@ -129,8 +161,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   """
   @spec load_registry(keyword()) :: {:ok, registry()} | :error
   def load_registry(opts) do
-    with {:ok, prepared_opts} <- HtmlValidator.prepare_font_options(opts),
-         {:ok, bundled_configs} <- HtmlValidator.prepare_font_configs(bundled_font_configs()),
+    with {:ok, prepared_opts} <- normalize_options(opts),
+         :ok <- HtmlValidator.validate_font_configs(Keyword.fetch!(prepared_opts, :fonts)),
+         {:ok, bundled_configs} <- normalize_configs(bundled_font_configs()),
+         :ok <- HtmlValidator.validate_font_configs(bundled_configs),
          {:ok, configured} <- load_fonts(Keyword.fetch!(prepared_opts, :fonts)),
          {:ok, bundled} <- load_fonts(bundled_configs) do
       fallback = configured ++ bundled
@@ -284,6 +318,88 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     end)
   end
 
+  defp normalize_config(font) do
+    case font do
+      {family, path} ->
+        normalize_config(%{family: family, path: path})
+
+      font when is_list(font) ->
+        case Keyword.keyword?(font) do
+          true -> normalize_config(Map.new(font))
+          false -> :error
+        end
+
+      font when is_map(font) ->
+        family = Map.get(font, :family) || Map.get(font, "family")
+        path = Map.get(font, :path) || Map.get(font, "path")
+        weight = Map.get(font, :weight) || Map.get(font, "weight") || 400
+        style = Map.get(font, :style) || Map.get(font, "style") || :normal
+
+        with true <- is_binary(family) and String.trim(family) != "",
+             {:ok, paths} <- normalize_paths(path),
+             {:ok, weight} <- normalize_weight(weight),
+             {:ok, style} <- normalize_style(style) do
+          {:ok, %{family: String.trim(family), path: paths, weight: weight, style: style}}
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp normalize_paths(path) do
+    case path do
+      path when is_binary(path) ->
+        case String.trim(path) do
+          "" -> :error
+          path -> {:ok, [path]}
+        end
+
+      paths when is_list(paths) ->
+        case paths != [] and Enum.all?(paths, &(is_binary(&1) and String.trim(&1) != "")) do
+          true -> {:ok, Enum.map(paths, &String.trim/1)}
+          false -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp normalize_weight(weight) do
+    case weight do
+      weight when is_number(weight) and weight >= 100 and weight <= 900 ->
+        {:ok, weight}
+
+      "normal" ->
+        {:ok, 400}
+
+      "bold" ->
+        {:ok, 700}
+
+      weight when is_binary(weight) ->
+        case Integer.parse(String.trim(weight)) do
+          {weight, ""} when weight >= 100 and weight <= 900 -> {:ok, weight}
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp normalize_style(style) do
+    case style do
+      :normal -> {:ok, :normal}
+      :italic -> {:ok, :italic}
+      "normal" -> {:ok, :normal}
+      "italic" -> {:ok, :italic}
+      _ -> :error
+    end
+  end
+
   defp bundled_font_configs do
     font_directory =
       Application.app_dir(:native_elixir_pdf_utilities, "priv/fonts/dejavu")
@@ -376,7 +492,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       end)
       |> Enum.uniq_by(&{String.downcase(&1.family), &1.weight, &1.style})
 
-    {:ok, prepared} = HtmlValidator.prepare_font_configs(candidates)
+    {:ok, prepared} = normalize_configs(candidates)
+    :ok = HtmlValidator.validate_font_configs(prepared)
 
     Enum.reduce(prepared, [], fn font, acc ->
       loaded = load_font(font)

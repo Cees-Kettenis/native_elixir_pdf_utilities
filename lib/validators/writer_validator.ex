@@ -8,6 +8,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @border_styles [
     :none,
@@ -262,8 +263,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       link_url when is_binary(link_url) ->
         width = Map.get(box, :annotation_width, Map.get(box, :width))
 
-        is_number(width) and width > 0 and
-          Regex.match?(~r/^(https?:\/\/[^\s<>]+|mailto:[^\s<>@]+@[^\s<>@]+)$/iu, link_url)
+        is_number(width) and width > 0 and HtmlValidator.valid_link_url?(link_url)
 
       _ ->
         false

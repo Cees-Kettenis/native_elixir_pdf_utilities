@@ -2641,7 +2641,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
             %{
               type: :element,
               style: Map.put(table_cell_style(), :rowspan, 2),
-              children: :bad
+              children: [%{type: :element, style: %{display: :invalid}, children: []}]
             }
           ]
         },
@@ -3941,6 +3941,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   end
 
   test "layout rejects invalid options and unsupported trees" do
+    assert Layout.layout(%{type: :document, children: []}, :not_options) ==
+             {:error, :invalid_layout}
+
     assert Layout.layout(%{tag: "p", style: %{}}, []) == {:error, :invalid_layout}
 
     assert Layout.layout(document([%{type: :invalid}, paragraph("After")]), []) ==

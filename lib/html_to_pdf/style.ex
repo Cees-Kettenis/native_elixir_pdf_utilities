@@ -59,8 +59,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           {:ok, styled_tree()}
           | {:error, {:invalid_css | :invalid_document | :invalid_options, map()}}
   def compute_detailed(dom, opts \\ []) do
-    case HtmlValidator.validate_style_input(dom, opts) do
-      {:ok, %{dom: %{type: :document, children: children} = dom, options: opts}} ->
+    font_options = Font.normalize_options(opts)
+
+    case HtmlValidator.validate_style_input(dom, opts, font_options) do
+      :ok ->
+        {:ok, opts} = font_options
+        %{type: :document, children: children} = dom
+
         with {:ok, stylesheet_entries} <- load_stylesheets(dom, opts),
              {:ok, css_fonts} <- stylesheet_fonts(stylesheet_entries),
              {:ok, font_registry} <- font_registry(opts, css_fonts),
@@ -131,8 +136,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           {:ok, [stylesheet_entry()]}
           | {:error, :invalid_document | :invalid_stylesheet_options}
   def load_stylesheets(dom, opts) do
-    case HtmlValidator.validate_style_input(dom, opts) do
-      {:ok, %{dom: %{children: children}, options: opts}} ->
+    font_options = Font.normalize_options(opts)
+
+    case HtmlValidator.validate_style_input(dom, opts, font_options) do
+      :ok ->
+        {:ok, opts} = font_options
+        children = dom.children
         stylesheet_entries(children, opts)
 
       {:error, {:invalid_options, _diagnostic}} ->
@@ -754,7 +763,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, %{display: :inline, color: {0, 0, 1}}}
 
       href ->
-        case valid_link_url?(href) do
+        case HtmlValidator.valid_link_url?(href) do
           true -> {:ok, %{display: :inline, color: {0, 0, 1}, link_url: href}}
           false -> :invalid
         end
@@ -3784,16 +3793,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       "red" => {1, 0, 0},
       "white" => {1, 1, 1}
     }
-  end
-
-  defp valid_link_url?(href) do
-    case href do
-      href when is_binary(href) ->
-        Regex.match?(~r/^(https?:\/\/[^\s<>]+|mailto:[^\s<>@]+@[^\s<>@]+)$/iu, href)
-
-      _ ->
-        false
-    end
   end
 
   defp hex_to_pdf_color(hex) do

@@ -14,6 +14,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type declaration :: {String.t(), String.t()} | {String.t(), String.t(), :important}
   @type selector_part :: %{
@@ -161,8 +162,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   @spec parse_detailed(String.t()) ::
           {:ok, stylesheet()} | {:error, {:invalid_css, map()}}
   def parse_detailed(css) do
-    case css do
-      css when is_binary(css) ->
+    case HtmlValidator.validate_css_source(css) do
+      {:ok, css} ->
         with {:ok, active_css} <- css |> strip_comments() |> active_media_rules(),
              {:ok, _font_faces} <- parse_font_faces(active_css, css),
              {:ok, _page_options} <- parse_page_rules(active_css, css) do
@@ -180,14 +181,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
             {:error, {:invalid_css, css_error_detail(css, css)}}
         end
 
-      _ ->
-        {:error,
-         {:invalid_css,
-          %{
-            stage: :css,
-            reason: :invalid_css,
-            message: "CSS input must be a string"
-          }}}
+      {:error, {:invalid_css, diagnostic}} ->
+        {:error, {:invalid_css, diagnostic}}
     end
   end
 
@@ -203,8 +198,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   """
   @spec font_faces(String.t()) :: {:ok, [font_face()]} | {:error, :invalid_css}
   def font_faces(css) do
-    case css do
-      css when is_binary(css) ->
+    case HtmlValidator.validate_css_source(css) do
+      {:ok, css} ->
         case css |> strip_comments() |> active_media_rules() do
           {:ok, active_css} ->
             case parse_font_faces(active_css, active_css) do
@@ -216,7 +211,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
             {:error, :invalid_css}
         end
 
-      _ ->
+      {:error, {:invalid_css, _diagnostic}} ->
         {:error, :invalid_css}
     end
   end
@@ -234,8 +229,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   """
   @spec page_options(String.t()) :: {:ok, [page_option()]} | {:error, :invalid_css}
   def page_options(css) do
-    case css do
-      css when is_binary(css) ->
+    case HtmlValidator.validate_css_source(css) do
+      {:ok, css} ->
         with {:ok, active_css} <- css |> strip_comments() |> active_media_rules() do
           case parse_page_rules(active_css, css) do
             {:ok, page_options} -> {:ok, page_options}
@@ -243,7 +238,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           end
         end
 
-      _ ->
+      {:error, {:invalid_css, _diagnostic}} ->
         {:error, :invalid_css}
     end
   end
@@ -267,8 +262,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   @spec parse_declarations_detailed(String.t()) ::
           {:ok, [declaration()]} | {:error, {:invalid_css, map()}}
   def parse_declarations_detailed(css) do
-    case css do
-      css when is_binary(css) ->
+    case HtmlValidator.validate_css_source(css, :declarations) do
+      {:ok, css} ->
         declarations =
           css
           |> String.split(";")
@@ -285,14 +280,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           end
         end)
 
-      _ ->
-        {:error,
-         {:invalid_css,
-          %{
-            stage: :css,
-            reason: :invalid_css,
-            message: "CSS declaration input must be a string"
-          }}}
+      {:error, {:invalid_css, diagnostic}} ->
+        {:error, {:invalid_css, diagnostic}}
     end
   end
 

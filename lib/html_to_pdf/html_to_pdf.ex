@@ -18,6 +18,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
@@ -194,16 +195,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   end
 
   defp do_render(html, opts) do
-    with {:ok, request} <- HtmlValidator.validate_render_request(html, opts),
-         {:ok, dom} <- HtmlParser.parse_detailed(request.html),
-         {:ok, effective_opts} <- effective_render_options_detailed(dom, request.options),
-         {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts),
-         {:ok, styled_tree} <- FontFallback.resolve(styled_tree),
-         {:ok, layout_tree} <- layout_document(styled_tree, effective_opts),
-         {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
-         {:ok, pages} <- PageFurniture.decorate(pages, layout_tree, effective_opts),
-         {:ok, pdf_binary} <- PdfWriter.render(pages, effective_opts) do
-      {:ok, pdf_binary}
+    font_options = Font.normalize_options(opts)
+
+    case HtmlValidator.validate_render_request(html, opts, font_options) do
+      :ok ->
+        {:ok, opts} = font_options
+
+        with {:ok, dom} <- HtmlParser.parse_detailed(html),
+             {:ok, effective_opts} <- effective_render_options_detailed(dom, opts),
+             {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts),
+             {:ok, styled_tree} <- FontFallback.resolve(styled_tree),
+             {:ok, layout_tree} <- layout_document(styled_tree, effective_opts),
+             {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
+             {:ok, pages} <- PageFurniture.decorate(pages, layout_tree, effective_opts),
+             {:ok, pdf_binary} <- PdfWriter.render(pages, effective_opts) do
+          {:ok, pdf_binary}
+        end
+
+      {:error, {_reason, _diagnostic}} = error ->
+        error
     end
   end
 

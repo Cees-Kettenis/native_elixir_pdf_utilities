@@ -1,12 +1,13 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
   @moduledoc """
-  Normalizes page sizes, four-sided page margins, and shared vertical box
-  geometry for rendering stages.
+  Shared page-option cascade helpers and vertical layout-box geometry.
 
-  Numeric custom page-size tuples retain the renderer's compatibility rule:
-  values up to `20 x 20` are inches and larger values are PDF points. CSS
-  page-size strings always retain their declared units.
+  This module parses page-size and margin inputs into the renderer's canonical
+  geometry values. The HTML validator remains the semantic authority that
+  decides whether those canonical values are valid for an operation.
   """
+
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type page_size_name ::
           :a5 | :a4 | :a3 | :b5 | :b4 | :jis_b5 | :jis_b4 | :letter | :legal | :ledger
@@ -19,12 +20,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
           | {orientation(), page_size_name() | :"jis-b5" | :"jis-b4"}
           | {number(), number()}
           | String.t()
-  @type margins :: %{
-          top: float(),
-          right: float(),
-          bottom: float(),
-          left: float()
-        }
+  @type margins :: %{top: float(), right: float(), bottom: float(), left: float()}
   @type margin_input :: number() | String.t() | map()
 
   @page_sizes %{
@@ -60,12 +56,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
         normalized_name = if page_size == :"jis-b5", do: :jis_b5, else: :jis_b4
         {:ok, Map.fetch!(@page_sizes, normalized_name)}
 
-      {page_size, orientation}
-      when orientation in [:portrait, :landscape] ->
+      {page_size, orientation} when orientation in [:portrait, :landscape] ->
         oriented_page_size(page_size, orientation)
 
-      {orientation, page_size}
-      when orientation in [:portrait, :landscape] ->
+      {orientation, page_size} when orientation in [:portrait, :landscape] ->
         oriented_page_size(page_size, orientation)
 
       {width, height} when is_number(width) and is_number(height) and width > 0 and height > 0 ->
@@ -84,10 +78,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
 
   @doc """
   Resolves a nonnegative renderer margin into top, right, bottom, and left points.
-
-  Strings use CSS shorthand order and accept one to four absolute lengths.
-  Margin maps may contain any of the `:top`, `:right`, `:bottom`, and `:left`
-  keys; omitted sides default to zero.
   """
   @spec normalize_margins(term()) :: {:ok, margins()} | {:error, :invalid_margin}
   def normalize_margins(margin) do
@@ -134,10 +124,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
 
   @doc """
   Merges a later page-margin declaration over an earlier declaration.
-
-  Scalar and shorthand values replace all sides. A partial side map replaces
-  only its declared sides, allowing `@page` longhands to cascade across rules
-  and stylesheets.
   """
   @spec merge_margin_defaults(term(), term()) :: term()
   def merge_margin_defaults(previous, override) do
@@ -188,10 +174,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
 
   @doc """
   Converts an applicable CSS page-margin value to a renderer margin value.
-
-  Valid CSS values that require unresolved percentages, relative units,
-  functions, keywords, `auto`, or negative geometry return `nil` and remain
-  compatibility no-ops.
   """
   @spec css_margin_option(String.t()) :: number() | String.t() | margins() | nil
   def css_margin_option(value) do
@@ -206,13 +188,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
         0.0
 
       [value] ->
-        case normalize_margin_length(value) do
-          {:ok, _margin} -> value
-          :error -> nil
+        case normalize_margins(value) do
+          {:ok, _margins} -> value
+          {:error, :invalid_margin} -> nil
         end
 
       values when length(values) in 2..4 ->
-        case normalize_margin_values(values) do
+        case normalize_margins(Enum.join(values, " ")) do
           {:ok, margins} -> margins
           {:error, :invalid_margin} -> nil
         end
@@ -224,9 +206,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
 
   @doc """
   Converts an applicable CSS page-size descriptor to a renderer page-size value.
-
-  Existing A4 and Letter return values are retained. Valid values that need
-  unresolved CSS context return `nil` and remain compatibility no-ops.
   """
   @spec css_page_size_option(String.t()) :: page_size_input() | nil
   def css_page_size_option(value) do
@@ -234,20 +213,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
     tokens = String.split(normalized, ~r/\s+/u, trim: true)
 
     case tokens do
-      ["a4"] -> :a4
-      ["a4", "portrait"] -> :a4
-      ["portrait", "a4"] -> :a4
-      ["a4", "landscape"] -> {841.89, 595.28}
-      ["landscape", "a4"] -> {841.89, 595.28}
-      ["letter"] -> :letter
-      ["letter", "portrait"] -> :letter
-      ["portrait", "letter"] -> :letter
-      ["letter", "landscape"] -> {792.0, 612.0}
-      ["landscape", "letter"] -> {792.0, 612.0}
-      [orientation] when orientation in ["portrait", "landscape"] -> normalized
-      [page_size] -> if page_size_name(page_size), do: normalized, else: nil
-      [first, second] -> css_two_token_page_size(first, second, normalized)
-      _ -> nil
+      ["a4"] ->
+        :a4
+
+      ["a4", "portrait"] ->
+        :a4
+
+      ["portrait", "a4"] ->
+        :a4
+
+      ["a4", "landscape"] ->
+        {841.89, 595.28}
+
+      ["landscape", "a4"] ->
+        {841.89, 595.28}
+
+      ["letter"] ->
+        :letter
+
+      ["letter", "portrait"] ->
+        :letter
+
+      ["portrait", "letter"] ->
+        :letter
+
+      ["letter", "landscape"] ->
+        {792.0, 612.0}
+
+      ["landscape", "letter"] ->
+        {792.0, 612.0}
+
+      _ ->
+        case normalize_page_size(normalized) do
+          {:ok, _page_size} -> normalized
+          {:error, :invalid_page_size} -> nil
+        end
     end
   end
 
@@ -256,17 +256,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
   """
   @spec valid_printable_area?({number(), number()}, margins()) :: boolean()
   def valid_printable_area?(page_size, margins) do
-    case {page_size, margins} do
-      {{page_width, page_height}, %{top: top, right: right, bottom: bottom, left: left}}
-      when is_number(page_width) and is_number(page_height) and is_number(top) and
-             is_number(right) and is_number(bottom) and is_number(left) ->
-        page_width > 0 and page_height > 0 and
-          Enum.all?([top, right, bottom, left], &(&1 >= 0)) and
-          left + right < page_width and top + bottom < page_height
-
-      _ ->
-        false
-    end
+    HtmlValidator.validate_printable_area(page_size, margins) == :ok
   end
 
   @doc """
@@ -358,23 +348,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
 
       :error ->
         {:error, :invalid_page_size}
-    end
-  end
-
-  defp css_two_token_page_size(first, second, normalized) do
-    cond do
-      page_size_name(first) && second in ["portrait", "landscape"] ->
-        normalized
-
-      first in ["portrait", "landscape"] && page_size_name(second) ->
-        normalized
-
-      match?({:ok, _length}, css_page_length(first)) and
-          match?({:ok, _length}, css_page_length(second)) ->
-        normalized
-
-      true ->
-        nil
     end
   end
 

@@ -17,6 +17,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @max_objects 100_000
   @max_pages 10_000
   @max_page_tree_depth 1_000
+  @max_input_bytes 50_000_000
   @inheritable_page_keys ["Resources", "MediaBox", "CropBox", "Rotate"]
 
   @typedoc "An indirect PDF object reference."
@@ -94,9 +95,23 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @spec validate_input(term(), [diagnostic_option()]) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_input(pdf, opts \\ []) do
-    case is_binary(pdf) do
-      true -> :ok
-      false -> error(:input, :invalid_pdf_input, "PDF input must be a binary", opts)
+    cond do
+      not is_binary(pdf) ->
+        error(:input, :invalid_pdf_input, "PDF input must be a binary", opts)
+
+      byte_size(pdf) > @max_input_bytes ->
+        error(:limits, :resource_limit_exceeded, "PDF input exceeds the byte limit", opts)
+
+      Regex.match?(~r/\A%PDF-(1\.[0-7]|2\.0)(?:\s|\r|\n)/, pdf) ->
+        :ok
+
+      true ->
+        error(
+          :header,
+          :invalid_pdf_input,
+          "PDF header is missing or has an unsupported version",
+          opts
+        )
     end
   end
 
@@ -168,6 +183,9 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
                 not valid_xref_entry?(entry, pdf, size)
           end) ->
             error(:xref, :invalid_pdf_input, "xref entry is outside its declared bounds", opts)
+
+          Map.has_key?(trailer, "Encrypt") ->
+            error(:encryption, :encrypted_pdf, "encrypted PDFs are not supported", opts)
 
           true ->
             :ok

@@ -17,8 +17,11 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
   end
 
   test "public PDF and merge input boundaries are owned by validators" do
-    assert :ok = PdfValidator.validate_input("%PDF-1.7")
+    assert :ok = PdfValidator.validate_input("%PDF-1.7\n")
     assert {:error, {:invalid_pdf_input, %{stage: :input}}} = PdfValidator.validate_input(nil)
+
+    assert {:error, {:invalid_pdf_input, %{stage: :header}}} =
+             PdfValidator.validate_input("%PDF-9.0\n")
 
     assert {:ok, ["one", "two"]} = MergeValidator.validate_inputs(["one", "two"])
     assert {:error, {:empty_pdf_list, %{stage: :merge}}} = MergeValidator.validate_inputs([])
@@ -33,6 +36,13 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
     valid_entries = %{0 => {:free, 0, 65_535}, 1 => {:uncompressed, 1, 0}}
 
     assert :ok = PdfValidator.validate_xref(valid_entries, trailer, pdf)
+
+    assert {:error, {:encrypted_pdf, %{stage: :encryption}}} =
+             PdfValidator.validate_xref(
+               valid_entries,
+               Map.put(trailer, "Encrypt", {:ref, {2, 0}}),
+               pdf
+             )
 
     invalid_entries = [
       Map.delete(valid_entries, 0),

@@ -11,6 +11,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlEntities
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type text_node :: %{type: :text, text: String.t()}
   @type element_node :: %{
@@ -32,7 +33,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   @doc """
   Parses an HTML binary into a renderer DOM tree.
   """
-  @spec parse(String.t()) :: {:ok, dom_tree()} | {:error, :invalid_html | :unsupported_html}
+  @spec parse(term()) ::
+          {:ok, dom_tree()} | {:error, :invalid_encoding | :invalid_html | :unsupported_html}
   def parse(html) do
     case parse_detailed(html) do
       {:ok, dom} -> {:ok, dom}
@@ -43,24 +45,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   @doc """
   Parses an HTML binary and returns source-location details when parsing fails.
   """
-  @spec parse_detailed(String.t()) ::
-          {:ok, dom_tree()} | {:error, {:invalid_html | :unsupported_html, map()}}
+  @spec parse_detailed(term()) ::
+          {:ok, dom_tree()}
+          | {:error, {:invalid_encoding | :invalid_html | :unsupported_html, map()}}
   def parse_detailed(html) do
-    case html do
-      html when is_binary(html) ->
+    case HtmlValidator.validate_html_source(html) do
+      {:ok, html} ->
         case parse_document(html) do
           {:ok, dom} -> {:ok, dom}
           {:error, reason} -> {:error, {reason, html_error_detail(reason, html)}}
         end
 
-      _ ->
-        {:error,
-         {:invalid_html,
-          %{
-            stage: :html,
-            reason: :invalid_html,
-            message: "HTML input must be a string"
-          }}}
+      {:error, {reason, diagnostic}} ->
+        {:error, {reason, diagnostic}}
     end
   end
 

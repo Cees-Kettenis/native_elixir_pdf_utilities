@@ -21,14 +21,63 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
   @spec resolve(styled_tree()) ::
           {:ok, styled_tree()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def resolve(styled_tree) do
-    case HtmlValidator.prepare_font_fallback(styled_tree) do
-      {:ok, %{children: children} = document} ->
-        {:ok, %{document | children: resolve_prepared_nodes(children)}}
-
+    with :ok <- HtmlValidator.validate_font_fallback_input(styled_tree),
+         prepared <- prepare_candidates(styled_tree),
+         :ok <- HtmlValidator.validate_font_coverage(prepared) do
+      {:ok, %{prepared | children: resolve_prepared_nodes(prepared.children)}}
+    else
       {:error, {reason, diagnostic}} ->
         {:error,
          {reason,
           Diagnostics.with_context(diagnostic, operation: :resolve_fonts, module: __MODULE__)}}
+    end
+  end
+
+  defp prepare_candidates(%{type: :document, children: children} = document) do
+    %{document | children: Enum.map(children, &prepare_candidate_node/1)}
+  end
+
+  defp prepare_candidate_node(node) do
+    case node do
+      %{type: :text, style: style} ->
+        registry = Map.fetch!(style, :_font_registry)
+        selected = Map.fetch!(style, :font_face)
+        families = Map.fetch!(style, :font_families)
+        weight = Map.fetch!(style, :font_weight)
+        font_style = Map.fetch!(style, :font_style)
+
+        requested =
+          Enum.flat_map(families, fn family ->
+            case Font.resolve([family], weight, font_style, registry) do
+              {:ok, _families, font_face} -> [font_face]
+              :error -> []
+            end
+          end)
+
+        candidates =
+          [selected | requested ++ Font.fallback_faces(registry, weight, font_style)]
+          |> Enum.uniq_by(&Font.pdf_name/1)
+
+        graphemes =
+          node.text
+          |> String.replace("\r\n", "\n")
+          |> String.replace("\r", "\n")
+          |> String.graphemes()
+          |> Enum.map(fn grapheme ->
+            layout_whitespace? =
+              grapheme
+              |> String.to_charlist()
+              |> Enum.all?(&(&1 in [9, 10, 13]))
+
+            %{text: grapheme, layout_whitespace?: layout_whitespace?}
+          end)
+
+        node
+        |> Map.put(:_font_candidates, candidates)
+        |> Map.put(:_font_graphemes, graphemes)
+
+      %{type: :element, children: children} = element ->
+        %{element | children: Enum.map(children, &prepare_candidate_node/1)}
     end
   end
 
@@ -38,25 +87,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
 
   defp resolve_prepared_node(node) do
     case node do
-      %{type: :text, text: text, style: style, _font_candidates: candidates} ->
-        resolved =
-          text
-          |> String.replace("\r\n", "\n")
-          |> String.replace("\r", "\n")
-          |> String.graphemes()
-          |> Enum.reduce([], fn grapheme, runs ->
-            layout_whitespace? =
-              grapheme
-              |> String.to_charlist()
-              |> Enum.all?(&(&1 in [9, 10, 13]))
+      %{
+        type: :text,
+        style: style,
+        _font_candidates: candidates,
+        _font_graphemes: graphemes
+      } ->
+        node = Map.drop(node, [:_font_candidates, :_font_graphemes])
 
+        resolved =
+          Enum.reduce(graphemes, [], fn grapheme, runs ->
             font_face =
-              case layout_whitespace? do
+              case grapheme.layout_whitespace? do
                 true -> List.first(candidates)
-                false -> Enum.find(candidates, &Font.supports_text?(&1, grapheme))
+                false -> Enum.find(candidates, &Font.supports_text?(&1, grapheme.text))
               end
 
-            append_run(runs, Map.delete(node, :_font_candidates), style, font_face, grapheme)
+            append_run(runs, node, style, font_face, grapheme.text)
           end)
 
         resolved
