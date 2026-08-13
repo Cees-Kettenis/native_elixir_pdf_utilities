@@ -74,6 +74,17 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
           {:ok, Map.put(instruction, :font, font), %{state | font: font}}
         end
 
+      %{operator: "gs", operands: [{:name, name}]} ->
+        with {:ok, font_state} <- prepare_ext_graphics_state(document, resources, name, page) do
+          case font_state do
+            nil ->
+              {:ok, instruction, state}
+
+            %{font: font} = font_state ->
+              {:ok, Map.merge(instruction, font_state), %{state | font: font}}
+          end
+        end
+
       %{operator: operator, operands: [string]} when operator in ["Tj", "'"] ->
         with {:ok, decoded} <- decode_string(string, state.font, page) do
           {:ok, Map.put(instruction, :decoded, decoded), state}
@@ -159,33 +170,80 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
          {:ok, fonts} <- Reader.dictionary(document, Map.get(resources, "Font")),
          {:ok, font_ref} <- required_value(fonts, font_name, "font", page),
          {:ok, font} <- Reader.dictionary(document, font_ref) do
-      cmap =
-        case Map.get(font, "ToUnicode") do
-          nil ->
-            {:ok, nil}
-
-          cmap_ref ->
-            with {:ok, stream} <- Reader.decoded_stream(document, cmap_ref),
-                 do: parse_cmap(stream, page, font_name)
-        end
-
-      with {:ok, cmap} <- cmap,
-           {:ok, cid_encoding} <- type0_cid_encoding(document, font, page, font_name),
-           {:ok, widths, default_width} <- font_metrics(document, font) do
-        {:ok,
-         %{
-           name: font_name,
-           dictionary: font,
-           cmap: cmap,
-           cid_encoding: cid_encoding,
-           document: document,
-           widths: widths,
-           default_width: default_width
-         }}
-      end
+      prepare_font(document, font, font_name, page)
     else
       {:error, {reason, diagnostic}} ->
         {:error, {reason, with_debug_details(diagnostic, page: page, font: font_name)}}
+    end
+  end
+
+  defp prepare_ext_graphics_state(document, resources, name, page) do
+    with {:ok, resources} <- Reader.dictionary(document, resources),
+         ext_graphics_states when not is_nil(ext_graphics_states) <-
+           Map.get(resources, "ExtGState"),
+         {:ok, ext_graphics_states} <- Reader.dictionary(document, ext_graphics_states),
+         {:ok, ext_graphics_state_ref} <-
+           required_value(ext_graphics_states, name, "ExtGState", page),
+         {:ok, ext_graphics_state} <- Reader.dictionary(document, ext_graphics_state_ref) do
+      case Map.get(ext_graphics_state, "Font") do
+        nil ->
+          {:ok, nil}
+
+        font_value ->
+          case Reader.resolve(document, font_value) do
+            {:ok, [{:ref, _ref} = font_ref, size]} when is_number(size) ->
+              with {:ok, font_dictionary} <- Reader.dictionary(document, font_ref),
+                   {:ok, font} <- prepare_font(document, font_dictionary, name, page) do
+                {:ok, %{font: font, font_size: size * 1.0}}
+              else
+                {:error, _} = font_error -> font_error
+              end
+
+            {:ok, _malformed} ->
+              error(
+                :resources,
+                :invalid_pdf_input,
+                "ExtGState resource #{name} Font entry is malformed",
+                page: page
+              )
+
+            {:error, _} = resolution_error ->
+              resolution_error
+          end
+      end
+    else
+      nil ->
+        error(:resources, :invalid_pdf_input, "ExtGState resources are missing", page: page)
+
+      {:error, _} = resource_error ->
+        resource_error
+    end
+  end
+
+  defp prepare_font(document, font, font_name, page) do
+    cmap =
+      case Map.get(font, "ToUnicode") do
+        nil ->
+          {:ok, nil}
+
+        cmap_ref ->
+          with {:ok, stream} <- Reader.decoded_stream(document, cmap_ref),
+               do: parse_cmap(stream, page, font_name)
+      end
+
+    with {:ok, cmap} <- cmap,
+         {:ok, cid_encoding} <- type0_cid_encoding(document, font, page, font_name),
+         {:ok, widths, default_width} <- font_metrics(document, font) do
+      {:ok,
+       %{
+         name: font_name,
+         dictionary: font,
+         cmap: cmap,
+         cid_encoding: cid_encoding,
+         document: document,
+         widths: widths,
+         default_width: default_width
+       }}
     end
   end
 

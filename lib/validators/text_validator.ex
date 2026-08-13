@@ -15,7 +15,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.TextResourceValidator
 
-  @validated_operators ~w(q Q cm BT ET Tf Tm Td TD T* TL Tc Tw Tz Tr Ts Tj TJ ' " Do)
+  @validated_operators ~w(q Q cm gs BT ET Tf Tm Td TD T* TL Tc Tw Tz Tr Ts Tj TJ ' " Do)
   @text_showing_operators ~w(Tj TJ ' ")
 
   @typedoc "A validated content instruction with operands in source order."
@@ -336,7 +336,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
             _ -> :error
           end
 
-        {"Do", [{:name, name}]} ->
+        {operator, [{:name, name}]} when operator in ["gs", "Do"] ->
           {:ok, [{:name, name}]}
 
         {operator, _operands} ->

@@ -508,6 +508,90 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert_in_delta outer_next.end_x, 14.8, 0.0001
   end
 
+  test "applies ExtGState fonts and restores them with q and Q" do
+    content = """
+    /F1 10 Tf
+    q
+      /GSFont gs
+      BT (A) Tj ET
+    Q
+    BT (A) Tj ET
+    /GSNoFont gs
+    BT (A) Tj ET
+    """
+
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+      {3,
+       "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources 4 0 R /Contents 6 0 R >>"},
+      {4, "<< /Font << /F1 5 0 R >> /ExtGState << /GSFont 7 0 R /GSNoFont 9 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", content)},
+      {7, "<< /Font [8 0 R 20] >>"},
+      {8, "<< /Type /Font /Subtype /Type1 /BaseFont /Symbol >>"},
+      {9, "<< /LW 2 >>"}
+    ]
+
+    assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(pdf(objects))
+
+    assert Enum.map(spans, &{&1.text, &1.font_resource, &1.font_size}) == [
+             {"Α", "GSFont", 20.0},
+             {"A", "F1", 10.0},
+             {"A", "F1", 10.0}
+           ]
+  end
+
+  test "resolves ExtGState fonts from Form XObject resources" do
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents 6 0 R >>"},
+      {4, "<< /XObject << /form 7 0 R >> >>"},
+      {6, stream_object("", "/form Do")},
+      {7,
+       stream_object(
+         "/Type /XObject /Subtype /Form /Resources 9 0 R",
+         "/GS1 gs BT (A) Tj ET"
+       )},
+      {8, "<< /Type /Font /Subtype /Type1 /BaseFont /Symbol >>"},
+      {9, "<< /ExtGState << /GS1 10 0 R >> >>"},
+      {10, "<< /Font [8 0 R 14] >>"}
+    ]
+
+    assert {:ok, %{pages: [%{spans: [span]}]}} = Text.extract_spans(pdf(objects))
+    assert {span.text, span.font_resource, span.font_size} == {"Α", "GS1", 14.0}
+  end
+
+  test "diagnoses missing and malformed ExtGState resources" do
+    assert_error(Text.extract(page_pdf("/Missing gs")), :invalid_pdf_input, :resources)
+
+    malformed_font_objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents 6 0 R >>"},
+      {4, "<< /ExtGState << /GS1 7 0 R >> >>"},
+      {6, stream_object("", "/GS1 gs")},
+      {7, "<< /Font [8 0 R] >>"},
+      {8, "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>"}
+    ]
+
+    assert_error(Text.extract(pdf(malformed_font_objects)), :invalid_pdf_input, :resources)
+
+    unresolved_font = List.replace_at(malformed_font_objects, 5, {7, "<< /Font 99 0 R >>"})
+    assert_error(Text.extract(pdf(unresolved_font)), :invalid_pdf_input, :resolution)
+
+    invalid_font =
+      malformed_font_objects
+      |> List.replace_at(5, {7, "<< /Font [8 0 R 12] >>"})
+      |> List.replace_at(6, {8, "<< /Type /Font /Subtype /Type0 >>"})
+
+    assert_error(Text.extract(pdf(invalid_font)), :invalid_pdf_input, :font)
+
+    invalid_dictionary = List.replace_at(malformed_font_objects, 5, {7, "42"})
+    assert_error(Text.extract(pdf(invalid_dictionary)), :invalid_pdf_input, :resolution)
+  end
+
   test "extract_spans keeps source order and can provide best-effort visual order" do
     content =
       "BT /F1 12 Tf 1 0 0 1 100 20 Tm (RIGHT) Tj " <>
@@ -806,6 +890,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
       "1 q",
       "Q",
       "1 cm",
+      "/GS1 1 gs",
       "BT /F1 Tf ET",
       "BT 1 Tm ET",
       "BT 1 Td ET",

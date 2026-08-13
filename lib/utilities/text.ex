@@ -343,6 +343,15 @@ defmodule NativeElixirPdfUtilities.Text do
       {"Tf", [{:name, _font_name}, size]} ->
         {:ok, %{state | font: operation.font, font_size: size}, spans}
 
+      {"gs", [{:name, _name}]} ->
+        case operation do
+          %{font: font, font_size: size} ->
+            {:ok, %{state | font: font, font_size: size}, spans}
+
+          _ ->
+            {:ok, state, spans}
+        end
+
       {"Tm", matrix} ->
         {:ok, %{state | text_matrix: matrix, line_matrix: matrix, join_next_span?: false}, spans}
 
