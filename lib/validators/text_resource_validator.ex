@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Pdf.TextEncoding
+  alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.TextValidator
   import Bitwise
 
@@ -145,7 +146,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
               with {:ok, stream} <- Reader.decoded_stream(document, xobject_ref),
                    {:ok, instructions} <- TextValidator.instructions(stream, page),
                    :ok <- TextValidator.validate_scopes([instructions], page),
-                   {:ok, matrix} <- matrix_value(Map.get(xobject, "Matrix"), page),
+                   {:ok, matrix} <- matrix_value(document, Map.get(xobject, "Matrix")),
                    {:ok, instructions, _state} <-
                      prepare_instructions(
                        instructions,
@@ -1051,22 +1052,19 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
     end
   end
 
-  defp matrix_value(values, page) do
+  defp matrix_value(document, values) do
     case values do
       nil ->
         {:ok, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]}
 
-      values when is_list(values) ->
-        case length(values) == 6 and Enum.all?(values, &is_number/1) do
-          true ->
-            {:ok, Enum.map(values, &(&1 * 1.0))}
-
-          false ->
-            error(:content, :invalid_pdf_input, "Form XObject Matrix is malformed", page: page)
+      values ->
+        with {:ok, matrix} <-
+               PdfValidator.number_array(document, values, 6,
+                 operation: :extract,
+                 module: __MODULE__
+               ) do
+          {:ok, Enum.map(matrix, &(&1 * 1.0))}
         end
-
-      _ ->
-        error(:content, :invalid_pdf_input, "Form XObject Matrix is malformed", page: page)
     end
   end
 

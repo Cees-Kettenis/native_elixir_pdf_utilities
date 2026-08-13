@@ -388,7 +388,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
        )}
     ]
 
-    assert_error(Text.extract(pdf(objects)), :invalid_pdf_input, :content)
+    assert_error(Text.extract(pdf(objects)), :invalid_pdf_input, :validation)
   end
 
   test "does not return text painted with an invisible rendering mode" do
@@ -1478,6 +1478,31 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
     assert Text.extract(pdf(valid_form_objects), layout: false) == {:ok, "Form"}
 
+    indirect_matrix_objects =
+      List.replace_at(recursive_objects, 6, {
+        7,
+        stream_object(
+          "/Type /XObject /Subtype /Form /Matrix 9 0 R /Resources 4 0 R",
+          "BT /F1 12 Tf 1.5 0 Td (Form) Tj ET"
+        )
+      }) ++ [{9, "[1 0 0 1 2 3]"}]
+
+    assert {:ok, %{pages: [%{spans: [indirect_span]}]}} =
+             Text.extract_spans(pdf(indirect_matrix_objects))
+
+    assert indirect_span.ctm == [1.0, 0.0, 0.0, 1.0, 2.0, 3.0]
+
+    indirect_matrix_elements =
+      List.replace_at(recursive_objects, 6, {
+        7,
+        stream_object(
+          "/Type /XObject /Subtype /Form /Matrix [9 0 R 0 0 1 2 3] /Resources 4 0 R",
+          "BT /F1 12 Tf (Form) Tj ET"
+        )
+      }) ++ [{9, "1"}]
+
+    assert Text.extract(pdf(indirect_matrix_elements), layout: false) == {:ok, "Form"}
+
     scalar_matrix_objects =
       List.replace_at(recursive_objects, 6, {
         7,
@@ -1487,7 +1512,19 @@ defmodule NativeElixirPdfUtilities.TextTest do
         )
       })
 
-    assert_error(Text.extract(pdf(scalar_matrix_objects)), :invalid_pdf_input, :content)
+    assert_error(Text.extract(pdf(scalar_matrix_objects)), :invalid_pdf_input, :validation)
+
+    malformed_indirect_matrix =
+      List.replace_at(indirect_matrix_objects, 6, {
+        7,
+        stream_object(
+          "/Type /XObject /Subtype /Form /Matrix 9 0 R /Resources 4 0 R",
+          "BT /F1 12 Tf (Form) Tj ET"
+        )
+      })
+      |> List.replace_at(7, {9, "[1 0 0 1 2]"})
+
+    assert_error(Text.extract(pdf(malformed_indirect_matrix)), :invalid_pdf_input, :validation)
   end
 
   defp page_pdf(content, options \\ []) do
