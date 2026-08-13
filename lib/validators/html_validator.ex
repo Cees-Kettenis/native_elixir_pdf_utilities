@@ -12,7 +12,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     :default_font,
     :fonts,
     :metadata,
-    :page_furniture
+    :page_furniture,
+    :unsupported_glyphs
   ]
   @variant_keys [:default, :first, :odd, :even]
 
@@ -278,25 +279,29 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
-  @spec validate_font_fallback_input(term()) ::
+  @spec validate_font_fallback_input(term(), term()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
-  def validate_font_fallback_input(styled_tree) do
-    case styled_tree do
-      %{type: :document, children: children} when is_list(children) ->
-        validate_font_input_nodes(children)
+  def validate_font_fallback_input(styled_tree, unsupported_glyphs) do
+    with :ok <- validate_unsupported_glyphs(unsupported_glyphs) do
+      case styled_tree do
+        %{type: :document, children: children} when is_list(children) ->
+          validate_font_input_nodes(children)
 
-      _ ->
-        invalid_styled_document("font fallback requires a styled document tree")
+        _ ->
+          invalid_styled_document("font fallback requires a styled document tree")
+      end
     end
   end
 
   @doc false
-  @spec validate_font_coverage(term()) ::
+  @spec validate_font_coverage(term(), term(), String.t()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
-  def validate_font_coverage(styled_tree) do
+  def validate_font_coverage(styled_tree, unsupported_glyphs, replacement_character) do
     case styled_tree do
-      %{type: :document, children: children} when is_list(children) ->
-        validate_font_coverage_nodes(children)
+      %{type: :document, children: children}
+      when is_list(children) and unsupported_glyphs in [:replace, :error] and
+             is_binary(replacement_character) ->
+        validate_font_coverage_nodes(children, unsupported_glyphs, replacement_character)
 
       _ ->
         invalid_styled_document("font fallback requires prepared font candidates")
@@ -361,6 +366,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         with :ok <- validate_stylesheets(Keyword.get(opts, :stylesheets, [])),
              :ok <- validate_base_url(Keyword.get(opts, :base_url)),
              :ok <- validate_default_font(Keyword.get(opts, :default_font, "Helvetica")),
+             :ok <- validate_unsupported_glyphs(Keyword.get(opts, :unsupported_glyphs, :replace)),
              :ok <- validate_font_options_result(font_options_result) do
           :ok
         end
@@ -412,6 +418,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     case valid? do
       true -> :ok
       false -> invalid_style_configuration()
+    end
+  end
+
+  defp validate_unsupported_glyphs(unsupported_glyphs) do
+    case unsupported_glyphs do
+      unsupported_glyphs when unsupported_glyphs in [:replace, :error] ->
+        :ok
+
+      _ ->
+        Diagnostics.error(
+          :options,
+          :invalid_options,
+          "unsupported_glyphs must be :replace or :error"
+        )
     end
   end
 
@@ -603,18 +623,27 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end)
   end
 
-  defp validate_font_coverage_nodes(nodes) do
+  defp validate_font_coverage_nodes(nodes, unsupported_glyphs, replacement_character) do
     Enum.reduce_while(nodes, :ok, fn node, :ok ->
       case node do
         %{type: :text, _font_candidates: candidates, _font_graphemes: graphemes}
         when is_list(candidates) and candidates != [] and is_list(graphemes) ->
-          case validate_supported_graphemes(graphemes, candidates) do
+          case validate_supported_graphemes(
+                 graphemes,
+                 candidates,
+                 unsupported_glyphs,
+                 replacement_character
+               ) do
             :ok -> {:cont, :ok}
             {:error, {_reason, _diagnostic}} = error -> {:halt, error}
           end
 
         %{type: :element, children: children} when is_list(children) ->
-          case validate_font_coverage_nodes(children) do
+          case validate_font_coverage_nodes(
+                 children,
+                 unsupported_glyphs,
+                 replacement_character
+               ) do
             :ok -> {:cont, :ok}
             {:error, {_reason, _diagnostic}} = error -> {:halt, error}
           end
@@ -625,15 +654,23 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end)
   end
 
-  defp validate_supported_graphemes(graphemes, candidates) do
+  defp validate_supported_graphemes(
+         graphemes,
+         candidates,
+         unsupported_glyphs,
+         replacement_character
+       ) do
     Enum.reduce_while(graphemes, :ok, fn grapheme, :ok ->
       case grapheme do
         %{text: text, layout_whitespace?: layout_whitespace?}
         when is_binary(text) and is_boolean(layout_whitespace?) ->
-          supported? =
-            layout_whitespace? or Enum.any?(candidates, &Font.supports_text?(&1, text))
+          supported? = layout_whitespace? or Enum.any?(candidates, &Font.supports_text?(&1, text))
 
-          case supported? do
+          replacement_supported? =
+            unsupported_glyphs == :replace and
+              Enum.any?(candidates, &Font.supports_text?(&1, replacement_character))
+
+          case supported? or replacement_supported? do
             true -> {:cont, :ok}
             false -> {:halt, unsupported_glyph(text)}
           end

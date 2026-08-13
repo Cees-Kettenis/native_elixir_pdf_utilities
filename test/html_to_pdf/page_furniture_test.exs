@@ -108,6 +108,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
            )
   end
 
+  test "decorate applies the unsupported glyph policy to furniture text" do
+    assert {:ok, [page]} =
+             PageFurniture.decorate(pages(1), layout_tree(),
+               page_furniture: [header: furniture_html("can\u0092t")]
+             )
+
+    assert page
+           |> furniture_texts()
+           |> Enum.drop(1)
+           |> Enum.join() == "can\uFFFDt"
+
+    assert {:error, {:unsupported_glyph, %{source: "\u0092"}}} =
+             PageFurniture.decorate(pages(1), layout_tree(),
+               page_furniture: [header: furniture_html("can\u0092t")],
+               unsupported_glyphs: :error
+             )
+  end
+
   test "decorate returns actionable diagnostics for invalid options and oversized furniture" do
     invalid_options = [
       :invalid,

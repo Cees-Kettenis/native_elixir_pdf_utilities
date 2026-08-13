@@ -54,7 +54,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallbackTest do
     assert run.style.font_face.family == "Provided Sans"
   end
 
-  test "returns actionable diagnostics for invalid text, missing font state, and unsupported glyphs" do
+  test "returns actionable diagnostics for invalid text and missing font state" do
     invalid_encoding = %{
       type: :document,
       children: [%{type: :text, text: <<255>>, style: text_style()}]
@@ -82,11 +82,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallbackTest do
                reason: :invalid_document,
                message: "styled text is missing its resolved font registry"
              }}} = FontFallback.resolve(missing_font_state)
+  end
 
+  test "replaces unsupported graphemes by default and preserves strict diagnostics" do
     unsupported = %{
       type: :document,
-      children: [%{type: :text, text: "漢", style: text_style()}]
+      children: [%{type: :text, text: "can\u0092t 漢", style: text_style()}]
     }
+
+    assert {:ok, resolved} = FontFallback.resolve(unsupported)
+    assert Enum.map_join(resolved.children, & &1.text) == "can\uFFFDt \uFFFD"
+
+    replacement_runs = Enum.filter(resolved.children, &String.contains?(&1.text, "\uFFFD"))
+    assert Enum.all?(replacement_runs, &(&1.style.font_face.family == "DejaVu Sans"))
 
     assert {:error,
             {:unsupported_glyph,
@@ -96,10 +104,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallbackTest do
                source: "漢",
                message:
                  "no requested, configured, or bundled font contains every glyph in \"漢\" (U+6F22)"
-             }}} = FontFallback.resolve(unsupported)
+             }}} =
+             FontFallback.resolve(
+               %{unsupported | children: [%{type: :text, text: "漢", style: text_style()}]},
+               :error
+             )
   end
 
   test "rejects malformed styled trees without raising" do
+    valid_tree = %{type: :document, children: [%{type: :text, text: "text", style: text_style()}]}
+
+    assert {:error,
+            {:invalid_options,
+             %{
+               stage: :options,
+               reason: :invalid_options,
+               message: "unsupported_glyphs must be :replace or :error"
+             }}} = FontFallback.resolve(valid_tree, :ignore)
+
     assert {:error,
             {:invalid_document,
              %{
@@ -120,6 +142,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallbackTest do
              FontFallback.resolve(%{
                type: :document,
                children: [%{type: :text, text: "", style: text_style()}]
+             })
+
+    no_replacement_style =
+      text_style()
+      |> Map.put(:_font_registry, %{embedded: [], fallback: []})
+
+    assert {:error, {:unsupported_glyph, %{source: "漢"}}} =
+             FontFallback.resolve(%{
+               type: :document,
+               children: [%{type: :text, text: "漢", style: no_replacement_style}]
              })
   end
 

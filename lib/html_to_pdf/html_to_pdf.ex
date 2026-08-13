@@ -11,9 +11,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
     * paginate layout boxes
     * write PDF bytes
 
-  The supported surface is a strict, document-oriented HTML/CSS subset. Invalid
-  or unsupported input returns an error instead of falling back to browser-like
-  guessing. See the README support matrix for the current element, CSS, layout,
+  The supported surface is a strict, document-oriented HTML/CSS subset.
+  Malformed structure and unsupported features return errors instead of using
+  browser-like guessing. Unsupported text graphemes are visibly replaced by
+  default. See the README support matrix for the current element, CSS, layout,
   image, and font support.
   """
 
@@ -70,6 +71,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
             }
   @typedoc "An explicitly tagged inline stylesheet or local stylesheet file."
   @type stylesheet_source :: {:css, String.t()} | {:file, String.t()}
+  @type unsupported_glyphs :: :replace | :error
   @type render_option ::
           {:page_size, page_size()}
           | {:margin, page_margin()}
@@ -79,6 +81,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | {:fonts, [map() | keyword() | {String.t(), String.t()}]}
           | {:metadata, pdf_metadata()}
           | {:page_furniture, page_furniture() | false | nil}
+          | {:unsupported_glyphs, unsupported_glyphs()}
   @type error_reason ::
           :invalid_document
           | :invalid_css
@@ -107,11 +110,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   `{:error, {:invalid_css, %{message: "...", line: 18, source: "..."}}}`.
 
   Supported options include `:page_size`, `:margin`, `:base_url`,
-  `:stylesheets`, `:default_font`, explicit local `:fonts`, and PDF
-  `:metadata`, plus opt-in `:page_furniture` headers and footers. Metadata
-  supports title, author, subject, keywords, creation date, and modification
-  date. An HTML `<title>` supplies the PDF title when `metadata[:title]` is not
-  set.
+  `:stylesheets`, `:default_font`, explicit local `:fonts`, PDF `:metadata`,
+  opt-in `:page_furniture` headers and footers, and `:unsupported_glyphs`.
+  Metadata supports title, author, subject, keywords, creation date, and
+  modification date. An HTML `<title>` supplies the PDF title when
+  `metadata[:title]` is not set.
+
+  Unsupported graphemes are replaced visibly with U+FFFD by default. Set
+  `unsupported_glyphs: :error` to return an `:unsupported_glyph` diagnostic
+  instead.
 
   Page furniture accepts `:header` and `:footer` HTML templates. Each can be a
   string used on every page or variants named `:default`, `:first`, `:odd`, and
@@ -204,7 +211,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
         with {:ok, dom} <- HtmlParser.parse_detailed(html),
              {:ok, effective_opts} <- effective_render_options_detailed(dom, opts),
              {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts),
-             {:ok, styled_tree} <- FontFallback.resolve(styled_tree),
+             {:ok, styled_tree} <-
+               FontFallback.resolve(
+                 styled_tree,
+                 Keyword.get(effective_opts, :unsupported_glyphs, :replace)
+               ),
              {:ok, layout_tree} <- layout_document(styled_tree, effective_opts),
              {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
              {:ok, pages} <- PageFurniture.decorate(pages, layout_tree, effective_opts),

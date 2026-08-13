@@ -39,29 +39,40 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
            ) == {:error, :invalid_layout}
 
     assert {:error, {:invalid_document, %{stage: :font}}} =
-             HtmlValidator.validate_font_fallback_input(%{
-               type: :document,
-               children: [
-                 %{type: :element, children: [%{type: :text, text: "Missing", style: %{}}]}
-               ]
-             })
+             HtmlValidator.validate_font_fallback_input(
+               %{
+                 type: :document,
+                 children: [
+                   %{type: :element, children: [%{type: :text, text: "Missing", style: %{}}]}
+                 ]
+               },
+               :replace
+             )
 
     assert {:error, {:invalid_document, %{stage: :font}}} =
-             HtmlValidator.validate_font_coverage(:not_a_document)
+             HtmlValidator.validate_font_coverage(:not_a_document, :replace, "\uFFFD")
 
     assert {:error, {:invalid_document, %{stage: :font}}} =
-             HtmlValidator.validate_font_coverage(%{
-               type: :document,
-               children: [%{type: :element, children: [%{type: :invalid}]}]
-             })
+             HtmlValidator.validate_font_coverage(
+               %{
+                 type: :document,
+                 children: [%{type: :element, children: [%{type: :invalid}]}]
+               },
+               :replace,
+               "\uFFFD"
+             )
 
     assert {:error, {:invalid_document, %{stage: :font}}} =
-             HtmlValidator.validate_font_coverage(%{
-               type: :document,
-               children: [
-                 %{type: :text, _font_candidates: [%{}], _font_graphemes: [:invalid]}
-               ]
-             })
+             HtmlValidator.validate_font_coverage(
+               %{
+                 type: :document,
+                 children: [
+                   %{type: :text, _font_candidates: [%{}], _font_graphemes: [:invalid]}
+                 ]
+               },
+               :replace,
+               "\uFFFD"
+             )
   end
 
   test "render requests and paths are validated at the shared boundary" do
@@ -81,6 +92,26 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
 
     assert {:error, {:invalid_encoding, %{stage: :html}}} =
              HtmlValidator.validate_render_request(<<255>>, [], Font.normalize_options([]))
+
+    assert :ok =
+             HtmlValidator.validate_render_request(
+               "<p>Hello</p>",
+               [unsupported_glyphs: :replace],
+               Font.normalize_options(unsupported_glyphs: :replace)
+             )
+
+    assert {:error,
+            {:invalid_options,
+             %{
+               stage: :options,
+               reason: :invalid_options,
+               message: "unsupported_glyphs must be :replace or :error"
+             }}} =
+             HtmlValidator.validate_render_request(
+               "<p>Hello</p>",
+               [unsupported_glyphs: :ignore],
+               Font.normalize_options(unsupported_glyphs: :ignore)
+             )
 
     assert {:ok, %{input_path: "input.html", output_path: "output.pdf"}} =
              HtmlValidator.validate_paths("input.html", "output.pdf")

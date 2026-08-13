@@ -13,18 +13,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type styled_tree :: NativeElixirPdfUtilities.HtmlToPdf.Style.styled_tree()
-  @type error_reason :: :invalid_document | :invalid_encoding | :unsupported_glyph
+  @type unsupported_glyphs :: :replace | :error
+  @type error_reason ::
+          :invalid_document | :invalid_encoding | :invalid_options | :unsupported_glyph
+  @replacement_character "\uFFFD"
 
   @doc """
   Resolves every styled text node to font faces that contain its graphemes.
+
+  Unsupported graphemes are replaced with U+FFFD by default. Pass `:error` as
+  the second argument to return an `:unsupported_glyph` diagnostic instead.
   """
-  @spec resolve(styled_tree()) ::
+  @spec resolve(styled_tree(), unsupported_glyphs()) ::
           {:ok, styled_tree()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
-  def resolve(styled_tree) do
-    with :ok <- HtmlValidator.validate_font_fallback_input(styled_tree),
+  def resolve(styled_tree, unsupported_glyphs \\ :replace) do
+    with :ok <- HtmlValidator.validate_font_fallback_input(styled_tree, unsupported_glyphs),
          prepared <- prepare_candidates(styled_tree),
-         :ok <- HtmlValidator.validate_font_coverage(prepared) do
-      {:ok, %{prepared | children: resolve_prepared_nodes(prepared.children)}}
+         :ok <-
+           HtmlValidator.validate_font_coverage(
+             prepared,
+             unsupported_glyphs,
+             @replacement_character
+           ) do
+      {:ok,
+       %{
+         prepared
+         | children: resolve_prepared_nodes(prepared.children, unsupported_glyphs)
+       }}
     else
       {:error, {reason, diagnostic}} ->
         {:error,
@@ -81,11 +96,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
     end
   end
 
-  defp resolve_prepared_nodes(nodes) do
-    Enum.flat_map(nodes, &resolve_prepared_node/1)
+  defp resolve_prepared_nodes(nodes, unsupported_glyphs) do
+    Enum.flat_map(nodes, &resolve_prepared_node(&1, unsupported_glyphs))
   end
 
-  defp resolve_prepared_node(node) do
+  defp resolve_prepared_node(node, unsupported_glyphs) do
     case node do
       %{
         type: :text,
@@ -97,19 +112,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
 
         resolved =
           Enum.reduce(graphemes, [], fn grapheme, runs ->
-            font_face =
+            {font_face, text} =
               case grapheme.layout_whitespace? do
-                true -> List.first(candidates)
-                false -> Enum.find(candidates, &Font.supports_text?(&1, grapheme.text))
+                true ->
+                  {List.first(candidates), grapheme.text}
+
+                false ->
+                  case Enum.find(candidates, &Font.supports_text?(&1, grapheme.text)) do
+                    nil when unsupported_glyphs == :replace ->
+                      replacement_face =
+                        Enum.find(candidates, &Font.supports_text?(&1, @replacement_character))
+
+                      {replacement_face, @replacement_character}
+
+                    font_face ->
+                      {font_face, grapheme.text}
+                  end
               end
 
-            append_run(runs, node, style, font_face, grapheme.text)
+            append_run(runs, node, style, font_face, text)
           end)
 
         resolved
 
       %{type: :element, children: children} = element when is_list(children) ->
-        [%{element | children: resolve_prepared_nodes(children)}]
+        [%{element | children: resolve_prepared_nodes(children, unsupported_glyphs)}]
     end
   end
 

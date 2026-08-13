@@ -903,7 +903,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert extracted =~ "€"
   end
 
-  test "render rejects invalid UTF-8 and glyphs unavailable in configured or bundled fonts" do
+  test "render rejects invalid UTF-8 and replaces unavailable glyphs by default" do
     assert {:error,
             {:invalid_encoding,
              %{
@@ -914,6 +914,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                message: "HTML input must be valid UTF-8"
              }}} = HtmlToPdf.render(<<"<p>", 255, "</p>">>)
 
+    assert {:ok, pdf} = HtmlToPdf.render("<p>can\u0092t 漢</p>")
+    assert {:ok, extracted} = Text.extract(pdf, layout: false)
+    assert String.graphemes(extracted) |> Enum.count(&(&1 == "\uFFFD")) == 2
+
     assert {:error,
             {:unsupported_glyph,
              %{
@@ -922,7 +926,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                operation: :resolve_fonts,
                module: NativeElixirPdfUtilities.HtmlToPdf.FontFallback,
                source: "漢"
-             }}} = HtmlToPdf.render("<p>漢</p>")
+             }}} = HtmlToPdf.render("<p>漢</p>", unsupported_glyphs: :error)
+
+    assert {:error,
+            {:invalid_options,
+             %{
+               stage: :options,
+               reason: :invalid_options,
+               operation: :render,
+               module: HtmlToPdf,
+               message: "unsupported_glyphs must be :replace or :error"
+             }}} = HtmlToPdf.render("<p>漢</p>", unsupported_glyphs: :ignore)
   end
 
   test "render_file writes a PDF for a supported paragraph" do

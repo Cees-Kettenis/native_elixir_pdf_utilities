@@ -10,7 +10,7 @@ CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity
 
 ## Current Result
 
-The browser-parity suite contains 31 synthetic HTML fixtures, 4 real production environment document fixtures, and guard tests that ensure every fixture has configured thresholds.
+The browser-parity suite contains 32 synthetic HTML fixtures, 4 real production environment document fixtures, and guard tests that ensure every fixture has configured thresholds.
 
 Current status: passing. The full suite passes with:
 
@@ -52,6 +52,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `table_rowspan_tfoot.html` | `rowspan`, `tfoot`, vertical alignment, footer rows, `colspan` totals |
 | `table_separate_borders.html` | separate borders, captions, headers, cell padding, `colspan`, right-aligned table content |
 | `text_style_variants.html` | `rgb()`, `rgba()` text and backgrounds, transparent text and borders, `currentColor`, nested custom properties, inherited unitless line height, white-space, word breaking, letter spacing, text transforms |
+| `unsupported_glyph_replacement.html` | browser-compatible continuation for unsupported text, including C1 controls and private-use glyphs, with deterministic U+FFFD replacement in native output |
 | `units_and_sizing.html` | `pt`, `px`, `mm`, `cm`, `in`, root-font-relative `rem`, percentages, `aspect-ratio`, fixed height, min-height |
 | `whitespace_pre_line.html` | default whitespace collapse, `white-space: pre-line`, `<br>`, literal escaped newline text, centered and right-aligned lines |
 
@@ -123,7 +124,7 @@ Current production fixture parity:
 | Page breaks inside/around tables | Passing | `table_pagination_headers.html` |
 | Running headers, footers, and current/total page-number tokens inside page margins | Passing | `page_furniture.html` |
 | Images inside block/table/flex/grid | Passing | `images_data_uris.html` |
-| Embedded/system font metrics and Unicode fallback vs Chromium | Passing | `fonts_and_print_media.html` exercises both declared DejaVu Sans and built-in Helvetica text that falls back to bundled DejaVu glyphs; production fixtures use their declared font families when registered by the test helper |
+| Embedded/system font metrics, Unicode fallback, and unsupported glyph replacement vs Chromium | Passing | `fonts_and_print_media.html` exercises both declared DejaVu Sans and built-in Helvetica text that falls back to bundled DejaVu glyphs; `unsupported_glyph_replacement.html` exercises visible continuation for unsupported graphemes; production fixtures use their declared font families when registered by the test helper |
 
 ## Summary
 

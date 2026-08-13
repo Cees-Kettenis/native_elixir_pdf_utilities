@@ -226,7 +226,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
 
         with {:ok, dom} <- HtmlParser.parse_detailed(html),
              {:ok, styled_tree} <- Style.compute_detailed(dom, furniture_opts),
-             {:ok, styled_tree} <- FontFallback.resolve(styled_tree) do
+             {:ok, styled_tree} <-
+               FontFallback.resolve(
+                 styled_tree,
+                 Keyword.get(furniture_opts, :unsupported_glyphs, :replace)
+               ) do
           case apply(Layout, :layout, [styled_tree, furniture_opts]) do
             {:ok, furniture_layout} ->
               place(position, furniture_layout.boxes, page_size, margins)

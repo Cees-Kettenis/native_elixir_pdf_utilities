@@ -4,7 +4,7 @@
 
 For runnable templates, styling patterns, and caller-side error handling examples, see [HTML to PDF Examples](html-to-pdf-examples.md).
 
-Unsupported or malformed input is rejected instead of being silently approximated. Rendering failures return a broad reason with diagnostic detail, for example:
+Malformed document structure and unsupported HTML/CSS features are rejected instead of being silently approximated. Unsupported text graphemes are visibly replaced with U+FFFD by default; set `unsupported_glyphs: :error` when strict font-coverage diagnostics are required. Rendering failures return a broad reason with diagnostic detail, for example:
 
 ```elixir
 {:error,
@@ -33,6 +33,7 @@ The detail map always includes `:stage`, `:reason`, and `:message`. It includes 
 | `:fonts`        | `%{family: ..., path: ...}` maps, keyword lists, or `{family, path}` tuples | TrueType fonts.`:weight` and `:style` are optional. OpenType files using TrueType outlines share this path; CFF-flavored OTF is unsupported. Configured faces participate in automatic glyph fallback. |
 | `:metadata`     | Keyword list or map                                                              | Supports `:title`, `:author`, `:subject`, `:keywords`, `:creation_date`, and `:modification_date`. Dates accept calendar structs or ISO 8601 strings. An HTML `<title>` is the default PDF title. |
 | `:page_furniture` | Keyword list or map with `:header` and `:footer` | Opt-in running page furniture. Each position accepts HTML or `:default`, `:first`, `:odd`, and `:even` variants. Omitted, `nil`, and `false` furniture is disabled. |
+| `:unsupported_glyphs` | `:replace` or `:error` | Defaults to `:replace`, which substitutes U+FFFD for each grapheme absent from every candidate font. `:error` returns the strict `:unsupported_glyph` diagnostic. |
 
 ## Running Headers, Footers, and Page Numbers
 
@@ -124,7 +125,7 @@ Adam7-interlaced PNG decoding is scheduled for `0.21.0`.
 
 Fonts support built-in PDF fonts (`Helvetica`, `Courier`, `Times-Roman` and their bold/italic variants), explicit font options, local CSS `@font-face` declarations, and bundled DejaVu Sans regular, bold, oblique, and bold-oblique fallback faces. Relative `@font-face` URLs resolve against the containing stylesheet directory or `:base_url`; HTTP(S), data URLs, `local(...)`-only sources, WOFF, WOFF2, and CFF-flavored OpenType fonts are rejected. Convert unsupported web fonts to TTF before rendering.
 
-Font fallback is resolved once before layout so wrapping and pagination use the final glyph metrics. For each Unicode grapheme, the renderer tries the selected CSS face, the remaining requested family list, configured font faces in declaration order, and then the closest bundled DejaVu Sans weight/style. Adjacent graphemes using the same face remain one text run. Invalid UTF-8 returns `:invalid_encoding`; a grapheme absent from every candidate returns `:unsupported_glyph` with the grapheme and codepoints in the diagnostic instead of writing corrupt PDF text.
+Font fallback is resolved once before layout so wrapping and pagination use the final glyph metrics. For each Unicode grapheme, the renderer tries the selected CSS face, the remaining requested family list, configured font faces in declaration order, and then the closest bundled DejaVu Sans weight/style. Adjacent graphemes using the same face remain one text run. Invalid UTF-8 returns `:invalid_encoding`. By default, a grapheme absent from every candidate is replaced with U+FFFD using an available fallback face; `unsupported_glyphs: :error` instead returns `:unsupported_glyph` with the original grapheme and codepoints in the diagnostic.
 
 Embedded fonts use TrueType glyph widths, Type0/CID PDF resources, and basic Unicode mapping. Glyph availability does not imply complex shaping: Arabic, Indic scripts, Thai, emoji sequences, bidirectional layout, and other advanced typography remain unsupported.
 
