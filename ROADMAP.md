@@ -19,56 +19,6 @@ breaking API changes are allowed, but they should be explained clearly in
 
 ## Milestones
 
-### 0.10.0 - Layered PDF Validation
-
-Milestone goal: centralize shared PDF structural validation and keep
-operation-specific validation in focused text and merge modules.
-
-#### Scope
-
-- Add a shared PDF validator for reusable document invariants, including:
-  - catalog and page-tree structure
-  - indirect-reference resolution and cycles
-  - page identity, `/Kids`, `/Count`, and inherited page values
-  - stream dictionary structure shared by PDF-consuming operations
-- Add a text validator for extraction-specific requirements, including content
-  streams, resources, fonts, encodings, CMaps, and supported text operations.
-- Add a merge validator for rewrite-specific requirements, including page
-  materialization, serializable object graphs, generations, and reference
-  remapping.
-- Return prepared validated contexts that downstream operations can consume
-  without repeating traversal or reinterpreting raw tokens.
-- Migrate scattered validation from merge and text extraction into the
-  appropriate validator while preserving the shared diagnostics contract.
-
-#### Design Notes
-
-- Keep byte parsing, xref/object loading, resource limits, and parsing safety in
-  the shared reader. Validators operate on its parsed document model and must
-  not parse the PDF a second time.
-- Keep dependencies one-directional: operation validators may depend on the
-  shared PDF validator, while the shared validator must not depend on merge or
-  text extraction.
-- Use validated semantic values for decisions such as page identity and page
-  traversal. Raw tokens may be retained for faithful serialization, but must
-  not become a second source of semantic truth.
-- Preserve existing diagnostic tuple shapes and actionable stages, reasons,
-  messages, operations, modules, and source details.
-- Keep validation pure and deterministic so it can be audited independently of
-  execution and PDF writing.
-
-#### Completion Criteria
-
-- Add focused validator tests for shared, text-specific, and merge-specific
-  valid and invalid inputs.
-- Add reader-to-validator-to-operation invariant tests that prove accepted
-  inputs cannot later fail through unchecked pattern matches or exceptions.
-- Add generated/property tests for indirect values, nested dictionaries,
-  object generations, page-tree depth, and reference remapping.
-- Document the validation boundaries and which module owns each invariant.
-- Preserve existing public return shapes, 100% test coverage, and all normal
-  quality gates.
-
 ### 0.11.0 - Static HTML Form Rendering
 
 Milestone goal: render common HTML form controls as static PDF content for government

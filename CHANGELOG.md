@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.10.0 - 2026-08-14
+
+### Added
+
+- Added layered validator modules for shared PDF structure, text extraction,
+  merging, HTML rendering, and PDF writing, with prepared contexts that keep
+  validation separate from execution and serialization.
+- Added `NativeElixirPdfUtilities.Pdf.Reader.read_validated/1` for consumers
+  that need the complete shared PDF validation context while preserving the
+  existing `read/1` document projection.
+- Added recoverable unsupported-glyph rendering. Missing glyphs now use the
+  Unicode replacement character by default, while `unsupported_glyphs: :error`
+  retains strict failure behavior with an actionable diagnostic.
+- Added HTML table column definitions through `colgroup` and `col`, including
+  column spans, percentage widths, fixed table layout, and separate and
+  collapsed border-spacing behavior.
+- Added documentation for the layered PDF validation pipeline and browser
+  parity fixtures for table column layout, repeated headers near page breaks,
+  border-box sizing, and unsupported-glyph replacement.
+
+### Changed
+
+- Centralized caller input, option, document-structure, and semantic validation
+  in dedicated validators. PDF reading, text extraction, merging, HTML layout,
+  pagination, font fallback, and writing now consume validated and normalized
+  data instead of repeating validation rules in execution code.
+- Separated normalization from validation throughout the HTML renderer so
+  downstream layout and writing stages can rely on stable normalized values.
+- Changed text resource preparation to validate only fonts, encodings, CMaps,
+  graphics states, and Form XObjects reached by executable page content.
+- Changed the HTML renderer and text extraction APIs to reject unknown options
+  with the shared actionable diagnostics contract.
+
+### Fixed
+
+- Fixed PDF validation for page-tree depth limits, `/Parent` relationships,
+  page aliases, null-valued optional entries, malformed object records, and the
+  required free object-zero cross-reference entry.
+- Fixed stream loading for indirect lengths in ordinary and cross-reference
+  streams, including compressed length objects and stream-boundary ambiguity.
+- Fixed text extraction from ExtGState font selections and Form XObjects with
+  indirect transformation matrices, and rejected unbalanced graphics or text
+  scopes with diagnostics instead of unsafe execution.
+- Fixed merge validation for page resources, terminal page references,
+  top-level page rewrites, exact object generations, and complete indirect
+  reference remapping.
+- Fixed resource bounds for predictor row allocation, CID font width expansion,
+  and page-tree traversal.
+- Fixed repeated table headers overflowing page bounds and page furniture
+  bounds omitting line height.
+- Fixed auto-sized `border-box` elements losing horizontal padding and bounded
+  emitted PDF color channels to their valid range.
+
 ## 0.9.0 - 2026-08-07
 
 ### Added
