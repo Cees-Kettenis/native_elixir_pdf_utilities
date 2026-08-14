@@ -26,9 +26,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   @block_tags ~w(article aside div footer header main nav p h1 h2 h3 h4 h5 h6 section ul ol table img)
   @inline_tags ~w(strong b em i span a br)
   @list_tags ~w(ul ol)
-  @table_structure_tags ~w(table thead tbody tfoot tr)
+  @table_structure_tags ~w(table colgroup thead tbody tfoot tr)
   @table_content_tags ~w(caption th td)
-  @void_tags ~w(meta br img)
+  @void_tags ~w(meta br img col)
 
   @doc """
   Parses an HTML binary into a renderer DOM tree.
@@ -105,7 +105,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         with {:ok, tag, attributes, self_closing?} <- parse_opening_tag(token),
              true <- allowed_child?(context, tag),
              {:ok, element_children, rest} <- element_children(tag, remaining, self_closing?),
-             true <- valid_element?(tag, element_children) do
+             true <- valid_element?(tag, attributes, element_children) do
           element = %{
             type: :element,
             tag: tag,
@@ -250,6 +250,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         {name, tag, false} when tag in ~w(td th) and name in ~w(colspan rowspan) ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
+        {"scope", "th", false} ->
+          case HtmlValidator.valid_table_header_scope?(value) do
+            true -> {:cont, {:ok, Map.put(acc, name, value)}}
+            false -> {:halt, {:error, :unsupported_html}}
+          end
+
+        {"span", tag, false} when tag in ~w(colgroup col) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
         _ ->
           {:halt, {:error, :unsupported_html}}
       end
@@ -287,7 +296,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         false
 
       context == "table" ->
-        tag in ~w(caption thead tbody tfoot tr)
+        tag in ~w(caption colgroup thead tbody tfoot tr)
+
+      context == "colgroup" ->
+        tag == "col"
 
       context in ~w(thead tbody tfoot) ->
         tag == "tr"
@@ -311,10 +323,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
   defp supported_tag?(tag) do
     tag in @structural_tags or tag in @block_tags or tag in @inline_tags or tag == "li" or
-      tag in ~w(caption thead tbody tfoot tr th td)
+      tag in ~w(caption colgroup col thead tbody tfoot tr th td)
   end
 
-  defp valid_element?(tag, children) do
+  defp valid_element?(tag, attributes, children) do
     case tag do
       "head" ->
         Enum.all?(children, &match?(%{tag: tag} when tag in ["style", "meta", "title"], &1))
@@ -329,9 +341,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         children == []
 
       "table" ->
-        caption_count = Enum.count(children, &match?(%{tag: "caption"}, &1))
-        caption_first? = caption_count == 0 or hd(children).tag == "caption"
-        caption_count <= 1 and caption_first? and Enum.any?(children, &table_row_container?/1)
+        table_children_valid?(children)
+
+      "colgroup" ->
+        span? = Map.has_key?(attributes, "span")
+
+        (children != [] and not span? and Enum.all?(children, &match?(%{tag: "col"}, &1))) or
+          (children == [] and span?)
 
       tag when tag in ~w(thead tbody tfoot) ->
         children != [] and Enum.all?(children, &match?(%{tag: "tr"}, &1))
@@ -342,6 +358,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
       _ ->
         true
     end
+  end
+
+  defp table_children_valid?(children) do
+    children =
+      case children do
+        [%{tag: "caption"} | remaining] -> remaining
+        children -> children
+      end
+
+    {_column_groups, row_children} =
+      Enum.split_while(children, &match?(%{tag: "colgroup"}, &1))
+
+    row_children != [] and Enum.all?(row_children, &table_row_container?/1)
   end
 
   defp table_row_container?(child) do

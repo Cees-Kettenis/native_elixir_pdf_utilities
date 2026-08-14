@@ -450,6 +450,66 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert body.tag == "tbody"
   end
 
+  test "parse accepts standard scope values only on table headers" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <table>
+               <tr>
+                 <th scope="col">Column</th>
+                 <th scope="row">Row</th>
+                 <th scope="rowgroup">Row group</th>
+                 <th scope="colgroup">Column group</th>
+               </tr>
+             </table>
+             """)
+
+    [table] = dom.children
+    [row] = table.children
+
+    assert Enum.map(row.children, & &1.attributes["scope"]) ==
+             ~w(col row rowgroup colgroup)
+
+    assert HtmlParser.parse("<table><tr><th scope=\"column\">Bad</th></tr></table>") ==
+             {:error, :unsupported_html}
+
+    assert HtmlParser.parse("<table><tr><td scope=\"col\">Bad</td></tr></table>") ==
+             {:error, :unsupported_html}
+  end
+
+  test "parse accepts column groups, column spans, and strict table ordering" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <table>
+               <caption>Inventory</caption>
+               <colgroup><col span="2" /><col /></colgroup>
+               <colgroup span="2"></colgroup>
+               <tr><td>A</td><td>B</td><td>C</td><td>D</td><td>E</td></tr>
+             </table>
+             """)
+
+    [table] = dom.children
+    [caption, first_group, second_group, row] = table.children
+    [spanned_column, column] = first_group.children
+
+    assert caption.tag == "caption"
+    assert spanned_column.attributes == %{"span" => "2"}
+    assert column.attributes == %{}
+    assert second_group.attributes == %{"span" => "2"}
+    assert second_group.children == []
+    assert row.tag == "tr"
+
+    invalid_tables = [
+      "<table><col /><tr><td>A</td></tr></table>",
+      "<table><tr><td>A</td></tr><colgroup><col /></colgroup></table>",
+      "<table><colgroup></colgroup><tr><td>A</td></tr></table>",
+      "<table><colgroup span=\"2\"><col /></colgroup><tr><td>A</td></tr></table>"
+    ]
+
+    Enum.each(invalid_tables, fn html ->
+      assert HtmlParser.parse(html) == {:error, :unsupported_html}
+    end)
+  end
+
   test "parse rejects unsupported markup" do
     assert HtmlParser.parse("") == {:error, :unsupported_html}
     assert HtmlParser.parse("<>") == {:error, :unsupported_html}

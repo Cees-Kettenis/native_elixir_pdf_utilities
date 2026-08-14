@@ -163,6 +163,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec valid_table_header_scope?(term()) :: boolean()
+  def valid_table_header_scope?(scope) do
+    case scope do
+      scope when is_binary(scope) -> String.downcase(scope) in ~w(row col rowgroup colgroup)
+      _ -> false
+    end
+  end
+
+  @doc false
   @spec validate_style_input(term(), term(), term()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_style_input(dom, opts, font_options_result) do

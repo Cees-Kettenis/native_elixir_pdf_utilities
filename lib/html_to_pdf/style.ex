@@ -464,6 +464,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         "caption" ->
           table_caption_defaults(inherited_font_size)
 
+        "colgroup" ->
+          table_column_defaults(:group, attributes)
+
+        "col" ->
+          table_column_defaults(:column, attributes)
+
         "thead" ->
           table_row_group_defaults(:head)
 
@@ -671,8 +677,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     |> Map.merge(%{
       display: :table,
       border_collapse: :separate,
+      border_spacing: {0.0, 0.0},
       margin: edges(0.0),
-      padding: edges(0.0)
+      padding: edges(0.0),
+      table_layout: :auto
     })
   end
 
@@ -713,21 +721,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     }
   end
 
+  defp table_column_defaults(kind, attributes) do
+    with {:ok, span} <- positive_attribute(attributes, "span") do
+      {:ok,
+       %{
+         background_color: nil,
+         display: if(kind == :group, do: :table_column_group, else: :table_column),
+         span: span
+       }}
+    else
+      _ -> :invalid
+    end
+  end
+
   defp table_cell_defaults(kind, attributes, font_size) do
     base = %{
       background_color: nil,
       border_color: :current_color,
       border_colors: edges(:current_color),
       border_radius: 0.0,
-      border_styles: edges(:solid),
-      border_widths: edges(1.0),
+      border_styles: edges(:none),
+      border_widths: edges(0.0),
       box_sizing: :content_box,
       colspan: 1,
       display: :table_cell,
       font_size: font_size,
       font_weight: 400,
       margin: edges(0.0),
-      padding: edges(4.0),
+      padding: edges(0.75),
       rowspan: 1,
       text_align: :left,
       vertical_align: :middle
@@ -744,7 +765,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         :header ->
           {:ok,
            Map.merge(cell, %{
-             background_color: {0.9333333333, 0.9333333333, 0.9333333333},
              font_weight: 700,
              text_align: :center
            })}
@@ -1716,6 +1736,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       "border-collapse" ->
         put_border_collapse(style, value)
 
+      "border-spacing" ->
+        with {:ok, horizontal, vertical} <- parse_border_spacing(value) do
+          {:ok, Map.put(style, :border_spacing, {horizontal, vertical})}
+        end
+
+      "table-layout" ->
+        put_table_layout(style, value)
+
       "flex-direction" ->
         put_flex_direction(style, value)
 
@@ -2335,6 +2363,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
+  defp put_table_layout(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      "auto" -> {:ok, Map.put(style, :table_layout, :auto)}
+      "fixed" -> {:ok, Map.put(style, :table_layout, :fixed)}
+      _ -> {:error, :invalid_document}
+    end
+  end
+
   defp put_order(style, value) do
     case Integer.parse(String.trim(value)) do
       {order, ""} -> {:ok, Map.put(style, :order, order)}
@@ -2902,6 +2938,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     case gaps do
       [{:ok, both}] -> {:ok, both, both}
       [{:ok, row_gap}, {:ok, column_gap}] -> {:ok, row_gap, column_gap}
+      _ -> :error
+    end
+  end
+
+  defp parse_border_spacing(value) do
+    lengths =
+      value
+      |> String.split(~r/\s+/u, trim: true)
+      |> Enum.map(&parse_length/1)
+
+    case lengths do
+      [{:ok, both}] -> {:ok, both, both}
+      [{:ok, horizontal}, {:ok, vertical}] -> {:ok, horizontal, vertical}
       _ -> :error
     end
   end

@@ -23,6 +23,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     assert HtmlValidator.valid_link_url?("https://example.com/report")
     refute HtmlValidator.valid_link_url?("javascript:alert(1)")
 
+    Enum.each(~w(row col rowgroup colgroup COL), fn scope ->
+      assert HtmlValidator.valid_table_header_scope?(scope)
+    end)
+
+    refute HtmlValidator.valid_table_header_scope?("column")
+    refute HtmlValidator.valid_table_header_scope?(nil)
+
     assert :ok = HtmlValidator.validate_furniture_fit(:header, 12.0, 12.0)
 
     assert {:error, {:invalid_layout, %{stage: :layout}}} =

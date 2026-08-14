@@ -76,13 +76,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
     assert {:ok, layout_tree} = layout_fixture(html, page_size: {841.89, 595.28}, margin: 0)
 
     assert_layout_text(layout_tree, "Master Trimcard")
-    assert_layout_text(layout_tree, "GGPIX7736FA27")
+    assert_layout_text(layout_tree, "JOB-TRIM-001")
     assert_layout_text(layout_tree, "ORDER QTY")
     assert_layout_text(layout_tree, "SEASON")
-    assert_layout_text(layout_tree, "TRIM (1066261)")
+    assert_layout_text(layout_tree, "FABRIC (1000001)")
 
     texts = Enum.filter(layout_tree.boxes, &(&1.type == :text))
-    style_tail = Enum.find(texts, &String.contains?(&1.text, "PANT"))
+    style_tail = Enum.find(texts, &String.contains?(&1.text, "JACKET"))
     order_qty = Enum.find(texts, &(&1.text == "ORDER QTY"))
     season = Enum.find(texts, &(&1.text == "SEASON"))
 
@@ -105,7 +105,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
       "trim_card.html"
       |> fixture_html()
       |> String.replace(
-        "Elastic waistband tape for scrubbed trim-card fixture.",
+        "Water-repellent recycled woven fabric; approved production material; technical face; cuttable width 152 cm; chemical water-repellent finish on face and back.",
         @long_trim_description
       )
 
@@ -124,7 +124,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
     head_box =
       layout_tree.boxes
       |> Enum.filter(&(&1.type == :rect))
-      |> Enum.find(&(&1.x > 8.0 and &1.x < 10.0 and &1.width > 190.0 and &1.height > 250.0))
+      |> Enum.find(
+        &(Map.get(&1, :role) == :table_border and &1.x > 13.0 and &1.x < 14.0 and
+            &1.width > 190.0 and &1.height > 250.0)
+      )
 
     assert head_box
     assert head_box.y < last_description_line.y
@@ -132,15 +135,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
     header_border_box =
       layout_tree.boxes
       |> Enum.filter(&(&1.type == :rect))
-      |> Enum.find(&(&1.border_widths == %{top: 3.0, right: 0.0, bottom: 0.75, left: 0.0}))
+      |> Enum.find(&(&1.border_widths.top == 3.0))
 
     assert header_border_box
 
     assert header_border_box.border_colors.top ==
              {0.13333333333333333, 0.20392156862745098, 0.2901960784313726}
 
-    assert header_border_box.border_colors.bottom ==
-             {0.8431372549019608, 0.8745098039215686, 0.9137254901960784}
+    metric_border_box =
+      layout_tree.boxes
+      |> Enum.filter(&(&1.type == :rect))
+      |> Enum.find(&(&1.border_widths.top == 0.75 and &1.x == header_border_box.x))
+
+    assert metric_border_box.border_colors.top ==
+             {0.8666666666666667, 0.8941176470588236, 0.9254901960784314}
   end
 
   defp fixture_html(name) do

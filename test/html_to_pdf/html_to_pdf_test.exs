@@ -638,7 +638,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
   test "render converts tables to PDF text boxes and cell borders" do
     html =
-      ~s(<table><caption>Summary</caption><thead><tr><th>Name</th><th>Docs</th></tr></thead><tbody><tr><td>Alpha</td><td><a href="https://example.com">Link</a></td></tr></tbody></table>)
+      ~s(<style>th,td{border:1pt solid black;padding:4pt}th{background:#eee}</style><table><caption>Summary</caption><thead><tr><th>Name</th><th>Docs</th></tr></thead><tbody><tr><td>Alpha</td><td><a href="https://example.com">Link</a></td></tr></tbody></table>)
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
     assert pdf =~ "(Summary) Tj"
@@ -653,6 +653,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "/URI (https://example.com)"
   end
 
+  test "render supports fixed column groups and separate border spacing" do
+    html = """
+    <table style="width: 240pt; table-layout: fixed; border-collapse: separate; border-spacing: 8pt 4pt">
+      <colgroup><col span="2" style="width: 25%"><col style="width: 50%"></colgroup>
+      <tbody>
+        <tr><th scope="col">Code</th><th scope="col">Qty</th><th scope="col">Description</th></tr>
+        <tr><td colspan="2">A-100 / 12</td><td>Trim hardware</td></tr>
+      </tbody>
+    </table>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert pdf =~ "(Code) Tj"
+    assert pdf =~ "(Description) Tj"
+    assert pdf =~ "(Trim hardware) Tj"
+  end
+
   test "render paginates overflowing content into multiple PDF pages" do
     rows =
       1..3
@@ -662,7 +679,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       |> Enum.join()
 
     html =
-      "<table><thead><tr><th>Name</th><th>Count</th></tr></thead><tbody>" <>
+      "<style>th,td{padding:4pt}</style><table><thead><tr><th>Name</th><th>Count</th></tr></thead><tbody>" <>
         rows <> "</tbody></table>"
 
     assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {200, 100}, margin: 10)

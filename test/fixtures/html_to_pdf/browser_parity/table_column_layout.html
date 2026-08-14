@@ -1,0 +1,83 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: "DejaVu Sans", Arial, sans-serif;
+        font-size: 9pt;
+        line-height: 11pt;
+        color: #111827;
+      }
+      .sheet { width: 595pt; padding: 18pt; box-sizing: border-box; }
+      table {
+        width: 480pt;
+        table-layout: fixed;
+        margin-bottom: 16pt;
+      }
+      th, td {
+        padding: 5pt;
+        overflow: hidden;
+      }
+      .separate {
+        border: 3pt solid #172554;
+        border-collapse: separate;
+        border-spacing: 8pt 5pt;
+        background-color: #dbeafe;
+      }
+      .separate col.narrow { width: 18%; }
+      .separate col.wide { width: 40%; }
+      .separate th {
+        border: 2pt solid #9f1239;
+        background-color: #ffe4e6;
+      }
+      .separate td {
+        border: 1pt solid #1d4ed8;
+        background-color: #eff6ff;
+      }
+      .collapsed {
+        border-collapse: collapse;
+        border-spacing: 16pt 12pt;
+      }
+      .collapsed colgroup { width: 35%; }
+      .collapsed col:last-child { width: 65%; }
+      .collapsed td {
+        border: 3pt solid #166534;
+        background-color: #dcfce7;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <table class="separate">
+        <colgroup>
+          <col class="narrow" span="2">
+          <col class="wide">
+          <col>
+        </colgroup>
+        <thead>
+          <tr><th scope="col">Code</th><th scope="col">Qty</th><th scope="col">Description</th><th scope="col">Bin</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>A-100</td><td>12</td>
+            <td>Fixed column widths ignore a later row's intrinsic content preference</td>
+            <td>R4</td>
+          </tr>
+          <tr><td colspan="2">Spanned pair</td><td>Second row</td><td>B7</td></tr>
+          <tr><td>First column only</td></tr>
+        </tbody>
+      </table>
+
+      <table class="collapsed">
+        <colgroup span="2"></colgroup>
+        <colgroup><col></colgroup>
+        <tbody>
+          <tr><td>Collapsed A</td><td>Collapsed B</td><td>Collapsed C</td></tr>
+          <tr><td>no gap</td><td colspan="2">border spacing is ignored</td></tr>
+        </tbody>
+      </table>
+    </main>
+  </body>
+</html>

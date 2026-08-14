@@ -855,13 +855,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
         %{
           type: :element,
           tag: "table",
-          attributes: %{},
+          attributes: %{
+            "style" => "border-spacing: 6pt 3pt; table-layout: fixed; border-collapse: separate"
+          },
           children: [
             %{
               type: :element,
               tag: "caption",
               attributes: %{},
               children: [%{type: :text, text: "Summary"}]
+            },
+            %{
+              type: :element,
+              tag: "colgroup",
+              attributes: %{"style" => "width: 25%"},
+              children: [
+                %{
+                  type: :element,
+                  tag: "col",
+                  attributes: %{"span" => "2", "style" => "width: 20%"},
+                  children: []
+                }
+              ]
             },
             %{
               type: :element,
@@ -926,22 +941,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     assert {:ok, styled_tree} = Style.compute(dom, [])
     [table] = styled_tree.children
-    [caption, head, body] = table.children
+    [caption, column_group, head, body] = table.children
+    [column] = column_group.children
     [header_row] = head.children
     [name, count] = header_row.children
     [body_row] = body.children
     [alpha, amount] = body_row.children
 
     assert table.style.display == :table
+    assert table.style.border_spacing == {6.0, 3.0}
+    assert table.style.table_layout == :fixed
     assert caption.style.display == :table_caption
     assert caption.style.text_align == :center
+    assert column_group.style.display == :table_column_group
+    assert column_group.style.width == {:percent, 0.25}
+    assert column.style.display == :table_column
+    assert column.style.span == 2
+    assert column.style.width == {:percent, 0.2}
     assert head.style.display == :table_row_group
     assert head.style.table_section == :head
     assert body.style.table_section == :body
     assert name.style.display == :table_cell
     assert name.style.font_weight == 700
     assert name.style.text_align == :center
-    assert count.style.background_color == {0.9333333333, 0.9333333333, 0.9333333333}
+    assert count.style.background_color == nil
+    assert count.style.padding == %{top: 0.75, right: 0.75, bottom: 0.75, left: 0.75}
+    assert count.style.border_widths == %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+    assert count.style.border_styles == %{top: :none, right: :none, bottom: :none, left: :none}
     assert alpha.style.padding == %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0}
     assert alpha.style.border_widths == %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0}
     assert alpha.style.border_color == {0, 0, 1}
@@ -2575,6 +2601,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       {"border-top: 2pt solid red", :border_color, {0, 0, 0}},
       {"border-collapse: collapse", :border_collapse, :collapse},
       {"border-collapse: separate", :border_collapse, :separate},
+      {"table-layout: auto", :table_layout, :auto},
       {"aspect-ratio: 1.5", :aspect_ratio, 1.5},
       {"margin-bottom: 5pt", :margin_after, 5.0},
       {"margin-top: -2pt", :margin, %{top: -2.0, right: 0.0, bottom: 12.0, left: 0.0}}
@@ -2809,6 +2836,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "aspect-ratio: 0 / 1",
       "aspect-ratio: 1 / 2 / 3",
       "border-collapse: maybe",
+      "border-spacing: -1pt",
+      "border-spacing: 1pt 2pt 3pt",
+      "table-layout: balanced",
       "border: nonsense"
     ]
 

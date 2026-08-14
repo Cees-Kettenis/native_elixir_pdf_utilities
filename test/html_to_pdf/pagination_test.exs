@@ -237,6 +237,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
     assert_in_delta child.y, 78.0, 0.0001
   end
 
+  test "paginate preserves child positions when a parent background moves to a later page" do
+    boxes = [
+      text_box("First", 78.0, {:block, :first}, %{break_after: :page}),
+      %{
+        type: :rect,
+        x: 0.0,
+        y: -100.0,
+        width: 200.0,
+        height: 100.0,
+        flow_id: {:block, :parent},
+        break_before: :auto,
+        break_after: :auto
+      },
+      text_box("Child", -22.0, {:block, :child})
+    ]
+
+    layout_tree = %{type: :layout, page_size: {200.0, 100.0}, margin: 0.0, boxes: boxes}
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+    assert Enum.map(first_page.boxes, &Map.get(&1, :text, :rect)) == ["First"]
+    assert Enum.map(second_page.boxes, &Map.get(&1, :text, :rect)) == [:rect, "Child"]
+
+    child = Enum.find(second_page.boxes, &(&1.type == :text))
+    assert_in_delta child.y, 78.0, 0.0001
+  end
+
   test "paginate consumes empty manual page-break markers" do
     boxes = [
       text_box("First", 78.0, {:block, 1}),
@@ -339,7 +365,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
       |> Enum.join()
 
     html =
-      "<table><thead><tr><th colspan=\"2\">Inventory</th></tr>" <>
+      "<style>th,td{padding:4pt}</style><table><thead><tr><th colspan=\"2\">Inventory</th></tr>" <>
         "<tr><th>Name</th><th>Count</th></tr></thead><tbody>" <>
         rows <> "</tbody></table>"
 

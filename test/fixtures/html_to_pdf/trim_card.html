@@ -1,204 +1,397 @@
 <section class="sheet">
   <style>
-    @page { size: A4 landscape; margin: 7mm; }
-    * { box-sizing: border-box; }
+    @page {
+      size: A4 landscape;
+      margin: 7mm;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
     body {
       margin: 0;
       font-family: Arial, sans-serif;
       color: #102038;
       background: #ffffff;
     }
+
+    p {
+      margin: 0;
+    }
+
     .sheet {
       height: 196mm;
       padding: 8px 10px;
       border: 1px solid #cdd7e2;
-      display: flex;
-      flex-direction: column;
       page-break-after: always;
-      background: #fff;
+      background: #ffffff;
     }
-    .header {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-      gap: 8px;
-      align-items: start;
-      padding-bottom: 8px;
+
+    .sheet:last-child {
+      page-break-after: auto;
+    }
+
+    .header-table {
+      width: 100%;
+      margin-bottom: 8px;
+      border-collapse: collapse;
       border-bottom: 2px solid #26364d;
+      table-layout: fixed;
     }
-    .header__left {
-      display: grid;
-      gap: 3px;
+
+    .header-table td {
+      padding: 0 0 8px;
+      vertical-align: top;
     }
-    .header__right {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 4px 14px;
-      text-align: right;
-      justify-items: end;
-      align-content: start;
-      justify-self: end;
-      width: min(100%, 360px);
+
+    .header-left {
+      width: 25%;
     }
-    .header__row span {
+
+    .header-center {
+      width: 34%;
+      text-align: center;
+    }
+
+    .header-right {
+      width: 41%;
+    }
+
+    .label {
       display: block;
+      margin-bottom: 2px;
       font-size: 8px;
       line-height: 1.05;
+      font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: #61728b;
-      margin-bottom: 2px;
-      font-weight: 700;
     }
-    .header__row strong {
+
+    .value {
       display: block;
       font-size: 14px;
       line-height: 1.12;
       font-weight: 700;
-      word-break: break-word;
+      overflow-wrap: break-word;
     }
-    .header__center {
-      text-align: center;
-      padding-top: 1px;
-      justify-self: center;
-    }
-    .header__eyebrow {
+
+    .brand {
       font-size: 9px;
+      font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.18em;
       color: #576a83;
-      font-weight: 700;
     }
-    .header__title {
+
+    .title {
+      margin-top: 2px;
       font-size: 23px;
       line-height: 1;
       font-weight: 700;
-      margin-top: 2px;
     }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 7px;
-      flex: 1;
-      min-height: 0;
-      padding-top: 8px;
-      align-items: stretch;
+
+    .meta-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      text-align: right;
     }
+
+    .meta-table td {
+      width: 50%;
+      padding: 0 0 4px 14px;
+    }
+
+    .items-table {
+      width: 100%;
+      height: 168mm;
+      border-collapse: separate;
+      border-spacing: 7px 0;
+      table-layout: fixed;
+    }
+
+    .items-table col {
+      width: 25%;
+    }
+
+    .item-cell {
+      height: 168mm;
+      padding: 0;
+      vertical-align: top;
+    }
+
     .trim-card-item {
+      width: 100%;
+      height: 100%;
       border: 1px solid #ccd6e1;
-      display: flex;
-      flex-direction: column;
-      min-height: 100%;
-      background: #ffffff;
+      border-collapse: collapse;
       page-break-inside: avoid;
+      background: #ffffff;
     }
-    .trim-card-item__head {
+
+    .trim-card-item th,
+    .trim-card-item td {
+      overflow-wrap: break-word;
+    }
+
+    .item-head {
       padding: 6px 7px 5px;
       border-top: 4px solid #22344a;
       border-bottom: 1px solid #d7dfe9;
+      vertical-align: top;
     }
-    .trim-card-item__shell {
+
+    .item-section,
+    .trim-card-item__col {
       font-size: 9px;
       line-height: 1.2;
       font-weight: 700;
+      color: #4f627b;
+    }
+
+    .item-section {
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: #4f627b;
-      word-break: break-word;
     }
-    .trim-card-item__number {
+
+    .trim-card-item__col {
+      margin-top: 2px;
+    }
+
+    .item-number {
+      margin-top: 5px;
       font-size: 14px;
       line-height: 1.1;
       font-weight: 700;
-      margin-top: 5px;
-      word-break: break-word;
+      color: #22354d;
     }
-    .trim-card-item__description {
+
+    .item-description {
+      min-height: 54px;
       margin-top: 5px;
       font-size: 11px;
       line-height: 1.2;
       color: #1f3149;
       white-space: pre-line;
-      word-break: break-word;
-      min-height: 62px;
     }
-    .trim-card-item__usage-block {
-      padding: 6px 7px 4px;
+
+    .item-label-row {
+      height: 18px;
+    }
+
+    .item-value-row {
+      height: 30px;
+    }
+
+    .item-colour-row {
+      height: 28px;
+    }
+
+    .item-label {
+      padding: 6px 7px 2px;
       border-top: 1px solid #dde4ec;
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .trim-card-item__metric {
-      padding-right: 6px;
-      border-right: 1px solid #dde4ec;
-    }
-    .trim-card-item__metric:last-child {
-      padding-right: 0;
-      padding-left: 8px;
-      border-right: 0;
-    }
-    .trim-card-item__metric-label,
-    .trim-card-item__colour-label {
       font-size: 7px;
       line-height: 1.15;
       font-weight: 700;
+      text-align: left;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: #6a7c95;
-      word-break: break-word;
+      vertical-align: top;
     }
-    .trim-card-item__metric-value,
-    .trim-card-item__colour-value {
-      margin-top: 2px;
+
+    .item-value {
+      padding: 0 7px 6px;
       font-size: 11px;
       line-height: 1.2;
       font-weight: 700;
       color: #22354d;
-      word-break: break-word;
+      vertical-align: top;
     }
-    .trim-card-item__colour-block {
-      padding: 6px 7px 4px;
-      border-top: 1px solid #dde4ec;
+
+    .item-colour {
       border-bottom: 1px solid #dde4ec;
+    }
+
+    .sample-row {
+      height: 100%;
+    }
+
+    .sample-box {
+      height: 100%;
+      padding: 0;
+      border-top: 1px solid #dde4ec;
+      background: #ffffff;
     }
   </style>
 
-  <div class="header">
-    <div class="header__left">
-      <div class="header__row"><span>Job Number</span><strong>GGPIX7736FA27</strong></div>
-    </div>
-    <div class="header__center">
-      <div class="header__eyebrow">South Island Garment Sdn. Bhd</div>
-      <div class="header__title">Master Trimcard</div>
-    </div>
-    <div class="header__right">
-      <div class="header__row"><span>Date</span><strong>08/07/2026 07:55</strong></div>
-      <div class="header__row"><span>Style</span><strong>M ACG DF SCND SNRSE PANT</strong></div>
-      <div class="header__row"><span>Order Qty</span><strong>1 EA</strong></div>
-      <div class="header__row"><span>Season</span><strong>FA27</strong></div>
-    </div>
-  </div>
+  <table class="header-table" role="presentation">
+    <tr>
+      <td class="header-left">
+        <span class="label">Job Number</span>
+        <span class="value">JOB-TRIM-001</span>
+      </td>
+      <td class="header-center">
+        <p class="brand">South Island Garment Sdn. Bhd</p>
+        <p class="title">Master Trimcard</p>
+      </td>
+      <td class="header-right">
+        <table class="meta-table" role="presentation">
+          <tr>
+            <td>
+              <span class="label">Date</span>
+              <span class="value">14/08/2026 08:15</span>
+            </td>
+            <td>
+              <span class="label">Style</span>
+              <span class="value">SAMPLE OUTDOOR JACKET</span>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <span class="label">Order Qty</span>
+              <span class="value">1 EA</span>
+            </td>
+            <td>
+              <span class="label">Season</span>
+              <span class="value"></span>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
 
-  <div class="grid">
-    <article class="trim-card-item">
-      <div class="trim-card-item__head">
-        <div class="trim-card-item__shell">TRIM (1066261)</div>
-        <div class="trim-card-item__number">1066261</div>
-        <div class="trim-card-item__description">Elastic waistband tape for scrubbed trim-card fixture.</div>
-      </div>
-      <div class="trim-card-item__usage-block">
-        <div class="trim-card-item__metric">
-          <div class="trim-card-item__metric-label">M. Used</div>
-          <div class="trim-card-item__metric-value">1.20</div>
-        </div>
-        <div class="trim-card-item__metric">
-          <div class="trim-card-item__metric-label">Weight (G/M2)</div>
-          <div class="trim-card-item__metric-value"></div>
-        </div>
-      </div>
-      <div class="trim-card-item__colour-block">
-        <div class="trim-card-item__colour-label">Colour</div>
-        <div class="trim-card-item__colour-value">40Y - POLAR</div>
-      </div>
-    </article>
-  </div>
+  <table class="items-table grid" role="presentation">
+    <colgroup>
+      <col />
+      <col />
+      <col />
+      <col />
+    </colgroup>
+    <tr>
+      <td class="item-cell">
+  <table class="trim-card-item" role="presentation">
+    <tr>
+      <td class="item-head" colspan="2">
+        <p class="item-section">FABRIC (1000001)</p>
+        <div class="trim-card-item__col"></div>
+        <p class="item-number">1000001</p>
+        <p class="item-description">Water-repellent recycled woven fabric; approved production material; technical face; cuttable width 152 cm; chemical water-repellent finish on face and back.</p>
+      </td>
+    </tr>
+    <tr class="item-label-row">
+      <th class="item-label" scope="col">M. Used</th>
+      <th class="item-label" scope="col">Weight (G/M2)</th>
+    </tr>
+    <tr class="item-value-row">
+      <td class="item-value">30.0</td>
+      <td class="item-value">0</td>
+    </tr>
+    <tr class="item-label-row">
+      <th class="item-label" colspan="2" scope="row">Colour</th>
+    </tr>
+    <tr class="item-colour-row">
+      <td class="item-value item-colour" colspan="2">BLUE CERAMIC</td>
+    </tr>
+    <tr class="sample-row">
+      <td class="sample-box" colspan="2">&nbsp;</td>
+    </tr>
+  </table>
+</td>
+
+<td class="item-cell">
+  <table class="trim-card-item" role="presentation">
+    <tr>
+      <td class="item-head" colspan="2">
+        <p class="item-section">FABRIC (1000002)</p>
+        <div class="trim-card-item__col"></div>
+        <p class="item-number">1000002</p>
+        <p class="item-description">Recycled ripstop fabric with UV protection; approved production material; width 132 cm; crinkled visual effect; digital direct print.</p>
+      </td>
+    </tr>
+    <tr class="item-label-row">
+      <th class="item-label" scope="col">M. Used</th>
+      <th class="item-label" scope="col">Weight (G/M2)</th>
+    </tr>
+    <tr class="item-value-row">
+      <td class="item-value">60.0</td>
+      <td class="item-value">0</td>
+    </tr>
+    <tr class="item-label-row">
+      <th class="item-label" colspan="2" scope="row">Colour</th>
+    </tr>
+    <tr class="item-colour-row">
+      <td class="item-value item-colour" colspan="2">BLUE CERAMIC</td>
+    </tr>
+    <tr class="sample-row">
+      <td class="sample-box" colspan="2">&nbsp;</td>
+    </tr>
+  </table>
+</td>
+
+<td class="item-cell">
+  <table class="trim-card-item" role="presentation">
+    <tr>
+      <td class="item-head" colspan="2">
+        <p class="item-section">TRIM (1000003)</p>
+        <div class="trim-card-item__col"></div>
+        <p class="item-number">1000003</p>
+        <p class="item-description">Woven loop label; no backing; two colours; ultrasonic piece cut; vendor supplied; size-matrix application; sew-on construction.</p>
+      </td>
+    </tr>
+    <tr class="item-label-row">
+      <th class="item-label" scope="col">M. Used</th>
+      <th class="item-label" scope="col">Weight (G/M2)</th>
+    </tr>
+    <tr class="item-value-row">
+      <td class="item-value">100.0</td>
+      <td class="item-value">0</td>
+    </tr>
+    <tr class="item-label-row">
+      <th class="item-label" colspan="2" scope="row">Colour</th>
+    </tr>
+    <tr class="item-colour-row">
+      <td class="item-value item-colour" colspan="2">DEFAULT</td>
+    </tr>
+    <tr class="sample-row">
+      <td class="sample-box" colspan="2">&nbsp;</td>
+    </tr>
+  </table>
+</td>
+
+<td class="item-cell">
+  <table class="trim-card-item" role="presentation">
+    <tr>
+      <td class="item-head" colspan="2">
+        <p class="item-section">TRIM (1000004)</p>
+        <div class="trim-card-item__col"></div>
+        <p class="item-number">1000004</p>
+        <p class="item-description">Folded woven label with detailed construction notes; approved trim hardware; recycled polyester yarn; edge-to-edge finish; loop fold; sew-on application.</p>
+      </td>
+    </tr>
+    <tr class="item-label-row">
+      <th class="item-label" scope="col">M. Used</th>
+      <th class="item-label" scope="col">Weight (G/M2)</th>
+    </tr>
+    <tr class="item-value-row">
+      <td class="item-value">50.0</td>
+      <td class="item-value">0</td>
+    </tr>
+    <tr class="item-label-row">
+      <th class="item-label" colspan="2" scope="row">Colour</th>
+    </tr>
+    <tr class="item-colour-row">
+      <td class="item-value item-colour" colspan="2">BLACK</td>
+    </tr>
+    <tr class="sample-row">
+      <td class="sample-box" colspan="2">&nbsp;</td>
+    </tr>
+  </table>
+</td>
+
+    </tr>
+  </table>
 </section>

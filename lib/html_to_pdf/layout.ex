@@ -136,13 +136,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             )
             |> Map.put(:flow_id, {:block, box_x, box_top})
 
+          content_metadata =
+            flow_metadata
+            |> Map.put(:break_before, :auto)
+            |> Map.put(:break_after, :auto)
+
           case layout_block_content(
                  children,
                  style,
                  content_x,
                  content_top,
                  content_width,
-                 flow_metadata
+                 content_metadata
                ) do
             {:ok, content_boxes, content_height} ->
               content_box_height = resolved_content_size(style, :height, nil, content_height)
@@ -154,30 +159,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               background_box =
                 style
                 |> background_box(box_x, box_top - box_height, box_width, box_height)
-                |> tag_boxes(flow_metadata)
+                |> tag_boxes(content_metadata)
 
               next_y = box_top - box_height - margin.bottom
 
-              page_break_box =
+              page_break_box = fn position ->
                 %{
                   type: :page_break,
                   x: box_x,
-                  y: box_top,
+                  y: if(position == :before, do: box_top, else: next_y),
                   width: box_width,
                   height: 0.0
                 }
-                |> Map.merge(Map.put(flow_metadata, :flow_id, {:page_break, box_x, box_top}))
+                |> Map.merge(%{
+                  break_before: if(position == :before, do: :page, else: :auto),
+                  break_after: if(position == :after, do: :page, else: :auto),
+                  break_inside: :auto,
+                  flow_id: {:page_break, position, box_x, box_top}
+                })
+              end
+
+              boxes = background_box ++ content_boxes
 
               boxes =
-                case {background_box ++ content_boxes, flow_metadata} do
-                  {[], %{break_before: :page}} ->
-                    [page_break_box]
+                case Map.get(flow_metadata, :break_before) do
+                  :page -> [page_break_box.(:before) | boxes]
+                  _ -> boxes
+                end
 
-                  {[], %{break_after: :page}} ->
-                    [page_break_box]
-
-                  {boxes, _metadata} ->
-                    boxes
+              boxes =
+                case Map.get(flow_metadata, :break_after) do
+                  :page -> boxes ++ [page_break_box.(:after)]
+                  _ -> boxes
                 end
 
               {:ok, boxes, next_y}
@@ -2301,11 +2314,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
          {:ok, row_boxes, content_bottom} <-
            layout_table_rows(
              rows,
+             table_columns(children),
              content_x,
              rows_top,
              content_width,
              table_id,
-             Map.get(style, :border_collapse, :separate)
+             Map.get(style, :border_collapse, :separate),
+             Map.get(style, :border_spacing, {0.0, 0.0}),
+             Map.get(style, :table_layout, :auto),
+             resolved_content_size(style, :height, nil, nil)
            ) do
       content_height = content_top - content_bottom
 
@@ -2433,9 +2450,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
+  defp table_columns(children) do
+    children
+    |> Enum.filter(&match?(%{style: %{display: :table_column_group}}, &1))
+    |> Enum.flat_map(fn %{style: group_style, children: columns} ->
+      group_width = Map.get(group_style, :width)
+
+      case Enum.filter(columns, &match?(%{style: %{display: :table_column}}, &1)) do
+        [] ->
+          List.duplicate(%{width: group_width}, Map.get(group_style, :span, 1))
+
+        columns ->
+          Enum.flat_map(columns, fn %{style: column_style} ->
+            column = %{width: Map.get(column_style, :width) || group_width}
+            List.duplicate(column, Map.get(column_style, :span, 1))
+          end)
+      end
+    end)
+  end
+
   defp table_child_rows(child) do
     case child do
-      %{style: %{display: display}} when display in [:none, :table_caption] ->
+      %{style: %{display: display}}
+      when display in [:none, :table_caption, :table_column_group] ->
         {:ok, []}
 
       %{style: %{display: :table_row}, children: cells} when is_list(cells) ->
@@ -2485,16 +2522,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     Enum.reject(cells, &match?(%{style: %{display: :none}}, &1))
   end
 
-  defp layout_table_rows(rows, x, y, width, table_id, border_collapse) do
+  defp layout_table_rows(
+         rows,
+         columns,
+         x,
+         y,
+         width,
+         table_id,
+         border_collapse,
+         border_spacing,
+         table_layout,
+         available_height
+       ) do
     grid_rows = table_grid(rows)
-    column_count = table_column_count(grid_rows)
-    column_widths = table_column_widths(grid_rows, column_count, width)
+    column_count = max(table_column_count(grid_rows), length(columns))
 
-    with {:ok, row_heights} <- table_row_heights(grid_rows, column_widths) do
+    {horizontal_spacing, vertical_spacing} =
+      case {border_collapse, border_spacing} do
+        {:separate, {horizontal, vertical}}
+        when is_number(horizontal) and is_number(vertical) ->
+          {horizontal, vertical}
+
+        _ ->
+          {0.0, 0.0}
+      end
+
+    column_grid_width = max(width - horizontal_spacing * (column_count + 1), 0.0)
+
+    column_widths =
+      table_column_widths(
+        grid_rows,
+        columns,
+        column_count,
+        column_grid_width,
+        table_layout
+      )
+
+    with {:ok, row_heights} <-
+           table_row_heights(
+             grid_rows,
+             column_widths,
+             horizontal_spacing,
+             vertical_spacing,
+             available_height
+           ) do
       {boxes, next_y} =
         grid_rows
         |> Enum.with_index()
-        |> Enum.reduce({[], y}, fn {row, index}, {boxes, current_y} ->
+        |> Enum.reduce({[], y - vertical_spacing}, fn {row, index}, {boxes, current_y} ->
           {:ok, row_boxes, next_y} =
             layout_table_row(
               row,
@@ -2504,10 +2579,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               current_y,
               column_widths,
               row_heights,
-              border_collapse
+              border_collapse,
+              horizontal_spacing,
+              vertical_spacing
             )
 
-          {boxes ++ row_boxes, next_y}
+          {boxes ++ row_boxes, next_y - vertical_spacing}
         end)
 
       {:ok, boxes, next_y}
@@ -2519,7 +2596,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
            row: %{style: %{display: :table_row} = style},
            section: section,
            cells: cells,
-           active_columns: active_columns,
            consumed_columns: consumed_columns
          },
          table_id,
@@ -2528,11 +2604,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
          y,
          column_widths,
          row_heights,
-         border_collapse
+         border_collapse,
+         horizontal_spacing,
+         vertical_spacing
        ) do
     row_height = Enum.at(row_heights, index)
     last_row? = index == length(row_heights) - 1
-    single_cell_row? = length(cells) == 1 and active_columns == []
 
     row_metadata =
       table_id
@@ -2542,12 +2619,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     boxes =
       Enum.reduce(cells, [], fn
         %{cell: cell, column: column, colspan: colspan, rowspan: rowspan}, boxes ->
-          cell_x = x + (column_widths |> Enum.take(column) |> Enum.sum())
+          cell_x =
+            x + horizontal_spacing * (column + 1) +
+              (column_widths |> Enum.take(column) |> Enum.sum())
 
           cell_width =
-            table_cell_width(column_widths, column, colspan, single_cell_row?)
+            table_cell_width(
+              column_widths,
+              column,
+              colspan,
+              horizontal_spacing
+            )
 
-          cell_height = row_heights |> Enum.slice(index, rowspan) |> Enum.sum()
+          cell_height =
+            (row_heights |> Enum.slice(index, rowspan) |> Enum.sum()) +
+              vertical_spacing * max(rowspan - 1, 0)
+
           last_cell? = column + colspan >= length(column_widths)
           cell_last_row? = index + rowspan >= length(row_heights)
 
@@ -2584,12 +2671,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         )
 
     {background_boxes, content_boxes} =
-      Enum.split_with(boxes, &(Map.get(&1, :role) == :table_cell_background))
+      Enum.split_with(
+        boxes,
+        &(Map.get(&1, :role) == :table_cell_background and
+            Map.get(&1, :paint_ordered, false) == false)
+      )
 
     {border_boxes, content_boxes} =
-      Enum.split_with(content_boxes, &(Map.get(&1, :role) == :table_border))
+      Enum.split_with(
+        content_boxes,
+        &(Map.get(&1, :role) == :table_border and Map.get(&1, :paint_ordered, false) == false)
+      )
 
-    {:ok, background_boxes ++ border_boxes ++ content_boxes, y - row_height}
+    paint_boxes =
+      Enum.map(background_boxes ++ border_boxes, &Map.put(&1, :paint_ordered, true))
+
+    {:ok, paint_boxes ++ content_boxes, y - row_height}
   end
 
   defp table_grid(rows) do
@@ -2691,12 +2788,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     content_top = y - border_widths.top - padding.top
 
-    with {:ok, content_boxes, content_bottom} <-
-           layout_table_cell_content(children, style, content_x, content_top, content_width) do
-      content_height = content_top - content_bottom
+    content_area_height =
+      max(
+        height - border_widths.top - padding.top - padding.bottom - border_widths.bottom,
+        0.0
+      )
 
-      content_area_height =
-        height - border_widths.top - padding.top - padding.bottom - border_widths.bottom
+    with {:ok, content_boxes, content_bottom} <-
+           layout_table_cell_content(
+             children,
+             style,
+             content_x,
+             content_top,
+             content_width,
+             content_area_height
+           ) do
+      content_height = content_top - content_bottom
 
       vertical_offset = table_cell_vertical_offset(style, content_area_height, content_height)
 
@@ -2708,7 +2815,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       cell_box =
         table_cell_background_box(style, x, y - height, width, height, border_collapse)
         |> tag_boxes(row_metadata)
-        |> Enum.map(&Map.put(&1, :role, :table_cell_background))
+        |> Enum.map(fn box ->
+          box
+          |> Map.put(:role, :table_cell_background)
+        end)
 
       border_box =
         table_cell_border_box(
@@ -2722,7 +2832,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           last_row?
         )
         |> tag_boxes(row_metadata)
-        |> Enum.map(&Map.put(&1, :role, :table_border))
+        |> Enum.map(fn box ->
+          box
+          |> Map.put(:role, :table_border)
+        end)
 
       {:ok, cell_box ++ border_box ++ tag_atomic_boxes(content_boxes, row_metadata)}
     end
@@ -2836,7 +2949,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           last_row?
         )
         |> tag_boxes(row_metadata)
-        |> Enum.map(&Map.put(&1, :role, :table_border))
+        |> Enum.map(fn box ->
+          box
+          |> Map.put(:role, :table_border)
+        end)
 
       _ ->
         []
@@ -2860,9 +2976,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     |> Enum.max()
   end
 
-  defp table_column_widths(rows, column_count, table_width) do
+  defp table_column_widths(rows, columns, column_count, table_width, table_layout) do
+    column_preferred =
+      0..(column_count - 1)
+      |> Enum.map(fn index ->
+        columns
+        |> Enum.at(index, %{})
+        |> Map.get(:width)
+        |> table_column_preferred_width(table_width)
+      end)
+
+    width_rows = if table_layout == :fixed, do: Enum.take(rows, 1), else: rows
+
     preferred =
-      Enum.reduce(rows, List.duplicate(nil, column_count), fn %{cells: cells}, widths ->
+      Enum.reduce(width_rows, column_preferred, fn %{cells: cells}, widths ->
         Enum.reduce(cells, widths, fn
           %{cell: cell, column: index, colspan: colspan}, acc ->
             case table_cell_preferred_width(cell, table_width) do
@@ -2875,6 +3002,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 Enum.reduce(index..(index + colspan - 1), acc, fn column, column_acc ->
                   List.update_at(column_acc, column, fn
                     nil -> share
+                    width when table_layout == :fixed -> width
                     width -> max(width, share)
                   end)
                 end)
@@ -2882,11 +3010,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         end)
       end)
 
-    minimum = table_minimum_column_widths(rows, column_count)
+    minimum =
+      case table_layout do
+        :fixed -> List.duplicate(0.0, column_count)
+        _ -> table_minimum_column_widths(rows, column_count)
+      end
+
     fixed_total = preferred |> Enum.reject(&is_nil/1) |> Enum.sum()
     flexible_count = Enum.count(preferred, &is_nil/1)
 
     cond do
+      table_layout == :fixed and fixed_total > table_width and fixed_total > 0 ->
+        Enum.map(preferred, fn
+          nil -> 0.0
+          width -> width / fixed_total * table_width
+        end)
+
+      table_layout == :fixed and flexible_count > 0 ->
+        flexible_width = max((table_width - fixed_total) / flexible_count, 0.0)
+        Enum.map(preferred, fn width -> width || flexible_width end)
+
+      table_layout == :fixed and column_count > 0 ->
+        extra_width = max((table_width - fixed_total) / column_count, 0.0)
+        Enum.map(preferred, &(&1 + extra_width))
+
       fixed_total > table_width and fixed_total > 0 and flexible_count > 0 ->
         Enum.map(preferred, fn
           nil -> 0.0
@@ -2923,6 +3070,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       true ->
         Enum.map(preferred, &(&1 / fixed_total * table_width))
+    end
+  end
+
+  defp table_column_preferred_width(width, table_width) do
+    case width do
+      {:percent, ratio} when is_number(ratio) -> table_width * ratio
+      width when is_number(width) and width > 0 -> min(width, table_width)
+      _ -> nil
     end
   end
 
@@ -3037,20 +3192,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp table_cell_width(column_widths, index, colspan, single_cell_row?) do
-    case single_cell_row? do
-      true -> Enum.sum(column_widths)
-      false -> column_widths |> Enum.slice(index, colspan) |> Enum.sum()
-    end
+  defp table_cell_width(
+         column_widths,
+         index,
+         colspan,
+         horizontal_spacing
+       ) do
+    (column_widths |> Enum.slice(index, colspan) |> Enum.sum()) +
+      horizontal_spacing * max(colspan - 1, 0)
   end
 
-  defp table_row_heights(rows, column_widths) do
+  defp table_row_heights(
+         rows,
+         column_widths,
+         horizontal_spacing,
+         vertical_spacing,
+         available_height
+       ) do
     initial_heights =
       Enum.reduce_while(rows, {:ok, []}, fn
-        %{row: %{style: style}, cells: cells, active_columns: active_columns},
-        {:ok, row_heights} ->
-          single_cell_row? = length(cells) == 1 and active_columns == []
-
+        %{row: %{style: style}, cells: cells}, {:ok, row_heights} ->
           result =
             cells
             |> Enum.filter(&(&1.rowspan == 1))
@@ -3060,7 +3221,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                   column_widths,
                   placement.column,
                   placement.colspan,
-                  single_cell_row?
+                  horizontal_spacing
                 )
 
               case table_cell_height(placement.cell, width) do
@@ -3081,66 +3242,118 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           end
       end)
 
-    case initial_heights do
+    adjusted_heights =
+      case initial_heights do
+        {:ok, heights} ->
+          rows
+          |> Enum.with_index()
+          |> Enum.reduce_while({:ok, heights}, fn {%{cells: cells}, row_index},
+                                                  {:ok, row_heights} ->
+            result =
+              cells
+              |> Enum.filter(&(&1.rowspan > 1))
+              |> Enum.reduce_while({:ok, row_heights}, fn placement, {:ok, acc} ->
+                width =
+                  table_cell_width(
+                    column_widths,
+                    placement.column,
+                    placement.colspan,
+                    horizontal_spacing
+                  )
+
+                case table_cell_height(placement.cell, width) do
+                  {:ok, required_height} ->
+                    current_height =
+                      acc
+                      |> Enum.slice(row_index, placement.rowspan)
+                      |> Enum.sum()
+
+                    current_height =
+                      current_height + vertical_spacing * max(placement.rowspan - 1, 0)
+
+                    extra_height = max(required_height - current_height, 0.0)
+                    share = extra_height / placement.rowspan
+
+                    adjusted =
+                      acc
+                      |> Enum.with_index()
+                      |> Enum.map(fn
+                        {height, index}
+                        when index >= row_index and index < row_index + placement.rowspan ->
+                          height + share
+
+                        {height, _index} ->
+                          height
+                      end)
+
+                    {:cont, {:ok, adjusted}}
+
+                  {:error, reason} ->
+                    {:halt, {:error, reason}}
+                end
+              end)
+
+            case result do
+              {:ok, adjusted} -> {:cont, {:ok, adjusted}}
+              {:error, reason} -> {:halt, {:error, reason}}
+            end
+          end)
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+
+    case adjusted_heights do
       {:ok, heights} ->
-        rows
-        |> Enum.with_index()
-        |> Enum.reduce_while({:ok, heights}, fn {%{
-                                                   cells: cells,
-                                                   active_columns: active_columns
-                                                 }, row_index},
-                                                {:ok, row_heights} ->
-          single_cell_row? = length(cells) == 1 and active_columns == []
-
-          result =
-            cells
-            |> Enum.filter(&(&1.rowspan > 1))
-            |> Enum.reduce_while({:ok, row_heights}, fn placement, {:ok, acc} ->
-              width =
-                table_cell_width(
-                  column_widths,
-                  placement.column,
-                  placement.colspan,
-                  single_cell_row?
-                )
-
-              case table_cell_height(placement.cell, width) do
-                {:ok, required_height} ->
-                  current_height =
-                    acc
-                    |> Enum.slice(row_index, placement.rowspan)
-                    |> Enum.sum()
-
-                  extra_height = max(required_height - current_height, 0.0)
-                  share = extra_height / placement.rowspan
-
-                  adjusted =
-                    acc
-                    |> Enum.with_index()
-                    |> Enum.map(fn
-                      {height, index}
-                      when index >= row_index and index < row_index + placement.rowspan ->
-                        height + share
-
-                      {height, _index} ->
-                        height
-                    end)
-
-                  {:cont, {:ok, adjusted}}
-
-                {:error, reason} ->
-                  {:halt, {:error, reason}}
-              end
-            end)
-
-          case result do
-            {:ok, adjusted} -> {:cont, {:ok, adjusted}}
-            {:error, reason} -> {:halt, {:error, reason}}
-          end
-        end)
+        {:ok, stretch_table_row_heights(rows, heights, available_height, vertical_spacing)}
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp stretch_table_row_heights(rows, heights, available_height, vertical_spacing) do
+    case available_height do
+      available_height when is_number(available_height) and heights != [] ->
+        row_space =
+          max(available_height - vertical_spacing * (length(heights) + 1), 0.0)
+
+        extra_height = max(row_space - Enum.sum(heights), 0.0)
+
+        percentage_rows =
+          rows
+          |> Enum.with_index()
+          |> Enum.flat_map(fn
+            {%{row: %{style: %{height: {:percent, ratio}}}}, index}
+            when is_number(ratio) and ratio > 0 ->
+              [{index, ratio}]
+
+            {_row, _index} ->
+              []
+          end)
+
+        case {extra_height, percentage_rows} do
+          {extra_height, _percentage_rows} when extra_height <= 0 ->
+            heights
+
+          {extra_height, []} ->
+            share = extra_height / length(heights)
+            Enum.map(heights, &(&1 + share))
+
+          {extra_height, percentage_rows} ->
+            ratio_total =
+              Enum.reduce(percentage_rows, 0.0, fn {_index, ratio}, acc -> acc + ratio end)
+
+            Enum.with_index(heights, fn height, index ->
+              case List.keyfind(percentage_rows, index, 0) do
+                {_index, ratio} -> height + extra_height * ratio / ratio_total
+                nil -> height
+              end
+            end)
+        end
+
+      _ ->
+        heights
     end
   end
 
@@ -3158,7 +3371,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           width - border_widths.left - padding.left - padding.right - border_widths.right
 
         with {:ok, _boxes, content_bottom} <-
-               layout_table_cell_content(children, style, 0.0, 0.0, content_width) do
+               layout_table_cell_content(children, style, 0.0, 0.0, content_width, nil) do
           content_height = 0.0 - content_bottom
 
           content_box_height =
@@ -3196,21 +3409,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     |> Enum.max(fn -> 0.0 end)
   end
 
-  defp layout_table_cell_content(children, style, x, y, width) do
+  defp layout_table_cell_content(children, style, x, y, width, available_height) do
     case inline_runs(children) do
       {:ok, runs} ->
         {boxes, content_height} = inline_text_boxes(runs, style, x, y, width, %{})
         {:ok, boxes, y - content_height}
 
       {:error, _reason} ->
-        layout_table_cell_blocks(children, style, x, y, width)
+        layout_table_cell_blocks(children, style, x, y, width, available_height)
     end
   end
 
-  defp layout_table_cell_blocks(children, style, x, y, width) do
+  defp layout_table_cell_blocks(children, style, x, y, width, available_height) do
     result =
       Enum.reduce_while(children, {:ok, [], y}, fn child, {:ok, boxes, current_y} ->
-        case layout_table_cell_block(child, style, x, current_y, width) do
+        remaining_height =
+          case available_height do
+            available_height when is_number(available_height) ->
+              max(available_height - (y - current_y), 0.0)
+
+            _ ->
+              nil
+          end
+
+        case layout_table_cell_block(child, style, x, current_y, width, remaining_height) do
           {:ok, child_boxes, next_y} -> {:cont, {:ok, boxes ++ child_boxes, next_y}}
           {:error, reason} -> {:halt, {:error, reason}}
         end
@@ -3222,7 +3444,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp layout_table_cell_block(child, style, x, y, width) do
+  defp layout_table_cell_block(child, style, x, y, width, available_height) do
     case child do
       %{type: :text, text: text} when is_binary(text) ->
         case trim_inline_whitespace(text) do
@@ -3243,6 +3465,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         end
 
       _ ->
+        child_style = Map.fetch!(child, :style)
+
+        child =
+          case resolved_content_size(child_style, :height, available_height, nil) do
+            height when is_number(height) ->
+              Map.put(child, :style, Map.put(child_style, :height, height))
+
+            _ ->
+              child
+          end
+
         layout_block(child, x, y, width)
     end
   end

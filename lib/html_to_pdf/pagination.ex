@@ -64,7 +64,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       pages: [],
       current_boxes: [],
       current_y: content_top,
-      previous_bottom: nil
+      position_delta: 0.0
     }
 
     final_state =
@@ -91,8 +91,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         _ -> state
       end
 
-    gap = vertical_gap(state.previous_bottom, group.top)
-    target_top = target_group_top(state, group, gap)
+    target_top = target_group_top(state, group)
     group_bottom = target_top - group.height
 
     state =
@@ -123,7 +122,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
             state
             | current_boxes: state.current_boxes ++ shifted_boxes,
               current_y: target_top - group.height,
-              previous_bottom: group.bottom
+              position_delta: target_top - group.top
           }
       end
 
@@ -148,8 +147,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
                 %{
                   state
                   | current_boxes: state.current_boxes ++ shifted_boxes,
-                    current_y: state.current_y - header.height,
-                    previous_bottom: header.bottom
+                    current_y: state.current_y - header.height
                 }
 
               false ->
@@ -172,7 +170,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         boxes -> state.pages ++ [boxes]
       end
 
-    %{state | pages: pages, current_boxes: [], current_y: content_top, previous_bottom: nil}
+    %{state | pages: pages, current_boxes: [], current_y: content_top, position_delta: nil}
   end
 
   defp flow_groups(boxes) do
@@ -271,25 +269,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     end)
   end
 
-  defp vertical_gap(previous_bottom, top) do
-    case previous_bottom do
-      nil -> 0.0
-      previous_bottom -> max(previous_bottom - top, 0.0)
-    end
-  end
-
-  defp target_group_top(state, group, gap) do
-    target_top = state.current_y - gap
-
-    cond do
-      state.current_boxes != [] and group.top > state.current_y ->
-        group.top
-
-      state.current_boxes == [] and state.pages == [] and group.top < target_top ->
-        group.top
-
-      true ->
-        target_top
+  defp target_group_top(state, group) do
+    case state.position_delta do
+      position_delta when is_number(position_delta) -> group.top + position_delta
+      nil -> state.current_y
     end
   end
 end
