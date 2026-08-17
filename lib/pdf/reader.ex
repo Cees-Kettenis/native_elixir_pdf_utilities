@@ -249,6 +249,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
              true <- is_map(trailer) do
           {:ok, entries, trailer}
         else
+          {:error, {_reason, _diagnostic}} = error -> error
           _ -> error(:trailer, :invalid_pdf_input, "trailer dictionary is malformed")
         end
 
@@ -576,42 +577,81 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp parse_value(tokens) do
+    parse_value(tokens, 0)
+  end
+
+  defp parse_value(tokens, depth) do
     case tokens do
-      [{:int, first}, {:int, second}, :R | rest] -> {:ok, {:ref, {first, second}}, rest}
-      [{:int, value} | rest] -> {:ok, value, rest}
-      [{:real, value} | rest] -> {:ok, value, rest}
-      [{:name, name} | rest] -> {:ok, {:name, name}, rest}
-      [{:string, value} | rest] -> {:ok, {:string, value}, rest}
-      [{:hex_string, value} | rest] -> {:ok, {:hex, value}, rest}
-      [true | rest] -> {:ok, true, rest}
-      [false | rest] -> {:ok, false, rest}
-      [:null | rest] -> {:ok, nil, rest}
-      [:lbracket | rest] -> parse_array(rest, [])
-      [:dict_start | rest] -> parse_dictionary(rest, %{})
-      _ -> :error
+      [{:int, first}, {:int, second}, :R | rest] ->
+        {:ok, {:ref, {first, second}}, rest}
+
+      [{:int, value} | rest] ->
+        {:ok, value, rest}
+
+      [{:real, value} | rest] ->
+        {:ok, value, rest}
+
+      [{:name, name} | rest] ->
+        {:ok, {:name, name}, rest}
+
+      [{:string, value} | rest] ->
+        {:ok, {:string, value}, rest}
+
+      [{:hex_string, value} | rest] ->
+        {:ok, {:hex, value}, rest}
+
+      [true | rest] ->
+        {:ok, true, rest}
+
+      [false | rest] ->
+        {:ok, false, rest}
+
+      [:null | rest] ->
+        {:ok, nil, rest}
+
+      [:lbracket | rest] ->
+        with :ok <-
+               PdfValidator.validate_value_depth(depth + 1,
+                 operation: :read,
+                 module: __MODULE__
+               ) do
+          parse_array(rest, [], depth + 1)
+        end
+
+      [:dict_start | rest] ->
+        with :ok <-
+               PdfValidator.validate_value_depth(depth + 1,
+                 operation: :read,
+                 module: __MODULE__
+               ) do
+          parse_dictionary(rest, %{}, depth + 1)
+        end
+
+      _ ->
+        :error
     end
   end
 
-  defp parse_array(tokens, values) do
+  defp parse_array(tokens, values, depth) do
     case tokens do
       [:rbracket | rest] ->
         {:ok, Enum.reverse(values), rest}
 
       _ ->
-        with {:ok, value, rest} <- parse_value(tokens) do
-          parse_array(rest, [value | values])
+        with {:ok, value, rest} <- parse_value(tokens, depth) do
+          parse_array(rest, [value | values], depth)
         end
     end
   end
 
-  defp parse_dictionary(tokens, dictionary) do
+  defp parse_dictionary(tokens, dictionary, depth) do
     case tokens do
       [:dict_end | rest] ->
         {:ok, dictionary, rest}
 
       [{:name, key} | rest] ->
-        with {:ok, value, rest} <- parse_value(rest) do
-          parse_dictionary(rest, Map.put(dictionary, key, value))
+        with {:ok, value, rest} <- parse_value(rest, depth) do
+          parse_dictionary(rest, Map.put(dictionary, key, value), depth)
         end
 
       _ ->
@@ -698,6 +738,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
                    pending_stream: source
                  }}
               else
+                {:error, {_reason, _diagnostic}} = error -> error
                 _ -> error(:object, :invalid_pdf_input, "indirect object boundary is malformed")
               end
 
@@ -714,6 +755,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
                    {:ok, stream, []} <- parse_optional_stream(value_rest) do
                 {:ok, ref, %{value: value, stream: stream, offset: offset, tokens: body}}
               else
+                {:error, {_reason, _diagnostic}} = error -> error
                 _ -> error(:object, :invalid_pdf_input, "indirect object boundary is malformed")
               end
           end
@@ -903,6 +945,9 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
                        object: ref
                      )}
                 end
+
+              {:error, {_reason, _diagnostic}} = error ->
+                {:halt, error}
 
               _ ->
                 {:halt,

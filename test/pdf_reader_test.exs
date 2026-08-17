@@ -44,6 +44,84 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
     assert {:ok, _document} = Reader.read(null_encrypt)
   end
 
+  test "limits generic array and dictionary nesting before recursive descent" do
+    valid_array = String.duplicate("[", 100) <> "0" <> String.duplicate("]", 100)
+
+    valid_dictionary =
+      String.duplicate("<< /Value ", 100) <> "0" <> String.duplicate(" >>", 100)
+
+    assert {:ok, _document} =
+             Reader.read(
+               pdf([
+                 {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+                 {2, "<< /Type /Pages /Kids [] /Count 0 >>"},
+                 {3, valid_array},
+                 {4, valid_dictionary}
+               ])
+             )
+
+    excessive_values = [
+      String.duplicate("[", 101) <> "0" <> String.duplicate("]", 101),
+      String.duplicate("<< /Value ", 101) <> "0" <> String.duplicate(" >>", 101)
+    ]
+
+    for value <- excessive_values do
+      assert {:error,
+              {:resource_limit_exceeded,
+               %{
+                 stage: :limits,
+                 reason: :resource_limit_exceeded,
+                 operation: :read,
+                 module: NativeElixirPdfUtilities.Pdf.Reader,
+                 message: message
+               }}} =
+               Reader.read(
+                 pdf([
+                   {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+                   {2, "<< /Type /Pages /Kids [] /Count 0 >>"},
+                   {3, value}
+                 ])
+               )
+
+      assert message == "PDF value nesting depth exceeds the 100-level limit; object 3 0"
+    end
+
+    nested_trailer = String.duplicate("[", 100) <> "0" <> String.duplicate("]", 100)
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: trailer_message}}} =
+             Reader.read(
+               pdf(
+                 [
+                   {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+                   {2, "<< /Type /Pages /Kids [] /Count 0 >>"}
+                 ],
+                 "/Root 1 0 R /Deep #{nested_trailer}"
+               )
+             )
+
+    assert trailer_message == "PDF value nesting depth exceeds the 100-level limit"
+
+    nested_stream_dictionary =
+      String.duplicate("[", 100) <> "0" <> String.duplicate("]", 100)
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: stream_message}}} =
+             Reader.read(
+               pdf([
+                 {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+                 {2, "<< /Type /Pages /Kids [] /Count 0 >>"},
+                 {3,
+                  stream_object(
+                    "/Length 4 0 R /Deep #{nested_stream_dictionary}",
+                    "x",
+                    false
+                  )},
+                 {4, "1"}
+               ])
+             )
+
+    assert stream_message == "PDF value nesting depth exceeds the 100-level limit; object 3 0"
+  end
+
   test "resolves indirect chains and rejects reference cycles" do
     document = %{
       objects: %{

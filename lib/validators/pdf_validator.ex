@@ -20,6 +20,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @max_page_tree_depth 1_000
   @max_reference_chain_depth 1_000
   @max_reference_resolution_work 25_000
+  @max_value_depth 100
   @max_input_bytes 50_000_000
   @inheritable_page_keys ["Resources", "MediaBox", "CropBox", "Rotate"]
 
@@ -242,6 +243,27 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
 
       _ ->
         error(:object_stream, :invalid_pdf_input, "object stream header is invalid", opts)
+    end
+  end
+
+  @doc false
+  @spec validate_value_depth(term(), [diagnostic_option()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_value_depth(depth, opts \\ []) do
+    case depth do
+      depth when is_integer(depth) and depth >= 0 and depth <= @max_value_depth ->
+        :ok
+
+      depth when is_integer(depth) and depth > @max_value_depth ->
+        error(
+          :limits,
+          :resource_limit_exceeded,
+          "PDF value nesting depth exceeds the #{@max_value_depth}-level limit",
+          opts
+        )
+
+      _ ->
+        error(:object, :invalid_pdf_input, "PDF value nesting depth is invalid", opts)
     end
   end
 

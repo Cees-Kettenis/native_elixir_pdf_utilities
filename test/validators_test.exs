@@ -125,6 +125,24 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
     end
   end
 
+  test "generic PDF value depth is bounded by the shared validator" do
+    assert :ok = PdfValidator.validate_value_depth(100)
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{
+               stage: :limits,
+               reason: :resource_limit_exceeded,
+               message: "PDF value nesting depth exceeds the 100-level limit"
+             }}} = PdfValidator.validate_value_depth(101)
+
+    assert {:error,
+            {:invalid_pdf_input, %{stage: :object, reason: :invalid_pdf_input, message: message}}} =
+             PdfValidator.validate_value_depth(:invalid)
+
+    assert message == "PDF value nesting depth is invalid"
+  end
+
   test "shared validation prepares reusable page identity and inherited values" do
     document = shared_document()
 

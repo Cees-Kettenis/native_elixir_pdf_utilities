@@ -292,6 +292,21 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
       )
 
     assert_error(Reader.read(malformed_header), :invalid_pdf_input, :object_stream)
+
+    nested = String.duplicate("[", 100) <> "0" <> String.duplicate("]", 100)
+    nested_catalog = "<< /Type /Catalog /Pages 2 0 R /Deep #{nested} >>"
+    nested_header = "1 0 2 #{byte_size(nested_catalog) + 1} "
+
+    assert {:error, {:resource_limit_exceeded, nested_diagnostic}} =
+             Reader.read(
+               object_stream_pdf(
+                 nested_header <> nested_catalog <> "\n" <> pages,
+                 byte_size(nested_header)
+               )
+             )
+
+    assert nested_diagnostic.stage == :limits
+    assert nested_diagnostic.message == "PDF value nesting depth exceeds the 100-level limit"
   end
 
   test "limits object-stream entries before scanning the decoded header" do
