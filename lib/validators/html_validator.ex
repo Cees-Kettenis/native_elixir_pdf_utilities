@@ -24,6 +24,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @max_aggregate_image_source_bytes 50_000_000
   @max_decoded_image_bytes 40_000_000
   @max_aggregate_decoded_image_bytes 80_000_000
+  @max_layout_cardinality 1_000
 
   @type image_budget :: :atomics.atomics_ref()
 
@@ -312,6 +313,68 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     case scope do
       scope when is_binary(scope) -> String.downcase(scope) in ~w(row col rowgroup colgroup)
       _ -> false
+    end
+  end
+
+  @doc false
+  @spec validate_table_span_attribute(term(), term()) ::
+          {:ok, pos_integer()} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_table_span_attribute(attributes, name) do
+    case {attributes, name} do
+      {attributes, name}
+      when is_map(attributes) and name in ["span", "colspan", "rowspan"] ->
+        case Map.get(attributes, name) do
+          nil ->
+            {:ok, 1}
+
+          value when is_binary(value) ->
+            case Integer.parse(String.trim(value)) do
+              {integer, ""} ->
+                with :ok <- validate_layout_cardinality(:table_span, integer) do
+                  {:ok, integer}
+                end
+
+              _ ->
+                :error
+            end
+
+          _ ->
+            :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  @doc false
+  @spec validate_layout_cardinality(:grid_placement | :grid_tracks | :table_span, term()) ::
+          :ok | :error | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_layout_cardinality(kind, value) do
+    case {kind, value} do
+      {kind, value}
+      when kind in [:grid_placement, :grid_tracks, :table_span] and is_integer(value) and
+             value >= 1 and value <= @max_layout_cardinality ->
+        :ok
+
+      {kind, value}
+      when kind in [:grid_placement, :grid_tracks, :table_span] and is_integer(value) and
+             value >= 1 ->
+        label =
+          case kind do
+            :grid_placement -> "grid placement"
+            :grid_tracks -> "grid track count"
+            :table_span -> "table span"
+          end
+
+        Diagnostics.error(
+          :limits,
+          :resource_limit_exceeded,
+          "#{label} exceeds the #{@max_layout_cardinality}-item limit"
+        )
+
+      _ ->
+        :error
     end
   end
 

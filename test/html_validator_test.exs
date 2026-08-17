@@ -30,6 +30,31 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     refute HtmlValidator.valid_table_header_scope?("column")
     refute HtmlValidator.valid_table_header_scope?(nil)
 
+    assert {:ok, 1} = HtmlValidator.validate_table_span_attribute(%{}, "colspan")
+
+    assert {:ok, 1_000} =
+             HtmlValidator.validate_table_span_attribute(%{"rowspan" => " 1000 "}, "rowspan")
+
+    assert :error = HtmlValidator.validate_table_span_attribute(%{"span" => "0"}, "span")
+    assert :error = HtmlValidator.validate_table_span_attribute(%{"span" => "many"}, "span")
+    assert :error = HtmlValidator.validate_table_span_attribute(%{"span" => 2}, "span")
+    assert :error = HtmlValidator.validate_table_span_attribute(:bad, "span")
+    assert :error = HtmlValidator.validate_table_span_attribute(%{}, "width")
+
+    for kind <- [:grid_placement, :grid_tracks, :table_span] do
+      assert :ok = HtmlValidator.validate_layout_cardinality(kind, 1_000)
+
+      assert {:error,
+              {:resource_limit_exceeded,
+               %{stage: :limits, reason: :resource_limit_exceeded, message: message}}} =
+               HtmlValidator.validate_layout_cardinality(kind, 1_001)
+
+      assert message =~ "1000-item limit"
+    end
+
+    assert :error = HtmlValidator.validate_layout_cardinality(:grid_tracks, 0)
+    assert :error = HtmlValidator.validate_layout_cardinality(:unsupported, 1)
+
     assert :ok = HtmlValidator.validate_furniture_fit(:header, 12.0, 12.0)
 
     assert {:error, {:invalid_layout, %{stage: :layout}}} =

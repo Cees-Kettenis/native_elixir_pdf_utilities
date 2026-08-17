@@ -2736,10 +2736,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           end)
 
         covered_columns =
-          Enum.reduce(placed_cells, active_columns, fn placement, columns ->
-            columns ++
-              Enum.to_list(placement.column..(placement.column + placement.colspan - 1))
-          end)
+          Enum.map(placed_cells, &(&1.column + &1.colspan - 1)) ++ active_columns
 
         consumed_columns = Enum.max(covered_columns) + 1
 

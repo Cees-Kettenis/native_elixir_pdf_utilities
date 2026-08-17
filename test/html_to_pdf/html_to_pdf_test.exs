@@ -863,6 +863,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "(Second) Tj"
   end
 
+  test "render rejects excessive grid and table cardinalities before layout" do
+    excessive_documents = [
+      ~s|<div style="display: grid; grid-template-columns: repeat(1000000000, 1pt)">Grid</div>|,
+      ~s|<div style="display: grid; grid-template-columns: repeat(600, 1pt) repeat(600, 1pt)">Grid</div>|,
+      ~s|<div style="display: grid; grid-column: span 1001">Grid</div>|,
+      ~s|<table><tr><td colspan="1001">Cell</td></tr></table>|,
+      ~s|<table><tr><td rowspan="1001">Cell</td></tr></table>|,
+      ~s|<table><colgroup><col span="1001"></colgroup><tr><td>Cell</td></tr></table>|
+    ]
+
+    for html <- excessive_documents do
+      assert {:error,
+              {:resource_limit_exceeded,
+               %{
+                 stage: :limits,
+                 reason: :resource_limit_exceeded,
+                 operation: :render,
+                 module: NativeElixirPdfUtilities.HtmlToPdf,
+                 message: message
+               }}} = HtmlToPdf.render(html)
+
+      assert message =~ "1000-item limit"
+    end
+
+    assert {:error, {:invalid_document, %{stage: :style}}} =
+             HtmlToPdf.render(
+               ~s|<table><colgroup><col span="many"></colgroup><tr><td>Cell</td></tr></table>|
+             )
+  end
+
   test "render converts a PNG data URI image to a PDF image object" do
     src = "data:image/png;base64,#{Base.encode64(png_fixture(2, 1))}"
     html = ~s(<img src="#{src}" style="width: 20pt">)

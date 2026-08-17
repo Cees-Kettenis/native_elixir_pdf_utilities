@@ -275,6 +275,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "display: grid; grid-template-columns: minmax()",
       "display: grid; grid-template-columns: minmax(1fr, 2fr)",
       "display: grid; grid-template-columns: minmax(minmax(0, 1fr), 2fr)",
+      "display: grid; grid-template-columns: repeat(2, bad)",
       "width: min(100%, nope)",
       "width: min()",
       "width: min",

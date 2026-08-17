@@ -746,6 +746,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
          span: span
        }}
     else
+      {:error, {_reason, _diagnostic}} = error -> error
       _ -> :invalid
     end
   end
@@ -789,6 +790,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           {:ok, cell}
       end
     else
+      {:error, {_reason, _diagnostic}} = error -> error
       _ -> :invalid
     end
   end
@@ -825,19 +827,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp positive_attribute(attributes, name) do
-    case Map.get(attributes, name) do
-      nil ->
-        {:ok, 1}
-
-      value when is_binary(value) ->
-        case Integer.parse(String.trim(value)) do
-          {integer, ""} when integer >= 1 -> {:ok, integer}
-          _ -> :error
-        end
-
-      _ ->
-        :error
-    end
+    HtmlValidator.validate_table_span_attribute(attributes, name)
   end
 
   defp edges(value) do
@@ -2497,16 +2487,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp parse_grid_tracks(value) do
-    parsed_tracks =
+    result =
       value
       |> String.trim()
       |> String.downcase()
       |> split_css_tokens()
-      |> Enum.map(&parse_grid_track_source/1)
+      |> Enum.reduce_while({:ok, [], 0}, fn source, {:ok, chunks, track_count} ->
+        case parse_grid_track_source(source) do
+          {:ok, tracks} ->
+            track_count = track_count + length(tracks)
 
-    case Enum.all?(parsed_tracks, &match?({:ok, _track}, &1)) do
-      true -> {:ok, Enum.flat_map(parsed_tracks, fn {:ok, tracks} -> tracks end)}
-      false -> :error
+            case HtmlValidator.validate_layout_cardinality(:grid_tracks, track_count) do
+              :ok -> {:cont, {:ok, [tracks | chunks], track_count}}
+              {:error, {_reason, _diagnostic}} = error -> {:halt, error}
+            end
+
+          :error ->
+            {:halt, :error}
+
+          {:error, {_reason, _diagnostic}} = error ->
+            {:halt, error}
+        end
+      end)
+
+    case result do
+      {:ok, chunks, _track_count} -> {:ok, chunks |> Enum.reverse() |> List.flatten()}
+      result -> result
     end
   end
 
@@ -2562,9 +2568,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     case Regex.named_captures(~r/^repeat\((?<count>[1-9]\d*)\s*,\s*(?<track>.+)\)$/u, normalized) do
       %{"count" => count, "track" => track} ->
         with {count, ""} <- Integer.parse(count),
+             :ok <- HtmlValidator.validate_layout_cardinality(:grid_tracks, count),
              {:ok, parsed_track} <- parse_grid_track(track) do
           {:ok, List.duplicate(parsed_track, count)}
         else
+          {:error, {_reason, _diagnostic}} = error -> error
           _ -> :error
         end
 
@@ -2703,11 +2711,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       Regex.match?(~r/^span\s+[1-9]\d*$/u, value) ->
         ["span", count] = String.split(value, ~r/\s+/u, trim: true)
         {count, ""} = Integer.parse(count)
-        {:ok, {:span, count}}
+
+        with :ok <- HtmlValidator.validate_layout_cardinality(:grid_placement, count) do
+          {:ok, {:span, count}}
+        end
 
       Regex.match?(~r/^[1-9]\d*$/u, value) ->
         {line, ""} = Integer.parse(value)
-        {:ok, line}
+
+        with :ok <- HtmlValidator.validate_layout_cardinality(:grid_placement, line) do
+          {:ok, line}
+        end
 
       true ->
         :error
