@@ -127,6 +127,15 @@ other explainable extraction failure returns the shared diagnostic contract:
 {:error, {reason, diagnostic}}
 ```
 
+Each extraction keeps a request-scoped cache of decoded streams and raw content
+instructions keyed by the terminal indirect-stream reference. Repeated page and
+Form references therefore reuse decoding and tokenization work without sharing
+state across documents or callers. Extraction also bounds aggregate decoded
+content to 50 MB, unique parsed instructions to 100,000, stream uses to 100,000,
+executed instruction uses to 1,000,000, and Form expansions to 10,000. Exceeding
+one of these operation-wide limits returns `:resource_limit_exceeded` rather
+than a partial result.
+
 Use the positioned API for domain-specific interpretation and the string API
 when a best-effort readable projection is sufficient.
 

@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
 
   alias NativeElixirPdfUtilities.Validators.MergeValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
+  alias NativeElixirPdfUtilities.Validators.TextResourceValidator
   alias NativeElixirPdfUtilities.Validators.TextValidator
 
   @fixture_directory Path.expand("fixtures/pdf_reader", __DIR__)
@@ -495,6 +496,47 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
 
     assert {:error, {:invalid_pdf_input, %{stage: :page_tree}}} =
              TextValidator.prepare(malformed_page)
+  end
+
+  test "text preparation canonicalizes stream aliases and preserves the resource wrapper" do
+    document = %{
+      objects: %{
+        {1, 0} => %{value: {:ref, {2, 0}}, stream: nil},
+        {2, 0} => %{value: %{"Length" => 0}, stream: ""}
+      }
+    }
+
+    preparation_context = TextValidator.new_preparation_context()
+
+    assert {:ok, [], preparation_context} =
+             TextValidator.prepare_content_stream(
+               document,
+               {:ref, {2, 0}},
+               1,
+               preparation_context
+             )
+
+    assert {:ok, [], preparation_context} =
+             TextValidator.prepare_content_stream(
+               document,
+               {:ref, {1, 0}},
+               1,
+               preparation_context
+             )
+
+    assert map_size(preparation_context.decoded_streams) == 1
+    assert map_size(preparation_context.instructions) == 1
+    assert preparation_context.stream_uses == 2
+
+    assert TextResourceValidator.prepare_contents(document, nil, [], 1) == {:ok, []}
+
+    assert {:error, {:invalid_pdf_input, %{stage: :resolution}}} =
+             TextResourceValidator.prepare_contents(
+               document,
+               nil,
+               [[%{operator: "Tf", operands: [{:name, "F1"}, 12]}]],
+               1
+             )
   end
 
   defp shared_document do

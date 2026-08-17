@@ -103,6 +103,14 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
     assert_error(Reader.decoded_stream(document, {:ref, {1, 0}}), :invalid_pdf_input, :stream)
     assert_error(Reader.decoded_stream(document, {:ref, {2, 0}}), :invalid_pdf_input, :resolution)
     assert_error(Reader.decoded_stream(document, 1), :invalid_pdf_input, :stream)
+
+    assert {:error, {:invalid_pdf_input, prepared_diagnostic}} =
+             Reader.decode_prepared_stream(%{})
+
+    assert prepared_diagnostic.stage == :stream
+    assert prepared_diagnostic.operation == :read
+    assert prepared_diagnostic.module == Reader
+
     assert_error(Reader.dictionary(document, 42), :invalid_pdf_input, :resolution)
     assert_error(Reader.fetch(document, %{}, 42), :invalid_pdf_input, :resolution)
     assert Reader.fetch(document, %{"A" => 1}, "A") == {:ok, 1}

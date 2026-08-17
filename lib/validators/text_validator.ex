@@ -17,6 +17,11 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
 
   @validated_operators ~w(q Q cm gs BT ET Tf Tm Td TD T* TL Tc Tw Tz Tr Ts Tj TJ ' " Do)
   @text_showing_operators ~w(Tj TJ ' ")
+  @max_decoded_content_bytes 50_000_000
+  @max_parsed_instructions 100_000
+  @max_stream_uses 100_000
+  @max_instruction_uses 1_000_000
+  @max_form_expansions 10_000
 
   @typedoc "A validated content instruction with operands in source order."
   @type instruction :: %{required(:operator) => binary(), required(:operands) => [term()]}
@@ -30,10 +35,35 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
           required(:contents) => [[instruction()]]
         }
 
+  @typedoc false
+  @type preparation_context :: %{
+          required(:stream_refs) => %{optional(PdfValidator.value()) => PdfValidator.ref()},
+          required(:decoded_streams) => %{optional(PdfValidator.ref()) => binary()},
+          required(:instructions) => %{
+            optional(PdfValidator.ref()) => [instruction()]
+          },
+          required(:decoded_bytes) => non_neg_integer(),
+          required(:parsed_instructions) => non_neg_integer(),
+          required(:stream_uses) => non_neg_integer(),
+          required(:instruction_uses) => non_neg_integer(),
+          required(:form_expansions) => non_neg_integer()
+        }
+
+  @typedoc false
+  @type preparation_stats :: %{
+          required(:unique_streams) => non_neg_integer(),
+          required(:decoded_bytes) => non_neg_integer(),
+          required(:parsed_instructions) => non_neg_integer(),
+          required(:stream_uses) => non_neg_integer(),
+          required(:instruction_uses) => non_neg_integer(),
+          required(:form_expansions) => non_neg_integer()
+        }
+
   @typedoc "A text-specific context prepared from the shared PDF context."
   @type context :: %{
           required(:document) => PdfValidator.document(),
-          required(:pages) => [page_context()]
+          required(:pages) => [page_context()],
+          required(:preparation_stats) => preparation_stats()
         }
 
   @typedoc "A validated public text-extraction request."
@@ -145,15 +175,26 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
       %{document: document, pages: pages} ->
         pages
         |> Enum.with_index(1)
-        |> Enum.reduce_while({:ok, []}, fn {page, page_number}, {:ok, prepared_pages} ->
-          case prepare_page(document, page, page_number) do
-            {:ok, prepared} -> {:cont, {:ok, [prepared | prepared_pages]}}
-            {:error, _} = page_error -> {:halt, page_error}
+        |> Enum.reduce_while(
+          {:ok, [], new_preparation_context()},
+          fn {page, page_number}, {:ok, prepared_pages, preparation_context} ->
+            case prepare_page(document, page, page_number, preparation_context) do
+              {:ok, prepared, preparation_context} ->
+                {:cont, {:ok, [prepared | prepared_pages], preparation_context}}
+
+              {:error, _} = page_error ->
+                {:halt, page_error}
+            end
           end
-        end)
+        )
         |> case do
-          {:ok, prepared_pages} ->
-            {:ok, %{document: document, pages: Enum.reverse(prepared_pages)}}
+          {:ok, prepared_pages, preparation_context} ->
+            {:ok,
+             %{
+               document: document,
+               pages: Enum.reverse(prepared_pages),
+               preparation_stats: preparation_stats(preparation_context)
+             }}
 
           {:error, _} = preparation_error ->
             preparation_error
@@ -161,6 +202,75 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
 
       _ ->
         error(:text_validation, :invalid_pdf_input, "shared PDF validation context is malformed")
+    end
+  end
+
+  @doc false
+  @spec new_preparation_context() :: preparation_context()
+  def new_preparation_context do
+    %{
+      stream_refs: %{},
+      decoded_streams: %{},
+      instructions: %{},
+      decoded_bytes: 0,
+      parsed_instructions: 0,
+      stream_uses: 0,
+      instruction_uses: 0,
+      form_expansions: 0
+    }
+  end
+
+  @doc false
+  @spec prepare_content_stream(
+          PdfValidator.document(),
+          PdfValidator.value(),
+          pos_integer(),
+          preparation_context()
+        ) ::
+          {:ok, [instruction()], preparation_context()}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_content_stream(document, value, page_number, preparation_context) do
+    with {:ok, stream_ref, content, preparation_context} <-
+           cached_stream(document, value, page_number, preparation_context),
+         {:ok, operations, preparation_context} <-
+           cached_instructions(
+             stream_ref,
+             content,
+             preparation_context,
+             page_number
+           ) do
+      {:ok, operations, preparation_context}
+    end
+  end
+
+  @doc false
+  @spec decoded_stream(
+          PdfValidator.document(),
+          PdfValidator.value(),
+          pos_integer(),
+          preparation_context()
+        ) ::
+          {:ok, binary(), preparation_context()}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def decoded_stream(document, value, page_number, preparation_context) do
+    with {:ok, _stream_ref, content, preparation_context} <-
+           cached_stream(document, value, page_number, preparation_context) do
+      {:ok, content, preparation_context}
+    end
+  end
+
+  @doc false
+  @spec charge_form_expansion(preparation_context(), pos_integer()) ::
+          {:ok, preparation_context()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def charge_form_expansion(preparation_context, page_number) do
+    form_expansions = preparation_context.form_expansions + 1
+
+    case form_expansions <= @max_form_expansions do
+      true ->
+        {:ok, %{preparation_context | form_expansions: form_expansions}}
+
+      false ->
+        resource_limit_error("Form XObject expansion count exceeds the limit", page_number)
     end
   end
 
@@ -356,17 +466,19 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     end
   end
 
-  defp prepare_page(document, page, page_number) do
+  defp prepare_page(document, page, page_number, preparation_context) do
     with {:ok, media_box} <- page_rectangle(document, page.media_box, page_number),
          {:ok, rotation} <- page_rotation(document, page.rotate, page_number),
          {:ok, content_refs} <- content_references(page.dictionary, page.ref),
-         {:ok, contents} <- prepare_contents(document, content_refs, page_number),
-         {:ok, contents} <-
+         {:ok, contents, preparation_context} <-
+           prepare_contents(document, content_refs, page_number, preparation_context),
+         {:ok, contents, preparation_context} <-
            TextResourceValidator.prepare_contents(
              document,
              page.resources,
              contents,
-             page_number
+             page_number,
+             preparation_context
            ) do
       {:ok,
        %{
@@ -375,7 +487,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
          media_box: media_box,
          rotation: rotation,
          contents: contents
-       }}
+       }, preparation_context}
     end
   end
 
@@ -428,29 +540,167 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     end
   end
 
-  defp prepare_contents(document, content_refs, page_number) do
-    Enum.reduce_while(content_refs, {:ok, []}, fn content_ref, {:ok, contents} ->
-      with {:ok, content} <- Reader.decoded_stream(document, content_ref),
-           {:ok, operations} <- instructions(content, page_number) do
-        {:cont, {:ok, [operations | contents]}}
-      else
-        {:error, {reason, diagnostic}} ->
-          diagnostic = append_details(diagnostic, page: page_number)
-          {:halt, {:error, {reason, diagnostic}}}
+  defp prepare_contents(document, content_refs, page_number, preparation_context) do
+    Enum.reduce_while(
+      content_refs,
+      {:ok, [], preparation_context},
+      fn content_ref, {:ok, contents, preparation_context} ->
+        case prepare_content_stream(document, content_ref, page_number, preparation_context) do
+          {:ok, operations, preparation_context} ->
+            {:cont, {:ok, [operations | contents], preparation_context}}
+
+          {:error, {reason, diagnostic}} ->
+            diagnostic = append_details(diagnostic, page: page_number)
+            {:halt, {:error, {reason, diagnostic}}}
+        end
       end
-    end)
+    )
     |> case do
-      {:ok, contents} ->
+      {:ok, contents, preparation_context} ->
         contents = Enum.reverse(contents)
 
         case validate_scopes(contents, page_number) do
-          :ok -> {:ok, contents}
+          :ok -> {:ok, contents, preparation_context}
           {:error, _} = scope_error -> scope_error
         end
 
       {:error, _} = content_error ->
         content_error
     end
+  end
+
+  defp cached_decoded_stream(stream_context, preparation_context, page_number) do
+    case Map.fetch(preparation_context.decoded_streams, stream_context.ref) do
+      {:ok, content} ->
+        {:ok, content, preparation_context}
+
+      :error ->
+        with {:ok, content} <- Reader.decode_prepared_stream(stream_context),
+             {:ok, preparation_context} <-
+               cache_decoded_stream(
+                 preparation_context,
+                 stream_context.ref,
+                 content,
+                 page_number
+               ) do
+          {:ok, content, preparation_context}
+        end
+    end
+  end
+
+  defp cached_stream(document, value, page_number, preparation_context) do
+    with {:ok, preparation_context} <- charge_stream_use(preparation_context, page_number) do
+      case Map.fetch(preparation_context.stream_refs, value) do
+        {:ok, stream_ref} ->
+          {:ok, stream_ref, Map.fetch!(preparation_context.decoded_streams, stream_ref),
+           preparation_context}
+
+        :error ->
+          with {:ok, stream_context} <-
+                 PdfValidator.prepare_decoded_stream(document, value,
+                   operation: :read,
+                   module: Reader
+                 ),
+               {:ok, content, preparation_context} <-
+                 cached_decoded_stream(stream_context, preparation_context, page_number) do
+            preparation_context = %{
+              preparation_context
+              | stream_refs: Map.put(preparation_context.stream_refs, value, stream_context.ref)
+            }
+
+            {:ok, stream_context.ref, content, preparation_context}
+          end
+      end
+    end
+  end
+
+  defp cache_decoded_stream(preparation_context, stream_ref, content, page_number) do
+    decoded_bytes = preparation_context.decoded_bytes + byte_size(content)
+
+    case decoded_bytes <= @max_decoded_content_bytes do
+      true ->
+        {:ok,
+         %{
+           preparation_context
+           | decoded_streams: Map.put(preparation_context.decoded_streams, stream_ref, content),
+             decoded_bytes: decoded_bytes
+         }}
+
+      false ->
+        resource_limit_error("aggregate decoded content bytes exceed the limit", page_number)
+    end
+  end
+
+  defp cached_instructions(stream_ref, content, preparation_context, page_number) do
+    case Map.fetch(preparation_context.instructions, stream_ref) do
+      {:ok, operations} ->
+        with {:ok, preparation_context} <-
+               charge_instruction_uses(preparation_context, length(operations), page_number) do
+          {:ok, operations, preparation_context}
+        end
+
+      :error ->
+        with {:ok, operations} <- instructions(content, page_number),
+             {:ok, preparation_context} <-
+               cache_instructions(preparation_context, stream_ref, operations, page_number),
+             {:ok, preparation_context} <-
+               charge_instruction_uses(preparation_context, length(operations), page_number) do
+          {:ok, operations, preparation_context}
+        end
+    end
+  end
+
+  defp cache_instructions(preparation_context, stream_ref, operations, page_number) do
+    parsed_instructions = preparation_context.parsed_instructions + length(operations)
+
+    case parsed_instructions <= @max_parsed_instructions do
+      true ->
+        {:ok,
+         %{
+           preparation_context
+           | instructions: Map.put(preparation_context.instructions, stream_ref, operations),
+             parsed_instructions: parsed_instructions
+         }}
+
+      false ->
+        resource_limit_error("parsed content instruction count exceeds the limit", page_number)
+    end
+  end
+
+  defp charge_stream_use(preparation_context, page_number) do
+    stream_uses = preparation_context.stream_uses + 1
+
+    case stream_uses <= @max_stream_uses do
+      true ->
+        {:ok, %{preparation_context | stream_uses: stream_uses}}
+
+      false ->
+        resource_limit_error("content stream reference count exceeds the limit", page_number)
+    end
+  end
+
+  defp charge_instruction_uses(preparation_context, count, page_number) do
+    instruction_uses = preparation_context.instruction_uses + count
+
+    case instruction_uses <= @max_instruction_uses do
+      true -> {:ok, %{preparation_context | instruction_uses: instruction_uses}}
+      false -> resource_limit_error("content instruction work exceeds the limit", page_number)
+    end
+  end
+
+  defp preparation_stats(preparation_context) do
+    %{
+      unique_streams: map_size(preparation_context.decoded_streams),
+      decoded_bytes: preparation_context.decoded_bytes,
+      parsed_instructions: preparation_context.parsed_instructions,
+      stream_uses: preparation_context.stream_uses,
+      instruction_uses: preparation_context.instruction_uses,
+      form_expansions: preparation_context.form_expansions
+    }
+  end
+
+  defp resource_limit_error(message, page_number) do
+    error(:limits, :resource_limit_exceeded, message, page: page_number)
   end
 
   defp validate_scope_instructions(instructions, scope, page_number) do

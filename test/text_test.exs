@@ -1,7 +1,9 @@
 defmodule NativeElixirPdfUtilities.TextTest do
   use ExUnit.Case
 
+  alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Text
+  alias NativeElixirPdfUtilities.Validators.TextValidator
 
   test "extracts a Type0 ToUnicode CMap without mixing it with another font" do
     cmap =
@@ -85,6 +87,113 @@ defmodule NativeElixirPdfUtilities.TextTest do
     ]
 
     assert Text.extract(pdf(objects), layout: false) == {:ok, "First Second Form"}
+  end
+
+  test "caches shared decoded content and instructions for one extraction" do
+    pdf = shared_content_pages_pdf(250, "BT /F1 12 Tf (Shared) Tj ET")
+
+    assert {:ok, pdf_context} = Reader.read_validated(pdf)
+    assert {:ok, text_context} = TextValidator.prepare(pdf_context)
+
+    assert text_context.preparation_stats == %{
+             unique_streams: 1,
+             decoded_bytes: 27,
+             parsed_instructions: 4,
+             stream_uses: 250,
+             instruction_uses: 1_000,
+             form_expansions: 0
+           }
+
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    assert length(String.split(text, "\n")) == 250
+  end
+
+  test "reuses raw Form instructions while charging every expansion" do
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents 6 0 R >>"},
+      {4, "<< /Font << /F1 5 0 R >> /XObject << /form 7 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", "/form Do /form Do")},
+      {7,
+       stream_object(
+         "/Type /XObject /Subtype /Form /Resources 4 0 R",
+         "BT /F1 12 Tf (Form) Tj ET"
+       )}
+    ]
+
+    assert {:ok, pdf_context} = objects |> pdf() |> Reader.read_validated()
+    assert {:ok, text_context} = TextValidator.prepare(pdf_context)
+
+    assert text_context.preparation_stats.unique_streams == 2
+    assert text_context.preparation_stats.parsed_instructions == 6
+    assert text_context.preparation_stats.stream_uses == 3
+    assert text_context.preparation_stats.instruction_uses == 10
+    assert text_context.preparation_stats.form_expansions == 2
+  end
+
+  test "returns validator diagnostics for aggregate extraction work limits" do
+    assert {:ok, pdf_context} = Reader.read_validated(page_pdf("BT /F1 12 Tf (Limit) Tj ET"))
+    preparation_context = TextValidator.new_preparation_context()
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: stream_message}}} =
+             TextValidator.prepare_content_stream(
+               pdf_context.document,
+               {:ref, {6, 0}},
+               1,
+               %{preparation_context | stream_uses: 100_000}
+             )
+
+    assert stream_message =~ "content stream reference count"
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: byte_message}}} =
+             TextValidator.prepare_content_stream(
+               pdf_context.document,
+               {:ref, {6, 0}},
+               1,
+               %{preparation_context | decoded_bytes: 50_000_000}
+             )
+
+    assert byte_message =~ "aggregate decoded content bytes"
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: parse_message}}} =
+             TextValidator.prepare_content_stream(
+               pdf_context.document,
+               {:ref, {6, 0}},
+               1,
+               %{preparation_context | parsed_instructions: 100_000}
+             )
+
+    assert parse_message =~ "parsed content instruction count"
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: work_message}}} =
+             TextValidator.prepare_content_stream(
+               pdf_context.document,
+               {:ref, {6, 0}},
+               1,
+               %{preparation_context | instruction_uses: 1_000_000}
+             )
+
+    assert work_message =~ "content instruction work"
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: form_message}}} =
+             TextValidator.charge_form_expansion(
+               %{preparation_context | form_expansions: 10_000},
+               1
+             )
+
+    assert form_message =~ "Form XObject expansion count"
+  end
+
+  test "rejects aggregate parsed instruction work through the public extraction API" do
+    oversized_instruction_stream = :binary.copy("x ", 100_001)
+
+    assert_error(
+      Text.extract(page_pdf(oversized_instruction_stream)),
+      :resource_limit_exceeded,
+      :limits
+    )
   end
 
   test "balances graphics and text scopes across page content streams" do
@@ -1561,6 +1670,33 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
     objects = if cmap, do: objects ++ [{7, stream_object("", cmap)}], else: objects
     pdf(objects)
+  end
+
+  defp shared_content_pages_pdf(page_count, content) do
+    page_refs = Enum.to_list(3..(page_count + 2))
+    resources_ref = page_count + 3
+    font_ref = page_count + 4
+    content_ref = page_count + 5
+
+    pages =
+      Enum.map(page_refs, fn page_ref ->
+        {page_ref,
+         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources #{resources_ref} 0 R /Contents #{content_ref} 0 R >>"}
+      end)
+
+    pdf(
+      [
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2,
+         "<< /Type /Pages /Kids [#{Enum.map_join(page_refs, " ", &"#{&1} 0 R")}] /Count #{page_count} >>"}
+      ] ++
+        pages ++
+        [
+          {resources_ref, "<< /Font << /F1 #{font_ref} 0 R >> >>"},
+          {font_ref, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+          {content_ref, stream_object("", content)}
+        ]
+    )
   end
 
   defp stream_object(dictionary, stream) do

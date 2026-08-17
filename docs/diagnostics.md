@@ -79,6 +79,9 @@ The tokenizer represents malformed literal and hexadecimal strings as
 `NativeElixirPdfUtilities.Tokenizer` directly; merge and text extraction convert
 such tokenization failures into their public diagnostic error shape.
 
-To protect extraction from resource exhaustion, the shared reader applies input,
-decoded-stream, ratio, object/page, CMap, and recursion limits. A limit failure
-returns `:resource_limit_exceeded`; it is never converted to a partial result.
+To protect extraction from resource exhaustion, the shared reader and text
+validators apply input, decoded-stream, decompression-ratio, object/page, CMap,
+recursion, aggregate decoded-content, stream-use, instruction, and Form-expansion
+limits. A limit failure returns `:resource_limit_exceeded`; it is never converted
+to a partial result. Repeated indirect streams are decoded and tokenized once per
+extraction, while every semantic use is still charged to the operation budget.

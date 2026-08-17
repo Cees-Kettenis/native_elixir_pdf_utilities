@@ -20,27 +20,52 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   @spec prepare_contents(map(), term(), [[TextValidator.instruction()]], pos_integer()) ::
           {:ok, [[map()]]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_contents(document, resources, contents, page_number) do
-    contents
-    |> Enum.reduce_while({:ok, [], %{font: nil, stack: []}}, fn instructions,
-                                                                {:ok, prepared, state} ->
-      case prepare_instructions(
-             instructions,
-             document,
-             resources,
-             state,
-             page_number,
-             0
-           ) do
-        {:ok, instructions, state} ->
-          {:cont, {:ok, [instructions | prepared], state}}
+    case prepare_contents(
+           document,
+           resources,
+           contents,
+           page_number,
+           TextValidator.new_preparation_context()
+         ) do
+      {:ok, contents, _preparation_context} -> {:ok, contents}
+      {:error, _} = preparation_error -> preparation_error
+    end
+  end
 
-        {:error, _} = preparation_error ->
-          {:halt, preparation_error}
+  @doc false
+  @spec prepare_contents(
+          map(),
+          term(),
+          [[TextValidator.instruction()]],
+          pos_integer(),
+          TextValidator.preparation_context()
+        ) ::
+          {:ok, [[map()]], TextValidator.preparation_context()}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_contents(document, resources, contents, page_number, preparation_context) do
+    contents
+    |> Enum.reduce_while(
+      {:ok, [], %{font: nil, stack: [], preparation: preparation_context}},
+      fn instructions, {:ok, prepared, state} ->
+        case prepare_instructions(
+               instructions,
+               document,
+               resources,
+               state,
+               page_number,
+               0
+             ) do
+          {:ok, instructions, state} ->
+            {:cont, {:ok, [instructions | prepared], state}}
+
+          {:error, _} = preparation_error ->
+            {:halt, preparation_error}
+        end
       end
-    end)
+    )
     |> case do
-      {:ok, prepared, _state} ->
-        {:ok, Enum.reverse(prepared)}
+      {:ok, prepared, state} ->
+        {:ok, Enum.reverse(prepared), state.preparation}
 
       {:error, {reason, diagnostic}} ->
         {:error, {reason, with_debug_details(diagnostic, page: page_number)}}
@@ -71,18 +96,28 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
         {:ok, instruction, %{state | font: font, stack: stack}}
 
       %{operator: "Tf", operands: [{:name, font_name}, _size]} ->
-        with {:ok, font} <- resolve_font(document, resources, font_name, page) do
-          {:ok, Map.put(instruction, :font, font), %{state | font: font}}
+        with {:ok, font, preparation} <-
+               resolve_font(document, resources, font_name, page, state.preparation) do
+          {:ok, Map.put(instruction, :font, font),
+           %{state | font: font, preparation: preparation}}
         end
 
       %{operator: "gs", operands: [{:name, name}]} ->
-        with {:ok, font_state} <- prepare_ext_graphics_state(document, resources, name, page) do
+        with {:ok, font_state, preparation} <-
+               prepare_ext_graphics_state(
+                 document,
+                 resources,
+                 name,
+                 page,
+                 state.preparation
+               ) do
           case font_state do
             nil ->
-              {:ok, instruction, state}
+              {:ok, instruction, %{state | preparation: preparation}}
 
             %{font: font} = font_state ->
-              {:ok, Map.merge(instruction, font_state), %{state | font: font}}
+              {:ok, Map.merge(instruction, font_state),
+               %{state | font: font, preparation: preparation}}
           end
         end
 
@@ -119,9 +154,17 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
         end
 
       %{operator: "Do", operands: [{:name, name}]} ->
-        with {:ok, form} <-
-               prepare_form(name, document, resources, state.font, page, depth) do
-          {:ok, Map.put(instruction, :form, form), state}
+        with {:ok, form, preparation} <-
+               prepare_form(
+                 name,
+                 document,
+                 resources,
+                 state.font,
+                 page,
+                 depth,
+                 state.preparation
+               ) do
+          {:ok, Map.put(instruction, :form, form), %{state | preparation: preparation}}
         end
 
       _ ->
@@ -129,7 +172,15 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
     end
   end
 
-  defp prepare_form(name, document, resources, inherited_font, page, depth) do
+  defp prepare_form(
+         name,
+         document,
+         resources,
+         inherited_font,
+         page,
+         depth,
+         preparation_context
+       ) do
     case depth >= @max_form_depth do
       true ->
         error(:limits, :resource_limit_exceeded, "Form XObject nesting exceeds the limit",
@@ -143,42 +194,49 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
              {:ok, xobject} <- Reader.dictionary(document, xobject_ref) do
           case name?(Map.get(xobject, "Subtype"), "Form") do
             true ->
-              with {:ok, stream} <- Reader.decoded_stream(document, xobject_ref),
-                   {:ok, instructions} <- TextValidator.instructions(stream, page),
+              with {:ok, preparation_context} <-
+                     TextValidator.charge_form_expansion(preparation_context, page),
+                   {:ok, instructions, preparation_context} <-
+                     TextValidator.prepare_content_stream(
+                       document,
+                       xobject_ref,
+                       page,
+                       preparation_context
+                     ),
                    :ok <- TextValidator.validate_scopes([instructions], page),
                    {:ok, matrix} <- matrix_value(document, Map.get(xobject, "Matrix")),
-                   {:ok, instructions, _state} <-
+                   {:ok, instructions, state} <-
                      prepare_instructions(
                        instructions,
                        document,
                        Map.get(xobject, "Resources", resources),
-                       %{font: inherited_font, stack: []},
+                       %{font: inherited_font, stack: [], preparation: preparation_context},
                        page,
                        depth + 1
                      ) do
-                {:ok, %{instructions: instructions, matrix: matrix}}
+                {:ok, %{instructions: instructions, matrix: matrix}, state.preparation}
               end
 
             false ->
-              {:ok, nil}
+              {:ok, nil, preparation_context}
           end
         end
     end
   end
 
-  defp resolve_font(document, resources, font_name, page) do
+  defp resolve_font(document, resources, font_name, page, preparation_context) do
     with {:ok, resources} <- Reader.dictionary(document, resources),
          {:ok, fonts} <- Reader.dictionary(document, Map.get(resources, "Font")),
          {:ok, font_ref} <- required_value(fonts, font_name, "font", page),
          {:ok, font} <- Reader.dictionary(document, font_ref) do
-      prepare_font(document, font, font_name, page)
+      prepare_font(document, font, font_name, page, preparation_context)
     else
       {:error, {reason, diagnostic}} ->
         {:error, {reason, with_debug_details(diagnostic, page: page, font: font_name)}}
     end
   end
 
-  defp prepare_ext_graphics_state(document, resources, name, page) do
+  defp prepare_ext_graphics_state(document, resources, name, page, preparation_context) do
     with {:ok, resources} <- Reader.dictionary(document, resources),
          ext_graphics_states when not is_nil(ext_graphics_states) <-
            Map.get(resources, "ExtGState"),
@@ -188,14 +246,21 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
          {:ok, ext_graphics_state} <- Reader.dictionary(document, ext_graphics_state_ref) do
       case Map.get(ext_graphics_state, "Font") do
         nil ->
-          {:ok, nil}
+          {:ok, nil, preparation_context}
 
         font_value ->
           case Reader.resolve(document, font_value) do
             {:ok, [{:ref, _ref} = font_ref, size]} when is_number(size) ->
               with {:ok, font_dictionary} <- Reader.dictionary(document, font_ref),
-                   {:ok, font} <- prepare_font(document, font_dictionary, name, page) do
-                {:ok, %{font: font, font_size: size * 1.0}}
+                   {:ok, font, preparation_context} <-
+                     prepare_font(
+                       document,
+                       font_dictionary,
+                       name,
+                       page,
+                       preparation_context
+                     ) do
+                {:ok, %{font: font, font_size: size * 1.0}, preparation_context}
               else
                 {:error, _} = font_error -> font_error
               end
@@ -221,19 +286,28 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
     end
   end
 
-  defp prepare_font(document, font, font_name, page) do
+  defp prepare_font(document, font, font_name, page, preparation_context) do
     cmap =
       case Map.get(font, "ToUnicode") do
         nil ->
-          {:ok, nil}
+          {:ok, nil, preparation_context}
 
         cmap_ref ->
-          with {:ok, stream} <- Reader.decoded_stream(document, cmap_ref),
-               do: parse_cmap(stream, page, font_name)
+          with {:ok, stream, preparation_context} <-
+                 TextValidator.decoded_stream(
+                   document,
+                   cmap_ref,
+                   page,
+                   preparation_context
+                 ),
+               {:ok, cmap} <- parse_cmap(stream, page, font_name) do
+            {:ok, cmap, preparation_context}
+          end
       end
 
-    with {:ok, cmap} <- cmap,
-         {:ok, cid_encoding} <- type0_cid_encoding(document, font, page, font_name),
+    with {:ok, cmap, preparation_context} <- cmap,
+         {:ok, cid_encoding, preparation_context} <-
+           type0_cid_encoding(document, font, page, font_name, preparation_context),
          {:ok, widths, default_width} <- font_metrics(document, font) do
       {:ok,
        %{
@@ -244,7 +318,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
          document: document,
          widths: widths,
          default_width: default_width
-       }}
+       }, preparation_context}
     end
   end
 
@@ -255,12 +329,12 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
     end
   end
 
-  defp type0_cid_encoding(document, font, page, font_name) do
+  defp type0_cid_encoding(document, font, page, font_name, preparation_context) do
     case name?(Map.get(font, "Subtype"), "Type0") do
       true ->
         case Map.get(font, "Encoding") do
           {:name, "Identity-H"} ->
-            {:ok, :identity}
+            {:ok, :identity, preparation_context}
 
           {:name, _name} ->
             error(
@@ -279,10 +353,18 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
 
           encoding ->
             with {:ok, dictionary} <- Reader.dictionary(document, encoding),
-                 {:ok, stream} <- Reader.decoded_stream(document, encoding) do
+                 {:ok, stream, preparation_context} <-
+                   TextValidator.decoded_stream(
+                     document,
+                     encoding,
+                     page,
+                     preparation_context
+                   ) do
               case {Map.get(dictionary, "UseCMap"), Map.get(dictionary, "WMode", 0)} do
                 {nil, 0} ->
-                  parse_cid_cmap(stream, page, font_name)
+                  with {:ok, cmap} <- parse_cid_cmap(stream, page, font_name) do
+                    {:ok, cmap, preparation_context}
+                  end
 
                 {nil, _vertical} ->
                   error(
@@ -306,7 +388,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
         end
 
       false ->
-        {:ok, nil}
+        {:ok, nil, preparation_context}
     end
   end
 

@@ -120,6 +120,26 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
+  @doc false
+  @spec decode_prepared_stream(PdfValidator.stream_context()) ::
+          {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
+  def decode_prepared_stream(stream_context) do
+    case stream_context do
+      %{stream: stream, filters: filters, ref: ref}
+      when is_binary(stream) and is_list(filters) and is_tuple(ref) ->
+        decode_stream(stream, filters, ref)
+
+      _ ->
+        Diagnostics.error(
+          :stream,
+          :invalid_pdf_input,
+          "prepared stream context is malformed",
+          operation: :read,
+          module: __MODULE__
+        )
+    end
+  end
+
   @doc """
   Resolves a dictionary value, returning an error when it is not a dictionary.
   """
