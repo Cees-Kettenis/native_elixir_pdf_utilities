@@ -82,6 +82,64 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
              )
   end
 
+  test "image resource budgets bound count, source bytes, and retained decoded bytes" do
+    count_budget = HtmlValidator.new_image_budget()
+
+    for _image <- 1..1_000 do
+      assert :ok = HtmlValidator.reserve_image_source(count_budget, 0)
+    end
+
+    assert {:error, {:resource_limit_exceeded, count_diagnostic}} =
+             HtmlValidator.reserve_image_source(count_budget, 0)
+
+    assert count_diagnostic.stage == :limits
+    assert count_diagnostic.message == "image count exceeds the limit"
+
+    source_budget = HtmlValidator.new_image_budget()
+
+    for _image <- 1..5 do
+      assert :ok = HtmlValidator.reserve_image_source(source_budget, 10_000_000)
+    end
+
+    assert {:error, {:resource_limit_exceeded, source_diagnostic}} =
+             HtmlValidator.reserve_image_source(source_budget, 1)
+
+    assert source_diagnostic.stage == :limits
+    assert source_diagnostic.message == "aggregate image source bytes exceed the limit"
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
+             HtmlValidator.reserve_image_source(HtmlValidator.new_image_budget(), 10_000_001)
+
+    decoded_budget = HtmlValidator.new_image_budget()
+
+    for _image <- 1..20 do
+      assert :ok = HtmlValidator.reserve_decoded_image(decoded_budget, 1_000, 1_000, 4)
+    end
+
+    assert {:error, {:resource_limit_exceeded, decoded_diagnostic}} =
+             HtmlValidator.reserve_decoded_image(decoded_budget, 1, 1, 1)
+
+    assert decoded_diagnostic.stage == :limits
+    assert decoded_diagnostic.message == "aggregate decoded image bytes exceed the limit"
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
+             HtmlValidator.reserve_decoded_image(
+               HtmlValidator.new_image_budget(),
+               10_000,
+               2_000,
+               3
+             )
+
+    assert {:error, {:invalid_document, %{stage: :style}}} =
+             HtmlValidator.reserve_image_source(HtmlValidator.new_image_budget(), -1)
+
+    assert {:error, {:invalid_document, %{stage: :style}}} =
+             HtmlValidator.reserve_decoded_image(HtmlValidator.new_image_budget(), 0, 1, 3)
+
+    assert {:error, {:invalid_document, %{stage: :style}}} =
+             HtmlValidator.reserve_image_source(make_ref(), 1)
+  end
+
   test "render requests and paths are validated at the shared boundary" do
     assert :ok =
              HtmlValidator.validate_render_request(

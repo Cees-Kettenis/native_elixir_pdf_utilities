@@ -876,6 +876,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "/Im1 Do"
   end
 
+  test "render rejects aggregate decoded PNG bytes before inflating the excess image" do
+    src = "data:image/png;base64,#{Base.encode64(png_fixture(2_000, 2_000))}"
+    image = ~s(<img src="#{src}" style="width: 20pt">)
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{
+               stage: :limits,
+               reason: :resource_limit_exceeded,
+               operation: :render,
+               module: NativeElixirPdfUtilities.HtmlToPdf,
+               message: "aggregate decoded image bytes exceed the limit"
+             }}} = HtmlToPdf.render(String.duplicate(image, 7))
+  end
+
+  test "render rejects excess image sources during style traversal" do
+    src = "data:image/png;base64,#{Base.encode64(png_fixture(1, 1))}"
+    image = ~s(<img src="#{src}" style="width: 1pt">)
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{
+               stage: :limits,
+               reason: :resource_limit_exceeded,
+               operation: :render,
+               module: NativeElixirPdfUtilities.HtmlToPdf,
+               message: "image count exceeds the limit"
+             }}} = HtmlToPdf.render(String.duplicate(image, 1_001))
+  end
+
   test "render rasterizes an SVG data URI image to a PDF image object" do
     svg =
       ~s(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"><rect width="2" height="1" fill="red"/></svg>)

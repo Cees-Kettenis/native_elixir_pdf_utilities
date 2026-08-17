@@ -14,7 +14,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
-  @max_decoded_image_bytes 100_000_000
   @border_styles [
     :none,
     :hidden,
@@ -79,6 +78,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                  font_registry
                ),
              {:ok, rules} <- stylesheet_rules(stylesheet_entries) do
+          image_budget = HtmlValidator.new_image_budget()
+          style_opts = Keyword.put(opts, :__image_budget__, image_budget)
+
           base_style = %{
             _custom_properties: %{},
             _font_registry: font_registry,
@@ -99,13 +101,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           }
 
           result =
-            case fragment_root_style(children, base_style, rules, opts) do
+            case fragment_root_style(children, base_style, rules, style_opts) do
               {:ok, nil} ->
                 {:ok, %{type: :document, children: []}}
 
               {:ok, root_style} ->
                 with {:ok, styled_children, _counters} <-
-                       style_children(children, root_style, rules, [], opts, %{}) do
+                       style_children(children, root_style, rules, [], style_opts, %{}) do
                   {:ok, %{type: :document, children: styled_children}}
                 end
 
@@ -536,7 +538,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           |> Map.put(:_inherited_color, Map.fetch!(inherited_style, :color))
           |> Map.put(:_root_element, tag in ["html", "body"] and ancestors == [])
 
-        result = tag |> finalize_element_style(apply_author_styles(style, node, ancestors, rules))
+        result =
+          tag
+          |> finalize_element_style(
+            apply_author_styles(style, node, ancestors, rules),
+            Keyword.fetch!(opts, :__image_budget__)
+          )
 
         case {tag, ancestors, result} do
           {tag, [], {:ok, style}} when tag in ["html", "body"] ->
@@ -548,24 +555,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       :invalid ->
         {:error, :invalid_document}
+
+      {:error, {_reason, _diagnostic}} = error ->
+        error
     end
   end
 
-  defp finalize_element_style(tag, result) do
+  defp finalize_element_style(tag, result, image_budget) do
     case {tag, result} do
       {"img", {:ok, style}} ->
-        finalize_image_style(style)
+        finalize_image_style(style, image_budget)
 
       {_tag, result} ->
         result
     end
   end
 
-  defp finalize_image_style(style) do
+  defp finalize_image_style(style, image_budget) do
     case {Map.get(style, :display), Map.get(style, :image), Map.get(style, :svg_image)} do
       {:image, nil, svg} when is_binary(svg) ->
-        with {:ok, png} <- rasterize_svg(svg, svg_raster_options(style)),
-             {:ok, image} <- decode_image(png) do
+        with {:ok, png} <- rasterize_svg(svg, svg_raster_options(style), image_budget),
+             {:ok, image} <- decode_image(png, image_budget, false) do
           {:ok,
            style
            |> Map.put(:image, image)
@@ -809,6 +819,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
        })
        |> Map.merge(image_style)}
     else
+      {:error, {_reason, _diagnostic}} = error -> error
       _ -> :invalid
     end
   end
@@ -3339,34 +3350,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp load_image_style(src, opts) do
-    case image_source(src, Keyword.get(opts, :base_url)) do
+    image_budget = Keyword.fetch!(opts, :__image_budget__)
+
+    case image_source(src, Keyword.get(opts, :base_url), image_budget) do
       {:ok, svg, :svg} ->
         {:ok, %{svg_image: svg}}
 
       {:ok, data, expected_format} ->
-        with {:ok, image} <- decode_image(data) do
+        with {:ok, image} <- decode_image(data, image_budget) do
           case is_nil(expected_format) or image.format == expected_format do
             true -> {:ok, %{image: image}}
             false -> :error
           end
         end
 
+      {:error, {_reason, _diagnostic}} = error ->
+        error
+
       _ ->
         :error
     end
   end
 
-  defp data_uri_image_source(src) do
+  defp data_uri_image_source(src, image_budget) do
     case Regex.run(~r/^data:image\/svg\+xml;base64,([A-Za-z0-9+\/=\r\n]+)$/u, src) do
       [_, encoded] ->
-        with {:ok, svg} <- Base.decode64(String.replace(encoded, ~r/\s/u, "")) do
+        with :ok <- HtmlValidator.reserve_image_source(image_budget, byte_size(encoded)),
+             {:ok, svg} <- Base.decode64(String.replace(encoded, ~r/\s/u, "")) do
           {:ok, svg, :svg}
         end
 
       _ ->
         case Regex.run(~r/^data:(image\/(?:png|jpeg));base64,([A-Za-z0-9+\/=\r\n]+)$/u, src) do
           [_, mime_type, encoded] ->
-            with {:ok, data} <- Base.decode64(String.replace(encoded, ~r/\s/u, "")) do
+            with :ok <- HtmlValidator.reserve_image_source(image_budget, byte_size(encoded)),
+                 {:ok, data} <- Base.decode64(String.replace(encoded, ~r/\s/u, "")) do
               {:ok, data, data_uri_format(mime_type)}
             end
 
@@ -3376,11 +3394,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp rasterize_svg(svg, raster_options) do
+  defp rasterize_svg(svg, raster_options, image_budget) do
     case String.valid?(svg) do
       true ->
         with {:ok, validated_raster_options} <-
-               HtmlValidator.validate_svg_raster(svg, raster_options) do
+               HtmlValidator.validate_svg_raster(svg, raster_options, image_budget) do
           sanitized_svg =
             svg
             |> String.replace(~r/<\?xml[^>]*>/iu, "")
@@ -3450,22 +3468,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp image_source(src, base_url) do
+  defp image_source(src, base_url, image_budget) do
     cond do
       String.starts_with?(src, "data:") ->
-        data_uri_image_source(src)
+        data_uri_image_source(src, image_budget)
 
       Path.type(src) == :absolute ->
-        with {:ok, data} <- File.read(src), do: {:ok, data, nil}
+        file_image_source(src, image_budget)
 
       is_binary(base_url) ->
         with {:ok, path} <- relative_asset_path(src, base_url),
-             {:ok, data} <- File.read(path) do
-          {:ok, data, nil}
-        end
+             {:ok, data, expected_format} <- file_image_source(path, image_budget),
+             do: {:ok, data, expected_format}
 
       true ->
         :error
+    end
+  end
+
+  defp file_image_source(path, image_budget) do
+    with {:ok, %{size: source_bytes}} <- File.stat(path),
+         :ok <- HtmlValidator.reserve_image_source(image_budget, source_bytes),
+         {:ok, data} <- File.read(path) do
+      {:ok, data, nil}
     end
   end
 
@@ -3505,10 +3530,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp decode_image(data) do
+  defp decode_image(data, image_budget, reserve_decoded? \\ true) do
     cond do
       String.starts_with?(data, <<137, 80, 78, 71, 13, 10, 26, 10>>) ->
-        decode_png(data)
+        decode_png(data, image_budget, reserve_decoded?)
 
       String.starts_with?(data, <<255, 216>>) ->
         decode_jpeg(data)
@@ -3518,7 +3543,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp decode_png(<<137, 80, 78, 71, 13, 10, 26, 10, chunks::binary>>) do
+  defp decode_png(
+         <<137, 80, 78, 71, 13, 10, 26, 10, chunks::binary>>,
+         image_budget,
+         reserve_decoded?
+       ) do
     with {:ok, parsed} <- png_chunks(chunks, %{idat: []}),
          %{
            width_px: width,
@@ -3533,7 +3562,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
          when width > 0 and height > 0 and color_type in [2, 6] <- parsed,
          bytes_per_pixel = if(color_type == 2, do: 3, else: 4),
          decoded_size = height * (width * bytes_per_pixel + 1),
-         true <- decoded_size <= @max_decoded_image_bytes,
+         :ok <-
+           (case reserve_decoded? do
+              true ->
+                HtmlValidator.reserve_decoded_image(
+                  image_budget,
+                  width,
+                  height,
+                  bytes_per_pixel
+                )
+
+              false ->
+                :ok
+            end),
          {:ok, inflated} <-
            png_inflate(idat |> Enum.reverse() |> IO.iodata_to_binary(), decoded_size),
          {:ok, rgb_data, alpha_data} <- png_image_data(inflated, width, height, color_type) do
@@ -3554,6 +3595,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
          alpha_data -> Map.put(image, :alpha_data, alpha_data)
        end}
     else
+      {:error, {_reason, _diagnostic}} = error -> error
       _ -> :error
     end
   end

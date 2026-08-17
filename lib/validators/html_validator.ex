@@ -19,6 +19,88 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @max_svg_bytes 5_000_000
   @max_svg_raster_dimension 8_192
   @max_svg_raster_pixels 16_777_216
+  @max_image_count 1_000
+  @max_image_source_bytes 10_000_000
+  @max_aggregate_image_source_bytes 50_000_000
+  @max_decoded_image_bytes 40_000_000
+  @max_aggregate_decoded_image_bytes 80_000_000
+
+  @type image_budget :: :atomics.atomics_ref()
+
+  @doc false
+  @spec new_image_budget() :: image_budget()
+  def new_image_budget do
+    :atomics.new(3, signed: false)
+  end
+
+  @doc false
+  @spec reserve_image_source(image_budget(), non_neg_integer()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def reserve_image_source(budget, source_bytes) do
+    cond do
+      not is_integer(source_bytes) or source_bytes < 0 ->
+        Diagnostics.error(:style, :invalid_document, "image source size is invalid")
+
+      source_bytes > @max_image_source_bytes ->
+        Diagnostics.error(
+          :limits,
+          :resource_limit_exceeded,
+          "image source exceeds the #{@max_image_source_bytes}-byte limit"
+        )
+
+      true ->
+        with :ok <-
+               reserve_image_budget(
+                 budget,
+                 1,
+                 1,
+                 @max_image_count,
+                 "image count exceeds the limit"
+               ),
+             :ok <-
+               reserve_image_budget(
+                 budget,
+                 2,
+                 source_bytes,
+                 @max_aggregate_image_source_bytes,
+                 "aggregate image source bytes exceed the limit"
+               ) do
+          :ok
+        end
+    end
+  end
+
+  @doc false
+  @spec reserve_decoded_image(image_budget(), pos_integer(), pos_integer(), pos_integer()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def reserve_decoded_image(budget, width, height, channels) do
+    case is_integer(width) and width > 0 and is_integer(height) and height > 0 and
+           is_integer(channels) and channels > 0 do
+      true ->
+        decoded_bytes = width * height * channels
+
+        cond do
+          decoded_bytes > @max_decoded_image_bytes ->
+            Diagnostics.error(
+              :limits,
+              :resource_limit_exceeded,
+              "decoded image exceeds the #{@max_decoded_image_bytes}-byte limit"
+            )
+
+          true ->
+            reserve_image_budget(
+              budget,
+              3,
+              decoded_bytes,
+              @max_aggregate_decoded_image_bytes,
+              "aggregate decoded image bytes exceed the limit"
+            )
+        end
+
+      false ->
+        Diagnostics.error(:style, :invalid_document, "decoded image dimensions are invalid")
+    end
+  end
 
   @doc false
   @spec validate_page_size(term()) :: :ok | {:error, :invalid_page_size}
@@ -144,6 +226,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           {:ok, [width: pos_integer(), height: pos_integer()]}
           | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_svg_raster(svg, raster_options) do
+    validate_svg_raster(svg, raster_options, nil)
+  end
+
+  @doc false
+  @spec validate_svg_raster(term(), term(), image_budget() | nil) ::
+          {:ok, [width: pos_integer(), height: pos_integer()]}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_svg_raster(svg, raster_options, image_budget) do
     case {svg, raster_options} do
       {svg, raster_options} when is_binary(svg) and is_list(raster_options) ->
         cond do
@@ -158,7 +248,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             with {:ok, {intrinsic_width, intrinsic_height}} <- svg_intrinsic_dimensions(svg),
                  {:ok, {width, height}} <-
                    svg_raster_dimensions(raster_options, intrinsic_width, intrinsic_height),
-                 :ok <- validate_svg_raster_budget(width, height) do
+                 :ok <- validate_svg_raster_budget(width, height),
+                 :ok <-
+                   (case image_budget do
+                      nil -> :ok
+                      image_budget -> reserve_decoded_image(image_budget, width, height, 4)
+                    end) do
               {:ok, [width: width, height: height]}
             end
         end
@@ -170,6 +265,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           "SVG rasterization requires valid SVG source and dimension options"
         )
     end
+  end
+
+  defp reserve_image_budget(budget, index, amount, limit, message) do
+    case :atomics.add_get(budget, index, amount) <= limit do
+      true ->
+        :ok
+
+      false ->
+        Diagnostics.error(:limits, :resource_limit_exceeded, message)
+    end
+  rescue
+    ArgumentError ->
+      Diagnostics.error(:style, :invalid_document, "image resource budget is invalid")
   end
 
   @doc false
