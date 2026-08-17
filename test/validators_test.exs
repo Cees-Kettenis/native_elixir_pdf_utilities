@@ -354,11 +354,10 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
     generation_input = %{
       objects: [%{obj: 1, gen: 2, tokens: [], value: 42}],
       pages: [],
-      inherited: %{},
-      max_obj: 1
+      inherited: %{}
     }
 
-    assert {:ok, [%{map: %{{1, 2} => 4}}]} =
+    assert {:ok, [%{map: %{{1, 2} => 3}}]} =
              MergeValidator.prepare_remapping([generation_input], 3)
 
     for generation <- 0..10 do
@@ -366,7 +365,7 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
         put_in(generation_input.objects, [%{obj: 1, gen: generation, tokens: [], value: 42}])
 
       assert {:ok, [%{map: map}]} = MergeValidator.prepare_remapping([generated], 3)
-      assert map == %{{1, generation} => 4}
+      assert map == %{{1, generation} => 3}
     end
   end
 
@@ -376,6 +375,32 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
 
     assert {:error, {:invalid_pdf_input, %{stage: :reference_remapping}}} =
              MergeValidator.prepare_remapping(:invalid, 0)
+
+    assert {:error, {:invalid_pdf_input, %{stage: :reference_remapping}}} =
+             MergeValidator.prepare_remapping([%{objects: :invalid, pages: []}], 3)
+
+    assert {:error, {:invalid_pdf_input, %{stage: :reference_remapping}}} =
+             MergeValidator.prepare_remapping([%{objects: [:invalid], pages: []}], 3)
+
+    assert {:error, {:resource_limit_exceeded, page_diagnostic}} =
+             MergeValidator.prepare_remapping(
+               [%{objects: [], pages: List.duplicate({1, 0}, 10_001)}],
+               3
+             )
+
+    assert page_diagnostic.stage == :limits
+    assert page_diagnostic.message == "merged page count exceeds the limit"
+
+    object = %{obj: 1, gen: 0, tokens: [], value: 42}
+
+    assert {:error, {:resource_limit_exceeded, object_diagnostic}} =
+             MergeValidator.prepare_remapping(
+               [%{objects: List.duplicate(object, 99_999), pages: []}],
+               3
+             )
+
+    assert object_diagnostic.stage == :limits
+    assert object_diagnostic.message == "merged object count exceeds the limit"
 
     unserializable = %{
       document: %{objects: %{{1, 0} => object(42, nil, [{:op, "invalid"}])}},
@@ -390,8 +415,7 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
         %{obj: 1, gen: 0, tokens: [{:int, 9}, {:int, 2}, :R], value: {:ref, {9, 2}}}
       ],
       pages: [],
-      inherited: %{},
-      max_obj: 1
+      inherited: %{}
     }
 
     assert {:error, {:invalid_pdf_input, diagnostic}} =

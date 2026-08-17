@@ -12,6 +12,11 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   alias NativeElixirPdfUtilities.Tokenizer
   alias NativeElixirPdfUtilities.Validators.PdfValidator
 
+  @max_merge_inputs 100
+  @max_aggregate_input_bytes 100_000_000
+  @max_merged_objects 100_000
+  @max_merged_pages 10_000
+
   @typedoc "A parsed object retained for merge serialization."
   @type object_context :: %{
           required(:obj) => non_neg_integer(),
@@ -35,7 +40,6 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
           required(:objects) => [object_context()],
           required(:pages) => [PdfValidator.ref()],
           required(:inherited) => inherited_pages(),
-          required(:max_obj) => non_neg_integer(),
           optional(:map) => %{optional(PdfValidator.ref()) => non_neg_integer()}
         }
 
@@ -53,11 +57,27 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
         )
 
       inputs when is_list(inputs) ->
-        case Enum.all?(inputs, &is_binary/1) do
-          true ->
+        inputs
+        |> Enum.reduce_while({:ok, 0, 0}, fn input, {:ok, count, aggregate_bytes} ->
+          cond do
+            not is_binary(input) ->
+              {:halt, :invalid}
+
+            count >= @max_merge_inputs ->
+              {:halt, resource_limit_error("merge input count exceeds the limit")}
+
+            aggregate_bytes + byte_size(input) > @max_aggregate_input_bytes ->
+              {:halt, resource_limit_error("aggregate merge input bytes exceed the limit")}
+
+            true ->
+              {:cont, {:ok, count + 1, aggregate_bytes + byte_size(input)}}
+          end
+        end)
+        |> case do
+          {:ok, _count, _aggregate_bytes} ->
             {:ok, inputs}
 
-          false ->
+          :invalid ->
             Diagnostics.error(
               :merge,
               :invalid_pdf_input,
@@ -65,6 +85,9 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
               operation: :merge,
               module: __MODULE__
             )
+
+          {:error, _} = limit_error ->
+            limit_error
         end
 
       _ ->
@@ -99,8 +122,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
            %{
              objects: objects,
              pages: Enum.map(pages, & &1.ref),
-             inherited: inherited,
-             max_obj: Enum.reduce(objects, 0, fn object, maximum -> max(maximum, object.obj) end)
+             inherited: inherited
            }}
         end
 
@@ -118,22 +140,61 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
     case is_list(inputs) and is_integer(start_id) and start_id > 0 do
       true ->
         inputs
-        |> Enum.map_reduce(start_id, fn input, next_id ->
-          base = next_id
+        |> Enum.reduce_while({:ok, [], start_id, 0}, fn input,
+                                                        {:ok, prepared, next_id, page_count} ->
+          case input do
+            %{objects: objects, pages: pages} when is_list(objects) and is_list(pages) ->
+              page_count = page_count + length(pages)
 
-          id_map =
-            Map.new(input.objects, fn object ->
-              {{object.obj, object.gen}, base + object.obj}
-            end)
+              cond do
+                page_count > @max_merged_pages ->
+                  {:halt, resource_limit_error("merged page count exceeds the limit")}
 
-          {Map.put(input, :map, id_map), base + input.max_obj + 1}
+                true ->
+                  case allocate_dense_ids(objects, next_id) do
+                    {:ok, id_map, next_id} ->
+                      {:cont,
+                       {:ok, [Map.put(input, :map, id_map) | prepared], next_id, page_count}}
+
+                    {:error, _} = limit_error ->
+                      {:halt, limit_error}
+                  end
+              end
+
+            _ ->
+              {:halt, error(:reference_remapping, "merge remapping inputs are malformed")}
+          end
         end)
-        |> elem(0)
-        |> validate_reference_remapping()
+        |> case do
+          {:ok, prepared, _next_id, _page_count} ->
+            prepared |> Enum.reverse() |> validate_reference_remapping()
+
+          {:error, _} = remapping_error ->
+            remapping_error
+        end
 
       false ->
         error(:reference_remapping, "merge remapping inputs are malformed")
     end
+  end
+
+  defp allocate_dense_ids(objects, next_id) do
+    Enum.reduce_while(objects, {:ok, %{}, next_id}, fn object, {:ok, id_map, next_id} ->
+      case object do
+        %{obj: object, gen: generation}
+        when is_integer(object) and object >= 0 and is_integer(generation) and generation >= 0 ->
+          case next_id > @max_merged_objects do
+            true ->
+              {:halt, resource_limit_error("merged object count exceeds the limit")}
+
+            false ->
+              {:cont, {:ok, Map.put(id_map, {object, generation}, next_id), next_id + 1}}
+          end
+
+        _ ->
+          {:halt, error(:reference_remapping, "merge remapping inputs are malformed")}
+      end
+    end)
   end
 
   @doc """
@@ -478,6 +539,13 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
   defp error(stage, message) do
     Diagnostics.error(stage, :invalid_pdf_input, message,
+      operation: :merge,
+      module: __MODULE__
+    )
+  end
+
+  defp resource_limit_error(message) do
+    Diagnostics.error(:limits, :resource_limit_exceeded, message,
       operation: :merge,
       module: __MODULE__
     )

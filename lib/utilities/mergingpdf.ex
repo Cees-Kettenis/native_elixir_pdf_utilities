@@ -458,37 +458,12 @@ defmodule NativeElixirPdfUtilities.Merge do
 
     header = ["xref\n0 ", Integer.to_string(size), "\n"]
 
-    all_ids = Enum.to_list(0..max_id)
-
-    # Free ids are those without offsets (0 is always free)
-    nonzero_free =
-      all_ids
-      |> Enum.reject(&(&1 == 0))
-      |> Enum.filter(&(not Map.has_key?(offsets, &1)))
-
-    # Build free-list mapping for nonzero free objects: id -> next_id (last points to 0)
-    next_of =
-      nonzero_free
-      |> Enum.zip(Enum.drop(nonzero_free, 1) ++ [0])
-      |> Map.new()
-
-    # Object 0 must point to the first free object (or 0 if none)
-    first_free = List.first(nonzero_free) || 0
-
     entries =
-      Enum.map(all_ids, fn id ->
-        case Map.fetch(offsets, id) do
-          {:ok, {off, gen}} ->
-            [pad10(off), " ", pad5(gen), " n \n"]
-
-          :error when id == 0 ->
-            [pad10(first_free), " 65535 f \n"]
-
-          :error ->
-            next = Map.get(next_of, id, 0)
-            [pad10(next), " 00000 f \n"]
-        end
-      end)
+      [[pad10(0), " 65535 f \n"]] ++
+        Enum.map(1..max_id, fn id ->
+          {offset, generation} = Map.fetch!(offsets, id)
+          [pad10(offset), " ", pad5(generation), " n \n"]
+        end)
 
     trailer = [
       "trailer\n<< /Size ",

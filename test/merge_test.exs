@@ -96,6 +96,22 @@ defmodule NativeElixirPdfUtilities.MergeTest do
              }}} = Merge.merge([encrypted])
   end
 
+  test "rejects excessive merge work before parsing any input" do
+    assert {:error, {:resource_limit_exceeded, count_diagnostic}} =
+             Merge.merge(List.duplicate("not a PDF", 101))
+
+    assert count_diagnostic.stage == :limits
+    assert count_diagnostic.message == "merge input count exceeds the limit"
+
+    shared_input = :binary.copy("x", 1_000_001)
+
+    assert {:error, {:resource_limit_exceeded, bytes_diagnostic}} =
+             Merge.merge(List.duplicate(shared_input, 100))
+
+    assert bytes_diagnostic.stage == :limits
+    assert bytes_diagnostic.message == "aggregate merge input bytes exceed the limit"
+  end
+
   test "renumbers pages and injects inherited page attributes" do
     content = """
     BT
@@ -117,12 +133,26 @@ defmodule NativeElixirPdfUtilities.MergeTest do
     assert {:ok, merged} = Merge.merge([pdf, pdf])
 
     assert merged =~ "%PDF-1.7"
-    assert merged =~ "/Type /Pages /Kids [ 6 0 R 17 0 R ] /Count 2"
+    assert merged =~ "/Type /Pages /Kids [ 5 0 R 10 0 R ] /Count 2"
     assert merged =~ "/Parent 1 0 R"
-    assert merged =~ "/Resources << /Font << /F1 7 0 R >> >>"
+    assert merged =~ "/Resources << /Font << /F1 6 0 R >> >>"
     assert merged =~ "/MediaBox [ 0 0 612 792 ]"
-    assert merged =~ "xref\n0 25\n"
-    assert merged =~ " 00000 f"
+    assert merged =~ "xref\n0 13\n"
+    refute merged =~ " 00000 f"
+  end
+
+  test "densely renumbers sparse source objects before xref generation" do
+    sparse =
+      merge_pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [1000 0 R] /Count 1 >>"},
+        {1000, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>"}
+      ])
+
+    assert {:ok, merged} = Merge.merge([sparse])
+    assert merged =~ "xref\n0 6\n"
+    refute merged =~ "xref\n0 1004\n"
+    assert {:ok, %{pages: [_page]}} = Reader.read(merged)
   end
 
   test "uses the trailer catalog when unrelated catalog objects are present" do
@@ -346,7 +376,7 @@ defmodule NativeElixirPdfUtilities.MergeTest do
 
     assert merged =~ "/MediaBox [ 0.5 0 200.25 300 ]"
     assert merged =~ "/Resources << /ProcSet [ /PDF ] /Font << /F1"
-    assert merged =~ "/AltParent 6 0 R"
+    assert merged =~ "/AltParent 5 0 R"
   end
 
   test "preserves inherited page attributes from intermediate Pages nodes" do
@@ -363,7 +393,7 @@ defmodule NativeElixirPdfUtilities.MergeTest do
 
     assert {:ok, merged} = Merge.merge([pdf])
     assert merged =~ "/MediaBox [ 0 0 123 456 ]"
-    assert merged =~ "/Resources << /Font << /F1 8 0 R >> >>"
+    assert merged =~ "/Resources << /Font << /F1 7 0 R >> >>"
   end
 
   test "materializes all inherited page attributes and resolves indirect values" do
@@ -527,7 +557,7 @@ defmodule NativeElixirPdfUtilities.MergeTest do
       ])
 
     assert {:ok, merged} = Merge.merge([pdf])
-    assert merged =~ "/Type /Example /Parent 4 0 R"
+    assert merged =~ "/Type /Example /Parent 3 0 R"
   end
 
   test "handles empty and cyclic Pages trees without looping" do
