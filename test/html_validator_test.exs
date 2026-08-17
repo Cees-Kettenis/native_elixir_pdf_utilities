@@ -107,6 +107,62 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
              )
   end
 
+  test "local document resources are confined beneath their base directory" do
+    fixture_dir = Path.join(System.tmp_dir!(), "native-elixir-pdf-resource-validator")
+    resource_root = Path.join(fixture_dir, "root")
+    inside_path = Path.join(resource_root, "inside.png")
+    outside_path = Path.join(fixture_dir, "outside.png")
+    outside_directory = Path.join(fixture_dir, "outside-directory")
+    symlink_path = Path.join(resource_root, "linked.png")
+    directory_symlink_path = Path.join(resource_root, "linked-directory")
+    File.mkdir_p!(resource_root)
+    File.mkdir_p!(outside_directory)
+    File.write!(inside_path, "inside")
+    File.write!(outside_path, "outside")
+    File.write!(Path.join(outside_directory, "nested.png"), "outside")
+    :ok = File.ln_s(outside_path, symlink_path)
+    :ok = File.ln_s(outside_directory, directory_symlink_path)
+
+    assert {:ok, ^inside_path} =
+             HtmlValidator.validate_local_resource_path("inside.png", resource_root)
+
+    assert {:ok, ^inside_path} =
+             HtmlValidator.validate_local_resource_path(inside_path, resource_root)
+
+    assert {:ok, ^inside_path} =
+             HtmlValidator.validate_local_resource_path(
+               "inside.png",
+               "file://localhost#{resource_root}"
+             )
+
+    assert {:ok, ^resource_root} =
+             HtmlValidator.validate_local_resource_path(".", resource_root)
+
+    for {source, base_url} <- [
+          {outside_path, resource_root},
+          {"../outside.png", resource_root},
+          {"linked.png", resource_root},
+          {"linked-directory/nested.png", resource_root},
+          {"missing.png", resource_root},
+          {"inside.png", nil},
+          {"inside.png", "https://example.com"},
+          {"inside.png", "file://remote#{resource_root}"},
+          {"bad\0name.png", resource_root},
+          {"https://example.com/image.png", resource_root},
+          {:invalid, resource_root}
+        ] do
+      assert {:error,
+              {:invalid_document,
+               %{
+                 stage: :style,
+                 reason: :invalid_document,
+                 message: "local document resource path is not authorized by base_url"
+               }}} = HtmlValidator.validate_local_resource_path(source, base_url)
+    end
+  after
+    File.rm_rf(Path.join(System.tmp_dir!(), "native-elixir-pdf-resource-validator"))
+  end
+
   test "image resource budgets bound count, source bytes, and retained decoded bytes" do
     count_budget = HtmlValidator.new_image_budget()
 

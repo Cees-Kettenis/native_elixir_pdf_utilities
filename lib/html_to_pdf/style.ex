@@ -38,7 +38,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         }
   @type styled_tree :: %{type: :document, children: [styled_element()]}
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
-  @type stylesheet_entry :: %{css: String.t(), base_url: String.t() | nil}
+  @type stylesheet_entry :: %{
+          css: String.t(),
+          base_url: String.t() | nil,
+          trusted_local_resources: boolean()
+        }
 
   @doc """
   Computes styles for a parsed HTML document tree.
@@ -889,7 +893,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       embedded_entries =
         children
         |> style_sources()
-        |> Enum.map(&%{css: &1, base_url: base_url})
+        |> Enum.map(&%{css: &1, base_url: base_url, trusted_local_resources: false})
 
       {:ok, configured_entries ++ embedded_entries}
     end
@@ -899,12 +903,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     Enum.reduce_while(stylesheets, {:ok, []}, fn stylesheet, {:ok, acc} ->
       case stylesheet do
         {:css, css} when is_binary(css) ->
-          {:cont, {:ok, acc ++ [%{css: css, base_url: base_url}]}}
+          entry = %{css: css, base_url: base_url, trusted_local_resources: false}
+          {:cont, {:ok, acc ++ [entry]}}
 
         {:file, path} when is_binary(path) ->
           case File.read(path) do
             {:ok, css} ->
-              entry = %{css: css, base_url: path |> Path.expand() |> Path.dirname()}
+              entry = %{
+                css: css,
+                base_url: path |> Path.expand() |> Path.dirname(),
+                trusted_local_resources: true
+              }
+
               {:cont, {:ok, acc ++ [entry]}}
 
             {:error, _reason} ->
@@ -922,9 +932,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             Enum.reduce_while(font_faces, {:ok, []}, fn font_face, {:ok, fonts} ->
               paths =
                 Enum.flat_map(font_face.sources, fn source ->
-                  case local_font_path(source, entry.base_url) do
+                  case local_font_path(source, entry) do
                     {:ok, path} -> [path]
-                    :error -> []
+                    _ -> []
                   end
                 end)
 
@@ -953,25 +963,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end)
   end
 
-  defp local_font_path(source, stylesheet_base_url) do
-    cond do
-      Path.type(source) == :absolute ->
-        {:ok, source}
-
-      is_binary(stylesheet_base_url) ->
-        case URI.parse(stylesheet_base_url) do
-          %URI{scheme: nil, path: path} when is_binary(path) ->
-            {:ok, Path.expand(source, path)}
-
-          %URI{scheme: "file", path: path} when is_binary(path) ->
-            {:ok, Path.expand(source, path)}
-
-          _ ->
-            :error
+  defp local_font_path(source, entry) do
+    case entry do
+      %{trusted_local_resources: true, base_url: stylesheet_base_url}
+      when is_binary(stylesheet_base_url) ->
+        case Path.type(source) do
+          :absolute -> {:ok, source}
+          _ -> {:ok, Path.expand(source, stylesheet_base_url)}
         end
 
-      true ->
-        :error
+      %{base_url: base_url} ->
+        HtmlValidator.validate_local_resource_path(source, base_url)
     end
   end
 
@@ -3483,20 +3485,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp image_source(src, base_url, image_budget) do
-    cond do
-      String.starts_with?(src, "data:") ->
+    case String.starts_with?(src, "data:") do
+      true ->
         data_uri_image_source(src, image_budget)
 
-      Path.type(src) == :absolute ->
-        file_image_source(src, image_budget)
-
-      is_binary(base_url) ->
-        with {:ok, path} <- relative_asset_path(src, base_url),
+      false ->
+        with {:ok, path} <- HtmlValidator.validate_local_resource_path(src, base_url),
              {:ok, data, expected_format} <- file_image_source(path, image_budget),
              do: {:ok, data, expected_format}
-
-      true ->
-        :error
     end
   end
 
@@ -3512,35 +3508,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     case mime_type do
       "image/png" -> :png
       "image/jpeg" -> :jpeg
-    end
-  end
-
-  defp relative_asset_path(src, base_url) do
-    case String.contains?(src, ["\0", "://"]) do
-      true ->
-        :error
-
-      false ->
-        base_path =
-          case URI.parse(base_url) do
-            %URI{scheme: nil, path: path} when is_binary(path) -> path
-            %URI{scheme: "file", path: path} when is_binary(path) -> path
-            _ -> nil
-          end
-
-        case base_path do
-          nil ->
-            :error
-
-          base_path ->
-            expanded_base = Path.expand(base_path)
-            path = Path.expand(src, expanded_base)
-
-            case path == expanded_base or String.starts_with?(path, expanded_base <> "/") do
-              true -> {:ok, path}
-              false -> :error
-            end
-        end
     end
   end
 

@@ -53,7 +53,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     <p>CSS font</p>
     """
 
-    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert {:ok, pdf} = HtmlToPdf.render(html, base_url: Path.dirname(font_path))
     assert pdf =~ "/Subtype /Type0"
     assert pdf =~ "1 0 0 rg"
     refute pdf =~ "0 0 1 rg"
@@ -348,7 +348,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     <p>Fallback font</p>
     """
 
-    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert {:ok, pdf} = HtmlToPdf.render(html, base_url: Path.dirname(font_path))
     assert pdf =~ "/Subtype /Type0"
 
     failed_html = """
@@ -366,7 +366,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                reason: :invalid_document,
                source: ^missing_path,
                message: message
-             }}} = HtmlToPdf.render(failed_html)
+             }}} = HtmlToPdf.render(failed_html, base_url: Path.dirname(font_path))
 
     assert message =~ "CSS font sources could not be resolved or loaded"
     refute message =~ "font-family"
@@ -904,6 +904,68 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "/ColorSpace /DeviceRGB"
     assert pdf =~ "/Filter /FlateDecode"
     assert pdf =~ "/Im1 Do"
+  end
+
+  test "render confines document-selected images and fonts to base_url" do
+    fixture_dir = Path.join(System.tmp_dir!(), "native-elixir-pdf-resource-confinement")
+    resource_root = Path.join(fixture_dir, "root")
+    inside_image = Path.join(resource_root, "inside.png")
+    outside_image = Path.join(fixture_dir, "outside.png")
+    outside_font = Path.join(fixture_dir, "outside.ttf")
+    linked_image = Path.join(resource_root, "linked.png")
+    linked_font = Path.join(resource_root, "linked.ttf")
+    File.mkdir_p!(resource_root)
+    File.write!(inside_image, png_fixture(1, 1))
+    File.write!(outside_image, png_fixture(1, 1))
+    File.cp!(ttf_font_path!(), outside_font)
+    :ok = File.ln_s(outside_image, linked_image)
+    :ok = File.ln_s(outside_font, linked_font)
+
+    assert {:ok, authorized_pdf} =
+             HtmlToPdf.render(~s|<img src="#{inside_image}">|, base_url: resource_root)
+
+    assert authorized_pdf =~ "/Subtype /Image"
+
+    for source <- [inside_image, outside_image, "../outside.png", "linked.png"] do
+      opts = if source == inside_image, do: [], else: [base_url: resource_root]
+
+      assert {:error,
+              {:invalid_document,
+               %{
+                 stage: :style,
+                 reason: :invalid_document,
+                 operation: :render,
+                 module: NativeElixirPdfUtilities.HtmlToPdf
+               }}} = HtmlToPdf.render(~s|<img src="#{source}">|, opts)
+    end
+
+    for {source, opts} <- [
+          {outside_font, []},
+          {outside_font, [base_url: resource_root]},
+          {"../outside.ttf", [base_url: resource_root]},
+          {"linked.ttf", [base_url: resource_root]}
+        ] do
+      html = """
+      <style>
+        @font-face { font-family: Confined; src: url("#{source}"); }
+        p { font-family: Confined; }
+      </style>
+      <p>Confined font</p>
+      """
+
+      assert {:error, {:invalid_document, %{stage: :style}}} =
+               HtmlToPdf.render(html, opts)
+    end
+
+    assert {:ok, trusted_pdf} =
+             HtmlToPdf.render("<p>Trusted font</p>",
+               fonts: [%{family: "Trusted", path: outside_font}],
+               default_font: "Trusted"
+             )
+
+    assert trusted_pdf =~ "/Subtype /Type0"
+  after
+    File.rm_rf(Path.join(System.tmp_dir!(), "native-elixir-pdf-resource-confinement"))
   end
 
   test "render rejects aggregate decoded PNG bytes before inflating the excess image" do

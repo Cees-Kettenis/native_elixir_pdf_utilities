@@ -317,6 +317,44 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec validate_local_resource_path(term(), term()) ::
+          {:ok, String.t()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_local_resource_path(source, base_url) do
+    result =
+      with source when is_binary(source) and source != "" <- source,
+           false <- String.contains?(source, ["\0", "://"]),
+           {:ok, base_path} <- local_resource_base_path(base_url),
+           base_path <- Path.expand(base_path),
+           path <-
+             (case Path.type(source) do
+                :absolute -> Path.expand(source)
+                _ -> Path.expand(source, base_path)
+              end),
+           relative <- Path.relative_to(path, base_path),
+           true <-
+             relative == "." or
+               (Path.type(relative) == :relative and relative != ".." and
+                  not String.starts_with?(relative, "../")),
+           true <- symlink_free_resource_path?(base_path, relative) do
+        {:ok, path}
+      else
+        _ -> :error
+      end
+
+    case result do
+      {:ok, path} ->
+        {:ok, path}
+
+      :error ->
+        Diagnostics.error(
+          :style,
+          :invalid_document,
+          "local document resource path is not authorized by base_url"
+        )
+    end
+  end
+
+  @doc false
   @spec validate_table_span_attribute(term(), term()) ::
           {:ok, pos_integer()} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_table_span_attribute(attributes, name) do
@@ -547,6 +585,42 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       true -> :ok
       false -> :error
     end
+  end
+
+  defp local_resource_base_path(base_url) do
+    case base_url do
+      base_url when is_binary(base_url) ->
+        case URI.parse(base_url) do
+          %URI{scheme: nil, host: nil, path: path, query: nil, fragment: nil}
+          when is_binary(path) and path != "" ->
+            {:ok, path}
+
+          %URI{scheme: "file", host: host, path: path, query: nil, fragment: nil}
+          when host in [nil, "", "localhost"] and is_binary(path) and path != "" ->
+            {:ok, path}
+
+          _ ->
+            :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp symlink_free_resource_path?(base_path, relative) do
+    relative
+    |> Path.split()
+    |> Enum.reduce_while(base_path, fn component, current_path ->
+      path = Path.join(current_path, component)
+
+      case File.lstat(path) do
+        {:ok, %File.Stat{type: :symlink}} -> {:halt, false}
+        {:ok, _stat} -> {:cont, path}
+        {:error, _reason} -> {:halt, false}
+      end
+    end)
+    |> is_binary()
   end
 
   defp validate_render_options(opts, font_options_result) do

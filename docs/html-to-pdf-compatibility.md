@@ -27,7 +27,7 @@ The detail map always includes `:stage`, `:reason`, and `:message`. It includes 
 | ----------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `:page_size`    | Named size, oriented named size, CSS two-length string, or `{width, height}` | Named sizes are `:a5`, `:a4`, `:a3`, `:b5`, `:b4`, `:jis_b5`, `:jis_b4`, `:letter`, `:legal`, and `:ledger`; pair a name with `:portrait` or `:landscape`. Custom tuples up to `20 x 20` are treated as inches for compatibility; larger tuples are PDF points. |
 | `:margin`       | Number, one-to-four-value CSS length string, or side map | Numbers are uniform PDF-point margins. CSS strings follow top/right/bottom/left shorthand rules. Maps accept `:top`, `:right`, `:bottom`, and `:left`; omitted sides are zero. |
-| `:base_url`     | Local path or`file://` URL                                                    | Used for relative image and embedded stylesheet font paths. Remote HTTP fetching is not supported.                                                                        |
+| `:base_url`     | Local path or `file://` URL                                                   | Authorization root for document-selected image and embedded stylesheet font paths. Relative and absolute paths must remain beneath it; traversal and symlink components are rejected. Remote fetching is unsupported. |
 | `:stylesheets`  | Tagged inline CSS and local files: `{:css, css}` or `{:file, path}`             | Configured stylesheets load before embedded `<style>` tags; bare strings are rejected so file access is always explicit.                                                |
 | `:default_font` | Font family or fallback list                                                    | Defaults to`"Helvetica"`. Unsupported glyphs are resolved through configured fonts and the bundled DejaVu Sans faces before layout.                                                                                                    |
 | `:fonts`        | `%{family: ..., path: ...}` maps, keyword lists, or `{family, path}` tuples | TrueType fonts.`:weight` and `:style` are optional. OpenType files using TrueType outlines share this path; CFF-flavored OTF is unsupported. Configured faces participate in automatic glyph fallback. |
@@ -117,15 +117,15 @@ Block, list, table, flexbox, and grid layout are deterministic and intentionally
 Pagination supports automatic page breaks, manual page breaks around complete block boxes and their children, page margins, line-level paragraph fragmentation, best-effort keep-together behavior for `break-inside: avoid`, and repeated table headers when table bodies continue across pages. An avoided paragraph that is taller than the printable page is fragmented so that all text remains visible.
 
 Images support 8-bit, non-interlaced RGB and RGBA PNGs, JPEGs, and SVG data URIs,
-plus the same PNG subset and JPEGs from absolute local paths and
-`base_url`-relative paths. SVG data URIs are rasterized to PNG with the
+plus the same PNG subset and JPEGs from paths authorized beneath `base_url`.
+SVG data URIs are rasterized to PNG with the
 lightweight `resvg` NIF using local in-process rendering. SVG input is limited
 to 5 MB, 8,192 pixels per axis, and 16,777,216 total raster pixels; excess input
 returns a `:resource_limit_exceeded` diagnostic before native raster allocation.
-Remote URLs and unsafe relative paths are rejected. Greyscale, indexed-color, 16-bit, and
+Remote URLs, traversal, and symlink components are rejected. Greyscale, indexed-color, 16-bit, and
 Adam7-interlaced PNG decoding is scheduled for `0.21.0`.
 
-Fonts support built-in PDF fonts (`Helvetica`, `Courier`, `Times-Roman` and their bold/italic variants), explicit font options, local CSS `@font-face` declarations, and bundled DejaVu Sans regular, bold, oblique, and bold-oblique fallback faces. Relative `@font-face` URLs resolve against the containing stylesheet directory or `:base_url`; HTTP(S), data URLs, `local(...)`-only sources, WOFF, WOFF2, and CFF-flavored OpenType fonts are rejected. Convert unsupported web fonts to TTF before rendering.
+Fonts support built-in PDF fonts (`Helvetica`, `Courier`, `Times-Roman` and their bold/italic variants), explicit font options, local CSS `@font-face` declarations, and bundled DejaVu Sans regular, bold, oblique, and bold-oblique fallback faces. Document-selected `@font-face` URLs must remain beneath `:base_url`; explicitly configured stylesheet files resolve their own trusted relative font paths. HTTP(S), data URLs, traversal, symlink components, `local(...)`-only sources, WOFF, WOFF2, and CFF-flavored OpenType fonts are rejected. Convert unsupported web fonts to TTF before rendering.
 
 Font fallback is resolved once before layout so wrapping and pagination use the final glyph metrics. For each Unicode grapheme, the renderer tries the selected CSS face, the remaining requested family list, configured font faces in declaration order, and then the closest bundled DejaVu Sans weight/style. Adjacent graphemes using the same face remain one text run. Invalid UTF-8 returns `:invalid_encoding`. By default, a grapheme absent from every candidate is replaced with U+FFFD using an available fallback face; `unsupported_glyphs: :error` instead returns `:unsupported_glyph` with the original grapheme and codepoints in the diagnostic.
 

@@ -144,6 +144,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   `:stylesheets` accepts a list of `{:css, css}` and `{:file, path}` tuples.
   The explicit tag determines whether content is parsed directly or read from
   the local filesystem; bare strings are rejected.
+
+  `:base_url` is also the authorization root for document-selected local image
+  and `@font-face` paths. Relative paths and absolute paths beneath that root
+  are accepted; traversal outside it and symlink components are rejected.
+  Explicit `:fonts` and `{:file, stylesheet}` paths are trusted caller
+  configuration and are not reclassified as document-selected resources.
   """
   @spec render(String.t(), [render_option()]) ::
           {:ok, binary()} | {:error, detailed_error_reason()}

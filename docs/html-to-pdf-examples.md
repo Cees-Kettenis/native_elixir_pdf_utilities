@@ -144,9 +144,11 @@ template.
 
 ## Images
 
-Local PNG/JPEG paths can be absolute or relative to `:base_url`. SVG data URIs
-are accepted and rasterized locally, subject to a 5 MB source limit, an 8,192
-pixel per-axis limit, and a 16,777,216 total-pixel raster limit.
+Local PNG/JPEG paths must resolve beneath `:base_url`, which acts as the
+document-resource authorization root. Relative paths and absolute paths inside
+that root are accepted; traversal and symlink components are rejected. SVG
+data URIs are accepted and rasterized locally, subject to a 5 MB source limit,
+an 8,192 pixel per-axis limit, and a 16,777,216 total-pixel raster limit.
 
 ```elixir
 {:ok, pdf} =
@@ -197,7 +199,8 @@ Built-in PDF fonts are available without setup. For Unicode-heavy documents, pas
 
 Explicit font registration avoids relying on OS font discovery. That makes production output easier to reproduce across containers and hosts.
 
-CSS declarations use the same registry and can resolve relative URLs from `:base_url`:
+CSS declarations use the same registry and can resolve local URLs beneath
+`:base_url`:
 
 ```elixir
 {:ok, pdf} =
@@ -218,7 +221,9 @@ CSS declarations use the same registry and can resolve relative URLs from `:base
   )
 ```
 
-Font URLs must be local. WOFF/WOFF2 and CFF-flavored OpenType fonts are unsupported; convert them to TTF for predictable embedding.
+Document-selected font URLs must remain beneath `:base_url` and cannot traverse
+symlinks. WOFF/WOFF2 and CFF-flavored OpenType fonts are unsupported; convert
+them to TTF for predictable embedding.
 
 ## PDF Metadata
 

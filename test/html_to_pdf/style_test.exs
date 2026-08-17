@@ -1095,7 +1095,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       ]
     }
 
-    assert {:ok, styled_tree} = Style.compute(dom)
+    assert {:ok, styled_tree} = Style.compute(dom, base_url: Path.dirname(font_path))
     [paragraph] = styled_tree.children
 
     assert paragraph.style.font_family == "CSS Fixture"
@@ -1136,6 +1136,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     [paragraph] = styled_from_file.children
     assert paragraph.style.font_face.type == :embedded
 
+    File.write!(
+      stylesheet_path,
+      "@font-face { font-family: AbsoluteFileFixture; src: url('#{copied_font_path}'); } p { font-family: AbsoluteFileFixture; }"
+    )
+
+    assert {:ok, styled_from_absolute_file} =
+             Style.compute(dom, stylesheets: [{:file, stylesheet_path}])
+
+    [paragraph] = styled_from_absolute_file.children
+    assert paragraph.style.font_face.type == :embedded
+
     inline_css =
       "@font-face { font-family: BaseFixture; src: url('fonts/fixture.ttf'); } p { font-family: BaseFixture; }"
 
@@ -1167,6 +1178,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "@font-face { font-family: Bad; src: url('font.woff2') format('woff2'); }"
 
     assert Style.compute(dom, stylesheets: [{:css, invalid_face_css}], base_url: fixture_dir) ==
+             {:error, :invalid_document}
+
+    invalid_font_path = Path.join(font_dir, "invalid.ttf")
+    File.write!(invalid_font_path, "not a font")
+
+    invalid_font_css =
+      "@font-face { font-family: InvalidFixture; src: url('fonts/invalid.ttf'); }"
+
+    assert Style.compute(dom, stylesheets: [{:css, invalid_font_css}], base_url: fixture_dir) ==
              {:error, :invalid_document}
 
     invalid_stylesheet_path = Path.join(css_dir, "invalid.css")
@@ -2857,7 +2877,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert style_for("div", "background-color: nope") == {:error, :invalid_document}
   end
 
-  test "compute loads file URI and absolute images and rejects malformed image sources" do
+  test "compute loads authorized file URI and absolute images and rejects malformed sources" do
     base_dir = Path.join(System.tmp_dir!(), "native-elixir-pdf-image-style-branches")
     File.mkdir_p!(base_dir)
     png_path = Path.join(base_dir, "photo.png")
@@ -2869,7 +2889,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     chunked_png_path = Path.join(base_dir, "chunked.png")
     File.write!(chunked_png_path, png_with_extra_chunk_fixture())
 
-    assert {:ok, png_style} = image_style(png_path, [])
+    assert {:ok, png_style} = image_style(png_path, base_url: base_dir)
     assert png_style.image.format == :png
     assert png_style.image.data == <<255, 0, 0>>
     refute Map.has_key?(png_style.image, :alpha_data)
@@ -2877,7 +2897,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     transparent_png_path = Path.join(base_dir, "transparent.png")
     File.write!(transparent_png_path, png_rgba_fixture(1, 1, 0, <<0, 0, 0, 0>>))
 
-    assert {:ok, transparent_png_style} = image_style(transparent_png_path, [])
+    assert {:ok, transparent_png_style} =
+             image_style(transparent_png_path, base_url: base_dir)
+
     assert transparent_png_style.image.data == <<0, 0, 0>>
     assert transparent_png_style.image.alpha_data == <<0>>
 
