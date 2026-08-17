@@ -181,6 +181,40 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
     assert diagnostic.message == "PDF page tree depth exceeds the limit; object 1002 0"
   end
 
+  test "caches shared page Parent chains during validation" do
+    assert {:ok, context} =
+             500
+             |> shared_parent_chain_document(500)
+             |> PdfValidator.validate()
+
+    assert length(context.pages) == 500
+  end
+
+  test "limits indirect reference chain depth and aggregate validation work" do
+    assert {:ok, 42} =
+             1_000
+             |> reference_chain_document()
+             |> PdfValidator.resolve({:ref, {1, 0}})
+
+    assert {:error, {:resource_limit_exceeded, depth_diagnostic}} =
+             1_001
+             |> reference_chain_document()
+             |> PdfValidator.resolve({:ref, {1, 0}})
+
+    assert depth_diagnostic.stage == :limits
+
+    assert depth_diagnostic.message ==
+             "indirect reference chain depth exceeds the limit; object 1001 0"
+
+    assert {:error, {:resource_limit_exceeded, work_diagnostic}} =
+             50
+             |> unique_parent_chains_document(500)
+             |> PdfValidator.validate()
+
+    assert work_diagnostic.stage == :limits
+    assert work_diagnostic.message =~ "indirect reference resolution work exceeds the limit"
+  end
+
   test "page-tree Parent validation includes indirect-object generations" do
     document =
       shared_document()
@@ -730,6 +764,110 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
       )
 
     %{objects: objects, trailer: %{"Root" => {:ref, {1, 0}}}}
+  end
+
+  defp shared_parent_chain_document(page_count, chain_length) do
+    alias_start = 3
+    page_start = alias_start + chain_length
+
+    aliases =
+      Enum.reduce(0..(chain_length - 1), %{}, fn offset, objects ->
+        object_number = alias_start + offset
+
+        next_ref =
+          case offset == chain_length - 1 do
+            true -> {2, 0}
+            false -> {object_number + 1, 0}
+          end
+
+        Map.put(objects, {object_number, 0}, object({:ref, next_ref}))
+      end)
+
+    {objects, kids} =
+      Enum.reduce(0..(page_count - 1), {aliases, []}, fn offset, {objects, kids} ->
+        page_ref = {page_start + offset, 0}
+
+        page =
+          object(%{"Type" => {:name, "Page"}, "Parent" => {:ref, {alias_start, 0}}})
+
+        {Map.put(objects, page_ref, page), [{:ref, page_ref} | kids]}
+      end)
+
+    objects =
+      objects
+      |> Map.put(
+        {1, 0},
+        object(%{"Type" => {:name, "Catalog"}, "Pages" => {:ref, {2, 0}}})
+      )
+      |> Map.put(
+        {2, 0},
+        object(%{
+          "Type" => {:name, "Pages"},
+          "Kids" => Enum.reverse(kids),
+          "Count" => page_count,
+          "MediaBox" => [0, 0, 100, 100]
+        })
+      )
+
+    %{objects: objects, trailer: %{"Root" => {:ref, {1, 0}}}}
+  end
+
+  defp unique_parent_chains_document(page_count, chain_length) do
+    {objects, kids, _next_object} =
+      Enum.reduce(1..page_count, {%{}, [], 3}, fn _page, {objects, kids, next_object} ->
+        parent_ref = {next_object, 0}
+
+        objects =
+          Enum.reduce(0..(chain_length - 1), objects, fn offset, objects ->
+            object_number = next_object + offset
+
+            next_ref =
+              case offset == chain_length - 1 do
+                true -> {2, 0}
+                false -> {object_number + 1, 0}
+              end
+
+            Map.put(objects, {object_number, 0}, object({:ref, next_ref}))
+          end)
+
+        page_ref = {next_object + chain_length, 0}
+        page = object(%{"Type" => {:name, "Page"}, "Parent" => {:ref, parent_ref}})
+
+        {Map.put(objects, page_ref, page), [{:ref, page_ref} | kids], elem(page_ref, 0) + 1}
+      end)
+
+    objects =
+      objects
+      |> Map.put(
+        {1, 0},
+        object(%{"Type" => {:name, "Catalog"}, "Pages" => {:ref, {2, 0}}})
+      )
+      |> Map.put(
+        {2, 0},
+        object(%{
+          "Type" => {:name, "Pages"},
+          "Kids" => Enum.reverse(kids),
+          "Count" => page_count,
+          "MediaBox" => [0, 0, 100, 100]
+        })
+      )
+
+    %{objects: objects, trailer: %{"Root" => {:ref, {1, 0}}}}
+  end
+
+  defp reference_chain_document(length) do
+    objects =
+      Enum.reduce(1..length, %{}, fn object_number, objects ->
+        value =
+          case object_number == length do
+            true -> 42
+            false -> {:ref, {object_number + 1, 0}}
+          end
+
+        Map.put(objects, {object_number, 0}, object(value))
+      end)
+
+    %{objects: objects}
   end
 
   defp object(value, stream \\ nil, tokens \\ []) do

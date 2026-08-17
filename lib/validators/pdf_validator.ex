@@ -18,6 +18,8 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @max_object_stream_entries 10_000
   @max_pages 10_000
   @max_page_tree_depth 1_000
+  @max_reference_chain_depth 1_000
+  @max_reference_resolution_work 25_000
   @max_input_bytes 50_000_000
   @inheritable_page_keys ["Resources", "MediaBox", "CropBox", "Rotate"]
 
@@ -255,7 +257,13 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     case document do
       %{objects: objects, trailer: trailer} when is_map(objects) and is_map(trailer) ->
         root = Map.get(trailer, "Root")
-        traversal = %{seen: %{}, pages: [], page_count: 0}
+
+        traversal = %{
+          seen: %{},
+          pages: [],
+          page_count: 0,
+          reference_resolution: %{cache: %{}, work: 0}
+        }
 
         with {:ok, catalog} <- dictionary(document, root, opts),
              true <- named?(Map.get(catalog, "Type"), "Catalog"),
@@ -309,8 +317,8 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   def resolve(document, value, opts \\ []) do
     case value do
       {:ref, ref} ->
-        case resolve_reference(document, ref, %{}, opts) do
-          {:ok, resolved, _terminal_ref} -> {:ok, resolved}
+        case resolve_reference(document, ref, %{cache: %{}, work: 0}, %{}, 0, opts) do
+          {:ok, resolved, _terminal_ref, _resolution} -> {:ok, resolved}
           {:error, _} = resolution_error -> resolution_error
         end
 
@@ -581,7 +589,15 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           error(:limits, :resource_limit_exceeded, "PDF page count exceeds the limit", opts)
 
         true ->
-          with :ok <- validate_page_tree_parent(document, dictionary, ref, expected_parent, opts) do
+          with {:ok, traversal} <-
+                 validate_page_tree_parent(
+                   document,
+                   dictionary,
+                   ref,
+                   expected_parent,
+                   traversal,
+                   opts
+                 ) do
             inherited = inherit_page_values(dictionary, ref, inherited)
             ancestors = Map.put(ancestors, ref, true)
             traversal = %{traversal | seen: Map.put(traversal.seen, ref, true)}
@@ -696,12 +712,19 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
-  defp validate_page_tree_parent(document, dictionary, ref, expected_parent, opts) do
+  defp validate_page_tree_parent(
+         document,
+         dictionary,
+         ref,
+         expected_parent,
+         traversal,
+         opts
+       ) do
     case expected_parent do
       nil ->
         case Map.get(dictionary, "Parent") do
           nil ->
-            :ok
+            {:ok, traversal}
 
           _parent ->
             error(
@@ -716,9 +739,19 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
       expected_parent ->
         case Map.get(dictionary, "Parent") do
           {:ref, parent_ref} ->
-            case resolve_reference(document, parent_ref, %{}, opts) do
-              {:ok, _parent, ^expected_parent} ->
-                :ok
+            case resolve_reference(
+                   document,
+                   parent_ref,
+                   traversal.reference_resolution,
+                   %{},
+                   0,
+                   opts
+                 ) do
+              {:ok, _parent, ^expected_parent, resolution} ->
+                {:ok, %{traversal | reference_resolution: resolution}}
+
+              {:error, {:resource_limit_exceeded, _diagnostic}} = limit_error ->
+                limit_error
 
               _ ->
                 error(
@@ -816,7 +849,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
-  defp resolve_reference(document, ref, seen, opts) do
+  defp resolve_reference(document, ref, resolution, seen, depth, opts) do
     cond do
       not valid_ref?(ref) ->
         error(:resolution, :invalid_pdf_input, "indirect reference is malformed", opts)
@@ -826,37 +859,95 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           object: ref
         )
 
+      depth >= @max_reference_chain_depth ->
+        error(
+          :limits,
+          :resource_limit_exceeded,
+          "indirect reference chain depth exceeds the limit",
+          opts,
+          object: ref
+        )
+
+      resolution.work >= @max_reference_resolution_work ->
+        error(
+          :limits,
+          :resource_limit_exceeded,
+          "indirect reference resolution work exceeds the limit",
+          opts,
+          object: ref
+        )
+
       true ->
-        case fetch_object_record(document, ref) do
-          {:ok, %{value: {:ref, next_ref}}} ->
-            resolve_reference(document, next_ref, Map.put(seen, ref, true), opts)
+        resolution = %{resolution | work: resolution.work + 1}
 
-          {:ok, %{value: value}} ->
-            {:ok, value, ref}
+        case Map.fetch(resolution.cache, ref) do
+          {:ok, {value, terminal_ref}} ->
+            {:ok, value, terminal_ref, resolution}
 
-          {:ok, _object} ->
-            error(:resolution, :invalid_pdf_input, "indirect object record is malformed", opts,
-              object: ref
-            )
+          :error ->
+            case fetch_object_record(document, ref) do
+              {:ok, %{value: {:ref, next_ref}}} ->
+                case resolve_reference(
+                       document,
+                       next_ref,
+                       resolution,
+                       Map.put(seen, ref, true),
+                       depth + 1,
+                       opts
+                     ) do
+                  {:ok, value, terminal_ref, resolution} ->
+                    resolution = %{
+                      resolution
+                      | cache: Map.put(resolution.cache, ref, {value, terminal_ref})
+                    }
 
-          :missing ->
-            error(:resolution, :invalid_pdf_input, "indirect object reference is missing", opts,
-              object: ref
-            )
+                    {:ok, value, terminal_ref, resolution}
 
-          :malformed_document ->
-            error(
-              :resolution,
-              :invalid_pdf_input,
-              "parsed PDF document object table is malformed",
-              opts
-            )
+                  {:error, _} = resolution_error ->
+                    resolution_error
+                end
+
+              {:ok, %{value: value}} ->
+                resolution = %{
+                  resolution
+                  | cache: Map.put(resolution.cache, ref, {value, ref})
+                }
+
+                {:ok, value, ref, resolution}
+
+              {:ok, _object} ->
+                error(
+                  :resolution,
+                  :invalid_pdf_input,
+                  "indirect object record is malformed",
+                  opts,
+                  object: ref
+                )
+
+              :missing ->
+                error(
+                  :resolution,
+                  :invalid_pdf_input,
+                  "indirect object reference is missing",
+                  opts,
+                  object: ref
+                )
+
+              :malformed_document ->
+                error(
+                  :resolution,
+                  :invalid_pdf_input,
+                  "parsed PDF document object table is malformed",
+                  opts
+                )
+            end
         end
     end
   end
 
   defp referenced_dictionary(document, ref, opts) do
-    with {:ok, resolved, terminal_ref} <- resolve_reference(document, ref, %{}, opts),
+    with {:ok, resolved, terminal_ref, _resolution} <-
+           resolve_reference(document, ref, %{cache: %{}, work: 0}, %{}, 0, opts),
          true <- is_map(resolved) do
       {:ok, terminal_ref, resolved}
     else
