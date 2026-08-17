@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="./LICENSE"><img src="https://img.shields.io/hexpm/l/native_elixir_pdf_utilities.svg" alt="License" /></a> <a href="https://hex.pm/packages/native_elixir_pdf_utilities"><img src="https://img.shields.io/hexpm/v/native_elixir_pdf_utilities.svg" alt="Hex.pm" /></a> <a href="https://native-elixir-pdf-utilities.hexdocs.pm/api-reference.html"><img src="https://img.shields.io/badge/hex-docs-blue.svg" alt="HexDocs" /></a> <img src="https://img.shields.io/badge/elixir-~%3E%201.19-4B275F.svg" alt="Elixir ~> 1.19" />
+  <a href="https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/LICENSE"><img src="https://img.shields.io/hexpm/l/native_elixir_pdf_utilities.svg" alt="License" /></a> <a href="https://hex.pm/packages/native_elixir_pdf_utilities"><img src="https://img.shields.io/hexpm/v/native_elixir_pdf_utilities.svg" alt="Hex.pm" /></a> <a href="https://native-elixir-pdf-utilities.hexdocs.pm/api-reference.html"><img src="https://img.shields.io/badge/hex-docs-blue.svg" alt="HexDocs" /></a> <img src="https://img.shields.io/badge/elixir-~%3E%201.19-4B275F.svg" alt="Elixir ~> 1.19" />
 </p>
 
 # Native Elixir PDF Utilities
@@ -33,7 +33,7 @@ See the [documentation](https://github.com/Cees-Kettenis/native_elixir_pdf_utili
 ```elixir
 def deps do
   [
-    {:native_elixir_pdf_utilities, "~> 0.10.0"}
+    {:native_elixir_pdf_utilities, "~> 0.11.0"}
   ]
 end
 ```
@@ -54,8 +54,7 @@ for prerequisites, quicker installed-version checks, and result interpretation.
 
 ## License
 
-The library source is MIT licensed. See [LICENSE](LICENSE). Bundled DejaVu font
-files use the Bitstream Vera license in
-[`priv/fonts/dejavu/LICENSE.txt`](priv/fonts/dejavu/LICENSE.txt). Generated
-WHATWG character-reference data retains its BSD 3-Clause license in
-[`priv/licenses/WHATWG-BSD-3-Clause.txt`](priv/licenses/WHATWG-BSD-3-Clause.txt).
+The library source is MIT licensed. Bundled DejaVu font files use the Bitstream
+Vera license; WHATWG character-reference data and Adobe glyph-name data retain
+their respective BSD 3-Clause notices. See the complete
+[license texts](docs/licenses.md).

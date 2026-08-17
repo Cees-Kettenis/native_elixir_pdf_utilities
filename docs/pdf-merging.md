@@ -40,6 +40,8 @@ trailer, catalog, and flat page tree. Active input objects receive new object
 numbers, their indirect references are rewritten, and stream bytes and filter
 declarations are preserved. Effective inherited page resources, media and crop
 boxes, and rotation values are written onto the merged pages where required.
+Existing page-level entries such as `BleedBox`, `TrimBox`, `ArtBox`, and
+`UserUnit` remain on copied page dictionaries.
 Missing or malformed required page geometry fails with an actionable diagnostic
 instead of being replaced with a fabricated page size.
 

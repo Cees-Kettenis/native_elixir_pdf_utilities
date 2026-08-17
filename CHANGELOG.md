@@ -1,5 +1,68 @@
 # Changelog
 
+## 0.11.0 - 2026-08-17
+
+### Added
+
+- Added static rendering for text inputs, checkboxes, radio buttons, selects,
+  textareas, and buttons. Form state is rendered as deterministic visible PDF
+  content without creating interactive AcroForm fields or widget annotations.
+- Added support for the form `type`, `value`, `name`, `checked`, `selected`, and
+  `disabled` attributes, including valueless and quoted Boolean attributes,
+  selected-option defaults, textarea and button value fallbacks, and strict
+  form-structure validation.
+- Added configurable process-wide resource limits through
+  `NativeElixirPdfUtilities.Limits`, including validated application startup
+  configuration for HTML, image, SVG, layout, PDF reader, merge, text
+  extraction, CMap, Form XObject, and font-cache workloads.
+- Added a configurable resource-limits guide and browser parity coverage for a
+  static form-control matrix and a realistic government application form.
+- Added a PDF tokenizer guide covering tokens, byte spans, stream-length hints,
+  lexical errors, and the boundary between tokenization and document parsing.
+
+### Changed
+
+- Changed `base_url` into an explicit authorization root for
+  document-selected images and fonts. Relative and absolute resources must
+  remain beneath the configured root, and traversal and symlink components are
+  rejected; explicitly configured stylesheet files retain trusted local font
+  resolution relative to their own directory.
+- Changed text extraction to cache decoded streams and parsed instructions for
+  the duration of one extraction while still charging every stream use, Form
+  expansion, and executed instruction against aggregate work limits.
+- Changed sparse PDF merging to preflight input count and aggregate bytes and
+  densely renumber reachable source objects before writing the merged
+  cross-reference table.
+- Changed image rendering, complex grid/table layout, PDF reference
+  validation, object-stream parsing, and nested PDF value traversal to enforce
+  their limits before expensive allocation or recursive work begins.
+- Changed the generated ExDoc navigation to keep the changelog prominent,
+  consolidate all license texts under one expandable page, organize the guides
+  by subject, and group public, low-level PDF, HTML pipeline, and validation
+  modules in the API reference.
+
+### Fixed
+
+- Fixed oversized or malformed SVG raster dimensions reaching the native
+  rasterizer before source-byte, per-axis, and total-pixel limits were checked.
+- Fixed repeated images allowing excessive source counts, encoded bytes, or
+  decoded PNG allocation across one HTML render.
+- Fixed complex grid definitions, placements, and table spans performing
+  unbounded work before layout cardinality validation.
+- Fixed shared PDF streams being repeatedly decoded and tokenized during text
+  extraction. A 500-page shared-stream benchmark improved from approximately
+  3.26 seconds to 28 milliseconds while preserving per-use safety accounting.
+- Fixed PDF object streams scanning oversized headers before their entry count
+  was validated.
+- Fixed sparse PDF inputs causing merge work and output size to scale with high
+  source object numbers instead of the reachable object set.
+- Fixed repeated page-parent and indirect-reference chains being revalidated
+  without request-scoped caching or an aggregate reference-resolution budget.
+- Fixed deeply nested PDF arrays and dictionaries entering recursive descent
+  before the shared value-depth limit was enforced.
+- Fixed local HTML images and document-selected fonts accepting paths outside
+  `base_url`, including absolute paths, parent traversal, and symlink escapes.
+
 ## 0.10.0 - 2026-08-14
 
 ### Added

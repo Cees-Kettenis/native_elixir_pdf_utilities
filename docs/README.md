@@ -7,6 +7,8 @@ should account for.
 
 ## Reading and manipulating PDFs
 
+- [PDF Tokenizer](pdf-tokenizer.md) explains lexical tokens, byte spans, stream
+  length hints, and the boundary between tokenization and document parsing.
 - [PDF Reader](pdf-reader.md) describes the shared document model, supported
   cross-reference and object structures, stream decoding, limits, and errors.
 - [Text Extraction](text-extraction.md) covers reconstructed strings and
@@ -30,6 +32,8 @@ should account for.
 
 ## Project references
 
+- [Licenses](licenses.md) contains the MIT, Bitstream Vera, WHATWG, and Adobe
+  license texts used by the project, bundled fonts, and derived data.
 - [Changelog](../CHANGELOG.md) records released behavior and compatibility
   changes.
 - [Roadmap](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/ROADMAP.md)

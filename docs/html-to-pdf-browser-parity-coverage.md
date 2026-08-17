@@ -25,6 +25,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | Fixture | Coverage |
 | --- | --- |
 | `block_box_model.html` | margin, padding, width, min-height, side-specific borders, background, border radius, text alignment |
+| `border_style_variants.html` | all ten standard border styles, one-to-four-value side styles and colors, and transparent borders |
 | `box_sizing_and_margins.html` | `box-sizing`, min/max width, percentage width, negative margins, clamped block sizing |
 | `break_variants.html` | `break-before`, `break-after`, `page-break-before`, `page-break-inside`, auto and forced break values |
 | `css_cascade_selectors.html` | universal, element, class, id, child, descendant, `:first-child`, `:last-child`, `:nth-child`, `!important`, forward-referenced custom properties, `display: none` |
@@ -50,6 +51,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `pagination_breaks.html` | explicit page breaks, repeated page-sized sections, page count parity |
 | `table_collapsed_borders.html` | table captions, headers, collapsed borders, side-specific border precedence, `colspan`, missing trailing cells |
 | `table_column_layout.html` | `colgroup`, `col`, column `span`, percentage column widths, lone cells remaining in their first declared column, `table-layout: fixed`, and separate/collapsed `border-spacing` behavior |
+| `table_header_near_page_row.html` | a repeated table header kept with the first body row when both fit on a fresh page |
 | `table_pagination_headers.html` | table overflow pagination, repeated multi-row header expectations, page breaks around table rows |
 | `table_rowspan_tfoot.html` | `rowspan`, `tfoot`, vertical alignment, footer rows, `colspan` totals |
 | `table_separate_borders.html` | separate borders, captions, headers, cell padding, `colspan`, right-aligned table content |

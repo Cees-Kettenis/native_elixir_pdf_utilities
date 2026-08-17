@@ -14,8 +14,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   The supported surface is a strict, document-oriented HTML/CSS subset.
   Malformed structure and unsupported features return errors instead of using
   browser-like guessing. Unsupported text graphemes are visibly replaced by
-  default. See the README support matrix for the current element, CSS, layout,
-  image, and font support.
+  default. See the
+  [HTML-to-PDF compatibility guide](html-to-pdf-compatibility.html) for the
+  current element, CSS, layout, image, and font support.
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser

@@ -19,34 +19,6 @@ breaking API changes are allowed, but they should be explained clearly in
 
 ## Milestones
 
-### 0.11.0 - Static HTML Form Rendering
-
-Milestone goal: render common HTML form controls as static PDF content for government
-forms, applications, inspections, and contracts.
-
-#### Scope
-
-- Add static rendering for HTML form controls:
-  - `input type="text"` renders the `value` attribute as visible text
-  - `input type="checkbox"` renders checked state from `checked`
-  - `input type="radio"` renders checked state from `checked`
-  - `select` renders the selected option text from `selected`
-  - `textarea` renders its text content or value as visible text
-  - `button` where it appears in existing templates
-
-#### Design Notes
-
-- Document that HTML form controls render as static content only, not as
-  interactive PDF form fields.
-- Do not add special disabled-state rendering before `1.0.0`; callers can use
-  normal CSS classes or attributes if they need disabled-looking output.
-
-#### Completion Criteria
-
-- Add parser, style, layout, and PDF writer tests for static form controls.
-- Add browser parity fixtures for visible static form rendering.
-- Add or update a realistic government-style form fixture.
-
 ### 0.12.0 - Positioning, Image Fitting, and Asset Inputs
 
 Milestone goal: support fixed-size template regions while keeping asset handling explicit
@@ -225,15 +197,12 @@ Milestone goal: harden the library behavior that will be difficult to change aft
   - documented reason atoms and diagnostic maps
 - Add an error reference guide that lists public error return shapes and reason
   atoms by module.
-- Add resource limit and safety controls for renderer and PDF utility APIs:
-  - maximum input size
-  - maximum page count
-  - maximum image dimensions
-  - maximum rendered pages
-  - timeout or cancellation guidance
-- Provide conservative default resource limits suitable for server-side use, with
-  explicit configuration options so applications can raise, lower, or disable
-  limits where appropriate.
+- Complete the resource-safety controls not already delivered in `0.11.0`:
+  - add a dedicated maximum rendered-page limit for HTML-to-PDF output
+  - document timeout and cancellation guidance for caller applications
+- Reassess the conservative process-wide defaults delivered in `0.11.0` for
+  server-side use. Applications may raise or lower positive limits in runtime
+  configuration; disabling limits is intentionally unsupported.
 
 #### Design Notes
 

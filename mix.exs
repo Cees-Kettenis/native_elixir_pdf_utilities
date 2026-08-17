@@ -4,7 +4,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
   def project do
     [
       app: :native_elixir_pdf_utilities,
-      version: "0.10.0",
+      version: "0.11.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       description:
@@ -55,14 +55,14 @@ defmodule NativeElixirPdfUtilities.MixProject do
   defp docs do
     [
       main: "readme",
+      assets: %{"assets" => "assets"},
       extras: [
         "README.md",
-        "LICENSE",
-        {"priv/fonts/dejavu/LICENSE.txt", [title: "DejaVu Fonts License"]},
-        {"priv/licenses/WHATWG-BSD-3-Clause.txt", [title: "WHATWG Entity Data License"]},
         "CHANGELOG.md",
+        "docs/licenses.md",
         "docs/diagnostics.md",
         "docs/resource-limits.md",
+        "docs/pdf-tokenizer.md",
         "docs/pdf-reader.md",
         "docs/pdf-validation.md",
         "docs/text-extraction.md",
@@ -71,7 +71,57 @@ defmodule NativeElixirPdfUtilities.MixProject do
         "docs/html-to-pdf-browser-parity-coverage.md",
         "docs/html-to-pdf-examples.md"
       ],
-      source_ref: "v0.10.0",
+      groups_for_extras: [
+        "Reference Guides": [
+          "docs/diagnostics.md",
+          "docs/resource-limits.md"
+        ],
+        "PDF Guides": [
+          "docs/pdf-tokenizer.md",
+          "docs/pdf-reader.md",
+          "docs/pdf-validation.md",
+          "docs/text-extraction.md",
+          "docs/pdf-merging.md"
+        ],
+        "HTML to PDF": [
+          "docs/html-to-pdf-compatibility.md",
+          "docs/html-to-pdf-browser-parity-coverage.md",
+          "docs/html-to-pdf-examples.md"
+        ]
+      ],
+      groups_for_modules: [
+        "Public APIs": [
+          NativeElixirPdfUtilities.HtmlToPdf,
+          NativeElixirPdfUtilities.Merge,
+          NativeElixirPdfUtilities.Text,
+          NativeElixirPdfUtilities.Tokenizer,
+          NativeElixirPdfUtilities.Limits
+        ],
+        "PDF Building Blocks": [
+          NativeElixirPdfUtilities.Pdf.Reader,
+          NativeElixirPdfUtilities.Pdf.GlyphName,
+          NativeElixirPdfUtilities.Diagnostics
+        ],
+        "HTML Rendering Pipeline": [
+          NativeElixirPdfUtilities.HtmlToPdf.HtmlParser,
+          NativeElixirPdfUtilities.HtmlToPdf.CssParser,
+          NativeElixirPdfUtilities.HtmlToPdf.Style,
+          NativeElixirPdfUtilities.HtmlToPdf.Font,
+          NativeElixirPdfUtilities.HtmlToPdf.FontFallback,
+          NativeElixirPdfUtilities.HtmlToPdf.Layout,
+          NativeElixirPdfUtilities.HtmlToPdf.Pagination,
+          NativeElixirPdfUtilities.HtmlToPdf.PageGeometry,
+          NativeElixirPdfUtilities.HtmlToPdf.PageFurniture,
+          NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+        ],
+        "Validation Pipeline": [
+          NativeElixirPdfUtilities.Validators.PdfValidator,
+          NativeElixirPdfUtilities.Validators.MergeValidator,
+          NativeElixirPdfUtilities.Validators.TextValidator,
+          NativeElixirPdfUtilities.Validators.WriterValidator
+        ]
+      ],
+      source_ref: "v0.11.0",
       source_url: "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"
     ]
   end

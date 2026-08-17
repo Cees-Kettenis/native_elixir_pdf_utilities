@@ -166,49 +166,9 @@ Set `PDFTOPPM_BIN` if `pdftoppm` is not on `PATH`.
 
 New HTML-to-PDF features must include focused unit coverage in the relevant parser, style, layout, pagination, or PDF writer tests. If the feature changes visible rendering, add or update a browser parity fixture and keep the parity suite green before documenting the feature as supported.
 
-Current parity fixtures cover:
-
-| Fixture                                 | Coverage                                                                                                                                                                                                                          |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `block_box_model.html`                | margin, padding, width, min-height, side-specific borders, background, border radius, text alignment                                                                                                                              |
-| `border_style_variants.html`          | all ten standard border styles, one-to-four-value side styles and colors, and transparent borders                                                                                                                                |
-| `box_sizing_and_margins.html`         | `box-sizing`, min/max width, percentage width, negative margins, clamped block sizing                                                                                                                                           |
-| `break_variants.html`                 | `break-before`, `break-after`, `page-break-before`, `page-break-inside`, auto and forced break values                                                                                                                     |
-| `css_cascade_selectors.html`          | universal, element, class, id, child, descendant,`:first-child`, `:last-child`, `:nth-child`, `!important`, custom properties, `display: none`                                                                          |
-| `generated_content_counters.html`     | attribute selectors, `:not()`, odd/even and type-position selectors, `::before`, `::after`, `attr()`, named counter reset/increment/output |
-| `css_remaining_supported_values.html` | grouped selectors, source order, inline style priority, inherited text styles, inline flex/grid,`min()`, named colors, no-op `overflow`/`position`, side padding/borders, `vertical-align`, `line-break`, `word-wrap` |
-| `display_lists_and_inline_block.html` | inline-block layout, hidden elements, unordered lists, ordered lists, list item spacing                                                                                                                                           |
-| `fonts_and_print_media.html`          | local CSS `@font-face`, print-only media cascade, embedded font output, bundled Unicode glyph fallback from a built-in font                                                                                                          |
-| `html_semantics_typography.html`      | semantic block aliases, metadata wrappers,`title`, `lang`, `h1`-`h6`, `b`, `i`, font-relative semantic margins                                                                                                        |
-| `images_data_uris.html`               | 8-bit non-interlaced RGB PNG, JPEG, and SVG data URI images in block, table, flex, and grid contexts                                                                                                                               |
-| `inline_text_flow.html`               | inline runs, bold, italic, colors, line-height, wrapping,`<br>`, text transform                                                                                                                                                 |
-| `links_entities_and_protocols.html`   | links,`https`, `http`, `mailto`, named entities, decimal and hex numeric entities, non-breaking-space wrapping                                                                                                                |
-| `text_style_variants.html`            | `rgb()`, `rgba()`, `currentColor`, nested custom properties, inherited unitless line height, transparent borders, white-space, word breaking, letter spacing, text transforms                                               |
-| `units_and_sizing.html`               | `pt`, `px`, `mm`, `cm`, `in`, root-font-relative `rem`, percentages, `aspect-ratio`, fixed height, min-height                                                                                                            |
-| `whitespace_pre_line.html`            | default whitespace collapse, `white-space: pre-line`, `<br>`, literal escaped newline text, centered and right-aligned lines |
-
-Real production environment fixtures are also included:
-
-| Fixture                                   | Production settings                                                                                             |
-| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `purchase_order.html`                   | A4 production document size                                                                                   |
-| `material_requisition.html`             | A4 production document size                                                                                   |
-| `stock_sticker.html`                    | `{4.92126, 1.49606}` production label size                                                                    |
-| `trim_card.html`                        | `{11.6929, 8.2677}` production landscape document size                                                        |
-| `flex_grid_alignment.html`              | flex order, wrapping, gap, alignment, grid template tracks, grid spans, row/column gaps                         |
-| `flex_direction_and_justification.html` | flex row, row-reverse, column, grow/shrink/basis, main-axis min/max freezing and redistribution,`justify-content`, `align-items`, `align-self`, row gaps |
-| `grid_tracks_and_placement.html`        | `repeat()`, `minmax()` growth and minimum-bound overflow, auto rows/columns, `grid-column`, `grid-row`, `grid-area`, item alignment |
-| `layout_compositions_remaining.html`    | grid containing table, flex containing table, table containing direct flexbox                                   |
-| `table_collapsed_borders.html`          | table captions, headers, collapsed borders, side-specific border precedence,`colspan`, missing trailing cells |
-| `table_column_layout.html`              | `colgroup`, `col`, column `span`, percentage column widths, `table-layout: fixed`, and separate/collapsed `border-spacing` behavior |
-| `table_pagination_headers.html`         | table overflow pagination, repeated multi-row header expectations, page breaks around table rows                |
-| `table_rowspan_tfoot.html`              | `rowspan`, `tfoot`, vertical alignment, footer rows, `colspan` totals                                     |
-| `table_separate_borders.html`           | separate borders, captions, headers, cell padding,`colspan`, right-aligned table content                      |
-| `nested_table_grid_flex.html`           | table cell containing grid, grid item containing flexbox, ordering, gaps, nested borders                        |
-| `nested_table_collapsed_borders.html`   | collapsed outer table containing a collapsed inner table, nested`colspan`, side-specific nested borders       |
-| `page_geometry_asymmetric.html`          | named page sizing, landscape orientation, and asymmetric one-to-four-value`@page` margins                    |
-| `page_rules_landscape.html`             | CSS`@page` landscape sizing, page margins, explicit page-sized drawing geometry                               |
-| `paragraph_pagination.html`             | default line-level paragraph fragmentation across automatic page breaks                                         |
-| `pagination_breaks.html`                | explicit page breaks, repeated page-sized sections, page count parity                                           |
-
-The artifact directory for a failing fixture is reported in the assertion message under `tmp/browser_parity/<fixture-name>/` and contains Chromium/native PDFs plus rasterized PPM pages for inspection.
+The complete, current synthetic and realistic fixture catalogs live in
+[HTML to PDF Browser Parity Coverage](html-to-pdf-browser-parity-coverage.md).
+That guide also maps each documented support area to its Chromium comparison
+fixture. The artifact directory for a failure is reported under
+`tmp/browser_parity/<fixture-name>/` and contains the Chromium and native PDFs
+plus rasterized PPM pages for inspection.
