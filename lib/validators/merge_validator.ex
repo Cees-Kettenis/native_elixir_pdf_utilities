@@ -9,13 +9,9 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   """
 
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Tokenizer
   alias NativeElixirPdfUtilities.Validators.PdfValidator
-
-  @max_merge_inputs 100
-  @max_aggregate_input_bytes 100_000_000
-  @max_merged_objects 100_000
-  @max_merged_pages 10_000
 
   @typedoc "A parsed object retained for merge serialization."
   @type object_context :: %{
@@ -63,10 +59,10 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
             not is_binary(input) ->
               {:halt, :invalid}
 
-            count >= @max_merge_inputs ->
+            count >= Limits.get(:max_merge_inputs) ->
               {:halt, resource_limit_error("merge input count exceeds the limit")}
 
-            aggregate_bytes + byte_size(input) > @max_aggregate_input_bytes ->
+            aggregate_bytes + byte_size(input) > Limits.get(:max_aggregate_merge_input_bytes) ->
               {:halt, resource_limit_error("aggregate merge input bytes exceed the limit")}
 
             true ->
@@ -147,7 +143,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
               page_count = page_count + length(pages)
 
               cond do
-                page_count > @max_merged_pages ->
+                page_count > Limits.get(:max_merged_pages) ->
                   {:halt, resource_limit_error("merged page count exceeds the limit")}
 
                 true ->
@@ -183,7 +179,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
       case object do
         %{obj: object, gen: generation}
         when is_integer(object) and object >= 0 and is_integer(generation) and generation >= 0 ->
-          case next_id > @max_merged_objects do
+          case next_id > Limits.get(:max_merged_objects) do
             true ->
               {:halt, resource_limit_error("merged object count exceeds the limit")}
 

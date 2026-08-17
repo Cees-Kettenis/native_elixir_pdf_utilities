@@ -26,7 +26,7 @@ The goal is not to be a full PDF engine overnight. It is a steadily improving to
 3. Reader and text extraction - strictly resolve embedded Unicode text from classic and modern PDFs.
 4. HTML to PDF - renders a strict, document-oriented HTML/CSS subset to native PDF bytes without Chromium, wkhtmltopdf, Node, Rust, Python, OS packages, or SaaS calls.
 
-See the [documentation](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/tree/main/docs) for feature guides and quick reference.
+See the [documentation](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/tree/main/docs) for feature guides, configurable resource limits, and quick reference.
 
 ## Installation
 

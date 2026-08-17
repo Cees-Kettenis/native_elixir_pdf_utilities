@@ -8,14 +8,10 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   """
 
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Tokenizer
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   import Bitwise
-
-  @max_objects 100_000
-  @max_decoded_stream_bytes 25_000_000
-  @max_decompression_ratio 100
-  @max_xref_length_candidates 1_000
 
   @type ref :: {non_neg_integer(), non_neg_integer()}
   @type value ::
@@ -179,7 +175,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       Map.has_key?(seen, offset) ->
         error(:xref, :invalid_pdf_input, "xref revision chain contains a cycle")
 
-      depth >= 1_000 ->
+      depth >= Limits.get(:max_pdf_xref_revisions) ->
         error(:limits, :resource_limit_exceeded, "xref revision count exceeds the limit")
 
       true ->
@@ -243,6 +239,8 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp parse_classic_sections(tokens, entries) do
+    max_objects = Limits.get(:max_pdf_objects)
+
     case tokens do
       [:trailer | rest] ->
         with {:ok, trailer, _rest} <- parse_value(rest),
@@ -254,7 +252,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
         end
 
       [{:int, first}, {:int, count} | rest]
-      when first >= 0 and count >= 0 and first + count <= @max_objects + 1 ->
+      when first >= 0 and count >= 0 and first + count <= max_objects + 1 ->
         with {:ok, entries, rest} <- parse_classic_entries(rest, first, count, entries) do
           parse_classic_sections(rest, entries)
         end
@@ -416,7 +414,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       |> Enum.map(fn [{offset, _length}] -> offset end)
       |> Enum.uniq()
 
-    case length(offsets) <= @max_xref_length_candidates do
+    case length(offsets) <= Limits.get(:max_pdf_xref_length_candidates) do
       true ->
         candidates =
           Enum.reduce(offsets, [], fn offset, candidates ->
@@ -483,8 +481,9 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     size = Map.get(dictionary, "Size")
     widths = Map.get(dictionary, "W")
     index = Map.get(dictionary, "Index", if(is_integer(size), do: [0, size], else: nil))
+    max_objects = Limits.get(:max_pdf_objects)
 
-    with true <- is_integer(size) and size > 0 and size <= @max_objects + 1,
+    with true <- is_integer(size) and size > 0 and size <= max_objects + 1,
          [type_width, field_width, generation_width] <- widths,
          true <-
            Enum.all?(
@@ -1040,8 +1039,8 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
       limit =
         min(
-          @max_decoded_stream_bytes,
-          max(byte_size(data) * @max_decompression_ratio, 1)
+          Limits.get(:max_pdf_decoded_stream_bytes),
+          max(byte_size(data) * Limits.get(:max_pdf_decompression_ratio), 1)
         )
 
       inflate_chunks(zlib, data, limit, 0, [], ref)
@@ -1202,8 +1201,8 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   defp run_length(data, ref) do
     limit =
       min(
-        @max_decoded_stream_bytes,
-        max(byte_size(data) * @max_decompression_ratio, 1)
+        Limits.get(:max_pdf_decoded_stream_bytes),
+        max(byte_size(data) * Limits.get(:max_pdf_decompression_ratio), 1)
       )
 
     decode_run_length(data, 0, limit, [], ref)
@@ -1265,8 +1264,8 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
     limit =
       min(
-        @max_decoded_stream_bytes,
-        max(byte_size(data) * @max_decompression_ratio, 1)
+        Limits.get(:max_pdf_decoded_stream_bytes),
+        max(byte_size(data) * Limits.get(:max_pdf_decompression_ratio), 1)
       )
 
     decode_lzw_bits(data, 0, 9, dictionary, 258, nil, early_change, 0, limit, [], ref)
@@ -1523,7 +1522,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     columns = parameters["Columns"]
     row_bytes = div(colors * columns * bits + 7, 8)
 
-    case row_bytes <= @max_decoded_stream_bytes do
+    case row_bytes <= Limits.get(:max_pdf_decoded_stream_bytes) do
       true ->
         {:ok, row_bytes, max(1, div(colors * bits + 7, 8))}
 
@@ -1539,10 +1538,11 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
   defp validate_decoded_size(input, decoded) do
     cond do
-      byte_size(decoded) > @max_decoded_stream_bytes ->
+      byte_size(decoded) > Limits.get(:max_pdf_decoded_stream_bytes) ->
         error(:limits, :resource_limit_exceeded, "decoded stream exceeds the byte limit")
 
-      byte_size(input) > 0 and byte_size(decoded) > byte_size(input) * @max_decompression_ratio ->
+      byte_size(input) > 0 and
+          byte_size(decoded) > byte_size(input) * Limits.get(:max_pdf_decompression_ratio) ->
         error(:limits, :resource_limit_exceeded, "stream decompression ratio exceeds the limit")
 
       true ->

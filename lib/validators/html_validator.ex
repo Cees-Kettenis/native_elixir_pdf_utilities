@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.Limits
 
   @render_option_keys [
     :page_size,
@@ -16,16 +17,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     :unsupported_glyphs
   ]
   @variant_keys [:default, :first, :odd, :even]
-  @max_svg_bytes 5_000_000
-  @max_svg_raster_dimension 8_192
-  @max_svg_raster_pixels 16_777_216
-  @max_image_count 1_000
-  @max_image_source_bytes 10_000_000
-  @max_aggregate_image_source_bytes 50_000_000
-  @max_decoded_image_bytes 40_000_000
-  @max_aggregate_decoded_image_bytes 80_000_000
-  @max_layout_cardinality 1_000
-
   @type image_budget :: :atomics.atomics_ref()
 
   @doc false
@@ -38,15 +29,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec reserve_image_source(image_budget(), non_neg_integer()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def reserve_image_source(budget, source_bytes) do
+    max_image_source_bytes = Limits.get(:max_image_source_bytes)
+
     cond do
       not is_integer(source_bytes) or source_bytes < 0 ->
         Diagnostics.error(:style, :invalid_document, "image source size is invalid")
 
-      source_bytes > @max_image_source_bytes ->
+      source_bytes > max_image_source_bytes ->
         Diagnostics.error(
           :limits,
           :resource_limit_exceeded,
-          "image source exceeds the #{@max_image_source_bytes}-byte limit"
+          "image source exceeds the #{max_image_source_bytes}-byte limit"
         )
 
       true ->
@@ -55,7 +48,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                  budget,
                  1,
                  1,
-                 @max_image_count,
+                 Limits.get(:max_image_count),
                  "image count exceeds the limit"
                ),
              :ok <-
@@ -63,7 +56,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                  budget,
                  2,
                  source_bytes,
-                 @max_aggregate_image_source_bytes,
+                 Limits.get(:max_aggregate_image_source_bytes),
                  "aggregate image source bytes exceed the limit"
                ) do
           :ok
@@ -75,17 +68,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec reserve_decoded_image(image_budget(), pos_integer(), pos_integer(), pos_integer()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def reserve_decoded_image(budget, width, height, channels) do
+    max_decoded_image_bytes = Limits.get(:max_decoded_image_bytes)
+
     case is_integer(width) and width > 0 and is_integer(height) and height > 0 and
            is_integer(channels) and channels > 0 do
       true ->
         decoded_bytes = width * height * channels
 
         cond do
-          decoded_bytes > @max_decoded_image_bytes ->
+          decoded_bytes > max_decoded_image_bytes ->
             Diagnostics.error(
               :limits,
               :resource_limit_exceeded,
-              "decoded image exceeds the #{@max_decoded_image_bytes}-byte limit"
+              "decoded image exceeds the #{max_decoded_image_bytes}-byte limit"
             )
 
           true ->
@@ -93,7 +88,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
               budget,
               3,
               decoded_bytes,
-              @max_aggregate_decoded_image_bytes,
+              Limits.get(:max_aggregate_decoded_image_bytes),
               "aggregate decoded image bytes exceed the limit"
             )
         end
@@ -235,14 +230,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           {:ok, [width: pos_integer(), height: pos_integer()]}
           | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_svg_raster(svg, raster_options, image_budget) do
+    max_svg_bytes = Limits.get(:max_svg_bytes)
+
     case {svg, raster_options} do
       {svg, raster_options} when is_binary(svg) and is_list(raster_options) ->
         cond do
-          byte_size(svg) > @max_svg_bytes ->
+          byte_size(svg) > max_svg_bytes ->
             Diagnostics.error(
               :limits,
               :resource_limit_exceeded,
-              "SVG source exceeds the #{@max_svg_bytes}-byte limit"
+              "SVG source exceeds the #{max_svg_bytes}-byte limit"
             )
 
           true ->
@@ -389,10 +386,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec validate_layout_cardinality(:grid_placement | :grid_tracks | :table_span, term()) ::
           :ok | :error | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_layout_cardinality(kind, value) do
+    max_layout_cardinality = Limits.get(:max_layout_cardinality)
+
     case {kind, value} do
       {kind, value}
       when kind in [:grid_placement, :grid_tracks, :table_span] and is_integer(value) and
-             value >= 1 and value <= @max_layout_cardinality ->
+             value >= 1 and value <= max_layout_cardinality ->
         :ok
 
       {kind, value}
@@ -408,7 +407,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         Diagnostics.error(
           :limits,
           :resource_limit_exceeded,
-          "#{label} exceeds the #{@max_layout_cardinality}-item limit"
+          "#{label} exceeds the #{max_layout_cardinality}-item limit"
         )
 
       _ ->
@@ -788,19 +787,22 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   defp validate_svg_raster_budget(width, height) do
+    max_dimension = Limits.get(:max_svg_raster_dimension)
+    max_pixels = Limits.get(:max_svg_raster_pixels)
+
     cond do
-      width > @max_svg_raster_dimension or height > @max_svg_raster_dimension ->
+      width > max_dimension or height > max_dimension ->
         Diagnostics.error(
           :limits,
           :resource_limit_exceeded,
-          "SVG raster dimensions #{width}x#{height} exceed the #{@max_svg_raster_dimension}-pixel per-axis limit"
+          "SVG raster dimensions #{width}x#{height} exceed the #{max_dimension}-pixel per-axis limit"
         )
 
-      width * height > @max_svg_raster_pixels ->
+      width * height > max_pixels ->
         Diagnostics.error(
           :limits,
           :resource_limit_exceeded,
-          "SVG raster dimensions #{width}x#{height} exceed the #{@max_svg_raster_pixels}-pixel limit"
+          "SVG raster dimensions #{width}x#{height} exceed the #{max_pixels}-pixel limit"
         )
 
       true ->

@@ -16,6 +16,8 @@ should account for.
   diagnostics, and document-level features that are not preserved.
 - [Diagnostics](diagnostics.md) documents the shared recoverable error contract
   used by the public APIs.
+- [Configurable Resource Limits](resource-limits.md) lists every tunable
+  parsing, rendering, extraction, merge, and cache ceiling and its default.
 
 ## Generating PDFs from HTML
 

@@ -2,17 +2,14 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Pdf.TextEncoding
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.TextValidator
   import Bitwise
 
-  @max_cmap_bytes 1_000_000
-  @max_cmap_entries 100_000
   @max_cid 65_535
-  @max_cid_width_entries 65_536
-  @max_form_depth 20
 
   @doc """
   Prepares reachable fonts, strings, and Form XObjects for text execution.
@@ -181,7 +178,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
          depth,
          preparation_context
        ) do
-    case depth >= @max_form_depth do
+    case depth >= Limits.get(:max_form_xobject_depth) do
       true ->
         error(:limits, :resource_limit_exceeded, "Form XObject nesting exceeds the limit",
           page: page
@@ -495,7 +492,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
 
   defp validate_cid_width_entries(first, count, entry_count) do
     cond do
-      entry_count + count > @max_cid_width_entries ->
+      entry_count + count > Limits.get(:max_cid_width_entries) ->
         error(:font, :resource_limit_exceeded, "CID font width entry count exceeds the limit")
 
       first > @max_cid or (count > 0 and first + count - 1 > @max_cid) ->
@@ -713,7 +710,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
 
   defp parse_cmap(stream, page, font) do
     cond do
-      byte_size(stream) > @max_cmap_bytes ->
+      byte_size(stream) > Limits.get(:max_cmap_bytes) ->
         error(:cmap, :resource_limit_exceeded, "ToUnicode CMap exceeds the byte limit",
           page: page,
           font: font
@@ -733,7 +730,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
              {:ok, bfchar} <- parse_bfchar(stream),
              {:ok, bfrange} <- parse_bfrange(stream, map_size(bfchar)),
              mappings = Map.merge(bfrange, bfchar),
-             true <- map_size(mappings) <= @max_cmap_entries,
+             true <- map_size(mappings) <= Limits.get(:max_cmap_entries),
              true <- map_size(mappings) > 0 do
           {:ok, %{codespaces: codespaces, mappings: mappings}}
         else
@@ -754,7 +751,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
 
   defp parse_cid_cmap(stream, page, font) do
     cond do
-      byte_size(stream) > @max_cmap_bytes ->
+      byte_size(stream) > Limits.get(:max_cmap_bytes) ->
         error(:cmap, :resource_limit_exceeded, "Type0 Encoding CMap exceeds the byte limit",
           page: page,
           font: font
@@ -873,7 +870,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
             true ->
               mappings = Map.merge(mappings, Map.new(parsed))
 
-              case existing + map_size(mappings) <= @max_cmap_entries do
+              case existing + map_size(mappings) <= Limits.get(:max_cmap_entries) do
                 true -> {:cont, {:ok, mappings}}
                 false -> {:halt, :limit}
               end
@@ -915,7 +912,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
                   cid > 65_535 or (mapping_type == :sequential and cid + count - 1 > 65_535) ->
                     {:halt, :error}
 
-                  existing + map_size(mappings) + count > @max_cmap_entries ->
+                  existing + map_size(mappings) + count > Limits.get(:max_cmap_entries) ->
                     {:halt, :limit}
 
                   true ->
@@ -1001,7 +998,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
                  hex_bytes(last),
                true <- first <= last,
                count <- :binary.decode_unsigned(last) - :binary.decode_unsigned(first) + 1,
-               true <- count + existing + map_size(mappings) <= @max_cmap_entries,
+               true <- count + existing + map_size(mappings) <= Limits.get(:max_cmap_entries),
                {:ok, entries} <- bfrange_entries(first, count, target) do
             {:cont, {:ok, Map.merge(mappings, entries)}}
           else

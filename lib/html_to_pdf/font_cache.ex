@@ -3,7 +3,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
 
   use GenServer
 
-  @maximum_entries 64
   @table __MODULE__
 
   @type load_result :: {:ok, term()} | :error
@@ -61,7 +60,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
   end
 
   @impl GenServer
-  def init(_options) do
+  def init(options) do
     table =
       :ets.new(@table, [
         :named_table,
@@ -70,7 +69,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
         read_concurrency: true
       ])
 
-    {:ok, %{sequence: 0, table: table}}
+    {:ok,
+     %{maximum_entries: Keyword.fetch!(options, :maximum_entries), sequence: 0, table: table}}
   end
 
   @impl GenServer
@@ -89,7 +89,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
                 sequence = state.sequence + 1
                 :ets.insert(state.table, {path, fingerprint, result, sequence})
 
-                case :ets.info(state.table, :size) > @maximum_entries do
+                case :ets.info(state.table, :size) > state.maximum_entries do
                   true ->
                     {oldest_path, _fingerprint, _result, _sequence} =
                       state.table

@@ -20,10 +20,10 @@ defmodule NativeElixirPdfUtilities.Text do
   """
 
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Validators.TextValidator
 
-  @max_text_spans 25_000
   @graphics_state_fields [
     :ctm,
     :font,
@@ -468,7 +468,7 @@ defmodule NativeElixirPdfUtilities.Text do
       decoded.text == "" ->
         {:ok, state, spans}
 
-      state.next_source_index >= @max_text_spans ->
+      state.next_source_index >= Limits.get(:max_text_spans) ->
         error(:limits, :resource_limit_exceeded, "text span count exceeds the limit", page: page)
 
       true ->

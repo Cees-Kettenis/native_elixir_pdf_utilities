@@ -10,6 +10,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   """
 
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Tokenizer
   alias NativeElixirPdfUtilities.Validators.PdfValidator
@@ -17,12 +18,6 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
 
   @validated_operators ~w(q Q cm gs BT ET Tf Tm Td TD T* TL Tc Tw Tz Tr Ts Tj TJ ' " Do)
   @text_showing_operators ~w(Tj TJ ' ")
-  @max_decoded_content_bytes 50_000_000
-  @max_parsed_instructions 100_000
-  @max_stream_uses 100_000
-  @max_instruction_uses 1_000_000
-  @max_form_expansions 10_000
-
   @typedoc "A validated content instruction with operands in source order."
   @type instruction :: %{required(:operator) => binary(), required(:operands) => [term()]}
 
@@ -265,7 +260,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   def charge_form_expansion(preparation_context, page_number) do
     form_expansions = preparation_context.form_expansions + 1
 
-    case form_expansions <= @max_form_expansions do
+    case form_expansions <= Limits.get(:max_text_form_expansions) do
       true ->
         {:ok, %{preparation_context | form_expansions: form_expansions}}
 
@@ -617,7 +612,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   defp cache_decoded_stream(preparation_context, stream_ref, content, page_number) do
     decoded_bytes = preparation_context.decoded_bytes + byte_size(content)
 
-    case decoded_bytes <= @max_decoded_content_bytes do
+    case decoded_bytes <= Limits.get(:max_text_decoded_content_bytes) do
       true ->
         {:ok,
          %{
@@ -653,7 +648,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   defp cache_instructions(preparation_context, stream_ref, operations, page_number) do
     parsed_instructions = preparation_context.parsed_instructions + length(operations)
 
-    case parsed_instructions <= @max_parsed_instructions do
+    case parsed_instructions <= Limits.get(:max_text_parsed_instructions) do
       true ->
         {:ok,
          %{
@@ -670,7 +665,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   defp charge_stream_use(preparation_context, page_number) do
     stream_uses = preparation_context.stream_uses + 1
 
-    case stream_uses <= @max_stream_uses do
+    case stream_uses <= Limits.get(:max_text_stream_uses) do
       true ->
         {:ok, %{preparation_context | stream_uses: stream_uses}}
 
@@ -682,7 +677,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   defp charge_instruction_uses(preparation_context, count, page_number) do
     instruction_uses = preparation_context.instruction_uses + count
 
-    case instruction_uses <= @max_instruction_uses do
+    case instruction_uses <= Limits.get(:max_text_instruction_uses) do
       true -> {:ok, %{preparation_context | instruction_uses: instruction_uses}}
       false -> resource_limit_error("content instruction work exceeds the limit", page_number)
     end

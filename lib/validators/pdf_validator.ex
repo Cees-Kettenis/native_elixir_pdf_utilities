@@ -12,16 +12,9 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   """
 
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
 
-  @max_objects 100_000
-  @max_object_stream_entries 10_000
-  @max_pages 10_000
-  @max_page_tree_depth 1_000
-  @max_reference_chain_depth 1_000
-  @max_reference_resolution_work 25_000
-  @max_value_depth 100
-  @max_input_bytes 50_000_000
   @inheritable_page_keys ["Resources", "MediaBox", "CropBox", "Rotate"]
 
   @typedoc "An indirect PDF object reference."
@@ -103,7 +96,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
       not is_binary(pdf) ->
         error(:input, :invalid_pdf_input, "PDF input must be a binary", opts)
 
-      byte_size(pdf) > @max_input_bytes ->
+      byte_size(pdf) > Limits.get(:max_pdf_input_bytes) ->
         error(:limits, :resource_limit_exceeded, "PDF input exceeds the byte limit", opts)
 
       Regex.match?(~r/\A%PDF-(1\.[0-7]|2\.0)(?:\s|\r|\n)/, pdf) ->
@@ -160,10 +153,10 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         size = Map.get(trailer, "Size")
 
         cond do
-          not is_integer(size) or size <= 0 or size > @max_objects + 1 ->
+          not is_integer(size) or size <= 0 or size > Limits.get(:max_pdf_objects) + 1 ->
             error(:xref, :invalid_pdf_input, "xref Size is malformed", opts)
 
-          map_size(entries) > @max_objects ->
+          map_size(entries) > Limits.get(:max_pdf_objects) ->
             error(:limits, :resource_limit_exceeded, "PDF object count exceeds the limit", opts)
 
           not match?({:ref, _}, Map.get(trailer, "Root")) ->
@@ -223,7 +216,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
               object: ref
             )
 
-          count > @max_object_stream_entries ->
+          count > Limits.get(:max_pdf_object_stream_entries) ->
             error(
               :limits,
               :resource_limit_exceeded,
@@ -250,15 +243,17 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @spec validate_value_depth(term(), [diagnostic_option()]) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_value_depth(depth, opts \\ []) do
+    max_value_depth = Limits.get(:max_pdf_value_depth)
+
     case depth do
-      depth when is_integer(depth) and depth >= 0 and depth <= @max_value_depth ->
+      depth when is_integer(depth) and depth >= 0 and depth <= max_value_depth ->
         :ok
 
-      depth when is_integer(depth) and depth > @max_value_depth ->
+      depth when is_integer(depth) and depth > max_value_depth ->
         error(
           :limits,
           :resource_limit_exceeded,
-          "PDF value nesting depth exceeds the #{@max_value_depth}-level limit",
+          "PDF value nesting depth exceeds the #{max_value_depth}-level limit",
           opts
         )
 
@@ -602,12 +597,12 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
             object: ref
           )
 
-        depth >= @max_page_tree_depth ->
+        depth >= Limits.get(:max_pdf_page_tree_depth) ->
           error(:limits, :resource_limit_exceeded, "PDF page tree depth exceeds the limit", opts,
             object: ref
           )
 
-        traversal.page_count >= @max_pages ->
+        traversal.page_count >= Limits.get(:max_pdf_pages) ->
           error(:limits, :resource_limit_exceeded, "PDF page count exceeds the limit", opts)
 
         true ->
@@ -881,7 +876,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           object: ref
         )
 
-      depth >= @max_reference_chain_depth ->
+      depth >= Limits.get(:max_pdf_reference_chain_depth) ->
         error(
           :limits,
           :resource_limit_exceeded,
@@ -890,7 +885,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           object: ref
         )
 
-      resolution.work >= @max_reference_resolution_work ->
+      resolution.work >= Limits.get(:max_pdf_reference_resolution_work) ->
         error(
           :limits,
           :resource_limit_exceeded,
