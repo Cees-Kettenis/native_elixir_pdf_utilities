@@ -83,6 +83,48 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
              )
   end
 
+  test "object-stream metadata is bounded before header parsing" do
+    assert {:ok, %{count: 10_000, first: 20}} =
+             PdfValidator.validate_object_stream_header(
+               %{"N" => 10_000, "First" => 20},
+               20,
+               {6, 0}
+             )
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             PdfValidator.validate_object_stream_header(
+               %{"N" => 10_001, "First" => 20},
+               20,
+               {6, 0}
+             )
+
+    assert diagnostic.stage == :limits
+    assert diagnostic.reason == :resource_limit_exceeded
+
+    assert diagnostic.message ==
+             "PDF object stream entry count exceeds the limit; object 6 0"
+
+    assert {:error, {:invalid_pdf_input, %{stage: :object_stream}}} =
+             PdfValidator.validate_object_stream_header(
+               %{"N" => 1, "First" => 21},
+               20,
+               {6, 0}
+             )
+
+    for arguments <- [
+          {%{"N" => -1, "First" => 0}, 20, {6, 0}},
+          {%{"N" => 1, "First" => -1}, 20, {6, 0}},
+          {:malformed, 20, {6, 0}},
+          {%{"N" => 1, "First" => 0}, :malformed, {6, 0}},
+          {%{"N" => 1, "First" => 0}, 20, :malformed}
+        ] do
+      assert {:error, {:invalid_pdf_input, %{stage: :object_stream}}} =
+               arguments
+               |> Tuple.to_list()
+               |> then(&apply(PdfValidator, :validate_object_stream_header, &1))
+    end
+  end
+
   test "shared validation prepares reusable page identity and inherited values" do
     document = shared_document()
 

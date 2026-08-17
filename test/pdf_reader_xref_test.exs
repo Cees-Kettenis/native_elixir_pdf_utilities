@@ -277,6 +277,14 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
     descending_offsets = object_stream_pdf("1 10 2 0 " <> catalog <> "\n" <> pages, 9)
     assert_error(Reader.read(descending_offsets), :invalid_pdf_input, :object_stream)
 
+    duplicate_objects =
+      object_stream_pdf(
+        "1 0 1 #{byte_size(catalog) + 1} " <> catalog <> "\n" <> pages,
+        byte_size(header)
+      )
+
+    assert_error(Reader.read(duplicate_objects), :invalid_pdf_input, :object_stream)
+
     malformed_header =
       object_stream_pdf(
         "1 0 X 2 #{byte_size(catalog) + 1} " <> catalog <> "\n" <> pages,
@@ -284,6 +292,17 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
       )
 
     assert_error(Reader.read(malformed_header), :invalid_pdf_input, :object_stream)
+  end
+
+  test "limits object-stream entries before scanning the decoded header" do
+    excessive_entries = object_stream_pdf("", 0, 10_001)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Reader.read(excessive_entries)
+    assert diagnostic.stage == :limits
+    assert diagnostic.reason == :resource_limit_exceeded
+
+    assert diagnostic.message ==
+             "PDF object stream entry count exceeds the limit; object 6 0"
   end
 
   test "loads compressed Length objects before materializing ordinary streams" do
@@ -533,11 +552,11 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
       "startxref\n#{xref}\n%%EOF\n"
   end
 
-  defp object_stream_pdf(data, first) do
+  defp object_stream_pdf(data, first, count \\ 2) do
     header = "%PDF-1.7\n"
 
     object_stream =
-      "6 0 obj\n<< /Type /ObjStm /N 2 /First #{first} /Length #{byte_size(data)} >>\n" <>
+      "6 0 obj\n<< /Type /ObjStm /N #{count} /First #{first} /Length #{byte_size(data)} >>\n" <>
         "stream\n" <> data <> "\nendstream\nendobj\n"
 
     body = header <> object_stream

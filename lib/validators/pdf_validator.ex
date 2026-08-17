@@ -15,6 +15,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   alias NativeElixirPdfUtilities.Pdf.Reader
 
   @max_objects 100_000
+  @max_object_stream_entries 10_000
   @max_pages 10_000
   @max_page_tree_depth 1_000
   @max_input_bytes 50_000_000
@@ -193,6 +194,52 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
 
       _ ->
         error(:xref, :invalid_pdf_input, "parsed xref context is malformed", opts)
+    end
+  end
+
+  @doc """
+  Validates object-stream metadata before its decoded header is scanned.
+
+  Object streams are limited independently from the document-wide object count
+  so attacker-controlled entry counts cannot create excessive parsing work.
+  """
+  @spec validate_object_stream_header(term(), term(), term(), [diagnostic_option()]) ::
+          {:ok, %{count: non_neg_integer(), first: non_neg_integer()}}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_object_stream_header(dictionary, decoded_size, ref, opts \\ []) do
+    case {dictionary, decoded_size, ref} do
+      {dictionary, decoded_size, {object, generation}}
+      when is_map(dictionary) and is_integer(decoded_size) and decoded_size >= 0 and
+             is_integer(object) and object >= 0 and is_integer(generation) and generation >= 0 ->
+        count = Map.get(dictionary, "N")
+        first = Map.get(dictionary, "First")
+
+        cond do
+          not is_integer(count) or count < 0 ->
+            error(:object_stream, :invalid_pdf_input, "object stream header is invalid", opts,
+              object: ref
+            )
+
+          count > @max_object_stream_entries ->
+            error(
+              :limits,
+              :resource_limit_exceeded,
+              "PDF object stream entry count exceeds the limit",
+              opts,
+              object: ref
+            )
+
+          not is_integer(first) or first < 0 or first > decoded_size ->
+            error(:object_stream, :invalid_pdf_input, "object stream header is invalid", opts,
+              object: ref
+            )
+
+          true ->
+            {:ok, %{count: count, first: first}}
+        end
+
+      _ ->
+        error(:object_stream, :invalid_pdf_input, "object stream header is invalid", opts)
     end
   end
 

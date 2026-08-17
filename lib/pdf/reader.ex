@@ -863,9 +863,11 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp parse_object_stream(data, dictionary, ref) do
-    with count when is_integer(count) and count >= 0 <- Map.get(dictionary, "N"),
-         first when is_integer(first) and first >= 0 and first <= byte_size(data) <-
-           Map.get(dictionary, "First"),
+    with {:ok, %{count: count, first: first}} <-
+           PdfValidator.validate_object_stream_header(dictionary, byte_size(data), ref,
+             operation: :read,
+             module: __MODULE__
+           ),
          header <- binary_part(data, 0, first),
          numbers <-
            Regex.scan(~r/\d+/, header) |> List.flatten() |> Enum.map(&String.to_integer/1),
@@ -874,40 +876,56 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       pairs = Enum.chunk_every(numbers, 2)
 
       pairs
-      |> Enum.with_index()
-      |> Enum.reduce_while({:ok, %{}}, fn {[object, relative_offset], index}, {:ok, acc} ->
-        next_offset =
-          case Enum.at(pairs, index + 1) do
-            nil -> byte_size(data) - first
-            [_next_object, next_relative_offset] -> next_relative_offset
+      |> Enum.reverse()
+      |> Enum.reduce_while(
+        {:ok, %{}, MapSet.new(), count - 1, byte_size(data) - first},
+        fn [object, relative_offset], {:ok, acc, seen, index, next_offset} ->
+          length = next_offset - relative_offset
+
+          if length >= 0 and first + relative_offset + length <= byte_size(data) do
+            slice = binary_part(data, first + relative_offset, length)
+
+            tokens = Tokenizer.new(slice) |> Tokenizer.tokenize_all()
+
+            case parse_value(tokens) do
+              {:ok, value, []} when object > 0 ->
+                case MapSet.member?(seen, object) do
+                  false ->
+                    parsed = %{value: value, stream: nil, offset: nil, tokens: tokens}
+
+                    {:cont,
+                     {:ok, Map.put(acc, index, {object, parsed}), MapSet.put(seen, object),
+                      index - 1, relative_offset}}
+
+                  true ->
+                    {:halt,
+                     error(:object_stream, :invalid_pdf_input, "compressed object is malformed",
+                       object: ref
+                     )}
+                end
+
+              _ ->
+                {:halt,
+                 error(:object_stream, :invalid_pdf_input, "compressed object is malformed",
+                   object: ref
+                 )}
+            end
+          else
+            {:halt,
+             error(:object_stream, :invalid_pdf_input, "compressed object offset is invalid",
+               object: ref
+             )}
           end
-
-        length = next_offset - relative_offset
-
-        if length >= 0 and first + relative_offset + length <= byte_size(data) do
-          slice = binary_part(data, first + relative_offset, length)
-
-          tokens = Tokenizer.new(slice) |> Tokenizer.tokenize_all()
-
-          case parse_value(tokens) do
-            {:ok, value, []} when object > 0 and not is_map_key(acc, object) ->
-              parsed = %{value: value, stream: nil, offset: nil, tokens: tokens, index: index}
-              {:cont, {:ok, Map.put(acc, object, parsed)}}
-
-            _ ->
-              {:halt,
-               error(:object_stream, :invalid_pdf_input, "compressed object is malformed",
-                 object: ref
-               )}
-          end
-        else
-          {:halt,
-           error(:object_stream, :invalid_pdf_input, "compressed object offset is invalid",
-             object: ref
-           )}
         end
-      end)
+      )
+      |> case do
+        {:ok, contained, _seen, _index, _next_offset} -> {:ok, contained}
+        {:error, _} = object_stream_error -> object_stream_error
+      end
     else
+      {:error, _} = validation_error ->
+        validation_error
+
       _ ->
         error(:object_stream, :invalid_pdf_input, "object stream header is invalid", object: ref)
     end
@@ -916,9 +934,8 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   defp add_compressed_objects(requested, contained, objects, stream_ref) do
     Enum.reduce_while(requested, {:ok, objects}, fn {object, _object_stream, index},
                                                     {:ok, objects} ->
-      case Enum.find(contained, fn {_contained_object, parsed} -> parsed.index == index end) do
-        {^object, parsed} ->
-          parsed = Map.delete(parsed, :index)
+      case Map.fetch(contained, index) do
+        {:ok, {^object, parsed}} ->
           {:cont, {:ok, Map.put(objects, {object, 0}, parsed)}}
 
         _ ->
