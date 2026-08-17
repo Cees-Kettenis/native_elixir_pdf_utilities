@@ -151,6 +151,63 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert image.children == []
   end
 
+  test "parse accepts static form controls and boolean attributes" do
+    html = """
+    <div>
+      <input type="text" value="Alice &amp; Bob">
+      <input type="checkbox" checked disabled="disabled">
+      <input type="radio" checked="checked">
+      <select name="status">
+        <option>Pending</option>
+        <option value="approved" selected>Approved</option>
+      </select>
+      <textarea name="notes" value="Fallback"></textarea>
+      <button type="button"><strong>Save</strong></button>
+    </div>
+    """
+
+    assert {:ok, %{children: [%{children: controls}]}} = HtmlParser.parse(html)
+
+    [text, checkbox, radio, select, textarea, button] =
+      Enum.reject(controls, &match?(%{type: :text}, &1))
+
+    assert text.attributes == %{"type" => "text", "value" => "Alice & Bob"}
+
+    assert checkbox.attributes == %{
+             "checked" => "",
+             "disabled" => "disabled",
+             "type" => "checkbox"
+           }
+
+    assert radio.attributes == %{"checked" => "checked", "type" => "radio"}
+    assert Enum.map(select.children, & &1.tag) == ["option", "option"]
+    assert Enum.at(select.children, 1).attributes == %{"selected" => "", "value" => "approved"}
+    assert textarea.attributes == %{"name" => "notes", "value" => "Fallback"}
+    assert [%{tag: "strong"}] = button.children
+  end
+
+  test "parse rejects invalid static form structures and attributes" do
+    invalid_html = [
+      ~s(<div><input type="email" value="a@example.test"></div>),
+      ~s(<div><input type="text" checked></div>),
+      ~s(<div><input type="checkbox">child</input></div>),
+      ~s(<div><select></select></div>),
+      ~s(<div><select><span>Wrong</span></select></div>),
+      ~s(<div><select><option></option></select></div>),
+      ~s(<div><select><option selected>One</option><option selected>Two</option></select></div>),
+      ~s(<div><textarea><strong>Wrong</strong></textarea></div>),
+      ~s(<div><button><input type="text"></button></div>),
+      ~s(<div><button><strong><input type="text"></strong></button></div>),
+      ~s(<div><button type="menu">Wrong</button></div>),
+      ~s(<div><input type="text" readonly></div>),
+      ~s(<div class>Wrong</div>)
+    ]
+
+    Enum.each(invalid_html, fn html ->
+      assert HtmlParser.parse(html) == {:error, :unsupported_html}
+    end)
+  end
+
   test "parse ignores structural whitespace and decodes HTML character references once" do
     assert {:ok, dom} =
              HtmlParser.parse("""

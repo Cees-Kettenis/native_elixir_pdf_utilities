@@ -497,4 +497,47 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     assert :error = HtmlValidator.validate_font_configs(:not_a_list)
     assert :error = HtmlValidator.validate_font_configs([%{unexpected: true}])
   end
+
+  test "validates static form attributes and element semantics" do
+    for pair <- [
+          {"input", "checked"},
+          {"input", "disabled"},
+          {"select", "disabled"},
+          {"option", "selected"},
+          {"option", "disabled"},
+          {"textarea", "disabled"},
+          {"button", "disabled"}
+        ] do
+      assert apply(HtmlValidator, :valid_boolean_form_attribute?, Tuple.to_list(pair))
+    end
+
+    refute HtmlValidator.valid_boolean_form_attribute?("input", "value")
+
+    for {tag, name, value} <- [
+          {"input", "type", "RADIO"},
+          {"input", "name", "answer"},
+          {"select", "name", "status"},
+          {"option", "value", "yes"},
+          {"textarea", "value", "notes"},
+          {"button", "type", "SUBMIT"},
+          {"button", "value", "Save"}
+        ] do
+      assert HtmlValidator.valid_form_attribute?(tag, name, value)
+    end
+
+    refute HtmlValidator.valid_form_attribute?("input", "type", "email")
+    refute HtmlValidator.valid_form_attribute?("select", "multiple", "multiple")
+
+    text = %{type: :text, text: "Choice"}
+    option = %{type: :element, tag: "option", attributes: %{}, children: [text]}
+    selected = put_in(option.attributes, %{"selected" => ""})
+
+    assert HtmlValidator.valid_form_element?("input", %{}, [])
+    refute HtmlValidator.valid_form_element?("input", %{}, [text])
+    assert HtmlValidator.valid_form_element?("select", %{}, [option, selected])
+    assert HtmlValidator.valid_form_element?("option", %{}, [text])
+    assert HtmlValidator.valid_form_element?("textarea", %{}, [])
+    assert HtmlValidator.valid_form_element?("button", %{}, [text])
+    refute HtmlValidator.valid_form_element?("unknown", %{}, [])
+  end
 end

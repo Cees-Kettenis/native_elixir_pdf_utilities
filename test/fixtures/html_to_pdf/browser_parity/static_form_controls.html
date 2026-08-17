@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="fixture" content="browser-parity">
+    <title>Static Form Controls</title>
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body { font-family: "DejaVu Sans", sans-serif; font-size: 10pt; line-height: 13pt; color: #172033; }
+      .sheet { width: 360pt; padding: 18pt; box-sizing: border-box; }
+      h1 { margin: 0 0 10pt 0; font-size: 16pt; line-height: 19pt; }
+      .row { display: grid; grid-template-columns: 100pt 180pt; gap: 8pt; margin-bottom: 8pt; align-items: center; }
+      .caption { font-weight: 700; }
+      input[type="text"], select, textarea, button {
+        display: block;
+        width: 180pt;
+        box-sizing: border-box;
+        border: 1px solid #777777;
+        background: #ffffff;
+        padding: 2pt 3pt;
+        margin: 0;
+        font-family: "DejaVu Sans", sans-serif;
+        font-size: 10pt;
+        line-height: 13pt;
+      }
+      textarea { height: 44pt; white-space: pre-line; }
+      button { width: 84pt; background: #eeeeee; font-weight: 700; text-align: center; }
+      .choice { display: grid; grid-template-columns: 100pt 16pt 58pt 16pt; gap: 5pt; margin-bottom: 8pt; align-items: center; }
+      input[type="checkbox"], input[type="radio"] { display: block; width: 12pt; margin: 0; padding: 0; }
+      input[disabled] { color: #666666; background: #f4f4f4; }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <h1>Static controls</h1>
+      <div class="row"><span class="caption">Applicant</span><input type="text" value="Amira Tan"></div>
+      <div class="row"><span class="caption">Reference</span><input type="text" value="GF-2048" disabled></div>
+      <div class="choice">
+        <span class="caption">Inspection</span>
+        <input type="checkbox" checked>
+        <span>Passed</span>
+        <input type="checkbox">
+      </div>
+      <div class="choice">
+        <span class="caption">Priority</span>
+        <input type="radio" checked>
+        <span>Normal</span>
+        <input type="radio">
+      </div>
+      <div class="row">
+        <span class="caption">Status</span>
+        <select><option>Pending</option><option selected>Approved</option></select>
+      </div>
+      <div class="row"><span class="caption">Notes</span><textarea>Documents verified
+Signature required</textarea></div>
+      <div class="row"><span></span><button type="button"><strong>Record</strong></button></div>
+    </main>
+  </body>
+</html>

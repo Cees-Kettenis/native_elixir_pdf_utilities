@@ -244,6 +244,31 @@ Set common PDF document information under `:metadata`. Calendar structs and ISO 
 
 When `:metadata` does not contain `:title`, the renderer uses the first non-empty HTML `<title>`. An explicit metadata title always wins.
 
+## Static Form Records
+
+Supported form controls render as visible, non-editable PDF content. They do not create PDF form fields or widget annotations.
+
+```elixir
+html = """
+<div class="application">
+  <input type="text" value="Amira Tan">
+  <input type="checkbox" checked>
+  <input type="radio">
+  <select>
+    <option>Pending</option>
+    <option selected>Approved</option>
+  </select>
+  <textarea>Documents verified
+Signature required</textarea>
+  <button type="button">Record application</button>
+</div>
+"""
+
+{:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html)
+```
+
+Text inputs display their `value`. Selects display the selected option, or the first option when no `selected` attribute is present. Textarea child text takes precedence over its optional `value` fallback. `checked`, `selected`, and `disabled` may use normal valueless HTML syntax. Disabled controls have no automatic visual treatment; use a class or an attribute selector such as `input[disabled]` when a disabled-looking print style is required.
+
 ## Styling Choices
 
 The renderer is intentionally strict. Unsupported CSS does not get ignored because silent fallback can create PDFs that look valid but are missing important layout or print information.

@@ -12,6 +12,7 @@ This repository is an Elixir Library
 - Do not duplicate existing helpers for common concerns such as number parsing, date formatting, string cleanup, or similar utility behavior already handled in shared modules.
 - All input, option, document-structure, and semantic validation must be implemented in the appropriate validator module. Validators are the single source of truth for whether data is valid. Public APIs, parsers, readers, writers, and execution modules must delegate to validators and must not duplicate or independently reinterpret validation rules, because duplicated checks can contradict one another. After validation succeeds, downstream code should operate on the validated result and may rely on its guarantees. If validation cannot reasonably live in a validator, explain the reason to the user before implementing it elsewhere.
 - When moving an existing check into a validator, remove the corresponding check from the consuming module. Do not retain a second “defensive” validation path unless it represents an internal invariant rather than caller-input validation.
+- Define every tunable resource or complexity limit in `NativeElixirPdfUtilities.Limits`; do not add module-local configurable ceilings. Keep format- or protocol-mandated bounds fixed, and clearly identify them as non-configurable invariants when they could be mistaken for resource limits (for example, the maximum PDF CID value of 65,535).
 
 # Forbidden style:
 

@@ -10,7 +10,7 @@ CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity
 
 ## Current Result
 
-The browser-parity suite contains 34 synthetic HTML fixtures, 4 real production environment document fixtures, and guard tests that ensure every fixture has configured thresholds.
+The browser-parity suite contains 35 synthetic HTML fixtures, 5 realistic document fixtures, and guard tests that ensure every fixture has configured thresholds.
 
 Current status: passing. The full suite passes with:
 
@@ -40,6 +40,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `inline_text_flow.html` | inline runs, bold, italic, colors, line-height, wrapping, `<br>`, text transform |
 | `layout_compositions_remaining.html` | grid containing table, flex containing table, table containing direct flexbox |
 | `links_entities_and_protocols.html` | links, `https`, `http`, `mailto`, named entities, decimal and hex numeric entities, non-breaking-space wrapping |
+| `static_form_controls.html` | static text inputs, checked and unchecked checkbox/radio state, selected options, multiline textarea content, buttons, Boolean attributes, and CSS-targeted disabled appearance |
 | `nested_table_collapsed_borders.html` | collapsed outer table containing a collapsed inner table, nested `colspan`, side-specific nested borders, and nested background/border paint order |
 | `nested_table_grid_flex.html` | table cell containing grid, grid item containing flexbox, ordering, gaps, nested borders |
 | `page_geometry_asymmetric.html` | named page sizing, landscape orientation, and asymmetric one-to-four-value `@page` margins |
@@ -63,6 +64,7 @@ These fixtures mirror documents currently used in real production environments a
 
 | Fixture | Production document type | Browser parity setting |
 | --- | --- | --- |
+| `government_application_form.html` | Government-style permit application with static form controls | A4 document size |
 | `purchase_order.html` | Purchase order printout | A4 production document size |
 | `material_requisition.html` | Material requisition printout | A4 production document size |
 | `stock_sticker.html` | Stock sticker label | `{4.92126, 1.49606}` production label size |
@@ -72,6 +74,7 @@ Current production fixture parity:
 
 | Fixture | Current signal |
 | --- | --- |
+| `government_application_form.html` | Passing current parity thresholds. |
 | `purchase_order.html` | Passing current parity thresholds. |
 | `material_requisition.html` | Passing current parity thresholds. |
 | `trim_card.html` | Passing current parity thresholds. |
@@ -89,7 +92,8 @@ Current production fixture parity:
 | Lists: `ul`, `ol`, `li` | Passing | `display_lists_and_inline_block.html` |
 | Tables: `table`, `caption`, `colgroup`, `col`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td` | Passing | Table fixtures, especially `table_column_layout.html` and `table_rowspan_tfoot.html` |
 | Images: 8-bit non-interlaced RGB/RGBA PNG, JPEG, SVG data URIs | Passing | `images_data_uris.html` |
-| Attributes: `id`, `class`, `style`, `title`, `role`, `data-*`, `aria-*`, `lang`, metadata attributes, `href`, `src`, `alt`, column `span`, cell `colspan`/`rowspan`, and header `scope` | Passing | `generated_content_counters.html`, `css_cascade_selectors.html`, `html_semantics_typography.html`, `links_entities_and_protocols.html`, `images_data_uris.html`, table fixtures |
+| Static controls: text input, checkbox, radio, select/option, textarea, button | Passing | `static_form_controls.html`, `government_application_form.html` |
+| Attributes: `id`, `class`, `style`, `title`, `role`, `data-*`, `aria-*`, `lang`, metadata attributes, `href`, `src`, `alt`, form `type`/`value`/`name`/`checked`/`selected`/`disabled`, column `span`, cell `colspan`/`rowspan`, and header `scope` | Passing | `generated_content_counters.html`, `css_cascade_selectors.html`, `html_semantics_typography.html`, `links_entities_and_protocols.html`, `images_data_uris.html`, `static_form_controls.html`, table fixtures |
 | Link protocols: `https`, `http`, `mailto` | Passing | `links_entities_and_protocols.html` |
 
 ## CSS Coverage

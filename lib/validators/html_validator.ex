@@ -383,6 +383,78 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec valid_boolean_form_attribute?(String.t(), String.t()) :: boolean()
+  def valid_boolean_form_attribute?(tag, name) do
+    case {tag, name} do
+      {"input", name} when name in ["checked", "disabled"] -> true
+      {"select", "disabled"} -> true
+      {"option", name} when name in ["selected", "disabled"] -> true
+      {"textarea", "disabled"} -> true
+      {"button", "disabled"} -> true
+      _ -> false
+    end
+  end
+
+  @doc false
+  @spec valid_form_attribute?(String.t(), String.t(), String.t()) :: boolean()
+  def valid_form_attribute?(tag, name, value) do
+    case {tag, name, value} do
+      {"input", "type", value} -> String.downcase(value) in ["text", "checkbox", "radio"]
+      {"input", name, _value} when name in ["value", "name", "checked", "disabled"] -> true
+      {"select", name, _value} when name in ["name", "disabled"] -> true
+      {"option", name, _value} when name in ["value", "selected", "disabled"] -> true
+      {"textarea", name, _value} when name in ["value", "name", "disabled"] -> true
+      {"button", "type", value} -> String.downcase(value) in ["button", "submit", "reset"]
+      {"button", name, _value} when name in ["value", "name", "disabled"] -> true
+      _ -> false
+    end
+  end
+
+  @doc false
+  @spec valid_form_element?(String.t(), map(), [term()]) :: boolean()
+  def valid_form_element?(tag, attributes, children) do
+    case tag do
+      "input" ->
+        children == [] and
+          String.downcase(Map.get(attributes, "type", "text")) in ["text", "checkbox", "radio"] and
+          (not Map.has_key?(attributes, "checked") or
+             String.downcase(Map.get(attributes, "type", "text")) in ["checkbox", "radio"])
+
+      "select" ->
+        children != [] and Enum.all?(children, &match?(%{tag: "option"}, &1)) and
+          Enum.count(children, &Map.has_key?(&1.attributes, "selected")) <= 1
+
+      "option" ->
+        children != [] and Enum.all?(children, &match?(%{type: :text}, &1))
+
+      "textarea" ->
+        Enum.all?(children, &match?(%{type: :text}, &1))
+
+      "button" ->
+        valid_button_children?(children)
+
+      _ ->
+        false
+    end
+  end
+
+  defp valid_button_children?(children) do
+    Enum.all?(children, fn child ->
+      case child do
+        %{type: :text} ->
+          true
+
+        %{type: :element, tag: tag, children: nested}
+        when tag in ["strong", "b", "em", "i", "span"] and is_list(nested) ->
+          valid_button_children?(nested)
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  @doc false
   @spec validate_layout_cardinality(:grid_placement | :grid_tracks | :table_span, term()) ::
           :ok | :error | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_layout_cardinality(kind, value) do

@@ -16,6 +16,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert String.ends_with?(pdf, "%%EOF\n")
   end
 
+  test "render writes form controls as static PDF content" do
+    html = """
+    <div>
+      <input type="text" value="Applicant Alice">
+      <input type="checkbox" checked>
+      <input type="radio">
+      <select><option>Pending</option><option selected>Approved</option></select>
+      <textarea>Inspection notes</textarea>
+      <button>Submit application</button>
+    </div>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert pdf =~ "(Applicant Alice) Tj"
+    assert pdf =~ "(Approved) Tj"
+    assert pdf =~ "(Inspection notes) Tj"
+    assert pdf =~ "(Submit) Tj"
+    assert pdf =~ "(application) Tj"
+    refute pdf =~ "/AcroForm"
+    refute pdf =~ "/Widget"
+
+    assert {:ok, extracted} = Text.extract(pdf, layout: false)
+    assert extracted =~ "Applicant Alice"
+    assert extracted =~ "Approved"
+    assert extracted =~ "Inspection notes"
+    assert extracted =~ "Submit application"
+  end
+
   test "render uses the HTML title as PDF metadata unless explicitly overridden" do
     html = "<html><head><title>  HTML Report  </title></head><body><p>Hello</p></body></html>"
 

@@ -151,6 +151,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
              {0.8666666666666667, 0.8941176470588236, 0.9254901960784314}
   end
 
+  test "renders a government application with static form controls" do
+    html = fixture_html("government_application_form.html")
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, page_size: :a4)
+    assert_valid_pdf(pdf)
+    refute pdf =~ "/AcroForm"
+    refute pdf =~ "/Widget"
+
+    assert {:ok, layout_tree} = layout_fixture(html, page_size: :a4)
+    assert_layout_text(layout_tree, "Public Works Permit Application")
+    assert_layout_text(layout_tree, "Amira Tan")
+    assert_layout_text(layout_tree, "Drainage inspection")
+    assert_layout_text(layout_tree, "Identity documents verified.")
+    assert_layout_text(layout_tree, "Record application")
+    assert Enum.count(layout_tree.boxes, &(&1.type == :rect)) >= 10
+  end
+
   defp fixture_html(name) do
     @fixtures_dir
     |> Path.join(name)

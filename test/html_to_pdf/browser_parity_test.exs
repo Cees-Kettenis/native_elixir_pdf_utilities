@@ -31,6 +31,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     {"images_data_uris.html", max_changed_ratio: 0.18, max_average_delta: 0.045},
     {"inline_text_flow.html", max_changed_ratio: 0.12, max_average_delta: 0.03},
     {"links_entities_and_protocols.html", max_changed_ratio: 0.16, max_average_delta: 0.04},
+    {"static_form_controls.html", max_changed_ratio: 0.20, max_average_delta: 0.05},
     {"text_style_variants.html", max_changed_ratio: 0.14, max_average_delta: 0.035},
     {"unsupported_glyph_replacement.html", max_changed_ratio: 0.08, max_average_delta: 0.02},
     {"whitespace_pre_line.html", max_changed_ratio: 0.14, max_average_delta: 0.035},
@@ -88,6 +89,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   ]
 
   @real_document_fixture_thresholds [
+    {"government_application_form.html",
+     render_opts: [page_size: :a4],
+     chromium_page_size: :a4,
+     max_changed_ratio: 0.20,
+     max_average_delta: 0.05},
     {"purchase_order.html",
      render_opts: [page_size: :a4],
      chromium_page_size: :a4,
@@ -131,6 +137,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
       end)
 
     assert Enum.sort(configured_names) == [
+             "government_application_form.html",
              "material_requisition.html",
              "purchase_order.html",
              "stock_sticker.html",

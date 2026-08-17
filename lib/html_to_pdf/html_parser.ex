@@ -5,9 +5,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   Supports a strict subset of document-oriented HTML: structural
   html/head/body/style tags, paragraphs, headings, inline emphasis/color
   containers, div containers for flex/grid layouts, lists, links, tables,
-  images, and CSS-targeting attributes, including `data-*` and `aria-*`
-  metadata used by attribute selectors and generated content. Unsupported or
-  malformed markup returns an error instead of guessing at browser behavior.
+  images, static form controls, and CSS-targeting attributes, including
+  `data-*` and `aria-*` metadata used by attribute selectors and generated
+  content. Unsupported or malformed markup returns an error instead of
+  guessing at browser behavior.
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlEntities
@@ -24,11 +25,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
   @structural_tags ~w(html head body style title meta)
   @block_tags ~w(article aside div footer header main nav p h1 h2 h3 h4 h5 h6 section ul ol table img)
-  @inline_tags ~w(strong b em i span a br)
+  @text_inline_tags ~w(strong b em i span a br)
+  @form_control_tags ~w(input select textarea button)
+  @inline_tags @text_inline_tags ++ @form_control_tags
   @list_tags ~w(ul ol)
   @table_structure_tags ~w(table colgroup thead tbody tfoot tr)
   @table_content_tags ~w(caption th td)
-  @void_tags ~w(meta br img col)
+  @void_tags ~w(meta br img col input)
 
   @doc """
   Parses an HTML binary into a renderer DOM tree.
@@ -127,6 +130,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
       context in @table_structure_tags and String.trim(token) == "" ->
         parse_children(remaining, context, closing_tag, children)
 
+      context == "select" and String.trim(token) == "" ->
+        parse_children(remaining, context, closing_tag, children)
+
       context in ~w(html head body) and String.trim(token) == "" ->
         parse_children(remaining, context, closing_tag, children)
 
@@ -188,7 +194,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
       attributes ->
         captures =
-          Regex.scan(~r/\s*([a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*("[^"]*"|'[^']*')/u, attributes)
+          Regex.scan(
+            ~r/\s*([a-zA-Z][a-zA-Z0-9_-]*)(?:\s*=\s*("[^"]*"|'[^']*'))?/u,
+            attributes
+          )
 
         parsed_source = captures |> Enum.map_join("", &List.first/1) |> String.trim()
 
@@ -202,62 +211,80 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   end
 
   defp attributes_to_map(captures, tag) do
-    Enum.reduce_while(captures, {:ok, %{}}, fn [_, name, quoted_value], {:ok, acc} ->
+    Enum.reduce_while(captures, {:ok, %{}}, fn capture, {:ok, acc} ->
+      [_, name | quoted] = capture
+      quoted_value = List.first(quoted) || ""
       name = String.downcase(name)
 
       value =
-        quoted_value
-        |> String.slice(1..-2//1)
-        |> HtmlEntities.decode(:attribute)
+        case quoted_value do
+          "" ->
+            ""
 
-      case {name, tag, Map.has_key?(acc, name)} do
-        {"style", _, false} ->
+          quoted_value ->
+            quoted_value |> String.slice(1..-2//1) |> HtmlEntities.decode(:attribute)
+        end
+
+      case {quoted_value == "", name, tag, Map.has_key?(acc, name)} do
+        {true, name, tag, false} ->
+          case HtmlValidator.valid_boolean_form_attribute?(tag, name) do
+            true -> {:cont, {:ok, Map.put(acc, name, value)}}
+            false -> {:halt, {:error, :unsupported_html}}
+          end
+
+        {false, "style", _, false} ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
-        {"id", _, false} ->
+        {false, "id", _, false} ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
-        {"class", _, false} ->
+        {false, "class", _, false} ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
-        {"title", _, false} ->
+        {false, "title", _, false} ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
-        {"role", _, false} ->
+        {false, "role", _, false} ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
-        {name, _, false}
+        {false, name, _, false}
         when is_binary(name) and
                (binary_part(name, 0, min(byte_size(name), 5)) == "data-" or
                   binary_part(name, 0, min(byte_size(name), 5)) == "aria-") ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
-        {"lang", "html", false} ->
+        {false, "lang", "html", false} ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
-        {"href", "a", false} ->
+        {false, "href", "a", false} ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
-        {"src", "img", false} ->
+        {false, "src", "img", false} ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
-        {"alt", "img", false} ->
+        {false, "alt", "img", false} ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
-        {name, "meta", false} when name in ~w(charset content http-equiv name property) ->
+        {false, name, "meta", false} when name in ~w(charset content http-equiv name property) ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
-        {name, tag, false} when tag in ~w(td th) and name in ~w(colspan rowspan) ->
+        {false, name, tag, false} when tag in ~w(td th) and name in ~w(colspan rowspan) ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
-        {"scope", "th", false} ->
+        {false, "scope", "th", false} ->
           case HtmlValidator.valid_table_header_scope?(value) do
             true -> {:cont, {:ok, Map.put(acc, name, value)}}
             false -> {:halt, {:error, :unsupported_html}}
           end
 
-        {"span", tag, false} when tag in ~w(colgroup col) ->
+        {false, "span", tag, false} when tag in ~w(colgroup col) ->
           {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {false, name, tag, false} when tag in @form_control_tags or tag == "option" ->
+          case HtmlValidator.valid_form_attribute?(tag, name, value) do
+            true -> {:cont, {:ok, Map.put(acc, name, value)}}
+            false -> {:halt, {:error, :unsupported_html}}
+          end
 
         _ ->
           {:halt, {:error, :unsupported_html}}
@@ -308,7 +335,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         tag in ~w(th td)
 
       context == "a" ->
-        tag in @inline_tags and tag != "a"
+        tag in @text_inline_tags and tag != "a"
+
+      context == "select" ->
+        tag == "option"
+
+      context in ["option", "textarea"] ->
+        false
+
+      context == "button" ->
+        tag in ["strong", "b", "em", "i", "span"]
 
       context in @table_content_tags ->
         tag in @inline_tags or tag in @block_tags
@@ -323,7 +359,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
   defp supported_tag?(tag) do
     tag in @structural_tags or tag in @block_tags or tag in @inline_tags or tag == "li" or
-      tag in ~w(caption colgroup col thead tbody tfoot tr th td)
+      tag in ~w(caption colgroup col thead tbody tfoot tr th td option)
   end
 
   defp valid_element?(tag, attributes, children) do
@@ -336,6 +372,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
       "title" ->
         Enum.all?(children, &match?(%{type: :text}, &1))
+
+      tag when tag in @form_control_tags or tag == "option" ->
+        HtmlValidator.valid_form_element?(tag, attributes, children)
 
       tag when tag in @void_tags ->
         children == []

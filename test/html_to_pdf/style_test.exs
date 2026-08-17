@@ -49,6 +49,75 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert article.style.display == :block
   end
 
+  test "compute turns form state and values into static styled content" do
+    html = """
+    <style>
+      input[disabled] { color: #777777; }
+      select { width: 90pt; }
+    </style>
+    <div>
+      <input type="text" value="Alice">
+      <input type="checkbox" checked disabled>
+      <input type="checkbox">
+      <input type="radio" checked>
+      <input type="radio">
+      <select><option>Pending</option><option selected>Approved</option></select>
+      <select><option>First</option><option>Second</option></select>
+      <textarea>Line one
+    Line two</textarea>
+      <textarea value="Fallback"></textarea>
+      <button><strong>Save</strong></button>
+      <button value="Fallback button"></button>
+    </div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom)
+    [container] = styled_tree.children
+
+    [
+      text,
+      checked_box,
+      empty_box,
+      checked_radio,
+      empty_radio,
+      selected,
+      first,
+      textarea,
+      textarea_fallback,
+      button,
+      button_fallback
+    ] = Enum.reject(container.children, &match?(%{type: :text}, &1))
+
+    assert text.style.form_kind == :text
+    assert text.style.width == 126.0
+    assert Enum.map(text.children, & &1.text) == ["Alice"]
+    assert Enum.map(checked_box.children, & &1.text) == ["☒"]
+    assert checked_box.style.color == {0.4666666666666667, 0.4666666666666667, 0.4666666666666667}
+    assert Enum.map(empty_box.children, & &1.text) == ["☐"]
+    assert Enum.map(checked_radio.children, & &1.text) == ["●"]
+    assert Enum.map(empty_radio.children, & &1.text) == ["○"]
+    assert Enum.map(selected.children, & &1.text) == ["Approved"]
+    assert selected.style.width == 90.0
+    assert Enum.map(first.children, & &1.text) == ["First"]
+    assert Enum.map(textarea.children, & &1.text) == ["Line one\nLine two"]
+    assert textarea.style.white_space == :pre_line
+    assert Enum.map(textarea_fallback.children, & &1.text) == ["Fallback"]
+    assert [%{tag: "strong", children: [%{text: "Save"}]}] = button.children
+    assert button.style.font_weight == 700
+    assert Enum.map(button_fallback.children, & &1.text) == ["Fallback button"]
+  end
+
+  test "compute honors display none on static form controls" do
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               ~s(<div><input type="text" value="Secret" style="display: none"></div>)
+             )
+
+    assert {:ok, %{children: [%{children: [%{style: %{display: :none}, children: []}]}]}} =
+             Style.compute(dom)
+  end
+
   test "compute applies body inherited styles to document fragments" do
     dom = %{
       type: :document,

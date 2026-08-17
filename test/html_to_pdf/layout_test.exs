@@ -124,6 +124,59 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert Enum.at(text_boxes, 0).y > Enum.at(text_boxes, 1).y
   end
 
+  test "layout emits static form controls as text and rectangle boxes" do
+    html = """
+    <div style="margin: 0">
+      <input type="text" value="Alice">
+      <input type="checkbox" checked>
+      <input type="radio">
+      <select><option selected>Approved</option></select>
+      <textarea>Line one
+    Line two</textarea>
+      <button>Save</button>
+    </div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom)
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {240, 300}, margin: 10)
+
+    text_boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
+    rects = Enum.filter(layout_tree.boxes, &(&1.type == :rect))
+
+    assert Enum.map(text_boxes, & &1.text) == [
+             "Alice",
+             "☒",
+             "○",
+             "Approved",
+             "Line one",
+             "Line two",
+             "Save"
+           ]
+
+    assert length(rects) == 4
+    assert Enum.all?(rects, &(&1.width > 0 and &1.height > 0))
+
+    assert text_boxes
+           |> Enum.map(& &1.y)
+           |> Enum.chunk_every(2, 1, :discard)
+           |> Enum.all?(fn [a, b] -> a >= b end)
+  end
+
+  test "layout keeps form controls visible when they occur between inline text" do
+    html = ~s(<p style="margin: 0">Before<input type="text" value="Value">After</p>)
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom)
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 120}, margin: 10)
+
+    assert Enum.map(Enum.filter(layout_tree.boxes, &(&1.type == :text)), & &1.text) == [
+             "Before",
+             "Value",
+             "After"
+           ]
+  end
+
   test "layout preserves normalized LF, CRLF, and CR breaks only for white-space pre-line" do
     for newline <- ["\n", "\r\n", "\r"] do
       html =

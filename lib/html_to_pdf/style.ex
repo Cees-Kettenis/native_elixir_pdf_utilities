@@ -4,9 +4,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   This module applies defaults, inheritance, font resolution, and the CSS
   cascade for the supported text, generated-content, named-counter, selector,
-  box, list, link, table, page-break, flexbox, grid, image, and embedded-font
-  styling subset. Unsupported properties or invalid values fail the render
-  instead of being ignored.
+  box, list, link, table, page-break, flexbox, grid, image, static form-control,
+  and embedded-font styling subset. Unsupported properties or invalid values
+  fail the render instead of being ignored.
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
@@ -248,6 +248,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
                 _ ->
                   counters = apply_counter_operations(element_style, counters)
+                  rendered_children = static_form_children(tag, attributes, children)
 
                   with {:ok, before, counters} <-
                          generated_content_node(
@@ -260,7 +261,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                          ),
                        {:ok, styled_children, counters} <-
                          style_children(
-                           children,
+                           rendered_children,
                            text_style(element_style),
                            rules,
                            [node | ancestors],
@@ -522,6 +523,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
         "img" ->
           image_defaults(attributes, opts, inherited_font_size)
+
+        "input" ->
+          form_control_defaults(
+            String.downcase(Map.get(attributes, "type", "text")),
+            inherited_font_size
+          )
+
+        "select" ->
+          form_control_defaults("select", inherited_font_size)
+
+        "textarea" ->
+          form_control_defaults("textarea", inherited_font_size)
+
+        "button" ->
+          form_control_defaults("button", inherited_font_size)
 
         _ ->
           :invalid
@@ -827,6 +843,85 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     else
       {:error, {_reason, _diagnostic}} = error -> error
       _ -> :invalid
+    end
+  end
+
+  defp form_control_defaults(kind, font_size) do
+    base =
+      block_defaults(font_size, 400, 0.0)
+      |> Map.merge(%{
+        background_color: {1.0, 1.0, 1.0},
+        border_color: {0.47, 0.47, 0.47},
+        border_colors: edges({0.47, 0.47, 0.47}),
+        border_styles: edges(:solid),
+        border_widths: edges(0.75),
+        form_kind: String.to_atom(kind),
+        margin: edges(0.0),
+        padding: edges(1.5, 2.25, 1.5, 2.25)
+      })
+
+    case kind do
+      kind when kind in ["checkbox", "radio"] ->
+        base
+        |> Map.merge(%{
+          background_color: nil,
+          border_colors: edges(nil),
+          border_styles: edges(:none),
+          border_widths: edges(0.0),
+          padding: edges(0.0),
+          width: font_size
+        })
+
+      "textarea" ->
+        base
+        |> Map.put(:height, font_size * 3.6)
+        |> Map.put(:white_space, :pre_line)
+        |> Map.put(:width, font_size * 15.0)
+
+      "button" ->
+        base
+        |> Map.put(:background_color, {0.94, 0.94, 0.94})
+        |> Map.put(:font_weight, 700)
+        |> Map.put(:text_align, :center)
+        |> Map.put(:width, font_size * 10.5)
+
+      _ ->
+        Map.put(base, :width, font_size * 10.5)
+    end
+  end
+
+  defp static_form_children(tag, attributes, children) do
+    case tag do
+      "input" ->
+        text =
+          case String.downcase(Map.get(attributes, "type", "text")) do
+            "checkbox" -> if(Map.has_key?(attributes, "checked"), do: "☒", else: "☐")
+            "radio" -> if(Map.has_key?(attributes, "checked"), do: "●", else: "○")
+            "text" -> Map.get(attributes, "value", "")
+          end
+
+        [%{type: :text, text: text}]
+
+      "select" ->
+        selected =
+          Enum.find(children, &Map.has_key?(&1.attributes, "selected")) || List.first(children)
+
+        selected.children
+
+      "textarea" ->
+        case children do
+          [] -> [%{type: :text, text: Map.get(attributes, "value", "")}]
+          children -> children
+        end
+
+      "button" ->
+        case children do
+          [] -> [%{type: :text, text: Map.get(attributes, "value", "")}]
+          children -> children
+        end
+
+      _ ->
+        children
     end
   end
 

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Public Works Permit Application</title>
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body { font-family: "DejaVu Sans", sans-serif; font-size: 9pt; line-height: 12pt; color: #111827; }
+      .sheet { width: 595pt; padding: 28pt; box-sizing: border-box; }
+      h1 { margin: 0 0 3pt 0; font-size: 17pt; line-height: 20pt; text-align: center; }
+      .subtitle { margin: 0 0 14pt 0; text-align: center; color: #475569; }
+      h2 { margin: 12pt 0 6pt 0; padding: 4pt; font-size: 10pt; line-height: 13pt; background: #e2e8f0; border: 1px solid #64748b; }
+      table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+      td { border: 1px solid #94a3b8; padding: 5pt; vertical-align: top; }
+      .field-name { width: 32%; font-weight: 700; background: #f8fafc; }
+      input[type="text"], select, textarea {
+        display: block;
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid #64748b;
+        background: #ffffff;
+        margin: 0;
+        padding: 2pt 3pt;
+        font-family: "DejaVu Sans", sans-serif;
+        font-size: 9pt;
+        line-height: 12pt;
+      }
+      textarea { height: 48pt; white-space: pre-line; }
+      .choices { display: grid; grid-template-columns: 14pt 70pt 14pt 70pt; gap: 4pt; align-items: center; }
+      input[type="checkbox"], input[type="radio"] { display: block; width: 11pt; margin: 0; padding: 0; }
+      .certification { margin-top: 12pt; padding: 8pt; border: 1px solid #64748b; background: #f8fafc; }
+      .actions { display: flex; justify-content: flex-end; margin-top: 10pt; }
+      button { display: block; width: 110pt; border: 1px solid #475569; background: #e2e8f0; padding: 3pt; font-weight: 700; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <h1>Public Works Permit Application</h1>
+      <p class="subtitle">Static record copy — Department of Municipal Services</p>
+
+      <h2>1. Applicant information</h2>
+      <table>
+        <tr><td class="field-name">Applicant name</td><td><input type="text" value="Amira Tan"></td></tr>
+        <tr><td class="field-name">Application number</td><td><input type="text" value="PW-2026-0418" disabled></td></tr>
+        <tr><td class="field-name">Permit category</td><td><select><option>Road opening</option><option selected>Drainage inspection</option><option>Temporary structure</option></select></td></tr>
+      </table>
+
+      <h2>2. Inspection details</h2>
+      <table>
+        <tr>
+          <td class="field-name">Required checks</td>
+          <td><div class="choices"><input type="checkbox" checked><span>Site plan</span><input type="checkbox" checked><span>Insurance</span></div></td>
+        </tr>
+        <tr>
+          <td class="field-name">Priority</td>
+          <td><div class="choices"><input type="radio" checked><span>Standard</span><input type="radio"><span>Urgent</span></div></td>
+        </tr>
+        <tr><td class="field-name">Officer notes</td><td><textarea>Identity documents verified.
+Schedule field inspection within ten working days.</textarea></td></tr>
+      </table>
+
+      <div class="certification">
+        <strong>Certification:</strong> I confirm that the information shown above is complete and accurate for this static application record.
+      </div>
+      <div class="actions"><button type="button">Record application</button></div>
+    </main>
+  </body>
+</html>

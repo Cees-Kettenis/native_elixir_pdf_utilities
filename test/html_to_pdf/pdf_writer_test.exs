@@ -30,6 +30,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "startxref"
   end
 
+  test "render serializes static control drawing instructions without PDF widgets" do
+    pages = [
+      %{
+        size: {200.0, 100.0},
+        boxes: [
+          %{
+            type: :rect,
+            x: 10.0,
+            y: 70.0,
+            width: 100.0,
+            height: 18.0,
+            fill_color: {1.0, 1.0, 1.0},
+            stroke_color: {0.47, 0.47, 0.47},
+            stroke_width: 0.75,
+            border_radius: 0.0
+          },
+          %{
+            type: :text,
+            text: "Selected value",
+            x: 13.0,
+            y: 74.0,
+            font: "Helvetica",
+            font_size: 12.0,
+            color: {0, 0, 0}
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, pdf} = PdfWriter.render(pages)
+    assert pdf =~ "(Selected value) Tj"
+    assert pdf =~ "10 70 100 18 re"
+    refute pdf =~ "/AcroForm"
+    refute pdf =~ "/Widget"
+  end
+
   test "render writes page-furniture boxes produced after pagination" do
     layout_tree = %{
       type: :layout,

@@ -91,7 +91,8 @@ position, measured height, and available margin. Reserve enough `@page` or
 | Lists             | `ul`, `ol`, `li`                                                                                                                                              |
 | Tables            | `table`, `caption`, `colgroup`, `col`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td`                                                                    |
 | Images            | Strict`img` with required `src`                                                                                                                                 |
-| Attributes        | Global `id`, `class`, `style`, `title`, `role`, `data-*`, and `aria-*`; `lang` on `html`, metadata attributes on `meta`, `href` on links, `src`/`alt` on images, `span` on column elements, `colspan`/`rowspan` on cells, and `scope` values `row`, `col`, `rowgroup`, or `colgroup` on `th` |
+| Static forms      | `input` types `text`, `checkbox`, and `radio`; `select` with text-only `option` children; text-only `textarea`; and `button` with text and basic inline emphasis. Controls become ordinary visible PDF content, never interactive fields. |
+| Attributes        | Global `id`, `class`, `style`, `title`, `role`, `data-*`, and `aria-*`; `lang` on `html`, metadata attributes on `meta`, `href` on links, `src`/`alt` on images, `span` on column elements, `colspan`/`rowspan` on cells, `scope` on `th`, and the documented form `type`, `value`, `name`, `checked`, `selected`, and `disabled` attributes |
 | Links             | `https://`, `http://`, and `mailto:` URI annotations                                                                                                          |
 
 ## CSS Support Matrix
@@ -113,6 +114,10 @@ position, measured height, and available margin. Reserve enough `@page` or
 ## Layout Details
 
 Block, list, table, flexbox, and grid layout are deterministic and intentionally narrower than browser layout. Tables use deterministic column sizing based on declared widths, available table width, and intrinsic unbreakable content. Column hints may be declared with ordered `colgroup`/`col` elements and positive `span` attributes. `table-layout: fixed` uses those hints and first-row cell widths instead of later intrinsic content. A row with fewer cells leaves its trailing declared columns empty; only an explicit `colspan` expands a cell across them. Separate-border tables honor one- or two-value `border-spacing`; collapsed-border tables ignore it. Browser-compatible cell defaults are transparent backgrounds, no border, and one CSS pixel of padding; visible borders and backgrounds must be declared in CSS. Explicit table heights distribute remaining height across rows, with percentage-height rows receiving the available remainder, and percentage-height nested tables resolve against their containing cell. Tables also support cell backgrounds, `colspan`, `rowspan`, repeated multi-row headers, nested collapsed-border paint ordering, and missing trailing cells in shorter rows. Flexbox and grid support document-oriented text, images, and nested block-card items, not the full browser algorithms.
+
+Static form controls use deterministic print styling and participate in block, table, flex, and grid layout. Text inputs show `value`; checkbox and radio state follows the presence of `checked`; selects show the explicitly `selected` option or the first option when none is marked; textarea child text takes precedence over its `value` fallback; and button child content takes precedence over its `value` fallback. A single select may contain at most one selected option. Boolean `checked`, `selected`, and `disabled` attributes accept both valueless HTML syntax and quoted values. `disabled` has no special built-in appearance, but remains available to attribute selectors such as `[disabled]`.
+
+These controls produce only text and drawing operations. They do not create PDF AcroForm fields, widget annotations, focus behavior, submission behavior, or editable values.
 
 Pagination supports automatic page breaks, manual page breaks around complete block boxes and their children, page margins, line-level paragraph fragmentation, best-effort keep-together behavior for `break-inside: avoid`, and repeated table headers when table bodies continue across pages. An avoided paragraph that is taller than the printable page is fragmented so that all text remains visible.
 
@@ -136,7 +141,7 @@ Embedded fonts use TrueType glyph widths, Type0/CID PDF resources, and basic Uni
 These features are intentionally outside the current renderer boundary:
 
 - JavaScript and runtime DOM behavior.
-- `script`, `canvas`, `video`, `audio`, `iframe`, and interactive form behavior.
+- `script`, `canvas`, `video`, `audio`, `iframe`, interactive form behavior, and input types other than `text`, `checkbox`, and `radio`.
 - Remote asset fetching.
 - CSS floats, absolute/fixed positioning, transforms, animations, media queries beyond the documented print subset, pseudo-elements beyond `::before`/`::after`, and pseudo-classes beyond the documented selector subset. Repeated page furniture uses the explicit `:page_furniture` option; `position: fixed` remains deferred because the flow layout model does not yet support positioned offsets or removing positioned elements from flow.
 - Nested `counters(...)`, counter styles, list-marker counter integration, and CSS `counter(page)`/`counter(pages)`. Repeated page numbering uses the explicit page-furniture `{{page}}` and `{{pages}}` tokens.

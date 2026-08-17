@@ -127,6 +127,11 @@ examples are stable enough to support as the public API.
 - Only extract a `defp` when it reduces real duplication, simplifies genuinely complex code, or names a non-obvious rule.
 - Prefer inline code when a private function is used only once and does not make the caller easier to understand.
 - Do not duplicate shared helpers for common concerns already handled elsewhere.
+- Define every tunable resource or complexity limit in
+  `NativeElixirPdfUtilities.Limits`. Keep format- or protocol-mandated bounds
+  fixed and clearly identify them as non-configurable invariants when they
+  could be mistaken for resource limits, such as the maximum PDF CID value of
+  65,535.
 
 ## Diagnostic Error Guidelines
 
