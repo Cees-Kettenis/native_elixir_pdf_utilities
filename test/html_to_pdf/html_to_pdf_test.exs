@@ -891,6 +891,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "/Filter /FlateDecode"
   end
 
+  test "render rejects SVG raster dimensions over the native allocation budget" do
+    svg =
+      ~s(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"><rect width="2" height="1" fill="red"/></svg>)
+
+    src = "data:image/svg+xml;base64,#{Base.encode64(svg)}"
+    html = ~s(<img src="#{src}" style="width: 8193px; aspect-ratio: 1">)
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{
+               stage: :limits,
+               reason: :resource_limit_exceeded,
+               operation: :render,
+               module: NativeElixirPdfUtilities.HtmlToPdf,
+               message: message
+             }}} = HtmlToPdf.render(html)
+
+    assert message =~ "8192-pixel per-axis limit"
+
+    intrinsic_svg =
+      ~s(<svg xmlns="http://www.w3.org/2000/svg" width="4294967295" height="1"><rect width="1" height="1" fill="red"/></svg>)
+
+    intrinsic_src = "data:image/svg+xml;base64,#{Base.encode64(intrinsic_svg)}"
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
+             HtmlToPdf.render(~s(<img src="#{intrinsic_src}">))
+  end
+
   test "render embeds configured TTF fonts for Unicode text" do
     html = ~s(<p style="font-family: 'Fixture Sans', Helvetica">Café</p>)
 

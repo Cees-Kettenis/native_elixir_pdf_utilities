@@ -119,8 +119,10 @@ Pagination supports automatic page breaks, manual page breaks around complete bl
 Images support 8-bit, non-interlaced RGB and RGBA PNGs, JPEGs, and SVG data URIs,
 plus the same PNG subset and JPEGs from absolute local paths and
 `base_url`-relative paths. SVG data URIs are rasterized to PNG with the
-lightweight `resvg` NIF using local in-process rendering; remote URLs and unsafe
-relative paths are rejected. Greyscale, indexed-color, 16-bit, and
+lightweight `resvg` NIF using local in-process rendering. SVG input is limited
+to 5 MB, 8,192 pixels per axis, and 16,777,216 total raster pixels; excess input
+returns a `:resource_limit_exceeded` diagnostic before native raster allocation.
+Remote URLs and unsafe relative paths are rejected. Greyscale, indexed-color, 16-bit, and
 Adam7-interlaced PNG decoding is scheduled for `0.21.0`.
 
 Fonts support built-in PDF fonts (`Helvetica`, `Courier`, `Times-Roman` and their bold/italic variants), explicit font options, local CSS `@font-face` declarations, and bundled DejaVu Sans regular, bold, oblique, and bold-oblique fallback faces. Relative `@font-face` URLs resolve against the containing stylesheet directory or `:base_url`; HTTP(S), data URLs, `local(...)`-only sources, WOFF, WOFF2, and CFF-flavored OpenType fonts are rejected. Convert unsupported web fonts to TTF before rendering.

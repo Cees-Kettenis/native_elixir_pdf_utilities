@@ -144,7 +144,9 @@ template.
 
 ## Images
 
-Local PNG/JPEG paths can be absolute or relative to `:base_url`. SVG data URIs are accepted and rasterized locally.
+Local PNG/JPEG paths can be absolute or relative to `:base_url`. SVG data URIs
+are accepted and rasterized locally, subject to a 5 MB source limit, an 8,192
+pixel per-axis limit, and a 16,777,216 total-pixel raster limit.
 
 ```elixir
 {:ok, pdf} =

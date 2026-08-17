@@ -57,7 +57,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   """
   @spec compute_detailed(term(), [render_option()]) ::
           {:ok, styled_tree()}
-          | {:error, {:invalid_css | :invalid_document | :invalid_options, map()}}
+          | {:error,
+             {:invalid_css | :invalid_document | :invalid_options | :resource_limit_exceeded,
+              map()}}
   def compute_detailed(dom, opts \\ []) do
     font_options = Font.normalize_options(opts)
 
@@ -117,6 +119,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
             {:error, :invalid_document} ->
               {:error, style_error_detail(dom, opts)}
+
+            {:error, {_reason, _diagnostic}} = error ->
+              error
           end
         else
           {:error, {:font_load_failed, sources}} ->
@@ -566,6 +571,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
            |> Map.put(:image, image)
            |> Map.delete(:svg_image)}
         else
+          {:error, {_reason, _diagnostic}} = error -> error
           _ -> {:error, :invalid_document}
         end
 
@@ -3373,23 +3379,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp rasterize_svg(svg, raster_options) do
     case String.valid?(svg) do
       true ->
-        sanitized_svg =
-          svg
-          |> String.replace(~r/<\?xml[^>]*>/iu, "")
-          |> String.replace(~r/<!DOCTYPE[^>]*(?:\[[\s\S]*?\]\s*)?>/iu, "")
+        with {:ok, validated_raster_options} <-
+               HtmlValidator.validate_svg_raster(svg, raster_options) do
+          sanitized_svg =
+            svg
+            |> String.replace(~r/<\?xml[^>]*>/iu, "")
+            |> String.replace(~r/<!DOCTYPE[^>]*(?:\[[\s\S]*?\]\s*)?>/iu, "")
 
-        case Resvg.svg_string_to_png_buffer(
-               sanitized_svg,
-               [
-                 resources_dir: System.tmp_dir!(),
-                 shape_rendering: :optimize_speed,
-                 text_rendering: :optimize_speed,
-                 image_rendering: :optimize_speed,
-                 skip_system_fonts: true
-               ] ++ raster_options
-             ) do
-          {:ok, png} -> {:ok, IO.iodata_to_binary(png)}
-          {:error, _reason} -> :error
+          case Resvg.svg_string_to_png_buffer(
+                 sanitized_svg,
+                 [
+                   resources_dir: System.tmp_dir!(),
+                   shape_rendering: :optimize_speed,
+                   text_rendering: :optimize_speed,
+                   image_rendering: :optimize_speed,
+                   skip_system_fonts: true
+                 ] ++ validated_raster_options
+               ) do
+            {:ok, png} -> {:ok, IO.iodata_to_binary(png)}
+            {:error, _reason} -> :error
+          end
         end
 
       false ->

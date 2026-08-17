@@ -94,6 +94,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | :invalid_path
           | :invalid_pdf_input
           | :not_implemented
+          | :resource_limit_exceeded
           | :unsupported_glyph
           | :unsupported_html
           | File.posix()

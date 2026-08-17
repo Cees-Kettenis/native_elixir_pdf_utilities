@@ -141,6 +141,96 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
              {:error, :invalid_stylesheet_options}
   end
 
+  test "SVG raster budgets are validated before native rendering" do
+    svg = ~s(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"></svg>)
+
+    assert {:ok, [width: 400, height: 200]} =
+             HtmlValidator.validate_svg_raster(svg, width: 400)
+
+    assert {:ok, [width: 200, height: 100]} =
+             HtmlValidator.validate_svg_raster(svg, [])
+
+    percentage_svg =
+      ~s(<svg xmlns="http://www.w3.org/2000/svg" width="50%" height="50%" viewBox="0 0 20 10"></svg>)
+
+    assert {:ok, [width: 10, height: 5]} =
+             HtmlValidator.validate_svg_raster(percentage_svg, [])
+
+    for {unit, expected_width} <- [
+          {"px", 1},
+          {"pt", 1},
+          {"pc", 16},
+          {"mm", 4},
+          {"cm", 38},
+          {"in", 96},
+          {"q", 1}
+        ] do
+      unit_svg =
+        ~s(<svg xmlns="http://www.w3.org/2000/svg" width="1#{unit}" height="1"></svg>)
+
+      assert {:ok, [width: ^expected_width, height: 1]} =
+               HtmlValidator.validate_svg_raster(unit_svg, [])
+    end
+
+    height_sized_svg =
+      ~s(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"></svg>)
+
+    assert {:ok, [width: 20, height: 10]} =
+             HtmlValidator.validate_svg_raster(height_sized_svg, height: 10)
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{
+               stage: :limits,
+               reason: :resource_limit_exceeded,
+               message: dimension_message
+             }}} = HtmlValidator.validate_svg_raster(svg, width: 8_193)
+
+    assert dimension_message =~ "8192-pixel per-axis limit"
+
+    extreme_intrinsic_svg =
+      ~s(<svg xmlns="http://www.w3.org/2000/svg" width="4294967295" height="1"></svg>)
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
+             HtmlValidator.validate_svg_raster(extreme_intrinsic_svg, [])
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{stage: :limits, reason: :resource_limit_exceeded, message: pixel_message}}} =
+             HtmlValidator.validate_svg_raster(svg, width: 8_192, height: 4_096)
+
+    assert pixel_message =~ "16777216-pixel limit"
+
+    oversized_source =
+      ~s(<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">) <>
+        :binary.copy(" ", 5_000_000) <> "</svg>"
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{stage: :limits, reason: :resource_limit_exceeded, message: source_message}}} =
+             HtmlValidator.validate_svg_raster(oversized_source, [])
+
+    assert source_message =~ "5000000-byte limit"
+
+    for invalid_svg <- [
+          "not SVG",
+          ~s(<svg width="1" height="1" viewBox="0 0 nope 1"></svg>),
+          ~s(<svg width="0" height="1"></svg>),
+          ~s(<svg width="0px" height="1"></svg>),
+          ~s(<svg width="auto" height="1"></svg>),
+          ~s(<svg width="1e9999" height="1"></svg>)
+        ] do
+      assert {:error, {:invalid_document, %{stage: :style}}} =
+               HtmlValidator.validate_svg_raster(invalid_svg, [])
+    end
+
+    assert {:error, {:invalid_document, %{stage: :style}}} =
+             HtmlValidator.validate_svg_raster(svg, width: 0)
+
+    assert {:error, {:invalid_document, %{stage: :style}}} =
+             HtmlValidator.validate_svg_raster(:not_svg, [])
+  end
+
   test "layout pagination and furniture inputs share normalized page geometry" do
     styled_tree = %{type: :document, children: []}
 

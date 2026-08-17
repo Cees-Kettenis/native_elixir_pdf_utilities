@@ -16,6 +16,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     :unsupported_glyphs
   ]
   @variant_keys [:default, :first, :odd, :even]
+  @max_svg_bytes 5_000_000
+  @max_svg_raster_dimension 8_192
+  @max_svg_raster_pixels 16_777_216
 
   @doc false
   @spec validate_page_size(term()) :: :ok | {:error, :invalid_page_size}
@@ -133,6 +136,39 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       _ ->
         Diagnostics.error(:css, :invalid_css, "CSS input must be a string")
+    end
+  end
+
+  @doc false
+  @spec validate_svg_raster(term(), term()) ::
+          {:ok, [width: pos_integer(), height: pos_integer()]}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_svg_raster(svg, raster_options) do
+    case {svg, raster_options} do
+      {svg, raster_options} when is_binary(svg) and is_list(raster_options) ->
+        cond do
+          byte_size(svg) > @max_svg_bytes ->
+            Diagnostics.error(
+              :limits,
+              :resource_limit_exceeded,
+              "SVG source exceeds the #{@max_svg_bytes}-byte limit"
+            )
+
+          true ->
+            with {:ok, {intrinsic_width, intrinsic_height}} <- svg_intrinsic_dimensions(svg),
+                 {:ok, {width, height}} <-
+                   svg_raster_dimensions(raster_options, intrinsic_width, intrinsic_height),
+                 :ok <- validate_svg_raster_budget(width, height) do
+              {:ok, [width: width, height: height]}
+            end
+        end
+
+      _ ->
+        Diagnostics.error(
+          :style,
+          :invalid_document,
+          "SVG rasterization requires valid SVG source and dimension options"
+        )
     end
   end
 
@@ -366,6 +402,164 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       false ->
         Diagnostics.error(:options, :invalid_options, "render options must be a keyword list")
+    end
+  end
+
+  defp svg_intrinsic_dimensions(svg) do
+    with [_, attributes] <- Regex.run(~r/<svg\b([^>]*)>/iu, svg),
+         attribute_values <-
+           Regex.scan(~r/\b(width|height|viewBox)\s*=\s*["']([^"']*)["']/iu, attributes),
+         values <-
+           Map.new(attribute_values, fn [_, name, value] -> {String.downcase(name), value} end),
+         {:ok, view_box} <- svg_view_box(Map.get(values, "viewbox")),
+         {:ok, width} <- svg_intrinsic_length(Map.get(values, "width"), view_box, 0),
+         {:ok, height} <- svg_intrinsic_length(Map.get(values, "height"), view_box, 1) do
+      {:ok, {width, height}}
+    else
+      _ ->
+        Diagnostics.error(
+          :style,
+          :invalid_document,
+          "SVG source must contain valid intrinsic dimensions or a viewBox"
+        )
+    end
+  end
+
+  defp svg_view_box(value) do
+    case value do
+      nil ->
+        {:ok, nil}
+
+      value when is_binary(value) ->
+        parts = String.split(value, ~r/[\s,]+/u, trim: true)
+
+        case Enum.map(parts, &parse_svg_number/1) do
+          [{:ok, _min_x}, {:ok, _min_y}, {:ok, width}, {:ok, height}]
+          when width > 0 and height > 0 ->
+            {:ok, {width, height}}
+
+          _ ->
+            :error
+        end
+    end
+  end
+
+  defp svg_intrinsic_length(value, view_box, index) do
+    case value do
+      nil ->
+        svg_view_box_length(view_box, index)
+
+      value when is_binary(value) ->
+        normalized = String.trim(value)
+
+        case Regex.run(
+               ~r/^([+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)(px|pt|pc|mm|cm|in|q)?$/iu,
+               normalized
+             ) do
+          [_, number] ->
+            case parse_svg_number(number) do
+              {:ok, number} when number > 0 -> {:ok, number}
+              _ -> :error
+            end
+
+          [_, number, unit] ->
+            case parse_svg_number(number) do
+              {:ok, number} when number > 0 ->
+                {:ok, number * svg_pixels_per_unit(String.downcase(unit))}
+
+              _ ->
+                :error
+            end
+
+          _ ->
+            case Regex.run(~r/^([+]?(?:\d+(?:\.\d*)?|\.\d+))%$/u, normalized) do
+              [_, percentage] ->
+                with {:ok, percentage} when percentage > 0 <- parse_svg_number(percentage),
+                     {:ok, base} <- svg_view_box_length(view_box, index) do
+                  {:ok, base * percentage / 100.0}
+                else
+                  _ -> :error
+                end
+
+              _ ->
+                :error
+            end
+        end
+    end
+  end
+
+  defp parse_svg_number(value) do
+    case Float.parse(value) do
+      {number, ""} -> {:ok, number}
+      _ -> :error
+    end
+  end
+
+  defp svg_view_box_length(view_box, index) do
+    case {view_box, index} do
+      {{width, _height}, 0} -> {:ok, width}
+      {{_width, height}, 1} -> {:ok, height}
+      {nil, _index} -> {:ok, 100.0}
+    end
+  end
+
+  defp svg_pixels_per_unit(unit) do
+    case unit do
+      "px" -> 1.0
+      "pt" -> 96.0 / 72.0
+      "pc" -> 16.0
+      "mm" -> 96.0 / 25.4
+      "cm" -> 96.0 / 2.54
+      "in" -> 96.0
+      "q" -> 96.0 / 101.6
+    end
+  end
+
+  defp svg_raster_dimensions(raster_options, intrinsic_width, intrinsic_height) do
+    width = Keyword.get(raster_options, :width)
+    height = Keyword.get(raster_options, :height)
+
+    case {width, height} do
+      {width, height}
+      when is_integer(width) and width > 0 and is_integer(height) and height > 0 ->
+        {:ok, {width, height}}
+
+      {width, nil} when is_integer(width) and width > 0 ->
+        {:ok, {width, max(round(width * intrinsic_height / intrinsic_width), 1)}}
+
+      {nil, height} when is_integer(height) and height > 0 ->
+        {:ok, {max(round(height * intrinsic_width / intrinsic_height), 1), height}}
+
+      {nil, nil} ->
+        {:ok, {max(round(intrinsic_width), 1), max(round(intrinsic_height), 1)}}
+
+      _ ->
+        Diagnostics.error(
+          :style,
+          :invalid_document,
+          "SVG raster dimensions must be positive integers"
+        )
+    end
+  end
+
+  defp validate_svg_raster_budget(width, height) do
+    cond do
+      width > @max_svg_raster_dimension or height > @max_svg_raster_dimension ->
+        Diagnostics.error(
+          :limits,
+          :resource_limit_exceeded,
+          "SVG raster dimensions #{width}x#{height} exceed the #{@max_svg_raster_dimension}-pixel per-axis limit"
+        )
+
+      width * height > @max_svg_raster_pixels ->
+        Diagnostics.error(
+          :limits,
+          :resource_limit_exceeded,
+          "SVG raster dimensions #{width}x#{height} exceed the #{@max_svg_raster_pixels}-pixel limit"
+        )
+
+      true ->
+        :ok
     end
   end
 
