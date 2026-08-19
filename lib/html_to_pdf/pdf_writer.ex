@@ -12,6 +12,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.WriterValidator
 
+  # CSS defines one pixel as 1/96 inch, which is a fixed 0.75 PDF points.
+  @css_pixel_points 0.75
+
   @type page :: NativeElixirPdfUtilities.HtmlToPdf.Pagination.page()
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
   @type error_reason :: :invalid_pdf_input
@@ -259,6 +262,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     font_resource = Map.fetch!(font_resources, font_key(box))
     text_operator = text_operator(box, font_resource)
 
+    text_y =
+      case Map.get(box, :snap_to_css_pixel_grid, false) do
+        true ->
+          Float.ceil(box.y / @css_pixel_points) * @css_pixel_points + 0.5
+
+        false ->
+          box.y
+      end
+
     text =
       [
         "BT",
@@ -277,7 +289,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         " ",
         format_number(box.x),
         " ",
-        format_number(box.y),
+        format_number(text_y),
         " Td",
         text_operator,
         " ET"
@@ -315,25 +327,73 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
       false ->
         border_style = uniform_border_style(box)
+        box = snap_box_to_css_pixel_grid(box)
 
-        graphics_state =
-          ["q"]
-          |> put_opacity(box.fill_color, :fill, graphics_state_resources)
-          |> put_opacity(box.stroke_color, :stroke, graphics_state_resources)
-          |> put_fill_color(box.fill_color)
-          |> put_stroke_color(
-            box.stroke_color,
-            box.stroke_width,
-            border_style not in [:none, :hidden]
-          )
-          |> put_stroke_pattern(border_style, box.stroke_width)
-          |> Kernel.++([rect_path(box), paint_operator(box), "Q"])
+        fill_stream =
+          case box.fill_color do
+            nil ->
+              []
 
-        Enum.join(graphics_state, " ")
+            _color ->
+              ["q"]
+              |> put_opacity(box.fill_color, :fill, graphics_state_resources)
+              |> put_fill_color(box.fill_color)
+              |> Kernel.++([rect_path(box), "f", "Q"])
+          end
+
+        stroke_stream =
+          case WriterValidator.visible_border?(box) and border_style not in [:none, :hidden] do
+            true ->
+              stroke_box = inset_stroke_box(box)
+
+              ["q"]
+              |> put_opacity(box.stroke_color, :stroke, graphics_state_resources)
+              |> put_stroke_color(box.stroke_color, box.stroke_width)
+              |> put_stroke_pattern(border_style, box.stroke_width)
+              |> Kernel.++([rect_path(stroke_box), "S", "Q"])
+
+            false ->
+              []
+          end
+
+        Enum.join(fill_stream ++ stroke_stream, " ")
     end
   end
 
+  defp snap_box_to_css_pixel_grid(box) do
+    case Map.get(box, :snap_to_css_pixel_grid, false) do
+      true ->
+        left = snap_css_pixel(box.x)
+        bottom = snap_css_pixel(box.y)
+        right = snap_css_pixel(box.x + box.width)
+        top = snap_css_pixel(box.y + box.height)
+
+        %{box | x: left, y: bottom, width: max(right - left, 0.0), height: max(top - bottom, 0.0)}
+
+      false ->
+        box
+    end
+  end
+
+  defp snap_css_pixel(value) do
+    Float.floor(value / @css_pixel_points + 0.5) * @css_pixel_points
+  end
+
+  defp inset_stroke_box(box) do
+    inset = box.stroke_width / 2
+
+    %{
+      box
+      | x: box.x + inset,
+        y: box.y + inset,
+        width: max(box.width - box.stroke_width, 0.0),
+        height: max(box.height - box.stroke_width, 0.0),
+        border_radius: max(box.border_radius - inset, 0.0)
+    }
+  end
+
   defp image_stream(box, image_resources) do
+    box = snap_box_to_css_pixel_grid(box)
     image_resource = Map.fetch!(image_resources, image_key(box.image))
 
     clip =
@@ -377,15 +437,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
       {r, g, b, _alpha} ->
         parts ++ [format_number(r), format_number(g), format_number(b), "rg"]
-
-      nil ->
-        parts
     end
   end
 
-  defp put_stroke_color(parts, color, stroke_width, visible? \\ true) do
-    case {color, stroke_width > 0 and visible?} do
-      {{r, g, b}, true} ->
+  defp put_stroke_color(parts, color, stroke_width) do
+    case color do
+      {r, g, b} ->
         parts ++
           [
             format_number(r),
@@ -396,7 +453,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             "w"
           ]
 
-      {{r, g, b, _alpha}, true} ->
+      {r, g, b, _alpha} ->
         parts ++
           [
             format_number(r),
@@ -406,9 +463,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             format_number(stroke_width),
             "w"
           ]
-
-      _ ->
-        parts
     end
   end
 
@@ -713,14 +767,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         x = left + inset
 
         "#{format_number(x)} #{format_number(bottom)} m #{format_number(x)} #{format_number(top)} l"
-    end
-  end
-
-  defp paint_operator(box) do
-    case {box.fill_color, WriterValidator.visible_border?(box)} do
-      {nil, true} -> "S"
-      {_, true} -> "B"
-      {_, false} -> "f"
     end
   end
 

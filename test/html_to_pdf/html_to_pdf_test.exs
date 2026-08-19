@@ -208,11 +208,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, css_pdf} = HtmlToPdf.render(html)
     assert css_pdf =~ "/MediaBox [0 0 841.89 595.28]"
-    assert css_pdf =~ "19.8425 563.4375 802.205 12 re"
+    assert css_pdf =~ "20 563.75 801.5 11 re S"
 
     assert {:ok, override_pdf} = HtmlToPdf.render(html, page_size: {200, 100}, margin: 0)
     assert override_pdf =~ "/MediaBox [0 0 200 100]"
-    assert override_pdf =~ "0 88 200 12 re"
+    assert override_pdf =~ "0.5 88.25 199.25 11 re S"
   end
 
   test "render applies complete page geometry and explicit option precedence" do
@@ -229,7 +229,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, css_pdf} = HtmlToPdf.render(html)
     assert css_pdf =~ "/MediaBox [0 0 595.28 419.53]"
-    assert css_pdf =~ "50 397.53 525.28 12 re"
+    assert css_pdf =~ "50.75 398 524 11 re S"
 
     assert {:ok, override_pdf} =
              HtmlToPdf.render(html,
@@ -238,7 +238,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              )
 
     assert override_pdf =~ "/MediaBox [0 0 200 100]"
-    assert override_pdf =~ "4 87 194 12 re"
+    assert override_pdf =~ "4.25 87.5 193.25 11 re S"
   end
 
   test "render uses page CSS defaults from configured stylesheets" do
@@ -278,7 +278,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                stylesheets: [{:css, "@page { margin: 10pt 20pt; }"}]
              )
 
-    assert pdf =~ "40 78 140 12 re"
+    assert pdf =~ "40.25 78.5 139.25 11 re S"
   end
 
   test "render returns detailed diagnostics for invalid page declarations" do

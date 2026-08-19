@@ -427,6 +427,49 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert italic.x > bold.x
   end
 
+  test "layout sizes paints and wraps inline blocks as atomic inline content" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <p style="margin: 0; font-size: 10pt; line-height: 10pt">
+               A <span style="display: inline-block; width: 20pt; height: 12pt; margin: 1pt; padding: 1pt; border: 1pt solid red; background: #eee">Chip</span><span style="display: inline-block; width: 80pt">Wide</span>
+             </p>
+             """)
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {100, 100}, margin: 10)
+
+    assert Enum.any?(layout_tree.boxes, fn
+             %{type: :rect, width: 24.0, height: 16.0} -> true
+             _ -> false
+           end)
+
+    chip = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "Chip"))
+    wide = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "Wide"))
+
+    assert chip.x > 10.0
+    assert wide.x == 10.0
+    assert wide.y < chip.y
+  end
+
+  test "layout rejects an inline block whose children are not inline layout content" do
+    assert {:ok, dom} = HtmlParser.parse("<p>Before <span>Child</span></p>")
+    assert {:ok, %{children: [paragraph]} = styled_tree} = Style.compute(dom, [])
+
+    [before, span] = paragraph.children
+    block_child = %{span | style: Map.put(span.style, :display, :block)}
+
+    inline_block = %{
+      span
+      | style: Map.put(span.style, :display, :inline_block),
+        children: [block_child]
+    }
+
+    styled_tree = %{styled_tree | children: [%{paragraph | children: [before, inline_block]}]}
+
+    assert {:error, :invalid_layout} =
+             Layout.layout(styled_tree, page_size: {100, 100}, margin: 10)
+  end
+
   test "layout measures embedded font text with TTF glyph widths" do
     dom = %{
       type: :document,
@@ -535,6 +578,46 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
            ]
 
     assert Enum.map(text_boxes, & &1.y) == text_boxes |> Enum.map(& &1.y) |> Enum.sort(:desc)
+  end
+
+  test "layout collapses an empty block's margin with the following block" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{},
+          children: [
+            %{
+              type: :element,
+              tag: "p",
+              attributes: %{"style" => "margin: 0"},
+              children: [%{type: :text, text: "First"}]
+            },
+            %{
+              type: :element,
+              tag: "div",
+              attributes: %{"style" => "margin-top: 2pt"},
+              children: []
+            },
+            %{
+              type: :element,
+              tag: "p",
+              attributes: %{"style" => "margin: 5pt 0 0"},
+              children: [%{type: :text, text: "Second"}]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 100}, margin: 0)
+
+    [first, second] = Enum.filter(layout_tree.boxes, &(&1.type == :text))
+
+    assert_in_delta first.y - second.y, first.line_height + 5.0, 0.0001
   end
 
   test "layout accounts for margin padding border and background dimensions" do
@@ -828,7 +911,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert first_header_cell.type == :rect
     assert_in_delta first_header_cell.x, 10.0, 0.0001
-    assert_in_delta first_header_cell.y, 789.09, 0.0001
+    assert_in_delta first_header_cell.y, 793.09, 0.0001
     assert_in_delta first_header_cell.width, 287.64, 0.0001
     assert_in_delta first_header_cell.height, 24.4, 0.0001
 
@@ -840,17 +923,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert first_header_text.text == "Name"
     assert first_header_text.font == "Helvetica-Bold"
     assert_in_delta first_header_text.x, 139.42, 0.0001
-    assert_in_delta first_header_text.y, 796.49, 0.0001
+    assert_in_delta first_header_text.y, 800.49, 0.0001
 
     assert_in_delta second_header_cell.x, 297.64, 0.0001
     assert second_header_text.text == "Count"
     assert second_header_text.font == "Helvetica-Bold"
     assert second_header_text.x > second_header_cell.x
 
-    assert_in_delta first_data_cell.y, 764.69, 0.0001
+    assert_in_delta first_data_cell.y, 768.69, 0.0001
     assert first_data_text.text == "Alpha"
     assert_in_delta first_data_text.x, 15.0, 0.0001
-    assert_in_delta first_data_text.y, 772.09, 0.0001
+    assert_in_delta first_data_text.y, 776.09, 0.0001
     assert second_data_cell.x > first_data_cell.x
     assert second_data_text.text == "2"
   end
@@ -980,6 +1063,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert_in_delta first_border.height, 50.0, 0.0001
     assert_in_delta second_border.height, 50.0, 0.0001
+  end
+
+  test "layout includes both outer borders in an intrinsic collapsed table height" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <table style="width: 100pt; border-collapse: collapse">
+               <tr><td style="border: 1pt solid black; padding: 0; font-size: 10pt; line-height: 10pt">First</td></tr>
+               <tr><td style="border: 1pt solid black; padding: 0; font-size: 10pt; line-height: 10pt">Second</td></tr>
+             </table>
+             """)
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {140, 140}, margin: 10)
+
+    borders = Enum.filter(layout_tree.boxes, &(Map.get(&1, :role) == :table_border))
+
+    assert_in_delta Enum.sum(Enum.map(borders, & &1.height)), 23.0, 0.0001
   end
 
   test "layout reserves rowspan columns and spans the combined row height" do
@@ -3843,10 +3943,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     [first_only, explicit_span] =
       Enum.filter(layout_tree.boxes, &(Map.get(&1, :role) == :table_cell_background))
 
-    assert_in_delta first_only.x, 17.0, 0.0001
-    assert_in_delta first_only.width, 41.25, 0.0001
+    assert_in_delta first_only.x, 16.75, 0.0001
+    assert_in_delta first_only.width, 41.5625, 0.0001
     assert_in_delta explicit_span.x, first_only.x, 0.0001
-    assert_in_delta explicit_span.width, 186.0, 0.0001
+    assert_in_delta explicit_span.width, 186.5, 0.0001
   end
 
   test "layout derives table column widths from cell width styles" do
@@ -3932,13 +4032,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     [first, second, third, fourth] =
       Enum.filter(layout_tree.boxes, &(Map.get(&1, :role) == :table_cell_background))
 
-    assert_in_delta first.x, 20.0, 0.0001
-    assert_in_delta first.width, 42.5, 0.0001
-    assert_in_delta second.x, 72.5, 0.0001
-    assert_in_delta second.width, 127.5, 0.0001
+    assert_in_delta first.x, 19.75, 0.0001
+    assert_in_delta first.width, 42.6875, 0.0001
+    assert_in_delta second.x, 72.1875, 0.0001
+    assert_in_delta second.width, 128.0625, 0.0001
     assert_in_delta third.x, first.x, 0.0001
     assert_in_delta fourth.x, second.x, 0.0001
-    assert_in_delta first.y - (third.y + third.height), 5.0, 0.0001
+    assert_in_delta first.y - (third.y + third.height), 4.5, 0.0001
   end
 
   test "layout expands column spans and ignores border spacing for collapsed tables" do
@@ -4118,7 +4218,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       |> Enum.filter(&(&1.type == :rect))
       |> Enum.find(&(&1.stroke_width > 0))
 
-    assert_in_delta cell_box.height, 40.0, 0.0001
+    assert_in_delta cell_box.height, 43.5, 0.0001
   end
 
   test "layout wraps anywhere when line-break allows it" do
@@ -4327,6 +4427,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert_in_delta first_cell.width, 50.0, 0.0001
     assert_in_delta second_cell.width, 50.0, 0.0001
+  end
+
+  test "layout constrains an intrinsic inline-block column beside a percentage column" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <table style="width: 100pt">
+               <tr>
+                 <td style="width: 50%; padding: 0; background: white">Fixed</td>
+                 <td style="padding: 0; background: white"><span style="display: inline-block; width: 200pt">Auto</span></td>
+               </tr>
+             </table>
+             """)
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {140, 100}, margin: 10)
+
+    [first_cell, second_cell] =
+      Enum.filter(layout_tree.boxes, &(Map.get(&1, :role) == :table_cell_background))
+
+    assert_in_delta first_cell.width + second_cell.width, 100.0, 0.0001
+    assert second_cell.width > first_cell.width
+  end
+
+  test "layout measures a block cell beside a percentage column without an inline preference" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <table style="width: 100pt">
+               <tr>
+                 <td style="width: 50%; padding: 0">Fixed</td>
+                 <td style="padding: 0"><div>Block</div></td>
+               </tr>
+             </table>
+             """)
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {140, 100}, margin: 10)
+    assert Enum.any?(layout_tree.boxes, &(&1.type == :text and &1.text == "Block"))
   end
 
   test "layout preserves intrinsic widths when percentage table columns exceed the table width" do

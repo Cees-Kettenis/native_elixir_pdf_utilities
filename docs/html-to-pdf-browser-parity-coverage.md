@@ -1,4 +1,4 @@
-# HTML to PDF Browser Parity Coverage
+# HTML to PDF browser parity coverage
 
 This document tracks which documented HTML/CSS/layout features have Chromium visual parity fixtures. A fixture being present means the feature is exercised by the browser-parity harness and must stay within the configured visual-diff threshold.
 
@@ -8,9 +8,9 @@ Run the parity suite with:
 CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity
 ```
 
-## Current Result
+## Current result
 
-The browser-parity suite contains 35 synthetic HTML fixtures, 5 realistic document fixtures, and guard tests that ensure every fixture has configured thresholds.
+The browser-parity suite contains 38 synthetic HTML fixtures, 8 realistic document fixtures, and guard tests that ensure every fixture has configured thresholds. The changed-pixel limit is 5% for the general fixtures, 1% for the geometric absolute-positioning fixture, and 5.5% for the trim-card fixture where the remaining difference comes from subpixel text and border rasterization. Average channel-delta limits remain at or below 5%.
 
 Current status: passing. The full suite passes with:
 
@@ -20,10 +20,12 @@ CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity
 
 New HTML-to-PDF renderer features must add focused unit coverage and, when they affect visible output, a browser parity fixture or an update to an existing fixture. Do not mark new HTML/CSS/layout behavior as supported until the relevant unit tests and browser parity suite pass.
 
-## Fixture Catalog
+## Fixture catalog
 
 | Fixture | Coverage |
 | --- | --- |
+| `absolute_positioning.html` | relative containing blocks, absolute offsets, percentages, nested positioning, negative and positive `z-index`, and removal from normal flow |
+| `background_images.html` | data URI background images, repeat and no-repeat painting, explicit sizing, `cover`, and positioned backgrounds |
 | `block_box_model.html` | margin, padding, width, min-height, side-specific borders, background, border radius, text alignment |
 | `border_style_variants.html` | all ten standard border styles, one-to-four-value side styles and colors, and transparent borders |
 | `box_sizing_and_margins.html` | `box-sizing`, min/max width, percentage width, negative margins, clamped block sizing |
@@ -38,6 +40,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `grid_tracks_and_placement.html` | `repeat()`, `minmax()` growth and minimum-bound overflow, auto rows/columns, `grid-column`, `grid-row`, `grid-area`, item alignment |
 | `html_semantics_typography.html` | semantic block aliases, metadata wrappers, `title`, `lang`, `h1`-`h6`, `b`, `i`, font-relative semantic margins |
 | `images_data_uris.html` | 8-bit non-interlaced RGB PNG, JPEG, and SVG data URI images in block, table, flex, and grid contexts |
+| `image_object_fitting.html` | replaced-image sizing, `object-fit: contain/cover`, percentage object positions, clipping, and image borders |
 | `inline_text_flow.html` | inline runs, bold, italic, colors, line-height, wrapping, `<br>`, text transform |
 | `layout_compositions_remaining.html` | grid containing table, flex containing table, table containing direct flexbox |
 | `links_entities_and_protocols.html` | links, `https`, `http`, `mailto`, named entities, decimal and hex numeric entities, non-breaking-space wrapping |
@@ -60,7 +63,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `units_and_sizing.html` | `pt`, `px`, `mm`, `cm`, `in`, root-font-relative `rem`, percentages, `aspect-ratio`, fixed height, min-height |
 | `whitespace_pre_line.html` | default whitespace collapse, `white-space: pre-line`, `<br>`, literal escaped newline text, centered and right-aligned lines |
 
-## Production Fixture Catalog
+## Production fixture catalog
 
 These fixtures mirror documents currently used in real production environments and use the same print sizes as those production render calls.
 
@@ -69,6 +72,9 @@ These fixtures mirror documents currently used in real production environments a
 | `government_application_form.html` | Government-style permit application with static form controls | A4 document size |
 | `purchase_order.html` | Purchase order printout | A4 production document size |
 | `material_requisition.html` | Material requisition printout | A4 production document size |
+| `invoice_012.html` | Production-style invoice | A4 production document size |
+| `statement_012.html` | Production-style account statement | A4 production document size |
+| `multi_page_report_012.html` | Production-style multi-page report | A4 production document size |
 | `stock_sticker.html` | Stock sticker label | `{4.92126, 1.49606}` production label size |
 | `trim_card.html` | Trim card printout using the production table, column-group, full-height nested-table, and sheet-break structure | `{11.6929, 8.2677}` production landscape document size |
 
@@ -79,10 +85,13 @@ Current production fixture parity:
 | `government_application_form.html` | Passing current parity thresholds. |
 | `purchase_order.html` | Passing current parity thresholds. |
 | `material_requisition.html` | Passing current parity thresholds. |
+| `invoice_012.html` | Passing current parity thresholds. |
+| `statement_012.html` | Passing current parity thresholds. |
+| `multi_page_report_012.html` | Passing current parity thresholds. |
 | `trim_card.html` | Passing current parity thresholds. |
 | `stock_sticker.html` | Passing current parity thresholds. |
 
-## HTML Coverage
+## HTML coverage
 
 | Feature | Status | Fixtures |
 | --- | --- | --- |
@@ -98,7 +107,7 @@ Current production fixture parity:
 | Attributes: `id`, `class`, `style`, `title`, `role`, `data-*`, `aria-*`, `lang`, metadata attributes, `href`, `src`, `alt`, form `type`/`value`/`name`/`checked`/`selected`/`disabled`, column `span`, cell `colspan`/`rowspan`, and header `scope` | Passing | `generated_content_counters.html`, `css_cascade_selectors.html`, `html_semantics_typography.html`, `links_entities_and_protocols.html`, `images_data_uris.html`, `static_form_controls.html`, table fixtures |
 | Link protocols: `https`, `http`, `mailto` | Passing | `links_entities_and_protocols.html` |
 
-## CSS Coverage
+## CSS coverage
 
 | Feature | Status | Fixtures |
 | --- | --- | --- |
@@ -107,14 +116,15 @@ Current production fixture parity:
 | Cascade: specificity, source order, inline style priority, `!important`, inheritance, recursively resolved custom properties via `var()` | Passing | `css_cascade_selectors.html`, `css_remaining_supported_values.html`, `text_style_variants.html` |
 | Units: `pt`, `px`, root-font-relative `rem`, `mm`, `cm`, `in`, percentages, unitless `0` | Passing | `units_and_sizing.html`, reset rules across fixtures |
 | Display: `block`, `inline`, `inline-block`, `none`, `flex`, `inline-flex`, `grid`, `inline-grid` | Passing | `display_lists_and_inline_block.html`, `css_remaining_supported_values.html`, flex/grid fixtures |
-| Box model: width/height, min/max width/height, `min()`, `aspect-ratio`, `box-sizing`, margin, negative margin, padding, side-specific padding, borders, border radius, border collapse, border spacing, table layout, background, overflow, position | Passing | `block_box_model.html`, `box_sizing_and_margins.html`, `css_remaining_supported_values.html`, `table_column_layout.html`, table fixtures |
+| Box model and painting: width/height, min/max width/height, `min()`, `aspect-ratio`, `box-sizing`, margin, negative margin, padding, side-specific padding, borders, border radius, border collapse, border spacing, table layout, backgrounds, background images, and overflow | Passing | `block_box_model.html`, `box_sizing_and_margins.html`, `background_images.html`, `css_remaining_supported_values.html`, `table_column_layout.html`, table fixtures |
+| Positioning: static, relative and absolute boxes, inset offsets, containing blocks, and `z-index` paint ordering | Passing | `absolute_positioning.html` |
 | Text: color, font family/size/weight/style, relative and absolute line-height inheritance, left/center/right alignment, transform, vertical align, line breaking, word breaking, default and `pre-line` whitespace, letter spacing | Passing | `whitespace_pre_line.html`, `inline_text_flow.html`, `text_style_variants.html`, `css_remaining_supported_values.html`, table fixtures |
 | Colors: hex, named colors, `rgb()`, `rgba()`, `currentColor`, transparent | Passing | `text_style_variants.html`, `css_remaining_supported_values.html` |
 | Page rules and breaks: `@page`, `@media print`, `break-before`, `break-after`, `page-break-before`, `page-break-after`, `page-break-inside` | Passing | `page_geometry_asymmetric.html`, `page_rules_landscape.html`, `fonts_and_print_media.html`, `pagination_breaks.html`, `break_variants.html` |
 | Flexbox subset: direction, wrap, gap, row/column gap, justify/align, order, grow/shrink/basis, main-axis min/max freezing and redistribution, `flex`, inline flex | Passing | `flex_direction_and_justification.html`, `flex_grid_alignment.html`, `css_remaining_supported_values.html` |
 | Grid subset: template rows/columns, auto rows/columns, `repeat()`, `minmax()` growth and minimum-bound overflow, placement, area, gaps, justify/align items/content/self, inline grid | Passing | `grid_tracks_and_placement.html`, `flex_grid_alignment.html`, `css_remaining_supported_values.html` |
 
-## Layout Interaction Coverage
+## Layout interaction coverage
 
 | Interaction | Status | Fixtures |
 | --- | --- | --- |
@@ -132,6 +142,9 @@ Current production fixture parity:
 | Page breaks inside/around tables | Passing | `table_pagination_headers.html` |
 | Running headers, footers, and current/total page-number tokens inside page margins | Passing | `page_furniture.html` |
 | Images inside block/table/flex/grid | Passing | `images_data_uris.html` |
+| Replaced-image `contain` and `cover` fitting with clipping and object positioning | Passing | `image_object_fitting.html` |
+| Repeated and fitted background images inside bordered boxes | Passing | `background_images.html` |
+| Absolute descendants inside relative containing blocks with ordered painting | Passing | `absolute_positioning.html` |
 | Embedded/system font metrics, Unicode fallback, and unsupported glyph replacement vs Chromium | Passing | `fonts_and_print_media.html` exercises both declared DejaVu Sans and built-in Helvetica text that falls back to bundled DejaVu glyphs; `unsupported_glyph_replacement.html` exercises visible continuation for unsupported graphemes; production fixtures use their declared font families when registered by the test helper |
 
 ## Summary

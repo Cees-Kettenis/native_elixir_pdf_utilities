@@ -425,6 +425,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         "p" ->
           inherited_font_size
           |> block_defaults(400, inherited_font_size)
+          |> Map.put(:_margin_before_em, 1.0)
           |> Map.put(:_margin_after_em, 1.0)
 
         "h1" ->
@@ -585,8 +586,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp finalize_element_style(tag, result, image_budget, opts) do
     case {tag, result} do
+      {"img", {:ok, %{display: :none} = style}} ->
+        {:ok, style}
+
       {"img", {:ok, style}} ->
-        with {:ok, style} <- finalize_image_style(style, image_budget) do
+        with {:ok, style} <- finalize_image_style(Map.put(style, :display, :image), image_budget) do
           finalize_background_image_style(style, opts, image_budget)
         end
 
@@ -769,7 +773,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp table_caption_defaults(font_size) do
-    block_defaults(font_size, 700, 4.0)
+    block_defaults(font_size, 700, 0.0)
     |> Map.merge(%{
       display: :table_caption,
       text_align: :center
@@ -835,7 +839,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       margin: edges(0.0),
       padding: edges(0.75),
       rowspan: 1,
-      text_align: :left,
       vertical_align: :middle
     }
 
@@ -880,11 +883,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     with src when is_binary(src) <- Map.get(attributes, "src"),
          {:ok, image_style} <- load_image_style(src, opts, :image) do
       {:ok,
-       block_defaults(font_size, 400, font_size)
+       block_defaults(font_size, 400, 0.0)
        |> Map.merge(%{
-         _margin_after_em: 1.0,
          display: :image,
-         margin: edges(0.0, 0.0, font_size, 0.0),
+         margin: edges(0.0),
          object_fit: :fill,
          object_position: {{:percent, 0.5}, {:percent, 0.5}},
          padding: edges(0.0)
@@ -2012,7 +2014,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, Map.put(style, :display, :inline)}
 
       "inline-block" ->
-        {:ok, style |> ensure_box_style() |> Map.put(:display, :block)}
+        {:ok, style |> ensure_box_style() |> Map.put(:display, :inline_block)}
 
       "none" ->
         {:ok, Map.put(style, :display, :none)}
@@ -2342,6 +2344,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp resolve_font_relative_defaults(style) do
+    style =
+      case Map.pop(style, :_margin_before_em) do
+        {multiplier, style} when is_number(multiplier) ->
+          Map.update!(
+            style,
+            :margin,
+            &Map.put(&1, :top, Map.fetch!(style, :font_size) * multiplier)
+          )
+
+        {_value, style} ->
+          style
+      end
+
     case Map.pop(style, :_margin_after_em) do
       {multiplier, style} when is_number(multiplier) ->
         margin_after = Map.fetch!(style, :font_size) * multiplier
@@ -3522,6 +3537,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         style
         |> Map.put(:margin, lengths)
         |> Map.put(:margin_after, lengths.bottom)
+        |> Map.delete(:_margin_before_em)
         |> Map.delete(:_margin_after_em)
 
       "padding" ->
@@ -3540,6 +3556,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     style = Map.put(style, map_key, lengths)
 
     case property do
+      "margin-top" ->
+        Map.delete(style, :_margin_before_em)
+
       "margin-bottom" ->
         style
         |> Map.put(:margin_after, length)

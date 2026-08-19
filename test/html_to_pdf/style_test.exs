@@ -118,6 +118,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
              Style.compute(dom)
   end
 
+  test "compute does not load a directly hidden image" do
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               ~s(<div><img src="data:image/png;base64,#{Base.encode64(png_fixture(1, 1))}" style="display: none" /></div>)
+             )
+
+    assert {:ok, %{children: [%{children: [%{style: %{display: :none}}]}]}} = Style.compute(dom)
+  end
+
   test "compute applies body inherited styles to document fragments" do
     dom = %{
       type: :document,
@@ -718,6 +727,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     [paragraph] = styled_tree.children
     %{ascent: ascent, descent: descent, units_per_em: units_per_em} = paragraph.style.font_face
+
     expected_line_height = (ascent - descent) / units_per_em * 10.0
 
     assert_in_delta paragraph.style.line_height, expected_line_height, 0.0001
@@ -2623,7 +2633,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assertions = [
       {"display: block", :display, :block},
       {"display: inline", :display, :inline},
-      {"display: inline-block", :display, :block},
+      {"display: inline-block", :display, :inline_block},
       {"display: none", :display, :none},
       {"display: inline-flex", :display, :inline_flex},
       {"display: inline-grid", :display, :inline_grid},
@@ -2633,7 +2643,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       {"padding-right: 2pt", :padding, %{top: 0.0, right: 2.0, bottom: 0.0, left: 0.0}},
       {"padding-bottom: 2pt", :padding, %{top: 0.0, right: 0.0, bottom: 2.0, left: 0.0}},
       {"padding-left: 2pt", :padding, %{top: 0.0, right: 0.0, bottom: 0.0, left: 2.0}},
-      {"margin-left: 2pt", :margin, %{top: 0.0, right: 0.0, bottom: 12.0, left: 2.0}},
+      {"margin-left: 2pt", :margin, %{top: 12.0, right: 0.0, bottom: 12.0, left: 2.0}},
       {"border-width: 2pt", :border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}},
       {"border: none", :border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}},
       {"border-right: none", :border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}},

@@ -110,8 +110,19 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       |> Keyword.put(:base_url, Path.dirname(fixture_path))
 
     case ttf_font_path() do
-      nil -> page_opts
-      path -> Keyword.put(page_opts, :fonts, [%{family: "DejaVu Sans", path: path}])
+      nil ->
+        page_opts
+
+      path ->
+        fonts = [%{family: "DejaVu Sans", path: path, weight: 400}]
+
+        fonts =
+          case ttf_bold_font_path() do
+            nil -> fonts
+            bold_path -> fonts ++ [%{family: "DejaVu Sans", path: bold_path, weight: 700}]
+          end
+
+        Keyword.put(page_opts, :fonts, fonts)
     end
   end
 
@@ -134,6 +145,15 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
       "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
       "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
+    ]
+    |> Enum.find(&File.exists?/1)
+  end
+
+  defp ttf_bold_font_path do
+    [
+      "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+      "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+      "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"
     ]
     |> Enum.find(&File.exists?/1)
   end
@@ -283,7 +303,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
 
     case Regex.run(~r/<head\b[^>]*>/iu, html) do
       [head_tag] -> String.replace(html, head_tag, head_tag <> "\n" <> page_css, global: false)
-      _ -> page_css <> "\n" <> html
+      _ -> html <> "\n" <> page_css
     end
   end
 

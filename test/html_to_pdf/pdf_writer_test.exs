@@ -336,7 +336,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     ]
 
     assert {:ok, pdf} = PdfWriter.render(pages, [])
-    assert pdf =~ "q 0.9 0.9 0.9 rg 1 0 0 RG 2 w 10 20 40 30 re B Q"
+    assert pdf =~ "q 0.9 0.9 0.9 rg 10 20 40 30 re f Q"
+    assert pdf =~ "q 1 0 0 RG 2 w 11 21 38 28 re S Q"
     assert pdf =~ "BT /F1 12 Tf 0 0 0 rg 15 35 Td (Boxed) Tj ET"
   end
 
@@ -384,7 +385,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "<< /Type /ExtGState /ca 0.5 >>"
     assert pdf =~ "<< /Type /ExtGState /CA 0.25 >>"
     assert length(Regex.scan(~r/<< \/Type \/ExtGState \/ca 0\.5 >>/, pdf)) == 1
-    assert pdf =~ ~r/q \/GS\d+ gs \/GS\d+ gs 1 0 0 rg 0 0 1 RG 2 w/
+    assert pdf =~ ~r/q \/GS\d+ gs 1 0 0 rg 10 20 40 30 re f Q/
+    assert pdf =~ ~r/q \/GS\d+ gs 0 0 1 RG 2 w 11 21 38 28 re S Q/
     assert pdf =~ ~r/q \/GS\d+ gs BT \/F1 12 Tf 0 0 0 rg 15 35 Td \(Hidden\) Tj ET Q/
     assert pdf =~ ~r/q \/GS\d+ gs BT \/F1 12 Tf 0 0 0 rg 15 50 Td \(Faded\) Tj ET Q/
   end
@@ -456,7 +458,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
     assert {:ok, pdf} = PdfWriter.render(pages, [])
     assert pdf =~ "q 0.9 0.9 0.9 rg 10 20 40 30 re f Q"
-    assert pdf =~ "q 0 0 1 RG 1 w 10 60 40 20 re S Q"
+    assert pdf =~ "q 0 0 1 RG 1 w 10.5 60.5 39 19 re S Q"
   end
 
   test "render writes side-specific rectangle borders" do
@@ -609,7 +611,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     refute pdf =~ "10 80 m 20 80 l S"
     assert pdf =~ "20 70 m 20 80 l S"
     assert pdf =~ "0.2 0.4 0.6 RG 1 w 30 80 m 40 80 l S"
-    assert pdf =~ "0.2 0.4 0.6 RG 1 w 50 70 10 10 re S"
+    assert pdf =~ "0.2 0.4 0.6 RG 1 w 50.5 70.5 9 9 re S"
   end
 
   test "render writes rounded rectangle paths when radius is set" do
@@ -634,7 +636,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
     assert {:ok, pdf} = PdfWriter.render(pages, [])
     assert pdf =~ "0 0 1 RG 1 w"
-    assert pdf =~ "14 20 m"
+    assert pdf =~ "14 20.5 m"
     assert pdf =~ "c"
     assert pdf =~ " h S Q"
   end

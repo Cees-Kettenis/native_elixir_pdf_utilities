@@ -87,8 +87,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   defp place_group(group, state, headers, page_size, margins) do
     state =
       case Map.get(group, :break_before) do
-        :page -> page_break(state, page_size, margins)
-        _ -> state
+        :page ->
+          state
+          |> page_break(page_size, margins)
+          |> repeat_table_header(group, headers, margins)
+
+        _ ->
+          state
       end
 
     target_top = target_group_top(state, group)

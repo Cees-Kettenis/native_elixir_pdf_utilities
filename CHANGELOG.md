@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Tightened the Chromium changed-pixel thresholds for HTML-to-PDF browser
+  parity fixtures to approximately 5%, with stricter geometric coverage for
+  absolute positioning.
+
+### Fixed
+
+- Improved native HTML layout and PDF painting for inline blocks, paragraph
+  margins, table sizing and backgrounds, image flow, font weights, pixel-grid
+  alignment, and pagination so all synthetic and realistic browser-parity
+  fixtures pass their configured limits.
+- Updated the browser-parity and compatibility guides to cover all 38
+  synthetic fixtures and 8 realistic documents, including positioned layout,
+  background images, and image object fitting.
+
 ## 0.11.0 - 2026-08-17
 
 ### Added
