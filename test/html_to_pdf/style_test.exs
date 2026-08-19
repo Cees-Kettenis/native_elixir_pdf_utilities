@@ -2910,7 +2910,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "max-width: nope",
       "min-height: var(--missing)",
       "min-height: nope",
-      "position: absolute",
       "overflow: scroll",
       "border-top-color: nope",
       "border-color: red nope",
@@ -2944,6 +2943,177 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert style_for("div", "grid-column: x") == {:error, :invalid_document}
     assert style_for("div", "font-family: Missing") == {:error, :invalid_document}
     assert style_for("div", "background-color: nope") == {:error, :invalid_document}
+  end
+
+  test "compute normalizes positioned layout, image fitting, and background image properties" do
+    assert {:ok, positioned} =
+             style_for(
+               "div",
+               "position: absolute; left: 10%; top: 8px; right: auto; bottom: 2pt; z-index: -3"
+             )
+
+    assert positioned.position == :absolute
+    assert positioned.offsets.left == {:percent, 0.1}
+    assert positioned.offsets.top == 6.0
+    assert positioned.offsets.right == :auto
+    assert positioned.offsets.bottom == 2.0
+    assert positioned.z_index == -3
+
+    png = png_fixture(4, 2)
+
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{
+            "style" =>
+              "background-image: url('asset:paper'); background-size: cover; background-position: right bottom; background-repeat: no-repeat"
+          },
+          children: []
+        },
+        %{
+          type: :element,
+          tag: "img",
+          attributes: %{
+            "src" => "asset:photo",
+            "style" => "width: 40pt; height: 40pt; object-fit: contain; object-position: left top"
+          },
+          children: []
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} =
+             Style.compute(dom,
+               assets: %{
+                 "asset:paper" => {:bytes, png},
+                 "asset:photo" => {:bytes, png}
+               }
+             )
+
+    [background, image] = styled_tree.children
+    assert background.style.background_image.format == :png
+    assert background.style.background_size == :cover
+    assert background.style.background_position == {{:percent, 1.0}, {:percent, 1.0}}
+    assert background.style.background_repeat == :no_repeat
+    assert image.style.object_fit == :contain
+    assert image.style.object_position == {{:percent, 0.0}, {:percent, 0.0}}
+  end
+
+  test "compute covers the supported positioning and image painting value forms" do
+    assert style_for!("div", "background-image: none").background_image == nil
+    assert style_for!("div", "background-size: contain").background_size == :contain
+    assert style_for!("div", "background-size: auto").background_size == {:auto, :auto}
+    assert style_for!("div", "background-size: 12pt").background_size == {12.0, :auto}
+    assert style_for!("div", "background-size: auto 8pt").background_size == {:auto, 8.0}
+
+    assert style_for!("div", "background-size: 25% 8pt").background_size ==
+             {{:percent, 0.25}, 8.0}
+
+    assert style_for!("div", "background-repeat: repeat").background_repeat == :repeat
+    assert style_for!("div", "background-repeat: repeat-x").background_repeat == :repeat_x
+    assert style_for!("div", "background-repeat: repeat-y").background_repeat == :repeat_y
+    assert style_for!("div", "position: static").position == :static
+    assert style_for!("div", "z-index: auto").z_index == :auto
+    assert style_for!("div", "object-fit: fill").object_fit == :fill
+    assert style_for!("div", "object-fit: cover").object_fit == :cover
+
+    assert style_for!("div", "object-position: left").object_position ==
+             {{:percent, 0.0}, {:percent, 0.5}}
+
+    assert style_for!("div", "object-position: top").object_position ==
+             {{:percent, 0.5}, {:percent, 0.0}}
+
+    assert style_for!("div", "object-position: center").object_position ==
+             {{:percent, 0.5}, {:percent, 0.5}}
+
+    assert style_for!("div", "object-position: 7pt").object_position ==
+             {7.0, {:percent, 0.5}}
+
+    assert style_for!("div", "object-position: top left").object_position ==
+             {{:percent, 0.0}, {:percent, 0.0}}
+
+    assert style_for!("div", "object-position: center left").object_position ==
+             {{:percent, 0.0}, {:percent, 0.5}}
+
+    for invalid <- [
+          "background-image: gradient(red, blue)",
+          "background-size: auto auto auto",
+          "background-repeat: space",
+          "position: fixed",
+          "z-index: front",
+          "object-fit: scale-down",
+          "object-position: nowhere",
+          "object-position: left right",
+          "object-position: left top center"
+        ] do
+      assert style_for("div", invalid) == {:error, :invalid_document}
+    end
+  end
+
+  test "compute resolves caller-supplied remote image and font bytes without fetching" do
+    png = png_fixture(2, 1)
+    font = File.read!(ttf_font_path!())
+    parent = self()
+
+    resolver = fn request ->
+      send(parent, {:asset_request, request})
+
+      case request.kind do
+        :image -> {:ok, png}
+        :font -> {:ok, font}
+      end
+    end
+
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [
+            %{
+              type: :text,
+              text:
+                "@font-face { font-family: RemoteFixture; src: url('https://example.com/font.ttf'); }"
+            }
+          ]
+        },
+        %{
+          type: :element,
+          tag: "img",
+          attributes: %{"src" => "https://example.com/photo.png"},
+          children: []
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute_detailed(dom, asset_resolver: resolver)
+    assert [%{style: %{image: %{format: :png}}}] = styled_tree.children
+
+    assert_received {:asset_request, %{reference: "https://example.com/font.ttf", kind: :font}}
+
+    assert_received {:asset_request, %{reference: "https://example.com/photo.png", kind: :image}}
+
+    assert {:error,
+            {:invalid_document, %{stage: :asset, source: "https://example.com/photo.png"}}} =
+             Style.compute_detailed(
+               %{
+                 type: :document,
+                 children: [
+                   %{
+                     type: :element,
+                     tag: "img",
+                     attributes: %{"src" => "https://example.com/photo.png"},
+                     children: []
+                   }
+                 ]
+               },
+               []
+             )
   end
 
   test "compute loads authorized file URI and absolute images and rejects malformed sources" do

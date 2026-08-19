@@ -220,9 +220,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert {:ok, []} = CssParser.parse("@font-face { font-family: X; src: url(x.ttf); }")
   end
 
-  test "font_faces rejects remote, WOFF-only, and malformed declarations" do
+  test "font_faces retains remote references for caller resolution and rejects unsupported declarations" do
+    assert {:ok, [remote]} =
+             CssParser.font_faces(
+               "@font-face { font-family: X; src: url(https://example.com/x.ttf); }"
+             )
+
+    assert remote.sources == ["https://example.com/x.ttf"]
+
     for css <- [
-          "@font-face { font-family: X; src: url(https://example.com/x.ttf); }",
           "@font-face { font-family: X; src: url(x.woff2) format(woff2); }",
           "@font-face { font-family: X; src: url(x.png) format(truetype); }",
           "@font-face { font-family: X; font-weight: bold; }",

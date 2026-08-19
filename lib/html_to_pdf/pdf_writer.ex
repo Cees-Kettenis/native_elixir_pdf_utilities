@@ -336,8 +336,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp image_stream(box, image_resources) do
     image_resource = Map.fetch!(image_resources, image_key(box.image))
 
+    clip =
+      case Map.get(box, :clip) do
+        %{x: x, y: y, width: width, height: height} ->
+          [
+            format_number(x),
+            " ",
+            format_number(y),
+            " ",
+            format_number(width),
+            " ",
+            format_number(height),
+            " re W n "
+          ]
+
+        _ ->
+          []
+      end
+
     [
       "q ",
+      clip,
       format_number(box.width),
       " 0 0 ",
       format_number(box.height),

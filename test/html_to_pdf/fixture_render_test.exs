@@ -168,6 +168,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
     assert Enum.count(layout_tree.boxes, &(&1.type == :rect)) >= 10
   end
 
+  test "renders realistic positioned invoice statement and multi-page report fixtures" do
+    for {name, expected_text, minimum_pages} <- [
+          {"invoice_012.html", "INVOICE INV-012-0042", 1},
+          {"statement_012.html", "ACCOUNT STATEMENT", 1},
+          {"multi_page_report_012.html", "OPERATIONS REPORT", 2}
+        ] do
+      html = fixture_html(name)
+      assert {:ok, pdf} = HtmlToPdf.render(html, page_size: :a4)
+      assert_valid_pdf(pdf)
+      assert pdf_page_count(pdf) >= minimum_pages
+      assert pdf =~ "/Subtype /Image"
+
+      assert {:ok, layout_tree} = layout_fixture(html, page_size: :a4)
+      assert_layout_text(layout_tree, expected_text)
+      assert Enum.any?(layout_tree.boxes, &(Map.get(&1, :out_of_flow, false) == true))
+    end
+  end
+
   defp fixture_html(name) do
     @fixtures_dir
     |> Path.join(name)

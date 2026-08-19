@@ -97,6 +97,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert safe_name_font.pdf_name =~ "EmbeddedFont-"
   end
 
+  test "load_registry rejects ambiguous and missing font sources" do
+    font_data = File.read!(ttf_font_path!())
+
+    assert Font.load_registry(
+             fonts: [%{family: "Ambiguous", path: ttf_font_path!(), data: font_data}]
+           ) == :error
+
+    assert Font.load_registry(fonts: [%{family: "Missing source"}]) == :error
+  end
+
   test "resolve handles built-in and generic font families" do
     assert {:ok, ["Helvetica"], sans} = Font.resolve("sans-serif", 400, :normal, %{embedded: []})
     assert sans.pdf_name == "Helvetica"

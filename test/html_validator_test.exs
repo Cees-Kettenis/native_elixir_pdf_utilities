@@ -280,6 +280,52 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
              {:error, :invalid_stylesheet_options}
   end
 
+  test "asset maps, resolvers, and resolver results are validated at the shared boundary" do
+    resolver = fn _request -> :not_found end
+
+    assert :ok =
+             HtmlValidator.validate_render_request(
+               "<p>Hello</p>",
+               [
+                 assets: %{
+                   "asset:logo" => {:bytes, <<1, 2, 3>>},
+                   "asset:file" => {:file, "/tmp/logo.png"}
+                 },
+                 asset_resolver: resolver
+               ],
+               Font.normalize_options(
+                 assets: %{
+                   "asset:logo" => {:bytes, <<1, 2, 3>>},
+                   "asset:file" => {:file, "/tmp/logo.png"}
+                 },
+                 asset_resolver: resolver
+               )
+             )
+
+    for opts <- [
+          [assets: []],
+          [assets: %{1 => {:bytes, <<1>>}}],
+          [assets: %{"asset:x" => <<1>>}],
+          [assets: %{"asset:x" => {:file, ""}}],
+          [asset_resolver: :not_a_function]
+        ] do
+      assert {:error, {:invalid_options, %{stage: :options}}} =
+               HtmlValidator.validate_render_request(
+                 "<p>Hello</p>",
+                 opts,
+                 Font.normalize_options(opts)
+               )
+    end
+
+    assert {:ok, "bytes"} =
+             HtmlValidator.validate_asset_resolver_result({:ok, "bytes"}, "asset:x")
+
+    assert :not_found = HtmlValidator.validate_asset_resolver_result(:not_found, "asset:x")
+
+    assert {:error, {:invalid_document, %{stage: :asset, source: "asset:x"}}} =
+             HtmlValidator.validate_asset_resolver_result({:ok, 123}, "asset:x")
+  end
+
   test "SVG raster budgets are validated before native rendering" do
     svg = ~s(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"></svg>)
 

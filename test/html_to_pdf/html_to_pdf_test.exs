@@ -960,7 +960,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       assert {:error,
               {:invalid_document,
                %{
-                 stage: :style,
+                 stage: :asset,
                  reason: :invalid_document,
                  operation: :render,
                  module: NativeElixirPdfUtilities.HtmlToPdf
@@ -994,6 +994,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert trusted_pdf =~ "/Subtype /Type0"
   after
     File.rm_rf(Path.join(System.tmp_dir!(), "native-elixir-pdf-resource-confinement"))
+  end
+
+  test "render consumes explicit and resolver-provided asset bytes" do
+    png = png_fixture(2, 1)
+
+    assert {:ok, explicit_pdf} =
+             HtmlToPdf.render(
+               ~s(<img src="asset:logo" style="width: 20pt; height: 20pt; object-fit: contain">),
+               assets: %{"asset:logo" => {:bytes, png}}
+             )
+
+    assert explicit_pdf =~ "/Subtype /Image"
+
+    resolver = fn
+      %{reference: "https://example.com/paper.png", kind: :background_image} -> {:ok, png}
+      _request -> :not_found
+    end
+
+    assert {:ok, resolver_pdf} =
+             HtmlToPdf.render(
+               ~s|<div style="width: 30pt; height: 20pt; background-image: url('https://example.com/paper.png'); background-size: cover; background-repeat: no-repeat"></div>|,
+               asset_resolver: resolver
+             )
+
+    assert resolver_pdf =~ "/Subtype /Image"
+
+    assert {:error,
+            {:invalid_document, %{stage: :asset, source: "https://example.com/paper.png"}}} =
+             HtmlToPdf.render(
+               ~s|<div style="background-image: url('https://example.com/paper.png')"></div>|
+             )
   end
 
   test "render rejects aggregate decoded PNG bytes before inflating the excess image" do

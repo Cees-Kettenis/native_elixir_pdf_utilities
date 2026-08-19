@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      @page { size: A4; margin: 30pt; }
+      html, body { margin: 0; padding: 0; }
+      body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 9pt; line-height: 12pt; color: #172033; }
+      .statement {
+        position: relative;
+        width: 535pt;
+        min-height: 690pt;
+        background-color: #ffffff;
+        background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAADElEQVR4nGP4zwACAAYBAQB/9VxdAAAAAElFTkSuQmCC");
+        background-size: 150pt 90pt;
+        background-position: center center;
+        background-repeat: no-repeat;
+      }
+      .account { padding: 14pt; border: 1pt solid #94a3b8; background: #f8fafc; }
+      .period { position: absolute; top: 12pt; right: 14pt; width: 200pt; text-align: right; }
+      table { width: 100%; margin-top: 22pt; border-collapse: collapse; }
+      th, td { padding: 7pt; border-bottom: 1pt solid #cbd5e1; }
+      th { background: #e2e8f0; }
+      .summary { display: flex; gap: 12pt; margin-top: 20pt; }
+      .metric { width: 160pt; padding: 10pt; border: 1pt solid #94a3b8; background: #ffffff; }
+    </style>
+  </head>
+  <body>
+    <main class="statement">
+      <header class="account"><strong>ACCOUNT STATEMENT</strong><br>Acme Manufacturing · AC-004821<div class="period">1–31 July 2026</div></header>
+      <table>
+        <thead><tr><th>Date</th><th>Reference</th><th>Description</th><th>Debit</th><th>Credit</th></tr></thead>
+        <tbody>
+          <tr><td>02 Jul</td><td>INV-3921</td><td>Production supplies</td><td>780.00</td><td></td></tr>
+          <tr><td>08 Jul</td><td>PAY-8840</td><td>Electronic payment</td><td></td><td>500.00</td></tr>
+          <tr><td>17 Jul</td><td>INV-3955</td><td>Calibration service</td><td>245.00</td><td></td></tr>
+          <tr><td>28 Jul</td><td>PAY-9012</td><td>Electronic payment</td><td></td><td>300.00</td></tr>
+        </tbody>
+      </table>
+      <section class="summary">
+        <div class="metric"><strong>Opening balance</strong><br>MYR 1,240.00</div>
+        <div class="metric"><strong>Activity</strong><br>MYR 225.00</div>
+        <div class="metric"><strong>Closing balance</strong><br>MYR 1,465.00</div>
+      </section>
+    </main>
+  </body>
+</html>

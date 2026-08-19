@@ -72,11 +72,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
             }
   @typedoc "An explicitly tagged inline stylesheet or local stylesheet file."
   @type stylesheet_source :: {:css, String.t()} | {:file, String.t()}
+  @typedoc "Caller-approved bytes or a trusted local asset file."
+  @type asset_source :: {:bytes, binary()} | {:file, String.t()}
+  @typedoc "Context supplied to a caller-provided asset resolver."
+  @type asset_request :: %{
+          required(:reference) => String.t(),
+          required(:kind) => :image | :background_image | :font
+        }
+  @typedoc "A callback that supplies bytes without giving the renderer network access."
+  @type asset_resolver ::
+          (asset_request() -> {:ok, binary()} | :not_found | {:error, term()})
   @type unsupported_glyphs :: :replace | :error
   @type render_option ::
           {:page_size, page_size()}
           | {:margin, page_margin()}
           | {:base_url, String.t() | nil}
+          | {:assets, %{optional(String.t()) => asset_source()}}
+          | {:asset_resolver, asset_resolver() | nil}
           | {:stylesheets, [stylesheet_source()]}
           | {:default_font, String.t() | [String.t()]}
           | {:fonts, [map() | keyword() | {String.t(), String.t()}]}

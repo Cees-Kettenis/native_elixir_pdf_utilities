@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
+  alias NativeElixirPdfUtilities.Limits
 
   test "layout positions a paragraph text box on the first page" do
     styled_tree = %{
@@ -1506,6 +1507,291 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert block_background.type == :rect
     assert_in_delta block_background.width, 30.0, 0.0001
     assert_in_delta block_background.height, 20.0, 0.0001
+  end
+
+  test "layout applies contain cover and object positioning inside a clipped image viewport" do
+    contain_style =
+      image_style(image_fixture(40.0, 20.0))
+      |> Map.merge(%{
+        width: 100.0,
+        height: 100.0,
+        object_fit: :contain,
+        object_position: {{:percent, 0.5}, {:percent, 0.5}}
+      })
+
+    cover_style =
+      image_style(image_fixture(40.0, 20.0))
+      |> Map.merge(%{
+        width: 100.0,
+        height: 100.0,
+        object_fit: :cover,
+        object_position: {{:percent, 0.5}, {:percent, 0.5}}
+      })
+
+    assert {:ok, layout_tree} =
+             Layout.layout(
+               document([
+                 %{type: :element, style: contain_style, children: []},
+                 %{type: :element, style: cover_style, children: []}
+               ]),
+               page_size: {200, 220},
+               margin: 0
+             )
+
+    [contain, cover] = layout_tree.boxes
+    assert_in_delta contain.x, 0.0, 0.0001
+    assert_in_delta contain.y, 145.0, 0.0001
+    assert_in_delta contain.width, 100.0, 0.0001
+    assert_in_delta contain.height, 50.0, 0.0001
+    assert contain.clip == %{x: 0.0, y: 120.0, width: 100.0, height: 100.0}
+
+    assert_in_delta cover.x, -50.0, 0.0001
+    assert_in_delta cover.y, 20.0, 0.0001
+    assert_in_delta cover.width, 200.0, 0.0001
+    assert_in_delta cover.height, 100.0, 0.0001
+    assert cover.clip == %{x: 0.0, y: 20.0, width: 100.0, height: 100.0}
+  end
+
+  test "layout paints sized positioned and repeated backgrounds between color and border" do
+    style =
+      block_style()
+      |> Map.merge(%{
+        width: 25.0,
+        height: 20.0,
+        margin_after: 0.0,
+        background_color: {1, 0, 0},
+        background_image: image_fixture(10.0, 10.0),
+        background_size: {:auto, :auto},
+        background_position: {{:percent, 0.0}, {:percent, 0.0}},
+        background_repeat: :repeat,
+        border_widths: %{top: 1.0, right: 1.0, bottom: 1.0, left: 1.0},
+        border_styles: %{top: :solid, right: :solid, bottom: :solid, left: :solid},
+        border_colors: %{
+          top: {0, 0, 0},
+          right: {0, 0, 0},
+          bottom: {0, 0, 0},
+          left: {0, 0, 0}
+        }
+      })
+
+    assert {:ok, layout_tree} =
+             Layout.layout(document([%{type: :element, style: style, children: []}]),
+               page_size: {100, 100},
+               margin: 0
+             )
+
+    assert [%{type: :rect, fill_color: {1, 0, 0}} | rest] = layout_tree.boxes
+    assert Enum.count(rest, &(&1.type == :image)) == 16
+    assert %{type: :rect, fill_color: nil} = List.last(rest)
+    assert Enum.all?(Enum.filter(rest, &(&1.type == :image)), &Map.has_key?(&1, :clip))
+  end
+
+  test "layout resolves absolute descendants against the nearest positioned ancestor" do
+    html = """
+    <div style="position: relative; width: 100pt; height: 60pt; background: red">
+      <div style="padding: 20pt">
+        <div style="position: absolute; right: 10%; bottom: 5pt; width: 20pt; height: 10pt; background: blue"></div>
+      </div>
+      <div style="height: 10pt; background: green"></div>
+    </div>
+    <div style="height: 10pt; background: black"></div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled_tree} = Style.compute_detailed(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 200}, margin: 0)
+
+    blue = Enum.find(layout_tree.boxes, &(&1.fill_color == {0, 0, 1}))
+    black = Enum.find(layout_tree.boxes, &(&1.fill_color == {0, 0, 0}))
+    assert_in_delta blue.x, 70.0, 0.0001
+    assert_in_delta blue.y, 145.0, 0.0001
+    assert blue.out_of_flow
+    assert_in_delta black.y, 130.0, 0.0001
+  end
+
+  test "layout applies relative offsets and nested stacking context order" do
+    html = """
+    <div style="position: relative; left: 5pt; top: 3pt; width: 100pt; height: 50pt; background: white">
+      <div style="height: 10pt; background: green"></div>
+      <div style="position: absolute; left: 0; top: 0; width: 10pt; height: 10pt; background: red; z-index: -1"></div>
+      <div style="position: absolute; left: 20pt; top: 0; width: 10pt; height: 10pt; background: blue; z-index: 2">
+        <div style="position: absolute; left: 0; top: 0; width: 5pt; height: 5pt; background: black; z-index: 999"></div>
+      </div>
+      <div style="position: absolute; left: 40pt; top: 0; width: 10pt; height: 10pt; background: #ffff00; z-index: 3"></div>
+    </div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled_tree} = Style.compute_detailed(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 200}, margin: 0)
+
+    colors =
+      layout_tree.boxes
+      |> Enum.filter(&(&1.type == :rect and not is_nil(&1.fill_color)))
+      |> Enum.map(& &1.fill_color)
+
+    assert colors == [
+             {1, 0, 0},
+             {1, 1, 1},
+             {0, 0.5019607843, 0},
+             {0, 0, 1},
+             {0, 0, 0},
+             {1.0, 1.0, 0.0}
+           ]
+
+    white = Enum.find(layout_tree.boxes, &(&1.type == :rect and &1.fill_color == {1, 1, 1}))
+    assert_in_delta white.x, 5.0, 0.0001
+    assert_in_delta white.y, 147.0, 0.0001
+  end
+
+  test "layout keeps negative z-index children above a parent background that creates a stacking context" do
+    html = """
+    <div style="position: relative; z-index: 0; width: 50pt; height: 30pt; background: white">
+      <div style="position: absolute; left: 5pt; top: 5pt; width: 20pt; height: 10pt; background: red; z-index: -1"></div>
+    </div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled_tree} = Style.compute_detailed(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {100, 100}, margin: 0)
+
+    colors =
+      layout_tree.boxes
+      |> Enum.filter(&(&1.type == :rect and not is_nil(&1.fill_color)))
+      |> Enum.map(& &1.fill_color)
+
+    assert colors == [{1, 1, 1}, {1, 0, 0}]
+  end
+
+  test "layout applies root fallback positioning, automatic offsets, and paired-edge stretching" do
+    html = """
+    <div style="position: absolute; width: 20pt; height: 10pt; background: red"></div>
+    <div style="position: absolute; box-sizing: content-box; left: 10pt; right: 20pt; top: 20pt; bottom: 30pt; margin: 2pt; padding: 3pt; border: 1pt solid black; background: blue"></div>
+    <div style="position: absolute; box-sizing: border-box; left: 30pt; right: 30pt; top: 40pt; bottom: 40pt; background: green"></div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled_tree} = Style.compute_detailed(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 200}, margin: 0)
+
+    red = Enum.find(layout_tree.boxes, &(&1.type == :rect and &1.fill_color == {1, 0, 0}))
+    blue = Enum.find(layout_tree.boxes, &(&1.type == :rect and &1.fill_color == {0, 0, 1}))
+
+    green =
+      Enum.find(layout_tree.boxes, &(&1.type == :rect and &1.fill_color == {0, 0.5019607843, 0}))
+
+    assert_in_delta red.x, 0.0, 0.0001
+    assert_in_delta red.y, 190.0, 0.0001
+    assert_in_delta blue.width, 166.0, 0.0001
+    assert_in_delta blue.height, 146.0, 0.0001
+    assert_in_delta green.width, 140.0, 0.0001
+    assert_in_delta green.height, 120.0, 0.0001
+    assert Enum.all?([red, blue, green], & &1.out_of_flow)
+  end
+
+  test "layout rejects positioned children whose containing or own display is unsupported" do
+    html = """
+    <table style="position: relative">
+      <tr><td><div style="position: absolute; left: 0; top: 0">No table positioning</div></td></tr>
+    </table>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled_tree} = Style.compute_detailed(dom, [])
+    assert Layout.layout(styled_tree) == {:error, :invalid_layout}
+
+    unsupported = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          style: %{display: :list, position: :absolute},
+          children: []
+        }
+      ]
+    }
+
+    assert Layout.layout(unsupported) == {:error, :invalid_layout}
+
+    malformed = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          style: %{display: :block, position: :absolute},
+          children: []
+        }
+      ]
+    }
+
+    assert Layout.layout(malformed) == {:error, :invalid_layout}
+  end
+
+  test "layout resolves every supported background sizing and positioning form" do
+    image = image_fixture(10.0, 5.0)
+
+    styles = [
+      %{background_size: :contain, background_position: {{:percent, 0.5}, {:percent, 0.5}}},
+      %{background_size: {10.0, :auto}, background_position: {1.0, 2.0}},
+      %{background_size: {:auto, 10.0}, background_position: {2.0, 3.0}},
+      %{
+        background_size: {{:percent, 0.5}, 10.0},
+        background_position: {3.0, 4.0}
+      }
+    ]
+
+    children =
+      Enum.map(styles, fn background_style ->
+        style =
+          block_style()
+          |> Map.merge(%{
+            width: 40.0,
+            height: 20.0,
+            margin_after: 0.0,
+            background_image: image,
+            background_repeat: :no_repeat
+          })
+          |> Map.merge(background_style)
+
+        %{type: :element, style: style, children: []}
+      end)
+
+    assert {:ok, layout_tree} =
+             Layout.layout(document(children), page_size: {100, 100}, margin: 0)
+
+    images = Enum.filter(layout_tree.boxes, &(&1.type == :image))
+
+    assert Enum.map(images, &{&1.width, &1.height}) == [
+             {40.0, 20.0},
+             {10.0, 5.0},
+             {20.0, 10.0},
+             {20.0, 10.0}
+           ]
+  end
+
+  test "layout returns an error when background repetition exceeds its resource limit" do
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+    Limits.install(Map.put(original_limits, :max_background_image_tiles, 1))
+
+    style =
+      block_style()
+      |> Map.merge(%{
+        position: :relative,
+        offsets: %{top: :invalid, right: :auto, bottom: :auto, left: :auto},
+        width: 30.0,
+        height: 30.0,
+        background_image: image_fixture(5.0, 5.0),
+        background_size: {:auto, :auto},
+        background_position: {{:percent, 0.0}, {:percent, 0.0}},
+        background_repeat: :repeat
+      })
+
+    assert Layout.layout(
+             document([%{type: :element, style: style, children: []}]),
+             page_size: {100, 100},
+             margin: 0
+           ) == {:error, :invalid_layout}
   end
 
   test "layout positions grid items with explicit placement gaps and alignment" do

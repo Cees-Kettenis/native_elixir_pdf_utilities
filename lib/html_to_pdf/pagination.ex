@@ -200,9 +200,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   end
 
   defp flow_group(boxes) do
-    bounds = Enum.map(boxes, &PageGeometry.box_vertical_bounds/1)
+    in_flow_boxes = Enum.reject(boxes, &(Map.get(&1, :out_of_flow, false) == true))
+
+    bounds =
+      case in_flow_boxes do
+        [] -> Enum.map(boxes, &PageGeometry.box_vertical_bounds/1)
+        in_flow_boxes -> Enum.map(in_flow_boxes, &PageGeometry.box_vertical_bounds/1)
+      end
+
     top = bounds |> Enum.map(&elem(&1, 0)) |> Enum.max()
-    bottom = bounds |> Enum.map(&elem(&1, 1)) |> Enum.min()
+
+    bottom =
+      case in_flow_boxes do
+        [] -> top
+        _ -> bounds |> Enum.map(&elem(&1, 1)) |> Enum.min()
+      end
+
     first = hd(boxes)
 
     %{
@@ -262,8 +275,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
   defp shift_boxes(boxes, delta_y) do
     Enum.map(boxes, fn box ->
-      case Map.get(box, :y) do
-        y when is_number(y) -> Map.put(box, :y, y + delta_y)
+      box =
+        case Map.get(box, :y) do
+          y when is_number(y) -> Map.put(box, :y, y + delta_y)
+          _ -> box
+        end
+
+      case Map.get(box, :clip) do
+        %{y: clip_y} = clip -> Map.put(box, :clip, %{clip | y: clip_y + delta_y})
         _ -> box
       end
     end)

@@ -332,17 +332,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       font when is_map(font) ->
         family = Map.get(font, :family) || Map.get(font, "family")
         path = Map.get(font, :path) || Map.get(font, "path")
+        data = Map.get(font, :data) || Map.get(font, "data")
         weight = Map.get(font, :weight) || Map.get(font, "weight") || 400
         style = Map.get(font, :style) || Map.get(font, "style") || :normal
 
         with true <- is_binary(family) and String.trim(family) != "",
-             {:ok, paths} <- normalize_paths(path),
+             {:ok, source} <- normalize_font_source(path, data),
              {:ok, weight} <- normalize_weight(weight),
              {:ok, style} <- normalize_style(style) do
-          {:ok, %{family: String.trim(family), path: paths, weight: weight, style: style}}
+          {:ok,
+           source
+           |> Map.merge(%{family: String.trim(family), weight: weight, style: style})}
         else
           _ -> :error
         end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp normalize_font_source(path, data) do
+    case {path, data} do
+      {path, nil} ->
+        with {:ok, paths} <- normalize_paths(path), do: {:ok, %{path: paths}}
+
+      {nil, data} when is_binary(data) and byte_size(data) > 0 ->
+        {:ok, %{data: data}}
 
       _ ->
         :error
@@ -436,8 +452,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     {String.downcase(font.family), font.weight, font.style}
   end
 
-  defp load_font(%{family: family, path: paths, weight: weight, style: style}) do
-    with {:ok, data, parsed} <- load_first_supported_font(paths) do
+  defp load_font(font) do
+    result =
+      case font do
+        %{path: paths} ->
+          load_first_supported_font(paths)
+
+        %{data: data} ->
+          case parse_ttf(data) do
+            {:ok, parsed} -> {:ok, data, parsed}
+            _ -> :error
+          end
+      end
+
+    with {:ok, data, parsed} <- result do
+      family = Map.fetch!(font, :family)
+
       hash =
         :crypto.hash(:sha256, [family, data])
         |> Base.encode16(case: :lower)
@@ -448,8 +478,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
        |> Map.merge(%{
          type: :embedded,
          family: family,
-         weight: weight,
-         style: style,
+         weight: Map.fetch!(font, :weight),
+         style: Map.fetch!(font, :style),
          id: hash,
          pdf_name: pdf_safe_name(family) <> "-" <> hash,
          data: data

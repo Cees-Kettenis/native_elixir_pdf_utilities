@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      @page { size: A4; margin: 30pt; }
+      html, body { margin: 0; padding: 0; }
+      body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 9pt; line-height: 12pt; color: #1f2937; }
+      .report-page { position: relative; width: 535pt; }
+      .details { page-break-before: always; }
+      .banner { height: 68pt; padding: 12pt; box-sizing: border-box; background: #1e3a8a; color: #ffffff; }
+      .page-mark { position: absolute; top: 16pt; right: 12pt; width: 120pt; text-align: right; z-index: 2; }
+      .hero {
+        height: 150pt;
+        margin-top: 18pt;
+        border: 2pt solid #93c5fd;
+        background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjAiIGhlaWdodD0iNDAiPjxyZWN0IHdpZHRoPSIxMjAiIGhlaWdodD0iNDAiIGZpbGw9IiMxZDRlZDgiLz48Y2lyY2xlIGN4PSIxMDAiIGN5PSIyMCIgcj0iMTUiIGZpbGw9IiNmYWNjMTUiLz48L3N2Zz4=");
+        background-size: cover;
+        background-position: center center;
+        background-repeat: no-repeat;
+      }
+      .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14pt; margin-top: 20pt; }
+      .card { min-height: 100pt; padding: 12pt; border: 1pt solid #cbd5e1; background: #f8fafc; }
+      table { width: 100%; margin-top: 20pt; border-collapse: collapse; }
+      th, td { padding: 7pt; border: 1pt solid #cbd5e1; }
+      th { background: #dbeafe; }
+    </style>
+  </head>
+  <body>
+    <section class="report-page">
+      <header class="banner"><strong>OPERATIONS REPORT</strong><br>Quarter ended 31 July 2026</header>
+      <div class="page-mark">Executive overview</div>
+      <div class="hero"></div>
+      <div class="cards">
+        <div class="card"><strong>Output</strong><br>Production increased by 8.4 percent while scrap remained below target.</div>
+        <div class="card"><strong>Delivery</strong><br>On-time delivery reached 96.2 percent across all customer groups.</div>
+        <div class="card"><strong>Safety</strong><br>No lost-time incidents were recorded during the reporting period.</div>
+        <div class="card"><strong>Quality</strong><br>First-pass yield improved after the calibration programme.</div>
+      </div>
+    </section>
+    <section class="report-page details">
+      <header class="banner"><strong>OPERATIONS REPORT</strong><br>Detailed measures</header>
+      <div class="page-mark">Performance table</div>
+      <table>
+        <thead><tr><th>Measure</th><th>Target</th><th>Actual</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Units completed</td><td>48,000</td><td>50,240</td><td>Above target</td></tr>
+          <tr><td>First-pass yield</td><td>97.0%</td><td>97.6%</td><td>Above target</td></tr>
+          <tr><td>On-time delivery</td><td>95.0%</td><td>96.2%</td><td>Above target</td></tr>
+          <tr><td>Scrap rate</td><td>1.8%</td><td>1.6%</td><td>Below limit</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </body>
+</html>

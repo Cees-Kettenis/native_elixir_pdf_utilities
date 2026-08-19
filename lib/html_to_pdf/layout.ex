@@ -9,6 +9,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type box :: map()
@@ -41,11 +42,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     case HtmlValidator.validate_layout_input(styled_tree, opts, page_size, margins) do
       :ok ->
+        styled_tree = attach_positioned_descendants(styled_tree)
         {:ok, page_size} = page_size
         {:ok, margins} = margins
         children = styled_tree.children
+        positioned_children = Map.get(styled_tree, :positioned_children, [])
 
-        with {:ok, boxes} <- layout_blocks(children, page_size, margins) do
+        with {:ok, boxes} <- layout_blocks(children, page_size, margins),
+             {:ok, boxes} <-
+               layout_positioned_children(
+                 positioned_children,
+                 boxes,
+                 %{
+                   x: margins.left,
+                   top: elem(page_size, 1) - margins.top,
+                   width: elem(page_size, 0) - margins.left - margins.right,
+                   height: elem(page_size, 1) - margins.top - margins.bottom
+                 },
+                 :root
+               ),
+             false <- Enum.any?(boxes, &(Map.get(&1, :type) == :layout_error)) do
           {page_width, page_height} = page_size
 
           {:ok,
@@ -58,10 +74,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
              content_width: page_width - margins.left - margins.right,
              content_height: page_height - margins.top - margins.bottom
            }}
+        else
+          true -> {:error, :invalid_layout}
+          {:error, reason} -> {:error, reason}
         end
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp attach_positioned_descendants(%{type: :document, children: children} = document) do
+    {children, positioned_children} = collect_positioned_children(children)
+
+    document
+    |> Map.put(:children, children)
+    |> Map.put(:positioned_children, positioned_children)
+  end
+
+  defp collect_positioned_children(children) do
+    Enum.reduce(children, {[], []}, fn child, {normal, positioned} ->
+      case child do
+        %{type: :element, children: nested_children, style: style} = element ->
+          {nested_children, nested_positioned} = collect_positioned_children(nested_children)
+
+          element =
+            element
+            |> Map.put(:children, nested_children)
+            |> maybe_attach_positioned_children(nested_positioned)
+
+          case Map.get(style, :position, :static) do
+            :absolute -> {normal, positioned ++ [element]}
+            :relative -> {normal ++ [element], positioned}
+            _ -> {normal ++ [element], positioned ++ nested_positioned}
+          end
+
+        child ->
+          {normal ++ [child], positioned}
+      end
+    end)
+  end
+
+  defp maybe_attach_positioned_children(element, positioned_children) do
+    case {Map.get(element.style, :position, :static), positioned_children} do
+      {position, positioned_children} when position in [:relative, :absolute] ->
+        Map.put(element, :positioned_children, positioned_children)
+
+      _ ->
+        element
     end
   end
 
@@ -93,6 +153,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @spec layout_block(term(), number(), number(), number()) ::
           {:ok, [box()], number()} | {:error, :invalid_layout}
   defp layout_block(block, x, y, width) do
+    case do_layout_block(block, x, y, width) do
+      {:ok, boxes, next_y} ->
+        position_container_contents(block, boxes, next_y, x, y, width)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp do_layout_block(block, x, y, width) do
     case block do
       %{type: :element, style: %{display: :none}} ->
         {:ok, [], y}
@@ -226,6 +296,335 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
+  defp position_container_contents(block, boxes, next_y, x, y, available_width) do
+    style = Map.fetch!(block, :style)
+    positioned_children = Map.get(block, :positioned_children, [])
+
+    case positioned_children do
+      [] ->
+        {:ok, relatively_shifted_boxes(boxes, style, x, y, available_width, next_y), next_y}
+
+      positioned_children ->
+        with {:ok, containing_block} <-
+               positioned_containing_block(style, x, y, available_width, next_y),
+             {:ok, positioned_boxes} <-
+               positioned_child_boxes(positioned_children, containing_block) do
+          boxes =
+            boxes
+            |> mark_container_background(style, x, y, available_width, next_y)
+            |> stack_positioned_boxes(positioned_boxes, is_integer(Map.get(style, :z_index)))
+
+          {:ok, relatively_shifted_boxes(boxes, style, x, y, available_width, next_y), next_y}
+        end
+    end
+  end
+
+  defp positioned_containing_block(style, x, y, available_width, next_y) do
+    display = Map.get(style, :display)
+
+    case display in [:block, :flex, :inline_flex, :grid, :inline_grid] do
+      true ->
+        margin = Map.get(style, :margin, edges(0.0))
+        border_widths = Map.get(style, :border_widths, edges(0.0))
+        box_x = x + margin.left
+        box_top = y - margin.top
+        box_width = positioned_element_border_width(style, available_width)
+        box_height = max(box_top - next_y - margin.bottom, 0.0)
+
+        {:ok,
+         %{
+           x: box_x + border_widths.left,
+           top: box_top - border_widths.top,
+           width: max(box_width - border_widths.left - border_widths.right, 0.0),
+           height: max(box_height - border_widths.top - border_widths.bottom, 0.0)
+         }}
+
+      false ->
+        {:error, :invalid_layout}
+    end
+  end
+
+  defp positioned_element_border_width(style, available_width) do
+    margin = Map.get(style, :margin, edges(0.0))
+    available_box_width = available_width - margin.left - margin.right
+
+    case Map.get(style, :display) do
+      :image ->
+        {content_width, _content_height} =
+          image_content_size(
+            style,
+            available_box_width - horizontal_box_size(style),
+            nil
+          )
+
+        content_width + horizontal_box_size(style)
+
+      _ ->
+        content_width =
+          resolved_content_size(
+            style,
+            :width,
+            width_available_size(style, available_box_width),
+            available_box_width - horizontal_box_size(style)
+          )
+
+        content_width + horizontal_box_size(style)
+    end
+  end
+
+  defp layout_positioned_children(positioned_children, normal_boxes, containing_block, anchor) do
+    case positioned_children do
+      [] ->
+        {:ok, normal_boxes}
+
+      positioned_children ->
+        with {:ok, positioned_boxes} <-
+               positioned_child_boxes(positioned_children, containing_block) do
+          positioned_boxes =
+            Enum.map(positioned_boxes, fn entry ->
+              %{entry | boxes: Enum.map(entry.boxes, &Map.put(&1, :position_anchor, anchor))}
+            end)
+
+          {:ok, stack_positioned_boxes(normal_boxes, positioned_boxes, true)}
+        end
+    end
+  end
+
+  defp positioned_child_boxes(positioned_children, containing_block) do
+    positioned_children
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {child, index}, {:ok, entries} ->
+      case positioned_child_box(child, containing_block, index) do
+        {:ok, entry} -> {:cont, {:ok, entries ++ [entry]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp positioned_child_box(%{type: :element, style: style} = child, containing_block, index) do
+    case Map.get(style, :display) in [:block, :image, :flex, :inline_flex, :grid, :inline_grid] do
+      true ->
+        offsets = Map.get(style, :offsets, edges(:auto))
+        style = stretch_positioned_style(style, offsets, containing_block)
+        child = Map.put(child, :style, style)
+
+        case layout_block(child, 0.0, 0.0, containing_block.width) do
+          {:ok, boxes, next_y} ->
+            margin = Map.get(style, :margin, edges(0.0))
+            border_width = positioned_element_border_width(style, containing_block.width)
+            border_height = max(0.0 - margin.top - next_y - margin.bottom, 0.0)
+            left = resolved_offset(offsets.left, containing_block.width)
+            right = resolved_offset(offsets.right, containing_block.width)
+            top = resolved_offset(offsets.top, containing_block.height)
+            bottom = resolved_offset(offsets.bottom, containing_block.height)
+
+            target_x =
+              cond do
+                is_number(left) ->
+                  containing_block.x + left + margin.left
+
+                is_number(right) ->
+                  containing_block.x + containing_block.width - right - margin.right -
+                    border_width
+
+                true ->
+                  containing_block.x + margin.left
+              end
+
+            target_top =
+              cond do
+                is_number(top) ->
+                  containing_block.top - top - margin.top
+
+                is_number(bottom) ->
+                  containing_block.top - containing_block.height + bottom + margin.bottom +
+                    border_height
+
+                true ->
+                  containing_block.top - margin.top
+              end
+
+            delta_x = target_x - margin.left
+            delta_y = target_top - -margin.top
+
+            boxes =
+              boxes
+              |> shift_layout_boxes(delta_x, delta_y)
+              |> Enum.map(&Map.put(&1, :out_of_flow, true))
+
+            z_index = Map.get(style, :z_index, :auto)
+            {:ok, %{z_index: z_index, index: index, boxes: boxes}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      false ->
+        {:error, :invalid_layout}
+    end
+  end
+
+  defp stretch_positioned_style(style, offsets, containing_block) do
+    style =
+      case {Map.get(style, :width), resolved_offset(offsets.left, containing_block.width),
+            resolved_offset(offsets.right, containing_block.width)} do
+        {nil, left, right} when is_number(left) and is_number(right) ->
+          target =
+            max(
+              containing_block.width - left - right -
+                horizontal_margin_size(style),
+              0.0
+            )
+
+          Map.put(style, :width, declared_size_for_border_box(style, :width, target))
+
+        _ ->
+          style
+      end
+
+    case {Map.get(style, :height), resolved_offset(offsets.top, containing_block.height),
+          resolved_offset(offsets.bottom, containing_block.height)} do
+      {nil, top, bottom} when is_number(top) and is_number(bottom) ->
+        target =
+          max(
+            containing_block.height - top - bottom - vertical_margin_size(style),
+            0.0
+          )
+
+        Map.put(style, :height, declared_size_for_border_box(style, :height, target))
+
+      _ ->
+        style
+    end
+  end
+
+  defp declared_size_for_border_box(style, property, size) do
+    case {Map.get(style, :box_sizing, :content_box), property} do
+      {:border_box, _property} -> size
+      {_box_sizing, :width} -> max(size - horizontal_box_size(style), 0.0)
+      {_box_sizing, :height} -> max(size - vertical_box_size(style), 0.0)
+    end
+  end
+
+  defp relatively_shifted_boxes(boxes, style, _x, y, available_width, next_y) do
+    case Map.get(style, :position, :static) do
+      :relative ->
+        offsets = Map.get(style, :offsets, edges(:auto))
+        margin = Map.get(style, :margin, edges(0.0))
+        element_height = max(y - margin.top - next_y - margin.bottom, 0.0)
+        left = resolved_offset(offsets.left, available_width)
+        right = resolved_offset(offsets.right, available_width)
+        top = resolved_offset(offsets.top, element_height)
+        bottom = resolved_offset(offsets.bottom, element_height)
+        delta_x = if(is_number(left), do: left, else: if(is_number(right), do: -right, else: 0.0))
+        delta_y = if(is_number(top), do: -top, else: if(is_number(bottom), do: bottom, else: 0.0))
+        shift_layout_boxes(boxes, delta_x, delta_y)
+
+      _ ->
+        boxes
+    end
+  end
+
+  defp resolved_offset(offset, available) do
+    case offset do
+      :auto -> nil
+      {:percent, ratio} -> ratio * available
+      offset when is_number(offset) -> offset
+      _ -> nil
+    end
+  end
+
+  defp horizontal_margin_size(style) do
+    margin = Map.get(style, :margin, edges(0.0))
+    margin.left + margin.right
+  end
+
+  defp vertical_margin_size(style) do
+    margin = Map.get(style, :margin, edges(0.0))
+    margin.top + margin.bottom
+  end
+
+  defp stack_positioned_boxes(normal_boxes, positioned_entries, stacking_context?) do
+    {background_boxes, content_boxes} =
+      Enum.split_while(normal_boxes, &(Map.get(&1, :stacking_background, false) == true))
+
+    sorted =
+      Enum.sort_by(positioned_entries, fn entry ->
+        z_index = if(is_integer(entry.z_index), do: entry.z_index, else: 0)
+        {z_index, entry.index}
+      end)
+
+    {negative, nonnegative} =
+      Enum.split_with(sorted, &(is_integer(&1.z_index) and &1.z_index < 0))
+
+    negative_boxes = Enum.flat_map(negative, & &1.boxes)
+    nonnegative_boxes = Enum.flat_map(nonnegative, & &1.boxes)
+
+    case stacking_context? do
+      true -> background_boxes ++ negative_boxes ++ content_boxes ++ nonnegative_boxes
+      false -> negative_boxes ++ background_boxes ++ content_boxes ++ nonnegative_boxes
+    end
+  end
+
+  defp mark_container_background(boxes, style, x, y, available_width, next_y) do
+    margin = Map.get(style, :margin, edges(0.0))
+    box_x = x + margin.left
+    box_top = y - margin.top
+    box_width = positioned_element_border_width(style, available_width)
+    box_height = max(box_top - next_y - margin.bottom, 0.0)
+    box_y = box_top - box_height
+
+    {background, remaining} =
+      Enum.split_while(boxes, fn box ->
+        background_paints_area?(box, box_x, box_y, box_width, box_height)
+      end)
+
+    Enum.map(background, &Map.put(&1, :stacking_background, true)) ++ remaining
+  end
+
+  defp background_paints_area?(box, x, y, width, height) do
+    case box do
+      %{type: :rect, paint_layer: :container_background} ->
+        approximately_equal?(box.x, x) and approximately_equal?(box.y, y) and
+          approximately_equal?(box.width, width) and approximately_equal?(box.height, height)
+
+      %{type: :image, paint_layer: :container_background, clip: clip} ->
+        approximately_equal?(clip.x, x) and approximately_equal?(clip.y, y) and
+          approximately_equal?(clip.width, width) and approximately_equal?(clip.height, height)
+
+      _ ->
+        false
+    end
+  end
+
+  defp approximately_equal?(left, right) do
+    is_number(left) and is_number(right) and abs(left - right) <= 0.0001
+  end
+
+  defp shift_layout_boxes(boxes, delta_x, delta_y) do
+    Enum.map(boxes, fn box ->
+      box =
+        box
+        |> maybe_shift_coordinate(:x, delta_x)
+        |> maybe_shift_coordinate(:y, delta_y)
+
+      case Map.get(box, :clip) do
+        %{x: clip_x, y: clip_y} = clip ->
+          Map.put(box, :clip, %{clip | x: clip_x + delta_x, y: clip_y + delta_y})
+
+        _ ->
+          box
+      end
+    end)
+  end
+
+  defp maybe_shift_coordinate(box, coordinate, delta) do
+    case Map.get(box, coordinate) do
+      value when is_number(value) -> Map.put(box, coordinate, value + delta)
+      _ -> box
+    end
+  end
+
   defp layout_block_content(children, style, x, y, width, metadata) do
     case inline_runs(children) do
       {:ok, runs} ->
@@ -307,14 +706,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       |> tag_boxes(flow_metadata)
 
     image_box =
-      %{
-        type: :image,
-        x: box_x + border_widths.left + padding.left,
-        y: box_top - border_widths.top - padding.top - content_height,
-        width: content_width,
-        height: content_height,
-        image: Map.fetch!(style, :image)
-      }
+      fitted_image_box(
+        style,
+        box_x + border_widths.left + padding.left,
+        box_top - border_widths.top - padding.top - content_height,
+        content_width,
+        content_height,
+        Map.fetch!(style, :image)
+      )
       |> Map.merge(flow_metadata)
 
     next_y = box_top - box_height - margin.bottom
@@ -1858,14 +2257,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     content_height =
       item.box_height - border_widths.top - padding.top - padding.bottom - border_widths.bottom
 
-    image_box = %{
-      type: :image,
-      x: content_x,
-      y: item.y - border_widths.top - padding.top - max(content_height, 0.0),
-      width: max(content_width, 0.0),
-      height: max(content_height, 0.0),
-      image: image
-    }
+    image_box =
+      fitted_image_box(
+        style,
+        content_x,
+        item.y - border_widths.top - padding.top - max(content_height, 0.0),
+        max(content_width, 0.0),
+        max(content_height, 0.0),
+        image
+      )
 
     background_boxes =
       background_box(style, item.x, item.y - item.box_height, item.box_width, item.box_height)
@@ -3881,27 +4281,189 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     stroke_width = Enum.max(Map.values(border_widths))
     fill_color = Map.get(style, :background_color)
 
-    case {fill_color, visible_border?(border_widths, border_styles, border_colors)} do
-      {nil, false} ->
-        []
+    border_visible? = visible_border?(border_widths, border_styles, border_colors)
 
-      _ ->
-        [
+    rect = %{
+      type: :rect,
+      paint_layer: :container_background,
+      x: x,
+      y: y,
+      width: width,
+      height: height,
+      fill_color: fill_color,
+      stroke_color: Map.get(style, :border_color, {0, 0, 0}),
+      stroke_width: stroke_width,
+      border_widths: border_widths,
+      border_colors: border_colors,
+      border_styles: border_styles,
+      border_radius: Map.get(style, :border_radius, 0.0)
+    }
+
+    case Map.get(style, :background_image) do
+      nil ->
+        case {fill_color, border_visible?} do
+          {nil, false} -> []
+          _ -> [rect]
+        end
+
+      image ->
+        fill_boxes =
+          case fill_color do
+            nil ->
+              []
+
+            _ ->
+              [
+                %{rect | stroke_color: nil, stroke_width: 0.0, border_widths: edges(0.0)}
+              ]
+          end
+
+        border_boxes =
+          case border_visible? do
+            true -> [%{rect | fill_color: nil}]
+            false -> []
+          end
+
+        fill_boxes ++
+          background_image_boxes(style, image, x, y, width, height, border_widths) ++
+          border_boxes
+    end
+  end
+
+  defp fitted_image_box(style, viewport_x, viewport_y, viewport_width, viewport_height, image) do
+    case Map.get(style, :object_fit, :fill) do
+      :fill ->
+        %{
+          type: :image,
+          x: viewport_x,
+          y: viewport_y,
+          width: viewport_width,
+          height: viewport_height,
+          image: image
+        }
+
+      fit when fit in [:contain, :cover] ->
+        natural_width = Map.fetch!(image, :width)
+        natural_height = Map.fetch!(image, :height)
+
+        scale =
+          case fit do
+            :contain -> min(viewport_width / natural_width, viewport_height / natural_height)
+            :cover -> max(viewport_width / natural_width, viewport_height / natural_height)
+          end
+
+        rendered_width = natural_width * scale
+        rendered_height = natural_height * scale
+
+        {horizontal, vertical} =
+          Map.get(style, :object_position, {{:percent, 0.5}, {:percent, 0.5}})
+
+        %{
+          type: :image,
+          x: viewport_x + paint_position(horizontal, viewport_width - rendered_width),
+          y:
+            viewport_y + viewport_height - rendered_height -
+              paint_position(vertical, viewport_height - rendered_height),
+          width: rendered_width,
+          height: rendered_height,
+          image: image,
+          clip: %{x: viewport_x, y: viewport_y, width: viewport_width, height: viewport_height}
+        }
+    end
+  end
+
+  defp background_image_boxes(style, image, x, y, width, height, border_widths) do
+    area_x = x + border_widths.left
+    area_y = y + border_widths.bottom
+    area_width = max(width - border_widths.left - border_widths.right, 0.0)
+    area_height = max(height - border_widths.top - border_widths.bottom, 0.0)
+    {tile_width, tile_height} = background_image_size(style, image, area_width, area_height)
+    {horizontal, vertical} = Map.get(style, :background_position)
+    initial_x = area_x + paint_position(horizontal, area_width - tile_width)
+
+    initial_y =
+      area_y + area_height - tile_height - paint_position(vertical, area_height - tile_height)
+
+    repeat = Map.get(style, :background_repeat, :repeat)
+
+    x_positions =
+      tile_positions(initial_x, tile_width, x, x + width, repeat in [:repeat, :repeat_x])
+
+    y_positions =
+      tile_positions(initial_y, tile_height, y, y + height, repeat in [:repeat, :repeat_y])
+
+    tile_count = length(x_positions) * length(y_positions)
+
+    case tile_count <= Limits.get(:max_background_image_tiles) do
+      true ->
+        for tile_x <- x_positions, tile_y <- y_positions do
           %{
-            type: :rect,
-            x: x,
-            y: y,
-            width: width,
-            height: height,
-            fill_color: fill_color,
-            stroke_color: Map.get(style, :border_color, {0, 0, 0}),
-            stroke_width: stroke_width,
-            border_widths: border_widths,
-            border_colors: border_colors,
-            border_styles: border_styles,
-            border_radius: Map.get(style, :border_radius, 0.0)
+            type: :image,
+            paint_layer: :container_background,
+            x: tile_x,
+            y: tile_y,
+            width: tile_width,
+            height: tile_height,
+            image: image,
+            clip: %{x: x, y: y, width: width, height: height}
           }
-        ]
+        end
+
+      false ->
+        [%{type: :layout_error, reason: :background_image_tile_limit}]
+    end
+  end
+
+  defp background_image_size(style, image, area_width, area_height) do
+    natural_width = Map.fetch!(image, :width)
+    natural_height = Map.fetch!(image, :height)
+
+    case Map.get(style, :background_size, {:auto, :auto}) do
+      :contain ->
+        scale = min(area_width / natural_width, area_height / natural_height)
+        {natural_width * scale, natural_height * scale}
+
+      :cover ->
+        scale = max(area_width / natural_width, area_height / natural_height)
+        {natural_width * scale, natural_height * scale}
+
+      {width, height} ->
+        resolved_width = resolve_background_size(width, area_width)
+        resolved_height = resolve_background_size(height, area_height)
+
+        case {resolved_width, resolved_height} do
+          {:auto, :auto} -> {natural_width, natural_height}
+          {width, :auto} -> {width, width * natural_height / natural_width}
+          {:auto, height} -> {height * natural_width / natural_height, height}
+          {width, height} -> {width, height}
+        end
+    end
+  end
+
+  defp resolve_background_size(size, available) do
+    case size do
+      :auto -> :auto
+      {:percent, ratio} -> available * ratio
+      size -> size
+    end
+  end
+
+  defp paint_position(position, remaining) do
+    case position do
+      {:percent, ratio} -> remaining * ratio
+      length -> length
+    end
+  end
+
+  defp tile_positions(initial, tile_size, minimum, maximum, repeat?) do
+    case repeat? and tile_size > 0 do
+      true ->
+        first = initial - max(Float.ceil((initial - minimum) / tile_size), 0) * tile_size
+        count = max(Float.ceil((maximum - first) / tile_size) |> trunc(), 1)
+        Enum.map(0..(count - 1), &(first + &1 * tile_size))
+
+      false ->
+        [initial]
     end
   end
 

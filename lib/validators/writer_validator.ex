@@ -161,7 +161,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       %{type: :image, x: x, y: y, width: width, height: height, image: image}
       when is_number(x) and is_number(y) and is_number(width) and is_number(height) and
              width > 0 and height > 0 ->
-        valid_image?(image)
+        valid_image?(image) and valid_image_clip?(Map.get(box, :clip))
 
       _ ->
         false
@@ -191,6 +191,21 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           _ ->
             false
         end
+
+      _ ->
+        false
+    end
+  end
+
+  defp valid_image_clip?(clip) do
+    case clip do
+      nil ->
+        true
+
+      %{x: x, y: y, width: width, height: height}
+      when map_size(clip) == 4 and is_number(x) and is_number(y) and is_number(width) and
+             width > 0 and is_number(height) and height > 0 ->
+        true
 
       _ ->
         false

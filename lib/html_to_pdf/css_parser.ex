@@ -266,7 +266,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       {:ok, css} ->
         declarations =
           css
-          |> String.split(";")
+          |> split_declaration_sources()
           |> Enum.map(&String.trim/1)
           |> Enum.reject(&(&1 == ""))
 
@@ -379,7 +379,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   defp font_face_descriptor_error(block, property) do
     source =
       block
-      |> String.split(";")
+      |> split_declaration_sources()
       |> Enum.map(&String.trim/1)
       |> Enum.find(&Regex.match?(~r/^#{Regex.escape(property)}\s*:/iu, &1))
 
@@ -504,9 +504,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     normalized_format = String.downcase(format)
     extension = source |> Path.extname() |> String.downcase()
 
-    local? =
-      source != "" and not String.contains?(source, ["\0", "://"]) and
-        not String.starts_with?(String.downcase(source), "data:")
+    supported_reference? = source != "" and not String.contains?(source, "\0")
 
     format_supported? =
       case normalized_format do
@@ -514,7 +512,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         format -> format in ["truetype", "opentype"]
       end
 
-    local? and extension in [".ttf", ".otf"] and format_supported?
+    supported_reference? and extension in [".ttf", ".otf"] and format_supported?
   end
 
   defp first_capture(captures, names) do
@@ -600,7 +598,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   defp page_options_from(block) do
     block
-    |> String.split(";")
+    |> split_declaration_sources()
     |> Enum.map(&String.trim/1)
     |> Enum.reject(&(&1 == ""))
     |> Enum.reduce_while({:ok, []}, fn source, {:ok, acc} ->
@@ -1169,7 +1167,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   defp invalid_declaration(declarations) do
     declarations
-    |> String.split(";")
+    |> split_declaration_sources()
     |> Enum.map(&String.trim/1)
     |> Enum.reject(&(&1 == ""))
     |> Enum.find(fn declaration ->
@@ -1185,6 +1183,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       declaration ->
         declaration
     end
+  end
+
+  defp split_declaration_sources(source) do
+    {parts, current, _quote, _depth} =
+      source
+      |> String.graphemes()
+      |> Enum.reduce({[], [], nil, 0}, fn character, {parts, current, quote, depth} ->
+        cond do
+          character in ["\"", "'"] and is_nil(quote) ->
+            {parts, [character | current], character, depth}
+
+          character == quote ->
+            {parts, [character | current], nil, depth}
+
+          is_nil(quote) and character == "(" ->
+            {parts, [character | current], quote, depth + 1}
+
+          is_nil(quote) and character == ")" ->
+            {parts, [character | current], quote, max(depth - 1, 0)}
+
+          is_nil(quote) and depth == 0 and character == ";" ->
+            part = current |> Enum.reverse() |> Enum.join()
+            {[part | parts], [], quote, depth}
+
+          true ->
+            {parts, [character | current], quote, depth}
+        end
+      end)
+
+    final = current |> Enum.reverse() |> Enum.join()
+    Enum.reverse([final | parts])
   end
 
   defp css_issue_to_detail({kind, source}, css) do

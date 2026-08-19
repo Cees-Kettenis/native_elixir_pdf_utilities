@@ -9,6 +9,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     :page_size,
     :margin,
     :base_url,
+    :assets,
+    :asset_resolver,
     :stylesheets,
     :default_font,
     :fonts,
@@ -352,6 +354,75 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec validate_asset_options(term(), term()) ::
+          :ok | {:error, {:invalid_options, Diagnostics.diagnostic()}}
+  def validate_asset_options(assets, asset_resolver) do
+    valid_assets? =
+      is_map(assets) and
+        Enum.all?(assets, fn
+          {reference, {:bytes, bytes}} ->
+            is_binary(reference) and String.trim(reference) != "" and is_binary(bytes)
+
+          {reference, {:file, path}} ->
+            is_binary(reference) and String.trim(reference) != "" and is_binary(path) and
+              String.trim(path) != ""
+
+          _ ->
+            false
+        end)
+
+    valid_resolver? = is_nil(asset_resolver) or is_function(asset_resolver, 1)
+
+    cond do
+      not valid_assets? ->
+        Diagnostics.error(
+          :options,
+          :invalid_options,
+          "assets must be a map of non-empty references to {:bytes, binary} or {:file, path}"
+        )
+
+      not valid_resolver? ->
+        Diagnostics.error(
+          :options,
+          :invalid_options,
+          "asset_resolver must be a one-argument function or nil"
+        )
+
+      true ->
+        :ok
+    end
+  end
+
+  @doc false
+  @spec validate_asset_resolver_result(term(), String.t()) ::
+          {:ok, binary()} | :not_found | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_asset_resolver_result(result, reference) do
+    case result do
+      {:ok, bytes} when is_binary(bytes) ->
+        {:ok, bytes}
+
+      :not_found ->
+        :not_found
+
+      {:error, _reason} ->
+        Diagnostics.error(
+          :asset,
+          :invalid_document,
+          "caller-provided asset resolver could not resolve the asset",
+          source: reference
+        )
+
+      _ ->
+        Diagnostics.error(
+          :asset,
+          :invalid_document,
+          "asset_resolver must return {:ok, binary}, :not_found, or {:error, reason}",
+          source: reference
+        )
+    end
+  end
+
+  @doc false
   @spec validate_table_span_attribute(term(), term()) ::
           {:ok, pos_integer()} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_table_span_attribute(attributes, name) do
@@ -647,6 +718,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
               String.trim(family) != "" and paths != [] and
                 Enum.all?(paths, &(is_binary(&1) and String.trim(&1) != ""))
 
+            %{family: family, data: data, weight: weight, style: style}
+            when map_size(font) == 4 and is_binary(family) and is_binary(data) and
+                   byte_size(data) > 0 and is_number(weight) and weight >= 100 and weight <= 900 and
+                   style in [:normal, :italic] ->
+              String.trim(family) != ""
+
             _ ->
               false
           end
@@ -886,6 +963,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     case Keyword.keyword?(opts) do
       true ->
         with :ok <- validate_stylesheets(Keyword.get(opts, :stylesheets, [])),
+             :ok <-
+               validate_asset_options(
+                 Keyword.get(opts, :assets, %{}),
+                 Keyword.get(opts, :asset_resolver)
+               ),
              :ok <- validate_base_url(Keyword.get(opts, :base_url)),
              :ok <- validate_default_font(Keyword.get(opts, :default_font, "Helvetica")),
              :ok <- validate_unsupported_glyphs(Keyword.get(opts, :unsupported_glyphs, :replace)),

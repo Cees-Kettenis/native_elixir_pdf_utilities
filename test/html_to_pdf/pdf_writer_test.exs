@@ -30,6 +30,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "startxref"
   end
 
+  test "render clips fitted and background image paint operations" do
+    image = %{
+      format: :png,
+      data: <<255, 0, 0>>,
+      width_px: 1,
+      height_px: 1,
+      width: 0.75,
+      height: 0.75,
+      color_space: :device_rgb,
+      bits_per_component: 8
+    }
+
+    pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes: [
+          %{
+            type: :image,
+            x: -10.0,
+            y: 10.0,
+            width: 80.0,
+            height: 40.0,
+            image: image,
+            clip: %{x: 10.0, y: 20.0, width: 40.0, height: 20.0}
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, pdf} = PdfWriter.render(pages)
+    assert pdf =~ "q 10 20 40 20 re W n 80 0 0 40 -10 10 cm /Im1 Do Q"
+
+    invalid = put_in(pages, [Access.at(0), :boxes, Access.at(0), :clip, :width], 0)
+    assert {:error, {:invalid_pdf_input, %{stage: :pdf}}} = PdfWriter.render(invalid)
+  end
+
   test "render serializes static control drawing instructions without PDF widgets" do
     pages = [
       %{

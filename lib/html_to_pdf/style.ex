@@ -10,6 +10,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
+  alias NativeElixirPdfUtilities.HtmlToPdf.AssetLoader
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
@@ -72,7 +73,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         %{type: :document, children: children} = dom
 
         with {:ok, stylesheet_entries} <- load_stylesheets(dom, opts),
-             {:ok, css_fonts} <- stylesheet_fonts(stylesheet_entries),
+             {:ok, css_fonts} <- stylesheet_fonts(stylesheet_entries, opts),
              {:ok, font_registry} <- font_registry(opts, css_fonts),
              {:ok, font_families, font_face} <-
                resolve_font(
@@ -562,7 +563,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           tag
           |> finalize_element_style(
             apply_author_styles(style, node, ancestors, rules),
-            Keyword.fetch!(opts, :__image_budget__)
+            Keyword.fetch!(opts, :__image_budget__),
+            opts
           )
 
         case {tag, ancestors, result} do
@@ -581,10 +583,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp finalize_element_style(tag, result, image_budget) do
+  defp finalize_element_style(tag, result, image_budget, opts) do
     case {tag, result} do
       {"img", {:ok, style}} ->
-        finalize_image_style(style, image_budget)
+        with {:ok, style} <- finalize_image_style(style, image_budget) do
+          finalize_background_image_style(style, opts, image_budget)
+        end
+
+      {_tag, {:ok, style}} ->
+        finalize_background_image_style(style, opts, image_budget)
 
       {_tag, result} ->
         result
@@ -607,6 +614,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       _ ->
         {:ok, Map.delete(style, :svg_image)}
+    end
+  end
+
+  defp finalize_background_image_style(style, opts, image_budget) do
+    style =
+      style
+      |> Map.put_new(:background_position, {{:percent, 0.0}, {:percent, 0.0}})
+      |> Map.put_new(:background_repeat, :repeat)
+      |> Map.put_new(:background_size, {:auto, :auto})
+
+    case Map.get(style, :background_image_source) do
+      nil ->
+        {:ok, style}
+
+      source ->
+        case load_image_style(source, opts, :background_image) do
+          {:ok, %{image: image}} ->
+            {:ok,
+             style
+             |> Map.put(:background_image, image)
+             |> Map.delete(:background_image_source)}
+
+          {:ok, %{svg_image: svg}} ->
+            with {:ok, png} <- rasterize_svg(svg, [], image_budget),
+                 {:ok, image} <- decode_image(png, image_budget, false) do
+              {:ok,
+               style
+               |> Map.put(:background_image, image)
+               |> Map.delete(:background_image_source)}
+            end
+
+          {:error, {_reason, _diagnostic}} = error ->
+            error
+        end
     end
   end
 
@@ -671,6 +712,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp block_defaults(font_size, font_weight, margin_bottom) do
     %{
       background_color: nil,
+      background_image: nil,
+      background_position: {{:percent, 0.0}, {:percent, 0.0}},
+      background_repeat: :repeat,
+      background_size: {:auto, :auto},
       break_inside: :auto,
       border_color: :current_color,
       border_colors: edges(:current_color),
@@ -683,7 +728,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       font_weight: font_weight,
       margin: edges(0.0, 0.0, margin_bottom, 0.0),
       margin_after: margin_bottom,
-      padding: edges(0.0)
+      padding: edges(0.0),
+      position: :static,
+      offsets: edges(:auto),
+      z_index: :auto
     }
   end
 
@@ -830,13 +878,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp image_defaults(attributes, opts, font_size) do
     with src when is_binary(src) <- Map.get(attributes, "src"),
-         {:ok, image_style} <- load_image_style(src, opts) do
+         {:ok, image_style} <- load_image_style(src, opts, :image) do
       {:ok,
        block_defaults(font_size, 400, font_size)
        |> Map.merge(%{
          _margin_after_em: 1.0,
          display: :image,
          margin: edges(0.0, 0.0, font_size, 0.0),
+         object_fit: :fill,
+         object_position: {{:percent, 0.5}, {:percent, 0.5}},
          padding: edges(0.0)
        })
        |> Map.merge(image_style)}
@@ -1019,26 +1069,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end)
   end
 
-  defp stylesheet_fonts(entries) do
+  defp stylesheet_fonts(entries, opts) do
     Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, acc} ->
       case CssParser.font_faces(entry.css) do
         {:ok, font_faces} ->
           resolved =
             Enum.reduce_while(font_faces, {:ok, []}, fn font_face, {:ok, fonts} ->
-              paths =
+              sources =
                 Enum.flat_map(font_face.sources, fn source ->
-                  case local_font_path(source, entry) do
-                    {:ok, path} -> [path]
+                  case font_asset_source(source, entry, opts) do
+                    {:ok, config} -> [config]
                     _ -> []
                   end
                 end)
 
-              case paths do
-                [_path | _remaining] ->
-                  font =
-                    font_face
-                    |> Map.delete(:sources)
-                    |> Map.put(:path, paths)
+              case sources do
+                [%{path: _path} | _remaining] ->
+                  paths = Enum.map(sources, &Map.fetch!(&1, :path))
+
+                  font = font_face |> Map.delete(:sources) |> Map.put(:path, paths)
+
+                  {:cont, {:ok, fonts ++ [font]}}
+
+                [%{data: data} | _remaining] ->
+                  font = font_face |> Map.delete(:sources) |> Map.put(:data, data)
 
                   {:cont, {:ok, fonts ++ [font]}}
 
@@ -1058,17 +1112,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end)
   end
 
-  defp local_font_path(source, entry) do
+  defp font_asset_source(source, entry, opts) do
     case entry do
-      %{trusted_local_resources: true, base_url: stylesheet_base_url}
-      when is_binary(stylesheet_base_url) ->
-        case Path.type(source) do
-          :absolute -> {:ok, source}
-          _ -> {:ok, Path.expand(source, stylesheet_base_url)}
-        end
+      %{trusted_local_resources: true, base_url: stylesheet_base_url} ->
+        path =
+          case Path.type(source) do
+            :absolute -> source
+            _ -> Path.expand(source, stylesheet_base_url)
+          end
 
-      %{base_url: base_url} ->
-        HtmlValidator.validate_local_resource_path(source, base_url)
+        {:ok, %{path: path}}
+
+      _ ->
+        with {:ok, data} <- AssetLoader.resolve(source, :font, opts), do: {:ok, %{data: data}}
     end
   end
 
@@ -1638,6 +1694,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       "background" ->
         put_background(style, value)
 
+      "background-image" ->
+        put_background_image(style, value)
+
+      "background-size" ->
+        put_background_size(style, value)
+
+      "background-position" ->
+        put_two_axis_position(style, :background_position, value)
+
+      "background-repeat" ->
+        put_background_repeat(style, value)
+
       "box-sizing" ->
         put_box_sizing(style, value)
 
@@ -1830,6 +1898,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       "position" ->
         put_position(style, value)
 
+      property when property in ["top", "right", "bottom", "left"] ->
+        put_position_offset(style, property, value)
+
+      "z-index" ->
+        put_z_index(style, value)
+
+      "object-fit" ->
+        put_object_fit(style, value)
+
+      "object-position" ->
+        put_two_axis_position(style, :object_position, value)
+
       "overflow" ->
         put_overflow(style, value)
 
@@ -1967,6 +2047,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp ensure_box_style(style) do
     style
     |> Map.put_new(:background_color, nil)
+    |> Map.put_new(:background_image, nil)
+    |> Map.put_new(:background_position, {{:percent, 0.0}, {:percent, 0.0}})
+    |> Map.put_new(:background_repeat, :repeat)
+    |> Map.put_new(:background_size, {:auto, :auto})
     |> Map.put_new(:border_color, :current_color)
     |> Map.put_new(:border_colors, edges(Map.get(style, :border_color, :current_color)))
     |> Map.put_new(:border_radius, 0.0)
@@ -1976,6 +2060,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     |> Map.put_new(:margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
     |> Map.put_new(:margin_after, 0.0)
     |> Map.put_new(:padding, edges(0.0))
+    |> Map.put_new(:position, :static)
+    |> Map.put_new(:offsets, edges(:auto))
+    |> Map.put_new(:z_index, :auto)
   end
 
   defp put_size(style, property, value) do
@@ -2012,10 +2099,128 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
+  defp put_background_image(style, value) do
+    normalized = String.trim(value)
+
+    case String.downcase(normalized) do
+      "none" ->
+        {:ok,
+         style
+         |> Map.put(:background_image, nil)
+         |> Map.delete(:background_image_source)}
+
+      _ ->
+        case Regex.named_captures(
+               ~r/^url\(\s*(?:"(?<double>[^"]+)"|'(?<single>[^']+)'|(?<bare>[^\s)'\"]+))\s*\)$/iu,
+               normalized
+             ) do
+          captures when is_map(captures) ->
+            source =
+              Enum.find_value(["double", "single", "bare"], fn name ->
+                case Map.get(captures, name) do
+                  value when is_binary(value) and value != "" -> value
+                  _ -> nil
+                end
+              end)
+
+            {:ok, Map.put(style, :background_image_source, source)}
+
+          _ ->
+            {:error, :invalid_document}
+        end
+    end
+  end
+
+  defp put_background_size(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      "contain" ->
+        {:ok, Map.put(style, :background_size, :contain)}
+
+      "cover" ->
+        {:ok, Map.put(style, :background_size, :cover)}
+
+      value ->
+        parts = String.split(value, ~r/\s+/u, trim: true)
+
+        parsed =
+          Enum.map(parts, fn part ->
+            case part do
+              "auto" -> {:ok, :auto}
+              part -> parse_size(part)
+            end
+          end)
+
+        case parsed do
+          [{:ok, size}] ->
+            {:ok, Map.put(style, :background_size, {size, :auto})}
+
+          [{:ok, width}, {:ok, height}] ->
+            {:ok, Map.put(style, :background_size, {width, height})}
+
+          _ ->
+            {:error, :invalid_document}
+        end
+    end
+  end
+
+  defp put_background_repeat(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      "repeat" -> {:ok, Map.put(style, :background_repeat, :repeat)}
+      "no-repeat" -> {:ok, Map.put(style, :background_repeat, :no_repeat)}
+      "repeat-x" -> {:ok, Map.put(style, :background_repeat, :repeat_x)}
+      "repeat-y" -> {:ok, Map.put(style, :background_repeat, :repeat_y)}
+      _ -> {:error, :invalid_document}
+    end
+  end
+
   defp put_position(style, value) do
     case value |> String.trim() |> String.downcase() do
-      value when value in ["static", "relative"] -> {:ok, style}
+      "static" -> {:ok, Map.put(style, :position, :static)}
+      "relative" -> {:ok, Map.put(style, :position, :relative)}
+      "absolute" -> {:ok, Map.put(style, :position, :absolute)}
       _ -> {:error, :invalid_document}
+    end
+  end
+
+  defp put_position_offset(style, property, value) do
+    parsed =
+      case value |> String.trim() |> String.downcase() do
+        "auto" -> {:ok, :auto}
+        value -> parse_position_component(value)
+      end
+
+    with {:ok, offset} <- parsed do
+      side = String.to_existing_atom(property)
+      offsets = style |> Map.get(:offsets, edges(:auto)) |> Map.put(side, offset)
+      {:ok, Map.put(style, :offsets, offsets)}
+    end
+  end
+
+  defp put_z_index(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      "auto" ->
+        {:ok, Map.put(style, :z_index, :auto)}
+
+      value ->
+        case Integer.parse(value) do
+          {z_index, ""} -> {:ok, Map.put(style, :z_index, z_index)}
+          _ -> {:error, :invalid_document}
+        end
+    end
+  end
+
+  defp put_object_fit(style, value) do
+    case value |> String.trim() |> String.downcase() do
+      "fill" -> {:ok, Map.put(style, :object_fit, :fill)}
+      "contain" -> {:ok, Map.put(style, :object_fit, :contain)}
+      "cover" -> {:ok, Map.put(style, :object_fit, :cover)}
+      _ -> {:error, :invalid_document}
+    end
+  end
+
+  defp put_two_axis_position(style, property, value) do
+    with {:ok, position} <- parse_two_axis_position(value) do
+      {:ok, Map.put(style, property, position)}
     end
   end
 
@@ -3103,6 +3308,92 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
+  defp parse_position_component(value) do
+    normalized = String.trim(value)
+
+    case Regex.run(~r/^(-?\d+(?:\.\d+)?)%$/u, normalized) do
+      [_, percentage] ->
+        {number, ""} = Float.parse(percentage)
+        {:ok, {:percent, number / 100.0}}
+
+      _ ->
+        parse_length(normalized, :margin)
+    end
+  end
+
+  defp parse_two_axis_position(value) do
+    tokens = value |> String.trim() |> String.downcase() |> String.split(~r/\s+/u, trim: true)
+
+    case tokens do
+      [token] ->
+        case position_token(token) do
+          {:ok, :horizontal, component} -> {:ok, {component, {:percent, 0.5}}}
+          {:ok, :vertical, component} -> {:ok, {{:percent, 0.5}, component}}
+          {:ok, :both, component} -> {:ok, {component, component}}
+          {:ok, :component, component} -> {:ok, {component, {:percent, 0.5}}}
+          _ -> :error
+        end
+
+      [first, second] ->
+        with {:ok, first_axis, first_component} <- position_token(first),
+             {:ok, second_axis, second_component} <- position_token(second),
+             {:ok, position} <-
+               order_position_components(
+                 first_axis,
+                 first_component,
+                 second_axis,
+                 second_component
+               ) do
+          {:ok, position}
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp position_token(token) do
+    case token do
+      "left" ->
+        {:ok, :horizontal, {:percent, 0.0}}
+
+      "right" ->
+        {:ok, :horizontal, {:percent, 1.0}}
+
+      "top" ->
+        {:ok, :vertical, {:percent, 0.0}}
+
+      "bottom" ->
+        {:ok, :vertical, {:percent, 1.0}}
+
+      "center" ->
+        {:ok, :both, {:percent, 0.5}}
+
+      token ->
+        case parse_position_component(token) do
+          {:ok, component} -> {:ok, :component, component}
+          _ -> :error
+        end
+    end
+  end
+
+  defp order_position_components(first_axis, first, second_axis, second) do
+    cond do
+      first_axis == :vertical and second_axis in [:horizontal, :component, :both] ->
+        {:ok, {second, first}}
+
+      first_axis in [:horizontal, :component, :both] and
+          second_axis in [:vertical, :component, :both] ->
+        {:ok, {first, second}}
+
+      first_axis == :both and second_axis == :horizontal ->
+        {:ok, {second, first}}
+
+      true ->
+        :error
+    end
+  end
+
   defp parse_min_size(value) do
     case Regex.named_captures(~r/^min\((?<sizes>.+)\)$/u, String.downcase(String.trim(value))) do
       %{"sizes" => sizes} ->
@@ -3460,10 +3751,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp load_image_style(src, opts) do
+  defp load_image_style(src, opts, kind) do
     image_budget = Keyword.fetch!(opts, :__image_budget__)
 
-    case image_source(src, Keyword.get(opts, :base_url), image_budget) do
+    case image_source(src, opts, image_budget, kind) do
       {:ok, svg, :svg} ->
         {:ok, %{svg_image: svg}}
 
@@ -3536,14 +3827,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp svg_raster_options(style) do
-    dimensions =
-      [
-        width: style |> target_image_width() |> points_to_pixels(),
-        height: style |> target_image_height() |> points_to_pixels()
-      ]
-      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    case Map.get(style, :object_fit, :fill) do
+      fit when fit in [:contain, :cover] ->
+        []
 
-    dimensions
+      _ ->
+        [
+          width: style |> target_image_width() |> points_to_pixels(),
+          height: style |> target_image_height() |> points_to_pixels()
+        ]
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    end
   end
 
   defp target_image_width(style) do
@@ -3579,23 +3873,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp image_source(src, base_url, image_budget) do
+  defp image_source(src, opts, image_budget, kind) do
     case String.starts_with?(src, "data:") do
       true ->
         data_uri_image_source(src, image_budget)
 
       false ->
-        with {:ok, path} <- HtmlValidator.validate_local_resource_path(src, base_url),
-             {:ok, data, expected_format} <- file_image_source(path, image_budget),
-             do: {:ok, data, expected_format}
-    end
-  end
-
-  defp file_image_source(path, image_budget) do
-    with {:ok, %{size: source_bytes}} <- File.stat(path),
-         :ok <- HtmlValidator.reserve_image_source(image_budget, source_bytes),
-         {:ok, data} <- File.read(path) do
-      {:ok, data, nil}
+        with {:ok, data} <- AssetLoader.resolve(src, kind, opts, image_budget),
+             do: {:ok, data, nil}
     end
   end
 

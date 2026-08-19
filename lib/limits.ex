@@ -25,6 +25,7 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_aggregate_image_source_bytes: 50_000_000,
     max_decoded_image_bytes: 40_000_000,
     max_aggregate_decoded_image_bytes: 80_000_000,
+    max_background_image_tiles: 10_000,
     max_layout_cardinality: 1_000,
     max_pdf_input_bytes: 50_000_000,
     max_pdf_objects: 100_000,
@@ -67,6 +68,7 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_aggregate_image_source_bytes
           | :max_decoded_image_bytes
           | :max_aggregate_decoded_image_bytes
+          | :max_background_image_tiles
           | :max_layout_cardinality
           | :max_pdf_input_bytes
           | :max_pdf_objects

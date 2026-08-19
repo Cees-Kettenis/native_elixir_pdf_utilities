@@ -19,6 +19,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
              {:ok, [%{size: {200.0, 100.0}, boxes: [text_box("Hello", 78.0, {:block, 1})]}]}
   end
 
+  test "paginate moves out-of-flow positioned descendants with their containing block" do
+    html = """
+    <div style="height: 75pt; background: #eeeeee"></div>
+    <div style="position: relative; width: 80pt; height: 40pt; background: white">
+      <div style="position: absolute; right: 5pt; bottom: 5pt; width: 10pt; height: 10pt; background: blue"></div>
+    </div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled_tree} = Style.compute_detailed(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {100, 100}, margin: 10)
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+
+    refute Enum.any?(first_page.boxes, &(Map.get(&1, :fill_color) == {0, 0, 1}))
+    blue = Enum.find(second_page.boxes, &(Map.get(&1, :fill_color) == {0, 0, 1}))
+    assert blue.out_of_flow
+    assert_in_delta blue.x, 75.0, 0.0001
+    assert_in_delta blue.y, 55.0, 0.0001
+  end
+
   test "paginate supports default opts and empty pages" do
     assert Pagination.paginate(%{
              type: :layout,

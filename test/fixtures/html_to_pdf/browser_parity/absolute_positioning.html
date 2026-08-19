@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body { font-family: "DejaVu Sans", Arial, sans-serif; }
+      .sheet { width: 595pt; padding: 24pt; box-sizing: border-box; }
+      .region {
+        position: relative;
+        width: 320pt;
+        height: 150pt;
+        padding: 12pt;
+        border: 3pt solid #1f2937;
+        background: #e5e7eb;
+      }
+      .normal { height: 24pt; background: #86efac; }
+      .badge {
+        position: absolute;
+        top: 10%;
+        right: 12pt;
+        width: 80pt;
+        height: 34pt;
+        background: #2563eb;
+        z-index: 2;
+      }
+      .under {
+        position: absolute;
+        left: 18pt;
+        bottom: 14pt;
+        width: 140pt;
+        height: 70pt;
+        background: #ef4444;
+        z-index: -1;
+      }
+      .nested {
+        position: absolute;
+        left: 24pt;
+        top: 10pt;
+        width: 32pt;
+        height: 18pt;
+        background: #111827;
+        z-index: 99;
+      }
+      .above {
+        position: absolute;
+        left: 92pt;
+        bottom: 28pt;
+        width: 100pt;
+        height: 38pt;
+        background: #facc15;
+        z-index: 3;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <section class="region">
+        <div class="normal"></div>
+        <div class="under"></div>
+        <div class="badge"><div class="nested"></div></div>
+        <div class="above"></div>
+      </section>
+    </main>
+  </body>
+</html>
