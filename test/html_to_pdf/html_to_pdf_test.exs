@@ -87,6 +87,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     refute pdf =~ "0 0 1 rg"
   end
 
+  test "render tries resolver-backed font-face sources in order" do
+    valid_font = File.read!(ttf_font_path!())
+    parent = self()
+
+    resolver = fn %{kind: :font, reference: reference} ->
+      send(parent, {:font_request, reference})
+
+      case reference do
+        "https://example.com/corrupt.ttf" -> {:ok, "not a font"}
+        "https://example.com/valid.ttf" -> {:ok, valid_font}
+      end
+    end
+
+    html = """
+    <style>
+      @font-face {
+        font-family: "Resolver Fallback";
+        src: url("https://example.com/corrupt.ttf"), url("https://example.com/valid.ttf");
+      }
+      p { font-family: "Resolver Fallback"; }
+    </style>
+    <p>Resolver font</p>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, asset_resolver: resolver)
+    assert pdf =~ "/Subtype /Type0"
+    assert_received {:font_request, "https://example.com/corrupt.ttf"}
+    assert_received {:font_request, "https://example.com/valid.ttf"}
+  end
+
   test "render supports commas inside quoted CSS font URLs" do
     fixture_dir = Path.join(System.tmp_dir!(), "native-elixir-pdf-comma-font-url")
     font_path = Path.join(fixture_dir, "report,sans.ttf")

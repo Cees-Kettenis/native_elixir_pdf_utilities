@@ -34,7 +34,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | `generated_content_counters.html` | attribute selectors, `:not()`, odd/even and type-position selectors, `::before`, `::after`, `attr()`, named counter reset/increment/output |
 | `css_remaining_supported_values.html` | grouped selectors, source order, inline style priority, inheritance, inline flex/grid, `min()`, named colors, no-op `overflow`/`position`, side padding/borders, `vertical-align`, `line-break`, `word-wrap` |
 | `display_lists_and_inline_block.html` | inline-block layout with inline and block contents, mixed inline/block flow, hidden elements, unordered lists, ordered lists, list item spacing |
-| `fonts_and_print_media.html` | local CSS `@font-face`, print-only media cascade, embedded font output, bundled Unicode glyph fallback from a built-in font |
+| `fonts_and_print_media.html` | ordered local CSS `@font-face` source fallback, print-only media cascade, embedded font output, bundled Unicode glyph fallback from a built-in font |
 | `flex_direction_and_justification.html` | flex row, row-reverse, column, grow/shrink/basis, main-axis min/max freezing and redistribution, `justify-content`, `align-items`, `align-self`, row gaps |
 | `flex_grid_alignment.html` | flex order, wrapping, gap, alignment, grid template tracks, grid spans, row/column gaps |
 | `grid_tracks_and_placement.html` | `repeat()`, `minmax()` growth and minimum-bound overflow, auto rows/columns, `grid-column`, `grid-row`, `grid-area`, item alignment |

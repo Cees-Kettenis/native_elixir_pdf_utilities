@@ -782,11 +782,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
               String.trim(family) != "" and paths != [] and
                 Enum.all?(paths, &(is_binary(&1) and String.trim(&1) != ""))
 
-            %{family: family, data: data, weight: weight, style: style}
-            when map_size(font) == 4 and is_binary(family) and is_binary(data) and
-                   byte_size(data) > 0 and is_number(weight) and weight >= 100 and weight <= 900 and
+            %{family: family, data: candidates, weight: weight, style: style}
+            when map_size(font) == 4 and is_binary(family) and is_list(candidates) and
+                   is_number(weight) and weight >= 100 and weight <= 900 and
                    style in [:normal, :italic] ->
-              String.trim(family) != ""
+              String.trim(family) != "" and candidates != [] and
+                Enum.all?(candidates, &(is_binary(&1) and byte_size(&1) > 0))
 
             _ ->
               false

@@ -156,8 +156,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   Loads explicit TTF font options into a registry.
 
   Accepted font entries are maps, keyword lists, or `{family, path}` tuples. Map
-  and keyword entries must include `:family` and `:path`; `:weight` and `:style`
-  are optional.
+  and keyword entries must include `:family` and one or more `:path` or `:data`
+  candidates; `:weight` and `:style` are optional.
   """
   @spec load_registry(keyword()) :: {:ok, registry()} | :error
   def load_registry(opts) do
@@ -357,8 +357,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       {path, nil} ->
         with {:ok, paths} <- normalize_paths(path), do: {:ok, %{path: paths}}
 
-      {nil, data} when is_binary(data) and byte_size(data) > 0 ->
-        {:ok, %{data: data}}
+      {nil, data} ->
+        case data do
+          data when is_binary(data) and byte_size(data) > 0 ->
+            {:ok, %{data: [data]}}
+
+          candidates when is_list(candidates) ->
+            case candidates != [] and
+                   Enum.all?(candidates, &(is_binary(&1) and byte_size(&1) > 0)) do
+              true -> {:ok, %{data: candidates}}
+              false -> :error
+            end
+
+          _ ->
+            :error
+        end
 
       _ ->
         :error
@@ -458,11 +471,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
         %{path: paths} ->
           load_first_supported_font(paths)
 
-        %{data: data} ->
-          case parse_ttf(data) do
-            {:ok, parsed} -> {:ok, data, parsed}
-            _ -> :error
-          end
+        %{data: candidates} ->
+          load_first_supported_data(candidates)
       end
 
     with {:ok, data, parsed} <- result do
@@ -504,6 +514,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       case result do
         {:ok, {data, parsed}} -> {:halt, {:ok, data, parsed}}
         :error -> {:cont, :error}
+      end
+    end)
+  end
+
+  defp load_first_supported_data(candidates) do
+    Enum.reduce_while(candidates, :error, fn data, :error ->
+      case parse_ttf(data) do
+        {:ok, parsed} -> {:halt, {:ok, data, parsed}}
+        _ -> {:cont, :error}
       end
     end)
   end

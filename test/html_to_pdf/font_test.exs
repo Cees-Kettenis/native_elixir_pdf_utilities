@@ -52,6 +52,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert Font.load_registry(fonts: [%{family: "Bad", path: [ttf_font_path!(), 123]}]) == :error
   end
 
+  test "load_registry tries in-memory font candidates in order" do
+    valid_font = File.read!(ttf_font_path!())
+
+    assert {:ok, registry} =
+             Font.load_registry(
+               fonts: [%{family: "Data Fallback Fixture", data: ["not a font", valid_font]}]
+             )
+
+    assert {:ok, _families, font} =
+             Font.resolve("Data Fallback Fixture", 400, :normal, registry)
+
+    assert font.type == :embedded
+    assert font.data == valid_font
+
+    assert {:ok, _registry} =
+             Font.load_registry(fonts: [%{family: "Single Data Fixture", data: valid_font}])
+
+    assert Font.load_registry(fonts: [%{family: "Bad", data: []}]) == :error
+    assert Font.load_registry(fonts: [%{family: "Bad", data: [valid_font, 123]}]) == :error
+    assert Font.load_registry(fonts: [%{family: "Bad", data: 123}]) == :error
+  end
+
   test "load_registry accepts supported config shapes and normalizes metadata" do
     font_path = ttf_font_path!()
 

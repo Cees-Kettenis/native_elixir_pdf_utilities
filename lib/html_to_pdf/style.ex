@@ -1093,8 +1093,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
                   {:cont, {:ok, fonts ++ [font]}}
 
-                [%{data: data} | _remaining] ->
-                  font = font_face |> Map.delete(:sources) |> Map.put(:data, data)
+                [%{data: _data} | _remaining] ->
+                  candidates = Enum.map(sources, &Map.fetch!(&1, :data))
+
+                  font = font_face |> Map.delete(:sources) |> Map.put(:data, candidates)
 
                   {:cont, {:ok, fonts ++ [font]}}
 
