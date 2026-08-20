@@ -1027,6 +1027,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              )
   end
 
+  test "render supports min() background image sizes" do
+    source = "data:image/png;base64,#{png_fixture_base64()}"
+
+    html = """
+    <div style="width: 40pt; height: 20pt; background-image: url(#{source}); background-size: min(10pt,50%); background-repeat: no-repeat"></div>
+    <div style="width: 40pt; height: 20pt; background-image: url(#{source}); background-size: min(10pt, 50%); background-repeat: no-repeat"></div>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert pdf =~ "/Subtype /Image"
+  end
+
   test "render rejects aggregate decoded PNG bytes before inflating the excess image" do
     src = "data:image/png;base64,#{Base.encode64(png_fixture(2_000, 2_000))}"
     image = ~s(<img src="#{src}" style="width: 20pt">)

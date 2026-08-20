@@ -2635,9 +2635,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp resolve_size_value(value, available_size) do
     case value do
-      {:percent, ratio} when is_number(available_size) -> max(available_size * ratio, 0.0)
-      value when is_number(value) -> value
-      _ -> nil
+      {:min, sizes} when is_list(sizes) ->
+        sizes
+        |> Enum.map(&resolve_size_value(&1, available_size))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.min(fn -> nil end)
+
+      {:percent, ratio} when is_number(available_size) ->
+        max(available_size * ratio, 0.0)
+
+      value when is_number(value) ->
+        value
+
+      _ ->
+        nil
     end
   end
 
@@ -4955,8 +4966,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp resolve_background_size(size, available) do
     case size do
       :auto -> :auto
-      {:percent, ratio} -> available * ratio
-      size -> size
+      size -> resolve_size_value(size, available)
     end
   end
 

@@ -2142,7 +2142,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, Map.put(style, :background_size, :cover)}
 
       value ->
-        parts = String.split(value, ~r/\s+/u, trim: true)
+        parts = split_css_tokens(value)
 
         parsed =
           Enum.map(parts, fn part ->

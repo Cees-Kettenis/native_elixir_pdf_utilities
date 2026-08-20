@@ -3022,6 +3022,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert style_for!("div", "background-size: 25% 8pt").background_size ==
              {{:percent, 0.25}, 8.0}
 
+    assert style_for!("div", "background-size: min(10pt, 50%)").background_size ==
+             {{:min, [10.0, {:percent, 0.5}]}, :auto}
+
+    assert style_for!("div", "background-size: min(10pt, 50%) min(8pt, 50%)").background_size ==
+             {{:min, [10.0, {:percent, 0.5}]}, {:min, [8.0, {:percent, 0.5}]}}
+
     assert style_for!("div", "background-repeat: repeat").background_repeat == :repeat
     assert style_for!("div", "background-repeat: repeat-x").background_repeat == :repeat_x
     assert style_for!("div", "background-repeat: repeat-y").background_repeat == :repeat_y

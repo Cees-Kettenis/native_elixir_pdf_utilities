@@ -1837,6 +1837,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       %{
         background_size: {{:percent, 0.5}, 10.0},
         background_position: {3.0, 4.0}
+      },
+      %{
+        background_size: {{:min, [10.0, {:percent, 0.5}]}, :auto},
+        background_position: {4.0, 5.0}
       }
     ]
 
@@ -1865,7 +1869,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
              {40.0, 20.0},
              {10.0, 5.0},
              {20.0, 10.0},
-             {20.0, 10.0}
+             {20.0, 10.0},
+             {10.0, 5.0}
            ]
   end
 
