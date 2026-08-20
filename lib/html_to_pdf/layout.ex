@@ -5204,7 +5204,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     repeat = Map.get(style, :background_repeat, :repeat)
 
-    with :ok <-
+    with true <- tile_width > 0 and tile_height > 0,
+         :ok <-
            HtmlValidator.validate_background_image_tile_dimensions(
              tile_width,
              tile_height,
@@ -5235,6 +5236,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         }
       end
     else
+      false ->
+        []
+
       _error ->
         [%{type: :layout_error, reason: :background_image_tile_limit}]
     end

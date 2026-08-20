@@ -1722,6 +1722,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert Enum.all?(Enum.filter(rest, &(&1.type == :image)), &Map.has_key?(&1, :clip))
   end
 
+  test "layout omits background image tiles with a zero dimension" do
+    children =
+      Enum.map([{0.0, 0.0}, {0.0, :auto}, {:auto, 0.0}], fn background_size ->
+        style =
+          block_style()
+          |> Map.merge(%{
+            width: 30.0,
+            height: 20.0,
+            margin_after: 0.0,
+            background_color: {1, 0, 0},
+            background_image: image_fixture(10.0, 5.0),
+            background_size: background_size,
+            background_position: {{:percent, 0.0}, {:percent, 0.0}},
+            background_repeat: :repeat
+          })
+
+        %{type: :element, style: style, children: []}
+      end)
+
+    assert {:ok, layout_tree} =
+             Layout.layout(document(children), page_size: {100, 100}, margin: 0)
+
+    assert Enum.count(layout_tree.boxes, &(&1.type == :rect)) == 3
+    refute Enum.any?(layout_tree.boxes, &(&1.type == :image))
+  end
+
   test "layout resolves absolute descendants against the nearest positioned ancestor" do
     html = """
     <div style="position: relative; width: 100pt; height: 60pt; background: red">
