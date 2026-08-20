@@ -1,10 +1,13 @@
-# HTML to PDF Examples
+# HTML to PDF examples
 
-`NativeElixirPdfUtilities.HtmlToPdf` renders a strict, document-oriented HTML/CSS subset to native PDF bytes. These examples show the intended calling style for reports, print templates, labels, and operational documents.
+`NativeElixirPdfUtilities.HtmlToPdf` renders its documented HTML/CSS subset to
+PDF bytes. The examples cover reports, print templates, labels, and operational
+documents.
 
-For the exact compatibility surface, see [HTML to PDF Compatibility](html-to-pdf-compatibility.md).
+For the exact support list, see
+[HTML to PDF compatibility](html-to-pdf-compatibility.md).
 
-## Basic Render
+## Basic render
 
 ```elixir
 alias NativeElixirPdfUtilities.HtmlToPdf
@@ -85,9 +88,9 @@ alias NativeElixirPdfUtilities.HtmlToPdf
   """)
 ```
 
-## Render a File
+## Render a file
 
-Use `render_file/3` when the HTML already lives on disk and the result should be written directly.
+Use `render_file/3` to read HTML from disk and write the PDF to a file.
 
 ```elixir
 :ok =
@@ -101,12 +104,14 @@ Use `render_file/3` when the HTML already lives on disk and the result should be
   )
 ```
 
-Configured stylesheets are loaded before embedded `<style>` tags. This lets shared print CSS define defaults while the template keeps document-specific overrides close to the markup.
+Configured stylesheets load before embedded `<style>` tags. Shared print CSS
+can define defaults, while each template keeps its overrides beside the markup.
+
 Use `{:css, css}` for inline configured CSS and `{:file, path}` for a local
 stylesheet. Bare strings are rejected so the renderer never has to guess
 whether a value is CSS or a filesystem path.
 
-## Running Headers, Footers, and Page Numbers
+## Running headers, footers, and page numbers
 
 Page furniture is disabled unless `:page_furniture` is supplied. Reserve enough
 page margin for the visible header and footer:
@@ -181,11 +186,13 @@ an 8,192 pixel per-axis limit, and a 16,777,216 total-pixel raster limit.
   )
 ```
 
-Remote asset fetching is intentionally not supported. The renderer should be deterministic on the server and should not depend on network availability during PDF generation.
+The renderer does not fetch remote assets. Supply asset bytes or keep files
+beneath `:base_url` so PDF generation does not depend on network access.
 
 ## Fonts
 
-Built-in PDF fonts are available without setup. For Unicode-heavy documents, pass explicit TrueType fonts or declare a local font in CSS.
+Built-in PDF fonts are available without setup. For Unicode-heavy documents,
+pass explicit TrueType fonts or declare a local font in CSS.
 
 ```elixir
 {:ok, pdf} =
@@ -197,7 +204,8 @@ Built-in PDF fonts are available without setup. For Unicode-heavy documents, pas
   )
 ```
 
-Explicit font registration avoids relying on OS font discovery. That makes production output easier to reproduce across containers and hosts.
+Explicit registration avoids OS font discovery, so installed system fonts do
+not change font selection between containers or hosts.
 
 CSS declarations use the same registry and can resolve local URLs beneath
 `:base_url`:
@@ -223,11 +231,12 @@ CSS declarations use the same registry and can resolve local URLs beneath
 
 Document-selected font URLs must remain beneath `:base_url` and cannot traverse
 symlinks. WOFF/WOFF2 and CFF-flavored OpenType fonts are unsupported; convert
-them to TTF for predictable embedding.
+them to TTF before rendering.
 
-## PDF Metadata
+## PDF metadata
 
-Set common PDF document information under `:metadata`. Calendar structs and ISO 8601 strings are accepted for dates.
+Set PDF document information under `:metadata`. Dates accept calendar structs
+and ISO 8601 strings.
 
 ```elixir
 {:ok, pdf} =
@@ -242,11 +251,13 @@ Set common PDF document information under `:metadata`. Calendar structs and ISO 
   )
 ```
 
-When `:metadata` does not contain `:title`, the renderer uses the first non-empty HTML `<title>`. An explicit metadata title always wins.
+When `:metadata` has no `:title`, the renderer uses the first non-empty HTML
+`<title>`. An explicit metadata title takes precedence.
 
-## Static Form Records
+## Static form records
 
-Supported form controls render as visible, non-editable PDF content. They do not create PDF form fields or widget annotations.
+Supported form controls render as visible, non-editable PDF content. They do
+not create PDF form fields or widget annotations.
 
 ```elixir
 html = """
@@ -267,17 +278,23 @@ Signature required</textarea>
 {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html)
 ```
 
-Text inputs display their `value`. Selects display the selected option, or the first option when no `selected` attribute is present. Textarea child text takes precedence over its optional `value` fallback. `checked`, `selected`, and `disabled` may use normal valueless HTML syntax. Disabled controls have no automatic visual treatment; use a class or an attribute selector such as `input[disabled]` when a disabled-looking print style is required.
+Text inputs display their `value`. Selects display the selected option, or the
+first option when no `selected` attribute is present. Textarea child text takes
+precedence over its optional `value`. The `checked`, `selected`, and `disabled`
+attributes may use valueless HTML syntax. Disabled controls have no built-in
+visual treatment. Use a class or a selector such as `input[disabled]` to style
+them.
 
-## Styling Choices
+## Styling choices
 
-The renderer is intentionally strict. Unsupported CSS does not get ignored because silent fallback can create PDFs that look valid but are missing important layout or print information.
+The renderer rejects unknown declarations and unsupported CSS values. It does
+not silently drop rules that may affect layout or print output.
 
 Preferred template patterns:
 
 - Use explicit `@page` size and margins for print templates.
 - Use tables for tabular financial or item data.
-- Use grid or flex for predictable document header and card layouts.
+- Use grid or flex for document headers and card layouts.
 - Use explicit `width`, `height`, `min-height`, and padding where exact print dimensions matter.
 - Keep images local or use data URIs.
 - Prefer simple selectors and document-oriented CSS over browser app CSS.
@@ -318,9 +335,9 @@ Useful print CSS:
 }
 ```
 
-## Error Handling
+## Error handling
 
-`render/2` returns a broad error reason plus a diagnostic detail map when rendering input is invalid.
+When input is invalid, `render/2` returns a reason atom and a diagnostic map.
 
 ```elixir
 case HtmlToPdf.render(html, page_size: :a4) do
@@ -378,4 +395,5 @@ Example HTML failure:
   """)
 ```
 
-The broad reason is intended for program flow. The detail map is intended for logs, UI feedback, and fixing templates.
+Use the reason atom for program flow. Use the detail map for logs, UI feedback,
+and template fixes.

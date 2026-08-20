@@ -1,22 +1,21 @@
-# PDF Reader
+# PDF reader
 
-`NativeElixirPdfUtilities.Pdf.Reader` is the shared document layer used by PDF
-utilities that need to understand existing files. It sits above
-`NativeElixirPdfUtilities.Tokenizer`:
+`NativeElixirPdfUtilities.Pdf.Reader` parses existing PDF documents for the
+other PDF utilities. It builds on `NativeElixirPdfUtilities.Tokenizer`:
 
 - The tokenizer converts PDF bytes into lexical tokens. It does not decide
   which revision of an object is active or resolve references.
 - The reader starts at the final `startxref`, follows the document's
-  cross-reference revisions, and loads the active objects. It then delegates
-  reusable reference, stream, catalog, and page-tree semantics to the layered
-  PDF validator and returns its compatibility document projection.
+  cross-reference revisions, and loads the active objects. The PDF validator
+  then checks references, streams, the catalog, and the page tree before the
+  reader returns the document map.
 
-Application code should normally use `NativeElixirPdfUtilities.Text` or
-`NativeElixirPdfUtilities.Merge`. The reader is public for inspection and for
-building additional PDF utilities on the same parsed document model.
+For text extraction or merging, use `NativeElixirPdfUtilities.Text` or
+`NativeElixirPdfUtilities.Merge`. Use the reader to inspect parsed documents or
+build another PDF utility on the same document model.
 
-`Reader.read_validated/1` retains the complete shared validation context for a
-PDF-consuming feature. `Reader.read/1` continues to return the existing map
+`Reader.read_validated/1` returns the full validation context needed by another
+PDF operation. `Reader.read/1` returns the existing map
 with `:binary`, `:objects`, `:trailer`, `:pages`, and `:xref` fields.
 
 ## Supported object structures
@@ -34,8 +33,8 @@ The reader supports:
   `/Count` validation, and descendant-count consistency checks
 
 The returned `:xref` map describes the active entry for each object number.
-The returned `:objects` map is keyed by `{object_number, generation}`. Free
-entries and superseded revisions are intentionally absent from `:objects`.
+The returned `:objects` map is keyed by `{object_number, generation}`. It omits
+free entries and superseded revisions.
 
 ## Streams
 
@@ -78,10 +77,10 @@ authoritative.
 
 ## Shared utility behavior
 
-Text extraction and merging both consume the prepared shared validation
-context. This means they use the same active revision, compressed-object
+Text extraction and merging both use the same validated context. They share
+the active revision, compressed-object
 handling, stream validation, page-tree traversal, encryption detection, and
 malformed-input diagnostics. New PDF inspection or transformation utilities
 should use `PdfValidator.validate_pdf/1` or `Reader.read_validated/1` instead of
-scanning the complete token stream for indirect objects. See
-[Layered PDF Validation](pdf-validation.md) for invariant ownership.
+scanning every token for indirect objects. See
+[Layered PDF validation](pdf-validation.md) for invariant ownership.

@@ -1,8 +1,8 @@
-# Configurable Resource Limits
+# Configurable resource limits
 
-Native Elixir PDF Utilities applies bounded resource and complexity limits to
-untrusted PDF, HTML, CSS, image, SVG, and font data. The built-in values remain
-active unless the importing application explicitly overrides them.
+Native Elixir PDF Utilities limits the resources used to process untrusted PDF,
+HTML, CSS, image, SVG, and font data. The built-in values apply unless the
+application overrides them.
 
 Configure limits under the library's OTP application in `config/config.exs` or
 `config/runtime.exs`:
@@ -17,8 +17,8 @@ config :native_elixir_pdf_utilities,
 
 Omitted keys retain their built-in defaults. Configuration is validated when
 the library application starts. Unknown keys, repeated keys, non-positive
-values, excessively large integers, and inconsistent aggregate limits prevent
-the application from starting and return an actionable configuration error.
+values, excessively large integers, and inconsistent aggregate limits stop the
+application from starting. The startup error identifies the invalid setting.
 
 Limits are process-wide and immutable for one application instance. Restart
 the application after changing them. Public PDF and rendering options cannot

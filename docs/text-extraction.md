@@ -1,6 +1,6 @@
-# Text Extraction
+# Text extraction
 
-`NativeElixirPdfUtilities.Text` provides two related extraction surfaces:
+`NativeElixirPdfUtilities.Text` has two result formats:
 
 - `extract/2` and `extract_file/2` return reconstructed strings for convenient
   reading and searching.
@@ -8,9 +8,9 @@
   operations for applications that need to interpret rows, columns, tables, or
   another document-specific layout.
 
-PDF files normally contain drawing and text-positioning operations rather than
-semantic tables. The library exposes reliable PDF-level information; callers
-remain responsible for deciding what that information means in their domain.
+This API reads drawing and text-positioning operations, not semantic tables.
+It returns PDF-level information. Callers decide what that information means
+for their documents.
 No extraction function performs OCR.
 
 ## Positioned text
@@ -66,8 +66,8 @@ traversed in `/Contents` order. A Form XObject is traversed where its `Do`
 operator occurs, including nested and repeated Forms, so each emitted span has
 a deterministic execution index.
 
-For convenience, callers can request the same best-effort visual line grouping
-used by string layout extraction:
+Callers can request the same heuristic visual line grouping used by string
+layout extraction:
 
 ```elixir
 Text.extract_spans(pdf, order: :visual)
@@ -110,12 +110,11 @@ PDF containing only empty pages or non-text content returns a positioned `:ok`
 result with empty span lists, while the string API returns
 `:no_extractable_text`.
 
-## Preservation boundary
+## What positioned extraction preserves
 
-Positioned extraction does not claim a lossless representation of every PDF
-text feature. Its guarantee is narrower: every non-empty text operand that the
-strict decoder successfully maps to Unicode is retained, even when its render
-mode does not paint text.
+Positioned extraction is not a lossless representation of every PDF text
+feature. It retains every non-empty text operand that the strict decoder maps
+to Unicode, even when its render mode does not paint text.
 
 The result does not expose internal reader or font structs. It also does not
 provide OCR, semantic table cells, glyph outlines, exact ink bounds,
@@ -136,8 +135,8 @@ executed instruction uses to 1,000,000, and Form expansions to 10,000. Exceeding
 one of these operation-wide limits returns `:resource_limit_exceeded` rather
 than a partial result.
 
-Use the positioned API for domain-specific interpretation and the string API
-when a best-effort readable projection is sufficient.
+Use the positioned API when document layout matters. Use the string API when
+readable text is enough.
 
 ## Public contract
 

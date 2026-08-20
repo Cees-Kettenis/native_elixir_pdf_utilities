@@ -1,10 +1,10 @@
-# PDF Tokenizer
+# PDF tokenizer
 
 `NativeElixirPdfUtilities.Tokenizer` converts a PDF byte stream into lexical
 tokens without resolving the document structure. It is useful for inspecting
-PDF syntax or building advanced PDF tooling. Applications that need active
+PDF syntax or building custom PDF tools. Applications that need active
 objects, decoded streams, page traversal, text extraction, or merging should
-normally use `NativeElixirPdfUtilities.Pdf.Reader`,
+use `NativeElixirPdfUtilities.Pdf.Reader`,
 `NativeElixirPdfUtilities.Text`, or `NativeElixirPdfUtilities.Merge` instead.
 
 ## Tokenizing a binary

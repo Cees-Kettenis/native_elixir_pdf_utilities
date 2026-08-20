@@ -1,10 +1,16 @@
-# HTML to PDF Compatibility
+# HTML to PDF compatibility
 
-`NativeElixirPdfUtilities.HtmlToPdf` is a native document renderer for predictable server-side PDFs such as reports, invoices, labels, statements, and simple generated documents. It is not a browser engine and does not claim full browser compatibility.
+`NativeElixirPdfUtilities.HtmlToPdf` renders the documented HTML/CSS subset for
+reports, invoices, labels, statements, and other server-generated documents.
+It is not a browser engine and does not claim full browser compatibility.
 
-For runnable templates, styling patterns, and caller-side error handling examples, see [HTML to PDF Examples](html-to-pdf-examples.md).
+For runnable templates, styling patterns, and error handling, see
+[HTML to PDF examples](html-to-pdf-examples.md).
 
-Malformed document structure and unsupported HTML/CSS features are rejected instead of being silently approximated. Unsupported text graphemes are visibly replaced with U+FFFD by default; set `unsupported_glyphs: :error` when strict font-coverage diagnostics are required. Rendering failures return a broad reason with diagnostic detail, for example:
+The renderer rejects malformed document structure and unsupported HTML/CSS
+instead of guessing. By default, it replaces unsupported text graphemes with a
+visible U+FFFD. Set `unsupported_glyphs: :error` to return a font-coverage
+diagnostic instead. Rendering failures include a reason atom and diagnostic map:
 
 ```elixir
 {:error,
@@ -19,9 +25,11 @@ Malformed document structure and unsupported HTML/CSS features are rejected inst
   }}}
 ```
 
-The detail map always includes `:stage`, `:reason`, and `:message`. It includes `:line`, `:column`, and `:source` when the renderer can locate the source snippet. CSS is strict: unknown declarations and unsupported values fail with `:invalid_css` rather than being ignored.
+The map always includes `:stage`, `:reason`, and `:message`. It also includes
+`:line`, `:column`, and `:source` when the renderer can locate the source.
+Unknown declarations and unsupported CSS values return `:invalid_css`.
 
-## HtmlToPdf Options
+## `HtmlToPdf` options
 
 | Option            | Supported values                                                                | Notes                                                                                                                                                                     |
 | ----------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -29,13 +37,13 @@ The detail map always includes `:stage`, `:reason`, and `:message`. It includes 
 | `:margin`       | Number, one-to-four-value CSS length string, or side map | Numbers are uniform PDF-point margins. CSS strings follow top/right/bottom/left shorthand rules. Maps accept `:top`, `:right`, `:bottom`, and `:left`; omitted sides are zero. |
 | `:base_url`     | Local path or `file://` URL                                                   | Authorization root for document-selected image and embedded stylesheet font paths. Relative and absolute paths must remain beneath it; traversal and symlink components are rejected. Remote fetching is unsupported. |
 | `:stylesheets`  | Tagged inline CSS and local files: `{:css, css}` or `{:file, path}`             | Configured stylesheets load before embedded `<style>` tags; bare strings are rejected so file access is always explicit.                                                |
-| `:default_font` | Font family or fallback list                                                    | Defaults to`"Helvetica"`. Unsupported glyphs are resolved through configured fonts and the bundled DejaVu Sans faces before layout.                                                                                                    |
-| `:fonts`        | `%{family: ..., path: ...}` maps, keyword lists, or `{family, path}` tuples | TrueType fonts.`:weight` and `:style` are optional. OpenType files using TrueType outlines share this path; CFF-flavored OTF is unsupported. Configured faces participate in automatic glyph fallback. |
+| `:default_font` | Font family or fallback list                                                    | Defaults to `"Helvetica"`. Unsupported glyphs are resolved through configured fonts and the bundled DejaVu Sans faces before layout.                                                                                                    |
+| `:fonts`        | `%{family: ..., path: ...}` maps, keyword lists, or `{family, path}` tuples | TrueType fonts. `:weight` and `:style` are optional. OpenType files using TrueType outlines share this path; CFF-flavored OTF is unsupported. Configured faces participate in automatic glyph fallback. |
 | `:metadata`     | Keyword list or map                                                              | Supports `:title`, `:author`, `:subject`, `:keywords`, `:creation_date`, and `:modification_date`. Dates accept calendar structs or ISO 8601 strings. An HTML `<title>` is the default PDF title. |
 | `:page_furniture` | Keyword list or map with `:header` and `:footer` | Opt-in running page furniture. Each position accepts HTML or `:default`, `:first`, `:odd`, and `:even` variants. Omitted, `nil`, and `false` furniture is disabled. |
 | `:unsupported_glyphs` | `:replace` or `:error` | Defaults to `:replace`, which substitutes U+FFFD for each grapheme absent from every candidate font. `:error` returns the strict `:unsupported_glyph` diagnostic. |
 
-## Running Headers, Footers, and Page Numbers
+## Running headers, footers, and page numbers
 
 Running page furniture is an opt-in rendering option:
 
@@ -60,11 +68,11 @@ accepted. Main-document embedded `<style>` rules are not automatically copied
 into a separate furniture template, so shared rules should be supplied through
 `:stylesheets` or included in the furniture HTML.
 
-Variant selection is deterministic:
+Variant selection follows this order:
 
-1. `:first` is selected for page one when present.
-2. Otherwise, a matching `:odd` or `:even` variant is selected when present.
-3. Otherwise, `:default` is selected.
+1. Use `:first` for page one when present.
+2. Otherwise, use the matching `:odd` or `:even` variant when present.
+3. Otherwise, use `:default`.
 
 A `false` or `nil` variant renders nothing. First-page-only furniture uses
 `[default: false, first: template]`; except-first-page furniture uses
@@ -74,14 +82,13 @@ A `false` or `nil` variant renders nothing. First-page-only furniture uses
 to the final total page count. Substitution happens before each furniture
 template is laid out.
 
-Furniture is placed inside the existing page margins and does not change body
-pagination. Headers must fit the top margin and footers must fit the bottom
-margin. If a template does not fit,
-rendering returns an `:invalid_layout` diagnostic describing the furniture
-position, measured height, and available margin. Reserve enough `@page` or
-`:margin` space for the header and footer.
+The renderer places furniture inside the existing page margins without changing
+body pagination. Headers must fit the top margin, and footers must fit the
+bottom margin. If a template does not fit, rendering returns an
+`:invalid_layout` diagnostic with the furniture position, measured height, and
+available margin. Reserve enough `@page` or `:margin` space for both.
 
-## HTML Support Matrix
+## HTML support matrix
 
 | Area              | Supported                                                                                                                                                           |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -90,12 +97,12 @@ position, measured height, and available margin. Reserve enough `@page` or
 | Inline text       | `span`, `strong`, `b`, `em`, `i`, `a`, `br`; WHATWG named and numeric HTML character references are decoded once, including multi-code-point references and non-breaking spaces |
 | Lists             | `ul`, `ol`, `li`                                                                                                                                              |
 | Tables            | `table`, `caption`, `colgroup`, `col`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td`                                                                    |
-| Images            | Strict`img` with required `src`                                                                                                                                 |
+| Images            | Strict `img` with required `src`                                                                                                                                 |
 | Static forms      | `input` types `text`, `checkbox`, and `radio`; `select` with text-only `option` children; text-only `textarea`; and `button` with text and basic inline emphasis. Controls become ordinary visible PDF content, never interactive fields. |
 | Attributes        | Global `id`, `class`, `style`, `title`, `role`, `data-*`, and `aria-*`; `lang` on `html`, metadata attributes on `meta`, `href` on links, `src`/`alt` on images, `span` on column elements, `colspan`/`rowspan` on cells, `scope` on `th`, and the documented form `type`, `value`, `name`, `checked`, `selected`, and `disabled` attributes |
 | Links             | `https://`, `http://`, and `mailto:` URI annotations                                                                                                          |
 
-## CSS Support Matrix
+## CSS support matrix
 
 | Area                  | Supported                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -113,18 +120,49 @@ position, measured height, and available margin. Reserve enough `@page` or
 | Flexbox subset        | `flex-direction`, `flex-wrap`, `gap`, `row-gap`, `column-gap`, `justify-content`, `align-items`, `align-self`, `justify-self`, `order`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex`, main-axis `min-width`/`max-width` and `min-height`/`max-height` freezing and redistribution                                                                                                                                                                                                                                                                                      |
 | Grid subset           | `grid-template-columns`, `grid-template-rows`, `grid-auto-columns`, `grid-auto-rows`, `repeat()`, `minmax()` with absolute-length or `auto` minimums and absolute-length, `auto`, or `fr` maximums, minimum-bound overflow, `grid-column`, `grid-column-start`, `grid-column-end`, `grid-row`, `grid-row-start`, `grid-row-end`, `grid-area`, `gap`, `row-gap`, `column-gap`, `justify-items`, `justify-self`, `align-items`, `justify-content`, `align-content`                                                                                                    |
 
-## Layout Details
+## Layout details
 
-Block, list, table, flexbox, and grid layout are deterministic and intentionally narrower than browser layout. Tables use deterministic column sizing based on declared widths, available table width, and intrinsic unbreakable content. Column hints may be declared with ordered `colgroup`/`col` elements and positive `span` attributes. `table-layout: fixed` uses those hints and first-row cell widths instead of later intrinsic content. A row with fewer cells leaves its trailing declared columns empty; only an explicit `colspan` expands a cell across them. Separate-border tables honor one- or two-value `border-spacing`; collapsed-border tables ignore it. Browser-compatible cell defaults are transparent backgrounds, no border, and one CSS pixel of padding; visible borders and backgrounds must be declared in CSS. Explicit table heights distribute remaining height across rows, with percentage-height rows receiving the available remainder, and percentage-height nested tables resolve against their containing cell. Tables also support cell backgrounds, `colspan`, `rowspan`, repeated multi-row headers, nested collapsed-border paint ordering, and missing trailing cells in shorter rows. Flexbox and grid support document-oriented text, images, and nested block-card items, not the full browser algorithms.
+The renderer implements the documented block, list, table, flexbox, and grid
+subset, not the full browser algorithms.
 
-Static form controls use deterministic print styling and participate in block, table, flex, and grid layout. Text inputs show `value`; checkbox and radio state follows the presence of `checked`; selects show the explicitly `selected` option or the first option when none is marked; textarea child text takes precedence over its `value` fallback; and button child content takes precedence over its `value` fallback. A single select may contain at most one selected option. Boolean `checked`, `selected`, and `disabled` attributes accept both valueless HTML syntax and quoted values. `disabled` has no special built-in appearance, but remains available to attribute selectors such as `[disabled]`.
+Tables calculate column widths from declared widths, available table width, and
+intrinsic unbreakable content. Ordered `colgroup` and `col` elements with
+positive `span` attributes may supply column hints. With `table-layout: fixed`,
+the renderer uses those hints and first-row cell widths instead of intrinsic
+content from later rows. A short row leaves its trailing declared columns
+empty. Only an explicit `colspan` expands a cell across those columns.
 
-These controls produce only text and drawing operations. They do not create PDF AcroForm fields, widget annotations, focus behavior, submission behavior, or editable values.
+Separate-border tables honor one- or two-value `border-spacing`; collapsed
+borders ignore it. Cells default to transparent backgrounds, no border, and
+one CSS pixel of padding. Declare visible borders and backgrounds in CSS.
+Explicit table heights distribute remaining height across rows. Percentage
+row heights receive the available remainder, and percentage-height nested
+tables resolve against their containing cell. Tables also support cell
+backgrounds, `colspan`, `rowspan`, repeated multi-row headers, nested
+collapsed-border paint order, and missing trailing cells. Flexbox and grid
+support text, images, and nested block cards within the documented subset.
 
-Pagination supports automatic page breaks, manual page breaks around complete block boxes and their children, page margins, line-level paragraph fragmentation, best-effort keep-together behavior for `break-inside: avoid`, and repeated table headers when table bodies continue across pages. An avoided paragraph that is taller than the printable page is fragmented so that all text remains visible.
+Static form controls participate in block, table, flex, and grid layout. Text
+inputs show `value`. Checkbox and radio states follow the presence of
+`checked`. Selects show the selected option, or the first option when none is
+selected. Textarea and button child content take precedence over each
+control's `value`. A select may contain at most one selected option.
 
-Images support 8-bit, non-interlaced RGB and RGBA PNGs, JPEGs, and SVG data URIs,
-plus the same PNG subset and JPEGs from paths authorized beneath `base_url`.
+Boolean `checked`, `selected`, and `disabled` attributes accept valueless HTML
+syntax and quoted values. The renderer gives `disabled` no built-in appearance,
+but CSS can target it with selectors such as `[disabled]`.
+
+These controls produce only text and drawing operations. They do not create PDF
+AcroForm fields, widget annotations, focus behavior, submission behavior, or
+editable values.
+
+Pagination supports automatic breaks, manual breaks around complete block boxes
+and their children, page margins, line-level paragraph fragmentation, and
+repeated table headers. It tries to keep `break-inside: avoid` content together.
+A paragraph taller than the printable page still fragments so no text is lost.
+
+Images support 8-bit, non-interlaced RGB and RGBA PNGs, JPEGs, and SVG data URIs.
+Paths authorized beneath `:base_url` support the same PNG subset and JPEGs.
 Replaced images honor explicit box dimensions, `object-fit`, and
 `object-position`. Background images support explicit sizes, `cover`,
 `contain`, repeat modes, and positioned painting inside the element box.
@@ -133,40 +171,76 @@ Relative boxes remain in normal flow and establish containing blocks for
 absolute descendants. Absolute boxes leave normal flow, resolve their inset
 offsets against the nearest positioned ancestor or page content box, and paint
 in integer `z-index` order. Fixed positioning is not supported.
-SVG data URIs are rasterized to PNG with the
-lightweight `resvg` NIF using local in-process rendering. SVG input is limited
-to 5 MB, 8,192 pixels per axis, and 16,777,216 total raster pixels; excess input
-returns a `:resource_limit_exceeded` diagnostic before native raster allocation.
-Remote URLs, traversal, and symlink components are rejected. Greyscale, indexed-color, 16-bit, and
-Adam7-interlaced PNG decoding is scheduled for `0.21.0`.
 
-Fonts support built-in PDF fonts (`Helvetica`, `Courier`, `Times-Roman` and their bold/italic variants), explicit font options, local CSS `@font-face` declarations, and bundled DejaVu Sans regular, bold, oblique, and bold-oblique fallback faces. Document-selected `@font-face` URLs must remain beneath `:base_url`; explicitly configured stylesheet files resolve their own trusted relative font paths. HTTP(S), data URLs, traversal, symlink components, `local(...)`-only sources, WOFF, WOFF2, and CFF-flavored OpenType fonts are rejected. Convert unsupported web fonts to TTF before rendering.
+The `resvg` NIF rasterizes SVG data URIs to PNG in the local process. SVG input
+is limited to 5 MB, 8,192 pixels per axis, and 16,777,216 total raster pixels.
+Excess input returns `:resource_limit_exceeded` before native raster allocation.
+Remote URLs, traversal, and symlink components are rejected. Greyscale,
+indexed-color, 16-bit, and Adam7-interlaced PNG decoding is scheduled for
+`0.21.0`.
 
-Font fallback is resolved once before layout so wrapping and pagination use the final glyph metrics. For each Unicode grapheme, the renderer tries the selected CSS face, the remaining requested family list, configured font faces in declaration order, and then the closest bundled DejaVu Sans weight/style. Adjacent graphemes using the same face remain one text run. Invalid UTF-8 returns `:invalid_encoding`. By default, a grapheme absent from every candidate is replaced with U+FFFD using an available fallback face; `unsupported_glyphs: :error` instead returns `:unsupported_glyph` with the original grapheme and codepoints in the diagnostic.
+Fonts include the built-in PDF families `Helvetica`, `Courier`, and
+`Times-Roman`, with their bold and italic variants. The renderer also accepts
+explicit font options and local CSS `@font-face` declarations. Bundled DejaVu
+Sans regular, bold, oblique, and bold-oblique faces handle glyph fallback.
 
-Embedded fonts use TrueType glyph widths, Type0/CID PDF resources, and basic Unicode mapping. Glyph availability does not imply complex shaping: Arabic, Indic scripts, Thai, emoji sequences, bidirectional layout, and other advanced typography remain unsupported.
+Document-selected `@font-face` URLs must remain beneath `:base_url`.
+Configured stylesheet files resolve their own trusted relative font paths.
+The renderer rejects HTTP(S), data URLs, traversal, symlink components,
+`local(...)`-only sources, WOFF, WOFF2, and CFF-flavored OpenType fonts. Convert
+unsupported web fonts to TTF before rendering.
 
-## Unsupported Features
+The renderer resolves font fallback before layout, so wrapping and pagination
+use the final glyph metrics. For each Unicode grapheme, it tries the selected
+CSS face, the remaining requested families, configured faces in declaration
+order, and then the closest bundled DejaVu Sans weight and style. Adjacent
+graphemes that use the same face remain one text run.
 
-These features are intentionally outside the current renderer boundary:
+Invalid UTF-8 returns `:invalid_encoding`. By default, the renderer replaces a
+grapheme missing from every candidate with U+FFFD in an available fallback
+face. Set `unsupported_glyphs: :error` to return `:unsupported_glyph` with the
+original grapheme and codepoints.
+
+Embedded fonts use TrueType glyph widths, Type0/CID PDF resources, and basic
+Unicode mapping. Glyph availability does not imply complex shaping. Arabic,
+Indic scripts, Thai, emoji sequences, bidirectional layout, and other advanced
+typography remain unsupported.
+
+## Unsupported features
+
+The renderer does not support:
 
 - JavaScript and runtime DOM behavior.
-- `script`, `canvas`, `video`, `audio`, `iframe`, interactive form behavior, and input types other than `text`, `checkbox`, and `radio`.
+- `script`, `canvas`, `video`, `audio`, `iframe`, interactive form behavior, and
+  input types other than `text`, `checkbox`, and `radio`.
 - Remote asset fetching.
-- CSS floats, fixed positioning, transforms, animations, media queries beyond the documented print subset, pseudo-elements beyond `::before`/`::after`, and pseudo-classes beyond the documented selector subset. Repeated page furniture uses the explicit `:page_furniture` option.
-- Nested `counters(...)`, counter styles, list-marker counter integration, and CSS `counter(page)`/`counter(pages)`. Repeated page numbering uses the explicit page-furniture `{{page}}` and `{{pages}}` tokens.
+- CSS floats, fixed positioning, transforms, animations, media queries beyond
+  the documented print subset, pseudo-elements beyond `::before` and
+  `::after`, and pseudo-classes beyond the documented selector subset.
+  Repeated page furniture uses the `:page_furniture` option.
+- Nested `counters(...)`, counter styles, list-marker counter integration, and
+  CSS `counter(page)` or `counter(pages)`. Repeated page numbering uses the
+  page-furniture `{{page}}` and `{{pages}}` tokens.
 - Full browser-compatible table, flexbox, and grid algorithms.
 - Complex text shaping and bidirectional layout.
 
-## Validation Expectations
+## Validation expectations
 
-Automated tests cover parsing, CSS cascade, layout dimensions, pagination, PDF object output, images, fonts, links, and end-to-end rendering. Human visual validation is still required before accepting broad layout changes because PDF layout regressions can be visually obvious while remaining structurally valid.
+Automated tests cover parsing, CSS cascade, layout dimensions, pagination, PDF
+objects, images, fonts, links, and complete renders. Review rendered pages when
+changing layout. A PDF can remain structurally valid while its layout is visibly
+wrong.
 
-Browser parity tests are available as an explicit, slower conformance suite. They render small HTML fixtures with Chromium, render the same fixtures with the native renderer, rasterize both PDFs with `pdftoppm`, and compare page pixels with a tolerance for font antialiasing.
+The slower browser parity suite renders each fixture with Chromium and the
+native renderer. It rasterizes both PDFs with `pdftoppm`, then compares page
+pixels with a tolerance for font antialiasing.
 
-For the current fixture-by-feature coverage audit, see [HTML to PDF Browser Parity Coverage](html-to-pdf-browser-parity-coverage.md).
+For the fixture-by-feature audit, see
+[HTML to PDF browser parity coverage](html-to-pdf-browser-parity-coverage.md).
 
-The parity suite is excluded from normal `mix test` runs because it requires local browser tooling. Run it when changing CSS, layout, table, flexbox, grid, border, page sizing, font, image, or pagination behavior:
+The parity suite is excluded from normal `mix test` runs because it requires
+local browser tooling. Run it when changing CSS, layout, tables, flexbox, grid,
+borders, page sizing, fonts, images, or pagination:
 
 ```bash
 CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity
@@ -174,11 +248,12 @@ CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity
 
 Set `PDFTOPPM_BIN` if `pdftoppm` is not on `PATH`.
 
-New HTML-to-PDF features must include focused unit coverage in the relevant parser, style, layout, pagination, or PDF writer tests. If the feature changes visible rendering, add or update a browser parity fixture and keep the parity suite green before documenting the feature as supported.
+New HTML-to-PDF behavior needs focused unit coverage in the relevant parser,
+style, layout, pagination, or PDF writer tests. If it changes visible output,
+add or update a browser parity fixture before documenting support.
 
-The complete, current synthetic and realistic fixture catalogs live in
-[HTML to PDF Browser Parity Coverage](html-to-pdf-browser-parity-coverage.md).
-That guide also maps each documented support area to its Chromium comparison
-fixture. The artifact directory for a failure is reported under
-`tmp/browser_parity/<fixture-name>/` and contains the Chromium and native PDFs
-plus rasterized PPM pages for inspection.
+The synthetic and production fixture catalogs are in
+[HTML to PDF browser parity coverage](html-to-pdf-browser-parity-coverage.md).
+That guide maps each documented support area to a Chromium fixture. A failed
+comparison writes Chromium and native PDFs, plus rasterized PPM pages, under
+`tmp/browser_parity/<fixture-name>/`.

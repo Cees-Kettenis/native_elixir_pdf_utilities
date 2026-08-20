@@ -1,33 +1,32 @@
 # Documentation
 
-Native Elixir PDF Utilities provides native building blocks for reading,
-merging, extracting text from, and generating PDF documents. The guides below
-describe the supported behavior and the boundaries that application code
-should account for.
+Native Elixir PDF Utilities reads, merges, extracts text from, and generates
+PDF documents. These guides document what each public API supports and which
+work remains the caller's responsibility.
 
 ## Reading and manipulating PDFs
 
-- [PDF Tokenizer](pdf-tokenizer.md) explains lexical tokens, byte spans, stream
+- [PDF tokenizer](pdf-tokenizer.md) explains lexical tokens, byte spans, stream
   length hints, and the boundary between tokenization and document parsing.
-- [PDF Reader](pdf-reader.md) describes the shared document model, supported
+- [PDF reader](pdf-reader.md) describes the shared document model, supported
   cross-reference and object structures, stream decoding, limits, and errors.
-- [Text Extraction](text-extraction.md) covers reconstructed strings and
+- [Text extraction](text-extraction.md) covers reconstructed strings and
   page-preserving positioned spans, including ordering, coordinates, font
   context, and rendering modes.
-- [PDF Merging](pdf-merging.md) covers supported inputs, output behavior,
+- [PDF merging](pdf-merging.md) covers supported inputs, output behavior,
   diagnostics, and document-level features that are not preserved.
 - [Diagnostics](diagnostics.md) documents the shared recoverable error contract
   used by the public APIs.
-- [Configurable Resource Limits](resource-limits.md) lists every tunable
+- [Configurable resource limits](resource-limits.md) lists every tunable
   parsing, rendering, extraction, merge, and cache ceiling and its default.
 
 ## Generating PDFs from HTML
 
-- [HTML to PDF Examples](html-to-pdf-examples.md) provides runnable rendering,
+- [HTML to PDF examples](html-to-pdf-examples.md) provides runnable rendering,
   file output, asset, font, and diagnostic examples.
-- [HTML to PDF Compatibility](html-to-pdf-compatibility.md) is the supported
+- [HTML to PDF compatibility](html-to-pdf-compatibility.md) is the supported
   HTML, CSS, option, layout, and known-limitations reference.
-- [HTML to PDF Browser Parity Coverage](html-to-pdf-browser-parity-coverage.md)
+- [HTML to PDF browser parity coverage](html-to-pdf-browser-parity-coverage.md)
   maps documented renderer behavior to Chromium comparison fixtures.
 
 ## Project references

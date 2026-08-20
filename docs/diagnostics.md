@@ -4,10 +4,10 @@ Native Elixir PDF Utilities returns recoverable public API failures as
 `{:error, {reason, diagnostic}}` when the library can explain why an operation
 cannot continue.
 
-The `reason` atom is intended for programmatic branching. The `diagnostic` map is
-intended for developer debugging, logs, and user-facing support messages.
+Use the `reason` atom for programmatic branching. Use the `diagnostic` map for
+debugging, logs, and user-facing support messages.
 
-## Diagnostic Fields
+## Diagnostic fields
 
 Diagnostic maps always include:
 
@@ -22,7 +22,7 @@ Diagnostic maps may also include:
 - `:source` - a path, source snippet, or caller-provided input label
 - `:line` and `:column` - source location details when parser input can be located
 
-## Example
+## Logging a diagnostic
 
 ```elixir
 case NativeElixirPdfUtilities.Text.extract_file(path) do
@@ -34,7 +34,7 @@ case NativeElixirPdfUtilities.Text.extract_file(path) do
 end
 ```
 
-## Example Diagnostic
+## Diagnostic tuple
 
 ```elixir
 {:error,
@@ -48,40 +48,37 @@ end
   }}}
 ```
 
-## Contributor Guidance
+## Contributor guidance
 
-Use `NativeElixirPdfUtilities.Diagnostics` for new public API failures instead
-of inventing per-module error shapes.
+Build new public API failures with `NativeElixirPdfUtilities.Diagnostics`.
+Do not create a separate error shape for each module.
 
-Changes to the shared diagnostics API, including its tuple shape, fields, and
-types, are permitted only when there is no other way to return correct debug
-information to the developer using the existing contract. Prefer expressing
-additional detail through the existing `:message` and `:source` fields.
+Keep the shared tuple shape, fields, and types stable. Change them only when the
+existing contract cannot report the correct debugging information. Put extra
+detail in `:message` and `:source` when those fields are sufficient.
 
-Do not raise for ordinary caller/input failures such as invalid paths, missing
-files, unsupported documents, unsupported HTML/CSS, or empty extraction results.
-Prefer diagnostic error tuples and add focused tests that assert the important
-fields.
+Do not raise for caller errors such as invalid paths, missing files, unsupported
+documents, unsupported HTML/CSS, or empty extraction results. Return a
+diagnostic tuple and test its important fields.
 
-## Malformed PDF Input
+## Malformed PDF input
 
-The shared reader used by `Merge.merge/1` and `Text.extract/2` validates PDF
-headers, final xref pointers, object boundaries, stream lengths, page trees,
-and indirect references before continuing. Malformed input returns an
-`:invalid_pdf_input` diagnostic rather than producing partial output or
-raising. Encrypted PDFs return `:encrypted_pdf`; unsupported stream features
-return `:unsupported_pdf_feature`; custom fonts without a reliable Unicode
-mapping return `:unsupported_text_encoding`; image-only PDFs return
-`:no_extractable_text` from the reconstructed string API.
+Before merging or extracting text, the shared reader validates PDF headers,
+final xref pointers, object boundaries, stream lengths, page trees, and
+indirect references. Malformed input returns `:invalid_pdf_input` instead of a
+partial result or exception. Encrypted PDFs return `:encrypted_pdf`.
+Unsupported stream operations return `:unsupported_pdf_feature`. Custom fonts
+without a reliable Unicode mapping return `:unsupported_text_encoding`.
+Image-only PDFs return `:no_extractable_text` from the string API.
 
 The tokenizer represents malformed literal and hexadecimal strings as
-`{:error, reason}` tokens. This is primarily useful to callers using
-`NativeElixirPdfUtilities.Tokenizer` directly; merge and text extraction convert
-such tokenization failures into their public diagnostic error shape.
+`{:error, reason}` tokens. Callers of `NativeElixirPdfUtilities.Tokenizer` can
+inspect those tokens directly. Merge and text extraction convert tokenizer
+failures to the shared diagnostic tuple.
 
-To protect extraction from resource exhaustion, the shared reader and text
-validators apply input, decoded-stream, decompression-ratio, object/page, CMap,
-recursion, aggregate decoded-content, stream-use, instruction, and Form-expansion
-limits. A limit failure returns `:resource_limit_exceeded`; it is never converted
-to a partial result. Repeated indirect streams are decoded and tokenized once per
-extraction, while every semantic use is still charged to the operation budget.
+The shared reader and text validators limit input size, decoded streams,
+decompression ratios, objects, pages, CMaps, recursion, aggregate decoded
+content, stream uses, instructions, and Form expansions. A limit failure
+returns `:resource_limit_exceeded`, never a partial result. Extraction decodes
+and tokenizes each repeated indirect stream once, but charges every semantic
+use to the operation budget.

@@ -1,8 +1,8 @@
-# Layered PDF Validation
+# Layered PDF validation
 
-PDF-consuming features use validators under
-`NativeElixirPdfUtilities.Validators`. The validation pipeline separates byte
-parsing from reusable document invariants and operation-specific preparation.
+PDF operations share validators under `NativeElixirPdfUtilities.Validators`.
+The pipeline separates byte parsing, document rules shared by every operation,
+and preparation needed by only one operation.
 
 ## Validation pipeline
 
@@ -20,19 +20,17 @@ operations:
 - indirect stream identity and `/Length` structure
 - fixed-length numeric arrays used by page geometry and matrices
 
-`PdfValidator.validate_pdf/1` parses and validates a binary and returns the
-prepared shared context. `PdfValidator.validate/2` validates a document model
-that has already been parsed. `Reader.read/1` remains compatible by returning
-the `:document` projection from the same prepared context, while
-`Reader.read_validated/1` retains the full context for utilities that need it.
+`PdfValidator.validate_pdf/1` parses and validates a binary, then returns the
+shared context. `PdfValidator.validate/2` validates an already parsed document
+model. `Reader.read/1` returns the `:document` map from that context.
+`Reader.read_validated/1` returns the full context for utilities that need it.
 
-`NativeElixirPdfUtilities.Validators.TextValidator` consumes the shared context
-and owns page geometry, content-stream references, decoded content preparation,
-content syntax, supported text-operator operands, and reusable PDF numeric-token
-conversion. Text execution retains responsibility for state-dependent behavior
-and for preparing only fonts, encodings, and CMaps that reachable text
-operations actually use. Unused font resources are not grounds for rejecting
-text extraction.
+`NativeElixirPdfUtilities.Validators.TextValidator` uses the shared context and
+checks page geometry, content-stream references, decoded content, content
+syntax, text-operator operands, and PDF numeric tokens. The text executor
+handles state-dependent behavior. It prepares only the fonts, encodings, and
+CMaps used by reachable text operations, so an unused font resource does not
+cause extraction to fail.
 
 `NativeElixirPdfUtilities.Validators.MergeValidator` consumes the shared
 context and owns page materialization, inherited serialization tokens,
@@ -40,7 +38,7 @@ serializable object tokens, exact object generations, output identifier
 allocation, and complete indirect-reference remapping. The writer only receives
 prepared inputs and therefore never leaves an unknown reference unchanged.
 
-## Context boundary
+## What the validated context contains
 
 Validated contexts contain semantic values for traversal and decisions. Raw
 tokens are retained only where merge serialization must reproduce an existing
@@ -54,13 +52,12 @@ network access. Every explainable failure uses the shared diagnostic result:
 {:error, {reason, diagnostic}}
 ```
 
-Public façades replace the diagnostic `:operation` and `:module` with the API
-the caller invoked while retaining the actionable validation stage, reason,
-message, and source details.
+Public APIs set diagnostic `:operation` and `:module` to the function the caller
+used. They keep the validation stage, reason, message, and source details.
 
 ## Reuse by future operations
 
-New PDF inspection and transformation features should begin with
+New PDF inspection and transformation operations should begin with
 `PdfValidator.validate_pdf/1` or a context already returned by
 `Reader.read_validated/1`. They should add a focused operation validator only
 for invariants not guaranteed by the shared context. They must not scan PDF

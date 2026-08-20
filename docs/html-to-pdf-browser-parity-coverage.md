@@ -1,6 +1,8 @@
 # HTML to PDF browser parity coverage
 
-This document tracks which documented HTML/CSS/layout features have Chromium visual parity fixtures. A fixture being present means the feature is exercised by the browser-parity harness and must stay within the configured visual-diff threshold.
+This catalog maps documented HTML, CSS, and layout behavior to Chromium
+comparison fixtures. Each listed fixture must remain within its configured
+pixel-difference thresholds.
 
 Run the parity suite with:
 
@@ -10,15 +12,16 @@ CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity
 
 ## Current result
 
-The browser-parity suite contains 38 synthetic HTML fixtures, 8 realistic document fixtures, and guard tests that ensure every fixture has configured thresholds. The changed-pixel limit is 5% for the general fixtures, 1% for the geometric absolute-positioning fixture, and 5.5% for the trim-card fixture where the remaining difference comes from subpixel text and border rasterization. Average channel-delta limits remain at or below 5%.
+The suite contains 38 synthetic HTML fixtures and 8 production document
+fixtures. Guard tests require thresholds for every fixture. Most fixtures allow
+at most 5% changed pixels. The geometric absolute-positioning fixture allows
+1%, and the trim-card fixture allows 5.5% because of subpixel text and border
+rasterization. Every average channel-delta limit is 5% or lower.
 
-Current status: passing. The full suite passes with:
+Current status: passing.
 
-```bash
-CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity
-```
-
-New HTML-to-PDF renderer features must add focused unit coverage and, when they affect visible output, a browser parity fixture or an update to an existing fixture. Do not mark new HTML/CSS/layout behavior as supported until the relevant unit tests and browser parity suite pass.
+New renderer behavior needs focused unit tests. If it changes visible output,
+add or update a parity fixture before documenting support.
 
 ## Fixture catalog
 
@@ -65,7 +68,8 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 
 ## Production fixture catalog
 
-These fixtures mirror documents currently used in real production environments and use the same print sizes as those production render calls.
+These fixtures mirror production documents and use their production print
+sizes.
 
 | Fixture | Production document type | Browser parity setting |
 | --- | --- | --- |
@@ -78,18 +82,7 @@ These fixtures mirror documents currently used in real production environments a
 | `stock_sticker.html` | Stock sticker label | `{4.92126, 1.49606}` production label size |
 | `trim_card.html` | Trim card printout using the production table, column-group, full-height nested-table, and sheet-break structure | `{11.6929, 8.2677}` production landscape document size |
 
-Current production fixture parity:
-
-| Fixture | Current signal |
-| --- | --- |
-| `government_application_form.html` | Passing current parity thresholds. |
-| `purchase_order.html` | Passing current parity thresholds. |
-| `material_requisition.html` | Passing current parity thresholds. |
-| `invoice_012.html` | Passing current parity thresholds. |
-| `statement_012.html` | Passing current parity thresholds. |
-| `multi_page_report_012.html` | Passing current parity thresholds. |
-| `trim_card.html` | Passing current parity thresholds. |
-| `stock_sticker.html` | Passing current parity thresholds. |
+All eight production fixtures currently pass their thresholds.
 
 ## HTML coverage
 
@@ -149,4 +142,8 @@ Current production fixture parity:
 
 ## Summary
 
-Every documented HTML/CSS/layout support area now has at least one Chromium parity fixture, and the current suite passes. The suite is still not a claim of full browser compatibility; it is a release checklist for the documented renderer surface. When expanding that surface, update this coverage map, add or update fixtures, and keep `mix test.browser_parity` green.
+Every documented HTML, CSS, and layout area has at least one Chromium fixture,
+and the suite currently passes. This does not establish full browser
+compatibility. It checks the behavior this renderer documents. When adding
+supported behavior, update this catalog and its fixtures, then run
+`mix test.browser_parity`.

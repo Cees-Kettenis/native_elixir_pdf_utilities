@@ -1,10 +1,9 @@
 # Licenses
 
-Native Elixir PDF Utilities includes source code, bundled fonts, generated
-character-reference data, and glyph-name assignments under the following
-licenses.
+The project distributes source code, bundled fonts, generated
+character-reference data, and glyph-name assignments under the licenses below.
 
-## Project - MIT License
+## Project: MIT License
 
 Copyright (c) 2025 Cees Kettenis
 
@@ -26,7 +25,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## DejaVu Fonts - Bitstream Vera License
+## DejaVu fonts: Bitstream Vera License
 
 Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved.
 Bitstream Vera is a trademark of Bitstream, Inc.
@@ -73,7 +72,7 @@ without prior written authorization from the Gnome Foundation or Bitstream
 Inc., respectively. For further information, contact: fonts at gnome dot
 org.
 
-## WHATWG Entity Data - BSD 3-Clause License
+## WHATWG entity data: BSD 3-Clause License
 
 Copyright © WHATWG (Apple, Google, Mozilla, Microsoft).
 
@@ -102,7 +101,7 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-## Adobe Glyph Lists - BSD 3-Clause License
+## Adobe glyph lists: BSD 3-Clause License
 
 The glyph-name assignments used by the PDF text decoder follow the Adobe Glyph
 List and ITC Zapf Dingbats Glyph List. The Elixir lookup and decoding

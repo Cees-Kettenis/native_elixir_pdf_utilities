@@ -1,7 +1,7 @@
-# PDF Merging
+# PDF merging
 
 `NativeElixirPdfUtilities.Merge` combines a non-empty list of PDF binaries and
-returns a newly serialized PDF.
+returns a new PDF.
 
 ```elixir
 alias NativeElixirPdfUtilities.Merge
@@ -35,26 +35,24 @@ the shared diagnostic contract. The merger does not decrypt PDFs.
 
 ## Output behavior
 
-The merger emits a fresh PDF 1.7 document with a new cross-reference table,
+The merger emits a PDF 1.7 document with a new cross-reference table,
 trailer, catalog, and flat page tree. Active input objects receive new object
 numbers, their indirect references are rewritten, and stream bytes and filter
 declarations are preserved. Effective inherited page resources, media and crop
 boxes, and rotation values are written onto the merged pages where required.
 Existing page-level entries such as `BleedBox`, `TrimBox`, `ArtBox`, and
 `UserUnit` remain on copied page dictionaries.
-Missing or malformed required page geometry fails with an actionable diagnostic
-instead of being replaced with a fabricated page size.
+If required page geometry is missing or malformed, the merger returns a
+diagnostic that identifies the problem. It does not invent a page size.
 
-The result is intended for combining page content. Because the top-level
-catalog is rebuilt, document-level features such as metadata, outlines and
-bookmarks, named destinations, viewer preferences, portfolios, and AcroForm
-configuration are not preserved as a merged document contract. Applications
-that require those features should restore them in a later transformation or
-use a merger designed for that specific feature.
+The merger combines page content. It rebuilds the top-level catalog, so it does
+not carry metadata, outlines and bookmarks, named destinations, viewer
+preferences, portfolios, or AcroForm configuration into the output. Add those
+items in a later transformation, or use a merger that supports them.
 
 ## Errors
 
-An empty input list and invalid PDF input return actionable diagnostics:
+An empty input list and invalid PDF input return diagnostics:
 
 ```elixir
 case Merge.merge(pdf_binaries) do
