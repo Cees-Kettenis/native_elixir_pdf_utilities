@@ -19,51 +19,6 @@ breaking API changes are allowed, but they should be explained clearly in
 
 ## Milestones
 
-### 0.12.0 - Positioning, Image Fitting, and Asset Inputs
-
-Milestone goal: support fixed-size template regions while keeping asset handling explicit
-and safe.
-
-#### Scope
-
-- Add limited absolute positioning:
-  - `position: absolute`
-  - `top`
-  - `right`
-  - `bottom`
-  - `left`
-  - `z-index`
-- Add browser-like image fitting:
-  - `object-fit: contain`
-  - `object-fit: cover`
-  - `object-position`
-- Add local background image support:
-  - `background-image`
-  - `background-size`
-  - `background-position`
-  - `background-repeat`
-- Remove any existing built-in remote asset fetching behavior from the renderer.
-- Add explicit asset inputs that consume caller-provided bytes or approved local
-  paths instead of fetching remote URLs directly.
-- Consider a caller-provided asset resolver callback that returns bytes for an
-  asset reference, while keeping all network access outside the library.
-
-#### Design Notes
-
-- Clarify supported positioning boundaries in the compatibility guide.
-- Keep remote background images under the same safety model as normal images:
-  the renderer may consume bytes supplied by the caller, but must not fetch them.
-- Reject remote asset URLs by default with clear diagnostics.
-- Do not provide built-in HTTP fetching for fonts, images, stylesheets, or other
-  remote assets.
-
-#### Completion Criteria
-
-- Add layout and PDF writer tests for absolute positioning, z-index, image
-  fitting, and background painting.
-- Add browser parity fixtures for visible layout and painting changes.
-- Add or update realistic invoice, statement, and multi-page report fixtures.
-
 ### 0.13.0 - PDF Information and Metadata
 
 Milestone goal: expose reliable document inspection and metadata operations on top of the

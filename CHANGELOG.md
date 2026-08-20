@@ -1,22 +1,50 @@
 # Changelog
 
-## Unreleased
+## 0.12.0 - 2026-08-20
+
+### Added
+
+- Added relative and absolute positioning with `top`, `right`, `bottom`,
+  `left`, percentage insets, positioned containing blocks, removal of absolute
+  boxes from normal flow, and integer `z-index` paint ordering.
+- Added `object-fit` and `object-position` for replaced images, including
+  `fill`, `contain`, `cover`, `none`, and `scale-down` fitting.
+- Added CSS background images with explicit sizes, `cover`, `contain`,
+  positioning, and repeat modes.
+- Added `:assets` and `:asset_resolver` rendering options. Callers can supply
+  approved bytes or local files without giving the renderer network access.
+- Added browser parity fixtures for positioning, image fitting, background
+  images, and realistic invoice, statement, and multi-page report documents.
 
 ### Changed
 
 - Tightened the Chromium changed-pixel thresholds for HTML-to-PDF browser
   parity fixtures to approximately 5%, with stricter geometric coverage for
   absolute positioning.
+- Reworked inline, block, table, image, and pagination layout so all 38
+  synthetic fixtures and 8 realistic documents pass their configured browser
+  parity thresholds.
+- Rewrote the public guides for clearer API contracts, examples, compatibility
+  limits, diagnostics, and browser parity coverage.
 
 ### Fixed
 
-- Improved native HTML layout and PDF painting for inline blocks, paragraph
-  margins, table sizing and backgrounds, image flow, font weights, pixel-grid
-  alignment, and pagination so all synthetic and realistic browser-parity
-  fixtures pass their configured limits.
-- Updated the browser-parity and compatibility guides to cover all 38
-  synthetic fixtures and 8 realistic documents, including positioned layout,
-  background images, and image object fitting.
+- Fixed repeated backgrounds allocating tile coordinates before enforcing the
+  tile limit, and stopped zero-sized background tiles from reaching the PDF
+  writer.
+- Fixed valid `background-size: min(...)` declarations raising from the public
+  render API.
+- Fixed the `background` shorthand retaining an earlier `background-image`
+  when the shorthand omitted an image.
+- Fixed root-positioned boxes moving to later pages during pagination.
+- Fixed collapsed-table background images being painted again after cell
+  content.
+- Fixed positioned inline elements losing their positioned descendants or
+  using the wrong containing block.
+- Fixed mixed inline-block and block children failing layout.
+- Fixed resolver-backed `@font-face` declarations losing the ordered source
+  candidates needed for fallback.
+- Fixed style diagnostics splitting declarations at semicolons inside URLs.
 
 ## 0.11.0 - 2026-08-17
 

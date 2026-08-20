@@ -4,7 +4,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
   def project do
     [
       app: :native_elixir_pdf_utilities,
-      version: "0.11.0",
+      version: "0.12.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       description:
@@ -121,7 +121,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
           NativeElixirPdfUtilities.Validators.WriterValidator
         ]
       ],
-      source_ref: "v0.11.0",
+      source_ref: "v0.12.0",
       source_url: "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"
     ]
   end
