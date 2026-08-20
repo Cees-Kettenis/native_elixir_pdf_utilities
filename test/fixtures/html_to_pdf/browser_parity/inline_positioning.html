@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body { font-family: "DejaVu Sans", Arial, sans-serif; }
+      .sheet { width: 300pt; padding: 20pt; box-sizing: border-box; }
+      .region {
+        position: relative;
+        width: 220pt;
+        height: 42pt;
+        background: #e5e7eb;
+      }
+      .absolute-inline {
+        position: absolute;
+        left: 12pt;
+        top: 9pt;
+        width: 62pt;
+        height: 20pt;
+        background: #2563eb;
+      }
+      .line {
+        margin-top: 18pt;
+        font-size: 10pt;
+        line-height: 14pt;
+      }
+      .anchor { position: relative; left: 4pt; top: 2pt; }
+      .marker {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 28pt;
+        height: 8pt;
+        background: #ef4444;
+        z-index: -1;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="sheet">
+      <div class="region"><span class="absolute-inline"></span></div>
+      <div class="line">Before <span class="anchor">Anchor<span class="marker"></span></span> After</div>
+    </main>
+  </body>
+</html>

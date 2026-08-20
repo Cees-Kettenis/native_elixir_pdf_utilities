@@ -430,7 +430,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp positioned_child_box(%{type: :element, style: style} = child, containing_block, index) do
-    case Map.get(style, :display) in [:block, :image, :flex, :inline_flex, :grid, :inline_grid] do
+    style =
+      case Map.get(style, :display) do
+        display when display in [:inline, :inline_block] -> Map.put(style, :display, :block)
+        :inline_flex -> Map.put(style, :display, :flex)
+        :inline_grid -> Map.put(style, :display, :grid)
+        _ -> style
+      end
+
+    case Map.get(style, :display) in [:block, :image, :flex, :grid] do
       true ->
         offsets = Map.get(style, :offsets, edges(:auto))
         style = stretch_positioned_style(style, offsets, containing_block)
@@ -4388,7 +4396,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         {boxes ++ line_boxes, consumed_height + current_line_height}
       end)
 
-    {boxes, inline_content_height(runs, lines, line_height)}
+    {position_inline_contexts(boxes, width), inline_content_height(runs, lines, line_height)}
   end
 
   defp inline_run_boxes(run, x, line_top, baseline_y, width, metadata) do
@@ -4415,11 +4423,181 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         {content_boxes, _height} =
           inline_text_boxes(child_runs, style, content_x, content_top, content_width, metadata)
 
-        background ++ content_boxes
+        boxes = background ++ content_boxes
+
+        case Map.get(run, :inline_positioning_contexts, []) do
+          [] ->
+            boxes
+
+          contexts ->
+            marker = %{
+              type: :inline_positioning_marker,
+              x: box_x,
+              y: box_top - box_height,
+              width: box_width,
+              height: box_height,
+              inline_positioning_contexts: contexts
+            }
+
+            [marker | inherit_inline_positioning_contexts(boxes, contexts)]
+        end
+
+      %{type: :inline_positioning_marker, style: style} ->
+        line_height = Map.fetch!(style, :line_height)
+
+        [
+          %{
+            type: :inline_positioning_marker,
+            x: x,
+            y: line_top - line_height,
+            width: 0.0,
+            height: line_height,
+            inline_positioning_contexts: Map.fetch!(run, :inline_positioning_contexts)
+          }
+        ]
 
       _ ->
-        [run |> text_box(x, baseline_y, width) |> Map.merge(metadata)]
+        box = run |> text_box(x, baseline_y, width) |> Map.merge(metadata)
+
+        case Map.get(run, :inline_positioning_contexts, []) do
+          [] -> [box]
+          contexts -> [Map.put(box, :inline_positioning_contexts, contexts)]
+        end
     end
+  end
+
+  defp position_inline_contexts(boxes, available_width) do
+    contexts =
+      boxes
+      |> Enum.flat_map(fn box ->
+        box
+        |> Map.get(:inline_positioning_contexts, [])
+        |> Enum.with_index()
+      end)
+      |> Enum.reduce(%{}, fn {context, depth}, acc ->
+        Map.update(acc, context.id, {context, depth}, fn {existing, existing_depth} ->
+          {existing, max(existing_depth, depth)}
+        end)
+      end)
+      |> Map.values()
+      |> Enum.sort_by(fn {_context, depth} -> -depth end)
+
+    boxes =
+      Enum.reduce(contexts, boxes, fn {context, _depth}, acc ->
+        position_inline_context(acc, context, available_width)
+      end)
+
+    boxes
+    |> Enum.reject(&(Map.get(&1, :type) == :inline_positioning_marker))
+    |> Enum.map(&Map.delete(&1, :inline_positioning_contexts))
+  end
+
+  defp position_inline_context(boxes, context, available_width) do
+    [_member | _members] =
+      member_indexes =
+      boxes
+      |> Enum.with_index()
+      |> Enum.filter(fn {box, _index} -> inline_positioning_member?(box, context.id) end)
+
+    first_index = member_indexes |> List.first() |> elem(1)
+    last_index = member_indexes |> List.last() |> elem(1)
+    member_boxes = Enum.map(member_indexes, &elem(&1, 0))
+    containing_block = inline_positioning_containing_block(member_boxes)
+
+    case positioned_child_boxes(context.positioned_children, containing_block) do
+      {:ok, positioned_boxes} ->
+        ancestors = inline_positioning_ancestors(member_boxes, context.id)
+
+        positioned_boxes =
+          Enum.map(positioned_boxes, fn entry ->
+            %{entry | boxes: inherit_inline_positioning_contexts(entry.boxes, ancestors)}
+          end)
+
+        segment_length = last_index - first_index + 1
+
+        positioned_segment =
+          boxes
+          |> Enum.slice(first_index, segment_length)
+          |> stack_positioned_boxes(
+            positioned_boxes,
+            is_integer(Map.get(context.style, :z_index))
+          )
+          |> shift_positioned_inline(context.style, available_width, containing_block.height)
+
+        Enum.take(boxes, first_index) ++
+          positioned_segment ++ Enum.drop(boxes, last_index + 1)
+
+      {:error, _reason} ->
+        boxes ++ [%{type: :layout_error}]
+    end
+  end
+
+  defp inline_positioning_member?(box, context_id) do
+    box
+    |> Map.get(:inline_positioning_contexts, [])
+    |> Enum.any?(&(&1.id == context_id))
+  end
+
+  defp inline_positioning_containing_block(boxes) do
+    {left, right, top, bottom} =
+      Enum.reduce(boxes, {nil, nil, nil, nil}, fn box, {left, right, top, bottom} ->
+        {box_left, box_right, box_top, box_bottom} = inline_positioning_bounds(box)
+
+        {
+          if(is_number(left), do: min(left, box_left), else: box_left),
+          if(is_number(right), do: max(right, box_right), else: box_right),
+          if(is_number(top), do: max(top, box_top), else: box_top),
+          if(is_number(bottom), do: min(bottom, box_bottom), else: box_bottom)
+        }
+      end)
+
+    %{x: left, top: top, width: max(right - left, 0.0), height: max(top - bottom, 0.0)}
+  end
+
+  defp inline_positioning_bounds(box) do
+    right =
+      case box do
+        %{type: :text, annotation_width: width} -> box.x + width
+        box -> box.x + Map.fetch!(box, :width)
+      end
+
+    {top, bottom} =
+      case box do
+        %{type: :inline_positioning_marker, y: y, height: height} -> {y + height, y}
+        _ -> PageGeometry.box_vertical_bounds(box)
+      end
+
+    {box.x, right, top, bottom}
+  end
+
+  defp inline_positioning_ancestors([box | _boxes], context_id) do
+    box
+    |> Map.get(:inline_positioning_contexts, [])
+    |> Enum.take_while(&(&1.id != context_id))
+  end
+
+  defp inherit_inline_positioning_contexts(boxes, contexts) do
+    case contexts do
+      [] ->
+        boxes
+
+      contexts ->
+        Enum.map(boxes, fn box ->
+          inherited = contexts ++ Map.get(box, :inline_positioning_contexts, [])
+          Map.put(box, :inline_positioning_contexts, inherited)
+        end)
+    end
+  end
+
+  defp shift_positioned_inline(boxes, style, available_width, inline_height) do
+    offsets = Map.get(style, :offsets, edges(:auto))
+    left = resolved_offset(offsets.left, available_width)
+    right = resolved_offset(offsets.right, available_width)
+    top = resolved_offset(offsets.top, inline_height)
+    bottom = resolved_offset(offsets.bottom, inline_height)
+    delta_x = if(is_number(left), do: left, else: if(is_number(right), do: -right, else: 0.0))
+    delta_y = if(is_number(top), do: -top, else: if(is_number(bottom), do: bottom, else: 0.0))
+    shift_layout_boxes(boxes, delta_x, delta_y)
   end
 
   defp inline_content_height(runs, width_or_lines, line_height) do
@@ -4490,7 +4668,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     runs
     |> Enum.reduce([[]], fn run, lines ->
       case run do
-        %{type: :inline_block} ->
+        %{type: type} when type in [:inline_block, :inline_positioning_marker] ->
           append_inline_atomic(lines, run, width)
 
         _ ->
@@ -4535,7 +4713,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       line_runs
       |> Enum.reverse()
       |> Enum.find_index(fn run ->
-        Map.get(run, :type) == :inline_block or trim_inline_whitespace(run.text) != ""
+        Map.get(run, :type) in [:inline_block, :inline_positioning_marker] or
+          trim_inline_whitespace(run.text) != ""
       end)
 
     case trailing_run_count do
@@ -4546,7 +4725,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         line_runs
         |> Enum.take(length(line_runs) - trailing_run_count)
         |> List.update_at(-1, fn
-          %{type: :inline_block} = run -> run
+          %{type: type} = run when type in [:inline_block, :inline_positioning_marker] -> run
           run -> %{run | text: String.replace(run.text, ~r/[ \t\f\r]+$/u, "")}
         end)
     end
@@ -4657,26 +4836,77 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     case child do
       %{type: :text, text: text, style: style} when is_binary(text) and is_map(style) ->
         text = normalize_inline_whitespace(text, style)
-        {:ok, append_whitespace_collapsed_run(runs, text, style)}
+        {:ok, append_whitespace_collapsed_run(runs, %{text: text, style: style})}
 
-      %{type: :element, style: %{display: :inline}, children: children}
+      %{type: :element, style: %{display: :inline} = style, children: children} = element
       when is_list(children) ->
         case inline_runs(children) do
           {:ok, child_runs} ->
+            child_runs =
+              case Map.get(style, :position, :static) do
+                :relative ->
+                  context = %{
+                    id: System.unique_integer([:positive]),
+                    style: style,
+                    positioned_children: Map.get(element, :positioned_children, [])
+                  }
+
+                  case child_runs do
+                    [] ->
+                      [
+                        %{
+                          type: :inline_positioning_marker,
+                          text: "",
+                          style: text_style(style),
+                          inline_positioning_contexts: [context]
+                        }
+                      ]
+
+                    child_runs ->
+                      Enum.map(child_runs, fn run ->
+                        contexts = [context | Map.get(run, :inline_positioning_contexts, [])]
+                        Map.put(run, :inline_positioning_contexts, contexts)
+                      end)
+                  end
+
+                _ ->
+                  child_runs
+              end
+
             {:ok,
              Enum.reduce(child_runs, runs, fn run, acc ->
-               append_whitespace_collapsed_run(acc, run.text, run.style)
+               case Map.get(run, :type) do
+                 :inline_positioning_marker -> acc ++ [run]
+                 _ -> append_whitespace_collapsed_run(acc, run)
+               end
              end)}
 
           {:error, reason} ->
             {:error, reason}
         end
 
-      %{type: :element, style: %{display: :inline_block} = style, children: children}
+      %{type: :element, style: %{display: :inline_block} = style, children: children} = element
       when is_list(children) ->
         case inline_runs(children) do
           {:ok, child_runs} ->
-            {:ok, runs ++ [%{type: :inline_block, text: "", style: style, runs: child_runs}]}
+            run = %{type: :inline_block, text: "", style: style, runs: child_runs}
+
+            run =
+              case Map.get(style, :position, :static) do
+                :relative ->
+                  context = %{
+                    id: System.unique_integer([:positive]),
+                    style: style,
+                    positioned_children: Map.get(element, :positioned_children, [])
+                  }
+
+                  Map.put(run, :inline_positioning_contexts, [context])
+
+                _ ->
+                  run
+              end
+
+            {:ok, runs ++ [run]}
 
           {:error, reason} ->
             {:error, reason}
@@ -4700,6 +4930,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
         inline_block_content_width(run, available_width) + horizontal_box_size(style) +
           margin.left + margin.right
+
+      %{type: :inline_positioning_marker} ->
+        0.0
 
       _ ->
         text_width(run.text, run.style)
@@ -4732,7 +4965,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp append_whitespace_collapsed_run(runs, text, style) do
+  defp append_whitespace_collapsed_run(runs, %{text: text} = run) do
     text =
       case List.last(runs) do
         %{text: previous_text} ->
@@ -4745,7 +4978,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           text
       end
 
-    runs ++ [%{text: text, style: style}]
+    runs ++ [%{run | text: text}]
   end
 
   defp trim_inline_whitespace(text) do

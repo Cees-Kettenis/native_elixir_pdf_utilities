@@ -32,6 +32,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     {"image_object_fitting.html", max_changed_ratio: 0.05, max_average_delta: 0.045},
     {"background_images.html", max_changed_ratio: 0.05, max_average_delta: 0.05},
     {"absolute_positioning.html", max_changed_ratio: 0.01, max_average_delta: 0.007},
+    {"inline_positioning.html", max_changed_ratio: 0.05, max_average_delta: 0.03},
     {"inline_text_flow.html", max_changed_ratio: 0.05, max_average_delta: 0.03},
     {"links_entities_and_protocols.html", max_changed_ratio: 0.05, max_average_delta: 0.04},
     {"static_form_controls.html", max_changed_ratio: 0.05, max_average_delta: 0.05},

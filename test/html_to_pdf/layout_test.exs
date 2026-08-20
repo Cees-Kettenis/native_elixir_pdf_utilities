@@ -1709,6 +1709,91 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert_in_delta black.y, 130.0, 0.0001
   end
 
+  test "layout blockifies absolutely positioned inline elements" do
+    html = """
+    <div style="position: relative; width: 100pt; height: 60pt">
+      <span style="position: absolute; left: 12pt; top: 8pt; width: 30pt; height: 14pt; background: red">Badge</span>
+      <span style="display: inline-flex; position: absolute; left: 12pt; top: 26pt; width: 30pt; height: 14pt; background: blue"></span>
+      <span style="display: inline-grid; position: absolute; left: 50pt; top: 26pt; width: 30pt; height: 14pt; background: green"></span>
+    </div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled_tree} = Style.compute_detailed(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {100, 100}, margin: 0)
+
+    red = Enum.find(layout_tree.boxes, &(&1.type == :rect and &1.fill_color == {1, 0, 0}))
+    blue = Enum.find(layout_tree.boxes, &(&1.type == :rect and &1.fill_color == {0, 0, 1}))
+
+    green =
+      Enum.find(layout_tree.boxes, &(&1.type == :rect and &1.fill_color == {0, 0.5019607843, 0}))
+
+    badge = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "Badge"))
+
+    assert_in_delta red.x, 12.0, 0.0001
+    assert_in_delta red.y, 78.0, 0.0001
+    assert Enum.all?([red, blue, green], & &1.out_of_flow)
+    assert badge.out_of_flow
+  end
+
+  test "layout keeps positioned descendants of relative inline elements" do
+    html = """
+    <div style="font-size: 10pt; line-height: 12pt">
+      Before <span style="position: relative; left: 4pt; top: 2pt">Anchor<span style="position: absolute; left: 0; top: 0; width: 24pt; height: 8pt; background: blue"></span></span> After
+    </div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled_tree} = Style.compute_detailed(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {160, 100}, margin: 0)
+
+    before = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "Before "))
+    anchor = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "Anchor"))
+    after_text = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == " After"))
+    blue = Enum.find(layout_tree.boxes, &(&1.type == :rect and &1.fill_color == {0, 0, 1}))
+
+    assert_in_delta anchor.x, before.x + before.annotation_width + 4.0, 0.0001
+
+    assert_in_delta after_text.x,
+                    before.x + before.annotation_width + anchor.annotation_width,
+                    0.0001
+
+    assert_in_delta blue.x, anchor.x, 0.0001
+    assert blue.out_of_flow
+  end
+
+  test "layout positions empty, nested, and inline-block relative elements" do
+    html = """
+    <div style="font-size: 10pt; line-height: 12pt">
+      A<span style="position: relative"><span style="position: absolute; left: 2pt; top: 1pt; width: 3pt; height: 3pt; background: red"></span></span>
+      <span style="position: relative; left: 2pt">Outer <span style="display: inline-block; position: relative; top: 1pt; width: 24pt; height: 12pt; background: green">Inner<span style="position: absolute; right: 0; bottom: 0; width: 4pt; height: 4pt; background: blue"></span></span></span>
+    </div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled_tree} = Style.compute_detailed(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {160, 100}, margin: 0)
+
+    colors =
+      layout_tree.boxes
+      |> Enum.filter(&(&1.type == :rect and not is_nil(&1.fill_color)))
+      |> Enum.map(& &1.fill_color)
+
+    assert colors == [{1, 0, 0}, {0, 0.5019607843, 0}, {0, 0, 1}]
+    refute Enum.any?(layout_tree.boxes, &(Map.get(&1, :type) == :inline_positioning_marker))
+    refute Enum.any?(layout_tree.boxes, &Map.has_key?(&1, :inline_positioning_contexts))
+  end
+
+  test "layout rejects unsupported positioned descendants of relative inline elements" do
+    html = """
+    <div><div style="display: inline; position: relative">Anchor<ol style="position: absolute"><li>No list positioning</li></ol></div></div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled_tree} = Style.compute_detailed(dom, [])
+    assert Layout.layout(styled_tree) == {:error, :invalid_layout}
+  end
+
   test "layout applies relative offsets and nested stacking context order" do
     html = """
     <div style="position: relative; left: 5pt; top: 3pt; width: 100pt; height: 50pt; background: white">
