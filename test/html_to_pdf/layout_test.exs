@@ -3430,6 +3430,56 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert Enum.map(row_boxes, & &1.type) == [:rect, :rect, :text, :text]
   end
 
+  test "layout paints a collapsed table background image only before row content" do
+    assert {:ok, styled_tree} =
+             Style.compute(%{
+               type: :document,
+               children: [
+                 %{
+                   type: :element,
+                   tag: "table",
+                   attributes: %{
+                     "style" => "width: 40pt; border-collapse: collapse; border: 1pt solid black"
+                   },
+                   children: [
+                     %{
+                       type: :element,
+                       tag: "tr",
+                       attributes: %{},
+                       children: [
+                         %{
+                           type: :element,
+                           tag: "td",
+                           attributes: %{"style" => "padding: 4pt; border: 1pt solid black"},
+                           children: [%{type: :text, text: "Cell"}]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    [table] = styled_tree.children
+
+    table_style =
+      table.style
+      |> Map.put(:background_image, image_fixture(10.0, 10.0))
+      |> Map.put(:background_size, {10.0, 10.0})
+      |> Map.put(:background_position, {{:percent, 0.0}, {:percent, 0.0}})
+      |> Map.put(:background_repeat, :no_repeat)
+
+    styled_tree = %{styled_tree | children: [%{table | style: table_style}]}
+
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {80, 80}, margin: 10)
+
+    assert [image] = Enum.filter(layout_tree.boxes, &(&1.type == :image))
+    text = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "Cell"))
+
+    assert Enum.find_index(layout_tree.boxes, &(&1 == image)) <
+             Enum.find_index(layout_tree.boxes, &(&1 == text))
+  end
+
   test "layout paints collapsed table borders as a separate grid" do
     assert {:ok, styled_tree} =
              Style.compute(%{

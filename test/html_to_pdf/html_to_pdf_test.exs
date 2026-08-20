@@ -681,6 +681,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "/URI (https://example.com)"
   end
 
+  test "render paints a collapsed table background image once" do
+    source = "data:image/png;base64,#{png_fixture_base64()}"
+
+    html = """
+    <table style="width: 40pt; border-collapse: collapse; border: 1pt solid black; background-image: url(#{source}); background-size: 10pt 10pt; background-repeat: no-repeat">
+      <tr><td style="padding: 4pt; border: 1pt solid black">Cell</td></tr>
+    </table>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert length(Regex.scan(~r/\/Im\d+ Do/, pdf)) == 1
+  end
+
   test "render supports fixed column groups and separate border spacing" do
     html = """
     <table style="width: 240pt; table-layout: fixed; border-collapse: separate; border-spacing: 8pt 4pt">

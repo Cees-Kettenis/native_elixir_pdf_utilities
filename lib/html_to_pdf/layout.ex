@@ -2895,6 +2895,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         border =
           style
           |> Map.put(:background_color, nil)
+          |> Map.put(:background_image, nil)
           |> background_box(x, content_bottom, width, row_grid_height)
           |> tag_boxes(metadata)
 
