@@ -1261,12 +1261,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     |> then(&Regex.replace(~r/@font-face\s*\{[^{}]*\}/ui, &1, ""))
     |> then(&Regex.scan(~r/[^{}]+\{(?<declarations>[^{}]*)\}/u, &1, capture: ["declarations"]))
     |> List.flatten()
-    |> Enum.flat_map(fn declarations ->
-      declarations
-      |> String.split(";")
-      |> Enum.map(&String.trim/1)
-      |> Enum.reject(&(&1 == ""))
-    end)
+    |> Enum.flat_map(&CssParser.declaration_sources/1)
   end
 
   defp inline_style_diagnostic_error(dom, opts) do
@@ -1276,7 +1271,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp inline_style_error(style_source, _opts) do
     case CssParser.parse_declarations_detailed(style_source) do
       {:ok, _declarations} ->
-        invalid_declaration_detail(style_source, inline_declaration_sources(style_source))
+        invalid_declaration_detail(style_source, CssParser.declaration_sources(style_source))
 
       {:error, error} ->
         error
@@ -1300,13 +1295,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       _ ->
         []
     end
-  end
-
-  defp inline_declaration_sources(style_source) do
-    style_source
-    |> String.split(";")
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
   end
 
   defp invalid_declaration_detail(css_source, declaration_sources) do

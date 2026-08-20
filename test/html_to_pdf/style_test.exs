@@ -2462,6 +2462,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
              })
   end
 
+  test "compute_detailed preserves semicolons inside URLs when locating invalid declarations" do
+    data_url = "data:image/png;base64,AAAA"
+    invalid_declaration = "display: table-row-group"
+
+    for html <- [
+          ~s|<p style="background-image: url(#{data_url}); #{invalid_declaration}">Inline</p>|,
+          ~s|<style>p { background-image: url(#{data_url}); #{invalid_declaration}; }</style><p>Stylesheet</p>|
+        ] do
+      assert {:ok, dom} = HtmlParser.parse(html)
+
+      assert {:error,
+              {:invalid_css,
+               %{
+                 stage: :css,
+                 reason: :invalid_css,
+                 line: 1,
+                 source: ^invalid_declaration,
+                 message:
+                   ~s(line 1: declaration "display: table-row-group" is invalid or unsupported)
+               }}} = Style.compute_detailed(dom)
+    end
+  end
+
   test "compute accepts wrapper elements heading levels and inline aliases" do
     dom = %{
       type: :document,

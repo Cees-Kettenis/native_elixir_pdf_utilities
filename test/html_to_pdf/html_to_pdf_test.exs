@@ -694,6 +694,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              HtmlToPdf.render_file(missing_input, "/tmp/native-elixir-pdf-failure.pdf")
   end
 
+  test "render identifies an invalid declaration after a semicolon-containing URL" do
+    html =
+      ~s|<p style="background-image: url(data:image/png;base64,AAAA); display: table-row-group">Bad display</p>|
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               line: 1,
+               source: "display: table-row-group",
+               message:
+                 ~s(line 1: declaration "display: table-row-group" is invalid or unsupported)
+             }}} = HtmlToPdf.render(html)
+  end
+
   test "render converts tables to PDF text boxes and cell borders" do
     html =
       ~s(<style>th,td{border:1pt solid black;padding:4pt}th{background:#eee}</style><table><caption>Summary</caption><thead><tr><th>Name</th><th>Docs</th></tr></thead><tbody><tr><td>Alpha</td><td><a href="https://example.com">Link</a></td></tr></tbody></table>)

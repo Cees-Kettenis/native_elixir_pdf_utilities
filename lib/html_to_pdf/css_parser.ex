@@ -264,11 +264,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   def parse_declarations_detailed(css) do
     case HtmlValidator.validate_css_source(css, :declarations) do
       {:ok, css} ->
-        declarations =
-          css
-          |> split_declaration_sources()
-          |> Enum.map(&String.trim/1)
-          |> Enum.reject(&(&1 == ""))
+        declarations = declaration_sources(css)
 
         Enum.reduce_while(declarations, {:ok, []}, fn declaration, {:ok, acc} ->
           case parse_declaration(declaration) do
@@ -379,8 +375,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   defp font_face_descriptor_error(block, property) do
     source =
       block
-      |> split_declaration_sources()
-      |> Enum.map(&String.trim/1)
+      |> declaration_sources()
       |> Enum.find(&Regex.match?(~r/^#{Regex.escape(property)}\s*:/iu, &1))
 
     case source do
@@ -598,9 +593,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   defp page_options_from(block) do
     block
-    |> split_declaration_sources()
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
+    |> declaration_sources()
     |> Enum.reduce_while({:ok, []}, fn source, {:ok, acc} ->
       case parse_declaration(source) do
         {:ok, {property, value}} ->
@@ -1167,9 +1160,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   defp invalid_declaration(declarations) do
     declarations
-    |> split_declaration_sources()
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
+    |> declaration_sources()
     |> Enum.find(fn declaration ->
       match?({:error, :invalid_css}, parse_declaration(declaration))
     end)
@@ -1185,7 +1176,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end
   end
 
-  defp split_declaration_sources(source) do
+  @doc false
+  @spec declaration_sources(String.t()) :: [String.t()]
+  def declaration_sources(source) do
     {parts, current, _quote, _depth} =
       source
       |> String.graphemes()
@@ -1213,7 +1206,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       end)
 
     final = current |> Enum.reverse() |> Enum.join()
-    Enum.reverse([final | parts])
+
+    [final | parts]
+    |> Enum.reverse()
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
   end
 
   defp css_issue_to_detail({kind, source}, css) do
