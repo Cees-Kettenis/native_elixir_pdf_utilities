@@ -9,7 +9,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @css_pixel_points 0.75
@@ -4891,31 +4890,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     repeat = Map.get(style, :background_repeat, :repeat)
 
-    x_positions =
-      tile_positions(initial_x, tile_width, x, x + width, repeat in [:repeat, :repeat_x])
+    with :ok <-
+           HtmlValidator.validate_background_image_tile_dimensions(
+             tile_width,
+             tile_height,
+             width,
+             height,
+             repeat
+           ),
+         x_plan =
+           tile_plan(initial_x, tile_width, x, x + width, repeat in [:repeat, :repeat_x]),
+         y_plan =
+           tile_plan(initial_y, tile_height, y, y + height, repeat in [:repeat, :repeat_y]),
+         :ok <-
+           HtmlValidator.validate_background_image_tile_count(x_plan.count * y_plan.count) do
+      x_positions = tile_positions(x_plan)
+      y_positions = tile_positions(y_plan)
 
-    y_positions =
-      tile_positions(initial_y, tile_height, y, y + height, repeat in [:repeat, :repeat_y])
-
-    tile_count = length(x_positions) * length(y_positions)
-
-    case tile_count <= Limits.get(:max_background_image_tiles) do
-      true ->
-        for tile_x <- x_positions, tile_y <- y_positions do
-          %{
-            type: :image,
-            paint_layer: :container_background,
-            snap_to_css_pixel_grid: true,
-            x: tile_x,
-            y: tile_y,
-            width: tile_width,
-            height: tile_height,
-            image: image,
-            clip: %{x: x, y: y, width: width, height: height}
-          }
-        end
-
-      false ->
+      for tile_x <- x_positions, tile_y <- y_positions do
+        %{
+          type: :image,
+          paint_layer: :container_background,
+          snap_to_css_pixel_grid: true,
+          x: tile_x,
+          y: tile_y,
+          width: tile_width,
+          height: tile_height,
+          image: image,
+          clip: %{x: x, y: y, width: width, height: height}
+        }
+      end
+    else
+      _error ->
         [%{type: :layout_error, reason: :background_image_tile_limit}]
     end
   end
@@ -4961,16 +4967,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp tile_positions(initial, tile_size, minimum, maximum, repeat?) do
+  defp tile_plan(initial, tile_size, minimum, maximum, repeat?) do
     case repeat? and tile_size > 0 do
       true ->
         first = initial - max(Float.ceil((initial - minimum) / tile_size), 0) * tile_size
         count = max(Float.ceil((maximum - first) / tile_size) |> trunc(), 1)
-        Enum.map(0..(count - 1), &(first + &1 * tile_size))
+        %{first: first, step: tile_size, count: count}
 
       false ->
-        [initial]
+        %{first: initial, step: tile_size, count: 1}
     end
+  end
+
+  defp tile_positions(%{first: first, step: step, count: count}) do
+    Enum.map(0..(count - 1), &(first + &1 * step))
   end
 
   defp visible_border?(border_widths, border_styles, border_colors) do

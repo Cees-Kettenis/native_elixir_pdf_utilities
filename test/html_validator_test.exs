@@ -55,6 +55,43 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     assert :error = HtmlValidator.validate_layout_cardinality(:grid_tracks, 0)
     assert :error = HtmlValidator.validate_layout_cardinality(:unsupported, 1)
 
+    assert :ok = HtmlValidator.validate_background_image_tile_count(10_000)
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{stage: :limits, reason: :resource_limit_exceeded, message: tile_message}}} =
+             HtmlValidator.validate_background_image_tile_count(10_001)
+
+    assert tile_message == "background image tile count exceeds the 10000-tile limit"
+    assert :error = HtmlValidator.validate_background_image_tile_count(0)
+
+    assert :ok =
+             HtmlValidator.validate_background_image_tile_dimensions(
+               5.0,
+               5.0,
+               30.0,
+               30.0,
+               :repeat
+             )
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
+             HtmlValidator.validate_background_image_tile_dimensions(
+               0.000_001,
+               0.000_001,
+               30.0,
+               30.0,
+               :repeat
+             )
+
+    assert :error =
+             HtmlValidator.validate_background_image_tile_dimensions(
+               :invalid,
+               5.0,
+               30.0,
+               30.0,
+               :repeat
+             )
+
     assert :ok = HtmlValidator.validate_furniture_fit(:header, 12.0, 12.0)
 
     assert {:error, {:invalid_layout, %{stage: :layout}}} =

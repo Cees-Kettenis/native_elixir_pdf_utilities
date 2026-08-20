@@ -559,6 +559,70 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec validate_background_image_tile_count(term()) ::
+          :ok | :error | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_background_image_tile_count(tile_count) do
+    max_background_image_tiles = Limits.get(:max_background_image_tiles)
+
+    case tile_count do
+      tile_count
+      when is_integer(tile_count) and tile_count >= 1 and
+             tile_count <= max_background_image_tiles ->
+        :ok
+
+      tile_count when is_integer(tile_count) and tile_count >= 1 ->
+        Diagnostics.error(
+          :limits,
+          :resource_limit_exceeded,
+          "background image tile count exceeds the #{max_background_image_tiles}-tile limit"
+        )
+
+      _ ->
+        :error
+    end
+  end
+
+  @doc false
+  @spec validate_background_image_tile_dimensions(
+          term(),
+          term(),
+          term(),
+          term(),
+          term()
+        ) :: :ok | :error | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_background_image_tile_dimensions(
+        tile_width,
+        tile_height,
+        area_width,
+        area_height,
+        repeat
+      ) do
+    max_background_image_tiles = Limits.get(:max_background_image_tiles)
+
+    case {tile_width, tile_height, area_width, area_height, repeat} do
+      {tile_width, tile_height, area_width, area_height, repeat}
+      when is_number(tile_width) and is_number(tile_height) and is_number(area_width) and
+             area_width >= 0 and is_number(area_height) and area_height >= 0 and
+             repeat in [:repeat, :repeat_x, :repeat_y, :no_repeat] ->
+        horizontal_over_limit? =
+          repeat in [:repeat, :repeat_x] and tile_width > 0 and
+            tile_width < area_width / max_background_image_tiles
+
+        vertical_over_limit? =
+          repeat in [:repeat, :repeat_y] and tile_height > 0 and
+            tile_height < area_height / max_background_image_tiles
+
+        case horizontal_over_limit? or vertical_over_limit? do
+          true -> validate_background_image_tile_count(max_background_image_tiles + 1)
+          false -> :ok
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  @doc false
   @spec validate_style_input(term(), term(), term()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_style_input(dom, opts, font_options_result) do

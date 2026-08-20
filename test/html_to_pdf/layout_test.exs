@@ -1882,7 +1882,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
         width: 30.0,
         height: 30.0,
         background_image: image_fixture(5.0, 5.0),
-        background_size: {:auto, :auto},
+        background_size: {0.000_001, 0.000_001},
         background_position: {{:percent, 0.0}, {:percent, 0.0}},
         background_repeat: :repeat
       })
