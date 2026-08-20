@@ -3012,6 +3012,75 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert image.style.object_position == {{:percent, 0.0}, {:percent, 0.0}}
   end
 
+  test "background shorthand resets earlier background image longhands without resolving the image" do
+    parent = self()
+    png = png_fixture(2, 1)
+
+    resolver = fn request ->
+      send(parent, {:asset_request, request})
+
+      case request.reference do
+        "asset:live" -> {:ok, png}
+        _reference -> :not_found
+      end
+    end
+
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{
+            "style" =>
+              "background-image: url('https://example.com/stale-none.png'); background-size: cover; background-position: right bottom; background-repeat: no-repeat; background: none"
+          },
+          children: []
+        },
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{
+            "style" =>
+              "background-image: url('https://example.com/stale-color.png'); background-size: 20pt 10pt; background-position: 5pt 6pt; background-repeat: repeat-x; background: red"
+          },
+          children: []
+        },
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{
+            "style" =>
+              "background: none; background-image: url('asset:live'); background-size: contain; background-position: center; background-repeat: no-repeat"
+          },
+          children: []
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute_detailed(dom, asset_resolver: resolver)
+    [none, color, live] = styled_tree.children
+
+    for style <- [none.style, color.style] do
+      assert style.background_image == nil
+      assert style.background_size == {:auto, :auto}
+      assert style.background_position == {{:percent, 0.0}, {:percent, 0.0}}
+      assert style.background_repeat == :repeat
+      refute Map.has_key?(style, :background_image_source)
+    end
+
+    assert none.style.background_color == nil
+    assert color.style.background_color == {1, 0, 0}
+    assert live.style.background_image.format == :png
+    assert live.style.background_size == :contain
+    assert live.style.background_position == {{:percent, 0.5}, {:percent, 0.5}}
+    assert live.style.background_repeat == :no_repeat
+
+    assert_received {:asset_request, %{reference: "asset:live", kind: :background_image}}
+    refute_received {:asset_request, %{reference: "https://example.com/stale-none.png"}}
+    refute_received {:asset_request, %{reference: "https://example.com/stale-color.png"}}
+  end
+
   test "compute covers the supported positioning and image painting value forms" do
     assert style_for!("div", "background-image: none").background_image == nil
     assert style_for!("div", "background-size: contain").background_size == :contain

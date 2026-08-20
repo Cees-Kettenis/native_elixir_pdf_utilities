@@ -25,7 +25,7 @@ New HTML-to-PDF renderer features must add focused unit coverage and, when they 
 | Fixture | Coverage |
 | --- | --- |
 | `absolute_positioning.html` | relative containing blocks, absolute offsets, percentages, nested positioning, negative and positive `z-index`, and removal from normal flow |
-| `background_images.html` | data URI background images, repeat and no-repeat painting, explicit sizing, `cover`, and positioned backgrounds |
+| `background_images.html` | data URI background images, repeat and no-repeat painting, explicit sizing, `cover`, positioned backgrounds, and shorthand resets of earlier image state |
 | `block_box_model.html` | margin, padding, width, min-height, side-specific borders, background, border radius, text alignment |
 | `border_style_variants.html` | all ten standard border styles, one-to-four-value side styles and colors, and transparent borders |
 | `box_sizing_and_margins.html` | `box-sizing`, min/max width, percentage width, negative margins, clamped block sizing |

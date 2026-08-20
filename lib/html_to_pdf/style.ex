@@ -2092,9 +2092,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp put_background(style, value) do
+    style =
+      style
+      |> Map.put(:background_color, nil)
+      |> Map.put(:background_image, nil)
+      |> Map.delete(:background_image_source)
+      |> Map.put(:background_position, {{:percent, 0.0}, {:percent, 0.0}})
+      |> Map.put(:background_repeat, :repeat)
+      |> Map.put(:background_size, {:auto, :auto})
+
     case value |> String.trim() |> String.downcase() do
       "none" ->
-        {:ok, Map.put(style, :background_color, nil)}
+        {:ok, style}
 
       value ->
         with {:ok, color} <- parse_color(value, Map.fetch!(style, :color)) do

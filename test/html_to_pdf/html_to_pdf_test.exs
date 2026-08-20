@@ -1084,6 +1084,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              )
   end
 
+  test "render does not load a background image reset by a later shorthand" do
+    html = """
+    <div style="width: 30pt; height: 20pt; background-image: url('https://example.com/stale.png'); background-size: cover; background-position: right bottom; background-repeat: no-repeat; background: red"></div>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    refute pdf =~ "/Subtype /Image"
+  end
+
   test "render supports min() background image sizes" do
     source = "data:image/png;base64,#{png_fixture_base64()}"
 
