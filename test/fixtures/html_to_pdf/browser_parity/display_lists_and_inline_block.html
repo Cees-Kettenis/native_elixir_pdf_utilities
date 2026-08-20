@@ -25,6 +25,22 @@
         border: 1pt solid #2563eb;
         background-color: #dbeafe;
       }
+      .mixed-flow { margin-top: 12pt; }
+      .stacked-chip {
+        display: inline-block;
+        width: 80pt;
+        margin-right: 5pt;
+        padding: 4pt;
+        border: 1pt solid #7c3aed;
+        background-color: #ede9fe;
+      }
+      .stacked-chip div { height: 14pt; }
+      .following-block {
+        width: 180pt;
+        height: 18pt;
+        margin-top: 5pt;
+        background-color: #fee2e2;
+      }
       ul, ol {
         width: 230pt;
         margin: 12pt 0 0 18pt;
@@ -43,6 +59,10 @@
         <span class="chip">beta</span>
         <span class="gone">hidden chip</span>
         trailing inline text
+      </div>
+      <div class="mixed-flow">
+        before <div class="stacked-chip"><div>first row</div><div>second row</div></div> after
+        <div class="following-block">following block</div>
       </div>
       <ul>
         <li>unordered one</li>

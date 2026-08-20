@@ -451,23 +451,59 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert wide.y < chip.y
   end
 
-  test "layout rejects an inline block whose children are not inline layout content" do
-    assert {:ok, dom} = HtmlParser.parse("<p>Before <span>Child</span></p>")
-    assert {:ok, %{children: [paragraph]} = styled_tree} = Style.compute(dom, [])
+  test "layout flows block children inside atomic inline blocks" do
+    html = """
+    <div style="font-size: 10pt; line-height: 12pt">
+      Before <div style="display: inline-block; width: 40pt; padding: 2pt; background: #eee"><div>First</div><div>Second</div></div> After
+    </div>
+    """
 
-    [before, span] = paragraph.children
-    block_child = %{span | style: Map.put(span.style, :display, :block)}
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {170, 100}, margin: 10)
 
-    inline_block = %{
-      span
-      | style: Map.put(span.style, :display, :inline_block),
-        children: [block_child]
-    }
+    before = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "Before "))
+    first = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "First"))
+    second = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "Second"))
+    after_text = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == " After"))
+    background = Enum.find(layout_tree.boxes, &(&1.type == :rect and &1.fill_color != nil))
 
-    styled_tree = %{styled_tree | children: [%{paragraph | children: [before, inline_block]}]}
+    assert_in_delta background.width, 44.0, 0.0001
+    assert first.x == second.x
+    assert first.y > second.y
+    assert before.x < background.x
+    assert_in_delta after_text.x, background.x + background.width, 0.0001
+  end
 
-    assert {:error, :invalid_layout} =
-             Layout.layout(styled_tree, page_size: {100, 100}, margin: 10)
+  test "layout keeps consecutive inline content together before a block sibling" do
+    html = """
+    <div style="font-size: 10pt; line-height: 12pt">
+      Lead <span style="display: inline-block; width: 30pt; height: 12pt; background: red">Chip</span><div style="height: 12pt; background: blue">Block</div>
+    </div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {140, 100}, margin: 10)
+
+    lead = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "Lead "))
+    chip = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "Chip"))
+    block = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "Block"))
+
+    assert_in_delta chip.x, lead.x + lead.annotation_width, 0.0001
+    assert block.y < lead.y
+  end
+
+  test "layout rejects invalid inline flow inside a block-backed inline block" do
+    html = """
+    <div><div style="display: inline-block"><div style="display: inline"><div>Invalid nested flow</div></div></div></div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+
+    assert Layout.layout(styled_tree, page_size: {140, 100}, margin: 10) ==
+             {:error, :invalid_layout}
   end
 
   test "layout measures embedded font text with TTF glyph widths" do

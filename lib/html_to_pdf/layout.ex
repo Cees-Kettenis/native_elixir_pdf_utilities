@@ -676,9 +676,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp layout_block_flow(children, style, x, y, width) do
     result =
-      Enum.reduce_while(children, {:ok, [], y, nil}, fn child,
-                                                        {:ok, boxes, current_y,
-                                                         previous_margin_bottom} ->
+      children
+      |> group_inline_flow_children()
+      |> Enum.reduce_while({:ok, [], y, nil}, fn child,
+                                                 {:ok, boxes, current_y, previous_margin_bottom} ->
         {margin_top, margin_bottom} = flow_child_vertical_margins(child, style)
 
         collapsed_margin = collapsed_sibling_margin(previous_margin_bottom, margin_top)
@@ -740,28 +741,48 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp layout_flow_child(child, style, x, y, width) do
     case child do
-      %{type: :text, text: text} when is_binary(text) ->
-        text = normalize_inline_whitespace(text, child.style)
-
-        case trim_inline_whitespace(text) do
-          "" ->
-            {:ok, [], y}
-
-          _ ->
-            with {:ok, runs} <- inline_runs([child]) do
-              {boxes, content_height} = inline_text_boxes(runs, style, x, y, width, %{})
-              {:ok, boxes, y - content_height}
-            end
-        end
-
-      %{type: :element, style: %{display: display}} when display in [:inline, :line_break] ->
-        with {:ok, runs} <- inline_runs([child]) do
-          {boxes, content_height} = inline_text_boxes(runs, style, x, y, width, %{})
-          {:ok, boxes, y - content_height}
-        end
+      %{type: :inline_flow, children: children} ->
+        layout_inline_flow(children, style, x, y, width)
 
       _ ->
         layout_block(child, x, y, width)
+    end
+  end
+
+  defp group_inline_flow_children(children) do
+    children
+    |> Enum.chunk_by(&inline_flow_child?/1)
+    |> Enum.flat_map(fn [first | _children] = group ->
+      case inline_flow_child?(first) do
+        true -> [%{type: :inline_flow, children: group}]
+        false -> group
+      end
+    end)
+  end
+
+  defp inline_flow_child?(child) do
+    case child do
+      %{type: :text} ->
+        true
+
+      %{type: :element, style: %{display: display}} ->
+        display in [:inline, :inline_block, :line_break, :none]
+    end
+  end
+
+  defp layout_inline_flow(children, style, x, y, width) do
+    with {:ok, runs} <- inline_runs(children) do
+      case Enum.any?(runs, fn run ->
+             Map.get(run, :type) in [:inline_block, :inline_positioning_marker] or
+               Map.get(run, :hard_break, false) or trim_inline_whitespace(run.text) != ""
+           end) do
+        true ->
+          {boxes, content_height} = inline_text_boxes(runs, style, x, y, width, %{})
+          {:ok, boxes, y - content_height}
+
+        false ->
+          {:ok, [], y}
+      end
     end
   end
 
@@ -4150,9 +4171,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp layout_table_cell_blocks(children, style, x, y, width, available_height) do
     result =
-      Enum.reduce_while(children, {:ok, [], y, nil}, fn child,
-                                                        {:ok, boxes, current_y,
-                                                         previous_margin_bottom} ->
+      children
+      |> group_inline_flow_children()
+      |> Enum.reduce_while({:ok, [], y, nil}, fn child,
+                                                 {:ok, boxes, current_y, previous_margin_bottom} ->
         {margin_top, margin_bottom} = flow_child_vertical_margins(child, style)
         collapsed_margin = collapsed_sibling_margin(previous_margin_bottom, margin_top)
 
@@ -4197,23 +4219,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp layout_table_cell_block(child, style, x, y, width, available_height) do
     case child do
-      %{type: :text, text: text} when is_binary(text) ->
-        case trim_inline_whitespace(text) do
-          "" ->
-            {:ok, [], y}
-
-          _ ->
-            with {:ok, runs} <- inline_runs([child]) do
-              {boxes, content_height} = inline_text_boxes(runs, style, x, y, width, %{})
-              {:ok, boxes, y - content_height}
-            end
-        end
-
-      %{type: :element, style: %{display: display}} when display in [:inline, :line_break] ->
-        with {:ok, runs} <- inline_runs([child]) do
-          {boxes, content_height} = inline_text_boxes(runs, style, x, y, width, %{})
-          {:ok, boxes, y - content_height}
-        end
+      %{type: :inline_flow, children: children} ->
+        layout_inline_flow(children, style, x, y, width)
 
       _ ->
         child_style = Map.fetch!(child, :style)
@@ -4401,7 +4408,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp inline_run_boxes(run, x, line_top, baseline_y, width, metadata) do
     case run do
-      %{type: :inline_block, style: style, runs: child_runs} ->
+      %{type: :inline_block, style: style} ->
         margin = Map.get(style, :margin, edges(0.0))
         padding = Map.get(style, :padding, edges(0.0))
         border_widths = Map.get(style, :border_widths, edges(0.0))
@@ -4421,7 +4428,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           |> Enum.map(&Map.merge(&1, metadata))
 
         {content_boxes, _height} =
-          inline_text_boxes(child_runs, style, content_x, content_top, content_width, metadata)
+          case run do
+            %{runs: child_runs} ->
+              inline_text_boxes(
+                child_runs,
+                style,
+                content_x,
+                content_top,
+                content_width,
+                metadata
+              )
+
+            %{children: children} ->
+              case layout_block_content(
+                     children,
+                     style,
+                     content_x,
+                     content_top,
+                     content_width,
+                     metadata
+                   ) do
+                {:ok, boxes, height} -> {boxes, height}
+                {:error, _reason} -> {[%{type: :layout_error}], 0.0}
+              end
+          end
 
         boxes = background ++ content_boxes
 
@@ -4887,30 +4917,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       %{type: :element, style: %{display: :inline_block} = style, children: children} = element
       when is_list(children) ->
-        case inline_runs(children) do
-          {:ok, child_runs} ->
-            run = %{type: :inline_block, text: "", style: style, runs: child_runs}
+        run =
+          case inline_runs(children) do
+            {:ok, child_runs} ->
+              %{type: :inline_block, text: "", style: style, runs: child_runs}
 
-            run =
-              case Map.get(style, :position, :static) do
-                :relative ->
-                  context = %{
-                    id: System.unique_integer([:positive]),
-                    style: style,
-                    positioned_children: Map.get(element, :positioned_children, [])
-                  }
+            {:error, _reason} ->
+              %{type: :inline_block, text: "", style: style, children: children}
+          end
 
-                  Map.put(run, :inline_positioning_contexts, [context])
+        run =
+          case Map.get(style, :position, :static) do
+            :relative ->
+              context = %{
+                id: System.unique_integer([:positive]),
+                style: style,
+                positioned_children: Map.get(element, :positioned_children, [])
+              }
 
-                _ ->
-                  run
-              end
+              Map.put(run, :inline_positioning_contexts, [context])
 
-            {:ok, runs ++ [run]}
+            _ ->
+              run
+          end
 
-          {:error, reason} ->
-            {:error, reason}
-        end
+        {:ok, runs ++ [run]}
 
       %{type: :element, style: %{display: :none}} ->
         {:ok, runs}
@@ -4939,14 +4970,52 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp inline_block_content_width(%{style: style, runs: runs}, available_width) do
-    intrinsic_width = Enum.reduce(runs, 0.0, &(&2 + inline_run_width(&1, available_width)))
-    resolved_content_size(style, :width, available_width, intrinsic_width)
+  defp inline_block_content_width(run, available_width) do
+    style = Map.fetch!(run, :style)
+
+    default_width =
+      case run do
+        %{runs: runs} ->
+          Enum.reduce(runs, 0.0, &(&2 + inline_run_width(&1, available_width)))
+
+        %{children: children} ->
+          intrinsic_width = flex_block_intrinsic_width(children)
+          margin = Map.get(style, :margin, edges(0.0))
+
+          case available_width do
+            width when is_number(width) ->
+              available_content_width =
+                max(
+                  width - horizontal_box_size(style) - margin.left - margin.right,
+                  0.0
+                )
+
+              min(intrinsic_width, available_content_width)
+
+            _ ->
+              intrinsic_width
+          end
+      end
+
+    resolved_content_size(style, :width, available_width, default_width)
   end
 
-  defp inline_block_content_height(%{style: style, runs: runs}, content_width) do
-    line_height = Map.fetch!(style, :line_height)
-    intrinsic_height = inline_content_height(runs, content_width, line_height)
+  defp inline_block_content_height(run, content_width) do
+    style = Map.fetch!(run, :style)
+
+    intrinsic_height =
+      case run do
+        %{runs: runs} ->
+          line_height = Map.fetch!(style, :line_height)
+          inline_content_height(runs, content_width, line_height)
+
+        %{children: children} ->
+          case layout_container_content_height(style, children, content_width) do
+            {:ok, height} -> height
+            {:error, _reason} -> 0.0
+          end
+      end
+
     resolved_content_size(style, :height, nil, intrinsic_height)
   end
 
