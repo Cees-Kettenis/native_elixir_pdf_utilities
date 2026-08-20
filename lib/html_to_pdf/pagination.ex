@@ -46,14 +46,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   defp paginate_boxes(page_size, boxes, margins) do
     {_page_width, page_height} = page_size
     content_height = page_height - margins.top - margins.bottom
+    pagination_order = make_ref()
+
+    boxes =
+      boxes
+      |> Enum.with_index()
+      |> Enum.map(fn {box, index} -> Map.put(box, pagination_order, index) end)
+
+    {root_positioned_boxes, flow_boxes} =
+      Enum.split_with(boxes, &(Map.get(&1, :position_anchor) == :root))
 
     groups =
-      boxes
+      flow_boxes
       |> flow_groups()
       |> Enum.flat_map(&fragment_flow_group(&1, content_height))
 
     headers = repeated_table_headers(groups)
-    {:ok, groups_to_pages(groups, headers, page_size, margins)}
+
+    pages =
+      groups
+      |> groups_to_pages(headers, page_size, margins)
+      |> restore_root_positioned_boxes(root_positioned_boxes, pagination_order)
+
+    {:ok, pages}
+  end
+
+  defp restore_root_positioned_boxes([first_page | remaining_pages], boxes, pagination_order) do
+    root_boxes = Enum.reject(boxes, &page_break_box?/1)
+
+    first_page = %{
+      first_page
+      | boxes:
+          (first_page.boxes ++ root_boxes)
+          |> Enum.sort_by(&Map.fetch!(&1, pagination_order))
+    }
+
+    Enum.map([first_page | remaining_pages], fn page ->
+      %{page | boxes: Enum.map(page.boxes, &Map.delete(&1, pagination_order))}
+    end)
   end
 
   defp groups_to_pages(groups, headers, page_size, margins) do

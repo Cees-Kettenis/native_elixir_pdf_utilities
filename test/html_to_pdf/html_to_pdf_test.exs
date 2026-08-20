@@ -717,6 +717,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "(Alpha 3) Tj"
   end
 
+  test "render keeps root-positioned content on the first page" do
+    html = """
+    <div style="height: 20pt; page-break-after: always">First page</div>
+    <div style="height: 20pt">Second page</div>
+    <div style="position: absolute; left: 0; top: 0; width: 80pt; height: 10pt">Root marker</div>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {100, 100}, margin: 0)
+    assert {:ok, %{page_count: 2, pages: [first_page, second_page]}} = Text.extract_spans(pdf)
+
+    assert Enum.map(first_page.spans, & &1.text) == ["First page", "Root marker"]
+    assert Enum.map(second_page.spans, & &1.text) == ["Second page"]
+  end
+
   test "render fragments a paragraph taller than the printable page" do
     lines =
       1..13

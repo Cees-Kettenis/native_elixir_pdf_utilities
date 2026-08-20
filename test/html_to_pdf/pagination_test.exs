@@ -39,6 +39,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
     assert_in_delta blue.y, 55.0, 0.0001
   end
 
+  test "paginate keeps root-positioned boxes on the first page in stacking order" do
+    html = """
+    <div style="height: 70pt; background: red"></div>
+    <div style="height: 70pt; background: green"></div>
+    <div style="position: absolute; left: 0; top: 0; width: 10pt; height: 10pt; background: blue"></div>
+    <div style="position: absolute; left: 20pt; top: 0; width: 10pt; height: 10pt; background: #ffff00; z-index: -1"></div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled_tree} = Style.compute_detailed(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {100, 100}, margin: 0)
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+
+    yellow = Enum.find(first_page.boxes, &(Map.get(&1, :fill_color) == {1.0, 1.0, 0.0}))
+    blue = Enum.find(first_page.boxes, &(Map.get(&1, :fill_color) == {0, 0, 1}))
+
+    assert_in_delta yellow.y, 90.0, 0.0001
+    assert_in_delta blue.y, 90.0, 0.0001
+    assert Enum.find_index(first_page.boxes, &(&1 == yellow)) == 0
+    assert Enum.find_index(first_page.boxes, &(&1 == blue)) == 2
+    refute Enum.any?(second_page.boxes, &Map.has_key?(&1, :position_anchor))
+  end
+
   test "paginate supports default opts and empty pages" do
     assert Pagination.paginate(%{
              type: :layout,

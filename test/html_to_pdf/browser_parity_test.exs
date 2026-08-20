@@ -59,6 +59,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     {"page_geometry_asymmetric.html", max_changed_ratio: 0.05, max_average_delta: 0.025},
     {"page_rules_landscape.html",
      render_opts: [margin: 0], max_changed_ratio: 0.05, max_average_delta: 0.02},
+    {"root_absolute_pagination.html", max_changed_ratio: 0.05, max_average_delta: 0.03},
     {"page_furniture.html",
      render_opts: [
        page_furniture: [

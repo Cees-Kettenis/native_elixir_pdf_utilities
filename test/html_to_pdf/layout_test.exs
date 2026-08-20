@@ -1787,6 +1787,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert_in_delta green.width, 140.0, 0.0001
     assert_in_delta green.height, 120.0, 0.0001
     assert Enum.all?([red, blue, green], & &1.out_of_flow)
+    assert Enum.all?([red, blue, green], &(Map.get(&1, :position_anchor) == :root))
   end
 
   test "layout rejects positioned children whose containing or own display is unsupported" do
