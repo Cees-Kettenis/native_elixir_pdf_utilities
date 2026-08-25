@@ -141,6 +141,30 @@ defmodule NativeElixirPdfUtilities.MergeTest do
     refute merged =~ " 00000 f"
   end
 
+  test "replaces a null page Resources entry with effective inherited resources" do
+    content = "BT /F1 12 Tf (Inherited) Tj ET"
+
+    pdf =
+      merge_pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /Resources << /Font << /F1 4 0 R >> >> >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /Resources null /MediaBox [0 0 200 100] /Contents 5 0 R >>"},
+        {4, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"},
+        {5, "<< /Length #{byte_size(content)} >>\nstream\n#{content}\nendstream"}
+      ])
+
+    assert {:ok, source_document} = Reader.read(pdf)
+    assert [source_page] = source_document.pages
+    assert source_page.resources == %{"Font" => %{"F1" => {:ref, {4, 0}}}}
+
+    assert {:ok, merged} = Merge.merge([pdf])
+    assert {:ok, merged_document} = Reader.read(merged)
+    assert [merged_page] = merged_document.pages
+    assert merged_page.resources == %{"Font" => %{"F1" => {:ref, {6, 0}}}}
+    assert {:ok, "Inherited"} = Text.extract(merged, layout: false)
+  end
+
   test "densely renumbers sparse source objects before xref generation" do
     sparse =
       merge_pdf([

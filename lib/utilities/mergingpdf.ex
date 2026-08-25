@@ -243,7 +243,7 @@ defmodule NativeElixirPdfUtilities.Merge do
       dict_inner
       |> put_key("Parent", [{:generated_reference, parent_id}])
       |> ensure_type_page()
-      |> ensure_resources(inh_res)
+      |> put_optional_key("Resources", inh_res)
       |> put_key("MediaBox", inh_mb)
       |> put_optional_key("CropBox", inh_crop)
       |> put_optional_key("Rotate", inh_rotate)
@@ -287,21 +287,6 @@ defmodule NativeElixirPdfUtilities.Merge do
   # Ensure /Type /Page is set.
   defp ensure_type_page(tokens) do
     put_key(tokens, "Type", [{:name, "Page"}])
-  end
-
-  # Keep existing /Resources if non-empty; otherwise inject inherited /Resources when available.
-  defp ensure_resources(tokens, inh_res) do
-    case MergeValidator.split_dictionary_value(tokens, "Resources") do
-      {:ok, left, val, right} when is_list(val) and val != [] ->
-        left ++ [{:name, "Resources"} | val] ++ right
-
-      _ ->
-        if is_list(inh_res) and inh_res != [] do
-          put_key(tokens, "Resources", inh_res)
-        else
-          tokens
-        end
-    end
   end
 
   # Render tokens back into iodata while remapping indirect references using id_map.
