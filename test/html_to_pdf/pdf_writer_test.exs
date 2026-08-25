@@ -154,6 +154,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
                  author: "Ada \\ Bob",
                  subject: "Résumé",
                  keywords: ["finance", "quarterly"],
+                 producer: "Fixture producer",
                  creation_date: ~D[2026-07-20],
                  modification_date: modification_date
                }
@@ -163,6 +164,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "/Author (Ada \\\\ Bob)"
     assert pdf =~ "/Subject <FEFF005200E900730075006D00E9>"
     assert pdf =~ "/Keywords (finance, quarterly)"
+    assert pdf =~ "/Producer (Fixture producer)"
     assert pdf =~ "/CreationDate (D:20260720)"
     assert pdf =~ "/ModDate (D:20260721043045+00'00')"
     assert pdf =~ ~r/trailer\n<< \/Size \d+ \/Root 1 0 R \/Info \d+ 0 R >>/

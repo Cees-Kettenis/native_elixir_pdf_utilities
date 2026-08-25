@@ -41,6 +41,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
               optional(:author) => String.t(),
               optional(:subject) => String.t(),
               optional(:keywords) => String.t() | [String.t()],
+              optional(:producer) => String.t(),
               optional(:creation_date) =>
                 Date.t() | NaiveDateTime.t() | DateTime.t() | String.t(),
               optional(:modification_date) =>
@@ -126,8 +127,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   Supported options include `:page_size`, `:margin`, `:base_url`,
   `:stylesheets`, `:default_font`, explicit local `:fonts`, PDF `:metadata`,
   opt-in `:page_furniture` headers and footers, and `:unsupported_glyphs`.
-  Metadata supports title, author, subject, keywords, creation date, and
-  modification date. An HTML `<title>` supplies the PDF title when
+  Metadata supports title, author, subject, keywords, producer, creation date,
+  and modification date. An HTML `<title>` supplies the PDF title when
   `metadata[:title]` is not set.
 
   Unsupported graphemes are replaced visibly with U+FFFD by default. Set

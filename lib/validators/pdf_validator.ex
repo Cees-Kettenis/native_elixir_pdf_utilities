@@ -39,6 +39,15 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           | {:uncompressed, non_neg_integer(), non_neg_integer()}
           | {:compressed, pos_integer(), non_neg_integer()}
 
+  @typedoc "Validated cross-reference and trailer data available before object loading."
+  @type probe_context :: %{
+          required(:binary) => binary(),
+          required(:xref_offset) => non_neg_integer(),
+          required(:xref) => %{optional(integer()) => xref_entry()},
+          required(:trailer) => map(),
+          required(:encrypted?) => boolean()
+        }
+
   @typedoc "Diagnostic ownership supplied by the public operation."
   @type diagnostic_option ::
           {:operation, atom()} | {:module, module()} | {:source, String.t() | nil}
@@ -148,6 +157,20 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           [diagnostic_option()]
         ) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_xref(entries, trailer, pdf, opts \\ []) do
+    with :ok <- validate_xref_structure(entries, trailer, pdf, opts),
+         :ok <- validate_unencrypted(trailer, opts) do
+      :ok
+    end
+  end
+
+  @doc false
+  @spec validate_xref_structure(
+          %{optional(integer()) => xref_entry()},
+          map(),
+          binary(),
+          [diagnostic_option()]
+        ) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_xref_structure(entries, trailer, pdf, opts \\ []) do
     case {entries, trailer, pdf} do
       {entries, trailer, pdf} when is_map(entries) and is_map(trailer) and is_binary(pdf) ->
         size = Map.get(trailer, "Size")
@@ -181,15 +204,28 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           end) ->
             error(:xref, :invalid_pdf_input, "xref entry is outside its declared bounds", opts)
 
-          not is_nil(Map.get(trailer, "Encrypt")) ->
-            error(:encryption, :encrypted_pdf, "encrypted PDFs are not supported", opts)
-
           true ->
             :ok
         end
 
       _ ->
         error(:xref, :invalid_pdf_input, "parsed xref context is malformed", opts)
+    end
+  end
+
+  @doc false
+  @spec validate_unencrypted(map(), [diagnostic_option()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_unencrypted(trailer, opts \\ []) do
+    case trailer do
+      trailer when is_map(trailer) ->
+        case is_nil(Map.get(trailer, "Encrypt")) do
+          true -> :ok
+          false -> error(:encryption, :encrypted_pdf, "encrypted PDFs are not supported", opts)
+        end
+
+      _ ->
+        error(:trailer, :invalid_pdf_input, "parsed trailer context is malformed", opts)
     end
   end
 

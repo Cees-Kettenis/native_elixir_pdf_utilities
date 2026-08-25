@@ -37,6 +37,11 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
     valid_entries = %{0 => {:free, 0, 65_535}, 1 => {:uncompressed, 1, 0}}
 
     assert :ok = PdfValidator.validate_xref(valid_entries, trailer, pdf)
+    assert :ok = PdfValidator.validate_xref_structure(valid_entries, trailer, pdf)
+    assert :ok = PdfValidator.validate_unencrypted(trailer)
+
+    assert {:error, {:invalid_pdf_input, %{stage: :trailer}}} =
+             PdfValidator.validate_unencrypted(:malformed)
 
     assert {:error, {:encrypted_pdf, %{stage: :encryption}}} =
              PdfValidator.validate_xref(

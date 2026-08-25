@@ -15,6 +15,7 @@ defmodule NativeElixirPdfUtilities.Merge do
   """
 
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Pdf.InfoCodec
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Tokenizer
   alias NativeElixirPdfUtilities.Validators.MergeValidator
@@ -314,7 +315,7 @@ defmodule NativeElixirPdfUtilities.Merge do
         acc
 
       [{:name, name} | rest] ->
-        do_render_tokens(rest, id_map, [["/", encode_pdf_name(name)] | add_sep(acc)], name)
+        do_render_tokens(rest, id_map, [["/", InfoCodec.encode_name(name)] | add_sep(acc)], name)
 
       [{:generated_reference, obj} | rest] ->
         io = [Integer.to_string(obj), " 0 R"]
@@ -341,7 +342,12 @@ defmodule NativeElixirPdfUtilities.Merge do
         do_render_tokens(rest, id_map, [["\nstream\n", data, "\nendstream"] | acc], nil)
 
       [{:string, string} | rest] ->
-        do_render_tokens(rest, id_map, [["(", escape_literal(string), ")"] | add_sep(acc)], nil)
+        do_render_tokens(
+          rest,
+          id_map,
+          [["(", InfoCodec.escape_literal(string), ")"] | add_sep(acc)],
+          nil
+        )
 
       [{:hex_string, string} | rest] ->
         do_render_tokens(rest, id_map, [["<", to_hex(string), ">"] | add_sep(acc)], nil)
@@ -371,23 +377,6 @@ defmodule NativeElixirPdfUtilities.Merge do
     end
   end
 
-  # PDF names use # followed by two hexadecimal digits for bytes that cannot be
-  # written literally. Tokenization decodes those escapes, so rendering must
-  # restore them to avoid changing token boundaries or the logical name value.
-  defp encode_pdf_name(name) do
-    for <<byte <- name>> do
-      case byte do
-        byte
-        when byte >= 33 and byte <= 126 and
-               byte not in [?#, ?(, ?), ?<, ?>, ?[, ?], ?{, ?}, ?/, ?%] ->
-          <<byte>>
-
-        byte ->
-          ["#", :io_lib.format("~2.16.0B", [byte])]
-      end
-    end
-  end
-
   # Ensure reals are rendered as plain decimal (no scientific notation)
   defp format_pdf_real(f) do
     # If the value is essentially an integer, emit as integer
@@ -406,44 +395,6 @@ defmodule NativeElixirPdfUtilities.Merge do
     bin
     |> String.replace_trailing("0", "")
     |> String.replace_trailing(".", "")
-  end
-
-  # Escape a literal string for inclusion in (...) with PDF-compliant escapes.
-  defp escape_literal(bin) do
-    bin
-    |> :binary.bin_to_list()
-    |> Enum.map(fn
-      ?\n ->
-        "\\n"
-
-      ?\r ->
-        "\\r"
-
-      ?\t ->
-        "\\t"
-
-      ?\b ->
-        "\\b"
-
-      ?\f ->
-        "\\f"
-
-      ?( ->
-        "\\("
-
-      ?) ->
-        "\\)"
-
-      ?\\ ->
-        "\\\\"
-
-      c when c < 32 or c > 126 ->
-        # Use octal escape for non-printable
-        :io_lib.format("\\~.3.0b", [c])
-
-      c ->
-        <<c>>
-    end)
   end
 
   # Convert bytes to uppercase hex pairs iodata.

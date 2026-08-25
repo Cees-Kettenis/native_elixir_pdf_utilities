@@ -22,7 +22,7 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
     assert {:ok, defaults} = LimitsValidator.validate([])
     assert defaults == Limits.defaults()
     assert Limits.effective() == Limits.defaults()
-    assert map_size(defaults) == 37
+    assert map_size(defaults) == 39
   end
 
   test "accepts a partial override for every configurable resource limit" do
@@ -79,6 +79,14 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
              )
 
     assert object_message =~ ":max_pdf_object_stream_entries"
+
+    assert {:error, info_message} =
+             LimitsValidator.validate(
+               max_pdf_info_value_bytes: 10,
+               max_pdf_info_total_bytes: 9
+             )
+
+    assert info_message =~ ":max_pdf_info_total_bytes"
 
     assert {:error, cid_message} = LimitsValidator.validate(max_cid_width_entries: 65_537)
     assert cid_message =~ "PDF CID range"

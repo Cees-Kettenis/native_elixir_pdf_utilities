@@ -39,6 +39,8 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_pdf_decompression_ratio: 100,
     max_pdf_xref_length_candidates: 1_000,
     max_pdf_xref_revisions: 1_000,
+    max_pdf_info_value_bytes: 1_000_000,
+    max_pdf_info_total_bytes: 5_000_000,
     max_merge_inputs: 100,
     max_aggregate_merge_input_bytes: 100_000_000,
     max_merged_objects: 100_000,
@@ -82,6 +84,8 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_pdf_decompression_ratio
           | :max_pdf_xref_length_candidates
           | :max_pdf_xref_revisions
+          | :max_pdf_info_value_bytes
+          | :max_pdf_info_total_bytes
           | :max_merge_inputs
           | :max_aggregate_merge_input_bytes
           | :max_merged_objects

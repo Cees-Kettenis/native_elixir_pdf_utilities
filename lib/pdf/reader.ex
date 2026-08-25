@@ -45,6 +45,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           {:free, non_neg_integer(), non_neg_integer()}
           | {:uncompressed, non_neg_integer(), non_neg_integer()}
           | {:compressed, pos_integer(), non_neg_integer()}
+  @type probe_context :: PdfValidator.probe_context()
   @type error_reason ::
           :encrypted_pdf
           | :invalid_pdf_input
@@ -71,22 +72,53 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           {:ok, PdfValidator.context()}
           | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def read_validated(pdf) do
-    with :ok <- PdfValidator.validate_input(pdf, operation: :read, module: __MODULE__),
-         {:ok, xref_offset} <- final_xref_offset(pdf),
-         {:ok, xref, trailer} <- parse_xref_chain(pdf, xref_offset, %{}, 0),
+    with {:ok, probe} <- probe(pdf),
          :ok <-
-           PdfValidator.validate_xref(xref, trailer, pdf,
+           PdfValidator.validate_unencrypted(probe.trailer,
              operation: :read,
              module: __MODULE__
            ),
+         xref = probe.xref,
+         trailer = probe.trailer,
          {:ok, objects} <- load_objects(pdf, xref),
          {:ok, context} <-
            PdfValidator.validate(
-             %{binary: pdf, objects: objects, trailer: trailer, xref: xref},
+             %{
+               binary: pdf,
+               objects: objects,
+               trailer: trailer,
+               xref: xref,
+               xref_offset: probe.xref_offset
+             },
              operation: :read,
              module: __MODULE__
            ) do
       {:ok, context}
+    else
+      {:error, {_reason, _diagnostic}} = reader_error -> reader_error
+    end
+  end
+
+  @doc false
+  @spec probe(term()) ::
+          {:ok, probe_context()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
+  def probe(pdf) do
+    with :ok <- PdfValidator.validate_input(pdf, operation: :read, module: __MODULE__),
+         {:ok, xref_offset} <- final_xref_offset(pdf),
+         {:ok, xref, trailer} <- parse_xref_chain(pdf, xref_offset, %{}, 0),
+         :ok <-
+           PdfValidator.validate_xref_structure(xref, trailer, pdf,
+             operation: :read,
+             module: __MODULE__
+           ) do
+      {:ok,
+       %{
+         binary: pdf,
+         xref_offset: xref_offset,
+         xref: xref,
+         trailer: trailer,
+         encrypted?: not is_nil(Map.get(trailer, "Encrypt"))
+       }}
     else
       {:error, {_reason, _diagnostic}} = reader_error -> reader_error
     end

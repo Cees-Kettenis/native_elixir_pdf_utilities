@@ -9,6 +9,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.InfoValidator
 
   @border_styles [
     :none,
@@ -50,11 +51,12 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       {pages, opts} when is_list(pages) and is_list(opts) ->
         case Keyword.keyword?(opts) do
           true ->
-            with {:ok, metadata} <- normalize_metadata(Keyword.get(opts, :metadata, [])),
+            with {:ok, metadata} <-
+                   InfoValidator.normalize_new_metadata(Keyword.get(opts, :metadata, [])),
                  true <- pages != [] and Enum.all?(pages, &valid_page?/1) do
               {:ok, %{pages: pages, metadata: metadata}}
             else
-              :error ->
+              {:error, _reason} ->
                 Diagnostics.error(
                   :pdf,
                   :invalid_pdf_input,
@@ -310,111 +312,5 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       _ ->
         false
     end
-  end
-
-  defp normalize_metadata(metadata) do
-    metadata =
-      case metadata do
-        metadata when is_map(metadata) -> metadata
-        metadata when is_list(metadata) -> if Keyword.keyword?(metadata), do: Map.new(metadata)
-        _ -> nil
-      end
-
-    allowed_fields = [:title, :author, :subject, :keywords, :creation_date, :modification_date]
-
-    case is_map(metadata) and Enum.all?(Map.keys(metadata), &(&1 in allowed_fields)) do
-      true ->
-        Enum.reduce_while(metadata, {:ok, %{}}, fn {field, value}, {:ok, normalized} ->
-          case normalize_metadata_value(field, value) do
-            {:ok, value} -> {:cont, {:ok, Map.put(normalized, field, value)}}
-            :error -> {:halt, :error}
-          end
-        end)
-
-      false ->
-        :error
-    end
-  end
-
-  defp normalize_metadata_value(field, value) do
-    case {field, value} do
-      {field, value} when field in [:title, :author, :subject] and is_binary(value) ->
-        if String.valid?(value), do: {:ok, value}, else: :error
-
-      {:keywords, value} when is_binary(value) ->
-        if String.valid?(value), do: {:ok, value}, else: :error
-
-      {:keywords, values} when is_list(values) ->
-        case Enum.all?(values, &(is_binary(&1) and String.valid?(&1))) do
-          true -> {:ok, Enum.join(values, ", ")}
-          false -> :error
-        end
-
-      {field, value} when field in [:creation_date, :modification_date] ->
-        pdf_date(value)
-
-      _ ->
-        :error
-    end
-  end
-
-  defp pdf_date(value) do
-    case value do
-      %DateTime{} = date_time ->
-        offset_seconds = date_time.utc_offset + date_time.std_offset
-        sign = if offset_seconds < 0, do: "-", else: "+"
-        offset_seconds = abs(offset_seconds)
-        hours = div(offset_seconds, 3600) |> Integer.to_string() |> String.pad_leading(2, "0")
-
-        minutes =
-          div(rem(offset_seconds, 3600), 60) |> Integer.to_string() |> String.pad_leading(2, "0")
-
-        {:ok,
-         "D:#{calendar_date(date_time)}#{calendar_time(date_time)}#{sign}#{hours}'#{minutes}'"}
-
-      %NaiveDateTime{} = date_time ->
-        {:ok, "D:#{calendar_date(date_time)}#{calendar_time(date_time)}"}
-
-      %Date{} = date ->
-        {:ok, "D:#{calendar_date(date)}"}
-
-      value when is_binary(value) ->
-        parsed_iso_date(value)
-
-      _ ->
-        :error
-    end
-  end
-
-  defp parsed_iso_date(value) do
-    case DateTime.from_iso8601(value) do
-      {:ok, date_time, _offset} ->
-        pdf_date(date_time)
-
-      {:error, _reason} ->
-        case NaiveDateTime.from_iso8601(value) do
-          {:ok, date_time} ->
-            pdf_date(date_time)
-
-          {:error, _reason} ->
-            case Date.from_iso8601(value) do
-              {:ok, date} -> pdf_date(date)
-              {:error, _reason} -> :error
-            end
-        end
-    end
-  end
-
-  defp calendar_date(value) do
-    (value.year |> Integer.to_string() |> String.pad_leading(4, "0")) <>
-      two_digits(value.month) <> two_digits(value.day)
-  end
-
-  defp calendar_time(value) do
-    two_digits(value.hour) <> two_digits(value.minute) <> two_digits(value.second)
-  end
-
-  defp two_digits(value) do
-    value |> Integer.to_string() |> String.pad_leading(2, "0")
   end
 end

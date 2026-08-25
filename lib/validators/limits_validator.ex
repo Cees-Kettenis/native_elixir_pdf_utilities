@@ -54,6 +54,10 @@ defmodule NativeElixirPdfUtilities.Validators.LimitsValidator do
       limits.max_pdf_object_stream_entries > limits.max_pdf_objects ->
         {:error, "resource limit :max_pdf_object_stream_entries must not exceed :max_pdf_objects"}
 
+      limits.max_pdf_info_total_bytes < limits.max_pdf_info_value_bytes ->
+        {:error,
+         "resource limit :max_pdf_info_total_bytes must be greater than or equal to :max_pdf_info_value_bytes"}
+
       limits.max_cid_width_entries > 65_536 ->
         {:error, "resource limit :max_cid_width_entries must not exceed the PDF CID range"}
 

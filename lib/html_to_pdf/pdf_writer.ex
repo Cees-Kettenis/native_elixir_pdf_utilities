@@ -10,6 +10,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Pdf.InfoCodec
   alias NativeElixirPdfUtilities.Validators.WriterValidator
 
   # CSS defines one pixel as 1/96 inch, which is a fixed 0.75 PDF points.
@@ -102,28 +103,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         author: :Author,
         subject: :Subject,
         keywords: :Keywords,
+        producer: :Producer,
         creation_date: :CreationDate,
         modification_date: :ModDate
       ]
       |> Enum.flat_map(fn {field, pdf_key} ->
         case Map.fetch(metadata, field) do
-          {:ok, value} -> ["/#{pdf_key} #{pdf_string(value)}"]
-          :error -> []
+          {:ok, value} ->
+            {:ok, encoded} = value |> InfoCodec.encode_text() |> InfoCodec.serialize_value()
+            [["/", Atom.to_string(pdf_key), " ", encoded]]
+
+          :error ->
+            []
         end
       end)
-      |> Enum.join(" ")
+      |> Enum.intersperse(" ")
+      |> IO.iodata_to_binary()
 
     "<< #{entries} >>"
-  end
-
-  defp pdf_string(value) do
-    case String.to_charlist(value) |> Enum.all?(&(&1 <= 0x7F)) do
-      true ->
-        "(#{escape_text(value)})"
-
-      false ->
-        "<FEFF#{value |> :unicode.characters_to_binary(:utf8, {:utf16, :big}) |> Base.encode16()}>"
-    end
   end
 
   defp pages_object(page_object_ids) do
