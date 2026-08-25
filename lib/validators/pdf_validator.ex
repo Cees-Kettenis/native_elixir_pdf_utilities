@@ -16,6 +16,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   alias NativeElixirPdfUtilities.Pdf.Reader
 
   @inheritable_page_keys ["Resources", "MediaBox", "CropBox", "Rotate"]
+  @reference_resolution_option :__reference_resolution__
 
   @typedoc "An indirect PDF object reference."
   @type ref :: {non_neg_integer(), non_neg_integer()}
@@ -307,6 +308,10 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @spec validate(document(), [diagnostic_option()]) ::
           {:ok, context()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate(document, opts \\ []) do
+    with_reference_resolution(opts, fn opts -> validate_document(document, opts) end)
+  end
+
+  defp validate_document(document, opts) do
     case document do
       %{objects: objects, trailer: trailer} when is_map(objects) and is_map(trailer) ->
         root = Map.get(trailer, "Root")
@@ -314,8 +319,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         traversal = %{
           seen: %{},
           pages: [],
-          page_count: 0,
-          reference_resolution: %{cache: %{}, work: 0}
+          page_count: 0
         }
 
         with {:ok, catalog} <- dictionary(document, root, opts),
@@ -368,16 +372,18 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @spec resolve(document(), value(), [diagnostic_option()]) ::
           {:ok, value()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def resolve(document, value, opts \\ []) do
-    case value do
-      {:ref, ref} ->
-        case resolve_reference(document, ref, %{cache: %{}, work: 0}, %{}, 0, opts) do
-          {:ok, resolved, _terminal_ref, _resolution} -> {:ok, resolved}
-          {:error, _} = resolution_error -> resolution_error
-        end
+    with_reference_resolution(opts, fn opts ->
+      case value do
+        {:ref, ref} ->
+          case resolve_reference(document, ref, %{}, 0, opts) do
+            {:ok, resolved, _terminal_ref, _chain_depth} -> {:ok, resolved}
+            {:error, _} = resolution_error -> resolution_error
+          end
 
-      value ->
-        {:ok, value}
-    end
+        value ->
+          {:ok, value}
+      end
+    end)
   end
 
   @doc """
@@ -421,22 +427,26 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @spec validate_stream(document(), value(), [diagnostic_option()]) ::
           {:ok, stream_context()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_stream(document, value, opts \\ []) do
-    case value do
-      {:ref, ref} ->
-        with {:ok, stream_ref, object} <- resolve_stream_object(document, ref, %{}, opts),
-             %{value: dictionary, stream: stream} <- object,
-             true <- is_map(dictionary) and is_binary(stream),
-             :ok <- validate_stream_length(stream, dictionary, document, stream_ref, opts) do
-          {:ok, %{ref: stream_ref, dictionary: dictionary, stream: stream}}
-        else
-          false -> error(:stream, :invalid_pdf_input, "object is not a stream", opts, object: ref)
-          {:error, _} = stream_error -> stream_error
-          _ -> error(:stream, :invalid_pdf_input, "object is not a stream", opts, object: ref)
-        end
+    with_reference_resolution(opts, fn opts ->
+      case value do
+        {:ref, ref} ->
+          with {:ok, stream_ref, object} <- resolve_stream_object(document, ref, opts),
+               %{value: dictionary, stream: stream} <- object,
+               true <- is_map(dictionary) and is_binary(stream),
+               :ok <- validate_stream_length(stream, dictionary, document, stream_ref, opts) do
+            {:ok, %{ref: stream_ref, dictionary: dictionary, stream: stream}}
+          else
+            false ->
+              error(:stream, :invalid_pdf_input, "object is not a stream", opts, object: ref)
 
-      _ ->
-        error(:stream, :invalid_pdf_input, "stream must be an indirect object", opts)
-    end
+            {:error, _} = stream_error ->
+              stream_error
+          end
+
+        _ ->
+          error(:stream, :invalid_pdf_input, "stream must be an indirect object", opts)
+      end
+    end)
   end
 
   @doc """
@@ -449,16 +459,19 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @spec prepare_decoded_stream(document(), value(), [diagnostic_option()]) ::
           {:ok, stream_context()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_decoded_stream(document, value, opts \\ []) do
-    with {:ok, stream_context} <- validate_stream(document, value, opts),
-         {:ok, filter_value} <-
-           resolve(document, Map.get(stream_context.dictionary, "Filter"), opts),
-         {:ok, parameter_value} <-
-           resolve(document, Map.get(stream_context.dictionary, "DecodeParms"), opts),
-         {:ok, filters} <- filter_names(filter_value, opts),
-         {:ok, parameters} <- filter_parameters(document, parameter_value, length(filters), opts),
-         {:ok, filters} <- prepare_filters(Enum.zip(filters, parameters), opts) do
-      {:ok, Map.put(stream_context, :filters, filters)}
-    end
+    with_reference_resolution(opts, fn opts ->
+      with {:ok, stream_context} <- validate_stream(document, value, opts),
+           {:ok, filter_value} <-
+             resolve(document, Map.get(stream_context.dictionary, "Filter"), opts),
+           {:ok, parameter_value} <-
+             resolve(document, Map.get(stream_context.dictionary, "DecodeParms"), opts),
+           {:ok, filters} <- filter_names(filter_value, opts),
+           {:ok, parameters} <-
+             filter_parameters(document, parameter_value, length(filters), opts),
+           {:ok, filters} <- prepare_filters(Enum.zip(filters, parameters), opts) do
+        {:ok, Map.put(stream_context, :filters, filters)}
+      end
+    end)
   end
 
   @doc """
@@ -470,25 +483,27 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @spec number_array(document(), value(), non_neg_integer(), [diagnostic_option()]) ::
           {:ok, [number()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def number_array(document, value, expected_length, opts \\ []) do
-    with {:ok, values} <- resolve(document, value, opts),
-         true <- is_list(values) and length(values) == expected_length do
-      values
-      |> Enum.reduce_while({:ok, []}, fn item, {:ok, numbers} ->
-        case resolve(document, item, opts) do
-          {:ok, number} when is_number(number) -> {:cont, {:ok, [number | numbers]}}
-          {:ok, _value} -> {:halt, :invalid}
-          {:error, _} = resolution_error -> {:halt, resolution_error}
+    with_reference_resolution(opts, fn opts ->
+      with {:ok, values} <- resolve(document, value, opts),
+           true <- is_list(values) and length(values) == expected_length do
+        values
+        |> Enum.reduce_while({:ok, []}, fn item, {:ok, numbers} ->
+          case resolve(document, item, opts) do
+            {:ok, number} when is_number(number) -> {:cont, {:ok, [number | numbers]}}
+            {:ok, _value} -> {:halt, :invalid}
+            {:error, _} = resolution_error -> {:halt, resolution_error}
+          end
+        end)
+        |> case do
+          {:ok, numbers} -> {:ok, Enum.reverse(numbers)}
+          :invalid -> error(:validation, :invalid_pdf_input, "expected a PDF number array", opts)
+          {:error, _} = resolution_error -> resolution_error
         end
-      end)
-      |> case do
-        {:ok, numbers} -> {:ok, Enum.reverse(numbers)}
-        :invalid -> error(:validation, :invalid_pdf_input, "expected a PDF number array", opts)
+      else
+        false -> error(:validation, :invalid_pdf_input, "expected a PDF number array", opts)
         {:error, _} = resolution_error -> resolution_error
       end
-    else
-      false -> error(:validation, :invalid_pdf_input, "expected a PDF number array", opts)
-      {:error, _} = resolution_error -> resolution_error
-    end
+    end)
   end
 
   defp filter_names(value, opts) do
@@ -792,16 +807,9 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
       expected_parent ->
         case Map.get(dictionary, "Parent") do
           {:ref, parent_ref} ->
-            case resolve_reference(
-                   document,
-                   parent_ref,
-                   traversal.reference_resolution,
-                   %{},
-                   0,
-                   opts
-                 ) do
-              {:ok, _parent, ^expected_parent, resolution} ->
-                {:ok, %{traversal | reference_resolution: resolution}}
+            case resolve_reference(document, parent_ref, %{}, 0, opts) do
+              {:ok, _parent, ^expected_parent, _chain_depth} ->
+                {:ok, traversal}
 
               {:error, {:resource_limit_exceeded, _diagnostic}} = limit_error ->
                 limit_error
@@ -902,7 +910,61 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
-  defp resolve_reference(document, ref, resolution, seen, depth, opts) do
+  defp with_reference_resolution(opts, operation) do
+    case Keyword.fetch(opts, @reference_resolution_option) do
+      {:ok, _resolution} ->
+        operation.(opts)
+
+      :error ->
+        cache = :ets.new(__MODULE__, [:set, :private])
+        work = :atomics.new(1, signed: false)
+        resolution = %{cache: cache, work: work}
+
+        try do
+          operation.(Keyword.put(opts, @reference_resolution_option, resolution))
+        after
+          :ets.delete(cache)
+        end
+    end
+  end
+
+  defp reserve_reference_work(ref, opts) do
+    %{work: work} = Keyword.fetch!(opts, @reference_resolution_option)
+
+    case :atomics.add_get(work, 1, 1) <= Limits.get(:max_pdf_reference_resolution_work) do
+      true ->
+        :ok
+
+      false ->
+        error(
+          :limits,
+          :resource_limit_exceeded,
+          "indirect reference resolution work exceeds the limit",
+          opts,
+          object: ref
+        )
+    end
+  end
+
+  defp cached_reference(ref, opts) do
+    %{cache: cache} = Keyword.fetch!(opts, @reference_resolution_option)
+
+    case :ets.lookup(cache, ref) do
+      [{^ref, value, terminal_ref, chain_depth}] ->
+        {:ok, value, terminal_ref, chain_depth}
+
+      [] ->
+        :missing
+    end
+  end
+
+  defp cache_reference(ref, value, terminal_ref, chain_depth, opts) do
+    %{cache: cache} = Keyword.fetch!(opts, @reference_resolution_option)
+    true = :ets.insert(cache, {ref, value, terminal_ref, chain_depth})
+    :ok
+  end
+
+  defp resolve_reference(document, ref, seen, depth, opts) do
     cond do
       not valid_ref?(ref) ->
         error(:resolution, :invalid_pdf_input, "indirect reference is malformed", opts)
@@ -921,86 +983,81 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           object: ref
         )
 
-      resolution.work >= Limits.get(:max_pdf_reference_resolution_work) ->
-        error(
-          :limits,
-          :resource_limit_exceeded,
-          "indirect reference resolution work exceeds the limit",
-          opts,
-          object: ref
-        )
-
       true ->
-        resolution = %{resolution | work: resolution.work + 1}
+        with :ok <- reserve_reference_work(ref, opts) do
+          case cached_reference(ref, opts) do
+            {:ok, value, terminal_ref, chain_depth} ->
+              case depth + chain_depth < Limits.get(:max_pdf_reference_chain_depth) do
+                true ->
+                  {:ok, value, terminal_ref, chain_depth}
 
-        case Map.fetch(resolution.cache, ref) do
-          {:ok, {value, terminal_ref}} ->
-            {:ok, value, terminal_ref, resolution}
+                false ->
+                  error(
+                    :limits,
+                    :resource_limit_exceeded,
+                    "indirect reference chain depth exceeds the limit",
+                    opts,
+                    object: ref
+                  )
+              end
 
-          :error ->
-            case fetch_object_record(document, ref) do
-              {:ok, %{value: {:ref, next_ref}}} ->
-                case resolve_reference(
-                       document,
-                       next_ref,
-                       resolution,
-                       Map.put(seen, ref, true),
-                       depth + 1,
-                       opts
-                     ) do
-                  {:ok, value, terminal_ref, resolution} ->
-                    resolution = %{
-                      resolution
-                      | cache: Map.put(resolution.cache, ref, {value, terminal_ref})
-                    }
+            :missing ->
+              case fetch_object_record(document, ref) do
+                {:ok, %{value: {:ref, next_ref}}} ->
+                  case resolve_reference(
+                         document,
+                         next_ref,
+                         Map.put(seen, ref, true),
+                         depth + 1,
+                         opts
+                       ) do
+                    {:ok, value, terminal_ref, chain_depth} ->
+                      chain_depth = chain_depth + 1
+                      cache_reference(ref, value, terminal_ref, chain_depth, opts)
+                      {:ok, value, terminal_ref, chain_depth}
 
-                    {:ok, value, terminal_ref, resolution}
+                    {:error, _} = resolution_error ->
+                      resolution_error
+                  end
 
-                  {:error, _} = resolution_error ->
-                    resolution_error
-                end
+                {:ok, %{value: value}} ->
+                  cache_reference(ref, value, ref, 0, opts)
+                  {:ok, value, ref, 0}
 
-              {:ok, %{value: value}} ->
-                resolution = %{
-                  resolution
-                  | cache: Map.put(resolution.cache, ref, {value, ref})
-                }
+                {:ok, _object} ->
+                  error(
+                    :resolution,
+                    :invalid_pdf_input,
+                    "indirect object record is malformed",
+                    opts,
+                    object: ref
+                  )
 
-                {:ok, value, ref, resolution}
+                :missing ->
+                  error(
+                    :resolution,
+                    :invalid_pdf_input,
+                    "indirect object reference is missing",
+                    opts,
+                    object: ref
+                  )
 
-              {:ok, _object} ->
-                error(
-                  :resolution,
-                  :invalid_pdf_input,
-                  "indirect object record is malformed",
-                  opts,
-                  object: ref
-                )
-
-              :missing ->
-                error(
-                  :resolution,
-                  :invalid_pdf_input,
-                  "indirect object reference is missing",
-                  opts,
-                  object: ref
-                )
-
-              :malformed_document ->
-                error(
-                  :resolution,
-                  :invalid_pdf_input,
-                  "parsed PDF document object table is malformed",
-                  opts
-                )
-            end
+                :malformed_document ->
+                  error(
+                    :resolution,
+                    :invalid_pdf_input,
+                    "parsed PDF document object table is malformed",
+                    opts
+                  )
+              end
+          end
         end
     end
   end
 
   defp referenced_dictionary(document, ref, opts) do
-    with {:ok, resolved, terminal_ref, _resolution} <-
-           resolve_reference(document, ref, %{cache: %{}, work: 0}, %{}, 0, opts),
+    with {:ok, resolved, terminal_ref, _chain_depth} <-
+           resolve_reference(document, ref, %{}, 0, opts),
          true <- is_map(resolved) do
       {:ok, terminal_ref, resolved}
     else
@@ -1009,45 +1066,39 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
-  defp resolve_stream_object(document, ref, seen, opts) do
-    cond do
-      not valid_ref?(ref) ->
-        error(:resolution, :invalid_pdf_input, "indirect stream reference is malformed", opts)
-
-      Map.has_key?(seen, ref) ->
-        error(:resolution, :invalid_pdf_input, "indirect stream reference contains a cycle", opts,
-          object: ref
-        )
-
+  defp resolve_stream_object(document, ref, opts) do
+    case valid_ref?(ref) do
       true ->
-        case fetch_object_record(document, ref) do
-          {:ok, %{value: {:ref, next_ref}, stream: nil}} ->
-            resolve_stream_object(document, next_ref, Map.put(seen, ref, true), opts)
+        with {:ok, _value, stream_ref, _chain_depth} <-
+               resolve_reference(document, ref, %{}, 0, opts) do
+          case fetch_object_record(document, stream_ref) do
+            {:ok, %{stream: stream} = object} when is_binary(stream) ->
+              {:ok, stream_ref, object}
 
-          {:ok, %{stream: stream} = object} when is_binary(stream) ->
-            {:ok, ref, object}
+            {:ok, %{stream: _stream}} ->
+              error(:stream, :invalid_pdf_input, "object is not a stream", opts,
+                object: stream_ref
+              )
 
-          {:ok, %{stream: _stream}} ->
-            error(:stream, :invalid_pdf_input, "object is not a stream", opts, object: ref)
-
-          {:ok, _object} ->
+            {:ok, _object} ->
+              error(:stream, :invalid_pdf_input, "stream object record is malformed", opts,
+                object: stream_ref
+              )
+          end
+        else
+          {:error,
+           {:invalid_pdf_input,
+            %{stage: :resolution, message: "indirect object record is malformed; object " <> _}}} ->
             error(:stream, :invalid_pdf_input, "stream object record is malformed", opts,
               object: ref
             )
 
-          :missing ->
-            error(:resolution, :invalid_pdf_input, "stream reference is missing", opts,
-              object: ref
-            )
-
-          :malformed_document ->
-            error(
-              :resolution,
-              :invalid_pdf_input,
-              "parsed PDF document object table is malformed",
-              opts
-            )
+          {:error, _} = resolution_error ->
+            resolution_error
         end
+
+      false ->
+        error(:resolution, :invalid_pdf_input, "indirect stream reference is malformed", opts)
     end
   end
 

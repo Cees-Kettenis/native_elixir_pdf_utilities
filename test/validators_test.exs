@@ -236,6 +236,16 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
 
     assert work_diagnostic.stage == :limits
     assert work_diagnostic.message =~ "indirect reference resolution work exceeds the limit"
+
+    assert {:error, {:resource_limit_exceeded, split_work_diagnostic}} =
+             50
+             |> unique_page_chains_document(500)
+             |> PdfValidator.validate()
+
+    assert split_work_diagnostic.stage == :limits
+
+    assert split_work_diagnostic.message =~
+             "indirect reference resolution work exceeds the limit"
   end
 
   test "page-tree Parent validation includes indirect-object generations" do
@@ -349,6 +359,37 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
 
     assert {:error, {:invalid_pdf_input, %{stage: :stream}}} =
              PdfValidator.validate_stream(incomplete, {:ref, {1, 0}})
+  end
+
+  test "stream reference aliases enforce the shared reference depth limit" do
+    assert {:ok, %{ref: {1_000, 0}, stream: "ok"}} =
+             1_000
+             |> stream_reference_chain_document()
+             |> PdfValidator.validate_stream({:ref, {1, 0}})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             1_001
+             |> stream_reference_chain_document()
+             |> PdfValidator.validate_stream({:ref, {1, 0}})
+
+    assert diagnostic.stage == :limits
+
+    assert diagnostic.message ==
+             "indirect reference chain depth exceeds the limit; object 1001 0"
+  end
+
+  test "cached reference suffixes cannot bypass the reference depth limit" do
+    document = cached_suffix_number_array_document(600, 402)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             PdfValidator.number_array(
+               document,
+               [{:ref, {1, 0}}, {:ref, {601, 0}}],
+               2
+             )
+
+    assert diagnostic.stage == :limits
+    assert diagnostic.message =~ "indirect reference chain depth exceeds the limit"
   end
 
   test "decoded stream validation prepares canonical filters and parameters" do
@@ -878,6 +919,49 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
     %{objects: objects, trailer: %{"Root" => {:ref, {1, 0}}}}
   end
 
+  defp unique_page_chains_document(page_count, chain_length) do
+    {objects, kids, _next_object} =
+      Enum.reduce(1..page_count, {%{}, [], 3}, fn _page, {objects, kids, next_object} ->
+        page_ref = {next_object + chain_length, 0}
+
+        objects =
+          Enum.reduce(0..(chain_length - 1), objects, fn offset, objects ->
+            object_number = next_object + offset
+
+            next_ref =
+              case offset == chain_length - 1 do
+                true -> page_ref
+                false -> {object_number + 1, 0}
+              end
+
+            Map.put(objects, {object_number, 0}, object({:ref, next_ref}))
+          end)
+
+        page = object(%{"Type" => {:name, "Page"}, "Parent" => {:ref, {2, 0}}})
+        objects = Map.put(objects, page_ref, page)
+
+        {objects, [{:ref, {next_object, 0}} | kids], elem(page_ref, 0) + 1}
+      end)
+
+    objects =
+      objects
+      |> Map.put(
+        {1, 0},
+        object(%{"Type" => {:name, "Catalog"}, "Pages" => {:ref, {2, 0}}})
+      )
+      |> Map.put(
+        {2, 0},
+        object(%{
+          "Type" => {:name, "Pages"},
+          "Kids" => Enum.reverse(kids),
+          "Count" => page_count,
+          "MediaBox" => [0, 0, 100, 100]
+        })
+      )
+
+    %{objects: objects, trailer: %{"Root" => {:ref, {1, 0}}}}
+  end
+
   defp reference_chain_document(length) do
     objects =
       Enum.reduce(1..length, %{}, fn object_number, objects ->
@@ -888,6 +972,49 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
           end
 
         Map.put(objects, {object_number, 0}, object(value))
+      end)
+
+    %{objects: objects}
+  end
+
+  defp stream_reference_chain_document(length) do
+    objects =
+      Enum.reduce(1..length, %{}, fn object_number, objects ->
+        object =
+          case object_number == length do
+            true -> object(%{"Length" => 2}, "ok")
+            false -> object({:ref, {object_number + 1, 0}})
+          end
+
+        Map.put(objects, {object_number, 0}, object)
+      end)
+
+    %{objects: objects}
+  end
+
+  defp cached_suffix_number_array_document(suffix_length, prefix_length) do
+    suffix =
+      Enum.reduce(1..suffix_length, %{}, fn object_number, objects ->
+        value =
+          case object_number == suffix_length do
+            true -> 42
+            false -> {:ref, {object_number + 1, 0}}
+          end
+
+        Map.put(objects, {object_number, 0}, object(value))
+      end)
+
+    objects =
+      Enum.reduce(0..(prefix_length - 1), suffix, fn offset, objects ->
+        object_number = suffix_length + offset + 1
+
+        next_ref =
+          case offset == prefix_length - 1 do
+            true -> {1, 0}
+            false -> {object_number + 1, 0}
+          end
+
+        Map.put(objects, {object_number, 0}, object({:ref, next_ref}))
       end)
 
     %{objects: objects}
