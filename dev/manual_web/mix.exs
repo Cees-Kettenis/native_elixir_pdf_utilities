@@ -1,0 +1,29 @@
+defmodule ManualWeb.MixProject do
+  use Mix.Project
+
+  def project do
+    [
+      app: :manual_web,
+      version: "0.1.0",
+      elixir: "~> 1.19",
+      start_permanent: Mix.env() == :prod,
+      deps: deps()
+    ]
+  end
+
+  def application do
+    [
+      extra_applications: [:logger],
+      mod: {ManualWeb.Application, []}
+    ]
+  end
+
+  defp deps do
+    [
+      {:bandit, "~> 1.7"},
+      {:jason, "~> 1.4"},
+      {:native_elixir_pdf_utilities, path: "../.."},
+      {:plug, "~> 1.18"}
+    ]
+  end
+end
