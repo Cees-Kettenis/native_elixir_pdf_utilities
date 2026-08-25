@@ -513,7 +513,12 @@ defmodule NativeElixirPdfUtilities.Text do
     width_codes = Map.get(decoded, :width_codes, decoded.codes)
     glyph_width = Enum.reduce(width_codes, 0, &(font_width(state.font, &1) + &2))
     glyph_count = length(decoded.codes)
-    spaces = Enum.count(decoded.codes, &(&1 == 32))
+
+    spaces =
+      case Map.fetch(decoded, :source_codes) do
+        {:ok, source_codes} -> Enum.count(source_codes, &(&1 == <<32>>))
+        :error -> Enum.count(decoded.codes, &(&1 == 32))
+      end
 
     width =
       (glyph_width / 1000.0 * state.font_size + state.char_spacing * glyph_count +

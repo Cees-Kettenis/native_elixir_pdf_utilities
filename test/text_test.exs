@@ -1248,6 +1248,47 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert {rest.text, rest.x, rest.end_x} == {"BCDEFG", 30.0, 61.0}
   end
 
+  test "applies Type0 word spacing only to a one-byte code 20" do
+    multibyte_cmap =
+      "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n" <>
+        "1 beginbfchar\n<0020> <0041>\nendbfchar"
+
+    identity_font =
+      "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    multibyte_pdf =
+      page_pdf("BT /F1 10 Tf 1 0 0 1 10 20 Tm 100 Tw <0020> Tj ET",
+        font: identity_font,
+        cmap: multibyte_cmap,
+        descendant: "<< /Type /Font /Subtype /CIDFontType2 /DW 500 >>"
+      )
+
+    assert {:ok, %{pages: [%{spans: [multibyte]}]}} = Text.extract_spans(multibyte_pdf)
+    assert {multibyte.text, multibyte.x, multibyte.end_x} == {"A", 10.0, 15.0}
+
+    one_byte_cmap =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 beginbfchar\n<20> <0041>\nendbfchar"
+
+    encoding =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 begincidchar\n<20> 32\nendcidchar"
+
+    mapped_font =
+      "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    one_byte_pdf =
+      page_pdf("BT /F1 10 Tf 1 0 0 1 10 20 Tm 100 Tw <20> Tj ET",
+        font: mapped_font,
+        cmap: one_byte_cmap,
+        descendant: "<< /Type /Font /Subtype /CIDFontType2 /DW 500 >>",
+        extra_objects: [{9, stream_object("", encoding)}]
+      )
+
+    assert {:ok, %{pages: [%{spans: [one_byte]}]}} = Text.extract_spans(one_byte_pdf)
+    assert {one_byte.text, one_byte.x, one_byte.end_x} == {"A", 10.0, 115.0}
+  end
+
   test "validates supported Type0 Encoding CMap boundaries" do
     to_unicode =
       "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
