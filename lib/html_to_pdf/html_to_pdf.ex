@@ -228,10 +228,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
     case HtmlValidator.validate_render_request(html, opts, font_options) do
       :ok ->
         {:ok, opts} = font_options
+        image_budget = HtmlValidator.new_image_budget()
 
         with {:ok, dom} <- HtmlParser.parse_detailed(html),
              {:ok, effective_opts} <- effective_render_options_detailed(dom, opts),
-             {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts),
+             {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts, image_budget),
              {:ok, styled_tree} <-
                FontFallback.resolve(
                  styled_tree,
@@ -239,7 +240,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
                ),
              {:ok, layout_tree} <- layout_document(styled_tree, effective_opts),
              {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
-             {:ok, pages} <- PageFurniture.decorate(pages, layout_tree, effective_opts),
+             {:ok, pages} <-
+               PageFurniture.decorate(pages, layout_tree, effective_opts, image_budget),
              {:ok, pdf_binary} <- PdfWriter.render(pages, effective_opts) do
           {:ok, pdf_binary}
         end

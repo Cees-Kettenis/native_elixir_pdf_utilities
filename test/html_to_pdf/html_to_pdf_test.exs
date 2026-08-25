@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   use ExUnit.Case
 
   alias NativeElixirPdfUtilities.HtmlToPdf
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Text
 
   test "render converts a simple paragraph to a valid PDF binary" do
@@ -848,6 +849,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert furnished_pdf =~ "(Page 1 of 3) Tj"
     assert furnished_pdf =~ "(Page 2 of 3) Tj"
     assert furnished_pdf =~ "(Page 3 of 3) Tj"
+  end
+
+  test "render shares the image budget across repeated page furniture" do
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+    Limits.install(Map.put(original_limits, :max_image_count, 1))
+
+    image = "data:image/png;base64,#{Base.encode64(png_fixture(1, 1))}"
+
+    html = """
+    <p>First body page</p>
+    <div style="page-break-after: always"></div>
+    <p>Second body page</p>
+    """
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{
+               stage: :limits,
+               reason: :resource_limit_exceeded,
+               operation: :render,
+               module: NativeElixirPdfUtilities.HtmlToPdf,
+               message: "image count exceeds the limit"
+             }}} =
+             HtmlToPdf.render(html,
+               page_size: {200, 100},
+               margin: 20,
+               page_furniture: [
+                 header: ~s(<img src="#{image}" style="width: 1pt; height: 1pt">)
+               ]
+             )
   end
 
   test "render reports invalid page furniture through the shared diagnostics contract" do

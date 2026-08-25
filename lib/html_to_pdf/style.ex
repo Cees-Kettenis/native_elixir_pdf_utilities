@@ -65,6 +65,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
              {:invalid_css | :invalid_document | :invalid_options | :resource_limit_exceeded,
               map()}}
   def compute_detailed(dom, opts \\ []) do
+    compute_detailed(dom, opts, HtmlValidator.new_image_budget())
+  end
+
+  @doc false
+  @spec compute_detailed(term(), [render_option()], HtmlValidator.image_budget()) ::
+          {:ok, styled_tree()}
+          | {:error,
+             {:invalid_css | :invalid_document | :invalid_options | :resource_limit_exceeded,
+              map()}}
+  def compute_detailed(dom, opts, image_budget) do
     font_options = Font.normalize_options(opts)
 
     case HtmlValidator.validate_style_input(dom, opts, font_options) do
@@ -83,7 +93,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                  font_registry
                ),
              {:ok, rules} <- stylesheet_rules(stylesheet_entries) do
-          image_budget = HtmlValidator.new_image_budget()
           style_opts = Keyword.put(opts, :__image_budget__, image_budget)
 
           base_style = %{

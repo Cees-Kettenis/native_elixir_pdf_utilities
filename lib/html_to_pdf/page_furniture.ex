@@ -64,6 +64,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
   @spec decorate([page()], layout_tree(), [render_option()]) ::
           {:ok, [page()]} | {:error, detailed_error()}
   def decorate(pages, layout_tree, opts) do
+    decorate(pages, layout_tree, opts, HtmlValidator.new_image_budget())
+  end
+
+  @doc false
+  @spec decorate(
+          [page()],
+          layout_tree(),
+          [render_option()],
+          HtmlValidator.image_budget()
+        ) :: {:ok, [page()]} | {:error, detailed_error()}
+  def decorate(pages, layout_tree, opts, image_budget) do
     margins =
       case layout_tree do
         layout_tree when is_map(layout_tree) ->
@@ -85,7 +96,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
       :ok ->
         {:ok, margins} = margins
         {:ok, furniture} = furniture
-        decorate_pages(pages, layout_tree.page_size, margins, furniture, opts)
+        decorate_pages(pages, layout_tree.page_size, margins, furniture, opts, image_budget)
 
       {:error, {reason, diagnostic}} ->
         {:error,
@@ -97,7 +108,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
     end
   end
 
-  defp decorate_pages(pages, page_size, margins, furniture, opts) do
+  defp decorate_pages(pages, page_size, margins, furniture, opts, image_budget) do
     case furniture do
       nil ->
         {:ok, pages}
@@ -116,7 +127,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
                    total_pages,
                    page_size,
                    margins,
-                   opts
+                   opts,
+                   image_budget
                  ),
                {:ok, footer_boxes} <-
                  render_position(
@@ -126,7 +138,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
                    total_pages,
                    page_size,
                    margins,
-                   opts
+                   opts,
+                   image_budget
                  ) do
             decorated_page = %{page | boxes: page.boxes ++ header_boxes ++ footer_boxes}
             {:cont, {:ok, decorated ++ [decorated_page]}}
@@ -207,7 +220,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
     end
   end
 
-  defp render_position(position, template, page_number, total_pages, page_size, margins, opts) do
+  defp render_position(
+         position,
+         template,
+         page_number,
+         total_pages,
+         page_size,
+         margins,
+         opts,
+         image_budget
+       ) do
     case template do
       template when template in [nil, false] ->
         {:ok, []}
@@ -225,7 +247,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
           |> Keyword.put(:margin, margins)
 
         with {:ok, dom} <- HtmlParser.parse_detailed(html),
-             {:ok, styled_tree} <- Style.compute_detailed(dom, furniture_opts),
+             {:ok, styled_tree} <- Style.compute_detailed(dom, furniture_opts, image_budget),
              {:ok, styled_tree} <-
                FontFallback.resolve(
                  styled_tree,
