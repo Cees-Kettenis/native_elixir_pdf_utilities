@@ -2,8 +2,8 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoWriter do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
+  alias NativeElixirPdfUtilities.Validators.InfoValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
 
   @doc false
@@ -15,80 +15,69 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoWriter do
         document: %{
           binary: pdf,
           trailer: trailer,
+          xref: xref,
           xref_offset: previous_xref_offset
         }
       }
-      when is_binary(pdf) and is_map(trailer) and is_integer(previous_xref_offset) and
-             is_map(dictionary) ->
-        write_increment(pdf, trailer, previous_xref_offset, dictionary)
+      when is_binary(pdf) and is_map(trailer) and is_map(xref) and
+             is_integer(previous_xref_offset) and is_map(dictionary) ->
+        write_increment(pdf, trailer, xref, previous_xref_offset, dictionary)
 
       _ ->
         error("prepared information write context is malformed")
     end
   end
 
-  defp write_increment(pdf, trailer, previous_xref_offset, dictionary) do
+  defp write_increment(pdf, trailer, xref, previous_xref_offset, dictionary) do
     size = Map.get(trailer, "Size")
 
-    cond do
-      not is_integer(size) or size <= 0 ->
-        error("active trailer Size is malformed")
+    with :ok <- InfoValidator.validate_incremental_object_capacity(trailer, xref),
+         {:ok, dictionary_io} <- InfoCodec.serialize_value(dictionary),
+         {:ok, trailer_id} <- updated_identifier(Map.get(trailer, "ID"), pdf, dictionary_io),
+         {:ok, root} <- active_root(Map.get(trailer, "Root")) do
+      separator = trailing_separator(pdf)
+      object_number = size
+      object_offset = byte_size(pdf) + byte_size(separator)
 
-      size > Limits.get(:max_pdf_objects) ->
-        Diagnostics.error(
-          :limits,
-          :resource_limit_exceeded,
-          "PDF object count cannot accommodate an information update"
-        )
+      object = [
+        Integer.to_string(object_number),
+        " 0 obj\n",
+        dictionary_io,
+        "\nendobj\n"
+      ]
 
-      true ->
-        with {:ok, dictionary_io} <- InfoCodec.serialize_value(dictionary),
-             {:ok, trailer_id} <- updated_identifier(Map.get(trailer, "ID"), pdf, dictionary_io),
-             {:ok, root} <- active_root(Map.get(trailer, "Root")) do
-          separator = trailing_separator(pdf)
-          object_number = size
-          object_offset = byte_size(pdf) + byte_size(separator)
+      xref_offset = object_offset + :erlang.iolist_size(object)
 
-          object = [
-            Integer.to_string(object_number),
-            " 0 obj\n",
-            dictionary_io,
-            "\nendobj\n"
-          ]
+      incremental_trailer =
+        %{
+          "Size" => size + 1,
+          "Root" => root,
+          "Info" => {:ref, {object_number, 0}},
+          "Prev" => previous_xref_offset
+        }
+        |> maybe_put_identifier(trailer_id)
 
-          xref_offset = object_offset + :erlang.iolist_size(object)
+      {:ok, trailer_io} = InfoCodec.serialize_value(incremental_trailer)
 
-          incremental_trailer =
-            %{
-              "Size" => size + 1,
-              "Root" => root,
-              "Info" => {:ref, {object_number, 0}},
-              "Prev" => previous_xref_offset
-            }
-            |> maybe_put_identifier(trailer_id)
-
-          {:ok, trailer_io} = InfoCodec.serialize_value(incremental_trailer)
-
-          {:ok,
-           IO.iodata_to_binary([
-             pdf,
-             separator,
-             object,
-             "xref\n",
-             Integer.to_string(object_number),
-             " 1\n",
-             padded_offset(object_offset),
-             " 00000 n \n",
-             "trailer\n",
-             trailer_io,
-             "\nstartxref\n",
-             Integer.to_string(xref_offset),
-             "\n%%EOF\n"
-           ])}
-        else
-          :error -> error("information dictionary cannot be serialized")
-          {:error, _} = writer_error -> writer_error
-        end
+      {:ok,
+       IO.iodata_to_binary([
+         pdf,
+         separator,
+         object,
+         "xref\n",
+         Integer.to_string(object_number),
+         " 1\n",
+         padded_offset(object_offset),
+         " 00000 n \n",
+         "trailer\n",
+         trailer_io,
+         "\nstartxref\n",
+         Integer.to_string(xref_offset),
+         "\n%%EOF\n"
+       ])}
+    else
+      :error -> error("information dictionary cannot be serialized")
+      {:error, _} = writer_error -> writer_error
     end
   end
 

@@ -216,6 +216,36 @@ defmodule NativeElixirPdfUtilities.InfoTest do
              Info.put(pdf, title: "1234", author: "1234")
   end
 
+  test "rejects an information update that would exceed the readable object count" do
+    source =
+      pdf(
+        base_objects() ++
+          [
+            {4, "<< /Custom (four) >>"},
+            {5, "<< /Custom (five) >>"}
+          ]
+      )
+
+    original_limits = Limits.effective()
+    Limits.install(%{original_limits | max_pdf_objects: 7})
+
+    assert {:ok, updated} = Info.put(source, title: "Within the boundary")
+    assert {:ok, _document} = Reader.read(updated)
+
+    Limits.install(%{original_limits | max_pdf_objects: 6})
+
+    assert {:ok, _document} = Reader.read(source)
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{
+               stage: :limits,
+               operation: :put_info,
+               module: Info,
+               message: "PDF object count cannot accommodate an information update"
+             }}} = Info.put(source, title: "At the boundary")
+  end
+
   test "internal validation and incremental writing reject malformed prepared contexts" do
     assert {:error, {:invalid_pdf_input, %{stage: :validation}}} =
              InfoValidator.prepare_page_sizes(:malformed)
@@ -269,6 +299,9 @@ defmodule NativeElixirPdfUtilities.InfoTest do
     assert {:error, {:invalid_pdf_input, %{stage: :incremental_write}}} =
              InfoWriter.write(malformed_size, %{})
 
+    assert {:error, {:invalid_pdf_input, %{stage: :incremental_write}}} =
+             InfoValidator.validate_incremental_object_capacity(%{}, :malformed)
+
     malformed_root = put_in(context.document.trailer["Root"], :invalid)
 
     assert {:error, {:invalid_pdf_input, %{stage: :incremental_write}}} =
@@ -303,6 +336,7 @@ defmodule NativeElixirPdfUtilities.InfoTest do
       document: %{
         binary: "",
         trailer: %{"Size" => 1, "Root" => {:ref, {1, 0}}},
+        xref: %{},
         xref_offset: 0
       }
     }

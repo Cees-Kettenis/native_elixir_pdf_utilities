@@ -55,6 +55,34 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   @typedoc "Validated caller patch keyed by PDF information dictionary names."
   @type patch :: %{optional(binary()) => PdfValidator.value() | :remove}
 
+  @doc false
+  @spec validate_incremental_object_capacity(term(), term()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_incremental_object_capacity(trailer, xref) do
+    case {trailer, xref} do
+      {%{"Size" => size}, xref} when is_map(xref) ->
+        max_pdf_objects = Limits.get(:max_pdf_objects)
+
+        cond do
+          not is_integer(size) or size <= 0 ->
+            error(:incremental_write, "active trailer Size is malformed")
+
+          size > max_pdf_objects or map_size(xref) >= max_pdf_objects ->
+            Diagnostics.error(
+              :limits,
+              :resource_limit_exceeded,
+              "PDF object count cannot accommodate an information update"
+            )
+
+          true ->
+            :ok
+        end
+
+      _ ->
+        error(:incremental_write, "active cross-reference state is malformed")
+    end
+  end
+
   @doc """
   Reads and validates the common fields in a shared PDF context.
   """

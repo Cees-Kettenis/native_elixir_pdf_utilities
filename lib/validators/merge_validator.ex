@@ -135,38 +135,40 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   def prepare_remapping(inputs, start_id) do
     case is_list(inputs) and is_integer(start_id) and start_id > 0 do
       true ->
-        inputs
-        |> Enum.reduce_while({:ok, [], start_id, 0}, fn input,
-                                                        {:ok, prepared, next_id, page_count} ->
-          case input do
-            %{objects: objects, pages: pages} when is_list(objects) and is_list(pages) ->
-              page_count = page_count + length(pages)
+        with :ok <- validate_generated_entry_count(start_id) do
+          inputs
+          |> Enum.reduce_while({:ok, [], start_id, 0}, fn input,
+                                                          {:ok, prepared, next_id, page_count} ->
+            case input do
+              %{objects: objects, pages: pages} when is_list(objects) and is_list(pages) ->
+                page_count = page_count + length(pages)
 
-              cond do
-                page_count > Limits.get(:max_merged_pages) ->
-                  {:halt, resource_limit_error("merged page count exceeds the limit")}
+                cond do
+                  page_count > Limits.get(:max_merged_pages) ->
+                    {:halt, resource_limit_error("merged page count exceeds the limit")}
 
-                true ->
-                  case allocate_dense_ids(objects, next_id) do
-                    {:ok, id_map, next_id} ->
-                      {:cont,
-                       {:ok, [Map.put(input, :map, id_map) | prepared], next_id, page_count}}
+                  true ->
+                    case allocate_dense_ids(objects, next_id) do
+                      {:ok, id_map, next_id} ->
+                        {:cont,
+                         {:ok, [Map.put(input, :map, id_map) | prepared], next_id, page_count}}
 
-                    {:error, _} = limit_error ->
-                      {:halt, limit_error}
-                  end
-              end
+                      {:error, _} = limit_error ->
+                        {:halt, limit_error}
+                    end
+                end
 
-            _ ->
-              {:halt, error(:reference_remapping, "merge remapping inputs are malformed")}
+              _ ->
+                {:halt, error(:reference_remapping, "merge remapping inputs are malformed")}
+            end
+          end)
+          |> case do
+            {:ok, prepared, _next_id, _page_count} ->
+              prepared |> Enum.reverse() |> validate_reference_remapping()
+
+            {:error, _} = remapping_error ->
+              remapping_error
           end
-        end)
-        |> case do
-          {:ok, prepared, _next_id, _page_count} ->
-            prepared |> Enum.reverse() |> validate_reference_remapping()
-
-          {:error, _} = remapping_error ->
-            remapping_error
         end
 
       false ->
@@ -174,12 +176,21 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
     end
   end
 
+  defp validate_generated_entry_count(start_id) do
+    case start_id <= merged_output_entry_limit() do
+      true -> :ok
+      false -> resource_limit_error("merged object count exceeds the limit")
+    end
+  end
+
   defp allocate_dense_ids(objects, next_id) do
+    output_entry_limit = merged_output_entry_limit()
+
     Enum.reduce_while(objects, {:ok, %{}, next_id}, fn object, {:ok, id_map, next_id} ->
       case object do
         %{obj: object, gen: generation}
         when is_integer(object) and object >= 0 and is_integer(generation) and generation >= 0 ->
-          case next_id > Limits.get(:max_merged_objects) do
+          case next_id >= output_entry_limit do
             true ->
               {:halt, resource_limit_error("merged object count exceeds the limit")}
 
@@ -191,6 +202,10 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
           {:halt, error(:reference_remapping, "merge remapping inputs are malformed")}
       end
     end)
+  end
+
+  defp merged_output_entry_limit do
+    min(Limits.get(:max_merged_objects), Limits.get(:max_pdf_objects))
   end
 
   @doc """

@@ -2,10 +2,18 @@ defmodule NativeElixirPdfUtilities.MergeTest do
   use ExUnit.Case
 
   alias NativeElixirPdfUtilities.Merge
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Text
+  alias NativeElixirPdfUtilities.Validators.MergeValidator
 
   @fixture_directory Path.expand("fixtures/pdf_reader", __DIR__)
+
+  setup do
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+    :ok
+  end
 
   defp merge_pdf(objects, root_id \\ 1) do
     header = "%PDF-1.7\n"
@@ -110,6 +118,54 @@ defmodule NativeElixirPdfUtilities.MergeTest do
 
     assert bytes_diagnostic.stage == :limits
     assert bytes_diagnostic.message == "aggregate merge input bytes exceed the limit"
+  end
+
+  test "rejects a merged xref that would exceed the readable object count" do
+    source =
+      merge_pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>"}
+      ])
+
+    original_limits = Limits.effective()
+
+    Limits.install(%{
+      original_limits
+      | max_pdf_objects: 6,
+        max_merged_objects: 6
+    })
+
+    assert {:ok, merged} = Merge.merge([source])
+    assert {:ok, _document} = Reader.read(merged)
+
+    Limits.install(%{
+      original_limits
+      | max_pdf_objects: 5,
+        max_merged_objects: 5
+    })
+
+    assert {:ok, _document} = Reader.read(source)
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{
+               stage: :limits,
+               operation: :merge,
+               message: "merged object count exceeds the limit"
+             }}} = Merge.merge([source])
+
+    Limits.install(%{
+      original_limits
+      | max_pdf_objects: 2,
+        max_merged_objects: 2
+    })
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
+             MergeValidator.prepare_remapping(
+               [%{objects: [], pages: [], inherited: %{}}],
+               3
+             )
   end
 
   test "renumbers pages and injects inherited page attributes" do
