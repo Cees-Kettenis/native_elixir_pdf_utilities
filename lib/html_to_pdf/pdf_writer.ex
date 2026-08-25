@@ -301,8 +301,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp text_operator(box, font_resource) do
     operator =
       case Map.get(font_resource, :font_face) do
-        %{type: :embedded} = font ->
-          " <" <> Font.encode_embedded_text(box.text, font) <> "> Tj"
+        %{type: :embedded} ->
+          " <" <> Font.encode_embedded_text(box.text, font_resource.encoding) <> "> Tj"
 
         _ ->
           " (" <> escape_text(box.text) <> ") Tj"
@@ -905,16 +905,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp font_resource(entry, object_id, index) do
     case entry.font_face do
       %{type: :embedded} = font ->
+        encoding = Font.pdf_encoding(entry.texts, font)
+
         %{
           name: "F#{index}",
           object_id: object_id,
           descendant_object_id: object_id + 1,
           descriptor_object_id: object_id + 2,
           font_file_object_id: object_id + 3,
-          to_unicode_object_id: object_id + 4,
-          object_count: 5,
+          cid_to_gid_object_id: object_id + 4,
+          to_unicode_object_id: object_id + 5,
+          object_count: 6,
           font_face: font,
-          unicode_mappings: Font.unicode_mappings(entry.texts, font),
+          encoding: encoding,
           pdf_name: font.pdf_name
         }
 
@@ -935,6 +938,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       {resource.descendant_object_id, embedded_cid_font_object(resource, font)},
       {resource.descriptor_object_id, embedded_descriptor_object(resource, font)},
       {resource.font_file_object_id, stream_object(font.data)},
+      {resource.cid_to_gid_object_id, cid_to_gid_object(resource)},
       {resource.to_unicode_object_id, to_unicode_object(resource)}
     ]
   end
@@ -944,7 +948,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp embedded_cid_font_object(resource, font) do
-    "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /#{font.pdf_name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor #{resource.descriptor_object_id} 0 R /W #{cid_widths(font)} /CIDToGIDMap /Identity >>"
+    "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /#{font.pdf_name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor #{resource.descriptor_object_id} 0 R /W #{cid_widths(resource, font)} /CIDToGIDMap #{resource.cid_to_gid_object_id} 0 R >>"
   end
 
   defp embedded_descriptor_object(resource, font) do
@@ -957,8 +961,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   defp to_unicode_object(resource) do
     mappings =
-      resource.unicode_mappings
-      |> Enum.sort_by(fn {glyph_id, _unicode} -> glyph_id end)
+      resource.encoding.cid_to_unicode
+      |> Enum.sort_by(fn {cid, _unicode} -> cid end)
 
     stream =
       [
@@ -972,8 +976,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         "<0000> <FFFF>",
         "endcodespacerange",
         "#{length(mappings)} beginbfchar",
-        Enum.map_join(mappings, "\n", fn {glyph_id, unicode} ->
-          "<#{hex16(glyph_id)}> <#{hex16(unicode)}>"
+        Enum.map_join(mappings, "\n", fn {cid, unicode} ->
+          "<#{hex16(cid)}> <#{hex16(unicode)}>"
         end),
         "endbfchar",
         "endcmap",
@@ -990,13 +994,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     "<< /Length #{byte_size(data)} >>\nstream\n" <> data <> "\nendstream"
   end
 
-  defp cid_widths(font) do
+  defp cid_to_gid_object(resource) do
+    max_cid = Enum.reduce(Map.keys(resource.encoding.cid_to_gid), 0, &max/2)
+
+    data =
+      for cid <- 0..max_cid, into: <<>> do
+        <<Map.get(resource.encoding.cid_to_gid, cid, 0)::16>>
+      end
+
+    stream_object(data)
+  end
+
+  defp cid_widths(resource, font) do
     widths =
-      font.widths
-      |> Enum.with_index()
-      |> Enum.reject(fn {_width, glyph_id} -> glyph_id == 0 end)
-      |> Enum.map(fn {width, glyph_id} ->
-        "#{glyph_id} [#{scale_metric(width, font.units_per_em)}]"
+      resource.encoding.cid_to_gid
+      |> Enum.sort_by(fn {cid, _glyph_id} -> cid end)
+      |> Enum.map(fn {cid, glyph_id} ->
+        width = Enum.at(font.widths, glyph_id, font.default_width)
+        "#{cid} [#{scale_metric(width, font.units_per_em)}]"
       end)
       |> Enum.join(" ")
 

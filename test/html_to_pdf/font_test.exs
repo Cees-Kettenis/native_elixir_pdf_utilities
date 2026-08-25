@@ -272,6 +272,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert Font.text_width("iiii", font, 12.0) < Font.text_width("WWWW", font, 12.0)
     assert Font.encode_embedded_text("é", font) =~ ~r/^[0-9A-F]{4}$/u
     assert Font.unicode_mappings(["é", <<0>>], font) |> Map.values() == [?é]
+
+    shared_glyph = Map.fetch!(font.cmap, ?A)
+    shared_font = %{font | cmap: Map.put(font.cmap, ?B, shared_glyph)}
+    encoding = Font.pdf_encoding(["AB"], shared_font)
+
+    assert encoding.codepoint_to_cid == %{?A => 1, ?B => 2}
+    assert encoding.cid_to_gid == %{1 => shared_glyph, 2 => shared_glyph}
+    assert encoding.cid_to_unicode == %{1 => ?A, 2 => ?B}
+    assert Font.encode_embedded_text("AB", encoding) == "00010002"
   end
 
   test "load_registry rejects unsupported font config" do
@@ -370,6 +379,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
 
   defp ttf_font_path! do
     [
+      Path.expand("../../priv/fonts/dejavu/DejaVuSans.ttf", __DIR__),
       "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
       "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
       "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"

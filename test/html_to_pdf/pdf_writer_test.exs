@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
+  alias NativeElixirPdfUtilities.Text
 
   test "render writes a valid PDF for a text page" do
     pages = [
@@ -794,6 +795,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     refute pdf =~ "(Café) Tj"
   end
 
+  test "embedded font CIDs preserve Unicode characters that share a glyph" do
+    assert {:ok, registry} = Font.load_registry(fonts: [{"Fixture Sans", ttf_font_path!()}])
+    assert {:ok, _families, font} = Font.resolve("Fixture Sans", 400, :normal, registry)
+
+    shared_glyph = Map.fetch!(font.cmap, ?A)
+    font = %{font | cmap: Map.put(font.cmap, ?B, shared_glyph)}
+
+    pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes: [
+          %{
+            type: :text,
+            text: "AB",
+            x: 10.0,
+            y: 80.0,
+            font: Font.pdf_name(font),
+            font_face: font,
+            font_size: 12.0,
+            color: {0, 0, 0}
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, pdf} = PdfWriter.render(pages, [])
+    assert pdf =~ "/CIDToGIDMap "
+    refute pdf =~ "/CIDToGIDMap /Identity"
+    assert pdf =~ "<0001> <0041>"
+    assert pdf =~ "<0002> <0042>"
+    assert {:ok, "AB"} = Text.extract(pdf, layout: false)
+  end
+
   test "render rejects text that its selected font cannot encode" do
     built_in_page = %{
       size: {100.0, 100.0},
@@ -1069,6 +1103,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
   defp ttf_font_path! do
     [
+      Path.expand("../../priv/fonts/dejavu/DejaVuSans.ttf", __DIR__),
       "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
       "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
       "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"

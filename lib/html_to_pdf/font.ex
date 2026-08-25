@@ -29,6 +29,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
           descent: integer(),
           bbox: {integer(), integer(), integer(), integer()}
         }
+  @typedoc "A document-scoped mapping from Unicode code points to PDF CIDs and font glyphs."
+  @type pdf_encoding :: %{
+          required(:codepoint_to_cid) => %{optional(non_neg_integer()) => pos_integer()},
+          required(:cid_to_gid) => %{optional(pos_integer()) => non_neg_integer()},
+          required(:cid_to_unicode) => %{optional(pos_integer()) => non_neg_integer()}
+        }
   @type font_face :: built_in_font() | embedded_font()
 
   @built_in_families ["Courier", "Helvetica", "Times-Roman"]
@@ -276,15 +282,61 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   end
 
   @doc """
+  Builds a document-scoped CID encoding for text shown with an embedded font.
+  """
+  @spec pdf_encoding([String.t()], embedded_font()) :: pdf_encoding()
+  def pdf_encoding(texts, font) do
+    encoding = %{codepoint_to_cid: %{}, cid_to_gid: %{}, cid_to_unicode: %{}}
+
+    {encoding, _next_cid} =
+      Enum.reduce(texts, {encoding, 1}, fn text, {encoding, next_cid} ->
+        text
+        |> String.to_charlist()
+        |> Enum.reduce({encoding, next_cid}, fn codepoint, {encoding, next_cid} ->
+          case Map.has_key?(encoding.codepoint_to_cid, codepoint) do
+            true ->
+              {encoding, next_cid}
+
+            false ->
+              case Map.get(font.cmap, codepoint, 0) do
+                0 ->
+                  {encoding, next_cid}
+
+                glyph_id ->
+                  encoding = %{
+                    codepoint_to_cid: Map.put(encoding.codepoint_to_cid, codepoint, next_cid),
+                    cid_to_gid: Map.put(encoding.cid_to_gid, next_cid, glyph_id),
+                    cid_to_unicode: Map.put(encoding.cid_to_unicode, next_cid, codepoint)
+                  }
+
+                  {encoding, next_cid + 1}
+              end
+          end
+        end)
+      end)
+
+    encoding
+  end
+
+  @doc """
   Encodes text for an embedded Type0 font content stream.
   """
-  @spec encode_embedded_text(String.t(), embedded_font()) :: String.t()
-  def encode_embedded_text(text, font) do
+  @spec encode_embedded_text(String.t(), pdf_encoding() | embedded_font()) :: String.t()
+  def encode_embedded_text(text, encoding_or_font) do
+    encoding =
+      case encoding_or_font do
+        %{codepoint_to_cid: mappings} = encoding when is_map(mappings) ->
+          encoding
+
+        %{type: :embedded} = font ->
+          pdf_encoding([text], font)
+      end
+
     text
     |> String.to_charlist()
     |> Enum.map_join("", fn codepoint ->
-      glyph_id = Map.get(font.cmap, codepoint, 0)
-      <<glyph_id::16>> |> Base.encode16(case: :upper)
+      cid = Map.fetch!(encoding.codepoint_to_cid, codepoint)
+      Base.encode16(<<cid::16>>, case: :upper)
     end)
   end
 
@@ -295,18 +347,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
           optional(non_neg_integer()) => non_neg_integer()
         }
   def unicode_mappings(texts, font) do
-    Enum.reduce(texts, %{}, fn text, acc ->
-      text
-      |> String.to_charlist()
-      |> Enum.reduce(acc, fn codepoint, mappings ->
-        glyph_id = Map.get(font.cmap, codepoint, 0)
-
-        case glyph_id do
-          0 -> mappings
-          glyph_id -> Map.put_new(mappings, glyph_id, codepoint)
-        end
-      end)
-    end)
+    pdf_encoding(texts, font).cid_to_unicode
   end
 
   defp load_fonts(fonts) do
