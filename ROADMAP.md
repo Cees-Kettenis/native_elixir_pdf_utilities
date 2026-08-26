@@ -56,7 +56,63 @@ shared PDF reader.
   encryption status, and diagnostic failures.
 - Preserve 100% test coverage for public modules.
 
-### 0.14.0 - Page Transforms and Document Assembly
+### 0.14.0 - Cross-Platform System Font Discovery
+
+Milestone goal: resolve CSS font families through the host operating system so
+documents use the fonts selected by their developers on Linux, macOS, and
+Windows instead of relying primarily on hard-coded installation paths.
+
+#### Scope
+
+- Add platform-specific system font discovery:
+  - Fontconfig on Linux
+  - Core Text on macOS
+  - DirectWrite on Windows
+- Resolve family, weight, and style to a concrete font face and file that the
+  existing parser and PDF embedding path can consume.
+- Resolve CSS generic families such as `serif`, `sans-serif`, and `monospace`
+  through the platform adapter.
+- Keep explicitly registered fonts and `@font-face` sources ahead of system
+  font discovery in the resolution order.
+- Preserve the bundled font as the final fallback when no requested or system
+  face can be used.
+- Cache successful and unsuccessful system lookups within bounded resource
+  limits so repeated text measurement does not repeatedly query the operating
+  system.
+- Provide a documented option to disable system discovery when reproducible
+  output across different hosts is more important than matching locally
+  installed fonts.
+
+#### Design Notes
+
+- Use operating-system font APIs as the primary discovery mechanism rather
+  than maintaining lists of known installation directories.
+- Keep platform integration behind a common adapter boundary and degrade to
+  the existing fallback path when a platform service is unavailable.
+- Use one resolved face for text measurement, line breaking, layout, and PDF
+  embedding; never measure with a substitute and write with another font.
+- Accept only font files and face formats supported by the parser and writer.
+  Continue through the CSS fallback list, or return an actionable diagnostic
+  when an explicitly required face cannot be consumed.
+- Respect font embedding restrictions exposed by the font metadata.
+- Document that system discovery follows each host's installed fonts and can
+  therefore produce different output across machines.
+
+#### Completion Criteria
+
+- Add focused tests for family, weight, style, generic-family, CSS fallback,
+  explicit-font precedence, unavailable-service, and unsupported-face paths.
+- Exercise Linux, macOS, and Windows discovery adapters on their native CI
+  platforms.
+- Add a regression fixture that proves an installed font is used consistently
+  for measurement and embedding, including right alignment and narrow table
+  headers.
+- Confirm disabling system discovery preserves deterministic bundled-fallback
+  behavior.
+- Document the lookup order, supported font formats, platform requirements,
+  embedding restrictions, and reproducibility trade-offs.
+
+### 0.15.0 - Page Transforms and Document Assembly
 
 Milestone goal: let applications assemble, split, rearrange, and rotate PDF documents
 after rendering or receiving them.
@@ -77,7 +133,7 @@ after rendering or receiving them.
 - Add unit tests for page range validation, page picking, deletion, and rotation.
 - Add regression fixtures for realistic merged and multi-page PDFs.
 
-### 0.15.0 - Bookmarks and Outlines
+### 0.16.0 - Bookmarks and Outlines
 
 Milestone goal: support navigation metadata for generated reports and assembled document
 packets.
@@ -95,7 +151,7 @@ packets.
 
 - Add unit and fixture tests for outline creation and outline preservation.
 
-### 0.16.0 - Stamping and Existing-PDF Page Numbers
+### 0.17.0 - Stamping and Existing-PDF Page Numbers
 
 Milestone goal: add common overlay workflows for drafts, approvals, internal documents,
 branded output, and assembled packets.
@@ -116,7 +172,7 @@ branded output, and assembled packets.
 - Add unit and fixture tests for stamping and page numbering.
 - Add visual regression coverage for stamping and watermarking behavior.
 
-### 0.17.0 - PDF Forms and Attachments
+### 0.18.0 - PDF Forms and Attachments
 
 Milestone goal: support common operational document workflows involving existing PDF
 forms and bundled sidecar files.
@@ -138,7 +194,7 @@ forms and bundled sidecar files.
 - Add unit and fixture tests for form filling, flattening, and attachments.
 - Verify form-filled PDFs remain readable by the shared PDF reader.
 
-### 0.18.0 - Resource Limits and API Boundary
+### 0.19.0 - Resource Limits and API Boundary
 
 Milestone goal: harden the library behavior that will be difficult to change after
 `1.0.0`.
@@ -198,90 +254,7 @@ Milestone goal: harden the library behavior that will be difficult to change aft
 - Add doctests for public examples where they can run without external browser
   tooling.
 
-### 0.19.0 - Optimization and Archive-Friendly Output
-
-Milestone goal: improve render-time scaling, memory use, output size, and archive
-readiness without claiming full PDF/A compliance before the library can validate
-it properly.
-
-#### Scope
-
-- Improve HTML-to-PDF runtime and memory scaling:
-  - store embedded-font glyph widths in a constant-time lookup structure
-  - cache font-fallback candidates by family, weight, and style within a render
-  - construct fallback runs and inline layout collections without repeated list
-    appends, last-element updates, or binary concatenation
-  - cache repeated text measurements and avoid recomputing complete line widths
-    while wrapping each token
-  - reuse table intrinsic measurements and precompute column geometry instead of
-    repeatedly traversing column lists
-  - collect PDF-writer text and resource data in linear passes
-  - separate the complete font registry from per-element style maps and carry
-    lightweight font identifiers through style and layout trees
-- Add conservative compression and optimization:
-  - compress uncompressed streams
-  - deduplicate repeated images where safe
-  - remove unreachable objects where safe
-  - optionally subset embedded fonts
-- Add best-effort archive-friendly output mode:
-  - embed required fonts
-  - avoid unsupported transparency where practical
-  - include document metadata
-  - expose best-effort diagnostics
-
-#### Design Notes
-
-- Ensure optimization does not intentionally change visual output.
-- Measure runtime work with deterministic BEAM reductions in addition to
-  wall-clock benchmarks.
-- Preserve browser-parity coverage while changing style, text, font, and table
-  internals.
-- Document the difference between archive-friendly output and full PDF/A
-  compliance.
-- Treat strict PDF/A validation and claims of fully validated archival output as
-  a future version 2 objective, not a `1.0.0` requirement.
-
-#### Completion Criteria
-
-- Add optimization fixture tests that confirm output remains readable.
-- Add production-shaped text and table benchmarks that bound per-element and
-  per-token scaling.
-- Confirm optimized rendering preserves existing CSS, font-fallback, layout,
-  pagination, and browser-parity results.
-- Add fixture coverage for best-effort archive-friendly output.
-
-### 0.20.0 - Documentation, Fixtures, and Release Polish
-
-Milestone goal: remove small documentation and example friction before the release
-candidate.
-
-#### Scope
-
-- Add a changelog discipline section that explains how pre-`1.0.0` breaking
-  changes are recorded.
-- Add final production-style fixture coverage for common business documents that
-  were not already represented by browser parity fixtures.
-- Add final examples for metadata, static form rendering, PDF inspection,
-  transforms, stamping, and error handling.
-
-#### Design Notes
-
-- Tighten README and HexDocs navigation so compatibility, examples, browser
-  parity coverage, roadmap, and changelog are easy to find.
-- Review all unsupported-feature documentation and add caller-side alternatives
-  where useful.
-- Review generated documentation for stale option names, old module names, and
-  examples that no longer match stable return shapes.
-
-#### Completion Criteria
-
-- Run doctests and normal tests after documentation example updates.
-- Run browser parity tests for any fixture or visible rendering documentation
-  changes.
-- Confirm README, HexDocs guide links, changelog links, and roadmap links are
-  valid.
-
-### 0.21.0 - Complete PNG Decoding and CMYK JPEG Handling
+### 0.20.0 - Complete PNG Decoding and CMYK JPEG Handling
 
 Milestone goal: make the renderer's PNG support cover conforming PNG image
 variants and make four-component JPEG rendering predictable, while preserving
@@ -349,7 +322,90 @@ strict input validation and bounded resource use.
 - Confirm grayscale and three-component JPEG rendering remains unchanged.
 - Preserve 100% test coverage and pass the full HTML-to-PDF quality gate.
 
-### 0.22.0 - Release Candidate and API Freeze
+### 0.21.0 - Optimization and Archive-Friendly Output
+
+Milestone goal: improve render-time scaling, memory use, output size, and archive
+readiness without claiming full PDF/A compliance before the library can validate
+it properly.
+
+#### Scope
+
+- Improve HTML-to-PDF runtime and memory scaling:
+  - store embedded-font glyph widths in a constant-time lookup structure
+  - cache font-fallback candidates by family, weight, and style within a render
+  - construct fallback runs and inline layout collections without repeated list
+    appends, last-element updates, or binary concatenation
+  - cache repeated text measurements and avoid recomputing complete line widths
+    while wrapping each token
+  - reuse table intrinsic measurements and precompute column geometry instead of
+    repeatedly traversing column lists
+  - collect PDF-writer text and resource data in linear passes
+  - separate the complete font registry from per-element style maps and carry
+    lightweight font identifiers through style and layout trees
+- Add conservative compression and optimization:
+  - compress uncompressed streams
+  - deduplicate repeated images where safe
+  - remove unreachable objects where safe
+  - optionally subset embedded fonts
+- Add best-effort archive-friendly output mode:
+  - embed required fonts
+  - avoid unsupported transparency where practical
+  - include document metadata
+  - expose best-effort diagnostics
+
+#### Design Notes
+
+- Ensure optimization does not intentionally change visual output.
+- Measure runtime work with deterministic BEAM reductions in addition to
+  wall-clock benchmarks.
+- Preserve browser-parity coverage while changing style, text, font, and table
+  internals.
+- Document the difference between archive-friendly output and full PDF/A
+  compliance.
+- Treat strict PDF/A validation and claims of fully validated archival output as
+  a future version 2 objective, not a `1.0.0` requirement.
+
+#### Completion Criteria
+
+- Add optimization fixture tests that confirm output remains readable.
+- Add production-shaped text and table benchmarks that bound per-element and
+  per-token scaling.
+- Confirm optimized rendering preserves existing CSS, font-fallback, layout,
+  pagination, and browser-parity results.
+- Add fixture coverage for best-effort archive-friendly output.
+
+### 0.22.0 - Documentation, Fixtures, and Release Polish
+
+Milestone goal: remove small documentation and example friction before the release
+candidate.
+
+#### Scope
+
+- Add a changelog discipline section that explains how pre-`1.0.0` breaking
+  changes are recorded.
+- Add final production-style fixture coverage for common business documents that
+  were not already represented by browser parity fixtures.
+- Add final examples for metadata, static form rendering, PDF inspection,
+  transforms, stamping, and error handling.
+
+#### Design Notes
+
+- Tighten README and HexDocs navigation so compatibility, examples, browser
+  parity coverage, roadmap, and changelog are easy to find.
+- Review all unsupported-feature documentation and add caller-side alternatives
+  where useful.
+- Review generated documentation for stale option names, old module names, and
+  examples that no longer match stable return shapes.
+
+#### Completion Criteria
+
+- Run doctests and normal tests after documentation example updates.
+- Run browser parity tests for any fixture or visible rendering documentation
+  changes.
+- Confirm README, HexDocs guide links, changelog links, and roadmap links are
+  valid.
+
+### 0.23.0 - Release Candidate and API Freeze
 
 Milestone goal: stop expanding scope and harden the public API before `1.0.0`.
 

@@ -201,6 +201,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     system_font =
       [
         {"Liberation Sans", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"},
+        {"Liberation Sans", "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"},
+        {"Liberation Sans", "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"},
         {"Noto Sans", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"}
       ]
       |> Enum.find(fn {_family, path} -> File.regular?(path) end)

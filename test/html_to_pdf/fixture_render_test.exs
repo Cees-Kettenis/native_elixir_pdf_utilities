@@ -24,6 +24,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
     assert_layout_text(layout_tree, "Supplier Address")
     assert_layout_text(layout_tree, "GGPHJ5376SU27")
     assert_layout_text(layout_tree, "Total: 40Y - POLAR")
+
+    title = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "PURCHASE ORDER"))
+    assert title.font_face.type == :embedded
+    assert title.font_face.family == "Liberation Sans"
+    assert_in_delta title.x + title.annotation_width, 587.78, 0.01
   end
 
   test "renders scrubbed stock sticker fixture at custom label size" do
@@ -59,6 +64,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
 
     assert_layout_text(layout_tree, "MATERIAL")
     assert_layout_text(layout_tree, "REQUISITION")
+    assert_layout_text(layout_tree, "Item Number")
+    assert_layout_text(layout_tree, "Colour Code")
     assert_layout_text(layout_tree, "MR-A-0726-0001")
     assert_layout_text(layout_tree, "AGS-NB0100")
     assert_layout_text(layout_tree, "Requested By:")

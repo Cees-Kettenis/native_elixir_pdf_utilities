@@ -66,25 +66,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     },
     %{
       family: "Liberation Sans",
-      path: "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+      path: [
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"
+      ],
       weight: 400,
       style: :normal
     },
     %{
       family: "Liberation Sans",
-      path: "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+      path: [
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-Bold.ttf"
+      ],
       weight: 700,
       style: :normal
     },
     %{
       family: "Liberation Sans",
-      path: "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
+      path: [
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Italic.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-Italic.ttf"
+      ],
       weight: 400,
       style: :italic
     },
     %{
       family: "Liberation Sans",
-      path: "/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf",
+      path: [
+        "/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-BoldItalic.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-BoldItalic.ttf"
+      ],
       weight: 700,
       style: :italic
     },
@@ -578,7 +594,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       system_font_candidates()
       |> Enum.reject(fn font ->
         MapSet.member?(explicit_keys, {String.downcase(font.family), font.weight, font.style}) or
-          not File.regular?(font.path)
+          not Enum.any?(List.wrap(font.path), &File.regular?/1)
       end)
       |> Enum.uniq_by(&{String.downcase(&1.family), &1.weight, &1.style})
 
