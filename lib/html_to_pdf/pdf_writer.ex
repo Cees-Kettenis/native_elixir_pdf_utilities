@@ -15,6 +15,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   # CSS defines one pixel as 1/96 inch, which is a fixed 0.75 PDF points.
   @css_pixel_points 0.75
+  # The Adobe CMap format fixes character-mapping sections at no more than 100 entries.
+  @cmap_section_size 100
 
   @type page :: NativeElixirPdfUtilities.HtmlToPdf.Pagination.page()
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
@@ -964,6 +966,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       resource.encoding.cid_to_unicode
       |> Enum.sort_by(fn {cid, _unicode} -> cid end)
 
+    mapping_sections =
+      mappings
+      |> Enum.chunk_every(@cmap_section_size)
+      |> Enum.map_join("\n", fn section ->
+        [
+          "#{length(section)} beginbfchar",
+          Enum.map_join(section, "\n", fn {cid, unicode} ->
+            "<#{hex16(cid)}> <#{hex16(unicode)}>"
+          end),
+          "endbfchar"
+        ]
+        |> Enum.join("\n")
+      end)
+
     stream =
       [
         "/CIDInit /ProcSet findresource begin",
@@ -975,11 +991,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         "1 begincodespacerange",
         "<0000> <FFFF>",
         "endcodespacerange",
-        "#{length(mappings)} beginbfchar",
-        Enum.map_join(mappings, "\n", fn {cid, unicode} ->
-          "<#{hex16(cid)}> <#{hex16(unicode)}>"
-        end),
-        "endbfchar",
+        mapping_sections,
         "endcmap",
         "CMapName currentdict /CMap defineresource pop",
         "end",

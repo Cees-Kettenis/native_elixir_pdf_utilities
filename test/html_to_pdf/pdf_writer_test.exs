@@ -828,6 +828,48 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert {:ok, "AB"} = Text.extract(pdf, layout: false)
   end
 
+  test "embedded font ToUnicode mappings use sections of at most 100 entries" do
+    assert {:ok, registry} = Font.load_registry(fonts: [{"Fixture Sans", ttf_font_path!()}])
+    assert {:ok, _families, font} = Font.resolve("Fixture Sans", 400, :normal, registry)
+
+    codepoints =
+      font.cmap
+      |> Map.keys()
+      |> Enum.filter(&(&1 in 0x20..0xD7FF or &1 in 0xE000..0xFFFF))
+      |> Enum.sort()
+      |> Enum.take(120)
+
+    assert length(codepoints) == 120
+    text = List.to_string(codepoints)
+
+    pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes: [
+          %{
+            type: :text,
+            text: text,
+            x: 10.0,
+            y: 80.0,
+            font: Font.pdf_name(font),
+            font_face: font,
+            font_size: 12.0,
+            color: {0, 0, 0}
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, pdf} = PdfWriter.render(pages, [])
+
+    assert Regex.scan(~r/(\d+) beginbfchar/, pdf, capture: :all_but_first) == [
+             ["100"],
+             ["20"]
+           ]
+
+    assert {:ok, ^text} = Text.extract(pdf, layout: false)
+  end
+
   test "render rejects text that its selected font cannot encode" do
     built_in_page = %{
       size: {100.0, 100.0},
