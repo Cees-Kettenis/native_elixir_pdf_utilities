@@ -82,6 +82,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
               }}
   end
 
+  test "parse keeps quoted tag delimiters inside attribute values" do
+    assert {:ok, %{children: [paragraph]}} =
+             HtmlParser.parse(~s(<p title="1 > 0" data-check='2 > 1'>Valid</p>))
+
+    assert paragraph.attributes == %{"data-check" => "2 > 1", "title" => "1 > 0"}
+    assert paragraph.children == [%{type: :text, text: "Valid"}]
+  end
+
+  test "parse preserves style raw text and decodes RCDATA entities" do
+    style_text = ~s(p::before { content: "< &lt;"; })
+
+    html =
+      "<style>#{style_text}</style>" <>
+        "<title>1 < 2 &amp; 3</title>" <>
+        "<div><textarea>4 < 5 &amp; 6</textarea></div>"
+
+    assert {:ok, %{children: [style, title, %{children: [textarea]}]}} = HtmlParser.parse(html)
+    assert style.children == [%{type: :text, text: style_text}]
+    assert title.children == [%{type: :text, text: "1 < 2 & 3"}]
+    assert textarea.children == [%{type: :text, text: "4 < 5 & 6"}]
+
+    assert {:ok, %{children: [%{children: [raw_text]}]}} =
+             HtmlParser.parse("<style><span>No element</span></style>")
+
+    assert raw_text == %{type: :text, text: "<span>No element</span>"}
+  end
+
   test "parse accepts generated-content and attribute-selector metadata" do
     assert {:ok, dom} =
              HtmlParser.parse(
@@ -195,7 +222,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
       ~s(<div><select><span>Wrong</span></select></div>),
       ~s(<div><select><option></option></select></div>),
       ~s(<div><select><option selected>One</option><option selected>Two</option></select></div>),
-      ~s(<div><textarea><strong>Wrong</strong></textarea></div>),
       ~s(<div><button><input type="text"></button></div>),
       ~s(<div><button><strong><input type="text"></strong></button></div>),
       ~s(<div><button type="menu">Wrong</button></div>),
@@ -571,6 +597,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert HtmlParser.parse("") == {:error, :unsupported_html}
     assert HtmlParser.parse("<>") == {:error, :unsupported_html}
     assert HtmlParser.parse("<p>Hello") == {:error, :unsupported_html}
+    assert HtmlParser.parse("<style>") == {:error, :unsupported_html}
+    assert HtmlParser.parse("<style>missing closing tag") == {:error, :unsupported_html}
     assert HtmlParser.parse("<script></script>") == {:error, :unsupported_html}
     assert HtmlParser.parse("<p>Hello</script></p>") == {:error, :unsupported_html}
     assert HtmlParser.parse("<p>Hello</>") == {:error, :unsupported_html}
@@ -584,9 +612,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert HtmlParser.parse(~s(<ul><p>No item</p></ul>)) == {:error, :unsupported_html}
     assert HtmlParser.parse(~s(<table><td>No row</td></table>)) == {:error, :unsupported_html}
     assert HtmlParser.parse(~s(<head><p>No paragraph</p></head>)) == {:error, :unsupported_html}
-
-    assert HtmlParser.parse(~s(<style><span>No element</span></style>)) ==
-             {:error, :unsupported_html}
 
     assert HtmlParser.parse(
              ~s(<table><caption>One</caption><caption>Two</caption><tr><td>Cell</td></tr></table>)

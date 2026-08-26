@@ -27,6 +27,7 @@
       h2:first-of-type { color: #0f766e; }
       h2:last-of-type { border-bottom: 1pt solid #0f766e; }
       .status::after { content: " [" attr(data-status) "]"; color: #991b1b; }
+      .less-than::before { content: "< "; color: #1d4ed8; }
     </style>
   </head>
   <body>
@@ -36,6 +37,7 @@
       <div class="figure muted" data-label="Fallback" data-tone="blue">Font resolution</div>
       <h2>Results</h2>
       <p class="status" data-status="approved">Generated labels and counters</p>
+      <p class="less-than">Raw style text</p>
     </main>
   </body>
 </html>

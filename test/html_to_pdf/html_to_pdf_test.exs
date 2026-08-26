@@ -200,9 +200,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       body { counter-reset: section 0; }
       h2::before { counter-increment: section; content: "Section " counter(section) ": "; }
       [data-status=ready]:not(.hidden)::after { content: " [" attr(data-status) "]"; }
+      .less-than::before { content: "< "; }
     </style>
     <h2 data-status="ready">Overview</h2>
     <h2 data-status="ready">Details</h2>
+    <p class="less-than">Limit</p>
     """
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
@@ -211,6 +213,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert length(Regex.scan(~r/\( \[ready\]\) Tj/, pdf)) == 2
     assert pdf =~ "(Overview) Tj"
     assert pdf =~ "(Details) Tj"
+    assert pdf =~ "(< ) Tj"
+    assert pdf =~ "(Limit) Tj"
   end
 
   test "render converts block box styling to PDF drawing commands" do

@@ -32,6 +32,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   @table_structure_tags ~w(table colgroup thead tbody tfoot tr)
   @table_content_tags ~w(caption th td)
   @void_tags ~w(meta br img col input)
+  @raw_text_tags ~w(style)
+  @rcdata_tags ~w(title textarea)
 
   @doc """
   Parses an HTML binary into a renderer DOM tree.
@@ -65,9 +67,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   end
 
   defp parse_document(html) do
-    tokens = html |> tokenize() |> List.flatten()
-
-    with true <- Enum.join(tokens) == html,
+    with {:ok, tokens} <- tokenize(html),
+         true <- Enum.join(tokens) == html,
          {:ok, children, []} <- parse_children(tokens, :document, nil, []),
          true <- children != [] do
       {:ok, %{type: :document, children: children}}
@@ -77,7 +78,97 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   end
 
   defp tokenize(html) do
-    Regex.scan(~r/<[^>]*>|[^<]+/u, html)
+    scan_tokens(html, :data, [])
+  end
+
+  defp scan_tokens(html, mode, tokens) do
+    case {html, mode} do
+      {"", :data} ->
+        {:ok, Enum.reverse(tokens)}
+
+      {"", {:text, _tag}} ->
+        {:error, :unsupported_html}
+
+      {html, {:text, tag}} ->
+        scan_text_content(html, tag, tokens)
+
+      {<<"<", _rest::binary>> = html, :data} ->
+        with {:ok, token, remaining} <- take_tag_token(html) do
+          next_mode =
+            case parse_opening_tag(token) do
+              {:ok, tag, _attributes, false}
+              when tag in @raw_text_tags or tag in @rcdata_tags ->
+                {:text, tag}
+
+              _ ->
+                :data
+            end
+
+          scan_tokens(remaining, next_mode, [token | tokens])
+        end
+
+      {html, :data} ->
+        case :binary.match(html, "<") do
+          {index, 1} ->
+            <<text::binary-size(^index), remaining::binary>> = html
+            scan_tokens(remaining, :data, [text | tokens])
+
+          :nomatch ->
+            scan_tokens("", :data, [html | tokens])
+        end
+    end
+  end
+
+  defp take_tag_token(html) do
+    case tag_token_length(html, nil, 0) do
+      {:ok, length} ->
+        <<token::binary-size(^length), remaining::binary>> = html
+        {:ok, token, remaining}
+
+      :error ->
+        {:error, :unsupported_html}
+    end
+  end
+
+  defp tag_token_length(html, quote, length) do
+    case html do
+      <<>> ->
+        :error
+
+      <<character, remaining::binary>> ->
+        cond do
+          is_nil(quote) and character in [?", ?'] ->
+            tag_token_length(remaining, character, length + 1)
+
+          character == quote ->
+            tag_token_length(remaining, nil, length + 1)
+
+          is_nil(quote) and character == ?> ->
+            {:ok, length + 1}
+
+          true ->
+            tag_token_length(remaining, quote, length + 1)
+        end
+    end
+  end
+
+  defp scan_text_content(html, tag, tokens) do
+    closing_pattern =
+      case tag do
+        "style" -> ~r/<\/\s*style\s*>/iu
+        "title" -> ~r/<\/\s*title\s*>/iu
+        "textarea" -> ~r/<\/\s*textarea\s*>/iu
+      end
+
+    case Regex.run(closing_pattern, html, return: :index) do
+      [{index, length}] ->
+        <<text::binary-size(^index), closing::binary-size(^length), remaining::binary>> = html
+        tokens = if text == "", do: [closing | tokens], else: [closing, text | tokens]
+        scan_tokens(remaining, :data, tokens)
+
+      nil ->
+        {:error, :unsupported_html}
+    end
   end
 
   defp parse_children(tokens, context, closing_tag, children) do
@@ -97,6 +188,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
     cond do
       context == :document and doctype_token?(token) ->
         parse_children(remaining, context, closing_tag, children)
+
+      context in @raw_text_tags or context in @rcdata_tags ->
+        parse_text_content_child(token, remaining, context, closing_tag, children)
 
       String.starts_with?(token, "</") ->
         case parse_closing_tag(token) do
@@ -149,10 +243,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
     end
   end
 
+  defp parse_text_content_child(token, remaining, context, closing_tag, children) do
+    case parse_closing_tag(token) do
+      {:ok, tag} when tag == closing_tag ->
+        {:ok, children, remaining}
+
+      _ ->
+        text =
+          case context in @raw_text_tags do
+            true -> token
+            false -> HtmlEntities.decode(token, :text)
+          end
+
+        parse_children(
+          remaining,
+          context,
+          closing_tag,
+          children ++ [%{type: :text, text: text}]
+        )
+    end
+  end
+
   defp parse_opening_tag(token) do
     captures =
       Regex.named_captures(
-        ~r/^<\s*(?<tag>[a-zA-Z][a-zA-Z0-9]*)\s*(?<attributes>[^<>]*?)(?<self_closing>\/?)\s*>$/u,
+        ~r/^<\s*(?<tag>[a-zA-Z][a-zA-Z0-9]*)\s*(?<attributes>(?:[^<>"']|"[^"<]*"|'[^'<]*')*?)(?<self_closing>\/?)\s*>$/u,
         token
       )
 
