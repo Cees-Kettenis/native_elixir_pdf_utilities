@@ -10,9 +10,11 @@ other PDF utilities. It builds on `NativeElixirPdfUtilities.Tokenizer`:
   then checks references, streams, the catalog, and the page tree before the
   reader returns the document map.
 
-For text extraction or merging, use `NativeElixirPdfUtilities.Text` or
-`NativeElixirPdfUtilities.Merge`. Use the reader to inspect parsed documents or
-build another PDF utility on the same document model.
+For document information and metadata updates, use
+`NativeElixirPdfUtilities.Info`. For text extraction or merging, use
+`NativeElixirPdfUtilities.Text` or `NativeElixirPdfUtilities.Merge`. Use the
+reader directly to inspect parsed objects or build another PDF utility on the
+same document model.
 
 `Reader.read_validated/1` returns the full validation context needed by another
 PDF operation. `Reader.read/1` returns the existing map
@@ -77,10 +79,10 @@ authoritative.
 
 ## Shared utility behavior
 
-Text extraction and merging both use the same validated context. They share
-the active revision, compressed-object
-handling, stream validation, page-tree traversal, encryption detection, and
-malformed-input diagnostics. New PDF inspection or transformation utilities
-should use `PdfValidator.validate_pdf/1` or `Reader.read_validated/1` instead of
-scanning every token for indirect objects. See
+Information, text extraction, and merging use the same validated context. They
+share the active revision, compressed-object handling, stream validation,
+page-tree traversal, encryption detection, and malformed-input diagnostics.
+New PDF inspection or transformation utilities should use
+`PdfValidator.validate_pdf/1` or `Reader.read_validated/1` instead of scanning
+every token for indirect objects. See
 [Layered PDF validation](pdf-validation.md) for invariant ownership.

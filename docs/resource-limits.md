@@ -36,6 +36,7 @@ override these values.
 | `max_aggregate_image_source_bytes` | 50,000,000 | Encoded images in one render |
 | `max_decoded_image_bytes` | 40,000,000 | One decoded image |
 | `max_aggregate_decoded_image_bytes` | 80,000,000 | Decoded images in one render |
+| `max_background_image_tiles` | 10,000 | Repeated background tiles in one render |
 | `max_layout_cardinality` | 1,000 | Grid tracks, placements, and table spans |
 | `max_pdf_input_bytes` | 50,000,000 | One PDF input |
 | `max_pdf_objects` | 100,000 | Parsed PDF objects |
@@ -49,6 +50,8 @@ override these values.
 | `max_pdf_decompression_ratio` | 100 | Decoded-to-encoded stream ratio |
 | `max_pdf_xref_length_candidates` | 1,000 | Candidate indirect `/Length` objects |
 | `max_pdf_xref_revisions` | 1,000 | Incremental cross-reference revisions |
+| `max_pdf_info_value_bytes` | 1,000,000 | One metadata value supplied for PDF generation or update |
+| `max_pdf_info_total_bytes` | 5,000,000 | Metadata values supplied for one PDF generation or update |
 | `max_merge_inputs` | 100 | PDFs in one merge |
 | `max_aggregate_merge_input_bytes` | 100,000,000 | PDF bytes in one merge |
 | `max_merged_objects` | 100,000 | Objects in merged output |

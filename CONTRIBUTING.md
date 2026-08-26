@@ -75,6 +75,24 @@ adding 1.21 to `ci/runtime-matrix.json` will add the third local and CI lane.
 - Generate documentation locally:
   - `mise exec -- mix docs`
 
+## Manual testing app
+
+The local app under `dev/manual_web` provides browser forms for rendering HTML,
+merging PDFs, extracting text, inspecting and updating document information,
+and tokenizing PDF syntax. It also publishes its OpenAPI document at
+`http://127.0.0.1:4001/openapi.json`.
+
+Run it from its own Mix project:
+
+```bash
+cd dev/manual_web
+mix deps.get
+mix run --no-halt
+```
+
+Open `http://127.0.0.1:4001` after the server starts. This app is development
+tooling and is not included in the Hex package.
+
 ## Pull Request Guidelines
 
 - Keep PRs focused and small where possible.

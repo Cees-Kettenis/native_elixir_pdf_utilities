@@ -1,8 +1,8 @@
 # Documentation
 
-Native Elixir PDF Utilities reads, merges, extracts text from, and generates
-PDF documents. These guides document what each public API supports and which
-work remains the caller's responsibility.
+Native Elixir PDF Utilities inspects, updates, merges, extracts text from, and
+generates PDF documents. These guides document what each public API supports
+and which work remains the caller's responsibility.
 
 ## Reading and manipulating PDFs
 
@@ -10,6 +10,9 @@ work remains the caller's responsibility.
   length hints, and the boundary between tokenization and document parsing.
 - [PDF reader](pdf-reader.md) describes the shared document model, supported
   cross-reference and object structures, stream decoding, limits, and errors.
+- [PDF information and metadata](pdf-information.md) covers document
+  information, page count and geometry, encryption status, and incremental
+  metadata updates.
 - [Text extraction](text-extraction.md) covers reconstructed strings and
   page-preserving positioned spans, including ordering, coordinates, font
   context, and rendering modes.
@@ -18,7 +21,8 @@ work remains the caller's responsibility.
 - [Diagnostics](diagnostics.md) documents the shared recoverable error contract
   used by the public APIs.
 - [Configurable resource limits](resource-limits.md) lists every tunable
-  parsing, rendering, extraction, merge, and cache ceiling and its default.
+  parsing, information, rendering, extraction, merge, and cache ceiling and its
+  default.
 
 ## Generating PDFs from HTML
 

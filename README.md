@@ -10,7 +10,7 @@
 
 Native Elixir PDF Utilities is a small library for developers who need practical PDF building blocks without command line tools.
 
-PDFs are useful, awkward, and full of edge cases. This project focuses on the common structural work that Elixir applications often need: reading PDF bytes, understanding the object stream, extracting embedded text when it is available, and combining documents in a predictable way.
+PDFs are useful, awkward, and full of edge cases. This project focuses on the common structural work that Elixir applications often need: reading PDF bytes, inspecting and updating document information, extracting embedded text when it is available, and combining documents in a predictable way.
 
 The goal is not to be a full PDF engine overnight. It is a steadily improving toolkit, handled by an excited developer who wants this to become a dependable native Elixir option for day-to-day PDF utility work.
 
@@ -22,9 +22,10 @@ The goal is not to be a full PDF engine overnight. It is a steadily improving to
 ## What It Does
 
 1. Tokenizer - turns PDF byte streams into structured Elixir tokens.
-2. Merger - combines multiple PDF binaries into a fresh PDF with rewritten object references.
-3. Reader and text extraction - strictly resolve embedded Unicode text from classic and modern PDFs.
-4. HTML to PDF - renders a strict, document-oriented HTML/CSS subset to native PDF bytes without Chromium, wkhtmltopdf, Node, Rust, Python, OS packages, or SaaS calls.
+2. PDF information - reads page geometry and document metadata, detects encryption, and updates common metadata fields.
+3. Merger - combines multiple PDF binaries into a fresh PDF with rewritten object references.
+4. Reader and text extraction - strictly resolve embedded Unicode text from classic and modern PDFs.
+5. HTML to PDF - renders a strict, document-oriented HTML/CSS subset to native PDF bytes without Chromium, wkhtmltopdf, Node, Rust, Python, OS packages, or SaaS calls.
 
 See the [documentation](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/tree/main/docs) for feature guides, configurable resource limits, and quick reference.
 
@@ -33,7 +34,7 @@ See the [documentation](https://github.com/Cees-Kettenis/native_elixir_pdf_utili
 ```elixir
 def deps do
   [
-    {:native_elixir_pdf_utilities, "~> 0.12.0"}
+    {:native_elixir_pdf_utilities, "~> 0.13.0"}
   ]
 end
 ```

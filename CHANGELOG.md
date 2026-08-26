@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.13.0 - 2026-08-27
+
+### Added
+
+- Added `NativeElixirPdfUtilities.Info` for reading and updating the common PDF
+  information fields `title`, `author`, `subject`, `keywords`, `producer`,
+  `creation_date`, and `modification_date`.
+- Added `Info.page_count/1`, `Info.page_sizes/1`, and `Info.encrypted?/1` for
+  validated page counts, effective rotated MediaBox geometry, and encryption
+  detection without attempting decryption.
+- Added incremental information updates through `Info.put/2`. Updates preserve
+  the original PDF bytes, unspecified fields, unknown information dictionary
+  entries, and the permanent trailer identifier. Passing `nil` removes a common
+  field.
+- Added `:producer` to HTML-to-PDF metadata and added
+  `max_pdf_info_value_bytes` and `max_pdf_info_total_bytes` resource limits for
+  HTML-to-PDF metadata and information updates.
+- Added a local manual testing application under `dev/manual_web` with a browser
+  interface and OpenAPI document for rendering, merging, text extraction,
+  information inspection and updates, and tokenization.
+
+### Fixed
+
+- Fixed PDF merging dropping inherited page resources when a page declared
+  `/Resources null`.
+- Fixed indirect-reference depth and aggregate-work limits being bypassed by
+  stream aliases, cached reference suffixes, or separate page chains.
+- Fixed body content and repeated page furniture receiving separate image
+  budgets instead of sharing the render-wide limits.
+- Fixed merged PDFs and incremental information updates being able to emit an
+  object count that the configured reader limit would reject.
+- Fixed embedded fonts losing Unicode distinctions when two characters mapped
+  to the same glyph. The writer now assigns distinct CIDs and emits an explicit
+  CID-to-glyph map so text extraction preserves both characters.
+- Fixed Type 0 text extraction applying PDF word spacing to a decoded CID or
+  Unicode value instead of only a one-byte source code `0x20`.
+- Fixed generated ToUnicode CMaps writing more than 100 entries in one
+  `beginbfchar` section.
+- Fixed the HTML parser treating `>` inside quoted attributes as the end of a
+  tag, treating `<` inside `<style>` as markup, and mishandling RCDATA in
+  `<title>` and `<textarea>`.
+- Fixed Liberation Sans lookup across common Linux installation paths, which
+  restores requested font metrics for right alignment and narrow table headers.
+
 ## 0.12.0 - 2026-08-20
 
 ### Added

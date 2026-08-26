@@ -39,7 +39,7 @@ Unknown declarations and unsupported CSS values return `:invalid_css`.
 | `:stylesheets`  | Tagged inline CSS and local files: `{:css, css}` or `{:file, path}`             | Configured stylesheets load before embedded `<style>` tags; bare strings are rejected so file access is always explicit.                                                |
 | `:default_font` | Font family or fallback list                                                    | Defaults to `"Helvetica"`. Unsupported glyphs are resolved through configured fonts and the bundled DejaVu Sans faces before layout.                                                                                                    |
 | `:fonts`        | `%{family: ..., path: ...}` maps, keyword lists, or `{family, path}` tuples | TrueType fonts. `:weight` and `:style` are optional. OpenType files using TrueType outlines share this path; CFF-flavored OTF is unsupported. Configured faces participate in automatic glyph fallback. |
-| `:metadata`     | Keyword list or map                                                              | Supports `:title`, `:author`, `:subject`, `:keywords`, `:creation_date`, and `:modification_date`. Dates accept calendar structs or ISO 8601 strings. An HTML `<title>` is the default PDF title. |
+| `:metadata`     | Keyword list or map                                                              | Supports `:title`, `:author`, `:subject`, `:keywords`, `:producer`, `:creation_date`, and `:modification_date`. Dates accept calendar structs, ISO 8601 strings, or PDF date strings. An HTML `<title>` is the default PDF title. |
 | `:page_furniture` | Keyword list or map with `:header` and `:footer` | Opt-in running page furniture. Each position accepts HTML or `:default`, `:first`, `:odd`, and `:even` variants. Omitted, `nil`, and `false` furniture is disabled. |
 | `:unsupported_glyphs` | `:replace` or `:error` | Defaults to `:replace`, which substitutes U+FFFD for each grapheme absent from every candidate font. `:error` returns the strict `:unsupported_glyph` diagnostic. |
 
@@ -92,7 +92,7 @@ available margin. Reserve enough `@page` or `:margin` space for both.
 
 | Area              | Supported                                                                                                                                                           |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Document wrappers | `doctype html`, `html`, `head`, `body`, `style`, `meta`, `title`                                                                                      |
+| Document wrappers | `doctype html`, `html`, `head`, `body`, `style`, `meta`, `title`; style content is parsed as raw text, while title content decodes character references as RCDATA |
 | Blocks            | `article`, `aside`, `div`, `footer`, `header`, `main`, `nav`, `section`, `p`, `h1` through `h6`                                               |
 | Inline text       | `span`, `strong`, `b`, `em`, `i`, `a`, `br`; WHATWG named and numeric HTML character references are decoded once, including multi-code-point references and non-breaking spaces |
 | Lists             | `ul`, `ol`, `li`                                                                                                                                              |
@@ -177,12 +177,18 @@ is limited to 5 MB, 8,192 pixels per axis, and 16,777,216 total raster pixels.
 Excess input returns `:resource_limit_exceeded` before native raster allocation.
 Remote URLs, traversal, and symlink components are rejected. Greyscale,
 indexed-color, 16-bit, and Adam7-interlaced PNG decoding is scheduled for
-`0.21.0`.
+`0.20.0`.
 
 Fonts include the built-in PDF families `Helvetica`, `Courier`, and
 `Times-Roman`, with their bold and italic variants. The renderer also accepts
 explicit font options and local CSS `@font-face` declarations. Bundled DejaVu
 Sans regular, bold, oblique, and bold-oblique faces handle glyph fallback.
+
+On Linux, the renderer recognizes Arial, Liberation Sans, DejaVu Sans, and Noto
+Sans at a limited set of known installation paths. This is not general system
+font discovery. Register a font explicitly when a document depends on a
+particular face or must render consistently across hosts. Cross-platform system
+font discovery is scheduled for `0.14.0`.
 
 Document-selected `@font-face` URLs must remain beneath `:base_url`.
 Configured stylesheet files resolve their own trusted relative font paths.

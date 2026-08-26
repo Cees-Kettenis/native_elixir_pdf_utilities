@@ -246,6 +246,7 @@ and ISO 8601 strings.
       author: "Finance Operations",
       subject: "Customer statement",
       keywords: ["statement", "monthly"],
+      producer: "Accounts service",
       creation_date: Date.utc_today()
     ]
   )

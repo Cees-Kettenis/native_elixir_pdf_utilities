@@ -4,11 +4,11 @@ defmodule NativeElixirPdfUtilities.MixProject do
   def project do
     [
       app: :native_elixir_pdf_utilities,
-      version: "0.12.0",
+      version: "0.13.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       description:
-        "Pure Elixir PDF utilities for tokenizing, merging, text extraction, and native HTML/CSS rendering.",
+        "Pure Elixir utilities for PDF inspection, metadata, tokenizing, merging, text extraction, and native HTML/CSS rendering.",
       deps: deps(),
       package: package(),
       docs: docs(),
@@ -64,6 +64,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
         "docs/resource-limits.md",
         "docs/pdf-tokenizer.md",
         "docs/pdf-reader.md",
+        "docs/pdf-information.md",
         "docs/pdf-validation.md",
         "docs/text-extraction.md",
         "docs/pdf-merging.md",
@@ -79,6 +80,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
         "PDF Guides": [
           "docs/pdf-tokenizer.md",
           "docs/pdf-reader.md",
+          "docs/pdf-information.md",
           "docs/pdf-validation.md",
           "docs/text-extraction.md",
           "docs/pdf-merging.md"
@@ -92,6 +94,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
       groups_for_modules: [
         "Public APIs": [
           NativeElixirPdfUtilities.HtmlToPdf,
+          NativeElixirPdfUtilities.Info,
           NativeElixirPdfUtilities.Merge,
           NativeElixirPdfUtilities.Text,
           NativeElixirPdfUtilities.Tokenizer,
@@ -116,12 +119,13 @@ defmodule NativeElixirPdfUtilities.MixProject do
         ],
         "Validation Pipeline": [
           NativeElixirPdfUtilities.Validators.PdfValidator,
+          NativeElixirPdfUtilities.Validators.InfoValidator,
           NativeElixirPdfUtilities.Validators.MergeValidator,
           NativeElixirPdfUtilities.Validators.TextValidator,
           NativeElixirPdfUtilities.Validators.WriterValidator
         ]
       ],
-      source_ref: "v0.12.0",
+      source_ref: "v0.13.0",
       source_url: "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"
     ]
   end

@@ -25,6 +25,12 @@ shared context. `PdfValidator.validate/2` validates an already parsed document
 model. `Reader.read/1` returns the `:document` map from that context.
 `Reader.read_validated/1` returns the full context for utilities that need it.
 
+`NativeElixirPdfUtilities.Validators.InfoValidator` uses the shared context to
+resolve and validate the active information dictionary, effective page sizes,
+and caller-provided metadata patches. It prepares serialized field values and
+checks information-specific byte and incremental-object limits before the
+writer appends an update.
+
 `NativeElixirPdfUtilities.Validators.TextValidator` uses the shared context and
 checks page geometry, content-stream references, decoded content, content
 syntax, text-operator operands, and PDF numeric tokens. The text executor

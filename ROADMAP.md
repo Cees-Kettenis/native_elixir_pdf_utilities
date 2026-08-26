@@ -19,43 +19,6 @@ breaking API changes are allowed, but they should be explained clearly in
 
 ## Milestones
 
-### 0.13.0 - PDF Information and Metadata
-
-Milestone goal: expose reliable document inspection and metadata operations on top of the
-shared PDF reader.
-
-#### Scope
-
-- Add PDF information helpers:
-  - page count
-  - page sizes
-  - title
-  - author
-  - producer
-  - creation date
-  - modification date
-  - encryption status
-- Add metadata writing for common document fields:
-  - title
-  - author
-  - subject
-  - keywords
-  - producer
-  - creation date
-  - modification date
-
-#### Design Notes
-
-- Keep information and metadata APIs binary-in, structured-data-out where
-  practical.
-- Document behavior for malformed, encrypted, compressed, or unsupported PDFs.
-
-#### Completion Criteria
-
-- Add unit tests for page tree traversal, metadata parsing, metadata writing,
-  encryption status, and diagnostic failures.
-- Preserve 100% test coverage for public modules.
-
 ### 0.14.0 - Cross-Platform System Font Discovery
 
 Milestone goal: resolve CSS font families through the host operating system so

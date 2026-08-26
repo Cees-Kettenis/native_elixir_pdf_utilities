@@ -63,18 +63,21 @@ diagnostic tuple and test its important fields.
 
 ## Malformed PDF input
 
-Before merging or extracting text, the shared reader validates PDF headers,
-final xref pointers, object boundaries, stream lengths, page trees, and
-indirect references. Malformed input returns `:invalid_pdf_input` instead of a
-partial result or exception. Encrypted PDFs return `:encrypted_pdf`.
+Before inspecting information, updating metadata, merging, or extracting text,
+the shared reader validates PDF headers, final xref pointers, object boundaries,
+stream lengths, page trees, and indirect references. Malformed input returns
+`:invalid_pdf_input` instead of a partial result or exception. Encrypted PDFs
+return `:encrypted_pdf` from operations that require document objects;
+`Info.encrypted?/1` reports their encryption status without loading those
+objects.
 Unsupported stream operations return `:unsupported_pdf_feature`. Custom fonts
 without a reliable Unicode mapping return `:unsupported_text_encoding`.
 Image-only PDFs return `:no_extractable_text` from the string API.
 
 The tokenizer represents malformed literal and hexadecimal strings as
 `{:error, reason}` tokens. Callers of `NativeElixirPdfUtilities.Tokenizer` can
-inspect those tokens directly. Merge and text extraction convert tokenizer
-failures to the shared diagnostic tuple.
+inspect those tokens directly. Information, merge, and text extraction APIs
+convert tokenizer failures to the shared diagnostic tuple.
 
 The shared reader and text validators limit input size, decoded streams,
 decompression ratios, objects, pages, CMaps, recursion, aggregate decoded
