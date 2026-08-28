@@ -26,3 +26,5 @@ native_elixir_pdf_utilities-*.tar
 /.quality/
 
 .elixir_ls/
+
+/priv/native

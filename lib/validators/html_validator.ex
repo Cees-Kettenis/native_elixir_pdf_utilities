@@ -14,6 +14,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     :stylesheets,
     :default_font,
     :fonts,
+    :system_font_discovery,
     :metadata,
     :page_furniture,
     :unsupported_glyphs
@@ -800,6 +801,29 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end
   end
 
+  @doc false
+  @spec validate_font_embedding(String.t(), term()) ::
+          :ok | {:error, {:invalid_document, Diagnostics.diagnostic()}}
+  def validate_font_embedding(family, embedding_flags) do
+    restricted? =
+      is_integer(embedding_flags) and
+        (Bitwise.band(embedding_flags, 0x0002) != 0 or
+           Bitwise.band(embedding_flags, 0x0200) != 0)
+
+    case restricted? do
+      true ->
+        Diagnostics.error(
+          :font,
+          :invalid_document,
+          "font #{inspect(family)} does not permit outline embedding in a PDF",
+          source: family
+        )
+
+      false ->
+        :ok
+    end
+  end
+
   defp local_resource_base_path(base_url) do
     case base_url do
       base_url when is_binary(base_url) ->
@@ -957,7 +981,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     case {view_box, index} do
       {{width, _height}, 0} -> {:ok, width}
       {{_width, height}, 1} -> {:ok, height}
-      {nil, _index} -> {:ok, 100.0}
+      {nil, _index} -> :error
     end
   end
 
@@ -1034,7 +1058,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                  Keyword.get(opts, :asset_resolver)
                ),
              :ok <- validate_base_url(Keyword.get(opts, :base_url)),
-             :ok <- validate_default_font(Keyword.get(opts, :default_font, "Helvetica")),
+             :ok <- validate_default_font(Keyword.get(opts, :default_font, "DejaVu Sans")),
+             :ok <-
+               validate_system_font_discovery(Keyword.get(opts, :system_font_discovery, true)),
              :ok <- validate_unsupported_glyphs(Keyword.get(opts, :unsupported_glyphs, :replace)),
              :ok <- validate_font_options_result(font_options_result) do
           :ok
@@ -1100,6 +1126,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           :options,
           :invalid_options,
           "unsupported_glyphs must be :replace or :error"
+        )
+    end
+  end
+
+  defp validate_system_font_discovery(system_font_discovery) do
+    case is_boolean(system_font_discovery) do
+      true ->
+        :ok
+
+      false ->
+        Diagnostics.error(
+          :options,
+          :invalid_options,
+          "system_font_discovery must be true or false"
         )
     end
   end

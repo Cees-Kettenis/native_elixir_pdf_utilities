@@ -11,7 +11,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert String.starts_with?(pdf, "%PDF-1.4")
     assert pdf =~ "/Type /Catalog"
     assert pdf =~ "/Type /Page"
-    assert pdf =~ "(Hello) Tj"
+    assert_pdf_text(pdf, "Hello")
     assert pdf =~ "xref"
     assert pdf =~ "trailer"
     assert String.ends_with?(pdf, "%%EOF\n")
@@ -30,11 +30,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     """
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
-    assert pdf =~ "(Applicant Alice) Tj"
-    assert pdf =~ "(Approved) Tj"
-    assert pdf =~ "(Inspection notes) Tj"
-    assert pdf =~ "(Submit) Tj"
-    assert pdf =~ "(application) Tj"
+
+    assert_pdf_text(pdf, ["Applicant Alice", "Approved", "Inspection notes", "Submit application"])
+
     refute pdf =~ "/AcroForm"
     refute pdf =~ "/Widget"
 
@@ -184,12 +182,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       ~s(<h1 style="color: #336699">Title</h1><p>Hello <strong>bold</strong> <em style="color: blue">italic</em></p>)
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
-    assert pdf =~ "(Title) Tj"
-    assert pdf =~ "(Hello ) Tj"
-    assert pdf =~ "(bold) Tj"
-    assert pdf =~ "(italic) Tj"
-    assert pdf =~ "/BaseFont /Helvetica-Bold"
-    assert pdf =~ "/BaseFont /Helvetica-Oblique"
+    assert_pdf_text(pdf, ["Title", "Hello", "bold", "italic"])
+    assert pdf =~ "/BaseFont /DejaVuSans"
     assert pdf =~ "0.2 0.4 0.6 rg"
     assert pdf =~ "0 0 1 rg"
   end
@@ -208,13 +202,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     """
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
-    assert pdf =~ "(Section 1: ) Tj"
-    assert pdf =~ "(Section 2: ) Tj"
-    assert length(Regex.scan(~r/\( \[ready\]\) Tj/, pdf)) == 2
-    assert pdf =~ "(Overview) Tj"
-    assert pdf =~ "(Details) Tj"
-    assert pdf =~ "(< ) Tj"
-    assert pdf =~ "(Limit) Tj"
+    assert {:ok, extracted} = Text.extract(pdf, layout: false)
+    assert extracted =~ "Section 1:"
+    assert extracted =~ "Overview"
+    assert extracted =~ "Section 2:"
+    assert extracted =~ "Details"
+    assert length(Regex.scan(~r/\[ready\]/, extracted)) == 2
+    assert extracted =~ "<"
+    assert extracted =~ "Limit"
   end
 
   test "render converts block box styling to PDF drawing commands" do
@@ -224,7 +219,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert {:ok, pdf} = HtmlToPdf.render(html)
     assert pdf =~ "0.9333 0.9333 0.9333 rg"
     assert pdf =~ "1 0 0 RG 1 w"
-    assert pdf =~ "(Boxed) Tj"
+    assert_pdf_text(pdf, "Boxed")
   end
 
   test "render accepts print template semantics and inch page sizes" do
@@ -233,7 +228,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {4.92126, 1.49606})
     assert pdf =~ "/MediaBox [0 0 354.3307 107.7163]"
-    assert pdf =~ "(Sticker) Tj"
+    assert_pdf_text(pdf, "Sticker")
     assert pdf =~ "/Subtype /Image"
   end
 
@@ -380,7 +375,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     """
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
-    assert pdf =~ "(Valid page CSS) Tj"
+    assert_pdf_text(pdf, "Valid page CSS")
   end
 
   test "render returns diagnostics for malformed embedded media rules" do
@@ -449,9 +444,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     """
 
     assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {600, 300})
-    assert pdf =~ "(Header) Tj"
-    assert pdf =~ "(THREAD) Tj"
-    assert pdf =~ "(AGSYIKOFP1) Tj"
+    assert_pdf_text(pdf, ["Header", "THREAD", "AGSYIKOFP1"])
   end
 
   test "render applies configured and embedded CSS before writing PDF output" do
@@ -459,8 +452,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       ~s(<style>p.notice { color: #336699; font-weight: bold; }</style><p class="notice">Styled</p>)
 
     assert {:ok, pdf} = HtmlToPdf.render(html, stylesheets: [{:css, "p { color: red; }"}])
-    assert pdf =~ "(Styled) Tj"
-    assert pdf =~ "/BaseFont /Helvetica-Bold"
+    assert_pdf_text(pdf, "Styled")
+    assert pdf =~ "/BaseFont /DejaVuSans"
     assert pdf =~ "0.2 0.4 0.6 rg"
   end
 
@@ -469,10 +462,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       ~s(<ul><li>Read <a href="https://example.com">docs</a></li><li>Ship</li></ul>)
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
-    assert pdf =~ "(*) Tj"
-    assert pdf =~ "(Read ) Tj"
-    assert pdf =~ "(docs) Tj"
-    assert pdf =~ "(Ship) Tj"
+    assert_pdf_text(pdf, ["*", "Read", "docs", "Ship"])
     assert pdf =~ "/Subtype /Link"
     assert pdf =~ "/URI (https://example.com)"
 
@@ -720,12 +710,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       ~s(<style>th,td{border:1pt solid black;padding:4pt}th{background:#eee}</style><table><caption>Summary</caption><thead><tr><th>Name</th><th>Docs</th></tr></thead><tbody><tr><td>Alpha</td><td><a href="https://example.com">Link</a></td></tr></tbody></table>)
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
-    assert pdf =~ "(Summary) Tj"
-    assert pdf =~ "(Name) Tj"
-    assert pdf =~ "(Docs) Tj"
-    assert pdf =~ "(Alpha) Tj"
-    assert pdf =~ "(Link) Tj"
-    assert pdf =~ "/BaseFont /Helvetica-Bold"
+    assert_pdf_text(pdf, ["Summary", "Name", "Docs", "Alpha", "Link"])
+    assert pdf =~ "/BaseFont /DejaVuSans"
     assert pdf =~ "0.9333 0.9333 0.9333 rg"
     assert pdf =~ "0 0 0 RG 1 w"
     assert pdf =~ "/Subtype /Link"
@@ -757,9 +743,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     """
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
-    assert pdf =~ "(Code) Tj"
-    assert pdf =~ "(Description) Tj"
-    assert pdf =~ "(Trim hardware) Tj"
+    assert_pdf_text(pdf, ["Code", "Description", "Trim hardware"])
   end
 
   test "render paginates overflowing content into multiple PDF pages" do
@@ -777,8 +761,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {200, 100}, margin: 10)
     assert pdf =~ "/Type /Pages"
     assert pdf =~ "/Count 2"
-    assert length(String.split(pdf, "(Name) Tj")) == 3
-    assert pdf =~ "(Alpha 3) Tj"
+    assert {:ok, extracted} = Text.extract(pdf, layout: false)
+    assert length(Regex.scan(~r/Name/, extracted)) == 2
+    assert extracted =~ "Alpha 3"
   end
 
   test "render keeps root-positioned content on the first page" do
@@ -811,7 +796,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     for index <- 1..13 do
       label = "Paragraph line #{String.pad_leading(Integer.to_string(index), 2, "0")}"
-      assert pdf =~ "(#{label}) Tj"
+      assert_pdf_text(pdf, label)
     end
   end
 
@@ -827,8 +812,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert {:ok, default_pdf} =
              HtmlToPdf.render(html, page_size: {200, 100}, margin: 20)
 
-    refute default_pdf =~ "(Report header) Tj"
-    refute default_pdf =~ "(Page 1 of 3) Tj"
+    refute_pdf_text(default_pdf, ["Report header", "Page 1 of 3"])
 
     assert {:ok, furnished_pdf} =
              HtmlToPdf.render(html,
@@ -847,12 +831,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              )
 
     assert furnished_pdf =~ "/Count 3"
-    refute furnished_pdf =~ "(Report header) Tj"
-    assert furnished_pdf =~ "(Odd header) Tj"
-    assert furnished_pdf =~ "(Even header) Tj"
-    assert furnished_pdf =~ "(Page 1 of 3) Tj"
-    assert furnished_pdf =~ "(Page 2 of 3) Tj"
-    assert furnished_pdf =~ "(Page 3 of 3) Tj"
+    refute_pdf_text(furnished_pdf, "Report header")
+
+    assert_pdf_text(furnished_pdf, [
+      "Odd header",
+      "Even header",
+      "Page 1 of 3",
+      "Page 2 of 3",
+      "Page 3 of 3"
+    ])
   end
 
   test "render shares the image budget across repeated page furniture" do
@@ -907,7 +894,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                reason: :invalid_layout,
                operation: :decorate_pages,
                module: NativeElixirPdfUtilities.HtmlToPdf.PageFurniture,
-               message: "footer page furniture height 14.4pt exceeds the 0.0pt page margin"
+               message: "footer page furniture height 13.97pt exceeds the 0.0pt page margin"
              }}} =
              HtmlToPdf.render("<p>Hello</p>", page_furniture: [footer: "Page {{page}}"])
 
@@ -934,15 +921,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {200, 100}, margin: 10)
     assert pdf =~ "/Count 2"
-    assert pdf =~ "(First) Tj"
-    assert pdf =~ "(Second) Tj"
+    assert_pdf_text(pdf, ["First", "Second"])
 
     html = ~s(<p>First</p><div style="page-break-before: always"></div><p>Second</p>)
 
     assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {200, 100}, margin: 10)
     assert pdf =~ "/Count 2"
-    assert pdf =~ "(First) Tj"
-    assert pdf =~ "(Second) Tj"
+    assert_pdf_text(pdf, ["First", "Second"])
   end
 
   test "render converts a flex layout subset to PDF text boxes" do
@@ -950,8 +935,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       ~s(<div style="display: flex; width: 80pt; gap: 8pt"><span style="order: 2">Second</span><span style="order: 1">First</span></div>)
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
-    assert pdf =~ "(First) Tj"
-    assert pdf =~ "(Second) Tj"
+    assert_pdf_text(pdf, ["First", "Second"])
   end
 
   test "render converts row flex items with block children and percentage widths" do
@@ -984,11 +968,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     """
 
     assert {:ok, pdf} = HtmlToPdf.render(html, page_size: :a4)
-    assert pdf =~ "(Left) Tj"
-    assert pdf =~ "(Right) Tj"
-    assert pdf =~ "(Supplier Address) Tj"
-    assert pdf =~ "(Buyer Address) Tj"
-    assert pdf =~ "(Consignee"
+    assert_pdf_text(pdf, ["Left", "Right", "Supplier Address", "Buyer Address", "Consignee"])
   end
 
   test "render converts a grid layout subset to PDF text boxes" do
@@ -996,8 +976,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       ~s(<div style="display: grid; width: 80pt; grid-template-columns: 30pt 30pt; gap: 8pt"><span style="grid-column: 2 / 3">Second</span><span style="grid-column: 1 / 2">First</span></div>)
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
-    assert pdf =~ "(First) Tj"
-    assert pdf =~ "(Second) Tj"
+    assert_pdf_text(pdf, ["First", "Second"])
   end
 
   test "render rejects excessive grid and table cardinalities before layout" do
@@ -1257,10 +1236,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     refute pdf =~ "(Café) Tj"
   end
 
-  test "render falls back from built-in fonts for Unicode text without corrupting glyphs" do
+  test "render uses bundled DejaVu for unstyled Unicode text without corrupting glyphs" do
     assert {:ok, pdf} = HtmlToPdf.render("<p>café © α €</p>")
 
-    assert pdf =~ "/Subtype /Type1"
     assert pdf =~ "/Subtype /Type0"
     assert pdf =~ "/FontFile2"
     assert pdf =~ "/ToUnicode"
@@ -1315,7 +1293,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     File.write!(input_path, "<p>Hello</p>")
 
     assert HtmlToPdf.render_file(input_path, output_path) == :ok
-    assert File.read!(output_path) =~ "(Hello) Tj"
+    assert_pdf_text(File.read!(output_path), "Hello")
 
     assert {:error, {:enoent, %{stage: :file, reason: :enoent, operation: :read}}} =
              HtmlToPdf.render_file(input_path <> ".missing", output_path)
@@ -1382,6 +1360,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
   defp ttf_font_path! do
     [
+      Path.expand("../../priv/fonts/dejavu/DejaVuSans.ttf", __DIR__),
       "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
       "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
       "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
@@ -1391,6 +1370,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       nil -> flunk("No local TTF font fixture found")
       path -> path
     end
+  end
+
+  defp assert_pdf_text(pdf, expected) do
+    assert {:ok, extracted} = Text.extract(pdf, layout: false)
+    Enum.each(List.wrap(expected), &assert(extracted =~ &1))
+  end
+
+  defp refute_pdf_text(pdf, expected) do
+    assert {:ok, extracted} = Text.extract(pdf, layout: false)
+    Enum.each(List.wrap(expected), &refute(extracted =~ &1))
   end
 
   defp png_chunk(type, data) do

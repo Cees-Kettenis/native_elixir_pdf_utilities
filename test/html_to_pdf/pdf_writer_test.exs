@@ -17,6 +17,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
             x: 56.69,
             y: 773.2,
             font: "Helvetica",
+            font_face: %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"},
             font_size: 12.0,
             color: {0, 0, 0}
           }
@@ -140,8 +141,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
     assert {:ok, pdf} = PdfWriter.render(decorated)
     assert pdf =~ "(Body) Tj"
-    assert pdf =~ "(Header) Tj"
-    assert pdf =~ "(Page 1/1) Tj"
+    assert {:ok, extracted} = Text.extract(pdf, layout: false)
+    assert extracted =~ "Header"
+    assert extracted =~ "Page 1/1"
   end
 
   test "render writes document information metadata" do

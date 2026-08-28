@@ -4,7 +4,23 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidatorTest do
   alias NativeElixirPdfUtilities.Validators.WriterValidator
 
   test "prepares valid pages and normalized metadata for serialization" do
-    pages = [%{size: {100.0, 100.0}, boxes: []}]
+    pages = [
+      %{
+        size: {100.0, 100.0},
+        boxes: [
+          %{
+            type: :text,
+            text: "Valid",
+            x: 10.0,
+            y: 20.0,
+            font: "Helvetica",
+            font_face: %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"},
+            font_size: 12.0,
+            color: {0, 0, 0}
+          }
+        ]
+      }
+    ]
 
     assert {:ok, %{pages: ^pages, metadata: %{keywords: "one, two", creation_date: "D:20260812"}}} =
              WriterValidator.prepare(pages,

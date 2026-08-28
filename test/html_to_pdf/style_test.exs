@@ -15,10 +15,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     [paragraph] = styled_tree.children
 
     assert paragraph.style.display == :block
-    assert paragraph.style.font_family == "Helvetica"
+    assert paragraph.style.font_family == "DejaVu Sans"
     assert paragraph.style.font_size == 12.0
     assert paragraph.style.color == {0, 0, 0}
     assert paragraph.style.break_inside == :auto
+  end
+
+  test "an explicit generic family on html resolves from the system and remains inherited" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <style>html { font-family: sans-serif; }</style>
+             <html><p>some text</p></html>
+             """)
+
+    assert {:ok, styled_tree} = Style.compute(dom)
+    [paragraph] = styled_tree.children
+    [text] = paragraph.children
+
+    assert paragraph.style.font_families == ["sans-serif"]
+    assert text.style.font_families == ["sans-serif"]
+    assert paragraph.style.font_face.source == :system
+    assert text.style.font_family == paragraph.style.font_family
+    assert text.style.font_face.id == paragraph.style.font_face.id
   end
 
   test "compute treats section and article as block containers" do
@@ -629,7 +647,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     assert absolute.style.line_height == 9.0
     assert unitless.style.line_height == 15.0
-    assert normal.style.line_height == 12.0
+    assert normal.style.line_height == 11.640625
 
     assert Style.compute(
              %{
@@ -701,8 +719,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     assert unitless_parent.style.line_height == 24.0
     assert unitless_child.style.line_height == 40.0
-    assert_in_delta normal_parent.style.line_height, 14.4, 0.0001
-    assert normal_child.style.line_height == 24.0
+    assert_in_delta normal_parent.style.line_height, 13.96875, 0.0001
+    assert normal_child.style.line_height == 23.28125
     assert absolute_parent.style.line_height == 15.0
     assert absolute_child.style.line_height == 15.0
   end
@@ -1410,7 +1428,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert span.style.color == {0.2, 0.4, 0.6}
     assert span.style.font_size == 16.0
     assert span.style.font_weight == 700
-    assert span.style.line_height == 19.2
+    assert span.style.line_height == 18.625
     assert text.style.color == {0.2, 0.4, 0.6}
     assert text.style.font_size == 16.0
   end
@@ -2974,7 +2992,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert style_for("div", "flex: 1 1 auto") == {:ok, style_for!("div", "flex: 1 1 auto")}
     assert style_for("div", "grid-template-columns: ") == {:error, :invalid_document}
     assert style_for("div", "grid-column: x") == {:error, :invalid_document}
-    assert style_for("div", "font-family: Missing") == {:error, :invalid_document}
+    assert {:ok, missing_font_style} = style_for("div", "font-family: Missing")
+    assert missing_font_style.font_family == "DejaVu Sans"
     assert style_for("div", "background-color: nope") == {:error, :invalid_document}
   end
 
@@ -3374,6 +3393,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     malformed_sources = [
       {"data:image/svg+xml;base64,#{Base.encode64("<svg></svg>")}"},
+      {"data:image/svg+xml;base64,#{Base.encode64(~s(<svg width="1" height="1"><))}"},
       {"data:image/svg+xml;base64,#{Base.encode64(<<255>>)}"},
       {"data:image/png;base64,%%%"},
       {"data:image/png;base64,#{Base.encode64(jpeg_fixture(1, 1))}"},
@@ -3394,7 +3414,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     ]
 
     Enum.each(malformed_sources, fn {src} ->
-      assert image_style(src, base_url: base_dir) == {:error, :invalid_document}
+      assert image_style(src, base_url: base_dir) == {:error, :invalid_document},
+             "expected malformed image source to be rejected: #{inspect(src)}"
     end)
 
     assert image_style("relative.png", []) == {:error, :invalid_document}
@@ -3497,8 +3518,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
              []
            ) == {:error, :invalid_document}
 
-    assert Style.compute(%{type: :document, children: []}, default_font: "Missing") ==
-             {:error, :invalid_document}
+    assert {:ok, %{type: :document, children: []}} =
+             Style.compute(%{type: :document, children: []}, default_font: "Missing")
 
     assert Style.compute(
              %{
@@ -3524,6 +3545,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   defp ttf_font_path! do
     [
+      Path.expand("../../priv/fonts/dejavu/DejaVuSans.ttf", __DIR__),
       "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
       "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
       "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"

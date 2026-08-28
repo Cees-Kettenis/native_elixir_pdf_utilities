@@ -55,7 +55,8 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_cmap_entries: 100_000,
     max_cid_width_entries: 65_536,
     max_form_xobject_depth: 20,
-    max_font_cache_entries: 64
+    max_font_cache_entries: 64,
+    max_system_font_cache_entries: 64
   }
 
   @persistent_key {__MODULE__, :effective}
@@ -101,6 +102,7 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_cid_width_entries
           | :max_form_xobject_depth
           | :max_font_cache_entries
+          | :max_system_font_cache_entries
 
   @typedoc "The complete validated resource-limit configuration."
   @type t :: %{required(key()) => pos_integer()}

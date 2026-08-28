@@ -101,10 +101,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
 
     assert Enum.map_join(header_boxes, & &1.text) == "Résumé α"
 
-    assert Enum.any?(
+    assert Enum.all?(
              header_boxes,
-             &(&1.text in ["é", "α"] and &1.font_face.type == :embedded and
-                 &1.font_face.family == "DejaVu Sans")
+             &(&1.font_face.type == :embedded and &1.font_face.family == "DejaVu Sans")
            )
   end
 

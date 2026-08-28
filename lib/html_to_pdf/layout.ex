@@ -5345,21 +5345,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp text_font_face(style) do
-    case Map.get(style, :font_face) do
-      nil ->
-        {:ok, _families, font_face} =
-          Font.resolve(
-            Map.fetch!(style, :font_family),
-            Map.fetch!(style, :font_weight),
-            Map.fetch!(style, :font_style),
-            %{embedded: [], fallback: []}
-          )
-
-        font_face
-
-      font_face ->
-        font_face
-    end
+    Map.fetch!(style, :font_face)
   end
 
   defp text_style(style) do

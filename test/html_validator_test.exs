@@ -283,6 +283,26 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
                Font.normalize_options(unsupported_glyphs: :replace)
              )
 
+    assert :ok =
+             HtmlValidator.validate_render_request(
+               "<p>Hello</p>",
+               [system_font_discovery: false],
+               Font.normalize_options(system_font_discovery: false)
+             )
+
+    assert {:error,
+            {:invalid_options,
+             %{
+               stage: :options,
+               reason: :invalid_options,
+               message: "system_font_discovery must be true or false"
+             }}} =
+             HtmlValidator.validate_render_request(
+               "<p>Hello</p>",
+               [system_font_discovery: :sometimes],
+               Font.normalize_options(system_font_discovery: :sometimes)
+             )
+
     assert {:error,
             {:invalid_options,
              %{
@@ -436,6 +456,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
 
     for invalid_svg <- [
           "not SVG",
+          "<svg></svg>",
           ~s(<svg width="1" height="1" viewBox="0 0 nope 1"></svg>),
           ~s(<svg width="0" height="1"></svg>),
           ~s(<svg width="0px" height="1"></svg>),
@@ -579,6 +600,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
 
     assert :error = HtmlValidator.validate_font_configs(:not_a_list)
     assert :error = HtmlValidator.validate_font_configs([%{unexpected: true}])
+
+    assert :ok = HtmlValidator.validate_font_embedding("Legacy Sans", nil)
   end
 
   test "validates static form attributes and element semantics" do

@@ -16,6 +16,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
           style: %{
             color: {0, 0, 0},
             display: :block,
+            font_face: %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"},
             font_family: "Helvetica",
             font_size: 12.0,
             font_style: :normal,
@@ -29,6 +30,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
               text: "Hello",
               style: %{
                 color: {0, 0, 0},
+                font_face: %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"},
                 font_family: "Helvetica",
                 font_size: 12.0,
                 font_style: :normal,
@@ -333,6 +335,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
           style: %{
             color: {0, 0, 0},
             display: :block,
+            font_face: %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"},
             font_family: "Helvetica",
             font_size: 12.0,
             font_style: :normal,
@@ -346,6 +349,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
               text: "A ",
               style: %{
                 color: {0, 0, 0},
+                font_face: %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"},
                 font_family: "Helvetica",
                 font_size: 12.0,
                 font_style: :normal,
@@ -359,6 +363,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
               style: %{
                 color: {1, 0, 0},
                 display: :inline,
+                font_face: %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica-Bold"},
                 font_family: "Helvetica",
                 font_size: 12.0,
                 font_style: :normal,
@@ -371,6 +376,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
                   text: "bold",
                   style: %{
                     color: {1, 0, 0},
+                    font_face: %{
+                      type: :built_in,
+                      family: "Helvetica",
+                      pdf_name: "Helvetica-Bold"
+                    },
                     font_family: "Helvetica",
                     font_size: 12.0,
                     font_style: :normal,
@@ -386,6 +396,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
               style: %{
                 color: {0, 0, 1},
                 display: :inline,
+                font_face: %{
+                  type: :built_in,
+                  family: "Helvetica",
+                  pdf_name: "Helvetica-Oblique"
+                },
                 font_family: "Helvetica",
                 font_size: 12.0,
                 font_style: :italic,
@@ -398,6 +413,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
                   text: "italic",
                   style: %{
                     color: {0, 0, 1},
+                    font_face: %{
+                      type: :built_in,
+                      family: "Helvetica",
+                      pdf_name: "Helvetica-Oblique"
+                    },
                     font_family: "Helvetica",
                     font_size: 12.0,
                     font_style: :italic,
@@ -676,6 +696,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
             border_widths: %{top: 1.0, right: 1.0, bottom: 1.0, left: 1.0},
             color: {0, 0, 0},
             display: :block,
+            font_face: %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"},
             font_family: "Helvetica",
             font_size: 12.0,
             font_style: :normal,
@@ -690,6 +711,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
               text: "Boxed",
               style: %{
                 color: {0, 0, 0},
+                font_face: %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"},
                 font_family: "Helvetica",
                 font_size: 12.0,
                 font_style: :normal,
@@ -848,8 +870,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert_in_delta plain.x, 52.0, 0.0001
     assert link.text == "docs"
     assert link.link_url == "https://example.com"
-    assert_in_delta link.x, 88.0, 0.0001
-    assert_in_delta link.annotation_width, 28.8, 0.0001
+    assert_in_delta link.x, 86.505859375, 0.0001
+    assert_in_delta link.annotation_width, 27.80859375, 0.0001
     assert second_marker.text == "2."
     assert second_text.text == "Ship"
     assert second_text.y < plain.y
@@ -943,13 +965,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       Enum.filter(row_boxes, &(&1.type == :text))
 
     assert caption.text == "Summary"
-    assert_in_delta caption.x, 272.44, 0.0001
+    assert_in_delta caption.x, 265.624375, 0.0001
 
     assert first_header_cell.type == :rect
     assert_in_delta first_header_cell.x, 10.0, 0.0001
-    assert_in_delta first_header_cell.y, 793.09, 0.0001
+    assert_in_delta first_header_cell.y, 793.9525, 0.0001
     assert_in_delta first_header_cell.width, 287.64, 0.0001
-    assert_in_delta first_header_cell.height, 24.4, 0.0001
+    assert_in_delta first_header_cell.height, 23.96875, 0.0001
 
     assert first_header_cell.fill_color ==
              {0.9333333333333333, 0.9333333333333333, 0.9333333333333333}
@@ -957,19 +979,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert first_header_cell.stroke_width == 1.0
 
     assert first_header_text.text == "Name"
-    assert first_header_text.font == "Helvetica-Bold"
-    assert_in_delta first_header_text.x, 139.42, 0.0001
-    assert_in_delta first_header_text.y, 800.49, 0.0001
+    assert first_header_text.font_face.family == "DejaVu Sans"
+    assert_in_delta first_header_text.x, 134.4283984375, 0.0001
+    assert_in_delta first_header_text.y, 800.92125, 0.0001
 
     assert_in_delta second_header_cell.x, 297.64, 0.0001
     assert second_header_text.text == "Count"
-    assert second_header_text.font == "Helvetica-Bold"
+    assert second_header_text.font_face.family == "DejaVu Sans"
     assert second_header_text.x > second_header_cell.x
 
-    assert_in_delta first_data_cell.y, 768.69, 0.0001
+    assert_in_delta first_data_cell.y, 769.98375, 0.0001
     assert first_data_text.text == "Alpha"
     assert_in_delta first_data_text.x, 15.0, 0.0001
-    assert_in_delta first_data_text.y, 776.09, 0.0001
+    assert_in_delta first_data_text.y, 776.9525, 0.0001
     assert second_data_cell.x > first_data_cell.x
     assert second_data_text.text == "2"
   end
@@ -2083,9 +2105,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert first.text == "A"
     assert second.text == "B"
-    assert_in_delta first.x, 86.4, 0.0001
-    assert_in_delta first.y, 87.4, 0.0001
-    assert_in_delta second.x, 46.4, 0.0001
+    assert_in_delta first.x, 85.8955078125, 0.0001
+    assert_in_delta first.y, 86.96875, 0.0001
+    assert_in_delta second.x, 45.8837890625, 0.0001
     assert_in_delta second.y, 63.0, 0.0001
   end
 
@@ -4933,6 +4955,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
   defp ttf_font_path! do
     [
+      Path.expand("../../priv/fonts/dejavu/DejaVuSans.ttf", __DIR__),
       "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
       "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
       "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
@@ -5043,6 +5066,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   defp text_style do
     %{
       color: {0, 0, 0},
+      font_face: %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"},
       font_family: "Helvetica",
       font_size: 12.0,
       font_style: :normal,

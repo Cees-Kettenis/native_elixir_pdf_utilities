@@ -5,15 +5,8 @@
     <title>Fonts and print media parity</title>
     <style>
       @page { size: letter; margin: 0; }
-      @font-face {
-        font-family: "Parity Sans";
-        src:
-          url("/usr/share/fonts/truetype/dejavu/missing-parity-font.ttf") format("truetype"),
-          url("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf") format("truetype");
-        font-display: block;
-      }
       html, body { margin: 0; padding: 0; }
-      body { font-family: "Parity Sans"; }
+      body { font-family: sans-serif; }
       @media screen {
         .print-card { display: none; }
       }
@@ -32,7 +25,7 @@
           font-weight: bold;
         }
         .unicode-fallback {
-          font-family: Helvetica, sans-serif;
+          font-family: sans-serif;
           font-size: 13pt;
           color: #334155;
         }

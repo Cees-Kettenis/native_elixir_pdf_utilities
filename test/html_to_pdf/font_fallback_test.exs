@@ -161,12 +161,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallbackTest do
   end
 
   defp text_style_with_registry(registry, weight \\ 400, font_style \\ :normal) do
-    {:ok, families, font_face} = Font.resolve("Missing, Helvetica", weight, font_style, registry)
+    font_face = %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"}
 
     %{
       _font_registry: registry,
       font_face: font_face,
-      font_families: families,
+      font_families: ["Helvetica"],
       font_family: font_face.family,
       font_weight: weight,
       font_style: font_style

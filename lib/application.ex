@@ -5,6 +5,7 @@ defmodule NativeElixirPdfUtilities.Application do
 
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.HtmlToPdf.FontCache
+  alias NativeElixirPdfUtilities.HtmlToPdf.SystemFontCache
   alias NativeElixirPdfUtilities.Validators.LimitsValidator
 
   @doc false
@@ -19,7 +20,10 @@ defmodule NativeElixirPdfUtilities.Application do
         :ok = Limits.install(limits)
 
         Supervisor.start_link(
-          [{FontCache, maximum_entries: limits.max_font_cache_entries}],
+          [
+            {FontCache, maximum_entries: limits.max_font_cache_entries},
+            {SystemFontCache, maximum_entries: limits.max_system_font_cache_entries}
+          ],
           strategy: :one_for_one,
           name: NativeElixirPdfUtilities.Supervisor
         )

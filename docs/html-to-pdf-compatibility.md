@@ -37,11 +37,18 @@ Unknown declarations and unsupported CSS values return `:invalid_css`.
 | `:margin`       | Number, one-to-four-value CSS length string, or side map | Numbers are uniform PDF-point margins. CSS strings follow top/right/bottom/left shorthand rules. Maps accept `:top`, `:right`, `:bottom`, and `:left`; omitted sides are zero. |
 | `:base_url`     | Local path or `file://` URL                                                   | Authorization root for document-selected image and embedded stylesheet font paths. Relative and absolute paths must remain beneath it; traversal and symlink components are rejected. Remote fetching is unsupported. |
 | `:stylesheets`  | Tagged inline CSS and local files: `{:css, css}` or `{:file, path}`             | Configured stylesheets load before embedded `<style>` tags; bare strings are rejected so file access is always explicit.                                                |
-| `:default_font` | Font family or fallback list                                                    | Defaults to `"Helvetica"`. Unsupported glyphs are resolved through configured fonts and the bundled DejaVu Sans faces before layout.                                                                                                    |
+| `:default_font` | Font family or fallback list                                                    | Defaults to the bundled `"DejaVu Sans"`. An explicitly requested family is resolved from configured faces and then installed system fonts before DejaVu is used as the final fallback. |
 | `:fonts`        | `%{family: ..., path: ...}` maps, keyword lists, or `{family, path}` tuples | TrueType fonts. `:weight` and `:style` are optional. OpenType files using TrueType outlines share this path; CFF-flavored OTF is unsupported. Configured faces participate in automatic glyph fallback. |
+| `:system_font_discovery` | Boolean | Defaults to `true`. Set to `false` to skip operating-system discovery; explicitly requested families that are not configured then fall back to bundled DejaVu Sans. |
 | `:metadata`     | Keyword list or map                                                              | Supports `:title`, `:author`, `:subject`, `:keywords`, `:producer`, `:creation_date`, and `:modification_date`. Dates accept calendar structs, ISO 8601 strings, or PDF date strings. An HTML `<title>` is the default PDF title. |
 | `:page_furniture` | Keyword list or map with `:header` and `:footer` | Opt-in running page furniture. Each position accepts HTML or `:default`, `:first`, `:odd`, and `:even` variants. Omitted, `nil`, and `false` furniture is disabled. |
 | `:unsupported_glyphs` | `:replace` or `:error` | Defaults to `:replace`, which substitutes U+FFFD for each grapheme absent from every candidate font. `:error` returns the strict `:unsupported_glyph` diagnostic. |
+
+Generic CSS families such as `sans-serif`, `serif`, `monospace`, and
+`system-ui` are passed to the platform font service. Family names and operating
+system paths are not built into the Elixir resolver. CSS inheritance is
+preserved, so a paragraph below `html { font-family: sans-serif; }` keeps the
+resolved installed sans-serif face.
 
 ## Running headers, footers, and page numbers
 
@@ -179,16 +186,21 @@ Remote URLs, traversal, and symlink components are rejected. Greyscale,
 indexed-color, 16-bit, and Adam7-interlaced PNG decoding is scheduled for
 `0.20.0`.
 
-Fonts include the built-in PDF families `Helvetica`, `Courier`, and
-`Times-Roman`, with their bold and italic variants. The renderer also accepts
-explicit font options and local CSS `@font-face` declarations. Bundled DejaVu
-Sans regular, bold, oblique, and bold-oblique faces handle glyph fallback.
+Unstyled content starts with bundled DejaVu Sans regular, bold, oblique, and
+bold-oblique faces. Explicit font options and local CSS `@font-face`
+declarations take precedence for their declared family names. Other explicit
+CSS family requests use the Elixir Font Discovery package, which calls
+Fontconfig on Linux, Core Text on macOS, and DirectWrite on Windows. The
+renderer does not contain a table of operating-system font paths. Register a
+font explicitly or disable system discovery when a document must render
+identically across hosts.
 
-On Linux, the renderer recognizes Arial, Liberation Sans, DejaVu Sans, and Noto
-Sans at a limited set of known installation paths. This is not general system
-font discovery. Register a font explicitly when a document depends on a
-particular face or must render consistently across hosts. Cross-platform system
-font discovery is scheduled for `0.14.0`.
+Before embedding an installed or caller-supplied face, the renderer reads the
+OpenType `OS/2` embedding flags. Restricted-license and bitmap-only embedding
+settings reject the face. An explicitly registered restricted face returns an
+actionable `:invalid_document` diagnostic at the `:font` stage; a restricted
+system candidate is skipped so the next CSS family or bundled DejaVu can be
+used.
 
 Document-selected `@font-face` URLs must remain beneath `:base_url`.
 Configured stylesheet files resolve their own trusted relative font paths.

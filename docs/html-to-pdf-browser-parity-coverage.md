@@ -138,7 +138,7 @@ All eight production fixtures currently pass their thresholds.
 | Replaced-image `contain` and `cover` fitting with clipping and object positioning | Passing | `image_object_fitting.html` |
 | Repeated and fitted background images inside bordered boxes | Passing | `background_images.html` |
 | Absolute descendants inside relative containing blocks with ordered painting | Passing | `absolute_positioning.html` |
-| Embedded/system font metrics, Unicode fallback, and unsupported glyph replacement vs Chromium | Passing | `fonts_and_print_media.html` exercises both declared DejaVu Sans and built-in Helvetica text that falls back to bundled DejaVu glyphs; `unsupported_glyph_replacement.html` exercises visible continuation for unsupported graphemes; production fixtures use their declared font families when registered by the test helper |
+| Embedded/system font metrics, Unicode fallback, and unsupported glyph replacement vs Chromium | Passing | `system_font_inheritance.html` exercises `html { font-family: sans-serif; }` inherited by a paragraph, `fonts_and_print_media.html` exercises system font metrics in print media, and `unsupported_glyph_replacement.html` exercises visible continuation for unsupported graphemes |
 
 ## Summary
 

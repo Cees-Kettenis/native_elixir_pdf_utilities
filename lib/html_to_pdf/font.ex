@@ -2,16 +2,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   @moduledoc """
   Font loading, fallback resolution, text measurement, and PDF text encoding.
 
-  The renderer loads explicitly configured fonts, bundles DejaVu Sans fallback
-  faces, and also discovers a small set of common system sans-serif fonts when
-  they are available.
+  The renderer loads explicitly configured fonts, discovers installed fonts on
+  demand, and keeps the bundled DejaVu Sans faces as the final fallback.
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.FontCache
+  alias NativeElixirPdfUtilities.HtmlToPdf.SystemFontCache
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type font_style :: :normal | :italic
-  @type registry :: %{embedded: [embedded_font()], fallback: [embedded_font()]}
+  @type registry :: %{
+          embedded: [embedded_font()],
+          fallback: [embedded_font()],
+          system_font_discovery: boolean()
+        }
   @type built_in_font :: %{type: :built_in, family: String.t(), pdf_name: String.t()}
   @type embedded_font :: %{
           type: :embedded,
@@ -27,7 +31,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
           cmap: %{optional(non_neg_integer()) => non_neg_integer()},
           ascent: integer(),
           descent: integer(),
-          bbox: {integer(), integer(), integer(), integer()}
+          bbox: {integer(), integer(), integer(), integer()},
+          embedding_flags: non_neg_integer(),
+          source: :configured | :bundled | :system
         }
   @typedoc "A document-scoped mapping from Unicode code points to PDF CIDs and font glyphs."
   @type pdf_encoding :: %{
@@ -37,110 +43,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
         }
   @type font_face :: built_in_font() | embedded_font()
 
-  @built_in_families ["Courier", "Helvetica", "Times-Roman"]
   @bundled_font_family "DejaVu Sans"
-  @system_font_candidates [
-    %{
-      family: "Arial",
-      path: "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf",
-      weight: 400,
-      style: :normal
-    },
-    %{
-      family: "Arial",
-      path: "/usr/share/fonts/truetype/msttcorefonts/Arial_Bold.ttf",
-      weight: 700,
-      style: :normal
-    },
-    %{
-      family: "Arial",
-      path: "/usr/share/fonts/truetype/msttcorefonts/Arial_Italic.ttf",
-      weight: 400,
-      style: :italic
-    },
-    %{
-      family: "Arial",
-      path: "/usr/share/fonts/truetype/msttcorefonts/Arial_Bold_Italic.ttf",
-      weight: 700,
-      style: :italic
-    },
-    %{
-      family: "Liberation Sans",
-      path: [
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"
-      ],
-      weight: 400,
-      style: :normal
-    },
-    %{
-      family: "Liberation Sans",
-      path: [
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/liberation/LiberationSans-Bold.ttf"
-      ],
-      weight: 700,
-      style: :normal
-    },
-    %{
-      family: "Liberation Sans",
-      path: [
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Italic.ttf",
-        "/usr/share/fonts/liberation/LiberationSans-Italic.ttf"
-      ],
-      weight: 400,
-      style: :italic
-    },
-    %{
-      family: "Liberation Sans",
-      path: [
-        "/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-BoldItalic.ttf",
-        "/usr/share/fonts/liberation/LiberationSans-BoldItalic.ttf"
-      ],
-      weight: 700,
-      style: :italic
-    },
-    %{
-      family: "DejaVu Sans",
-      path: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-      weight: 400,
-      style: :normal
-    },
-    %{
-      family: "DejaVu Sans",
-      path: "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-      weight: 700,
-      style: :normal
-    },
-    %{
-      family: "DejaVu Sans",
-      path: "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
-      weight: 400,
-      style: :italic
-    },
-    %{
-      family: "DejaVu Sans",
-      path: "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf",
-      weight: 700,
-      style: :italic
-    },
-    %{
-      family: "Noto Sans",
-      path: "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-      weight: 400,
-      style: :normal
-    },
-    %{
-      family: "Noto Sans",
-      path: "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
-      weight: 700,
-      style: :normal
-    }
-  ]
 
   @doc false
   @spec normalize_options(term()) :: {:ok, keyword()} | :error
@@ -181,18 +84,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   and keyword entries must include `:family` and one or more `:path` or `:data`
   candidates; `:weight` and `:style` are optional.
   """
-  @spec load_registry(keyword()) :: {:ok, registry()} | :error
+  @spec load_registry(keyword()) ::
+          {:ok, registry()} | :error | {:error, {:invalid_document, map()}}
   def load_registry(opts) do
     with {:ok, prepared_opts} <- normalize_options(opts),
          :ok <- HtmlValidator.validate_font_configs(Keyword.fetch!(prepared_opts, :fonts)),
          {:ok, bundled_configs} <- normalize_configs(bundled_font_configs()),
          :ok <- HtmlValidator.validate_font_configs(bundled_configs),
-         {:ok, configured} <- load_fonts(Keyword.fetch!(prepared_opts, :fonts)),
-         {:ok, bundled} <- load_fonts(bundled_configs) do
+         {:ok, configured} <- load_fonts(Keyword.fetch!(prepared_opts, :fonts), :configured),
+         {:ok, bundled} <- load_fonts(bundled_configs, :bundled) do
       fallback = configured ++ bundled
-      embedded = Enum.uniq_by(fallback, &font_key/1)
-      {:ok, %{embedded: embedded ++ system_fonts(embedded), fallback: fallback}}
+
+      {:ok,
+       %{
+         embedded: Enum.uniq_by(fallback, &font_key/1),
+         fallback: fallback,
+         system_font_discovery: Keyword.get(prepared_opts, :system_font_discovery, true)
+       }}
     else
+      {:error, {:invalid_document, _diagnostic}} = error -> error
       _ -> :error
     end
   end
@@ -205,10 +115,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   def resolve(family_value, weight, style, registry) do
     families = font_families(family_value)
 
-    case Enum.find_value(families, &resolve_family(&1, weight, style, registry)) do
+    case List.first(requested_faces(families, weight, style, registry)) ||
+           embedded_family(@bundled_font_family, weight, style, registry) do
       nil -> :error
       font -> {:ok, families, font}
     end
+  end
+
+  @doc false
+  @spec requested_faces(String.t() | [String.t()], number(), font_style(), registry()) ::
+          [embedded_font()]
+  def requested_faces(family_value, weight, style, registry) do
+    family_value
+    |> font_families()
+    |> Enum.map(&resolve_family(&1, weight, style, registry))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq_by(&pdf_name/1)
   end
 
   @doc """
@@ -366,10 +288,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     pdf_encoding(texts, font).cid_to_unicode
   end
 
-  defp load_fonts(fonts) do
+  defp load_fonts(fonts, source) do
     Enum.reduce_while(fonts, {:ok, []}, fn font, {:ok, acc} ->
-      case load_font(font) do
+      case load_font(Map.put(font, :source, source)) do
         {:ok, loaded} -> {:cont, {:ok, acc ++ [loaded]}}
+        {:error, _reason} = error -> {:halt, error}
         :error -> {:halt, :error}
       end
     end)
@@ -532,9 +455,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
           load_first_supported_data(candidates)
       end
 
-    with {:ok, data, parsed} <- result do
-      family = Map.fetch!(font, :family)
+    family = Map.fetch!(font, :family)
 
+    with {:ok, data, parsed} <- result,
+         :ok <- HtmlValidator.validate_font_embedding(family, parsed.embedding_flags) do
       hash =
         :crypto.hash(:sha256, [family, data])
         |> Base.encode16(case: :lower)
@@ -547,11 +471,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
          family: family,
          weight: Map.fetch!(font, :weight),
          style: Map.fetch!(font, :style),
+         source: Map.fetch!(font, :source),
          id: hash,
          pdf_name: pdf_safe_name(family) <> "-" <> hash,
          data: data
        })}
     else
+      {:error, {:invalid_document, _diagnostic}} = error -> error
       _ -> :error
     end
   end
@@ -584,67 +510,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     end)
   end
 
-  defp system_fonts(explicit_fonts) do
-    explicit_keys =
-      explicit_fonts
-      |> Enum.map(&{String.downcase(&1.family), &1.weight, &1.style})
-      |> MapSet.new()
-
-    candidates =
-      system_font_candidates()
-      |> Enum.reject(fn font ->
-        MapSet.member?(explicit_keys, {String.downcase(font.family), font.weight, font.style}) or
-          not Enum.any?(List.wrap(font.path), &File.regular?/1)
-      end)
-      |> Enum.uniq_by(&{String.downcase(&1.family), &1.weight, &1.style})
-
-    {:ok, prepared} = normalize_configs(candidates)
-    :ok = HtmlValidator.validate_font_configs(prepared)
-
-    Enum.reduce(prepared, [], fn font, acc ->
-      loaded = load_font(font)
-      if match?({:ok, _loaded}, loaded), do: acc ++ [elem(loaded, 1)], else: acc
-    end)
-  end
-
-  defp system_font_candidates do
-    @system_font_candidates ++ user_arial_font_candidates()
-  end
-
-  defp user_arial_font_candidates do
-    with {:ok, home} <- System.fetch_env("HOME") do
-      [
-        %{
-          family: "Arial",
-          path: Path.join(home, ".local/share/fonts/Monotype/TrueType/Arial/Arial_Regular.ttf"),
-          weight: 400,
-          style: :normal
-        },
-        %{
-          family: "Arial",
-          path: Path.join(home, ".local/share/fonts/Monotype/TrueType/Arial/Arial_Bold.ttf"),
-          weight: 700,
-          style: :normal
-        },
-        %{
-          family: "Arial",
-          path: Path.join(home, ".local/share/fonts/Monotype/TrueType/Arial/Arial_Italic.ttf"),
-          weight: 400,
-          style: :italic
-        },
-        %{
-          family: "Arial",
-          path:
-            Path.join(home, ".local/share/fonts/Monotype/TrueType/Arial/Arial_Bold_Italic.ttf"),
-          weight: 700,
-          style: :italic
-        }
-      ]
-    else
-      _ -> []
-    end
-  end
-
   defp font_families(family_value) do
     case family_value do
       families when is_list(families) ->
@@ -669,46 +534,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     |> String.trim()
     |> String.trim("\"")
     |> String.trim("'")
-    |> generic_family()
-  end
-
-  defp generic_family(family) do
-    case String.downcase(family) do
-      "sans-serif" -> "Helvetica"
-      "serif" -> "Times-Roman"
-      "monospace" -> "Courier"
-      _ -> family
-    end
   end
 
   defp resolve_family(family, weight, style, registry) do
-    cond do
-      family in @built_in_families ->
-        built_in_font(family, weight, style)
-
-      true ->
-        embedded_family(family, weight, style, registry)
-    end
+    embedded_family(family, weight, style, registry) ||
+      discover_system_family(family, weight, style, registry)
   end
 
-  defp built_in_font(family, weight, style) do
-    pdf_name =
-      case {family, weight >= 700, style} do
-        {"Helvetica", true, :italic} -> "Helvetica-BoldOblique"
-        {"Helvetica", true, _} -> "Helvetica-Bold"
-        {"Helvetica", false, :italic} -> "Helvetica-Oblique"
-        {"Helvetica", false, _} -> "Helvetica"
-        {"Courier", true, :italic} -> "Courier-BoldOblique"
-        {"Courier", true, _} -> "Courier-Bold"
-        {"Courier", false, :italic} -> "Courier-Oblique"
-        {"Courier", false, _} -> "Courier"
-        {"Times-Roman", true, :italic} -> "Times-BoldItalic"
-        {"Times-Roman", true, _} -> "Times-Bold"
-        {"Times-Roman", false, :italic} -> "Times-Italic"
-        {"Times-Roman", false, _} -> "Times-Roman"
-      end
+  defp discover_system_family(family, weight, style, registry) do
+    case Map.get(registry, :system_font_discovery, false) do
+      true ->
+        key = {String.downcase(family), weight, style}
 
-    %{type: :built_in, family: family, pdf_name: pdf_name}
+        SystemFontCache.fetch(key, fn ->
+          with {:ok, discovered} <- ElixirFontDiscovery.resolve(family, weight, style),
+               {:ok, loaded} <-
+                 load_font(%{
+                   family: discovered.family,
+                   data: [discovered.data],
+                   weight: discovered.weight,
+                   style: if(discovered.style == :oblique, do: :italic, else: discovered.style),
+                   source: :system
+                 }) do
+            loaded
+          else
+            _ -> nil
+          end
+        end)
+
+      false ->
+        nil
+    end
   end
 
   defp embedded_family(family, weight, style, registry) do
@@ -739,7 +595,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
          {:ok, ascent, descent, hmetric_count} <- parse_hhea(hhea),
          {:ok, glyph_count} <- read_u16(maxp, 4),
          {:ok, widths} <- parse_hmtx(hmtx, glyph_count, hmetric_count),
-         {:ok, cmap} <- parse_cmap(cmap) do
+         {:ok, cmap} <- parse_cmap(cmap),
+         {:ok, embedding_flags} <- font_embedding_flags(data, tables) do
       {:ok,
        %{
          units_per_em: units_per_em,
@@ -748,8 +605,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
          cmap: cmap,
          ascent: ascent,
          descent: descent,
-         bbox: bbox
+         bbox: bbox,
+         embedding_flags: embedding_flags
        }}
+    end
+  end
+
+  defp font_embedding_flags(data, tables) do
+    case table(data, tables, "OS/2") do
+      {:ok, os2} -> read_u16(os2, 8)
+      :error -> {:ok, 0}
     end
   end
 

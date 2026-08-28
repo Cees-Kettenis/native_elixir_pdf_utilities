@@ -129,60 +129,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert Font.load_registry(fonts: [%{family: "Missing source"}]) == :error
   end
 
-  test "resolve handles built-in and generic font families" do
-    assert {:ok, ["Helvetica"], sans} = Font.resolve("sans-serif", 400, :normal, %{embedded: []})
-    assert sans.pdf_name == "Helvetica"
+  test "resolve discovers installed generic families without rewriting the CSS family" do
+    assert {:ok, registry} = Font.load_registry([])
 
-    assert {:ok, ["Helvetica"], helvetica_bold_italic} =
-             Font.resolve("Helvetica", 700, :italic, %{embedded: []})
+    for family <- ["sans-serif", "serif", "monospace", "system-ui"] do
+      assert {:ok, [^family], font} = Font.resolve(family, 400, :normal, registry)
+      assert font.type == :embedded
+      assert font.source == :system
+    end
 
-    assert helvetica_bold_italic.pdf_name == "Helvetica-BoldOblique"
+    assert {:ok, ["Helvetica"], font} = Font.resolve("Helvetica", 400, :normal, registry)
+    assert font.type == :embedded
 
-    assert {:ok, ["Helvetica"], helvetica_italic} =
-             Font.resolve("Helvetica", 400, :italic, %{embedded: []})
+    assert {:ok, ["sans-serif"], emphasized} =
+             Font.resolve("sans-serif", 700, :italic, registry)
 
-    assert helvetica_italic.pdf_name == "Helvetica-Oblique"
-
-    assert {:ok, ["Times-Roman"], times_bold_italic} =
-             Font.resolve("serif", 700, :italic, %{embedded: []})
-
-    assert times_bold_italic.pdf_name == "Times-BoldItalic"
-
-    assert {:ok, ["Times-Roman"], times_bold} =
-             Font.resolve("Times-Roman", 700, :normal, %{embedded: []})
-
-    assert times_bold.pdf_name == "Times-Bold"
-
-    assert {:ok, ["Times-Roman"], times_italic} =
-             Font.resolve("Times-Roman", 400, :italic, %{embedded: []})
-
-    assert times_italic.pdf_name == "Times-Italic"
-
-    assert {:ok, ["Courier"], courier_bold_italic} =
-             Font.resolve("monospace", 700, :italic, %{embedded: []})
-
-    assert courier_bold_italic.pdf_name == "Courier-BoldOblique"
-
-    assert {:ok, ["Courier"], courier_bold} =
-             Font.resolve("Courier", 700, :normal, %{embedded: []})
-
-    assert courier_bold.pdf_name == "Courier-Bold"
-
-    assert {:ok, ["Courier"], courier_italic} =
-             Font.resolve("Courier", 400, :italic, %{embedded: []})
-
-    assert courier_italic.pdf_name == "Courier-Oblique"
-
-    assert {:ok, ["Courier"], courier} = Font.resolve("Courier", 400, :normal, %{embedded: []})
-    assert courier.pdf_name == "Courier"
-
-    assert {:ok, ["Times-Roman"], times} =
-             Font.resolve("Times-Roman", 400, :normal, %{embedded: []})
-
-    assert times.pdf_name == "Times-Roman"
+    assert emphasized.type == :embedded
+    assert emphasized.source == :system
+    assert emphasized.weight >= 600
   end
 
-  test "load_registry always includes bundled fallback faces and discovers other system fonts" do
+  test "load_registry includes bundled fallback faces and discovers installed fonts on demand" do
     assert {:ok, registry} = Font.load_registry([])
 
     assert Enum.map(registry.fallback, &{&1.family, &1.weight, &1.style}) == [
@@ -196,26 +163,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
              Font.resolve("DejaVu Sans", 400, :normal, registry)
 
     assert bundled.type == :embedded
+    assert bundled.source == :bundled
     assert is_binary(bundled.data)
 
-    system_font =
-      [
-        {"Liberation Sans", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"},
-        {"Liberation Sans", "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"},
-        {"Liberation Sans", "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"},
-        {"Noto Sans", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"}
-      ]
-      |> Enum.find(fn {_family, path} -> File.regular?(path) end)
+    assert Enum.all?(registry.embedded, &(&1.family == "DejaVu Sans"))
+    assert {:ok, ["sans-serif"], system_font} = Font.resolve("sans-serif", 400, :normal, registry)
+    assert system_font.type == :embedded
+    assert system_font.source == :system
 
-    case system_font do
-      {family, _path} ->
-        assert {:ok, [^family], font} = Font.resolve(family, 400, :normal, registry)
-        assert font.type == :embedded
-        assert font.family == family
+    assert {:ok, disabled_registry} = Font.load_registry(system_font_discovery: false)
 
-      nil ->
-        assert Enum.all?(registry.embedded, &(&1.family == "DejaVu Sans"))
-    end
+    assert {:ok, ["sans-serif"], disabled_fallback} =
+             Font.resolve("sans-serif", 400, :normal, disabled_registry)
+
+    assert disabled_fallback.family == "DejaVu Sans"
+    assert disabled_fallback.source == :bundled
+
+    assert {:ok, ["A Font That Is Not Installed 123"], missing_fallback} =
+             Font.resolve("A Font That Is Not Installed 123", 400, :normal, registry)
+
+    assert missing_fallback.family == "DejaVu Sans"
+    assert missing_fallback.source == :bundled
   end
 
   test "fallback_faces prefers configured families and matches weight and style" do
@@ -377,6 +345,46 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
              )
   after
     File.rm(Path.join(System.tmp_dir!(), "native-elixir-pdf-zero-table-font.ttf"))
+  end
+
+  test "rejects fonts whose OS/2 metadata prohibits outline embedding" do
+    restricted_font =
+      valid_tables()
+      |> Map.put("OS/2", <<0::size(8 * 8), 0x0002::16>>)
+      |> ttf_fixture()
+
+    assert {:error,
+            {:invalid_document,
+             %{
+               stage: :font,
+               reason: :invalid_document,
+               source: "Restricted Sans",
+               message: "font \"Restricted Sans\" does not permit outline embedding in a PDF"
+             }}} =
+             Font.load_registry(fonts: [%{family: "Restricted Sans", data: restricted_font}])
+
+    assert {:error,
+            {:invalid_document,
+             %{
+               stage: :font,
+               reason: :invalid_document,
+               operation: :render,
+               module: NativeElixirPdfUtilities.HtmlToPdf,
+               source: "Restricted Sans"
+             }}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render("<p>hello</p>",
+               fonts: [%{family: "Restricted Sans", data: restricted_font}]
+             )
+  end
+
+  test "treats a font without an OS/2 table as installable" do
+    font_without_os2 = valid_tables() |> ttf_fixture()
+
+    assert {:ok, registry} =
+             Font.load_registry(fonts: [%{family: "Legacy Sans", data: font_without_os2}])
+
+    assert {:ok, ["Legacy Sans"], %{family: "Legacy Sans", embedding_flags: 0}} =
+             Font.resolve(["Legacy Sans"], 400, :normal, registry)
   end
 
   defp ttf_font_path! do

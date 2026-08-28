@@ -38,15 +38,16 @@ defmodule NativeElixirPdfUtilities.MixProject do
   defp deps do
     [
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:elixir_font_discovery, "~> 0.1.1"},
       {:ex_doc, "~> 0.37", only: :dev, runtime: false},
-      {:resvg, "~> 0.5.0"}
+      {:resvg, "~> 0.6.0"}
     ]
   end
 
   defp package do
     [
       name: "native_elixir_pdf_utilities",
-      files: ~w(lib assets priv docs mix.exs README.md CHANGELOG.md LICENSE),
+      files: ~w(lib assets priv/fonts priv/licenses docs mix.exs README.md CHANGELOG.md LICENSE),
       licenses: ["MIT", "Bitstream-Vera", "BSD-3-Clause"],
       links: %{"GitHub" => "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"}
     ]

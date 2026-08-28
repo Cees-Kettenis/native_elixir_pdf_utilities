@@ -142,6 +142,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
 
   defp ttf_font_path do
     [
+      Path.expand("../../priv/fonts/dejavu/DejaVuSans.ttf", __DIR__),
       "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
       "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
       "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
@@ -151,6 +152,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
 
   defp ttf_bold_font_path do
     [
+      Path.expand("../../priv/fonts/dejavu/DejaVuSans-Bold.ttf", __DIR__),
       "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
       "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
       "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"
@@ -208,9 +210,10 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
         chromium_default_page_size(fixture_path, render_opts)
 
     page_furniture = Keyword.get(opts, :chromium_page_furniture)
+    fonts = Keyword.get(render_opts, :fonts, [])
 
-    case {page_size, page_furniture} do
-      {nil, nil} ->
+    case {page_size, page_furniture, fonts} do
+      {nil, nil, []} ->
         fixture_path
 
       _configured ->
@@ -218,6 +221,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
 
         fixture_path
         |> File.read!()
+        |> maybe_inject_chromium_fonts(fonts)
         |> maybe_inject_chromium_page_css(page_size)
         |> maybe_inject_chromium_page_furniture(
           page_furniture,
@@ -227,6 +231,31 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
         |> then(&File.write!(chromium_fixture_path, &1))
 
         chromium_fixture_path
+    end
+  end
+
+  defp maybe_inject_chromium_fonts(html, fonts) do
+    declarations =
+      Enum.map_join(fonts, "\n", fn font ->
+        family = Map.fetch!(font, :family)
+        path = Map.fetch!(font, :path)
+        weight = Map.get(font, :weight, 400)
+        style = Map.get(font, :style, :normal)
+
+        "@font-face { font-family: #{inspect(family)}; src: url(#{inspect(file_url(path))}) format(\"truetype\"); font-weight: #{weight}; font-style: #{style}; }"
+      end)
+
+    case declarations do
+      "" ->
+        html
+
+      declarations ->
+        style = "<style>\n#{declarations}\n</style>"
+
+        case Regex.run(~r/<head\b[^>]*>/iu, html) do
+          [head_tag] -> String.replace(html, head_tag, head_tag <> "\n" <> style, global: false)
+          _ -> style <> "\n" <> html
+        end
     end
   end
 

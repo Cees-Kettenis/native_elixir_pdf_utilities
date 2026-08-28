@@ -87,7 +87,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
              {:ok, font_registry} <- font_registry(opts, css_fonts),
              {:ok, font_families, font_face} <-
                resolve_font(
-                 Keyword.get(opts, :default_font, "Helvetica"),
+                 Keyword.get(opts, :default_font, "DejaVu Sans"),
                  400,
                  :normal,
                  font_registry
@@ -142,6 +142,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         else
           {:error, {:font_load_failed, sources}} ->
             {:error, font_load_error(sources)}
+
+          {:error, {:invalid_document, _diagnostic}} = error ->
+            error
 
           {:error, :invalid_document} ->
             {:error, style_error_detail(dom, opts)}
@@ -687,15 +690,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp normal_line_height(style) do
     font_size = Map.fetch!(style, :font_size)
 
-    case Map.get(style, :font_face) do
-      %{type: :embedded, ascent: ascent, descent: descent, units_per_em: units_per_em}
-      when is_number(ascent) and is_number(descent) and is_number(units_per_em) and
-             units_per_em > 0 ->
-        max((ascent - descent) / units_per_em * font_size, font_size)
+    %{type: :embedded, ascent: ascent, descent: descent, units_per_em: units_per_em} =
+      Map.fetch!(style, :font_face)
 
-      _ ->
-        font_size * 1.2
-    end
+    max((ascent - descent) / units_per_em * font_size, font_size)
   end
 
   defp text_style(style) do
@@ -1178,6 +1176,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       :error ->
         {:error, :invalid_document}
+
+      {:error, {:invalid_document, _diagnostic}} = error ->
+        error
     end
   end
 
@@ -1320,7 +1321,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp diagnostic_style do
     with {:ok, registry} <- font_registry([], []),
-         {:ok, families, font_face} <- resolve_font("Helvetica", 400, :normal, registry) do
+         {:ok, families, font_face} <- resolve_font("DejaVu Sans", 400, :normal, registry) do
       {:ok,
        12.0
        |> block_defaults(400, 0.0)
@@ -1370,10 +1371,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp resolve_font(family_value, weight, style, registry) do
-    case Font.resolve(family_value, weight, style, registry) do
-      {:ok, families, font_face} -> {:ok, families, font_face}
-      :error -> {:error, :invalid_document}
-    end
+    {:ok, _families, _font_face} = result = Font.resolve(family_value, weight, style, registry)
+    result
   end
 
   defp apply_author_styles(style, node, ancestors, rules, pseudo_element \\ nil) do

@@ -67,6 +67,7 @@ override these values.
 | `max_cid_width_entries` | 65,536 | CID width entries |
 | `max_form_xobject_depth` | 20 | Form XObject nesting |
 | `max_font_cache_entries` | 64 | Parsed font files retained by the cache |
+| `max_system_font_cache_entries` | 64 | Positive and negative installed-font discovery results retained by the cache |
 
 `NativeElixirPdfUtilities.Limits.defaults/0` returns these built-in values, and
 `NativeElixirPdfUtilities.Limits.effective/0` returns the values loaded for the

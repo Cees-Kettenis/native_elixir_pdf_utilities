@@ -61,13 +61,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
         weight = Map.fetch!(style, :font_weight)
         font_style = Map.fetch!(style, :font_style)
 
-        requested =
-          Enum.flat_map(families, fn family ->
-            case Font.resolve([family], weight, font_style, registry) do
-              {:ok, _families, font_face} -> [font_face]
-              :error -> []
-            end
-          end)
+        requested = Font.requested_faces(families, weight, font_style, registry)
 
         candidates =
           [selected | requested ++ Font.fallback_faces(registry, weight, font_style)]

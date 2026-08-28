@@ -18,7 +18,7 @@ alias NativeElixirPdfUtilities.HtmlToPdf
     @page { size: A4; margin: 18mm; }
 
     body {
-      font-family: Helvetica;
+      font-family: "DejaVu Sans";
       font-size: 10pt;
       color: #142033;
     }
@@ -191,13 +191,14 @@ beneath `:base_url` so PDF generation does not depend on network access.
 
 ## Fonts
 
-Built-in PDF fonts are available without setup. For Unicode-heavy documents,
-pass explicit TrueType fonts or declare a local font in CSS.
+Bundled DejaVu Sans is available without setup. Explicit CSS family requests
+can use installed system fonts. For documents that require a particular face,
+pass a TrueType font or declare a local font in CSS.
 
 ```elixir
 {:ok, pdf} =
   HtmlToPdf.render(
-    ~s(<p style="font-family: 'Report Sans', Helvetica">Café</p>),
+    ~s(<p style="font-family: 'Report Sans', sans-serif">Café</p>),
     fonts: [
       %{family: "Report Sans", path: "priv/fonts/report-sans.ttf"}
     ]
