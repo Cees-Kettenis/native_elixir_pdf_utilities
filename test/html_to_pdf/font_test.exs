@@ -253,6 +253,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert Font.encode_embedded_text("AB", encoding) == "00010002"
   end
 
+  test "load_registry skips an empty preferred cmap subtable" do
+    empty_format4 = cmap_format4_table(0xFFFF, 0xFFFF, 1, 0)
+    populated_format4 = cmap_format4_table(?A, ?A, 1, 0)
+    populated_offset = 20 + byte_size(empty_format4)
+
+    cmap =
+      <<0::16, 2::16, 3::16, 10::16, 20::32, 3::16, 1::16, populated_offset::32,
+        empty_format4::binary, populated_format4::binary>>
+
+    font_data = valid_tables() |> Map.put("cmap", cmap) |> ttf_fixture()
+
+    assert {:ok, registry} =
+             Font.load_registry(fonts: [%{family: "Fallback Cmap Sans", data: font_data}])
+
+    assert {:ok, ["Fallback Cmap Sans"], font} =
+             Font.resolve("Fallback Cmap Sans", 400, :normal, registry)
+
+    assert Map.has_key?(font.cmap, ?A)
+  end
+
   test "load_registry rejects unsupported font config" do
     invalid_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-invalid-font.ttf")
     short_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-short-font.ttf")

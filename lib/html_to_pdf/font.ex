@@ -703,9 +703,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     with {:ok, subtable_offsets} <- cmap_subtable_offsets(cmap) do
       subtable_offsets
       |> Enum.map(&parse_cmap_subtable(cmap, &1))
-      |> Enum.find(&match?({:ok, _map}, &1))
+      |> Enum.find(fn result ->
+        case result do
+          {:ok, map} -> map_size(map) > 0
+          _ -> false
+        end
+      end)
       |> case do
-        {:ok, map} when map_size(map) > 0 -> {:ok, map}
+        {:ok, map} -> {:ok, map}
         _ -> :error
       end
     end
