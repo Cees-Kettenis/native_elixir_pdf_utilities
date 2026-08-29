@@ -38,7 +38,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
   defp deps do
     [
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:elixir_font_discovery, "~> 0.1.1"},
+      {:elixir_font_discovery, "~> 0.2.0"},
       {:ex_doc, "~> 0.37", only: :dev, runtime: false},
       {:resvg, "~> 0.6.0"}
     ]
