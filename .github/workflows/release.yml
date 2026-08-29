@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  github-release:
+    name: GitHub release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate tag and extract release notes
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must use the form vMAJOR.MINOR.PATCH: ${tag}" >&2
+            exit 1
+          fi
+
+          version="${tag#v}"
+          project_version="$(
+            sed -n 's/^[[:space:]]*version: "\([^"]*\)",/\1/p' mix.exs |
+              head -n 1
+          )"
+
+          if [[ "${project_version}" != "${version}" ]]; then
+            echo "Tag ${tag} does not match mix.exs version ${project_version}" >&2
+            exit 1
+          fi
+
+          notes_file="${RUNNER_TEMP}/release-notes.md"
+
+          awk -v heading="## ${version} - " '
+            index($0, heading) == 1 { found = 1 }
+            found && /^## / && index($0, heading) != 1 { exit }
+            found { print }
+            END { if (!found) exit 2 }
+          ' CHANGELOG.md > "${notes_file}"
+
+          if ! grep -q '[^[:space:]]' "${notes_file}"; then
+            echo "CHANGELOG.md has no release notes for ${version}" >&2
+            exit 1
+          fi
+
+          echo "notes_file=${notes_file}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file "${{ steps.release.outputs.notes_file }}"
