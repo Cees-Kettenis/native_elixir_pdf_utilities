@@ -170,7 +170,27 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
   test "stream data fallback scans a valid endstream marker" do
     input = "stream\nabcxendstream\nreal\rendstream"
     assert [:stream, {:stream_data, "abcxendstream\nreal"}, :endstream] = toks(input)
+    assert [:stream, {:stream_data, "abc"}, :endstream] = toks("stream\nabc\nendstream%tail")
     assert [:stream, {:stream_data, "abc"}] = toks("stream\nabc")
+  end
+
+  test "stream data fallback ignores endstream keyword prefixes" do
+    for false_marker <- ["endstreamXYZ", "endstream#"] do
+      input = "<< /Length 9 0 R >> stream\nabc\n#{false_marker}\nstill-data\nendstream"
+      expected_data = "abc\n#{false_marker}\nstill-data"
+
+      assert [
+               :dict_start,
+               {:name, "Length"},
+               {:int, 9},
+               {:int, 0},
+               :R,
+               :dict_end,
+               :stream,
+               {:stream_data, ^expected_data},
+               :endstream
+             ] = toks(input)
+    end
   end
 
   test "peek and span APIs preserve tokenizer position metadata" do

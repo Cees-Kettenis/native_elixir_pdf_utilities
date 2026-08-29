@@ -736,7 +736,7 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
     find_from(bin, from)
   end
 
-  # Search for 'endstream' starting at `from` with simple pre-check for preceding whitespace.
+  # Search for an 'endstream' token starting at `from`.
   defp find_from(bin, from) do
     cond do
       from >= byte_size(bin) ->
@@ -748,16 +748,21 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
             nil
 
           {idx, 9} ->
-            # Check that preceding byte (if any) is whitespace/EOL; this reduces false positives
             prev = if idx == 0, do: nil, else: :binary.at(bin, idx - 1)
+            next_idx = idx + 9
+            next = if next_idx == byte_size(bin), do: nil, else: :binary.at(bin, next_idx)
 
-            if prev in [nil, 9, 10, 12, 13, 32] do
+            if token_boundary?(prev) and token_boundary?(next) do
               idx
             else
               find_from(bin, idx + 1)
             end
         end
     end
+  end
+
+  defp token_boundary?(byte) do
+    is_nil(byte) or byte in @whitespace or is_delim?(byte)
   end
 
   # Drop a single trailing CR, LF or CRLF from a binary, if present.
