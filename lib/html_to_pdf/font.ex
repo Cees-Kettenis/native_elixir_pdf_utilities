@@ -33,6 +33,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
           descent: integer(),
           bbox: {integer(), integer(), integer(), integer()},
           embedding_flags: non_neg_integer(),
+          variable_font?: boolean(),
           source: :configured | :bundled | :system
         }
   @typedoc "A document-scoped mapping from Unicode code points to PDF CIDs and font glyphs."
@@ -458,7 +459,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     family = Map.fetch!(font, :family)
 
     with {:ok, data, parsed} <- result,
-         :ok <- HtmlValidator.validate_font_embedding(family, parsed.embedding_flags) do
+         :ok <-
+           HtmlValidator.validate_font_embedding(
+             family,
+             parsed.embedding_flags,
+             parsed.variable_font?
+           ) do
       hash =
         :crypto.hash(:sha256, [family, data])
         |> Base.encode16(case: :lower)
@@ -606,7 +612,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
          ascent: ascent,
          descent: descent,
          bbox: bbox,
-         embedding_flags: embedding_flags
+         embedding_flags: embedding_flags,
+         variable_font?: Map.has_key?(tables, "fvar")
        }}
     end
   end

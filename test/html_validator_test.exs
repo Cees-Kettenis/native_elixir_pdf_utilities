@@ -601,7 +601,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     assert :error = HtmlValidator.validate_font_configs(:not_a_list)
     assert :error = HtmlValidator.validate_font_configs([%{unexpected: true}])
 
-    assert :ok = HtmlValidator.validate_font_embedding("Legacy Sans", nil)
+    assert :ok = HtmlValidator.validate_font_embedding("Legacy Sans", nil, false)
+
+    assert {:error,
+            {:invalid_document,
+             %{
+               stage: :font,
+               source: "Variable Sans",
+               message:
+                 "font \"Variable Sans\" uses OpenType variations; provide a static font instance for PDF embedding"
+             }}} = HtmlValidator.validate_font_embedding("Variable Sans", 0, true)
   end
 
   test "validates static form attributes and element semantics" do

@@ -38,7 +38,7 @@ Unknown declarations and unsupported CSS values return `:invalid_css`.
 | `:base_url`     | Local path or `file://` URL                                                   | Authorization root for document-selected image and embedded stylesheet font paths. Relative and absolute paths must remain beneath it; traversal and symlink components are rejected. Remote fetching is unsupported. |
 | `:stylesheets`  | Tagged inline CSS and local files: `{:css, css}` or `{:file, path}`             | Configured stylesheets load before embedded `<style>` tags; bare strings are rejected so file access is always explicit.                                                |
 | `:default_font` | Font family or fallback list                                                    | Defaults to the bundled `"DejaVu Sans"`. An explicitly requested family is resolved from configured faces and then installed system fonts before DejaVu is used as the final fallback. |
-| `:fonts`        | `%{family: ..., path: ...}` maps, keyword lists, or `{family, path}` tuples | TrueType fonts. `:weight` and `:style` are optional. OpenType files using TrueType outlines share this path; CFF-flavored OTF is unsupported. Configured faces participate in automatic glyph fallback. |
+| `:fonts`        | `%{family: ..., path: ...}` maps, keyword lists, or `{family, path}` tuples | Static TrueType fonts. `:weight` and `:style` are optional. OpenType files using static TrueType outlines share this path; variable and CFF-flavored fonts are unsupported. Configured faces participate in automatic glyph fallback. |
 | `:system_font_discovery` | Boolean | Defaults to `true`. Set to `false` to skip operating-system discovery; explicitly requested families that are not configured then fall back to bundled DejaVu Sans. |
 | `:metadata`     | Keyword list or map                                                              | Supports `:title`, `:author`, `:subject`, `:keywords`, `:producer`, `:creation_date`, and `:modification_date`. Dates accept calendar structs, ISO 8601 strings, or PDF date strings. An HTML `<title>` is the default PDF title. |
 | `:page_furniture` | Keyword list or map with `:header` and `:footer` | Opt-in running page furniture. Each position accepts HTML or `:default`, `:first`, `:odd`, and `:even` variants. Omitted, `nil`, and `false` furniture is disabled. |
@@ -202,11 +202,17 @@ actionable `:invalid_document` diagnostic at the `:font` stage; a restricted
 system candidate is skipped so the next CSS family or bundled DejaVu can be
 used.
 
+The renderer also rejects variable OpenType fonts because unchanged variable
+font bytes describe the default instance, not the weight or style selected by
+the operating system. Register a static instance when a family is distributed
+only as a variable font. A variable system candidate is skipped so the next
+CSS family or bundled DejaVu can be used.
+
 Document-selected `@font-face` URLs must remain beneath `:base_url`.
 Configured stylesheet files resolve their own trusted relative font paths.
 The renderer rejects HTTP(S), data URLs, traversal, symlink components,
-`local(...)`-only sources, WOFF, WOFF2, and CFF-flavored OpenType fonts. Convert
-unsupported web fonts to TTF before rendering.
+`local(...)`-only sources, WOFF, WOFF2, variable fonts, and CFF-flavored
+OpenType fonts. Convert unsupported web fonts to a static TTF before rendering.
 
 The renderer resolves font fallback before layout, so wrapping and pagination
 use the final glyph metrics. For each Unicode grapheme, it tries the selected

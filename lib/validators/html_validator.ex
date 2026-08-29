@@ -802,16 +802,24 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
-  @spec validate_font_embedding(String.t(), term()) ::
+  @spec validate_font_embedding(String.t(), term(), term()) ::
           :ok | {:error, {:invalid_document, Diagnostics.diagnostic()}}
-  def validate_font_embedding(family, embedding_flags) do
+  def validate_font_embedding(family, embedding_flags, variable_font?) do
     restricted? =
       is_integer(embedding_flags) and
         (Bitwise.band(embedding_flags, 0x0002) != 0 or
            Bitwise.band(embedding_flags, 0x0200) != 0)
 
-    case restricted? do
-      true ->
+    case {variable_font?, restricted?} do
+      {true, _restricted?} ->
+        Diagnostics.error(
+          :font,
+          :invalid_document,
+          "font #{inspect(family)} uses OpenType variations; provide a static font instance for PDF embedding",
+          source: family
+        )
+
+      {_variable_font?, true} ->
         Diagnostics.error(
           :font,
           :invalid_document,
@@ -819,7 +827,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           source: family
         )
 
-      false ->
+      {_variable_font?, false} ->
         :ok
     end
   end

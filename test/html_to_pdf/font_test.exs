@@ -377,13 +377,45 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
              )
   end
 
+  test "rejects variable fonts instead of using their default instance" do
+    variable_font =
+      valid_tables()
+      |> Map.put("fvar", <<1::16, 0::16>>)
+      |> ttf_fixture()
+
+    assert {:error,
+            {:invalid_document,
+             %{
+               stage: :font,
+               reason: :invalid_document,
+               source: "Variable Sans",
+               message:
+                 "font \"Variable Sans\" uses OpenType variations; provide a static font instance for PDF embedding"
+             }}} =
+             Font.load_registry(fonts: [%{family: "Variable Sans", data: variable_font}])
+
+    assert {:error,
+            {:invalid_document,
+             %{
+               stage: :font,
+               reason: :invalid_document,
+               operation: :render,
+               module: NativeElixirPdfUtilities.HtmlToPdf,
+               source: "Variable Sans"
+             }}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render("<p>hello</p>",
+               fonts: [%{family: "Variable Sans", data: variable_font}]
+             )
+  end
+
   test "treats a font without an OS/2 table as installable" do
     font_without_os2 = valid_tables() |> ttf_fixture()
 
     assert {:ok, registry} =
              Font.load_registry(fonts: [%{family: "Legacy Sans", data: font_without_os2}])
 
-    assert {:ok, ["Legacy Sans"], %{family: "Legacy Sans", embedding_flags: 0}} =
+    assert {:ok, ["Legacy Sans"],
+            %{family: "Legacy Sans", embedding_flags: 0, variable_font?: false}} =
              Font.resolve(["Legacy Sans"], 400, :normal, registry)
   end
 
