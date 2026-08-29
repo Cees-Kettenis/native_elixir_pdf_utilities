@@ -19,62 +19,6 @@ breaking API changes are allowed, but they should be explained clearly in
 
 ## Milestones
 
-### 0.14.0 - Cross-Platform System Font Discovery
-
-Milestone goal: resolve CSS font families through the host operating system so
-documents use the fonts selected by their developers on Linux, macOS, and
-Windows instead of relying primarily on hard-coded installation paths.
-
-#### Scope
-
-- Add platform-specific system font discovery:
-  - Fontconfig on Linux
-  - Core Text on macOS
-  - DirectWrite on Windows
-- Resolve family, weight, and style to a concrete font face and file that the
-  existing parser and PDF embedding path can consume.
-- Resolve CSS generic families such as `serif`, `sans-serif`, and `monospace`
-  through the platform adapter.
-- Keep explicitly registered fonts and `@font-face` sources ahead of system
-  font discovery in the resolution order.
-- Preserve the bundled font as the final fallback when no requested or system
-  face can be used.
-- Cache successful and unsuccessful system lookups within bounded resource
-  limits so repeated text measurement does not repeatedly query the operating
-  system.
-- Provide a documented option to disable system discovery when reproducible
-  output across different hosts is more important than matching locally
-  installed fonts.
-
-#### Design Notes
-
-- Use operating-system font APIs as the primary discovery mechanism rather
-  than maintaining lists of known installation directories.
-- Keep platform integration behind a common adapter boundary and degrade to
-  the existing fallback path when a platform service is unavailable.
-- Use one resolved face for text measurement, line breaking, layout, and PDF
-  embedding; never measure with a substitute and write with another font.
-- Accept only font files and face formats supported by the parser and writer.
-  Continue through the CSS fallback list, or return an actionable diagnostic
-  when an explicitly required face cannot be consumed.
-- Respect font embedding restrictions exposed by the font metadata.
-- Document that system discovery follows each host's installed fonts and can
-  therefore produce different output across machines.
-
-#### Completion Criteria
-
-- Add focused tests for family, weight, style, generic-family, CSS fallback,
-  explicit-font precedence, unavailable-service, and unsupported-face paths.
-- Exercise Linux, macOS, and Windows discovery adapters on their native CI
-  platforms.
-- Add a regression fixture that proves an installed font is used consistently
-  for measurement and embedding, including right alignment and narrow table
-  headers.
-- Confirm disabling system discovery preserves deterministic bundled-fallback
-  behavior.
-- Document the lookup order, supported font formats, platform requirements,
-  embedding restrictions, and reproducibility trade-offs.
-
 ### 0.15.0 - Page Transforms and Document Assembly
 
 Milestone goal: let applications assemble, split, rearrange, and rotate PDF documents

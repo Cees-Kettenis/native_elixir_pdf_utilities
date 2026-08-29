@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.14.0 - 2026-08-29
+
+### Added
+
+- Added cross-platform installed-font discovery through Fontconfig on Linux,
+  Core Text on macOS, and DirectWrite on Windows.
+- Added host resolution for named and generic CSS font families, including
+  `serif`, `sans-serif`, `monospace`, and `system-ui`. Explicitly configured
+  fonts and `@font-face` sources retain precedence, and bundled DejaVu Sans is
+  the final fallback.
+- Added the `:system_font_discovery` HTML-to-PDF option. It defaults to `true`
+  and can be disabled when identical output across hosts is more important
+  than matching locally installed fonts.
+- Added bounded caching for successful and unsuccessful system font lookups
+  through the `max_system_font_cache_entries` resource limit.
+- Added browser parity coverage for inherited system fonts.
+
+### Changed
+
+- Changed the default HTML-to-PDF font from a built-in PDF font to bundled
+  DejaVu Sans so text measurement and embedded output use the same face.
+- Updated `elixir_font_discovery` to `0.2.0` for explicit unavailable-service
+  and variable-font results.
+- System and configured font loading now respects font embedding restrictions
+  exposed by OpenType metadata.
+
+### Fixed
+
+- Fixed variable OpenType fonts being embedded as their default instance.
+  Configured variable fonts now return an actionable diagnostic, while system
+  lookup continues through the CSS fallback list. A static font instance is
+  required for embedding.
+- Fixed scanned PDF streams treating `endstream` prefixes inside stream data
+  as the end of the stream. Both sides of the keyword must now be valid PDF
+  token boundaries.
+- Fixed font loading stopping at an empty preferred `cmap` subtable instead of
+  continuing to a later usable subtable.
+
 ## 0.13.0 - 2026-08-27
 
 ### Added
