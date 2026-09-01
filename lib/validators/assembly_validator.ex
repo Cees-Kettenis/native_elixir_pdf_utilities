@@ -231,22 +231,30 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
             )
 
           true ->
-            object = Map.fetch!(objects, ref)
+            case Map.fetch(objects, ref) do
+              {:ok, object} ->
+                nested_references =
+                  case Map.fetch(overrides, ref) do
+                    {:ok, value} -> value_references(value)
+                    :error -> token_references(object.tokens)
+                  end
 
-            nested_references =
-              case Map.fetch(overrides, ref) do
-                {:ok, value} -> value_references(value)
-                :error -> token_references(object.tokens)
-              end
+                walk_references(
+                  nested_references ++ rest,
+                  Map.put(seen, ref, true),
+                  objects,
+                  overrides,
+                  selected,
+                  all_pages
+                )
 
-            walk_references(
-              nested_references ++ rest,
-              Map.put(seen, ref, true),
-              objects,
-              overrides,
-              selected,
-              all_pages
-            )
+              :error ->
+                error(
+                  :page_dependencies,
+                  :invalid_pdf_input,
+                  "a retained object references missing indirect object #{elem(ref, 0)} #{elem(ref, 1)}"
+                )
+            end
         end
     end
   end

@@ -236,6 +236,26 @@ defmodule NativeElixirPdfUtilities.PageTransformsTest do
     assert split_diagnostic.operation == :split_by_page
   end
 
+  test "returns diagnostics for dangling references reached from retained pages" do
+    source = three_page_pdf("/Private 16 0 R", [{17, "<< /Unused true >>"}])
+
+    assert {:ok, _context} = Reader.read_validated(source)
+
+    assert {:error, {:invalid_pdf_input, transform_diagnostic}} =
+             Transform.pick_pages(source, [1])
+
+    assert transform_diagnostic.stage == :page_dependencies
+    assert transform_diagnostic.operation == :pick_pages
+    assert transform_diagnostic.module == Transform
+    assert transform_diagnostic.message =~ "missing indirect object 16 0"
+
+    assert {:error, {:invalid_pdf_input, split_diagnostic}} = Split.by_page(source)
+    assert split_diagnostic.stage == :page_dependencies
+    assert split_diagnostic.operation == :split_by_page
+    assert split_diagnostic.module == Split
+    assert split_diagnostic.message =~ "missing indirect object 16 0"
+  end
+
   test "enforces aggregate byte and object-write limits for split outputs" do
     source = three_page_pdf()
     original = Limits.effective()
