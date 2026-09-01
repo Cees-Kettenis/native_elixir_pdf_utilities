@@ -44,6 +44,13 @@ serializable object tokens, exact object generations, output identifier
 allocation, and complete indirect-reference remapping. The writer only receives
 prepared inputs and therefore never leaves an unknown reference unchanged.
 
+`NativeElixirPdfUtilities.Validators.TransformValidator` and
+`NativeElixirPdfUtilities.Validators.SplitValidator` own page-selection,
+range, rotation, and split-limit validation. The internal assembly validator
+builds a selected-page dependency closure, removes internal links to discarded
+pages, and rejects other dependencies that would reintroduce an unselected
+page. The assembly writer receives only validated, completely remapped objects.
+
 ## What the validated context contains
 
 Validated contexts contain semantic values for traversal and decisions. Raw

@@ -56,6 +56,9 @@ override these values.
 | `max_aggregate_merge_input_bytes` | 100,000,000 | PDF bytes in one merge |
 | `max_merged_objects` | 100,000 | Objects in merged output |
 | `max_merged_pages` | 10,000 | Pages in merged output |
+| `max_split_outputs` | 1,000 | PDFs returned by one split operation |
+| `max_split_object_writes` | 1,000,000 | Aggregate objects serialized by one split operation |
+| `max_aggregate_split_output_bytes` | 100,000,000 | Aggregate bytes returned by one split operation |
 | `max_text_decoded_content_bytes` | 50,000,000 | Decoded content used by extraction |
 | `max_text_parsed_instructions` | 100,000 | Unique parsed content instructions |
 | `max_text_stream_uses` | 100,000 | Content stream references traversed |

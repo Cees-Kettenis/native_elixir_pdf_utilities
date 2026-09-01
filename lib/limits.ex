@@ -45,6 +45,9 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_aggregate_merge_input_bytes: 100_000_000,
     max_merged_objects: 100_000,
     max_merged_pages: 10_000,
+    max_split_outputs: 1_000,
+    max_split_object_writes: 1_000_000,
+    max_aggregate_split_output_bytes: 100_000_000,
     max_text_decoded_content_bytes: 50_000_000,
     max_text_parsed_instructions: 100_000,
     max_text_stream_uses: 100_000,
@@ -91,6 +94,9 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_aggregate_merge_input_bytes
           | :max_merged_objects
           | :max_merged_pages
+          | :max_split_outputs
+          | :max_split_object_writes
+          | :max_aggregate_split_output_bytes
           | :max_text_decoded_content_bytes
           | :max_text_parsed_instructions
           | :max_text_stream_uses

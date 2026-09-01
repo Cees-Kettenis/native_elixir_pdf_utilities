@@ -21,13 +21,17 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
           required(:value) => PdfValidator.value()
         }
 
-  @typedoc "Prepared inherited page tokens keyed by original page object number."
+  @typedoc "Prepared inherited page tokens keyed by original page reference."
   @type inherited_pages :: %{
-          optional(non_neg_integer()) => %{
+          optional(PdfValidator.ref() | non_neg_integer()) => %{
             required(:resources) => [Tokenizer.token()] | nil,
             required(:mediabox) => [Tokenizer.token()],
             required(:cropbox) => [Tokenizer.token()] | nil,
-            required(:rotate) => [Tokenizer.token()] | nil
+            required(:rotate) => [Tokenizer.token()] | nil,
+            required(:resources_value) => PdfValidator.value(),
+            required(:mediabox_value) => [number()],
+            required(:cropbox_value) => [number()] | nil,
+            required(:rotate_value) => integer() | nil
           }
         }
 
@@ -263,10 +267,19 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
           resources: resources,
           mediabox: number_tokens(media_box),
           cropbox: optional_number_tokens(crop_box),
-          rotate: rotation_tokens(rotate)
+          rotate: rotation_tokens(rotate),
+          resources_value: page.resources,
+          mediabox_value: media_box,
+          cropbox_value: crop_box,
+          rotate_value: rotate
         }
 
-        {:cont, {:ok, Map.put(inheritances, page_number, prepared)}}
+        inheritances =
+          inheritances
+          |> Map.put(page.ref, prepared)
+          |> Map.put(page_number, prepared)
+
+        {:cont, {:ok, inheritances}}
       else
         {:error, _} = page_error -> {:halt, page_error}
       end
@@ -480,8 +493,8 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
     Enum.reduce_while(inputs, {:ok, inputs}, fn input, {:ok, inputs} ->
       missing_reference =
         Enum.find_value(input.objects, fn object ->
-          object.tokens
-          |> token_references()
+          object
+          |> object_references()
           |> Enum.find(fn ref -> not Map.has_key?(input.map, ref) end)
         end)
 
@@ -497,6 +510,29 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
            )}
       end
     end)
+  end
+
+  defp object_references(object) do
+    case Map.fetch(object, :value_override) do
+      {:ok, value} -> value_references(value)
+      :error -> token_references(object.tokens)
+    end
+  end
+
+  defp value_references(value) do
+    case value do
+      {:ref, ref} ->
+        [ref]
+
+      values when is_list(values) ->
+        Enum.flat_map(values, &value_references/1)
+
+      dictionary when is_map(dictionary) ->
+        dictionary |> Map.values() |> Enum.flat_map(&value_references/1)
+
+      _ ->
+        []
+    end
   end
 
   defp token_references(tokens) do

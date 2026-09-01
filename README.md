@@ -24,8 +24,9 @@ The goal is not to be a full PDF engine overnight. It is a steadily improving to
 1. Tokenizer - turns PDF byte streams into structured Elixir tokens.
 2. PDF information - reads page geometry and document metadata, detects encryption, and updates common metadata fields.
 3. Merger - combines multiple PDF binaries into a fresh PDF with rewritten object references.
-4. Reader and text extraction - strictly resolve embedded Unicode text from classic and modern PDFs.
-5. HTML to PDF - renders a strict, document-oriented HTML/CSS subset to native PDF bytes, with configured and installed system fonts, without Chromium, wkhtmltopdf, Node, Rust, Python, OS packages, or SaaS calls.
+4. Page transforms and splitting - rebuild PDFs after selecting, reordering, deleting, rotating, or splitting pages.
+5. Reader and text extraction - strictly resolve embedded Unicode text from classic and modern PDFs.
+6. HTML to PDF - renders a strict, document-oriented HTML/CSS subset to native PDF bytes, with configured and installed system fonts, without Chromium, wkhtmltopdf, Node, Rust, Python, OS packages, or SaaS calls.
 
 See the [documentation](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/tree/main/docs) for feature guides, configurable resource limits, and quick reference.
 
