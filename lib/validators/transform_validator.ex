@@ -26,7 +26,8 @@ defmodule NativeElixirPdfUtilities.Validators.TransformValidator do
   def prepare_delete(context, selection) do
     with {:ok, page_count} <- page_count(context),
          {:ok, deleted} <- expand_page_selection(selection, page_count, true),
-         remaining = Enum.reject(page_numbers(page_count), &(&1 in deleted)),
+         deleted = MapSet.new(deleted),
+         remaining = Enum.reject(page_numbers(page_count), &MapSet.member?(deleted, &1)),
          :ok <- validate_nonempty_output(remaining) do
       prepare_output(context, remaining)
     end
@@ -63,10 +64,8 @@ defmodule NativeElixirPdfUtilities.Validators.TransformValidator do
   def expand_page_selection(selection, page_count, allow_empty) do
     case is_list(selection) and is_integer(page_count) and page_count >= 0 do
       true ->
-        with {:ok, page_numbers} <- expand_selectors(selection),
-             :ok <- validate_selection_presence(page_numbers, allow_empty),
-             :ok <- validate_unique_pages(page_numbers),
-             :ok <- validate_page_bounds(page_numbers, page_count) do
+        with {:ok, page_numbers} <- expand_selectors(selection, page_count),
+             :ok <- validate_selection_presence(page_numbers, allow_empty) do
           {:ok, page_numbers}
         end
 
@@ -82,32 +81,56 @@ defmodule NativeElixirPdfUtilities.Validators.TransformValidator do
     end
   end
 
-  defp expand_selectors(selectors) do
+  defp expand_selectors(selectors, page_count) do
     selectors
-    |> Enum.reduce_while({:ok, []}, fn selector, {:ok, expanded} ->
-      case expand_selector(selector) do
-        {:ok, page_numbers} -> {:cont, {:ok, [page_numbers | expanded]}}
-        {:error, _error} = selection_error -> {:halt, selection_error}
+    |> Enum.reduce_while({:ok, [], MapSet.new()}, fn selector, {:ok, expanded, seen} ->
+      case expand_selector(selector, page_count) do
+        {:ok, page_numbers} ->
+          case append_unique_pages(page_numbers, expanded, seen) do
+            {:ok, expanded, seen} -> {:cont, {:ok, expanded, seen}}
+            {:error, _error} = selection_error -> {:halt, selection_error}
+          end
+
+        {:error, _error} = selection_error ->
+          {:halt, selection_error}
       end
     end)
     |> case do
-      {:ok, expanded} -> {:ok, expanded |> Enum.reverse() |> List.flatten()}
+      {:ok, expanded, _seen} -> {:ok, Enum.reverse(expanded)}
       {:error, _error} = selection_error -> selection_error
     end
   end
 
-  defp expand_selector(selector) do
+  defp expand_selector(selector, page_count) do
     case selector do
       page when is_integer(page) and page > 0 ->
-        {:ok, [page]}
+        case page <= page_count do
+          true -> {:ok, [page]}
+          false -> page_out_of_bounds(page, page_count)
+        end
 
       %Range{first: first, last: last, step: 1}
       when is_integer(first) and is_integer(last) and first > 0 and last >= first ->
-        {:ok, Enum.to_list(first..last)}
+        case last <= page_count do
+          true -> {:ok, Enum.to_list(first..last)}
+          false -> page_out_of_bounds(max(first, page_count + 1), page_count)
+        end
 
       _ ->
         selection_error("page selection contains an invalid page number or range")
     end
+  end
+
+  defp append_unique_pages(page_numbers, expanded, seen) do
+    Enum.reduce_while(page_numbers, {:ok, expanded, seen}, fn page, {:ok, expanded, seen} ->
+      case MapSet.member?(seen, page) do
+        true ->
+          {:halt, selection_error("page selection must not contain duplicate pages")}
+
+        false ->
+          {:cont, {:ok, [page | expanded], MapSet.put(seen, page)}}
+      end
+    end)
   end
 
   defp validate_selection_presence(page_numbers, allow_empty) do
@@ -117,25 +140,12 @@ defmodule NativeElixirPdfUtilities.Validators.TransformValidator do
     end
   end
 
-  defp validate_unique_pages(page_numbers) do
-    case length(page_numbers) == MapSet.size(MapSet.new(page_numbers)) do
-      true -> :ok
-      false -> selection_error("page selection must not contain duplicate pages")
-    end
-  end
-
-  defp validate_page_bounds(page_numbers, page_count) do
-    case Enum.find(page_numbers, &(&1 > page_count)) do
-      nil ->
-        :ok
-
-      page ->
-        error(
-          :page_selection,
-          :page_out_of_bounds,
-          "page #{page} is outside the document's 1..#{page_count} page range"
-        )
-    end
+  defp page_out_of_bounds(page, page_count) do
+    error(
+      :page_selection,
+      :page_out_of_bounds,
+      "page #{page} is outside the document's 1..#{page_count} page range"
+    )
   end
 
   defp validate_nonempty_output(remaining) do

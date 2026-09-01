@@ -11,8 +11,8 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
           {:ok, [map()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_each_page(context) do
     with {:ok, page_count} <- page_count(context),
-         groups = Enum.map(page_numbers(page_count), &[&1]),
-         :ok <- validate_output_count(length(groups)) do
+         :ok <- validate_output_count(page_count),
+         groups = Enum.map(page_numbers(page_count), &[&1]) do
       prepare_groups(context, groups)
     end
   end
@@ -22,9 +22,8 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
           {:ok, [map()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_ranges(context, ranges) do
     with {:ok, page_count} <- page_count(context),
-         {:ok, groups} <- validate_ranges(ranges, page_count),
-         :ok <- validate_output_count(length(groups)) do
-      prepare_groups(context, groups)
+         :ok <- validate_range_list(ranges) do
+      prepare_range_groups(context, ranges, page_count)
     end
   end
 
@@ -34,6 +33,7 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
   def prepare_after_page(context, page_number) do
     with {:ok, page_count} <- page_count(context),
          :ok <- validate_split_point(page_number, page_count),
+         :ok <- validate_output_count(2),
          groups = [Enum.to_list(1..page_number), Enum.to_list((page_number + 1)..page_count)] do
       prepare_groups(context, groups)
     end
@@ -65,34 +65,36 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
     end
   end
 
-  defp validate_ranges(ranges, page_count) do
-    case is_list(ranges) and ranges != [] do
-      true ->
-        ranges
-        |> Enum.reduce_while({:ok, []}, fn range, {:ok, groups} ->
-          case range do
-            %Range{} ->
-              case TransformValidator.expand_page_selection([range], page_count, false) do
-                {:ok, page_numbers} -> {:cont, {:ok, [page_numbers | groups]}}
-                {:error, _error} = range_error -> {:halt, range_error}
-              end
+  defp validate_range_list(ranges) do
+    case ranges do
+      [] ->
+        error(:page_range, :invalid_page_range, "split ranges must be a non-empty list")
 
-            _ ->
-              {:halt,
-               error(
-                 :page_range,
-                 :invalid_page_range,
-                 "split ranges must be ascending Range values"
-               )}
+      ranges when is_list(ranges) ->
+        ranges
+        |> Enum.reduce_while(0, fn _range, output_count ->
+          case output_count < Limits.get(:max_split_outputs) do
+            true -> {:cont, output_count + 1}
+            false -> {:halt, :limit_exceeded}
           end
         end)
         |> case do
-          {:ok, groups} -> {:ok, Enum.reverse(groups)}
-          {:error, _error} = range_error -> range_error
+          :limit_exceeded -> limit_error("split output count exceeds the limit")
+          _output_count -> :ok
         end
 
-      false ->
+      _ ->
         error(:page_range, :invalid_page_range, "split ranges must be a non-empty list")
+    end
+  end
+
+  defp validate_range(range, page_count) do
+    case range do
+      %Range{} ->
+        TransformValidator.expand_page_selection([range], page_count, false)
+
+      _ ->
+        error(:page_range, :invalid_page_range, "split ranges must be ascending Range values")
     end
   end
 
@@ -120,14 +122,9 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
   defp prepare_groups(context, groups) do
     groups
     |> Enum.reduce_while({:ok, [], 0}, fn group, {:ok, prepared, object_writes} ->
-      case TransformValidator.prepare_output(context, group) do
-        {:ok, input} ->
-          object_writes = object_writes + length(input.objects) + 2
-
-          case object_writes <= Limits.get(:max_split_object_writes) do
-            true -> {:cont, {:ok, [input | prepared], object_writes}}
-            false -> {:halt, limit_error("split object writes exceed the limit")}
-          end
+      case prepare_group(context, group, object_writes) do
+        {:ok, input, object_writes} ->
+          {:cont, {:ok, [input | prepared], object_writes}}
 
         {:error, _error} = preparation_error ->
           {:halt, preparation_error}
@@ -136,6 +133,37 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
     |> case do
       {:ok, prepared, _object_writes} -> {:ok, Enum.reverse(prepared)}
       {:error, _error} = preparation_error -> preparation_error
+    end
+  end
+
+  defp prepare_range_groups(context, ranges, page_count) do
+    ranges
+    |> Enum.reduce_while({:ok, [], 0}, fn range, {:ok, prepared, object_writes} ->
+      with {:ok, group} <- validate_range(range, page_count),
+           {:ok, input, object_writes} <- prepare_group(context, group, object_writes) do
+        {:cont, {:ok, [input | prepared], object_writes}}
+      else
+        {:error, _error} = preparation_error -> {:halt, preparation_error}
+      end
+    end)
+    |> case do
+      {:ok, prepared, _object_writes} -> {:ok, Enum.reverse(prepared)}
+      {:error, _error} = preparation_error -> preparation_error
+    end
+  end
+
+  defp prepare_group(context, group, object_writes) do
+    case TransformValidator.prepare_output(context, group) do
+      {:ok, input} ->
+        object_writes = object_writes + length(input.objects) + 2
+
+        case object_writes <= Limits.get(:max_split_object_writes) do
+          true -> {:ok, input, object_writes}
+          false -> limit_error("split object writes exceed the limit")
+        end
+
+      {:error, _error} = preparation_error ->
+        preparation_error
     end
   end
 

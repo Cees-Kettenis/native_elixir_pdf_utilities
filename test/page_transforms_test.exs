@@ -62,8 +62,9 @@ defmodule NativeElixirPdfUtilities.PageTransformsTest do
 
   test "validates picks, deletions, rotations, options, and bounds" do
     source = three_page_pdf()
+    oversized_range = 1..1_000_000_000_000
 
-    for selection <- [[], [0], [4], [2, 2], [3..1//-1], [:bad]] do
+    for selection <- [[], [0], [4], [2, 2], [3..1//-1], [:bad], [oversized_range]] do
       assert {:error, {reason, diagnostic}} = Transform.pick_pages(source, selection)
       assert reason in [:invalid_page_selection, :page_out_of_bounds]
       assert diagnostic.operation == :pick_pages
@@ -116,8 +117,9 @@ defmodule NativeElixirPdfUtilities.PageTransformsTest do
 
   test "validates split ranges and split resource limits" do
     source = three_page_pdf()
+    oversized_range = 1..1_000_000_000_000
 
-    for ranges <- [[], [1], [0..1], [3..1//-1], [1..4]] do
+    for ranges <- [[], :bad, [1], [0..1], [3..1//-1], [1..4], [oversized_range]] do
       assert {:error, {reason, diagnostic}} = Split.by_ranges(source, ranges)
       assert reason in [:invalid_page_range, :invalid_page_selection, :page_out_of_bounds]
       assert diagnostic.operation == :split_by_ranges
@@ -127,6 +129,18 @@ defmodule NativeElixirPdfUtilities.PageTransformsTest do
 
     assert {:error, {:resource_limit_exceeded, count_limit}} = Split.by_page(source)
     assert count_limit.message == "split output count exceeds the limit"
+
+    assert {:error, {:resource_limit_exceeded, range_count_limit}} =
+             Split.by_ranges(source, [1..1, 2..2, oversized_range])
+
+    assert range_count_limit.message == "split output count exceeds the limit"
+
+    Limits.install(%{Limits.effective() | max_split_outputs: 1})
+
+    assert {:error, {:resource_limit_exceeded, after_page_limit}} =
+             Split.after_page(source, 1)
+
+    assert after_page_limit.message == "split output count exceeds the limit"
   end
 
   test "rejects malformed PDF inputs through the shared diagnostic contract" do
