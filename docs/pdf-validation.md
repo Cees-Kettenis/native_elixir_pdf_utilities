@@ -14,7 +14,8 @@ detection, parsing safety, stream decoding, and resource limits.
 operations:
 
 - catalog and page-tree identity
-- exact indirect references, missing objects, and reference cycles
+- generation-aware resolution of indirect references used by shared document
+  structures, including missing-object and reference-cycle diagnostics
 - `/Kids`, `/Count`, duplicate pages, and page-tree cycles
 - effective inherited `Resources`, `MediaBox`, `CropBox`, and `Rotate` values
 - indirect stream identity and `/Length` structure
@@ -44,12 +45,12 @@ serializable object tokens, exact object generations, output identifier
 allocation, and complete indirect-reference remapping. The writer only receives
 prepared inputs and therefore never leaves an unknown reference unchanged.
 
-`NativeElixirPdfUtilities.Validators.TransformValidator` and
-`NativeElixirPdfUtilities.Validators.SplitValidator` own page-selection,
-range, rotation, and split-limit validation. The internal assembly validator
-builds a selected-page dependency closure, removes internal links to discarded
-pages, and rejects other dependencies that would reintroduce an unselected
-page. The assembly writer receives only validated, completely remapped objects.
+The transform and split operation validators own page-selection, range,
+rotation, and split-limit validation. The internal assembly validator builds a
+selected-page dependency closure, rejects missing reachable objects before any
+write, removes internal links to discarded pages, and rejects other
+dependencies that would reintroduce an unselected page. The assembly writer
+receives only validated, completely remapped objects.
 
 ## What the validated context contains
 

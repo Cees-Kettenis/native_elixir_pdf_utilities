@@ -1,7 +1,7 @@
 defmodule NativeElixirPdfUtilities.Limits do
   @moduledoc """
-  Runtime resource limits used by PDF parsing, text extraction, merging, and
-  HTML-to-PDF rendering.
+  Runtime resource limits used by PDF parsing, information access, text
+  extraction, merging, page transforms, splitting, and HTML-to-PDF rendering.
 
   Applications can override individual defaults in `config/config.exs` or
   `config/runtime.exs`:

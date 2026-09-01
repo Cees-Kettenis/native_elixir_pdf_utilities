@@ -1,40 +1,35 @@
 # Diagnostics
 
-Native Elixir PDF Utilities returns recoverable public API failures as
-`{:error, {reason, diagnostic}}` when the library can explain why an operation
-cannot continue.
-
-Use the `reason` atom for programmatic branching. Use the `diagnostic` map for
-debugging, logs, and user-facing support messages.
-
-## Diagnostic fields
-
-Diagnostic maps always include:
-
-- `:stage` - the pipeline or utility stage that failed
-- `:reason` - the machine-readable reason atom
-- `:message` - a human-readable explanation
-
-Diagnostic maps may also include:
-
-- `:operation` - the public API or file operation being performed
-- `:module` - the public module returning the error
-- `:source` - a path, source snippet, or caller-provided input label
-- `:line` and `:column` - source location details when parser input can be located
-
-## Logging a diagnostic
+Native Elixir PDF Utilities uses one result shape for recoverable failures that
+the library can explain:
 
 ```elixir
-case NativeElixirPdfUtilities.Text.extract_file(path) do
-  {:ok, text} ->
-    text
-
-  {:error, {_reason, diagnostic}} ->
-    Logger.warning(diagnostic.message)
-end
+{:error, {reason, diagnostic}}
 ```
 
-## Diagnostic tuple
+This contract is for developer convenience. Reading, validating, transforming,
+and rendering documents involve different parts of the library, but callers
+should not need a separate error handler for each one. The same pattern works
+across public APIs, and every diagnostic carries as much useful context as the
+failing operation can provide.
+
+That consistency is especially useful in application boundaries. A controller,
+job, or file-processing pipeline can branch on the reason, log the diagnostic,
+and pass it to monitoring or support tooling without first translating several
+module-specific error formats.
+
+## The reason and the diagnostic
+
+The outer `reason` is an atom intended for program logic. Applications can use
+it to choose what happens next, such as rejecting invalid input or asking an
+operator to raise a resource limit.
+
+The `diagnostic` is a map intended for debugging. It explains where and why the
+operation stopped. The reason also appears inside this map so the diagnostic
+remains meaningful when it is logged, stored, or passed around without the
+outer tuple.
+
+For example:
 
 ```elixir
 {:error,
@@ -48,40 +43,55 @@ end
   }}}
 ```
 
-## Contributor guidance
+The `:operation` identifies the public function the caller used. The `:stage`
+identifies the part of that operation that failed. Keeping both makes a failure
+such as `:invalid_pdf_input` easier to trace without exposing the library's
+internal call structure.
 
-Build new public API failures with `NativeElixirPdfUtilities.Diagnostics`.
-Do not create a separate error shape for each module.
+## Diagnostic fields
 
-Keep the shared tuple shape, fields, and types stable. Change them only when the
-existing contract cannot report the correct debugging information. Put extra
-detail in `:message` and `:source` when those fields are sufficient.
+Every diagnostic includes:
 
-Do not raise for caller errors such as invalid paths, missing files, unsupported
-documents, unsupported HTML/CSS, or empty extraction results. Return a
-diagnostic tuple and test its important fields.
+- `:stage` identifies where processing stopped.
+- `:reason` is the machine-readable reason atom.
+- `:message` explains the failure in plain language.
 
-## Malformed PDF input
+When the information is available, a diagnostic also includes:
 
-Before inspecting information, updating metadata, merging, or extracting text,
-the shared reader validates PDF headers, final xref pointers, object boundaries,
-stream lengths, page trees, and indirect references. Malformed input returns
-`:invalid_pdf_input` instead of a partial result or exception. Encrypted PDFs
-return `:encrypted_pdf` from operations that require document objects;
-`Info.encrypted?/1` reports their encryption status without loading those
-objects.
-Unsupported stream operations return `:unsupported_pdf_feature`. Custom fonts
-without a reliable Unicode mapping return `:unsupported_text_encoding`.
-Image-only PDFs return `:no_extractable_text` from the string API.
+- `:operation` identifies the public API or file operation being performed.
+- `:module` identifies the public module returning the error.
+- `:source` identifies the relevant path, input value, page, font, or source
+  snippet.
+- `:line` and `:column` locate malformed parser input.
 
-The tokenizer represents malformed literal and hexadecimal strings as
-`{:error, reason}` tokens. Callers of `NativeElixirPdfUtilities.Tokenizer` can
-inspect those tokens directly. Information, merge, and text extraction APIs
-convert tokenizer failures to the shared diagnostic tuple.
+Optional fields depend on the failure. A file error usually has a path but no
+line number. A CSS parser error may have a source snippet, line, and column. The
+shape stays the same even when the available detail differs.
 
-The shared reader and text validators limit input size, decoded streams,
-decompression ratios, objects, pages, CMaps, recursion, aggregate decoded
-content, stream uses, instructions, and Form expansions. A limit failure
-returns `:resource_limit_exceeded`, never a partial result. Extraction decodes
-and tokenizes each repeated indirect stream once, but charges every semantic
-use to the operation budget.
+## Handling diagnostics
+
+One case expression can handle failures from any API that follows the shared
+contract:
+
+```elixir
+case NativeElixirPdfUtilities.Text.extract_file(path) do
+  {:ok, text} ->
+    text
+
+  {:error, {:resource_limit_exceeded, diagnostic}} ->
+    Logger.warning("PDF limit reached: #{diagnostic.message}")
+
+  {:error, {reason, diagnostic}} ->
+    Logger.warning("PDF operation failed with #{reason}: #{diagnostic.message}")
+end
+```
+
+Use the reason atom when application behavior depends on the failure. Use the
+diagnostic fields for logs and investigation. Since context fields are optional,
+read them with `Map.get/2` unless the API documentation guarantees a specific
+field for that failure.
+
+The contract covers ordinary caller and document failures that the library can
+describe. It does not turn programming errors or unexpected library defects
+into generic diagnostics, since doing so would hide bugs that should remain
+visible.

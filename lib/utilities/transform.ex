@@ -3,8 +3,10 @@ defmodule NativeElixirPdfUtilities.Transform do
   Rebuilds PDFs with selected, reordered, deleted, or rotated pages.
 
   Page numbers are one-based and follow the source document's page-tree order.
-  Page ranges are inclusive and must be ascending. Every successful operation
-  writes a new catalog, page tree, cross-reference table, and trailer.
+  Page ranges are inclusive, ascending, and must use a step of one. Transform
+  selections reject duplicate pages, including duplicates produced by
+  overlapping selectors. Every successful operation writes a new catalog, page
+  tree, cross-reference table, and trailer.
 
   Rebuilding omits unselected page objects and resources used only by those
   pages. It is not secure redaction because retained pages can share resources
@@ -31,8 +33,8 @@ defmodule NativeElixirPdfUtilities.Transform do
   @doc """
   Rebuilds a PDF with the selected pages in the requested order.
 
-  Selection entries may be positive page numbers or inclusive ascending ranges.
-  Duplicate pages and empty selections are rejected.
+  Selection entries may be positive page numbers or inclusive, ascending,
+  unit-step ranges. Duplicate pages and empty selections are rejected.
   """
   @spec pick_pages(binary(), [page_selector()]) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
@@ -49,7 +51,9 @@ defmodule NativeElixirPdfUtilities.Transform do
   Rebuilds a PDF without the selected pages.
 
   Page numbers refer to the original document and are evaluated together.
-  Deleting every page is rejected.
+  Ranges must be inclusive, ascending, and use a step of one. Deleting every
+  page is rejected. An empty selection rebuilds the document without removing
+  any pages.
   """
   @spec delete_pages(binary(), [page_selector()]) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
@@ -67,7 +71,8 @@ defmodule NativeElixirPdfUtilities.Transform do
 
   Rotation must be an integer multiple of 90 degrees and is added to each
   page's effective existing rotation. The `:pages` option accepts `:all`, which
-  is the default, or a list of page numbers and inclusive ascending ranges.
+  is the default, or a list of page numbers and inclusive, ascending, unit-step
+  ranges.
   """
   @spec rotate_pages(binary(), integer(), pages: :all | [page_selector()]) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}

@@ -1,8 +1,8 @@
 # Documentation
 
-Native Elixir PDF Utilities inspects, updates, merges, extracts text from, and
-generates PDF documents. These guides document what each public API supports
-and which work remains the caller's responsibility.
+Native Elixir PDF Utilities inspects, updates, merges, transforms, splits,
+extracts text from, and generates PDF documents. These guides document what
+each public API supports and which work remains the caller's responsibility.
 
 ## Reading and manipulating PDFs
 
@@ -18,20 +18,23 @@ and which work remains the caller's responsibility.
   context, and rendering modes.
 - [PDF merging](pdf-merging.md) covers supported inputs, output behavior,
   diagnostics, and document-level features that are not preserved.
-- [Diagnostics](diagnostics.md) documents the shared recoverable error contract
-  used by the public APIs.
+- [PDF page transforms and splitting](pdf-page-transforms.md) covers selecting,
+  reordering, deleting, rotating, and splitting pages, including rebuild
+  behavior and data-retention limitations.
+- [Diagnostics](diagnostics.md) explains why public APIs share one recoverable
+  error shape and how callers can use its debugging context.
 - [Configurable resource limits](resource-limits.md) lists every tunable
-  parsing, information, rendering, extraction, merge, and cache ceiling and its
-  default.
+  parsing, information, rendering, extraction, merge, transform, split, and
+  cache ceiling and its default.
 
 ## Generating PDFs from HTML
 
-- [HTML to PDF examples](html-to-pdf-examples.md) provides runnable rendering,
-  file output, asset, font, and diagnostic examples.
+- [HTML to PDF examples](html-to-pdf-examples.md) provides short, runnable
+  examples for common rendering workflows.
 - [HTML to PDF compatibility](html-to-pdf-compatibility.md) is the supported
-  HTML, CSS, option, layout, and known-limitations reference.
+  options, HTML, CSS, rendering behavior, and known limitations reference.
 - [HTML to PDF browser parity coverage](html-to-pdf-browser-parity-coverage.md)
-  maps documented renderer behavior to Chromium comparison fixtures.
+  explains the Chromium comparison suite and maps behavior to its fixtures.
 
 ## Project references
 

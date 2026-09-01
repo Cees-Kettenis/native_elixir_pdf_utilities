@@ -1,8 +1,13 @@
 # Configurable resource limits
 
-Native Elixir PDF Utilities limits the resources used to process untrusted PDF,
-HTML, CSS, image, SVG, and font data. The built-in values apply unless the
-application overrides them.
+Native Elixir PDF Utilities uses configurable limits to bound the memory, CPU,
+parsing work, and native raster allocation requested while processing PDF,
+HTML, CSS, image, SVG, and font data. These limits keep malformed or untrusted
+input from consuming resources without a predictable upper bound.
+
+The library provides built-in values so every application starts with one
+consistent resource policy. Applications can override those values to match
+their request sizes, concurrency, memory budget, and timeout policy.
 
 Configure limits under the library's OTP application in `config/config.exs` or
 `config/runtime.exs`:
@@ -77,9 +82,9 @@ override these values.
 current application instance.
 
 Increasing a limit increases the maximum memory, CPU, parsing work, or native
-raster allocation an untrusted document can request. Tune limits against the
-application's request-size controls, concurrency, memory budget, and timeout
-policy rather than considering each value in isolation.
+raster allocation an untrusted document can request. Consider the application's
+other resource controls when changing a value rather than tuning each limit in
+isolation.
 
 PDF-format bounds, CSS validity ranges, and local-resource authorization are not
 resource tuning controls. Those checks remain fixed. In particular, local

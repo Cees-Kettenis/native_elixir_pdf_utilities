@@ -1,12 +1,16 @@
 defmodule NativeElixirPdfUtilities.Diagnostics do
   @moduledoc """
-  Shared diagnostic helpers for public API errors.
+  Builds consistent diagnostics for public API errors.
 
   Public operations return diagnostic errors as `{:error, {reason, diagnostic}}`
   when the library can explain why an operation cannot continue. The diagnostic
   map always includes `:stage`, `:reason`, and `:message`, and may include
   actionable context such as `:operation`, `:module`, `:line`, `:column`, or
   `:source`.
+
+  The shared shape lets callers use one error handler across the library. The
+  outer reason supports programmatic decisions, while the diagnostic provides
+  context for logs and investigation.
   """
 
   @type diagnostic_option ::

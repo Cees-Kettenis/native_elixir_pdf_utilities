@@ -3,8 +3,8 @@ defmodule NativeElixirPdfUtilities.Split do
   Rebuilds one PDF as multiple valid PDF documents.
 
   Page numbers are one-based and follow the source document's page-tree order.
-  Ranges are inclusive and must be ascending. Every output receives a new
-  catalog, page tree, cross-reference table, and trailer.
+  Ranges are inclusive, ascending, and must use a step of one. Every output
+  receives a new catalog, page tree, cross-reference table, and trailer.
   """
 
   alias NativeElixirPdfUtilities.Diagnostics
@@ -24,7 +24,8 @@ defmodule NativeElixirPdfUtilities.Split do
   @doc """
   Rebuilds every source page as an individual PDF.
 
-  A document with no pages returns an empty output list.
+  A document with no pages returns an empty output list. The configured split
+  output limit must allow one output per source page.
   """
   @spec by_page(binary()) ::
           {:ok, [binary()]} | {:error, {error_reason(), Diagnostics.diagnostic()}}
@@ -41,7 +42,9 @@ defmodule NativeElixirPdfUtilities.Split do
   @doc """
   Rebuilds each inclusive source-page range as a separate PDF.
 
-  Ranges may overlap because each range describes an independent output.
+  The range list must be non-empty. Every range must be ascending and use a
+  step of one. Ranges may overlap because each range describes an independent
+  output. The configured split output limit must allow one output per range.
   """
   @spec by_ranges(binary(), [Range.t()]) ::
           {:ok, [binary()]} | {:error, {error_reason(), Diagnostics.diagnostic()}}
@@ -59,7 +62,8 @@ defmodule NativeElixirPdfUtilities.Split do
   Rebuilds a PDF as two non-empty PDFs split after `page_number`.
 
   The selected page is the final page in the first output. The split point must
-  be between page one and the penultimate page.
+  be between page one and the penultimate page. The configured split output
+  limit must allow two outputs.
   """
   @spec after_page(binary(), pos_integer()) ::
           {:ok, {binary(), binary()}}
