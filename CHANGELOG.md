@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.15.0 - 2026-09-01
+
+### Added
+
+- Added `NativeElixirPdfUtilities.Transform` with `pick_pages/2`,
+  `delete_pages/2`, and `rotate_pages/3` for selecting, reordering, removing,
+  and rotating pages in PDF binaries.
+- Added `NativeElixirPdfUtilities.Split` with `by_page/1`, `by_ranges/2`, and
+  `after_page/2` for rebuilding one PDF as multiple documents.
+- Added page-aware document assembly that copies the objects reachable from
+  retained pages, materializes inherited page values, remaps internal links to
+  retained pages, and preserves external URI links.
+- Added `max_split_outputs`, `max_split_object_writes`, and
+  `max_aggregate_split_output_bytes` resource limits.
+- Added realistic transform fixtures, focused validation and reconstruction
+  tests, and a page transforms and splitting guide.
+
+### Changed
+
+- Merging, page transforms, and splitting now share the same validated PDF
+  assembly and serialization path.
+- Reworked the public documentation so diagnostics, resource limits,
+  HTML-to-PDF examples, compatibility, and browser parity each have a shorter,
+  distinct guide.
+
+### Fixed
+
+- Fixed retained page dependencies with missing indirect objects raising during
+  assembly. Transform and split APIs now return an actionable
+  `:invalid_pdf_input` diagnostic.
+- Fixed oversized page ranges being expanded before bounds validation, and
+  changed duplicate-page checks and deletion membership checks to use bounded
+  incremental validation.
+- Fixed split operations allocating work before enforcing output-count limits,
+  including the two-output requirement for `after_page/2`.
+
 ## 0.14.0 - 2026-08-29
 
 ### Added

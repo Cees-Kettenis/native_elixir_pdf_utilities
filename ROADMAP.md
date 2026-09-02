@@ -19,27 +19,6 @@ breaking API changes are allowed, but they should be explained clearly in
 
 ## Milestones
 
-### 0.15.0 - Page Transforms and Document Assembly
-
-Milestone goal: let applications assemble, split, rearrange, and rotate PDF documents
-after rendering or receiving them.
-
-#### Scope
-
-- Add PDF splitting by page range or individual page.
-- Add page picking so callers can reorder or delete pages.
-- Add page rotation for selected pages.
-
-#### Design Notes
-
-- Keep transform APIs binary-in, binary-out where practical.
-- Document page numbering conventions clearly.
-
-#### Completion Criteria
-
-- Add unit tests for page range validation, page picking, deletion, and rotation.
-- Add regression fixtures for realistic merged and multi-page PDFs.
-
 ### 0.16.0 - Bookmarks and Outlines
 
 Milestone goal: support navigation metadata for generated reports and assembled document
@@ -130,11 +109,14 @@ Milestone goal: harden the library behavior that will be difficult to change aft
   internal implementation modules.
 - Classify the normal app-facing modules as stable public APIs:
   - `NativeElixirPdfUtilities.HtmlToPdf`
+  - `NativeElixirPdfUtilities.Info`
+  - `NativeElixirPdfUtilities.Limits`
   - `NativeElixirPdfUtilities.Merge`
+  - `NativeElixirPdfUtilities.Split`
   - `NativeElixirPdfUtilities.Text`
   - `NativeElixirPdfUtilities.Tokenizer`
-  - future `Info`, `Transform`, `Split`, `Stamp`, `Forms`, `Attachments`,
-    `Optimize`, and `Metadata` modules
+  - `NativeElixirPdfUtilities.Transform`
+  - future `Stamp`, `Forms`, `Attachments`, `Optimize`, and `Metadata` modules
 - Classify parser and pipeline building blocks as advanced public APIs:
   - `NativeElixirPdfUtilities.HtmlToPdf.HtmlParser`
   - `NativeElixirPdfUtilities.HtmlToPdf.CssParser`

@@ -4,11 +4,11 @@ defmodule NativeElixirPdfUtilities.MixProject do
   def project do
     [
       app: :native_elixir_pdf_utilities,
-      version: "0.14.0",
+      version: "0.15.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       description:
-        "Pure Elixir utilities for PDF inspection, metadata, tokenizing, merging, text extraction, and native HTML/CSS rendering.",
+        "Pure Elixir utilities for PDF inspection, metadata, tokenizing, merging, page transforms, splitting, text extraction, and native HTML/CSS rendering.",
       deps: deps(),
       package: package(),
       docs: docs(),
@@ -69,6 +69,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
         "docs/pdf-validation.md",
         "docs/text-extraction.md",
         "docs/pdf-merging.md",
+        "docs/pdf-page-transforms.md",
         "docs/html-to-pdf-compatibility.md",
         "docs/html-to-pdf-browser-parity-coverage.md",
         "docs/html-to-pdf-examples.md"
@@ -84,7 +85,8 @@ defmodule NativeElixirPdfUtilities.MixProject do
           "docs/pdf-information.md",
           "docs/pdf-validation.md",
           "docs/text-extraction.md",
-          "docs/pdf-merging.md"
+          "docs/pdf-merging.md",
+          "docs/pdf-page-transforms.md"
         ],
         "HTML to PDF": [
           "docs/html-to-pdf-compatibility.md",
@@ -96,10 +98,12 @@ defmodule NativeElixirPdfUtilities.MixProject do
         "Public APIs": [
           NativeElixirPdfUtilities.HtmlToPdf,
           NativeElixirPdfUtilities.Info,
+          NativeElixirPdfUtilities.Limits,
           NativeElixirPdfUtilities.Merge,
+          NativeElixirPdfUtilities.Split,
           NativeElixirPdfUtilities.Text,
           NativeElixirPdfUtilities.Tokenizer,
-          NativeElixirPdfUtilities.Limits
+          NativeElixirPdfUtilities.Transform
         ],
         "PDF Building Blocks": [
           NativeElixirPdfUtilities.Pdf.Reader,
@@ -126,7 +130,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
           NativeElixirPdfUtilities.Validators.WriterValidator
         ]
       ],
-      source_ref: "v0.14.0",
+      source_ref: "v0.15.0",
       source_url: "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"
     ]
   end
