@@ -135,6 +135,18 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
     assert reductions < 500_000
   end
 
+  test "expands fragmented xref stream Index ranges in linear work" do
+    pdf = fragmented_xref_stream_pdf(40_000)
+
+    {result, reductions} = measured_reductions(fn -> Reader.probe(pdf) end)
+
+    assert {:ok, probe} = result
+    assert map_size(probe.xref) == 40_000
+    assert probe.xref[0] == {:free, 0, 65_535}
+    assert probe.xref[39_999] == {:free, 39_999, 0}
+    assert reductions < 25_000_000
+  end
+
   test "rejects unsafe indirect xref stream Length objects" do
     malformed = [
       xref_stream_pdf(indirect_length: true, length_source: "/bad"),
@@ -573,6 +585,26 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
     xref_object = "3 0 obj\n#{dictionary}\nstream\n" <> data <> "\nendstream\nendobj\n"
     candidate_suffix = Keyword.get(options, :candidate_suffix, "")
     body <> xref_object <> candidate_suffix <> "startxref\n#{offsets[3]}\n%%EOF\n"
+  end
+
+  defp fragmented_xref_stream_pdf(count) do
+    header = "%PDF-1.7\n"
+    xref_offset = byte_size(header)
+    index = Enum.map_join(0..(count - 1), " ", &"#{&1} 1")
+
+    data =
+      for object <- 0..(count - 1), into: <<>> do
+        generation = if object == 0, do: 65_535, else: 0
+        <<0, object::unsigned-big-integer-size(24), generation::unsigned-big-integer-size(16)>>
+      end
+
+    xref_object =
+      "#{count} 0 obj\n" <>
+        "<< /Type /XRef /Size #{count} /Root 1 0 R /W [1 3 2] " <>
+        "/Index [#{index}] /Length #{byte_size(data)} >>\n" <>
+        "stream\n" <> data <> "\nendstream\nendobj\n"
+
+    header <> xref_object <> "startxref\n#{xref_offset}\n%%EOF\n"
   end
 
   defp large_page_pdf(page_count) do

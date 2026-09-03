@@ -600,7 +600,9 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
               if Enum.any?(range, &MapSet.member?(seen, &1)) do
                 {:halt, error(:xref, :invalid_pdf_input, "xref stream Index ranges overlap")}
               else
-                {:cont, {:ok, objects ++ range, Enum.reduce(range, seen, &MapSet.put(&2, &1))}}
+                {:cont,
+                 {:ok, Enum.reverse(range, objects),
+                  Enum.reduce(range, seen, &MapSet.put(&2, &1))}}
               end
 
             _ ->
@@ -608,7 +610,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           end
         end)
         |> case do
-          {:ok, objects, _seen} -> {:ok, objects}
+          {:ok, objects, _seen} -> {:ok, Enum.reverse(objects)}
           {:error, _} = index_error -> index_error
         end
 
