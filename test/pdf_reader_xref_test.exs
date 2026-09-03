@@ -51,6 +51,11 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
       assert_error(Reader.read(malformed), :invalid_pdf_input, :xref)
     end
 
+    malformed_trailer =
+      String.replace(valid.pdf, "trailer\n<<", "trailer\n42", global: false)
+
+    assert_error(Reader.read(malformed_trailer), :invalid_pdf_input, :trailer)
+
     cyclic =
       valid.pdf
       |> String.replace("/Root 1 0 R", "/Root 1 0 R /Prev #{valid.xref}", global: false)
@@ -118,6 +123,16 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
       assert {:error, {_reason, diagnostic}} = Reader.read(pdf)
       assert diagnostic.stage in [:xref, :object]
     end
+  end
+
+  test "stops parsing an xref stream object at endobj" do
+    padding = "%" <> :binary.copy("x", 2_000_000) <> "\n"
+    pdf = xref_stream_pdf(candidate_suffix: padding)
+
+    {result, reductions} = measured_reductions(fn -> Reader.probe(pdf) end)
+
+    assert {:ok, _probe} = result
+    assert reductions < 500_000
   end
 
   test "rejects unsafe indirect xref stream Length objects" do
@@ -400,6 +415,36 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
     assert_error(Reader.read(pdf), :resource_limit_exceeded, :limits)
   end
 
+  test "parses classic xref revisions without retokenizing later revisions" do
+    generated =
+      classic_pdf([
+        {1, 0, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"}
+      ])
+
+    {pdf, _xref} =
+      Enum.reduce(1..200, {generated.pdf, generated.xref}, fn revision, {pdf, previous_xref} ->
+        padding = "%" <> :binary.copy("x", 5_000) <> "\n"
+        xref = byte_size(pdf) + byte_size(padding)
+
+        update =
+          padding <>
+            "xref\n0 1\n" <>
+            classic_entry(0, 65_535, "f") <>
+            "trailer\n" <>
+            "<< /Size 3 /Root 1 0 R /Prev #{previous_xref} " <>
+            "/Audit << /Revision #{revision} >> >>\n" <>
+            "startxref\n#{xref}\n%%EOF\n"
+
+        {pdf <> update, xref}
+      end)
+
+    {result, reductions} = measured_reductions(fn -> Reader.probe(pdf) end)
+
+    assert {:ok, _probe} = result
+    assert reductions < 1_000_000
+  end
+
   test "limits the number of resolved pages" do
     assert_error(Reader.read(large_page_pdf(10_001)), :resource_limit_exceeded, :limits)
   end
@@ -662,6 +707,15 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
       " " <>
       String.pad_leading(Integer.to_string(generation), 5, "0") <>
       " #{marker} \n"
+  end
+
+  defp measured_reductions(fun) do
+    :erlang.garbage_collect()
+    {:reductions, reductions_before} = Process.info(self(), :reductions)
+    result = fun.()
+    {:reductions, reductions_after} = Process.info(self(), :reductions)
+
+    {result, reductions_after - reductions_before}
   end
 
   defp assert_error({:error, {reason, diagnostic}}, reason, stage) do

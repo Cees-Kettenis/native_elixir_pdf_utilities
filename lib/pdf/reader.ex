@@ -257,7 +257,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp parse_classic_xref(pdf, offset, tail) do
-    tokens = Tokenizer.new(tail) |> Tokenizer.tokenize_all()
+    tokens = tokenize_classic_xref_revision(tail)
 
     with [:xref | rest] <- tokens,
          {:ok, entries, trailer} <- parse_classic_sections(rest, %{}),
@@ -267,6 +267,50 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     else
       {:error, _} = xref_error -> xref_error
       _ -> error(:xref, :invalid_pdf_input, "classic xref table is malformed")
+    end
+  end
+
+  defp tokenize_classic_xref_revision(tail) do
+    tail
+    |> Tokenizer.new()
+    |> take_classic_xref_tokens(:sections, [])
+  end
+
+  defp take_classic_xref_tokens(tokenizer, state, tokens) do
+    {token, tokenizer} = Tokenizer.next(tokenizer)
+
+    case {state, token} do
+      {_state, {:eof, nil}} ->
+        Enum.reverse(tokens)
+
+      {:sections, :trailer} ->
+        take_classic_xref_tokens(tokenizer, :trailer_value, [:trailer | tokens])
+
+      {:trailer_value, :dict_start} ->
+        take_classic_xref_tokens(tokenizer, {:trailer_dictionary, 1}, [:dict_start | tokens])
+
+      {:trailer_value, token} ->
+        Enum.reverse([token | tokens])
+
+      {{:trailer_dictionary, 1}, :dict_end} ->
+        Enum.reverse([:dict_end | tokens])
+
+      {{:trailer_dictionary, depth}, :dict_start} ->
+        take_classic_xref_tokens(
+          tokenizer,
+          {:trailer_dictionary, depth + 1},
+          [:dict_start | tokens]
+        )
+
+      {{:trailer_dictionary, depth}, :dict_end} ->
+        take_classic_xref_tokens(
+          tokenizer,
+          {:trailer_dictionary, depth - 1},
+          [:dict_end | tokens]
+        )
+
+      {state, token} ->
+        take_classic_xref_tokens(tokenizer, state, [token | tokens])
     end
   end
 
@@ -774,13 +818,9 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
               end
 
             :none ->
-              tokens = Tokenizer.new(slice) |> Tokenizer.tokenize_all()
-
-              [{:int, ^object}, {:int, ^generation}, :obj | rest] = tokens
-              {body, tail} = Enum.split_while(rest, &(&1 != :endobj))
-
-              with true <- generation in 0..65_535,
-                   [_endobj | _] <- tail,
+              with {:ok, [{:int, ^object}, {:int, ^generation}, :obj | body]} <-
+                     tokenize_indirect_object(slice),
+                   true <- generation in 0..65_535,
                    false <- Enum.any?(body, &match?({:error, _}, &1)),
                    {:ok, value, value_rest} <- parse_value(body),
                    {:ok, stream, []} <- parse_optional_stream(value_rest) do
@@ -796,6 +836,22 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       end
     else
       error(:xref, :invalid_pdf_input, "indirect object offset is outside the PDF")
+    end
+  end
+
+  defp tokenize_indirect_object(slice) do
+    slice
+    |> Tokenizer.new()
+    |> take_indirect_object_tokens([])
+  end
+
+  defp take_indirect_object_tokens(tokenizer, tokens) do
+    {token, tokenizer} = Tokenizer.next(tokenizer)
+
+    case token do
+      :endobj -> {:ok, Enum.reverse(tokens)}
+      {:eof, nil} -> :error
+      token -> take_indirect_object_tokens(tokenizer, [token | tokens])
     end
   end
 
