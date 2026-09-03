@@ -38,8 +38,69 @@ defmodule ManualWeb.ValidatorTest do
                "unsupported_glyphs" => "error"
              })
 
+    assert {:ok, options} =
+             Validator.html_options(%{
+               "page_size" => "a4",
+               "orientation" => "portrait",
+               "unsupported_glyphs" => "replace",
+               "outlines_mode" => "headings"
+             })
+
+    assert options[:outlines] == :headings
+
+    assert {:ok, exact_options} =
+             Validator.html_options(%{
+               "page_size" => "a4",
+               "orientation" => "portrait",
+               "unsupported_glyphs" => "replace",
+               "outlines_mode" => "exact",
+               "outlines" => ~s([{"title":"Start","page":1,"view":"fit"}])
+             })
+
+    assert exact_options[:outlines] == [%{title: "Start", page: 1, view: :fit}]
+
     assert {:error, {:invalid_input, %{operation: :html_to_pdf}}} =
              Validator.html_options(%{"page_size" => "unknown"})
+
+    assert {:error, {:invalid_input, %{operation: :html_to_pdf}}} =
+             Validator.html_options(%{
+               "page_size" => "a4",
+               "orientation" => "portrait",
+               "outlines_mode" => "unsupported"
+             })
+  end
+
+  test "parses page selections, ranges, integers, and outline JSON" do
+    assert Validator.page_selection("3, 1-2", false, :pick_pages) == {:ok, [3, 1..2//1]}
+    assert Validator.page_selection("", true, :delete_pages) == {:ok, []}
+
+    assert {:error, {:invalid_input, %{operation: :pick_pages}}} =
+             Validator.page_selection("", false, :pick_pages)
+
+    assert {:error, {:invalid_input, %{operation: :pick_pages}}} =
+             Validator.page_selection("one", false, :pick_pages)
+
+    assert Validator.page_ranges("1-2, 4-5", :split_by_ranges) ==
+             {:ok, [1..2//1, 4..5//1]}
+
+    assert {:error, {:invalid_input, %{operation: :split_by_ranges}}} =
+             Validator.page_ranges("1,2-3", :split_by_ranges)
+
+    assert Validator.integer("-90", :rotate_pages, "enter rotation") == {:ok, -90}
+
+    assert {:error, {:invalid_input, %{operation: :rotate_pages}}} =
+             Validator.integer("90deg", :rotate_pages, "enter rotation")
+
+    json =
+      ~s([{"title":"Report","page":1,"view":["xyz",null,90,null],"open":false,"children":[{"title":"Child","page":2,"view":"fit_b"}]}])
+
+    assert {:ok, [item]} = Validator.outline_items(json, :put_outlines)
+    assert item.view == {:xyz, nil, 90, nil}
+    assert item.open == false
+    assert hd(item.children).view == :fit_b
+
+    assert {:error, {:invalid_input, %{operation: :put_outlines}}} =
+             Validator.outline_items("{}", :put_outlines)
   end
 
   test "builds metadata patches with remove taking precedence" do

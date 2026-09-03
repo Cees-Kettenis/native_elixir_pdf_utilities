@@ -43,6 +43,72 @@ defmodule ManualWeb.OpenApi do
               "application/pdf"
             )
         },
+        "/transform/pick" => %{
+          "post" =>
+            upload_operation(
+              "Pick or reorder PDF pages",
+              pdf_properties(%{
+                "pages" => %{"type" => "string", "examples" => ["3,1-2"]},
+                "disposition" => disposition_schema()
+              }),
+              ["pdf", "pages"],
+              "application/pdf"
+            )
+        },
+        "/transform/delete" => %{
+          "post" =>
+            upload_operation(
+              "Delete selected PDF pages",
+              pdf_properties(%{
+                "pages" => %{"type" => "string", "examples" => ["2,4-5"]},
+                "disposition" => disposition_schema()
+              }),
+              ["pdf"],
+              "application/pdf"
+            )
+        },
+        "/transform/rotate" => %{
+          "post" =>
+            upload_operation(
+              "Rotate all or selected PDF pages",
+              pdf_properties(%{
+                "degrees" => %{"type" => "integer", "multipleOf" => 90},
+                "pages" => %{"type" => "string", "examples" => ["1,3-5"]},
+                "disposition" => disposition_schema()
+              }),
+              ["pdf", "degrees"],
+              "application/pdf"
+            )
+        },
+        "/split/by-page" => %{
+          "post" =>
+            upload_operation(
+              "Split every page into a separate PDF ZIP entry",
+              pdf_properties(),
+              ["pdf"],
+              "application/zip"
+            )
+        },
+        "/split/by-ranges" => %{
+          "post" =>
+            upload_operation(
+              "Split page ranges into separate PDF ZIP entries",
+              pdf_properties(%{
+                "ranges" => %{"type" => "string", "examples" => ["1-3,8-10"]}
+              }),
+              ["pdf", "ranges"],
+              "application/zip"
+            )
+        },
+        "/split/after-page" => %{
+          "post" =>
+            upload_operation(
+              "Split a PDF into two PDF ZIP entries",
+              pdf_properties(%{"page" => %{"type" => "integer", "minimum" => 1}}),
+              ["pdf", "page"],
+              "application/zip"
+            )
+        },
         "/html-to-pdf" => %{
           "post" =>
             upload_operation(
@@ -54,9 +120,53 @@ defmodule ManualWeb.OpenApi do
                 "orientation" => %{"type" => "string", "enum" => ["portrait", "landscape"]},
                 "margin" => %{"type" => "string"},
                 "unsupported_glyphs" => %{"type" => "string", "enum" => ["replace", "error"]},
+                "outlines_mode" => %{
+                  "type" => "string",
+                  "enum" => ["none", "headings", "exact"]
+                },
+                "outlines" => %{"type" => "string", "description" => "Exact outline JSON"},
                 "disposition" => disposition_schema()
               },
               ["page_size", "orientation"],
+              "application/pdf"
+            )
+        },
+        "/outlines" => %{
+          "post" =>
+            upload_operation(
+              "Inspect an uploaded PDF's outlines",
+              pdf_properties(),
+              ["pdf"],
+              "text/html"
+            )
+        },
+        "/outlines/detect" => %{
+          "post" =>
+            upload_operation(
+              "Preview existing or best-effort detected PDF outlines",
+              pdf_properties(),
+              ["pdf"],
+              "text/html"
+            )
+        },
+        "/outlines/automatic" => %{
+          "post" =>
+            upload_operation(
+              "Detect and write PDF outlines",
+              pdf_properties(%{"disposition" => disposition_schema()}),
+              ["pdf"],
+              "application/pdf"
+            )
+        },
+        "/outlines/update" => %{
+          "post" =>
+            upload_operation(
+              "Replace PDF outlines from exact JSON",
+              pdf_properties(%{
+                "outlines" => %{"type" => "string", "description" => "Exact outline JSON"},
+                "disposition" => disposition_schema()
+              }),
+              ["pdf", "outlines"],
               "application/pdf"
             )
         },
@@ -139,6 +249,10 @@ defmodule ManualWeb.OpenApi do
 
   defp disposition_schema do
     %{"type" => "string", "enum" => ["inline", "attachment"], "default" => "inline"}
+  end
+
+  defp pdf_properties(additional \\ %{}) do
+    Map.put(additional, "pdf", %{"type" => "string", "format" => "binary"})
   end
 
   defp info_update_properties do

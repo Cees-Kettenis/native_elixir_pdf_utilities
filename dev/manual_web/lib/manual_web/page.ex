@@ -30,6 +30,78 @@ defmodule ManualWeb.Page do
         </section>
 
         <section>
+          <h2>Transform pages</h2>
+          <p>Pick, reorder, delete, or rotate pages. Page selections use <code>1,3-5</code> syntax.</p>
+
+          <form action="/transform/pick" method="post" enctype="multipart/form-data" target="_blank">
+            <h3>Pick or reorder</h3>
+            <label>PDF file <input type="file" name="pdf" accept="application/pdf,.pdf" required></label>
+            <label>Pages <input type="text" name="pages" value="3,1-2" required></label>
+            <label>Response
+              <select name="disposition">
+                <option value="inline">Open in browser</option>
+                <option value="attachment">Download</option>
+              </select>
+            </label>
+            <button type="submit">Pick pages</button>
+          </form>
+
+          <form action="/transform/delete" method="post" enctype="multipart/form-data" target="_blank">
+            <h3>Delete</h3>
+            <label>PDF file <input type="file" name="pdf" accept="application/pdf,.pdf" required></label>
+            <label>Pages <input type="text" name="pages" value="2" placeholder="Leave empty to rebuild unchanged"></label>
+            <label>Response
+              <select name="disposition">
+                <option value="inline">Open in browser</option>
+                <option value="attachment">Download</option>
+              </select>
+            </label>
+            <button type="submit">Delete pages</button>
+          </form>
+
+          <form action="/transform/rotate" method="post" enctype="multipart/form-data" target="_blank">
+            <h3>Rotate clockwise</h3>
+            <label>PDF file <input type="file" name="pdf" accept="application/pdf,.pdf" required></label>
+            <div class="fields">
+              <label>Degrees <input type="text" name="degrees" value="90" required></label>
+              <label>Pages <input type="text" name="pages" placeholder="Empty means all pages"></label>
+            </div>
+            <label>Response
+              <select name="disposition">
+                <option value="inline">Open in browser</option>
+                <option value="attachment">Download</option>
+              </select>
+            </label>
+            <button type="submit">Rotate pages</button>
+          </form>
+        </section>
+
+        <section>
+          <h2>Split PDFs</h2>
+          <p>Each operation downloads a ZIP containing every generated PDF.</p>
+
+          <form action="/split/by-page" method="post" enctype="multipart/form-data">
+            <h3>One PDF per page</h3>
+            <label>PDF file <input type="file" name="pdf" accept="application/pdf,.pdf" required></label>
+            <button type="submit">Split every page</button>
+          </form>
+
+          <form action="/split/by-ranges" method="post" enctype="multipart/form-data">
+            <h3>One PDF per range</h3>
+            <label>PDF file <input type="file" name="pdf" accept="application/pdf,.pdf" required></label>
+            <label>Ranges <input type="text" name="ranges" value="1-2,3-4" required></label>
+            <button type="submit">Split by ranges</button>
+          </form>
+
+          <form action="/split/after-page" method="post" enctype="multipart/form-data">
+            <h3>Split into two PDFs</h3>
+            <label>PDF file <input type="file" name="pdf" accept="application/pdf,.pdf" required></label>
+            <label>Split after page <input type="text" name="page" value="1" required></label>
+            <button type="submit">Split after page</button>
+          </form>
+        </section>
+
+        <section>
           <h2>HTML to PDF</h2>
           <p>Paste HTML or choose a file. Keep CSS inline and embed images or fonts as data URIs.</p>
           <form action="/html-to-pdf" method="post" enctype="multipart/form-data" target="_blank">
@@ -67,6 +139,13 @@ defmodule ManualWeb.Page do
                   <option value="error">Return an error</option>
                 </select>
               </label>
+              <label>PDF outlines
+                <select name="outlines_mode">
+                  <option value="none">None</option>
+                  <option value="headings">From h1-h6 headings</option>
+                  <option value="exact">Use exact JSON below</option>
+                </select>
+              </label>
               <label>Response
                 <select name="disposition">
                   <option value="inline">Open in browser</option>
@@ -74,7 +153,64 @@ defmodule ManualWeb.Page do
                 </select>
               </label>
             </div>
+            <label>Exact outline JSON
+              <textarea name="outlines" rows="8" spellcheck="false">[
+        {"title":"Introduction","page":1,"view":"fit","open":true,"children":[]}
+      ]</textarea>
+            </label>
             <button type="submit">Render and open</button>
+          </form>
+        </section>
+
+        <section>
+          <h2>PDF outlines and bookmarks</h2>
+          <p>Inspect existing navigation, preview best-effort detection, write it automatically, or replace it with exact JSON.</p>
+
+          <form action="/outlines" method="post" enctype="multipart/form-data">
+            <h3>Inspect existing outlines</h3>
+            <label>PDF file <input type="file" name="pdf" accept="application/pdf,.pdf" required></label>
+            <button type="submit">Inspect outlines</button>
+          </form>
+
+          <form action="/outlines/detect" method="post" enctype="multipart/form-data">
+            <h3>Preview detection</h3>
+            <label>PDF file <input type="file" name="pdf" accept="application/pdf,.pdf" required></label>
+            <button type="submit">Detect outlines</button>
+          </form>
+
+          <form action="/outlines/automatic" method="post" enctype="multipart/form-data" target="_blank">
+            <h3>Detect and write</h3>
+            <label>PDF file <input type="file" name="pdf" accept="application/pdf,.pdf" required></label>
+            <label>Response
+              <select name="disposition">
+                <option value="inline">Open in browser</option>
+                <option value="attachment">Download</option>
+              </select>
+            </label>
+            <button type="submit">Create automatic outlines</button>
+          </form>
+
+          <form action="/outlines/update" method="post" enctype="multipart/form-data" target="_blank">
+            <h3>Replace exact outlines</h3>
+            <label>PDF file <input type="file" name="pdf" accept="application/pdf,.pdf" required></label>
+            <label>Outline JSON
+              <textarea name="outlines" rows="12" spellcheck="false">[
+        {
+          "title":"Report",
+          "page":1,
+          "view":["fit_h",720],
+          "open":true,
+          "children":[{"title":"Details","page":2,"view":"fit"}]
+        }
+      ]</textarea>
+            </label>
+            <label>Response
+              <select name="disposition">
+                <option value="inline">Open in browser</option>
+                <option value="attachment">Download</option>
+              </select>
+            </label>
+            <button type="submit">Replace outlines</button>
           </form>
         </section>
 
@@ -159,6 +295,12 @@ defmodule ManualWeb.Page do
     result(title, ["<pre>", escape(json), "</pre>"])
   end
 
+  @doc "Returns outlines as JSON accepted by the exact outline forms."
+  @spec outline_result(String.t(), [map()]) :: binary()
+  def outline_result(title, outlines) do
+    json_result(title, outline_json(outlines))
+  end
+
   @doc "Returns a result page containing an escaped Elixir term."
   @spec term_result(String.t(), term()) :: binary()
   def term_result(title, value) do
@@ -209,6 +351,35 @@ defmodule ManualWeb.Page do
     ])
   end
 
+  defp outline_json(value) do
+    case value do
+      items when is_list(items) ->
+        Enum.map(items, &outline_json/1)
+
+      %{title: title, page: page, view: view, open: open, children: children} ->
+        %{
+          title: title,
+          page: page,
+          view: outline_json_view(view),
+          open: open,
+          children: outline_json(children)
+        }
+    end
+  end
+
+  defp outline_json_view(view) do
+    case view do
+      :fit -> "fit"
+      :fit_b -> "fit_b"
+      {:fit_h, top} -> ["fit_h", top]
+      {:fit_v, left} -> ["fit_v", left]
+      {:fit_bh, top} -> ["fit_bh", top]
+      {:fit_bv, left} -> ["fit_bv", left]
+      {:fit_r, left, bottom, right, top} -> ["fit_r", left, bottom, right, top]
+      {:xyz, left, top, zoom} -> ["xyz", left, top, zoom]
+    end
+  end
+
   defp escape(value) do
     value
     |> IO.iodata_to_binary()
@@ -229,6 +400,7 @@ defmodule ManualWeb.Page do
       section { background: linear-gradient(180deg, rgb(14 29 51 / 94%), rgb(9 20 37 / 94%)); border: 1px solid #1c3555; border-radius: 16px; padding: 26px; box-shadow: 0 18px 48px rgb(0 0 0 / 24%); }
       section:hover { border-color: #2d527c; }
       section h2 { margin: 0 0 9px; color: #f3f7fd; font-size: 1.22rem; font-weight: 720; letter-spacing: -.018em; }
+      section h3 { margin: 4px 0 -4px; color: #dce9f9; font-size: .95rem; }
       section p { margin: 0; color: #91a4bd; line-height: 1.58; }
       form { display: grid; gap: 15px; margin-top: 22px; }
       label { display: grid; gap: 7px; color: #c3d0e1; font-size: .84rem; font-weight: 680; }

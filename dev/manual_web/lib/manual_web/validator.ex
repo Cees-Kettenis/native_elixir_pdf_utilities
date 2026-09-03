@@ -102,22 +102,91 @@ defmodule ManualWeb.Validator do
         _ -> nil
       end
 
-    cond do
-      is_nil(page_size) ->
-        error(:html_to_pdf, "select a supported page size")
+    with {:ok, outlines} <- html_outlines(params) do
+      cond do
+        is_nil(page_size) ->
+          error(:html_to_pdf, "select a supported page size")
 
-      is_nil(orientation) ->
-        error(:html_to_pdf, "select portrait or landscape orientation")
+        is_nil(orientation) ->
+          error(:html_to_pdf, "select portrait or landscape orientation")
 
-      is_nil(unsupported_glyphs) ->
-        error(:html_to_pdf, "select a supported missing-glyph policy")
+        is_nil(unsupported_glyphs) ->
+          error(:html_to_pdf, "select a supported missing-glyph policy")
 
-      true ->
-        options = [page_size: {page_size, orientation}, unsupported_glyphs: unsupported_glyphs]
+        true ->
+          options = [page_size: {page_size, orientation}, unsupported_glyphs: unsupported_glyphs]
 
-        case optional_text(Map.get(params, "margin")) do
-          nil -> {:ok, options}
-          margin -> {:ok, Keyword.put(options, :margin, margin)}
+          options =
+            case outlines do
+              nil -> options
+              outlines -> Keyword.put(options, :outlines, outlines)
+            end
+
+          case optional_text(Map.get(params, "margin")) do
+            nil -> {:ok, options}
+            margin -> {:ok, Keyword.put(options, :margin, margin)}
+          end
+      end
+    end
+  end
+
+  @doc "Parses comma-separated page numbers and inclusive ranges such as 1,3-5."
+  @spec page_selection(term(), boolean(), atom()) ::
+          {:ok, [pos_integer() | Range.t()]} | {:error, detailed_error()}
+  def page_selection(value, allow_empty, operation) do
+    case {optional_text(value), allow_empty} do
+      {nil, true} ->
+        {:ok, []}
+
+      {nil, false} ->
+        error(operation, "enter at least one page number or range")
+
+      {selection, _allow_empty} ->
+        selection
+        |> String.split(",", trim: true)
+        |> Enum.map(&String.trim/1)
+        |> parse_page_selectors(operation)
+    end
+  end
+
+  @doc "Parses comma-separated inclusive page ranges such as 1-3,8-10."
+  @spec page_ranges(term(), atom()) :: {:ok, [Range.t()]} | {:error, detailed_error()}
+  def page_ranges(value, operation) do
+    with {:ok, selectors} <- page_selection(value, false, operation),
+         true <- Enum.all?(selectors, &match?(%Range{}, &1)) do
+      {:ok, selectors}
+    else
+      false -> error(operation, "enter ranges in start-end form")
+      {:error, _error} = selection_error -> selection_error
+    end
+  end
+
+  @doc "Parses a required integer used by page and rotation operations."
+  @spec integer(term(), atom(), String.t()) :: {:ok, integer()} | {:error, detailed_error()}
+  def integer(value, operation, message) do
+    case optional_text(value) do
+      nil ->
+        error(operation, message)
+
+      value ->
+        case Integer.parse(value) do
+          {integer, ""} -> {:ok, integer}
+          _ -> error(operation, message)
+        end
+    end
+  end
+
+  @doc "Parses exact outline items from the manual form's JSON representation."
+  @spec outline_items(term(), atom()) :: {:ok, list()} | {:error, detailed_error()}
+  def outline_items(value, operation) do
+    case optional_text(value) do
+      nil ->
+        error(operation, "enter an outline JSON array")
+
+      value ->
+        case Jason.decode(value) do
+          {:ok, items} when is_list(items) -> {:ok, normalize_outline_json(items)}
+          _ -> error(operation, "outline data must be a valid JSON array")
         end
     end
   end
@@ -183,6 +252,88 @@ defmodule ManualWeb.Validator do
     case optional_text(value) do
       nil -> error(operation, message)
       text -> {:ok, text}
+    end
+  end
+
+  defp html_outlines(params) do
+    case Map.get(params, "outlines_mode", "none") do
+      "none" -> {:ok, nil}
+      "headings" -> {:ok, :headings}
+      "exact" -> outline_items(Map.get(params, "outlines"), :html_to_pdf)
+      _ -> error(:html_to_pdf, "select a supported outline mode")
+    end
+  end
+
+  defp parse_page_selectors(parts, operation) do
+    case parts do
+      [] ->
+        error(operation, "enter at least one page number or range")
+
+      parts ->
+        parts
+        |> Enum.reduce_while({:ok, []}, fn part, {:ok, selectors} ->
+          selector =
+            case Regex.run(~r/\A([0-9]+)\s*-\s*([0-9]+)\z/, part) do
+              [_, first, last] ->
+                with {first, ""} <- Integer.parse(first),
+                     {last, ""} <- Integer.parse(last) do
+                  {:ok, first..last//1}
+                else
+                  _ -> :error
+                end
+
+              nil ->
+                case Integer.parse(part) do
+                  {page, ""} -> {:ok, page}
+                  _ -> :error
+                end
+            end
+
+          case selector do
+            {:ok, selector} -> {:cont, {:ok, [selector | selectors]}}
+            :error -> {:halt, error(operation, "page selections must use 1,3-5 syntax")}
+          end
+        end)
+        |> case do
+          {:ok, selectors} -> {:ok, Enum.reverse(selectors)}
+          {:error, _error} = selection_error -> selection_error
+        end
+    end
+  end
+
+  defp normalize_outline_json(value) do
+    case value do
+      items when is_list(items) ->
+        Enum.map(items, &normalize_outline_json/1)
+
+      item when is_map(item) ->
+        Map.new(item, fn {key, value} ->
+          case key do
+            "title" -> {:title, value}
+            "page" -> {:page, value}
+            "open" -> {:open, value}
+            "children" -> {:children, normalize_outline_json(value)}
+            "view" -> {:view, normalize_outline_view(value)}
+            key -> {key, value}
+          end
+        end)
+
+      value ->
+        value
+    end
+  end
+
+  defp normalize_outline_view(value) do
+    case value do
+      "fit" -> :fit
+      "fit_b" -> :fit_b
+      ["fit_h", top] -> {:fit_h, top}
+      ["fit_v", left] -> {:fit_v, left}
+      ["fit_bh", top] -> {:fit_bh, top}
+      ["fit_bv", left] -> {:fit_bv, left}
+      ["fit_r", left, bottom, right, top] -> {:fit_r, left, bottom, right, top}
+      ["xyz", left, top, zoom] -> {:xyz, left, top, zoom}
+      value -> value
     end
   end
 

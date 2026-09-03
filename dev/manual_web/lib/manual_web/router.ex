@@ -8,12 +8,16 @@ defmodule ManualWeb.Router do
   alias ManualWeb.OpenApi
   alias ManualWeb.Page
   alias ManualWeb.Validator
+  alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.Info
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Merge
+  alias NativeElixirPdfUtilities.Outlines
+  alias NativeElixirPdfUtilities.Split
   alias NativeElixirPdfUtilities.Text
   alias NativeElixirPdfUtilities.Tokenizer
+  alias NativeElixirPdfUtilities.Transform
 
   @brand_banner_path Path.expand("../../../../assets/readme-banner.svg", __DIR__)
   @external_resource @brand_banner_path
@@ -65,12 +69,120 @@ defmodule ManualWeb.Router do
     end
   end
 
+  post "/transform/pick" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :pick_pages),
+         {:ok, pages} <- Validator.page_selection(conn.params["pages"], false, :pick_pages),
+         {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),
+         {:ok, transformed} <- Transform.pick_pages(pdf, pages) do
+      send_pdf(conn, transformed, "picked-pages.pdf", disposition)
+    else
+      {:error, _} = operation_error -> send_error(conn, operation_error)
+    end
+  end
+
+  post "/transform/delete" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :delete_pages),
+         {:ok, pages} <- Validator.page_selection(conn.params["pages"], true, :delete_pages),
+         {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),
+         {:ok, transformed} <- Transform.delete_pages(pdf, pages) do
+      send_pdf(conn, transformed, "deleted-pages.pdf", disposition)
+    else
+      {:error, _} = operation_error -> send_error(conn, operation_error)
+    end
+  end
+
+  post "/transform/rotate" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :rotate_pages),
+         {:ok, degrees} <-
+           Validator.integer(conn.params["degrees"], :rotate_pages, "enter an integer rotation"),
+         {:ok, pages} <- Validator.page_selection(conn.params["pages"], true, :rotate_pages),
+         {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),
+         options = if(pages == [], do: [], else: [pages: pages]),
+         {:ok, transformed} <- Transform.rotate_pages(pdf, degrees, options) do
+      send_pdf(conn, transformed, "rotated-pages.pdf", disposition)
+    else
+      {:error, _} = operation_error -> send_error(conn, operation_error)
+    end
+  end
+
+  post "/split/by-page" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :split_by_page),
+         {:ok, outputs} <- Split.by_page(pdf),
+         {:ok, archive} <- zip_outputs(outputs, "page") do
+      send_archive(conn, archive, "split-by-page.zip")
+    else
+      {:error, _} = operation_error -> send_error(conn, operation_error)
+    end
+  end
+
+  post "/split/by-ranges" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :split_by_ranges),
+         {:ok, ranges} <- Validator.page_ranges(conn.params["ranges"], :split_by_ranges),
+         {:ok, outputs} <- Split.by_ranges(pdf, ranges),
+         {:ok, archive} <- zip_outputs(outputs, "range") do
+      send_archive(conn, archive, "split-by-ranges.zip")
+    else
+      {:error, _} = operation_error -> send_error(conn, operation_error)
+    end
+  end
+
+  post "/split/after-page" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :split_after_page),
+         {:ok, page} <-
+           Validator.integer(conn.params["page"], :split_after_page, "enter a split page"),
+         {:ok, {before_pdf, after_pdf}} <- Split.after_page(pdf, page),
+         {:ok, archive} <- zip_outputs([before_pdf, after_pdf], "part") do
+      send_archive(conn, archive, "split-after-page.zip")
+    else
+      {:error, _} = operation_error -> send_error(conn, operation_error)
+    end
+  end
+
   post "/html-to-pdf" do
     with {:ok, html} <- Validator.read_html(conn.params["html_file"], conn.params["html"]),
          {:ok, options} <- Validator.html_options(conn.params),
          {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),
          {:ok, pdf} <- HtmlToPdf.render(html, options) do
       send_pdf(conn, pdf, "rendered.pdf", disposition)
+    else
+      {:error, _} = operation_error -> send_error(conn, operation_error)
+    end
+  end
+
+  post "/outlines" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :get_outlines),
+         {:ok, outlines} <- Outlines.get(pdf) do
+      send_html(conn, 200, Page.outline_result("PDF outlines", outlines))
+    else
+      {:error, _} = operation_error -> send_error(conn, operation_error)
+    end
+  end
+
+  post "/outlines/detect" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :detect_outlines),
+         {:ok, outlines} <- Outlines.detect(pdf) do
+      send_html(conn, 200, Page.outline_result("Detected PDF outlines", outlines))
+    else
+      {:error, _} = operation_error -> send_error(conn, operation_error)
+    end
+  end
+
+  post "/outlines/automatic" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :automatic_outlines),
+         {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),
+         {:ok, updated} <- Outlines.automatic(pdf) do
+      send_pdf(conn, updated, "automatic-outlines.pdf", disposition)
+    else
+      {:error, _} = operation_error -> send_error(conn, operation_error)
+    end
+  end
+
+  post "/outlines/update" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :put_outlines),
+         {:ok, outlines} <- Validator.outline_items(conn.params["outlines"], :put_outlines),
+         {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),
+         {:ok, updated} <- Outlines.put(pdf, outlines) do
+      send_pdf(conn, updated, "updated-outlines.pdf", disposition)
     else
       {:error, _} = operation_error -> send_error(conn, operation_error)
     end
@@ -173,6 +285,36 @@ defmodule ManualWeb.Router do
     |> put_resp_header("content-type", "application/pdf")
     |> put_resp_header("content-disposition", "#{disposition}; filename=\"#{filename}\"")
     |> send_resp(200, pdf)
+  end
+
+  defp zip_outputs(outputs, prefix) do
+    files =
+      outputs
+      |> Enum.with_index(1)
+      |> Enum.map(fn {pdf, index} ->
+        {String.to_charlist("#{prefix}-#{index}.pdf"), pdf}
+      end)
+
+    case :zip.create(~c"outputs.zip", files, [:memory]) do
+      {:ok, {_filename, archive}} ->
+        {:ok, archive}
+
+      {:error, reason} ->
+        Diagnostics.error(
+          :manual_web,
+          :archive_error,
+          "could not create split archive: #{reason}",
+          operation: :split
+        )
+    end
+  end
+
+  defp send_archive(conn, archive, filename) do
+    conn
+    |> security_headers()
+    |> put_resp_header("content-type", "application/zip")
+    |> put_resp_header("content-disposition", "attachment; filename=\"#{filename}\"")
+    |> send_resp(200, archive)
   end
 
   defp send_error(conn, operation_error) do
