@@ -186,10 +186,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           nil
       end
 
-    case {heading, boxes} do
-      {nil, boxes} -> boxes
-      {_heading, []} -> []
-      {heading, [first | rest]} -> [Map.put(first, :outline_anchor, heading) | rest]
+    case heading do
+      nil ->
+        boxes
+
+      heading ->
+        case Enum.split_while(boxes, &(Map.get(&1, :type) == :page_break)) do
+          {_page_breaks, []} ->
+            boxes
+
+          {page_breaks, [first | rest]} ->
+            page_breaks ++ [Map.put(first, :outline_anchor, heading) | rest]
+        end
     end
   end
 

@@ -97,6 +97,21 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
     assert {:ok, []} = Outlines.get(none)
   end
 
+  test "keeps semantic outlines for headings with forced page breaks" do
+    for break_style <- ["break-before: page", "page-break-before: always"] do
+      html = """
+      <h1>First</h1>
+      <p>Body</p>
+      <h1 style="#{break_style}">Second</h1>
+      <p>Tail</p>
+      """
+
+      assert {:ok, pdf} = HtmlToPdf.render(html, outlines: :headings)
+      assert {:ok, outlines} = Outlines.get(pdf)
+      assert Enum.map(outlines, &{&1.title, &1.page}) == [{"First", 1}, {"Second", 2}]
+    end
+  end
+
   test "detects visual headings and automatic writes the proposal" do
     assert {:ok, pdf} =
              HtmlToPdf.render("""
