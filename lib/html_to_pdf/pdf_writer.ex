@@ -11,6 +11,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
+  alias NativeElixirPdfUtilities.Pdf.OutlineBuilder
   alias NativeElixirPdfUtilities.Validators.WriterValidator
 
   # CSS defines one pixel as 1/96 inch, which is a fixed 0.75 PDF points.
@@ -30,14 +31,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   def render(pages, opts \\ []) do
     case WriterValidator.prepare(pages, opts) do
       {:ok, context} ->
-        {:ok, pages_to_pdf(context.pages, context.metadata)}
+        {:ok, pages_to_pdf(context.pages, context.metadata, context.outlines)}
 
       {:error, {reason, diagnostic}} ->
         {:error, {reason, Map.put(diagnostic, :module, __MODULE__)}}
     end
   end
 
-  defp pages_to_pdf(pages, metadata) do
+  defp pages_to_pdf(pages, metadata, outlines) do
     {font_resources, next_object_id} = font_resources(pages, 3)
     image_resources = image_resources(pages, next_object_id)
     graphics_state_object_id = next_object_id + image_object_count(image_resources)
@@ -56,6 +57,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       )
 
     page_object_ids = Enum.map(page_entries, & &1.page_object_id)
+
+    outline_objects =
+      OutlineBuilder.build(
+        outlines,
+        fn page -> {Enum.fetch!(page_object_ids, page - 1), 0} end,
+        next_object_id
+      )
+
+    next_object_id = outline_objects.next_id
 
     page_objects =
       Enum.flat_map(page_entries, fn entry ->
@@ -82,12 +92,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
     objects =
       [
-        {1, "<< /Type /Catalog /Pages #{pages_object_id} 0 R >>"},
+        {1, catalog_object(pages_object_id, outline_objects.root_ref)},
         {pages_object_id, pages_object(page_object_ids)}
       ] ++
         font_objects(font_resources) ++
         image_objects(image_resources) ++
-        graphics_state_objects(graphics_state_resources) ++ page_objects
+        graphics_state_objects(graphics_state_resources) ++
+        page_objects ++ serialized_outline_objects(outline_objects.objects)
 
     case map_size(metadata) do
       0 ->
@@ -96,6 +107,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       _ ->
         objects_to_pdf(objects ++ [{next_object_id, metadata_object(metadata)}], next_object_id)
     end
+  end
+
+  defp catalog_object(pages_object_id, outline_root_ref) do
+    outline_entry =
+      case outline_root_ref do
+        nil -> ""
+        {object, generation} -> " /Outlines #{object} #{generation} R"
+      end
+
+    "<< /Type /Catalog /Pages #{pages_object_id} 0 R#{outline_entry} >>"
+  end
+
+  defp serialized_outline_objects(objects) do
+    Enum.map(objects, fn {id, 0, value} ->
+      {:ok, serialized} = InfoCodec.serialize_value(value)
+      {id, serialized}
+    end)
   end
 
   defp metadata_object(metadata) do

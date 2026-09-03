@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.OutlineValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.TransformValidator
 
@@ -155,7 +156,9 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
   defp prepare_group(context, group, object_writes) do
     case TransformValidator.prepare_output(context, group) do
       {:ok, input} ->
-        object_writes = object_writes + length(input.objects) + 2
+        outline_items = OutlineValidator.count_items(input.outlines)
+        outline_objects = if outline_items == 0, do: 0, else: outline_items + 1
+        object_writes = object_writes + length(input.objects) + outline_objects + 2
 
         case object_writes <= Limits.get(:max_split_object_writes) do
           true -> {:ok, input, object_writes}

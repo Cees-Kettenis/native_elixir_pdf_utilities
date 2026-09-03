@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
+  alias NativeElixirPdfUtilities.Pdf.OutlineBuilder
   alias NativeElixirPdfUtilities.Validators.MergeValidator
 
   @doc false
@@ -16,6 +17,21 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
 
     pages_object_id = 1
     catalog_object_id = 2
+
+    maximum_copied_id =
+      inputs
+      |> Enum.flat_map(fn input -> Map.values(input.map) end)
+      |> Enum.max(fn -> catalog_object_id end)
+
+    outlines = merged_outlines(inputs)
+
+    outline_objects =
+      OutlineBuilder.build(
+        outlines,
+        fn page -> Enum.fetch!(page_ids, page - 1) end,
+        maximum_copied_id + 1
+      )
+
     {pieces, offsets, position} = add_piece([], pdf_header(), %{}, 0)
 
     {pieces, offsets, position} =
@@ -35,7 +51,7 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
         position,
         catalog_object_id,
         0,
-        render_catalog_object(pages_object_id)
+        render_catalog_object(pages_object_id, outline_objects.root_ref)
       )
 
     {pieces, offsets, position} =
@@ -46,6 +62,13 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
           body = render_object_body(object, input.map, page_context)
           add_object(pieces, offsets, position, new_id, object.gen, body)
         end)
+      end)
+
+    {pieces, offsets, position} =
+      Enum.reduce(outline_objects.objects, {pieces, offsets, position}, fn
+        {id, generation, value}, {pieces, offsets, position} ->
+          {:ok, body} = InfoCodec.serialize_value(value)
+          add_object(pieces, offsets, position, id, generation, body)
       end)
 
     maximum_object_id = Enum.max([catalog_object_id, pages_object_id | Map.keys(offsets)])
@@ -99,8 +122,41 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
     ["<< /Type /Pages /Kids [ ", kids, " ] /Count ", Integer.to_string(length(page_ids)), " >>\n"]
   end
 
-  defp render_catalog_object(pages_object_id) do
-    ["<< /Type /Catalog /Pages ", Integer.to_string(pages_object_id), " 0 R >>\n"]
+  defp render_catalog_object(pages_object_id, outline_root_ref) do
+    outline_entry =
+      case outline_root_ref do
+        nil ->
+          []
+
+        {object, generation} ->
+          [" /Outlines ", Integer.to_string(object), " ", Integer.to_string(generation), " R"]
+      end
+
+    [
+      "<< /Type /Catalog /Pages ",
+      Integer.to_string(pages_object_id),
+      " 0 R",
+      outline_entry,
+      " >>\n"
+    ]
+  end
+
+  defp merged_outlines(inputs) do
+    {outlines, _page_offset} =
+      Enum.reduce(inputs, {[], 0}, fn input, {outlines, page_offset} ->
+        input_outlines = offset_outline_pages(Map.get(input, :outlines, []), page_offset)
+        {outlines ++ input_outlines, page_offset + length(input.pages)}
+      end)
+
+    outlines
+  end
+
+  defp offset_outline_pages(items, page_offset) do
+    Enum.map(items, fn item ->
+      page = if is_nil(item.page), do: nil, else: item.page + page_offset
+
+      %{item | page: page, children: offset_outline_pages(item.children, page_offset)}
+    end)
   end
 
   defp render_object_body(object, id_map, page_context) do

@@ -30,6 +30,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Pdf.OutlineDetector
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type page_size :: PageGeometry.page_size_input()
@@ -84,6 +85,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   @type asset_resolver ::
           (asset_request() -> {:ok, binary()} | :not_found | {:error, term()})
   @type unsupported_glyphs :: :replace | :error
+  @type outlines :: :headings | [NativeElixirPdfUtilities.Outlines.item_input()] | false | nil
   @type render_option ::
           {:page_size, page_size()}
           | {:margin, page_margin()}
@@ -95,6 +97,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | {:fonts, [map() | keyword() | {String.t(), String.t()}]}
           | {:system_font_discovery, boolean()}
           | {:metadata, pdf_metadata()}
+          | {:outlines, outlines()}
           | {:page_furniture, page_furniture() | false | nil}
           | {:unsupported_glyphs, unsupported_glyphs()}
   @type error_reason ::
@@ -128,7 +131,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   Supported options include `:page_size`, `:margin`, `:base_url`,
   `:stylesheets`, `:default_font`, explicit local `:fonts`,
   `:system_font_discovery`, PDF `:metadata`, opt-in `:page_furniture` headers
-  and footers, and `:unsupported_glyphs`.
+  and footers, PDF `:outlines`, and `:unsupported_glyphs`.
   Metadata supports title, author, subject, keywords, producer, creation date,
   and modification date. An HTML `<title>` supplies the PDF title when
   `metadata[:title]` is not set.
@@ -144,6 +147,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   then `:default`. Templates can contain `{{page}}` and `{{pages}}` tokens.
   Furniture is disabled when `:page_furniture` is omitted, `nil`, or `false`.
   Enabled furniture must fit inside the page margin.
+
+  Set `:outlines` to `:headings` to turn visible `h1` through `h6` elements
+  into nested PDF bookmarks using their final positions after pagination. An
+  exact outline list accepted by `NativeElixirPdfUtilities.Outlines.put/2` may
+  also be supplied. Outlines are omitted by default.
 
   `:page_size` accepts the CSS named sizes `:a5`, `:a4`, `:a3`, `:b5`, `:b4`,
   `:jis_b5`, `:jis_b4`, `:letter`, `:legal`, and `:ledger`, optionally paired
@@ -242,6 +250,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
                ),
              {:ok, layout_tree} <- layout_document(styled_tree, effective_opts),
              {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
+             effective_opts <- prepared_outline_options(pages, effective_opts),
              {:ok, pages} <-
                PageFurniture.decorate(pages, layout_tree, effective_opts, image_budget),
              {:ok, pdf_binary} <- PdfWriter.render(pages, effective_opts) do
@@ -251,6 +260,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
       {:error, {_reason, _diagnostic}} = error ->
         error
     end
+  end
+
+  defp prepared_outline_options(pages, opts) do
+    outlines =
+      case Keyword.get(opts, :outlines) do
+        :headings -> OutlineDetector.from_paginated_headings(pages)
+        false -> []
+        nil -> []
+        outlines -> outlines
+      end
+
+    Keyword.put(opts, :outlines, outlines)
   end
 
   defp layout_document(styled_tree, opts) do

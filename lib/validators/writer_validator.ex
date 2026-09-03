@@ -10,6 +10,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.InfoValidator
+  alias NativeElixirPdfUtilities.Validators.OutlineValidator
 
   @border_styles [
     :none,
@@ -39,7 +40,11 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   ]
 
   @typedoc "Validated input consumed by the PDF byte writer."
-  @type context :: %{required(:pages) => [map()], required(:metadata) => map()}
+  @type context :: %{
+          required(:pages) => [map()],
+          required(:metadata) => map(),
+          required(:outlines) => [OutlineValidator.item()]
+        }
 
   @doc """
   Validates pages and writer options and normalizes document metadata.
@@ -52,24 +57,35 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
         case Keyword.keyword?(opts) do
           true ->
             with {:ok, metadata} <-
-                   InfoValidator.normalize_new_metadata(Keyword.get(opts, :metadata, [])),
-                 true <- pages != [] and Enum.all?(pages, &valid_page?/1) do
-              {:ok, %{pages: pages, metadata: metadata}}
+                   InfoValidator.normalize_new_metadata(Keyword.get(opts, :metadata, [])) do
+              case OutlineValidator.normalize(
+                     normalized_outline_input(Keyword.get(opts, :outlines)),
+                     length(pages)
+                   ) do
+                {:ok, outlines} ->
+                  case pages != [] and Enum.all?(pages, &valid_page?/1) do
+                    true ->
+                      {:ok, %{pages: pages, metadata: metadata, outlines: outlines}}
+
+                    false ->
+                      Diagnostics.error(
+                        :pdf,
+                        :invalid_pdf_input,
+                        "PDF writer requires non-empty valid pages",
+                        operation: :write_pdf,
+                        module: __MODULE__
+                      )
+                  end
+
+                {:error, _error} = outline_error ->
+                  outline_error
+              end
             else
               {:error, _reason} ->
                 Diagnostics.error(
                   :pdf,
                   :invalid_pdf_input,
                   "PDF metadata must use supported fields and value types",
-                  operation: :write_pdf,
-                  module: __MODULE__
-                )
-
-              false ->
-                Diagnostics.error(
-                  :pdf,
-                  :invalid_pdf_input,
-                  "PDF writer requires non-empty valid pages",
                   operation: :write_pdf,
                   module: __MODULE__
                 )
@@ -90,6 +106,14 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           operation: :write_pdf,
           module: __MODULE__
         )
+    end
+  end
+
+  defp normalized_outline_input(outlines) do
+    case outlines do
+      nil -> []
+      false -> []
+      outlines -> outlines
     end
   end
 

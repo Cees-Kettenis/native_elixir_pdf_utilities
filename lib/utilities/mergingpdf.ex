@@ -19,8 +19,9 @@ defmodule NativeElixirPdfUtilities.Merge do
   @doc """
   Merges a non-empty list of PDF binaries into one rebuilt PDF.
 
-  Input page order determines output page order. Catalog-level structures such
-  as outlines, named destinations, and forms are not preserved.
+  Input page order determines output page order. Existing outlines are appended
+  in input order and their local destinations are remapped to output pages.
+  Other catalog-level structures such as forms are not preserved.
   """
   @spec merge([pdf_bin()]) ::
           {:ok, pdf_bin()} | {:error, {error_reason(), Diagnostics.diagnostic()}}

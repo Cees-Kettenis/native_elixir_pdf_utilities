@@ -16,6 +16,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     :fonts,
     :system_font_discovery,
     :metadata,
+    :outlines,
     :page_furniture,
     :unsupported_glyphs
   ]
@@ -1070,12 +1071,27 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              :ok <-
                validate_system_font_discovery(Keyword.get(opts, :system_font_discovery, true)),
              :ok <- validate_unsupported_glyphs(Keyword.get(opts, :unsupported_glyphs, :replace)),
+             :ok <- validate_outline_option(Keyword.get(opts, :outlines)),
              :ok <- validate_font_options_result(font_options_result) do
           :ok
         end
 
       false ->
         Diagnostics.error(:style, :invalid_document, "style options must be a keyword list")
+    end
+  end
+
+  defp validate_outline_option(outlines) do
+    case is_nil(outlines) or outlines == false or outlines == :headings or is_list(outlines) do
+      true ->
+        :ok
+
+      false ->
+        Diagnostics.error(
+          :options,
+          :invalid_options,
+          "outlines must be :headings, a list, false, or nil"
+        )
     end
   end
 

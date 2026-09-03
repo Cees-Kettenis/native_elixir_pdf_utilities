@@ -157,11 +157,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp layout_block(block, x, y, width) do
     case do_layout_block(block, x, y, width) do
       {:ok, boxes, next_y} ->
-        position_container_contents(block, boxes, next_y, x, y, width)
+        case position_container_contents(block, boxes, next_y, x, y, width) do
+          {:ok, positioned_boxes, next_y} ->
+            {:ok, attach_outline_anchor(block, positioned_boxes), next_y}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp attach_outline_anchor(block, boxes) do
+    heading =
+      case block do
+        %{type: :element, tag: <<"h", level>>, children: children}
+        when level in ?1..?6 and is_list(children) ->
+          title = children |> outline_text() |> String.replace(~r/\s+/u, " ") |> String.trim()
+
+          case title do
+            "" -> nil
+            title -> %{title: title, level: level - ?0}
+          end
+
+        _ ->
+          nil
+      end
+
+    case {heading, boxes} do
+      {nil, boxes} -> boxes
+      {_heading, []} -> []
+      {heading, [first | rest]} -> [Map.put(first, :outline_anchor, heading) | rest]
+    end
+  end
+
+  defp outline_text(children) do
+    Enum.map_join(children, "", fn child ->
+      case child do
+        %{type: :text, text: text} -> text
+        %{children: nested} when is_list(nested) -> outline_text(nested)
+        _ -> ""
+      end
+    end)
   end
 
   defp do_layout_block(block, x, y, width) do

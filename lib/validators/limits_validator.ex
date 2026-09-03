@@ -58,6 +58,10 @@ defmodule NativeElixirPdfUtilities.Validators.LimitsValidator do
         {:error,
          "resource limit :max_pdf_info_total_bytes must be greater than or equal to :max_pdf_info_value_bytes"}
 
+      limits.max_pdf_outline_total_title_bytes < limits.max_pdf_outline_title_bytes ->
+        {:error,
+         "resource limit :max_pdf_outline_total_title_bytes must be greater than or equal to :max_pdf_outline_title_bytes"}
+
       limits.max_cid_width_entries > 65_536 ->
         {:error, "resource limit :max_cid_width_entries must not exceed the PDF CID range"}
 

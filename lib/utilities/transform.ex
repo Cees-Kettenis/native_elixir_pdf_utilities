@@ -11,7 +11,8 @@ defmodule NativeElixirPdfUtilities.Transform do
   Rebuilding omits unselected page objects and resources used only by those
   pages. It is not secure redaction because retained pages can share resources
   with removed pages. Internal link annotations that target removed pages are
-  omitted; links to retained pages and external URI links remain.
+  omitted; links to retained pages and external URI links remain. Outline items
+  targeting retained pages are remapped, while removed-page leaves are omitted.
   """
 
   alias NativeElixirPdfUtilities.Diagnostics

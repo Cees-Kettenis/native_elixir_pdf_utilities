@@ -11,6 +11,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Tokenizer
+  alias NativeElixirPdfUtilities.Validators.OutlineValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
 
   @typedoc "A parsed object retained for merge serialization."
@@ -40,6 +41,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
           required(:objects) => [object_context()],
           required(:pages) => [PdfValidator.ref()],
           required(:inherited) => inherited_pages(),
+          required(:outlines) => [OutlineValidator.item()],
           optional(:map) => %{optional(PdfValidator.ref()) => non_neg_integer()}
         }
 
@@ -117,12 +119,14 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
         object_by_ref = Map.new(objects, &{{&1.obj, &1.gen}, &1})
 
         with :ok <- validate_serializable_objects(objects),
-             {:ok, inherited} <- prepare_page_inheritances(document, pages, object_by_ref) do
+             {:ok, inherited} <- prepare_page_inheritances(document, pages, object_by_ref),
+             {:ok, outlines} <- OutlineValidator.extract(pdf_context) do
           {:ok,
            %{
              objects: objects,
              pages: Enum.map(pages, & &1.ref),
-             inherited: inherited
+             inherited: inherited,
+             outlines: outlines
            }}
         end
 
@@ -167,8 +171,12 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
             end
           end)
           |> case do
-            {:ok, prepared, _next_id, _page_count} ->
-              prepared |> Enum.reverse() |> validate_reference_remapping()
+            {:ok, prepared, next_id, _page_count} ->
+              prepared = Enum.reverse(prepared)
+
+              with :ok <- validate_outline_object_capacity(prepared, next_id) do
+                validate_reference_remapping(prepared)
+              end
 
             {:error, _} = remapping_error ->
               remapping_error
@@ -210,6 +218,20 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
   defp merged_output_entry_limit do
     min(Limits.get(:max_merged_objects), Limits.get(:max_pdf_objects))
+  end
+
+  defp validate_outline_object_capacity(inputs, next_id) do
+    outline_items =
+      Enum.reduce(inputs, 0, fn input, count ->
+        count + OutlineValidator.count_items(Map.get(input, :outlines, []))
+      end)
+
+    generated_objects = if outline_items == 0, do: 0, else: outline_items + 1
+
+    case next_id + generated_objects <= merged_output_entry_limit() do
+      true -> :ok
+      false -> resource_limit_error("merged object count exceeds the limit")
+    end
   end
 
   @doc """

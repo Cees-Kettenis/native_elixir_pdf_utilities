@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.MergeValidator
+  alias NativeElixirPdfUtilities.Validators.OutlineValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
 
   @doc false
@@ -22,7 +23,8 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
          input
          | objects: objects,
            pages: selected_refs,
-           inherited: Map.take(input.inherited, selected_refs)
+           inherited: Map.take(input.inherited, selected_refs),
+           outlines: OutlineValidator.remap_for_selection(input.outlines, page_numbers)
        }}
     end
   end
