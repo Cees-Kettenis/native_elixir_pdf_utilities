@@ -78,8 +78,9 @@ adding 1.21 to `ci/runtime-matrix.json` will add the third local and CI lane.
 ## Manual testing app
 
 The local app under `dev/manual_web` provides browser forms for rendering HTML,
-merging PDFs, extracting text, inspecting and updating document information,
-and tokenizing PDF syntax. It also publishes its OpenAPI document at
+merging, transforming and splitting PDFs, inspecting and updating outlines,
+extracting text, inspecting and updating document information, and tokenizing
+PDF syntax. It also publishes its OpenAPI document at
 `http://127.0.0.1:4001/openapi.json`.
 
 Run it from its own Mix project:

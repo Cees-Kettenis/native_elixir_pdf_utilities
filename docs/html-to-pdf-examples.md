@@ -161,6 +161,27 @@ A document can also load a font beneath `:base_url` with `@font-face`:
 The first non-empty HTML `<title>` becomes the PDF title unless
 `metadata[:title]` is set.
 
+## Create bookmarks from headings
+
+Visible HTML headings can become nested items in the PDF viewer's bookmarks
+panel:
+
+```elixir
+{:ok, pdf} =
+  HtmlToPdf.render(
+    """
+    <h1>Annual report</h1>
+    <h2>Financial results</h2>
+    <h3>Revenue</h3>
+    <h3>Expenses</h3>
+    """,
+    outlines: :headings
+  )
+```
+
+See [PDF outlines and bookmarks](pdf-outlines.md) for exact outline input,
+automatic detection in existing PDFs, and preservation behavior.
+
 ## Render static form values
 
 Form controls become visible, non-editable PDF content:

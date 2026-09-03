@@ -8,7 +8,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       description:
-        "Pure Elixir utilities for PDF inspection, metadata, tokenizing, merging, page transforms, splitting, text extraction, and native HTML/CSS rendering.",
+        "Pure Elixir utilities for PDF inspection, metadata, tokenizing, merging, page transforms, splitting, outlines, text extraction, and native HTML/CSS rendering.",
       deps: deps(),
       package: package(),
       docs: docs(),
@@ -70,6 +70,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
         "docs/text-extraction.md",
         "docs/pdf-merging.md",
         "docs/pdf-page-transforms.md",
+        "docs/pdf-outlines.md",
         "docs/html-to-pdf-compatibility.md",
         "docs/html-to-pdf-browser-parity-coverage.md",
         "docs/html-to-pdf-examples.md"
@@ -86,7 +87,8 @@ defmodule NativeElixirPdfUtilities.MixProject do
           "docs/pdf-validation.md",
           "docs/text-extraction.md",
           "docs/pdf-merging.md",
-          "docs/pdf-page-transforms.md"
+          "docs/pdf-page-transforms.md",
+          "docs/pdf-outlines.md"
         ],
         "HTML to PDF": [
           "docs/html-to-pdf-compatibility.md",
@@ -100,6 +102,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
           NativeElixirPdfUtilities.Info,
           NativeElixirPdfUtilities.Limits,
           NativeElixirPdfUtilities.Merge,
+          NativeElixirPdfUtilities.Outlines,
           NativeElixirPdfUtilities.Split,
           NativeElixirPdfUtilities.Text,
           NativeElixirPdfUtilities.Tokenizer,
@@ -126,6 +129,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
           NativeElixirPdfUtilities.Validators.PdfValidator,
           NativeElixirPdfUtilities.Validators.InfoValidator,
           NativeElixirPdfUtilities.Validators.MergeValidator,
+          NativeElixirPdfUtilities.Validators.OutlineValidator,
           NativeElixirPdfUtilities.Validators.TextValidator,
           NativeElixirPdfUtilities.Validators.WriterValidator
         ]

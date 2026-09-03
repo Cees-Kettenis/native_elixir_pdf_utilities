@@ -21,6 +21,8 @@ each public API supports and which work remains the caller's responsibility.
 - [PDF page transforms and splitting](pdf-page-transforms.md) covers selecting,
   reordering, deleting, rotating, and splitting pages, including rebuild
   behavior and data-retention limitations.
+- [PDF outlines and bookmarks](pdf-outlines.md) covers exact outline updates,
+  best-effort detection, HTML headings, and preservation during assembly.
 - [Diagnostics](diagnostics.md) explains why public APIs share one recoverable
   error shape and how callers can use its debugging context.
 - [Configurable resource limits](resource-limits.md) lists every tunable

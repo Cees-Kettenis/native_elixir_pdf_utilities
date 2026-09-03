@@ -45,10 +45,10 @@ Existing page-level entries such as `BleedBox`, `TrimBox`, `ArtBox`, and
 If required page geometry is missing or malformed, the merger returns a
 diagnostic that identifies the problem. It does not invent a page size.
 
-The merger combines page content. It rebuilds the top-level catalog, so it does
-not carry metadata, outlines and bookmarks, named destinations, viewer
-preferences, portfolios, or AcroForm configuration into the output. Add those
-items in a later transformation, or use a merger that supports them.
+The merger combines page content and appends each input's top-level outline
+items in input order. Outline destinations are remapped to the corresponding
+output pages. It rebuilds the top-level catalog, so it does not carry metadata,
+viewer preferences, portfolios, or AcroForm configuration into the output.
 
 ## Errors
 

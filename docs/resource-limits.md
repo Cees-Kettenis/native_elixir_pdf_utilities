@@ -57,6 +57,11 @@ override these values.
 | `max_pdf_xref_revisions` | 1,000 | Incremental cross-reference revisions |
 | `max_pdf_info_value_bytes` | 1,000,000 | One metadata value supplied for PDF generation or update |
 | `max_pdf_info_total_bytes` | 5,000,000 | Metadata values supplied for one PDF generation or update |
+| `max_pdf_outline_items` | 10,000 | Outline items read or generated for one PDF |
+| `max_pdf_outline_depth` | 64 | Nested outline levels |
+| `max_pdf_outline_title_bytes` | 16,384 | UTF-8 bytes in one outline title |
+| `max_pdf_outline_total_title_bytes` | 5,000,000 | UTF-8 title bytes across one outline tree |
+| `max_pdf_name_tree_nodes` | 10,000 | Name-tree nodes traversed for named destinations |
 | `max_merge_inputs` | 100 | PDFs in one merge |
 | `max_aggregate_merge_input_bytes` | 100,000,000 | PDF bytes in one merge |
 | `max_merged_objects` | 100,000 | Objects in merged output |

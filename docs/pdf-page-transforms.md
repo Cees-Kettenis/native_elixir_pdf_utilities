@@ -89,9 +89,10 @@ removed pages and named destinations are omitted, while external URI links
 remain.
 
 Deleting a page is not secure redaction. A resource shared with a retained page
-must remain in the output. Catalog-level outlines, named destinations, forms,
-page labels, viewer preferences, and metadata are not preserved by these
-operations.
+must remain in the output. Outlines targeting retained pages are preserved and
+remapped. Items targeting removed pages are dropped when they have no retained
+children; otherwise they remain as destinationless grouping items. Forms, page
+labels, viewer preferences, and metadata are not preserved by these operations.
 
 A missing object required by a retained page is reported as malformed input.
 A retained non-navigation dependency on an unselected page is reported as an
