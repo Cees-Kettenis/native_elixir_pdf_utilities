@@ -171,7 +171,13 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
         render_tokens(tokens, id_map)
 
       value ->
-        render_value(value, id_map, page_context.parent_id)
+        parent_id =
+          case page_context do
+            %{parent_id: parent_id} -> parent_id
+            nil -> nil
+          end
+
+        render_value(value, id_map, parent_id)
     end
   end
 

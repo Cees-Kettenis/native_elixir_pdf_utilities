@@ -19,7 +19,8 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
           required(:obj) => non_neg_integer(),
           required(:gen) => non_neg_integer(),
           required(:tokens) => [Tokenizer.token()],
-          required(:value) => PdfValidator.value()
+          required(:value) => PdfValidator.value(),
+          optional(:value_override) => PdfValidator.value()
         }
 
   @typedoc "Prepared inherited page tokens keyed by original page reference."
@@ -119,6 +120,12 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
         object_by_ref = Map.new(objects, &{{&1.obj, &1.gen}, &1})
 
         with :ok <- validate_serializable_objects(objects),
+             {:ok, objects} <-
+               normalize_named_link_destinations(
+                 document,
+                 Map.get(pdf_context, :catalog, %{}),
+                 objects
+               ),
              {:ok, inherited} <- prepare_page_inheritances(document, pages, object_by_ref),
              {:ok, outlines} <- OutlineValidator.extract(pdf_context) do
           {:ok,
@@ -132,6 +139,136 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
       _ ->
         error(:merge_validation, "shared PDF validation context is malformed")
+    end
+  end
+
+  defp normalize_named_link_destinations(document, catalog, objects) do
+    case Enum.any?(objects, &named_link_destination?(document, &1.value)) do
+      false ->
+        {:ok, objects}
+
+      true ->
+        result =
+          case OutlineValidator.named_destinations(document, catalog) do
+            {:ok, named_destinations} ->
+              Enum.reduce_while(objects, {:ok, []}, fn object, {:ok, normalized} ->
+                case normalize_named_link_object(document, named_destinations, object) do
+                  {:ok, object} -> {:cont, {:ok, [object | normalized]}}
+                  {:error, _error} = destination_error -> {:halt, destination_error}
+                end
+              end)
+
+            {:error, _error} = destination_error ->
+              destination_error
+          end
+
+        case result do
+          {:ok, normalized} ->
+            {:ok, Enum.reverse(normalized)}
+
+          {:error, {reason, diagnostic}} ->
+            stage = if reason == :resource_limit_exceeded, do: :limits, else: :annotations
+
+            {:error,
+             {reason,
+              diagnostic
+              |> Map.put(:stage, stage)
+              |> Map.put(:operation, :merge)
+              |> Map.put(:module, __MODULE__)}}
+        end
+    end
+  end
+
+  defp named_link_destination?(document, value) do
+    case value do
+      %{"Subtype" => {:name, "Link"}} = dictionary ->
+        case link_destination(document, dictionary) do
+          {:ok, {_location, destination}} -> named_destination?(document, destination)
+          :none -> false
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp link_destination(document, dictionary) do
+    case Map.fetch(dictionary, "Dest") do
+      {:ok, destination} ->
+        {:ok, {:destination, destination}}
+
+      :error ->
+        case Map.get(dictionary, "A") do
+          nil ->
+            :none
+
+          action ->
+            case PdfValidator.resolve(document, action) do
+              {:ok, %{"S" => {:name, "GoTo"}} = action} ->
+                {:ok, {{:action, action}, Map.get(action, "D")}}
+
+              _ ->
+                :none
+            end
+        end
+    end
+  end
+
+  defp named_destination?(document, destination) do
+    case PdfValidator.resolve(document, destination) do
+      {:ok, {kind, value}} when kind in [:name, :string, :hex] and is_binary(value) -> true
+      _ -> false
+    end
+  end
+
+  defp normalize_named_link_object(document, named_destinations, object) do
+    case object.value do
+      %{"Subtype" => {:name, "Link"}} = dictionary ->
+        with {:ok, dictionary} <-
+               normalize_named_link_dictionary(document, named_destinations, dictionary) do
+          case dictionary == object.value do
+            true -> {:ok, object}
+            false -> {:ok, Map.put(object, :value_override, dictionary)}
+          end
+        end
+
+      _ ->
+        {:ok, object}
+    end
+  end
+
+  defp normalize_named_link_dictionary(document, named_destinations, dictionary) do
+    case link_destination(document, dictionary) do
+      {:ok, {location, destination}} ->
+        case PdfValidator.resolve(document, destination) do
+          {:ok, {kind, _name} = named_destination} when kind in [:name, :string, :hex] ->
+            case OutlineValidator.resolve_named_destination(
+                   document,
+                   named_destination,
+                   named_destinations
+                 ) do
+              {:ok, nil} ->
+                {:ok, dictionary}
+
+              {:ok, destination} ->
+                case location do
+                  :destination ->
+                    {:ok, Map.put(dictionary, "Dest", destination)}
+
+                  {:action, action} ->
+                    {:ok, Map.put(dictionary, "A", Map.put(action, "D", destination))}
+                end
+
+              {:error, _error} = destination_error ->
+                destination_error
+            end
+
+          _ ->
+            {:ok, dictionary}
+        end
+
+      :none ->
+        {:ok, dictionary}
     end
   end
 

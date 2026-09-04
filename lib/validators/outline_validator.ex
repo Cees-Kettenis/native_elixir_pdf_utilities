@@ -413,10 +413,47 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
     end
   end
 
-  defp named_destinations(document, catalog) do
+  @doc false
+  @spec named_destinations(PdfValidator.document(), map()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def named_destinations(document, catalog) do
     with {:ok, legacy} <- legacy_destinations(document, Map.get(catalog, "Dests")),
          {:ok, modern} <- modern_destinations(document, Map.get(catalog, "Names")) do
       {:ok, Map.merge(legacy, modern)}
+    end
+  end
+
+  @doc false
+  @spec resolve_named_destination(
+          PdfValidator.document(),
+          {:name | :string | :hex, binary()},
+          map()
+        ) ::
+          {:ok, [PdfValidator.value()] | nil}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def resolve_named_destination(document, named_destination, named_destinations) do
+    {kind, name} = named_destination
+    key = if kind == :name, do: {:name, name}, else: {:text, name}
+
+    case Map.fetch(named_destinations, key) do
+      {:ok, named_destination} ->
+        destination =
+          case PdfValidator.resolve(document, named_destination) do
+            {:ok, %{"D" => destination}} -> destination
+            {:ok, destination} -> destination
+            {:error, _error} -> :invalid
+          end
+
+        case PdfValidator.resolve(document, destination) do
+          {:ok, [{:ref, _page_ref}, {:name, _view_name} | _operands] = destination} ->
+            {:ok, destination}
+
+          _ ->
+            error(:invalid_pdf_input, "named destination is malformed")
+        end
+
+      :error ->
+        {:ok, nil}
     end
   end
 
@@ -594,28 +631,16 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
       {:ok, [{:ref, page_ref}, {:name, view_name} | operands]} ->
         decode_explicit_destination(page_ref, view_name, operands, page_lookup)
 
-      {:ok, {kind, name}} when kind in [:name, :string, :hex] ->
-        key = if kind == :name, do: {:name, name}, else: {:text, name}
+      {:ok, {kind, _name} = named_destination} when kind in [:name, :string, :hex] ->
+        case resolve_named_destination(document, named_destination, named_destinations) do
+          {:ok, [{:ref, page_ref}, {:name, view_name} | operands]} ->
+            decode_explicit_destination(page_ref, view_name, operands, page_lookup)
 
-        case Map.fetch(named_destinations, key) do
-          {:ok, named_destination} ->
-            destination =
-              case PdfValidator.resolve(document, named_destination) do
-                {:ok, %{"D" => destination}} -> destination
-                {:ok, destination} -> destination
-                {:error, _error} -> :invalid
-              end
-
-            case PdfValidator.resolve(document, destination) do
-              {:ok, [{:ref, page_ref}, {:name, view_name} | operands]} ->
-                decode_explicit_destination(page_ref, view_name, operands, page_lookup)
-
-              _ ->
-                error(:invalid_pdf_input, "named outline destination is malformed")
-            end
-
-          :error ->
+          {:ok, nil} ->
             {:ok, nil, :fit}
+
+          {:error, _error} = destination_error ->
+            destination_error
         end
 
       _ ->

@@ -13,8 +13,18 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
   def prepare(context, page_numbers, rotations) do
     with {:ok, input} <- MergeValidator.prepare(context),
          selected_pages = selected_pages(context.pages, page_numbers),
+         object_values =
+           Map.new(input.objects, fn object ->
+             {{object.obj, object.gen}, Map.get(object, :value_override, object.value)}
+           end),
          {:ok, overrides} <-
-           page_overrides(context.document, selected_pages, input.inherited, rotations),
+           page_overrides(
+             context.document,
+             object_values,
+             selected_pages,
+             input.inherited,
+             rotations
+           ),
          {:ok, objects} <- reachable_objects(input.objects, overrides, selected_pages) do
       selected_refs = Enum.map(selected_pages, & &1.ref)
 
@@ -34,7 +44,7 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
     Enum.map(page_numbers, &Map.fetch!(indexed, &1))
   end
 
-  defp page_overrides(document, selected_pages, inheritances, rotations) do
+  defp page_overrides(document, object_values, selected_pages, inheritances, rotations) do
     selected_refs = Map.new(selected_pages, &{&1.ref, true})
     all_page_refs = Map.new(document.pages, &{&1.ref, true})
 
@@ -46,6 +56,7 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
       with {:ok, annotations} <-
              sanitized_annotations(
                document,
+               object_values,
                Map.get(page.dictionary, "Annots"),
                selected_refs,
                all_page_refs
@@ -80,7 +91,13 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
     end
   end
 
-  defp sanitized_annotations(document, annotations, selected_refs, all_page_refs) do
+  defp sanitized_annotations(
+         document,
+         object_values,
+         annotations,
+         selected_refs,
+         all_page_refs
+       ) do
     case annotations do
       nil ->
         {:ok, nil}
@@ -90,7 +107,13 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
           {:ok, annotations} when is_list(annotations) ->
             annotations
             |> Enum.reduce_while({:ok, []}, fn annotation, {:ok, kept} ->
-              case keep_annotation?(document, annotation, selected_refs, all_page_refs) do
+              case keep_annotation?(
+                     document,
+                     object_values,
+                     annotation,
+                     selected_refs,
+                     all_page_refs
+                   ) do
                 {:ok, true} -> {:cont, {:ok, [annotation | kept]}}
                 {:ok, false} -> {:cont, {:ok, kept}}
                 {:error, _error} = annotation_error -> {:halt, annotation_error}
@@ -108,8 +131,20 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
     end
   end
 
-  defp keep_annotation?(document, annotation, selected_refs, all_page_refs) do
-    case PdfValidator.resolve(document, annotation) do
+  defp keep_annotation?(document, object_values, annotation, selected_refs, all_page_refs) do
+    resolved =
+      case annotation do
+        {:ref, ref} ->
+          case Map.fetch(object_values, ref) do
+            {:ok, value} -> {:ok, value}
+            :error -> PdfValidator.resolve(document, annotation)
+          end
+
+        annotation ->
+          PdfValidator.resolve(document, annotation)
+      end
+
+    case resolved do
       {:ok, %{"Subtype" => {:name, "Link"}} = dictionary} ->
         link_destination_status(document, dictionary, selected_refs, all_page_refs)
 

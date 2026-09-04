@@ -216,6 +216,40 @@ defmodule NativeElixirPdfUtilities.PageTransformsTest do
     assert {:ok, %{pages: [_, _]}} = Reader.read(retained_goto)
   end
 
+  test "preserves valid legacy and name-tree link destinations across rebuilt PDFs" do
+    source =
+      three_page_pdf(
+        "/Annots [16 0 R 17 0 R]",
+        [
+          {16, "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest /Legacy >>"},
+          {17,
+           "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /GoTo /D (modern) >> >>"},
+          {18, "<< /Names [(modern) 19 0 R] >>"},
+          {19, "<< /D [4 0 R /Fit] >>"}
+        ],
+        "/Dests << /Legacy [5 0 R /Fit] >> /Names << /Dests 18 0 R >>"
+      )
+
+    assert {:ok, merged} = Merge.merge([source, source])
+    assert link_target_pages(merged, 1) == [3, 2]
+    assert link_target_pages(merged, 4) == [6, 5]
+
+    assert {:ok, picked} = Transform.pick_pages(source, [3, 2, 1])
+    assert link_target_pages(picked, 3) == [1, 2]
+
+    assert {:ok, deleted} = Transform.delete_pages(source, [2])
+    assert link_target_pages(deleted, 1) == [2]
+
+    assert {:ok, rotated} = Transform.rotate_pages(source, 90)
+    assert link_target_pages(rotated, 1) == [3, 2]
+
+    assert {:ok, [range]} = Split.by_ranges(source, [1..3])
+    assert link_target_pages(range, 1) == [3, 2]
+
+    assert {:ok, [first, _second, _third]} = Split.by_page(source)
+    assert link_target_pages(first, 1) == []
+  end
+
   test "rejects malformed annotations instead of emitting dangling structures" do
     malformed_sources = [
       three_page_pdf("/Annots 42"),
@@ -228,7 +262,18 @@ defmodule NativeElixirPdfUtilities.PageTransformsTest do
       ]),
       three_page_pdf("/Annots [16 0 R]", [
         {16, "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest 42 >>"}
-      ])
+      ]),
+      three_page_pdf("/Annots [16 0 R]"),
+      three_page_pdf(
+        "/Annots [16 0 R]",
+        [{16, "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest /Broken >>"}],
+        "/Dests << /Broken (not-an-array) >>"
+      ),
+      three_page_pdf(
+        "/Annots [16 0 R]",
+        [{16, "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest /Broken >>"}],
+        "/Names 42"
+      )
     ]
 
     for source <- malformed_sources do
@@ -317,12 +362,49 @@ defmodule NativeElixirPdfUtilities.PageTransformsTest do
     assert length(pages) == 4
   end
 
-  defp three_page_pdf(page_one_extra \\ "", extra_objects \\ []) do
+  defp link_target_pages(pdf, page_number) do
+    assert {:ok, document} = Reader.read(pdf)
+
+    page_lookup =
+      document.pages
+      |> Enum.with_index(1)
+      |> Map.new(fn {page, number} -> {page.ref, number} end)
+
+    page = Enum.at(document.pages, page_number - 1)
+    assert {:ok, dictionary} = Reader.resolve(document, {:ref, page.ref})
+    assert {:ok, annotations} = Reader.resolve(document, Map.get(dictionary, "Annots", []))
+
+    Enum.flat_map(annotations, fn annotation ->
+      assert {:ok, annotation} = Reader.resolve(document, annotation)
+
+      destination =
+        case Map.get(annotation, "Dest") do
+          nil ->
+            case Reader.resolve(document, Map.get(annotation, "A")) do
+              {:ok, %{"S" => {:name, "GoTo"}} = action} -> Map.get(action, "D")
+              _ -> nil
+            end
+
+          destination ->
+            destination
+        end
+
+      case Reader.resolve(document, destination) do
+        {:ok, [{:ref, page_ref}, {:name, _view} | _operands]} ->
+          [Map.fetch!(page_lookup, page_ref)]
+
+        _ ->
+          []
+      end
+    end)
+  end
+
+  defp three_page_pdf(page_one_extra \\ "", extra_objects \\ [], catalog_extra \\ "") do
     content = fn text -> "BT /F1 12 Tf 20 100 Td (#{text}) Tj ET" end
 
     objects =
       [
-        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {1, "<< /Type /Catalog /Pages 2 0 R #{catalog_extra} >>"},
         {2,
          "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /Resources << /Font << /F1 15 0 R >> >> /MediaBox [0.0 0 300 200] /Rotate 0 >>"},
         {3,
