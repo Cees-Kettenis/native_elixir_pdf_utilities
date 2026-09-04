@@ -177,7 +177,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
           header ->
             case state.current_y - header.height - group.height >= margins.bottom do
               true ->
-                shifted_boxes = shift_boxes(header.boxes, state.current_y - header.top)
+                shifted_boxes =
+                  header.boxes
+                  |> Enum.map(&Map.delete(&1, :outline_anchor))
+                  |> shift_boxes(state.current_y - header.top)
 
                 %{
                   state

@@ -112,6 +112,23 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
     end
   end
 
+  test "creates one semantic outline for a heading in a repeated table header" do
+    rows =
+      Enum.map_join(1..80, "", fn row ->
+        "<tr><td>Row #{row}</td></tr>"
+      end)
+
+    html =
+      "<table><thead><tr><th><h1>Repeated Heading</h1></th></tr></thead>" <>
+        "<tbody>#{rows}</tbody></table>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, outlines: :headings)
+    assert {:ok, document} = Reader.read(pdf)
+    assert length(document.pages) == 2
+
+    assert {:ok, [%{title: "Repeated Heading", page: 1}]} = Outlines.get(pdf)
+  end
+
   test "detects visual headings and automatic writes the proposal" do
     assert {:ok, pdf} =
              HtmlToPdf.render("""

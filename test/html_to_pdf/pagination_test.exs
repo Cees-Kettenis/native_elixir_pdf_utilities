@@ -434,6 +434,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
     assert column_header.y > body_text.y
   end
 
+  test "paginate removes outline anchors from repeated table header copies" do
+    table_id = :table_with_heading
+
+    header =
+      text_box("Heading", 78.0, {:table_row, table_id, :header}, %{
+        table_id: table_id,
+        table_section: :head,
+        repeat_table_header: true,
+        outline_anchor: %{title: "Heading", level: 1}
+      })
+
+    first_row =
+      text_box("First", 60.0, {:table_row, table_id, :first}, %{
+        table_id: table_id,
+        table_section: :body
+      })
+
+    second_row =
+      text_box("Second", -20.0, {:table_row, table_id, :second}, %{
+        table_id: table_id,
+        table_section: :body
+      })
+
+    layout_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 10.0,
+      boxes: [header, first_row, second_row]
+    }
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+
+    assert Enum.find(first_page.boxes, &(&1.text == "Heading")).outline_anchor ==
+             header.outline_anchor
+
+    refute Map.has_key?(Enum.find(second_page.boxes, &(&1.text == "Heading")), :outline_anchor)
+  end
+
   test "paginate keeps a near-page-height table row inside the page bounds" do
     table_id = :near_page_height
 
