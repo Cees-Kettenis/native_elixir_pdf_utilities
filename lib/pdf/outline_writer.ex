@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineWriter do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
   alias NativeElixirPdfUtilities.Pdf.OutlineBuilder
+  alias NativeElixirPdfUtilities.Validators.IncrementalValidator
   alias NativeElixirPdfUtilities.Validators.OutlineValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
 
@@ -82,47 +83,52 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineWriter do
 
     case result do
       {:ok, pieces, entries, xref_offset} ->
-        incremental_trailer =
-          %{
-            "Size" => size,
-            "Root" => Map.fetch!(trailer, "Root"),
-            "Prev" => previous_xref_offset
-          }
-          |> copy_trailer_entry(trailer, "Info")
-          |> copy_trailer_entry(trailer, "ID")
+        pieces = Enum.reverse(pieces)
 
-        case InfoCodec.serialize_value(incremental_trailer) do
-          {:ok, trailer_io} ->
-            xref_entries =
-              entries
-              |> Enum.sort_by(fn {object, _generation, _offset} -> object end)
-              |> Enum.map(fn {object, generation, offset} ->
-                [
-                  Integer.to_string(object),
-                  " 1\n",
-                  padded(offset, 10),
-                  " ",
-                  padded(generation, 5),
-                  " n \n"
-                ]
-              end)
+        with {:ok, trailer_id} <-
+               IncrementalValidator.prepare_identifier(Map.get(trailer, "ID"), [pdf, pieces]) do
+          incremental_trailer =
+            %{
+              "Size" => size,
+              "Root" => Map.fetch!(trailer, "Root"),
+              "Prev" => previous_xref_offset
+            }
+            |> copy_trailer_entry(trailer, "Info")
+            |> maybe_put_identifier(trailer_id)
 
-            {:ok,
-             IO.iodata_to_binary([
-               pdf,
-               separator,
-               Enum.reverse(pieces),
-               "xref\n",
-               xref_entries,
-               "trailer\n",
-               trailer_io,
-               "\nstartxref\n",
-               Integer.to_string(xref_offset),
-               "\n%%EOF\n"
-             ])}
+          case InfoCodec.serialize_value(incremental_trailer) do
+            {:ok, trailer_io} ->
+              xref_entries =
+                entries
+                |> Enum.sort_by(fn {object, _generation, _offset} -> object end)
+                |> Enum.map(fn {object, generation, offset} ->
+                  [
+                    Integer.to_string(object),
+                    " 1\n",
+                    padded(offset, 10),
+                    " ",
+                    padded(generation, 5),
+                    " n \n"
+                  ]
+                end)
 
-          :error ->
-            error("incremental outline trailer cannot be serialized")
+              {:ok,
+               IO.iodata_to_binary([
+                 pdf,
+                 separator,
+                 pieces,
+                 "xref\n",
+                 xref_entries,
+                 "trailer\n",
+                 trailer_io,
+                 "\nstartxref\n",
+                 Integer.to_string(xref_offset),
+                 "\n%%EOF\n"
+               ])}
+
+            :error ->
+              error("incremental outline trailer cannot be serialized")
+          end
         end
 
       {:error, _error} = writer_error ->
@@ -134,6 +140,13 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineWriter do
     case Map.fetch(source, key) do
       {:ok, value} -> Map.put(updated, key, value)
       :error -> updated
+    end
+  end
+
+  defp maybe_put_identifier(trailer, identifier) do
+    case identifier do
+      nil -> trailer
+      identifier -> Map.put(trailer, "ID", identifier)
     end
   end
 

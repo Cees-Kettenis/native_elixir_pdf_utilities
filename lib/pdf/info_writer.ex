@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoWriter do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
+  alias NativeElixirPdfUtilities.Validators.IncrementalValidator
   alias NativeElixirPdfUtilities.Validators.InfoValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
 
@@ -33,7 +34,11 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoWriter do
 
     with :ok <- InfoValidator.validate_incremental_object_capacity(trailer, xref),
          {:ok, dictionary_io} <- InfoCodec.serialize_value(dictionary),
-         {:ok, trailer_id} <- updated_identifier(Map.get(trailer, "ID"), pdf, dictionary_io),
+         {:ok, trailer_id} <-
+           IncrementalValidator.prepare_identifier(
+             Map.get(trailer, "ID"),
+             [pdf, dictionary_io]
+           ),
          {:ok, root} <- active_root(Map.get(trailer, "Root")) do
       separator = trailing_separator(pdf)
       object_number = size
@@ -89,33 +94,6 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoWriter do
 
       _ ->
         error("active trailer Root is malformed")
-    end
-  end
-
-  defp updated_identifier(value, pdf, dictionary_io) do
-    case value do
-      nil ->
-        {:ok, nil}
-
-      [first, second] when tuple_size(first) == 2 and tuple_size(second) == 2 ->
-        case {pdf_string_value?(first), pdf_string_value?(second)} do
-          {true, true} ->
-            digest = :crypto.hash(:sha256, [pdf, dictionary_io]) |> binary_part(0, 16)
-            {:ok, [first, {:hex, digest}]}
-
-          _ ->
-            error("active trailer ID is malformed")
-        end
-
-      _ ->
-        error("active trailer ID is malformed")
-    end
-  end
-
-  defp pdf_string_value?(value) do
-    case value do
-      {kind, bytes} when kind in [:string, :hex] and is_binary(bytes) -> true
-      _ -> false
     end
   end
 

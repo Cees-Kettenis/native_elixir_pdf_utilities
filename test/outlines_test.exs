@@ -73,6 +73,29 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
     assert {:ok, []} = Outlines.get(removed)
   end
 
+  test "preserves the permanent trailer identifier and updates its revision identifier" do
+    first = "00112233445566778899AABBCCDDEEFF"
+    second = "FFEEDDCCBBAA99887766554433221100"
+
+    original =
+      pdf(
+        [
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+          {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>"}
+        ],
+        "/ID [<#{first}> <#{second}>]"
+      )
+
+    assert {:ok, updated} = Outlines.put(original, [{"One", 1}])
+    assert {:ok, document} = Reader.read(updated)
+
+    assert [{:hex, decoded_first}, {:hex, decoded_second}] = document.trailer["ID"]
+    assert Base.encode16(decoded_first) == first
+    refute Base.encode16(decoded_second) == second
+    assert byte_size(decoded_second) == 16
+  end
+
   test "creates semantic outlines from HTML headings" do
     html = """
     <h1>Quarterly Report</h1>
@@ -540,6 +563,13 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
 
     assert {:error, {:invalid_pdf_input, %{stage: :incremental_write}}} =
              OutlineWriter.write(invalid_trailer, [])
+
+    for identifier <- [[:malformed], [{:string, "one"}, {:name, "two"}]] do
+      invalid_identifier = put_in(base, [:document, :trailer, "ID"], identifier)
+
+      assert {:error, {:invalid_pdf_input, %{stage: :incremental_write}}} =
+               OutlineWriter.write(invalid_identifier, [])
+    end
   end
 
   test "merge remapping reserves capacity for generated outline objects" do
@@ -619,7 +649,7 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
     }
   end
 
-  defp pdf(objects) do
+  defp pdf(objects, trailer_extra \\ "") do
     header = "%PDF-1.7\n"
 
     {body, offsets} =
@@ -642,7 +672,7 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
     body <>
       "xref\n0 #{maximum + 1}\n" <>
       Enum.join(entries) <>
-      "trailer\n<< /Size #{maximum + 1} /Root 1 0 R >>\n" <>
+      "trailer\n<< /Size #{maximum + 1} /Root 1 0 R #{trailer_extra} >>\n" <>
       "startxref\n#{xref_offset}\n%%EOF\n"
   end
 end
