@@ -327,6 +327,7 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
     invalid_trees = [
       %{names: "42"},
       %{names: "<< /Dests 10 0 R >>", extra: {10, "<< /Kids [10 0 R] >>"}},
+      %{names: "<< /Dests 10 0 R >>", extra: {10, "<< /Names 42 >>"}},
       %{names: "<< /Dests 10 0 R >>", extra: {10, "<< /Names [(odd)] >>"}},
       %{names: "<< /Dests 10 0 R >>", extra: {10, "<< /Names [42 [3 0 R /Fit]] >>"}},
       %{names: "<< /Dests 10 0 R >>", extra: {10, "<< /Kids 42 >>"}},
@@ -363,6 +364,61 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
 
     Limits.install(%{original | max_pdf_name_tree_nodes: 1})
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} = Outlines.get(node_limited)
+  end
+
+  test "limits named destinations across legacy dictionaries and complete name trees" do
+    original = Limits.effective()
+    Limits.install(%{original | max_pdf_named_destinations: 2})
+
+    at_limit =
+      outlined_pdf(%{
+        catalog: "<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R /Names << /Dests 10 0 R >> >>",
+        item: "<< /Title (One) /Parent 5 0 R /Dest (one) >>",
+        extras: [{10, "<< /Names [(one) [3 0 R /Fit] (two) [3 0 R /Fit]] >>"}]
+      })
+
+    assert {:ok, [%{page: 1}]} = Outlines.get(at_limit)
+
+    wide_tree =
+      outlined_pdf(%{
+        catalog: "<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R /Names << /Dests 10 0 R >> >>",
+        extras: [
+          {10, "<< /Names [(one) [3 0 R /Fit] (two) [3 0 R /Fit] (three) [3 0 R /Fit]] >>"}
+        ]
+      })
+
+    narrow_tree =
+      outlined_pdf(%{
+        catalog: "<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R /Names << /Dests 10 0 R >> >>",
+        extras: [
+          {10, "<< /Kids [11 0 R 12 0 R 13 0 R] >>"},
+          {11, "<< /Names [(one) [3 0 R /Fit]] >>"},
+          {12, "<< /Names [(two) [3 0 R /Fit]] >>"},
+          {13, "<< /Names [(three) [3 0 R /Fit]] >>"}
+        ]
+      })
+
+    legacy =
+      outlined_pdf(%{
+        catalog:
+          "<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R /Dests << /One [3 0 R /Fit] /Two [3 0 R /Fit] /Three [3 0 R /Fit] >> >>"
+      })
+
+    combined =
+      outlined_pdf(%{
+        catalog:
+          "<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R /Dests << /One [3 0 R /Fit] >> /Names << /Dests 10 0 R >> >>",
+        extras: [
+          {10, "<< /Names [(two) [3 0 R /Fit] (three) [3 0 R /Fit]] >>"}
+        ]
+      })
+
+    for pdf <- [wide_tree, narrow_tree, legacy, combined] do
+      assert {:error,
+              {:resource_limit_exceeded,
+               %{stage: :limits, message: "named destination count exceeds the limit"}}} =
+               Outlines.get(pdf)
+    end
   end
 
   test "enforces source outline and incremental object limits" do

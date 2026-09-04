@@ -417,8 +417,8 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
   @spec named_destinations(PdfValidator.document(), map()) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def named_destinations(document, catalog) do
-    with {:ok, legacy} <- legacy_destinations(document, Map.get(catalog, "Dests")),
-         {:ok, modern} <- modern_destinations(document, Map.get(catalog, "Names")) do
+    with {:ok, legacy, count} <- legacy_destinations(document, Map.get(catalog, "Dests")),
+         {:ok, modern} <- modern_destinations(document, Map.get(catalog, "Names"), count) do
       {:ok, Map.merge(legacy, modern)}
     end
   end
@@ -460,13 +460,23 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
   defp legacy_destinations(document, value) do
     case value do
       nil ->
-        {:ok, %{}}
+        {:ok, %{}, 0}
 
       value ->
         case PdfValidator.dictionary(document, value) do
           {:ok, destinations} ->
-            {:ok,
-             Map.new(destinations, fn {name, destination} -> {{:name, name}, destination} end)}
+            count = map_size(destinations)
+
+            case count <= Limits.get(:max_pdf_named_destinations) do
+              true ->
+                {:ok,
+                 Map.new(destinations, fn {name, destination} ->
+                   {{:name, name}, destination}
+                 end), count}
+
+              false ->
+                limit_error("named destination count exceeds the limit")
+            end
 
           {:error, _error} ->
             error(:invalid_pdf_input, "catalog Dests entry must resolve to a dictionary")
@@ -474,7 +484,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
     end
   end
 
-  defp modern_destinations(document, names_value) do
+  defp modern_destinations(document, names_value, count) do
     case names_value do
       nil ->
         {:ok, %{}}
@@ -485,7 +495,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
                read_name_tree(
                  document,
                  Map.get(names, "Dests"),
-                 %{nodes: 0, seen: %{}, destinations: %{}}
+                 %{nodes: 0, entries: count, seen: %{}, destinations: %{}}
                ) do
           {:ok, destinations.destinations}
         else
@@ -515,11 +525,13 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
 
           true ->
             with {:ok, node} <- PdfValidator.dictionary(document, value),
-                 {:ok, destinations} <- name_tree_entries(document, Map.get(node, "Names")),
+                 {:ok, destinations, entries} <-
+                   name_tree_entries(document, Map.get(node, "Names"), state.entries),
                  {:ok, kids} <- name_tree_kids(document, Map.get(node, "Kids")) do
               state = %{
                 state
                 | nodes: state.nodes + 1,
+                  entries: entries,
                   seen: if(is_nil(ref), do: state.seen, else: Map.put(state.seen, ref, true)),
                   destinations: Map.merge(state.destinations, destinations)
               }
@@ -537,27 +549,50 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
     end
   end
 
-  defp name_tree_entries(document, value) do
+  defp name_tree_entries(document, value, count) do
     case value do
       nil ->
-        {:ok, %{}}
+        {:ok, %{}, count}
 
       value ->
         case PdfValidator.resolve(document, value) do
-          {:ok, entries} when is_list(entries) and rem(length(entries), 2) == 0 ->
-            entries
-            |> Enum.chunk_every(2)
-            |> Enum.reduce_while({:ok, %{}}, fn pair, {:ok, destinations} ->
-              case pair do
-                [{kind, name}, destination]
-                when kind in [:string, :hex] and is_binary(name) ->
-                  {:cont, {:ok, Map.put(destinations, {:text, name}, destination)}}
+          {:ok, entries} when is_list(entries) ->
+            entry_length = length(entries)
 
-                _ ->
-                  {:halt,
-                   error(:invalid_pdf_input, "destination name tree Names array is malformed")}
-              end
-            end)
+            cond do
+              rem(entry_length, 2) != 0 ->
+                error(
+                  :invalid_pdf_input,
+                  "destination name tree Names entry must resolve to pairs"
+                )
+
+              div(entry_length, 2) > Limits.get(:max_pdf_named_destinations) - count ->
+                limit_error("named destination count exceeds the limit")
+
+              true ->
+                pair_count = div(entry_length, 2)
+
+                entries
+                |> Enum.chunk_every(2)
+                |> Enum.reduce_while({:ok, %{}}, fn pair, {:ok, destinations} ->
+                  case pair do
+                    [{kind, name}, destination]
+                    when kind in [:string, :hex] and is_binary(name) ->
+                      {:cont, {:ok, Map.put(destinations, {:text, name}, destination)}}
+
+                    _ ->
+                      {:halt,
+                       error(
+                         :invalid_pdf_input,
+                         "destination name tree Names array is malformed"
+                       )}
+                  end
+                end)
+                |> case do
+                  {:ok, destinations} -> {:ok, destinations, count + pair_count}
+                  {:error, _error} = destination_error -> destination_error
+                end
+            end
 
           _ ->
             error(:invalid_pdf_input, "destination name tree Names entry must resolve to pairs")
