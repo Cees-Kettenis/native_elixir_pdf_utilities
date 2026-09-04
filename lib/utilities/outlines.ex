@@ -62,7 +62,8 @@ defmodule NativeElixirPdfUtilities.Outlines do
   Items may use normalized maps, `{title, page}` tuples, or
   `{title, page, children}` tuples. Passing an empty list removes the active
   outline. A map may set `:view`, `:open`, and `:children`; `:page` may be nil
-  for a destinationless grouping item.
+  for a destinationless grouping item. Leaf items normalize `:open` to `true`
+  because they have no children to expand or collapse.
   """
   @spec put(binary(), [item_input()]) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}

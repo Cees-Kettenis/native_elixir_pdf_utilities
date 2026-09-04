@@ -73,6 +73,14 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
     assert {:ok, []} = Outlines.get(removed)
   end
 
+  test "normalizes a closed leaf to its only representable open state" do
+    leaf = %{title: "Leaf", page: 1, open: false, children: []}
+
+    assert {:ok, [%{open: true}]} = OutlineValidator.normalize([leaf], 1)
+    assert {:ok, updated} = Outlines.put(two_page_pdf(), [leaf])
+    assert {:ok, [%{title: "Leaf", open: true, children: []}]} = Outlines.get(updated)
+  end
+
   test "preserves the permanent trailer identifier and updates its revision identifier" do
     first = "00112233445566778899AABBCCDDEEFF"
     second = "FFEEDDCCBBAA99887766554433221100"

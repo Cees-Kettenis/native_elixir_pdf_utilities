@@ -174,7 +174,14 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
          {:ok, open} <- normalize_open(Map.get(input, :open, true)),
          children when is_list(children) <- Map.get(input, :children, []),
          {:ok, children, budget} <- normalize_items(children, page_count, depth + 1, budget, []) do
-      {:ok, %{title: title, page: page, view: view, open: open, children: children}, budget}
+      {:ok,
+       %{
+         title: title,
+         page: page,
+         view: view,
+         open: normalized_open(open, children),
+         children: children
+       }, budget}
     else
       false ->
         error(:invalid_outlines, "outline item contains unsupported fields")
@@ -338,7 +345,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
                 title: title,
                 page: page,
                 view: view,
-                open: outline_open?(dictionary),
+                open: normalized_open(outline_open?(dictionary), children),
                 children: children
               }
 
@@ -758,6 +765,10 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
       count when is_integer(count) and count < 0 -> false
       _ -> true
     end
+  end
+
+  defp normalized_open(open, children) do
+    children == [] or open
   end
 
   defp remap_items(items, page_map, remapped) do
