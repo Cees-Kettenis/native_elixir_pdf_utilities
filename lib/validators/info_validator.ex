@@ -37,7 +37,12 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
           required(:modification_date) => NaiveDateTime.t() | nil
         }
 
-  @typedoc "One effective page size in PDF points."
+  @typedoc """
+  One effective page size.
+
+  Width and height are PDF points. MediaBox coordinates remain in the page's
+  default user-space units before applying its UserUnit scale.
+  """
   @type page_size :: %{
           required(:page_number) => pos_integer(),
           required(:width) => float(),
@@ -240,13 +245,14 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
 
   defp prepare_page_size(document, page, page_number) do
     case page do
-      %{media_box: media_box, rotate: rotate} ->
+      %{dictionary: dictionary, media_box: media_box, rotate: rotate} ->
         with {:ok, [left, bottom, right, top]} <-
                PdfValidator.number_array(document, media_box, 4),
              true <- right > left and top > bottom,
-             {:ok, rotation} <- normalized_rotation(document, rotate) do
-          unrotated_width = (right - left) * 1.0
-          unrotated_height = (top - bottom) * 1.0
+             {:ok, rotation} <- normalized_rotation(document, rotate),
+             {:ok, user_unit} <- normalized_user_unit(document, dictionary) do
+          unrotated_width = (right - left) * user_unit
+          unrotated_height = (top - bottom) * user_unit
 
           {width, height} =
             case rotation in [90, 270] do
@@ -269,7 +275,11 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
              }
            }}
         else
-          _ -> page_error(page_number, "has a malformed effective MediaBox or Rotate value")
+          {:error, :user_unit} ->
+            page_error(page_number, "has a UserUnit value that is not a positive number")
+
+          _ ->
+            page_error(page_number, "has a malformed effective MediaBox or Rotate value")
         end
 
       _ ->
@@ -284,6 +294,16 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
 
       _ ->
         :error
+    end
+  end
+
+  defp normalized_user_unit(document, dictionary) do
+    case PdfValidator.resolve(document, Map.get(dictionary, "UserUnit", 1)) do
+      {:ok, user_unit} when is_number(user_unit) and user_unit > 0 ->
+        {:ok, user_unit * 1.0}
+
+      _ ->
+        {:error, :user_unit}
     end
   end
 

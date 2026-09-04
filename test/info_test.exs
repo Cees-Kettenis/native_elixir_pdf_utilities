@@ -83,6 +83,66 @@ defmodule NativeElixirPdfUtilities.InfoTest do
            ]
   end
 
+  test "applies direct and indirect page UserUnit values to physical dimensions" do
+    pdf =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2,
+         "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [10 20 110 220] /Rotate 90 /UserUnit 4 >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /UserUnit 2 >>"},
+        {4,
+         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 100] /Rotate 180 /UserUnit 6 0 R >>"},
+        {5, "<< /Type /Page /Parent 2 0 R >>"},
+        {6, "2.5"}
+      ])
+
+    assert {:ok, sizes} = Info.page_sizes(pdf)
+
+    assert [direct, indirect, default] = sizes
+
+    assert %{width: 400.0, height: 200.0, rotation: 90} = direct
+
+    assert direct.media_box == %{
+             left: 10.0,
+             bottom: 20.0,
+             right: 110.0,
+             top: 220.0
+           }
+
+    assert %{width: 750.0, height: 250.0, rotation: 180} = indirect
+    assert %{width: 200.0, height: 100.0, rotation: 90} = default
+  end
+
+  test "rejects malformed direct and indirect UserUnit values" do
+    for {entry, extra_objects} <- [
+          {"0", []},
+          {"-1", []},
+          {"null", []},
+          {"/invalid", []},
+          {"4 0 R", [{4, "(invalid)"}]},
+          {"4 0 R", []}
+        ] do
+      malformed =
+        pdf(
+          [
+            {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+            {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+            {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 200] /UserUnit #{entry} >>"}
+          ] ++ extra_objects
+        )
+
+      assert {:error,
+              {:invalid_pdf_input,
+               %{
+                 stage: :page_tree,
+                 operation: :page_sizes,
+                 module: Info,
+                 source: "page 1",
+                 message: "page 1 has a UserUnit value that is not a positive number"
+               }}} = Info.page_sizes(malformed)
+    end
+  end
+
   test "detects encryption without loading encrypted objects" do
     encrypted =
       pdf(

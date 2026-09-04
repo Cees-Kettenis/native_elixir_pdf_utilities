@@ -15,7 +15,12 @@ defmodule NativeElixirPdfUtilities.Info do
   @typedoc "Common fields from the active PDF information dictionary."
   @type info :: InfoValidator.info()
 
-  @typedoc "One effective page size in PDF points."
+  @typedoc """
+  One effective page size.
+
+  Width and height are PDF points. MediaBox coordinates remain in the page's
+  default user-space units before applying its UserUnit scale.
+  """
   @type page_size :: InfoValidator.page_size()
 
   @type error_reason :: Reader.error_reason()
@@ -70,8 +75,9 @@ defmodule NativeElixirPdfUtilities.Info do
   @doc """
   Returns each page's effective MediaBox size and normalized rotation.
 
-  Width and height use PDF points and reflect page rotation. Page numbers begin
-  at one.
+  Width and height use PDF points, including the page's UserUnit scale, and
+  reflect page rotation. MediaBox coordinates remain in default user-space
+  units. Page numbers begin at one.
   """
   @spec page_sizes(binary()) ::
           {:ok, [page_size()]} | {:error, {error_reason(), Diagnostics.diagnostic()}}
