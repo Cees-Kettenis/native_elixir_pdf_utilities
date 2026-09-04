@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineDetector do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Text
+  alias NativeElixirPdfUtilities.Validators.OutlineValidator
 
   @maximum_title_graphemes 160
 
@@ -10,8 +11,9 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineDetector do
   @spec detect(binary()) :: {:ok, [map()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def detect(pdf) do
     with {:ok, document} <- Text.extract_spans(pdf, order: :visual),
-         {:ok, headings} <- visual_headings(document.pages) do
-      {:ok, nest(headings)}
+         {:ok, headings} <- visual_headings(document.pages),
+         {:ok, items} <- OutlineValidator.normalize(nest(headings), length(document.pages)) do
+      {:ok, items}
     end
   end
 

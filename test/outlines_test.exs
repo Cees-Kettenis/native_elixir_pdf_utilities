@@ -179,6 +179,28 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
              Outlines.detect(plain)
   end
 
+  test "rejects a detected proposal that exceeds the configured outline limit" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render("""
+             <h1>First detected heading</h1>
+             <p>Enough ordinary body text to establish the common body size.</p>
+             <h1>Second detected heading</h1>
+             <p>More ordinary body text follows this heading.</p>
+             """)
+
+    Limits.install(%{Limits.effective() | max_pdf_outline_items: 1})
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{stage: :limits, operation: :detect_outlines, module: Outlines}}} =
+             Outlines.detect(pdf)
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{stage: :limits, operation: :automatic_outlines, module: Outlines}}} =
+             Outlines.automatic(pdf)
+  end
+
   test "preserves and remaps outlines through merge, transform, and split" do
     assert {:ok, first} = HtmlToPdf.render("<h1>First</h1>", outlines: :headings)
     assert {:ok, second} = HtmlToPdf.render("<h1>Second</h1>", outlines: :headings)
