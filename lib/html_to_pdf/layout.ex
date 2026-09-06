@@ -4859,7 +4859,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       trim_inline_whitespace(run.text) == "" and current_line == [] ->
         lines
 
-      token_width > width and Map.get(run.style, :line_break) == :break_word ->
+      # An indivisible grapheme must overflow; splitting it again cannot make progress.
+      token_width > width and Map.get(run.style, :line_break) == :break_word and
+          length(String.graphemes(run.text)) > 1 ->
         append_break_word_token(lines, run, width)
 
       current_line != [] and

@@ -4532,6 +4532,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert length(Enum.filter(emergency_layout.boxes, &(&1.type == :text))) > 1
   end
 
+  test "emergency wrapping terminates and overflows indivisible graphemes" do
+    supervisor = start_supervised!(Task.Supervisor)
+
+    for property <- ["overflow-wrap", "word-wrap", "word-break"],
+        {width, text} <- [
+          {"1px", "W"},
+          {"1px", "W\u0301"},
+          {"1px", "WW\u0301"},
+          {"8pt", "iW\u0301"}
+        ] do
+      html = """
+      <p style="width: #{width}; font-family: Helvetica; font-size: 12pt; line-height: 16pt; margin: 0; #{property}: break-word">#{text}</p>
+      """
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled_tree} = Style.compute(dom)
+
+      task =
+        Task.Supervisor.async_nolink(supervisor, fn ->
+          Layout.layout(styled_tree, page_size: {100, 100}, margin: 10)
+        end)
+
+      assert {:ok, {:ok, layout}} = Task.yield(task, 1_000) || Task.shutdown(task, :brutal_kill)
+      boxes = Enum.filter(layout.boxes, &(&1.type == :text))
+      assert Enum.map(boxes, & &1.text) == String.graphemes(text)
+
+      for {box, index} <- Enum.with_index(boxes) do
+        assert_in_delta box.x, 10, 0.001
+        assert_in_delta box.y, hd(boxes).y - index * 16, 0.001
+      end
+
+      task =
+        Task.Supervisor.async_nolink(supervisor, fn ->
+          NativeElixirPdfUtilities.HtmlToPdf.render(html)
+        end)
+
+      assert {:ok, {:ok, "%PDF-" <> _}} =
+               Task.yield(task, 1_000) || Task.shutdown(task, :brutal_kill)
+    end
+  end
+
   test "layout distributes mixed fixed flexible and overflowing table widths" do
     assert {:ok, styled_tree} =
              Style.compute(%{
