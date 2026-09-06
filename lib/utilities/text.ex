@@ -142,22 +142,34 @@ defmodule NativeElixirPdfUtilities.Text do
          {:ok, pages} <- extract_pages(text_context) do
       visible_pages =
         pages
-        |> Enum.map(fn page -> Enum.filter(page.spans, & &1.paints_text?) end)
-        |> Enum.reject(&(&1 == []))
+        |> Enum.map(fn page -> {page.number, Enum.filter(page.spans, & &1.paints_text?)} end)
+        |> Enum.reject(fn {_page_number, spans} -> spans == [] end)
 
       case visible_pages do
         [] ->
           error(:text_extraction, :no_extractable_text, "PDF contains no extractable text")
 
         pages ->
-          text =
-            if request.options.layout do
-              pages |> Enum.map(&layout_page/1) |> Enum.join("\f")
-            else
-              pages |> Enum.map(&plain_page/1) |> Enum.join("\n")
-            end
+          case request.options.layout do
+            true ->
+              projections = Enum.map(pages, &layout_page_projection/1)
 
-          {:ok, text}
+              case TextValidator.validate_layout_whitespace(
+                     Enum.map(projections, &{&1.page_number, &1.whitespace_bytes})
+                   ) do
+                :ok ->
+                  {:ok, projections |> Enum.map(&render_layout_page/1) |> Enum.join("\f")}
+
+                {:error, _} = projection_error ->
+                  text_error(projection_error, :extract)
+              end
+
+            false ->
+              {:ok,
+               pages
+               |> Enum.map(fn {_page_number, spans} -> plain_page(spans) end)
+               |> Enum.join("\n")}
+          end
       end
     else
       {:error, _} = extraction_error -> text_error(extraction_error, :extract)
@@ -566,13 +578,30 @@ defmodule NativeElixirPdfUtilities.Text do
     |> IO.iodata_to_binary()
   end
 
-  defp layout_page(spans) do
+  defp layout_page_projection({page_number, spans}) do
     min_x = spans |> Enum.map(& &1.x) |> Enum.min()
 
-    spans
-    |> Enum.sort_by(&{&1.y, &1.x})
-    |> group_lines([])
-    |> Enum.map(fn line -> line.spans |> Enum.sort_by(& &1.x) |> render_line(min_x) end)
+    lines =
+      spans
+      |> Enum.sort_by(&{&1.y, &1.x})
+      |> group_lines([])
+      |> Enum.map(fn line -> line.spans |> Enum.sort_by(& &1.x) |> project_line(min_x) end)
+
+    %{
+      page_number: page_number,
+      lines: lines,
+      whitespace_bytes: Enum.sum(Enum.map(lines, & &1.whitespace_bytes))
+    }
+  end
+
+  defp render_layout_page(projection) do
+    projection.lines
+    |> Enum.map(fn line ->
+      line.parts
+      |> Enum.map(fn {spaces, text} -> [String.duplicate(" ", spaces), text] end)
+      |> IO.iodata_to_binary()
+      |> String.trim_trailing()
+    end)
     |> Enum.join("\n")
   end
 
@@ -609,25 +638,24 @@ defmodule NativeElixirPdfUtilities.Text do
     end
   end
 
-  defp render_line(spans, min_x) do
-    spans
-    |> Enum.reduce({[], min_x, true}, fn span, {parts, current_x, first?} ->
-      space_width = max(span.font_size * 0.25, 4.0)
-      gap = span.x - current_x
+  defp project_line(spans, min_x) do
+    {parts, _current_x, _first?, whitespace_bytes} =
+      Enum.reduce(spans, {[], min_x, true, 0}, fn span,
+                                                  {parts, current_x, first?, whitespace_bytes} ->
+        space_width = max(span.font_size * 0.25, 4.0)
+        gap = span.x - current_x
 
-      spaces =
-        cond do
-          first? -> max(round((span.x - min_x) / space_width), 0)
-          gap > space_width * 0.35 -> max(round(gap / space_width), 1)
-          true -> 0
-        end
+        spaces =
+          cond do
+            first? -> max(round((span.x - min_x) / space_width), 0)
+            gap > space_width * 0.35 -> max(round(gap / space_width), 1)
+            true -> 0
+          end
 
-      {[span.text, String.duplicate(" ", spaces) | parts], max(span.end_x, span.x), false}
-    end)
-    |> elem(0)
-    |> Enum.reverse()
-    |> IO.iodata_to_binary()
-    |> String.trim_trailing()
+        {[{spaces, span.text} | parts], max(span.end_x, span.x), false, whitespace_bytes + spaces}
+      end)
+
+    %{parts: Enum.reverse(parts), whitespace_bytes: whitespace_bytes}
   end
 
   defp text_state(page) do

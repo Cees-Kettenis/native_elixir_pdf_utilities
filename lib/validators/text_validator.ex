@@ -160,6 +160,55 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     end
   end
 
+  @doc false
+  @spec validate_layout_whitespace([{pos_integer(), non_neg_integer()}]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_layout_whitespace(page_whitespace) do
+    case is_list(page_whitespace) do
+      true ->
+        page_whitespace
+        |> Enum.reduce_while({:ok, 0}, fn page_entry, {:ok, total} ->
+          case page_entry do
+            {page_number, whitespace_bytes}
+            when is_integer(page_number) and page_number > 0 and
+                   is_integer(whitespace_bytes) and whitespace_bytes >= 0 ->
+              total = total + whitespace_bytes
+
+              case total <= Limits.get(:max_text_layout_whitespace_bytes) do
+                true ->
+                  {:cont, {:ok, total}}
+
+                false ->
+                  {:halt,
+                   resource_limit_error(
+                     "reconstructed layout whitespace exceeds the limit",
+                     page_number
+                   )}
+              end
+
+            _ ->
+              {:halt,
+               error(
+                 :text_validation,
+                 :invalid_pdf_input,
+                 "layout whitespace projection is malformed"
+               )}
+          end
+        end)
+        |> case do
+          {:ok, _total} -> :ok
+          {:error, _} = validation_error -> validation_error
+        end
+
+      false ->
+        error(
+          :text_validation,
+          :invalid_pdf_input,
+          "layout whitespace projection is malformed"
+        )
+    end
+  end
+
   @doc """
   Prepares all resolved pages and their content streams for text extraction.
   """

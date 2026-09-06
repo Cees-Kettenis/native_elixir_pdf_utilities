@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.TextTest do
   use ExUnit.Case
 
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Text
   alias NativeElixirPdfUtilities.Validators.TextValidator
@@ -224,6 +225,42 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert first == "NEXT"
     assert second =~ "DESC"
     assert second =~ "USE"
+  end
+
+  test "limits aggregate whitespace reconstructed from text coordinates" do
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+    Limits.install(%{original_limits | max_text_layout_whitespace_bytes: 5})
+
+    excessive_gaps = [
+      "BT /F1 12 Tf 1 0 0 1 0 20 Tm (A) Tj 1 0 0 1 40 20 Tm (B) Tj ET",
+      "BT /F1 12 Tf 1 0 0 1 -40 20 Tm (A) Tj 1 0 0 1 0 20 Tm (B) Tj ET",
+      "BT /F1 12 Tf " <>
+        "1 0 0 1 0 20 Tm (A) Tj 1 0 0 1 18 20 Tm (B) Tj " <>
+        "1 0 0 1 0 40 Tm (C) Tj 1 0 0 1 18 40 Tm (D) Tj ET"
+    ]
+
+    for content <- excessive_gaps do
+      pdf = page_pdf(content)
+
+      assert {:error,
+              {:resource_limit_exceeded,
+               %{
+                 stage: :limits,
+                 reason: :resource_limit_exceeded,
+                 operation: :extract,
+                 module: Text,
+                 message: message
+               }}} = Text.extract(pdf)
+
+      assert message == "reconstructed layout whitespace exceeds the limit; page 1"
+      assert {:ok, _text} = Text.extract(pdf, layout: false)
+    end
+
+    within_limit =
+      page_pdf("BT /F1 12 Tf 1 0 0 1 0 20 Tm (A) Tj 1 0 0 1 26 20 Tm (B) Tj ET")
+
+    assert {:ok, "A     B"} = Text.extract(within_limit)
   end
 
   test "rejects malformed xrefs, bad stream lengths, and encrypted PDFs" do

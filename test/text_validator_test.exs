@@ -22,6 +22,20 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidatorTest do
              TextValidator.validate_path("/tmp/input.pdf", 123)
   end
 
+  test "validates reconstructed layout whitespace projections" do
+    assert :ok = TextValidator.validate_layout_whitespace([{1, 0}, {2, 10}])
+
+    for projection <- [:not_a_list, [{0, 1}], [{1, -1}], [{1, :not_a_byte_count}]] do
+      assert {:error,
+              {:invalid_pdf_input,
+               %{
+                 stage: :text_validation,
+                 reason: :invalid_pdf_input,
+                 message: "layout whitespace projection is malformed"
+               }}} = TextValidator.validate_layout_whitespace(projection)
+    end
+  end
+
   test "validate_scopes rejects text showing outside a text object" do
     instructions = [[%{operator: "Tj", operands: [{:string, "outside"}]}]]
 

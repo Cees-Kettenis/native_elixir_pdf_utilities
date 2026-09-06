@@ -60,6 +60,7 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_text_instruction_uses: 1_000_000,
     max_text_form_expansions: 10_000,
     max_text_spans: 25_000,
+    max_text_layout_whitespace_bytes: 1_000_000,
     max_cmap_bytes: 1_000_000,
     max_cmap_entries: 100_000,
     max_cid_width_entries: 65_536,
@@ -115,6 +116,7 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_text_instruction_uses
           | :max_text_form_expansions
           | :max_text_spans
+          | :max_text_layout_whitespace_bytes
           | :max_cmap_bytes
           | :max_cmap_entries
           | :max_cid_width_entries
