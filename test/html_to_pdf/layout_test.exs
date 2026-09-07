@@ -94,6 +94,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert text.y <= background.y + background.height
   end
 
+  test "layout resolves percentage widths against the containing block" do
+    for display <- ["block", "flex", "grid"],
+        {box_sizing, expected_width} <- [{"content-box", 124.0}, {"border-box", 100.0}] do
+      html = """
+      <div style="width: 200pt">
+        <div style="display: #{display}; box-sizing: #{box_sizing}; width: 50%; margin: 0 5pt; padding: 0 10pt; border: 2pt solid black; background: red">X</div>
+      </div>
+      """
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled_tree} = Style.compute(dom)
+      assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {240, 100}, margin: 10)
+
+      background =
+        Enum.find(
+          layout_tree.boxes,
+          &(&1.type == :rect and &1.fill_color == {1.0, 0.0, 0.0})
+        )
+
+      assert_in_delta background.width, expected_width, 0.0001
+    end
+  end
+
   test "layout applies size constraints to auto-sized border-box blocks" do
     html = """
     <div style="box-sizing: border-box; max-width: 60pt; min-height: 30pt; padding: 5pt; background: #eee; font-size: 10pt; line-height: 12pt">

@@ -233,7 +233,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             resolved_content_size(
               style,
               :width,
-              width_available_size(style, available_box_width),
+              width,
               available_box_width - horizontal_box_size(style)
             )
 
@@ -428,7 +428,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         {content_width, _content_height} =
           image_content_size(
             style,
-            available_box_width - horizontal_box_size(style),
+            available_width,
             nil
           )
 
@@ -439,7 +439,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           resolved_content_size(
             style,
             :width,
-            width_available_size(style, available_box_width),
+            available_width,
             available_box_width - horizontal_box_size(style)
           )
 
@@ -837,8 +837,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     margin = Map.get(style, :margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
     padding = Map.get(style, :padding, edges(0.0))
     border_widths = Map.get(style, :border_widths, edges(0.0))
-    available_content_width = width - margin.left - margin.right - horizontal_box_size(style)
-    {content_width, content_height} = image_content_size(style, available_content_width, nil)
+    {content_width, content_height} = image_content_size(style, width, nil)
     box_x = x + margin.left
     box_top = y - margin.top
 
@@ -921,7 +920,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       resolved_content_size(
         style,
         :width,
-        width_available_size(style, available_box_width),
+        width,
         available_box_width - horizontal_box_size(style)
       )
 
@@ -1714,7 +1713,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       resolved_content_size(
         style,
         :width,
-        width_available_size(style, available_box_width),
+        width,
         available_box_width - horizontal_box_size(style)
       )
 
@@ -2661,13 +2660,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp width_available_size(style, available_box_width) do
-    case Map.get(style, :box_sizing, :content_box) do
-      :border_box -> available_box_width
-      _ -> available_box_width - horizontal_box_size(style)
-    end
-  end
-
   defp resolved_size(style, property, available_size, default) do
     size =
       case Map.get(style, property) do
@@ -2859,7 +2851,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       case {collapsed?, Map.get(style, :width)} do
         {collapsed?, declared_width} when not is_nil(declared_width) ->
           style
-          |> resolved_size(:width, available_box_width, available_box_width)
+          |> resolved_size(:width, width, available_box_width)
           |> Kernel.-(if(collapsed?, do: 0.0, else: horizontal_box_size(style)))
           |> max(0.0)
 
@@ -2867,7 +2859,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           resolved_content_size(
             style,
             :width,
-            width_available_size(style, available_box_width),
+            width,
             available_box_width - horizontal_box_size(style)
           )
       end
@@ -4323,7 +4315,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       resolved_content_size(
         style,
         :width,
-        width_available_size(style, available_box_width),
+        width,
         available_box_width - horizontal_box_size(style)
       )
 

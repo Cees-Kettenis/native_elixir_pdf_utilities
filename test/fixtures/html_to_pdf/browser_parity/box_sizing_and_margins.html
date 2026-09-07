@@ -40,6 +40,17 @@
         border: 1pt solid #92400e;
         background-color: #fef3c7;
       }
+      .percentage-parent { width: 300pt; margin-top: 14pt; }
+      .percentage-parent > div {
+        width: 50%;
+        margin: 4pt 10pt 0 10pt;
+        padding: 4pt 10pt;
+        border: 2pt solid #334155;
+      }
+      .percentage-content { box-sizing: content-box; background-color: #dbeafe; }
+      .percentage-border { box-sizing: border-box; background-color: #dcfce7; }
+      .percentage-flex { display: flex; box-sizing: content-box; background-color: #fce7f3; }
+      .percentage-grid { display: grid; box-sizing: border-box; background-color: #ede9fe; }
     </style>
   </head>
   <body>
@@ -47,6 +58,12 @@
       <section class="content-box">content box sizing</section>
       <section class="border-box">border box with negative margin</section>
       <section class="clamped">percentage width with max width</section>
+      <section class="percentage-parent">
+        <div class="percentage-content">content-box percentage</div>
+        <div class="percentage-border">border-box percentage</div>
+        <div class="percentage-flex">flex percentage</div>
+        <div class="percentage-grid">grid percentage</div>
+      </section>
     </main>
   </body>
 </html>
