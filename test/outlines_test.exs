@@ -81,6 +81,24 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
     assert {:ok, [%{title: "Leaf", open: true, children: []}]} = Outlines.get(updated)
   end
 
+  test "round trips outlines at the configured maximum depth" do
+    pdf = two_page_pdf()
+    original = Limits.effective()
+
+    for max_depth <- [1, original.max_pdf_outline_depth] do
+      Limits.install(%{original | max_pdf_outline_depth: max_depth})
+
+      items =
+        Enum.reduce(max_depth..1//-1, [], fn depth, children ->
+          [%{title: "Level #{depth}", page: 1, children: children}]
+        end)
+
+      assert {:ok, expected} = OutlineValidator.normalize(items, 2)
+      assert {:ok, updated} = Outlines.put(pdf, items)
+      assert {:ok, ^expected} = Outlines.get(updated)
+    end
+  end
+
   test "preserves the permanent trailer identifier and updates its revision identifier" do
     first = "00112233445566778899AABBCCDDEEFF"
     second = "FFEEDDCCBBAA99887766554433221100"

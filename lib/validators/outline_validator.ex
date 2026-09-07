@@ -290,9 +290,6 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
          items
        ) do
     cond do
-      depth > Limits.get(:max_pdf_outline_depth) ->
-        limit_error("outline nesting depth exceeds the limit")
-
       is_nil(current) ->
         actual_last =
           case items do
@@ -307,6 +304,9 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
           false ->
             error(:invalid_pdf_input, "outline Last entry does not match its sibling chain")
         end
+
+      depth > Limits.get(:max_pdf_outline_depth) ->
+        limit_error("outline nesting depth exceeds the limit")
 
       true ->
         {:ref, current_ref} = current
