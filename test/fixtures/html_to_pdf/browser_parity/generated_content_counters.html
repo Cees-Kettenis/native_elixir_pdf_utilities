@@ -28,6 +28,10 @@
       h2:last-of-type { border-bottom: 1pt solid #0f766e; }
       .status::after { content: " [" attr(data-status) "]"; color: #991b1b; }
       .less-than::before { content: "< "; color: #1d4ed8; }
+      .counter-scope { counter-reset: scoped; width: 360pt; }
+      .counter-scope .counter-item { margin: 3pt 0; }
+      .counter-scope .counter-item::before { counter-increment: scoped; content: counter(scoped) ". "; }
+      .counter-scope .counter-scope { margin-left: 18pt; padding-left: 6pt; border-left: 2pt solid #94a3b8; }
     </style>
   </head>
   <body>
@@ -38,6 +42,14 @@
       <h2>Results</h2>
       <p class="status" data-status="approved">Generated labels and counters</p>
       <p class="less-than">Raw style text</p>
+      <section class="counter-scope">
+        <p class="counter-item">outer item</p>
+        <div class="counter-scope">
+          <p class="counter-item">inner item</p>
+          <p class="counter-item">inner item</p>
+        </div>
+        <p class="counter-item">outer item resumes</p>
+      </section>
     </main>
   </body>
 </html>

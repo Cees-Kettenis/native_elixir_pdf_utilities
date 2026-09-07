@@ -1704,6 +1704,62 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert hd(figure_number.children).text == "Figure 5 — "
   end
 
+  test "compute restores an enclosing counter after a nested reset" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <style>
+               .reset { counter-reset: item; }
+               .item::before { counter-increment: item; content: counter(item); }
+             </style>
+             <div class="reset">
+               <p class="item"> outer</p>
+               <div class="reset">
+                 <p class="item"> inner</p>
+                 <p class="item"> inner</p>
+               </div>
+               <p class="item"> outer</p>
+             </div>
+             """)
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [outer] = styled_tree.children
+    [first_outer, inner, last_outer] = Enum.filter(outer.children, &(&1.type == :element))
+    [first_inner, second_inner] = Enum.filter(inner.children, &(&1.type == :element))
+
+    assert hd(hd(first_outer.children).children).text == "1"
+    assert hd(hd(first_inner.children).children).text == "1"
+    assert hd(hd(second_inner.children).children).text == "2"
+    assert hd(hd(last_outer.children).children).text == "2"
+  end
+
+  test "compute carries counters created by preceding siblings and pseudo-elements" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <style>
+               .seed { counter-reset: carried 4 carried 5; }
+               .read::before { counter-increment: carried; content: counter(carried); }
+               .trail::after { counter-increment: trail; content: counter(trail); }
+               .missing::before { content: counter(missing); }
+             </style>
+             <div class="seed"></div>
+             <div class="seed"></div>
+             <p class="read"> carried</p>
+             <p class="trail">trail </p>
+             <p class="trail">trail </p>
+             <p class="missing"> missing</p>
+             """)
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+
+    [_first_seed, _second_seed, carried, first_trail, second_trail, missing] =
+      Enum.filter(styled_tree.children, &(&1.type == :element))
+
+    assert hd(hd(carried.children).children).text == "6"
+    assert hd(List.last(first_trail.children).children).text == "1"
+    assert hd(List.last(second_trail.children).children).text == "2"
+    assert hd(hd(missing.children).children).text == "0"
+  end
+
   test "compute rejects malformed generated content and counter values" do
     for css <- [
           ~S|p::before { content: attr(); }|,

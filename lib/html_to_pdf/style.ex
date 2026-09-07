@@ -122,7 +122,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
               {:ok, root_style} ->
                 with {:ok, styled_children, _counters} <-
-                       style_children(children, root_style, rules, [], style_opts, %{}) do
+                       style_children(children, root_style, rules, [], style_opts, [], []) do
                   {:ok, %{type: :document, children: styled_children}}
                 end
 
@@ -177,16 +177,51 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp style_children(children, inherited_style, rules, ancestors, opts, counters) do
-    Enum.reduce_while(children, {:ok, [], counters}, fn child, {:ok, acc, counters} ->
-      case style_node(child, inherited_style, rules, ancestors, opts, counters) do
-        {:ok, styled_children, counters} ->
-          {:cont, {:ok, acc ++ styled_children, counters}}
+  defp style_children(
+         children,
+         inherited_style,
+         rules,
+         ancestors,
+         opts,
+         parent_counters,
+         latest_counters
+       ) do
+    result =
+      Enum.reduce_while(
+        children,
+        {:ok, [], nil, latest_counters},
+        fn child, {:ok, acc, previous_sibling_counters, latest_counters} ->
+          counters =
+            inherit_counters(parent_counters, previous_sibling_counters, latest_counters)
 
-        {:error, reason} ->
-          {:halt, {:error, reason}}
-      end
-    end)
+          case style_node(
+                 child,
+                 inherited_style,
+                 rules,
+                 ancestors,
+                 opts,
+                 counters,
+                 parent_counters
+               ) do
+            {:ok, styled_children, nil, latest_counters} ->
+              {:cont, {:ok, acc ++ styled_children, previous_sibling_counters, latest_counters}}
+
+            {:ok, styled_children, element_counters, latest_counters} ->
+              {:cont, {:ok, acc ++ styled_children, element_counters, latest_counters}}
+
+            {:error, reason} ->
+              {:halt, {:error, reason}}
+          end
+        end
+      )
+
+    case result do
+      {:ok, styled_children, _previous_sibling_counters, latest_counters} ->
+        {:ok, styled_children, latest_counters}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp assign_selector_ids(nodes) do
@@ -203,7 +238,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end)
   end
 
-  defp style_node(node, inherited_style, rules, ancestors, opts, counters) do
+  defp style_node(node, inherited_style, rules, ancestors, opts, counters, parent_counters) do
     case node do
       %{type: :text, text: text} when is_binary(text) ->
         {:ok,
@@ -213,35 +248,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
              text: transform_text(text, Map.get(inherited_style, :text_transform, :none)),
              style: text_style(inherited_style)
            }
-         ], counters}
+         ], nil, counters}
 
       %{type: :element, tag: tag, attributes: attributes, children: children}
       when is_binary(tag) and is_map(attributes) and is_list(children) ->
         case tag do
           tag when tag in ["style", "meta", "title"] ->
-            {:ok, [], counters}
+            {:ok, [], counters, counters}
 
           "head" ->
-            {:ok, [], counters}
+            {:ok, [], counters, counters}
 
           tag when tag in ["html", "body"] ->
             with {:ok, element_style} <-
                    element_style(node, inherited_style, rules, ancestors, opts) do
               case Map.get(element_style, :display) do
                 :none ->
-                  {:ok, [], counters}
+                  {:ok, [], counters, counters}
 
                 _ ->
-                  counters = apply_counter_operations(element_style, counters)
+                  element_counters =
+                    apply_counter_operations(
+                      element_style,
+                      counters,
+                      parent_counters,
+                      node._selector_id
+                    )
 
-                  with {:ok, before, counters} <-
+                  with {:ok, before, before_counters} <-
                          generated_content_node(
                            node,
                            :before,
                            element_style,
                            rules,
                            ancestors,
-                           counters
+                           element_counters
                          ),
                        {:ok, styled_children, counters} <-
                          style_children(
@@ -250,7 +291,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                            rules,
                            [node | ancestors],
                            opts,
-                           counters
+                           before_counters,
+                           before_counters
                          ),
                        {:ok, after_content, counters} <-
                          generated_content_node(
@@ -261,7 +303,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                            ancestors,
                            counters
                          ) do
-                    {:ok, before ++ styled_children ++ after_content, counters}
+                    sibling_counters =
+                      include_counters_created_by(
+                        before_counters,
+                        counters,
+                        {node._selector_id, :after}
+                      )
+
+                    {:ok, before ++ styled_children ++ after_content, sibling_counters, counters}
                   end
               end
             end
@@ -272,20 +321,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               case Map.get(element_style, :display) do
                 :none ->
                   {:ok, [%{type: :element, tag: tag, style: element_style, children: []}],
-                   counters}
+                   counters, counters}
 
                 _ ->
-                  counters = apply_counter_operations(element_style, counters)
+                  element_counters =
+                    apply_counter_operations(
+                      element_style,
+                      counters,
+                      parent_counters,
+                      node._selector_id
+                    )
+
                   rendered_children = static_form_children(tag, attributes, children)
 
-                  with {:ok, before, counters} <-
+                  with {:ok, before, before_counters} <-
                          generated_content_node(
                            node,
                            :before,
                            element_style,
                            rules,
                            ancestors,
-                           counters
+                           element_counters
                          ),
                        {:ok, styled_children, counters} <-
                          style_children(
@@ -294,7 +350,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                            rules,
                            [node | ancestors],
                            opts,
-                           counters
+                           before_counters,
+                           before_counters
                          ),
                        {:ok, after_content, counters} <-
                          generated_content_node(
@@ -305,6 +362,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                            ancestors,
                            counters
                          ) do
+                    sibling_counters =
+                      include_counters_created_by(
+                        before_counters,
+                        counters,
+                        {node._selector_id, :after}
+                      )
+
                     {:ok,
                      [
                        %{
@@ -313,7 +377,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                          style: element_style,
                          children: before ++ styled_children ++ after_content
                        }
-                     ], counters}
+                     ], sibling_counters, counters}
                   end
               end
             end
@@ -340,7 +404,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                pseudo_element
              ) do
           {:ok, style} ->
-            counters = apply_counter_operations(style, counters)
+            counters =
+              apply_counter_operations(
+                style,
+                counters,
+                counters,
+                {node._selector_id, pseudo_element}
+              )
 
             text =
               generated_content_text(Map.get(style, :content, :none), node.attributes, counters)
@@ -376,23 +446,106 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp apply_counter_operations(style, counters) do
+  defp inherit_counters(parent_counters, previous_sibling_counters, latest_counters) do
+    counters =
+      case previous_sibling_counters do
+        nil ->
+          parent_counters
+
+        previous_sibling_counters ->
+          Enum.reduce(previous_sibling_counters, parent_counters, fn counter, acc ->
+            {name, _creator, _value} = counter
+
+            case Enum.any?(acc, fn {counter_name, _creator, _value} -> counter_name == name end) do
+              true -> acc
+              false -> acc ++ [counter]
+            end
+          end)
+      end
+
+    Enum.map(counters, fn {name, creator, _value} ->
+      {^name, ^creator, latest_value} =
+        Enum.find(Enum.reverse(latest_counters), fn
+          {counter_name, counter_creator, _value} ->
+            counter_name == name and counter_creator == creator
+        end)
+
+      {name, creator, latest_value}
+    end)
+  end
+
+  defp apply_counter_operations(style, counters, parent_counters, creator) do
     counters =
       Enum.reduce(Map.get(style, :counter_reset, []), counters, fn {name, value}, acc ->
-        Map.put(acc, name, value)
+        reset_counter(acc, parent_counters, name, value, creator)
       end)
 
     Enum.reduce(Map.get(style, :counter_increment, []), counters, fn {name, increment}, acc ->
-      Map.update(acc, name, increment, &(&1 + increment))
+      case innermost_counter_index(acc, name) do
+        nil ->
+          acc ++ [{name, creator, increment}]
+
+        index ->
+          List.update_at(acc, index, fn {^name, counter_creator, value} ->
+            {name, counter_creator, value + increment}
+          end)
+      end
+    end)
+  end
+
+  defp include_counters_created_by(counters, latest_counters, creator) do
+    Enum.reduce(latest_counters, counters, fn
+      {_name, ^creator, _value} = counter, acc ->
+        acc ++ [counter]
+
+      _counter, acc ->
+        acc
+    end)
+  end
+
+  defp reset_counter(counters, parent_counters, name, value, creator) do
+    case innermost_counter_index(counters, name) do
+      nil ->
+        counters ++ [{name, creator, value}]
+
+      index ->
+        {^name, counter_creator, _old_value} = Enum.at(counters, index)
+
+        inherited_from_parent? =
+          Enum.any?(parent_counters, fn {parent_name, parent_creator, _value} ->
+            parent_name == name and parent_creator == counter_creator
+          end)
+
+        case counter_creator == creator or not inherited_from_parent? do
+          true -> List.replace_at(counters, index, {name, creator, value})
+          false -> counters ++ [{name, creator, value}]
+        end
+    end
+  end
+
+  defp innermost_counter_index(counters, name) do
+    counters
+    |> Enum.with_index()
+    |> Enum.reduce(nil, fn
+      {{^name, _creator, _value}, index}, _current -> index
+      {_counter, _index}, current -> current
     end)
   end
 
   defp generated_content_text(content, attributes, counters) do
     Enum.map_join(content_parts(content), "", fn part ->
       case part do
-        {:string, text} -> text
-        {:attr, name} -> Map.get(attributes, name, "")
-        {:counter, name} -> counters |> Map.get(name, 0) |> Integer.to_string()
+        {:string, text} ->
+          text
+
+        {:attr, name} ->
+          Map.get(attributes, name, "")
+
+        {:counter, name} ->
+          case innermost_counter_index(counters, name) do
+            nil -> "0"
+            index -> counters |> Enum.at(index) |> elem(2) |> Integer.to_string()
+          end
       end
     end)
   end
