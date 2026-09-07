@@ -32,6 +32,10 @@
       .counter-scope .counter-item { margin: 3pt 0; }
       .counter-scope .counter-item::before { counter-increment: scoped; content: counter(scoped) ". "; }
       .counter-scope .counter-scope { margin-left: 18pt; padding-left: 6pt; border-left: 2pt solid #94a3b8; }
+      [title="a b,c\"d"]::before {
+        content: "A/*B*/C } { , \"quoted\"; tail ";
+        color: #7c3aed;
+      }
     </style>
   </head>
   <body>
@@ -50,6 +54,7 @@
         </div>
         <p class="counter-item">outer item resumes</p>
       </section>
+      <p title='a b,c"d'>quoted CSS syntax</p>
     </main>
   </body>
 </html>

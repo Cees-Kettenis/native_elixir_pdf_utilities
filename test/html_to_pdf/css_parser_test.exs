@@ -96,6 +96,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert generated_selector.specificity == {0, 1, 2}
   end
 
+  test "parse keeps CSS syntax characters inside quoted strings" do
+    css =
+      ~S|/* outside */ [title="a b,c\"d"], .fallback { content: "A/*B*/C } { , \"quoted\"; tail"; } /* outside */|
+
+    assert {:ok, [rule]} = CssParser.parse(css)
+    assert rule.declarations == [{"content", ~S|"A/*B*/C } { , \"quoted\"; tail"|}]
+
+    [attribute_selector, fallback_selector] = rule.selectors
+    [attribute_part] = attribute_selector.parts
+
+    assert attribute_part.attributes == [{:equals, "title", ~S|a b,c"d|}]
+    assert hd(fallback_selector.parts).classes == ["fallback"]
+  end
+
   test "parse keeps unsupported selector diagnostics strict" do
     for css <- [
           "p:not(div span) { color: red; }",
@@ -579,6 +593,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
   test "parse rejects malformed CSS" do
     assert CssParser.parse("p color: red;") == {:error, :invalid_css}
     assert CssParser.parse("p { color: red; } dangling") == {:error, :invalid_css}
+    assert CssParser.parse("p { color: red;") == {:error, :invalid_css}
+    assert CssParser.parse("p { color: red; } /* unterminated") == {:error, :invalid_css}
+    assert CssParser.parse(~S|[title="open" { color: red; }|) == {:error, :invalid_css}
+    assert CssParser.parse("p] { color: red; }") == {:error, :invalid_css}
     assert CssParser.parse("{}") == {:error, :invalid_css}
     assert CssParser.parse("p, { color: red; }") == {:error, :invalid_css}
     assert CssParser.parse("> p { color: red; }") == {:error, :invalid_css}
@@ -617,6 +635,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
                source: "",
                message: ~s(line 1: declaration "" is invalid or unsupported)
              }}} = CssParser.parse_detailed("p { color: red; } div {}")
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               line: 1,
+               column: 1,
+               source: "1bad: value"
+             }}} = CssParser.parse_detailed("p { 1/* hidden */bad: value; }")
 
     assert {:error,
             {:invalid_css,

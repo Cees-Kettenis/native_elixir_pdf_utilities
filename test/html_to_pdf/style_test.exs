@@ -1645,6 +1645,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert paragraph.style.color == {0, 0, 0}
   end
 
+  test "compute preserves CSS syntax characters inside quoted selector and content strings" do
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               ~S|<style>[data-label="a b,c\"d"]::before { content: "A/*B*/C } { , \"quoted\"; tail"; }</style><p data-label='a b,c"d'>Body</p>|
+             )
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [paragraph] = styled_tree.children
+    [before, body] = paragraph.children
+
+    assert hd(before.children).text == ~S|A/*B*/C } { , "quoted"; tail|
+    assert body.text == "Body"
+  end
+
   test "compute evaluates reset and increment counters in document order" do
     dom = %{
       type: :document,

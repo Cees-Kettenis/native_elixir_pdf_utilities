@@ -282,7 +282,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   end
 
   defp strip_comments(css) do
-    Regex.replace(~r/\/\*.*?\*\//us, css, "")
+    strip_comments(css, nil, false, [])
+  end
+
+  defp strip_comments(css, quote, escaped?, acc) do
+    case {css, quote, escaped?} do
+      {"", _quote, _escaped?} ->
+        acc |> Enum.reverse() |> IO.iodata_to_binary()
+
+      {<<"/*", rest::binary>>, nil, false} ->
+        case :binary.match(rest, "*/") do
+          {index, 2} ->
+            remaining = binary_part(rest, index + 2, byte_size(rest) - index - 2)
+            strip_comments(remaining, nil, false, acc)
+
+          :nomatch ->
+            strip_comments("", nil, false, [<<"/*", rest::binary>> | acc])
+        end
+
+      {<<character::utf8, rest::binary>>, quote, true} ->
+        strip_comments(rest, quote, false, [<<character::utf8>> | acc])
+
+      {<<character::utf8, rest::binary>>, quote, false}
+      when not is_nil(quote) and character == ?\\ ->
+        strip_comments(rest, quote, true, [<<character::utf8>> | acc])
+
+      {<<character::utf8, rest::binary>>, quote, false}
+      when not is_nil(quote) and character == quote ->
+        strip_comments(rest, nil, false, [<<character::utf8>> | acc])
+
+      {<<character::utf8, rest::binary>>, nil, false} when character in [?", ?'] ->
+        strip_comments(rest, character, false, [<<character::utf8>> | acc])
+
+      {<<character::utf8, rest::binary>>, quote, false} ->
+        strip_comments(rest, quote, false, [<<character::utf8>> | acc])
+    end
   end
 
   defp strip_page_rules(css) do
@@ -797,18 +831,102 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   end
 
   defp parse_rules(css) do
-    case String.trim(css) do
-      "" ->
-        {:ok, []}
+    case rule_sources(css) do
+      {:ok, rule_sources} -> sources_to_rules(rule_sources)
+      {:error, _source} -> {:error, :invalid_css}
+    end
+  end
 
-      css ->
-        rule_sources = Regex.scan(~r/[^{}]+\{[^{}]*\}/u, css) |> Enum.map(&List.first/1)
-        unparsed = Regex.replace(~r/[^{}]+\{[^{}]*\}/u, css, "")
+  defp quoted_character_state(character, quote, escaped?) do
+    cond do
+      not is_nil(quote) and escaped? -> {:quoted, quote, false}
+      not is_nil(quote) and character == "\\" -> {:quoted, quote, true}
+      character == quote -> {:quoted, nil, false}
+      not is_nil(quote) -> {:quoted, quote, false}
+      character in ["\"", "'"] -> {:quoted, character, false}
+      true -> :syntax
+    end
+  end
 
-        case String.trim(unparsed) do
-          "" -> sources_to_rules(rule_sources)
-          _ -> {:error, :invalid_css}
+  defp rule_sources(css) do
+    initial = %{
+      rules: [],
+      selector: nil,
+      current: [],
+      mode: :selector,
+      quote: nil,
+      escaped?: false
+    }
+
+    result =
+      css
+      |> String.graphemes()
+      |> Enum.reduce_while({:ok, initial}, fn character, {:ok, state} ->
+        case quoted_character_state(character, state.quote, state.escaped?) do
+          {:quoted, quote, escaped?} ->
+            {:cont,
+             {:ok,
+              %{
+                state
+                | current: [character | state.current],
+                  quote: quote,
+                  escaped?: escaped?
+              }}}
+
+          :syntax ->
+            cond do
+              state.mode == :selector and character == "{" ->
+                selector = state.current |> Enum.reverse() |> Enum.join()
+
+                case String.trim(selector) do
+                  "" ->
+                    {:halt, {:error, css}}
+
+                  _selector ->
+                    {:cont,
+                     {:ok, %{state | selector: selector, current: [], mode: :declarations}}}
+                end
+
+              state.mode == :declarations and character == "}" ->
+                declarations = state.current |> Enum.reverse() |> Enum.join()
+
+                rule = %{
+                  source: state.selector <> "{" <> declarations <> "}",
+                  selectors: state.selector,
+                  declarations: declarations
+                }
+
+                next = %{
+                  state
+                  | rules: [rule | state.rules],
+                    selector: nil,
+                    current: [],
+                    mode: :selector
+                }
+
+                {:cont, {:ok, next}}
+
+              character in ["{", "}"] ->
+                {:halt, {:error, css}}
+
+              true ->
+                {:cont, {:ok, %{state | current: [character | state.current]}}}
+            end
         end
+      end)
+
+    case result do
+      {:ok, %{mode: :selector, quote: nil, escaped?: false} = state} ->
+        case state.current |> Enum.reverse() |> Enum.join() |> String.trim() do
+          "" -> {:ok, Enum.reverse(state.rules)}
+          _unparsed -> {:error, css}
+        end
+
+      {:ok, _state} ->
+        {:error, css}
+
+      {:error, source} ->
+        {:error, source}
     end
   end
 
@@ -823,15 +941,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end)
   end
 
-  defp parse_rule(source, order) do
-    captures =
-      Regex.named_captures(
-        ~r/^\s*(?<selectors>[^{}]+)\{(?<declarations>[^{}]*)\}\s*$/u,
-        source
-      )
-
-    %{"selectors" => selector_source, "declarations" => declaration_source} = captures
-
+  defp parse_rule(
+         %{selectors: selector_source, declarations: declaration_source},
+         order
+       ) do
     with {:ok, selectors} <- parse_selectors(selector_source),
          true <- selectors != [],
          {:ok, declarations} <- parse_declarations(declaration_source),
@@ -844,25 +957,121 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   defp parse_selectors(selector_source) do
     selector_source
-    |> String.split(",")
-    |> Enum.map(&String.trim/1)
+    |> split_selector_list()
     |> Enum.reduce_while({:ok, []}, fn selector, {:ok, acc} ->
-      case parse_selector(selector) do
+      case parse_selector(String.trim(selector)) do
         {:ok, parsed} -> {:cont, {:ok, acc ++ [parsed]}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp parse_selector(selector) do
-    tokens =
-      selector
-      |> String.replace(~r/\s*>\s*/u, " > ")
-      |> String.split(~r/\s+/u, trim: true)
+  defp split_selector_list(selector_source) do
+    result =
+      selector_source
+      |> String.graphemes()
+      |> Enum.reduce({[], [], nil, false}, fn character, {parts, current, quote, escaped?} ->
+        case quoted_character_state(character, quote, escaped?) do
+          {:quoted, quote, escaped?} ->
+            {parts, [character | current], quote, escaped?}
 
-    case tokens do
-      [] -> {:error, :invalid_css}
-      tokens -> selector_tokens_to_parts(tokens)
+          :syntax ->
+            case character do
+              "," ->
+                part = current |> Enum.reverse() |> Enum.join()
+                {[part | parts], [], nil, false}
+
+              _character ->
+                {parts, [character | current], nil, false}
+            end
+        end
+      end)
+
+    {parts, current, _quote, _escaped?} = result
+    final = current |> Enum.reverse() |> Enum.join()
+    Enum.reverse([final | parts])
+  end
+
+  defp parse_selector(selector) do
+    case selector_tokens(selector) do
+      {:ok, []} -> {:error, :invalid_css}
+      {:ok, tokens} -> selector_tokens_to_parts(tokens)
+      {:error, :invalid_css} -> {:error, :invalid_css}
+    end
+  end
+
+  defp selector_tokens(selector) do
+    result =
+      selector
+      |> String.graphemes()
+      |> Enum.reduce_while(
+        {:ok, [], [], nil, false, 0, 0},
+        fn character, {:ok, tokens, current, quote, escaped?, bracket_depth, parenthesis_depth} ->
+          case quoted_character_state(character, quote, escaped?) do
+            {:quoted, quote, escaped?} ->
+              {:cont,
+               {:ok, tokens, [character | current], quote, escaped?, bracket_depth,
+                parenthesis_depth}}
+
+            :syntax ->
+              cond do
+                character == "[" ->
+                  {:cont,
+                   {:ok, tokens, [character | current], nil, false, bracket_depth + 1,
+                    parenthesis_depth}}
+
+                character == "]" and bracket_depth > 0 ->
+                  {:cont,
+                   {:ok, tokens, [character | current], nil, false, bracket_depth - 1,
+                    parenthesis_depth}}
+
+                character == "(" ->
+                  {:cont,
+                   {:ok, tokens, [character | current], nil, false, bracket_depth,
+                    parenthesis_depth + 1}}
+
+                character == ")" and parenthesis_depth > 0 ->
+                  {:cont,
+                   {:ok, tokens, [character | current], nil, false, bracket_depth,
+                    parenthesis_depth - 1}}
+
+                character in ["]", ")"] ->
+                  {:halt, {:error, :invalid_css}}
+
+                bracket_depth == 0 and parenthesis_depth == 0 and character == ">" ->
+                  tokens = push_selector_token(tokens, current)
+                  {:cont, {:ok, [">" | tokens], [], nil, false, 0, 0}}
+
+                bracket_depth == 0 and parenthesis_depth == 0 and
+                    String.match?(character, ~r/^\s$/u) ->
+                  tokens = push_selector_token(tokens, current)
+                  {:cont, {:ok, tokens, [], nil, false, 0, 0}}
+
+                true ->
+                  {:cont,
+                   {:ok, tokens, [character | current], nil, false, bracket_depth,
+                    parenthesis_depth}}
+              end
+          end
+        end
+      )
+
+    case result do
+      {:ok, tokens, current, nil, false, 0, 0} ->
+        {:ok, tokens |> push_selector_token(current) |> Enum.reverse()}
+
+      {:ok, _tokens, _current, _quote, _escaped?, _bracket_depth, _parenthesis_depth} ->
+        {:error, :invalid_css}
+
+      {:error, :invalid_css} ->
+        {:error, :invalid_css}
+    end
+  end
+
+  defp push_selector_token(tokens, current) do
+    case current |> Enum.reverse() |> Enum.join() |> String.trim() do
+      "" -> tokens
+      token -> [token | tokens]
     end
   end
 
@@ -963,7 +1172,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
           captures =
               Regex.named_captures(
-                ~r/^\[\s*(?<name>[a-zA-Z_][a-zA-Z0-9_:-]*)(?:\s*=\s*(?<value>"[^"]*"|'[^']*'|[^\]\s]+))?\s*\](?<rest>.*)$/u,
+                ~r/^\[\s*(?<name>[a-zA-Z_][a-zA-Z0-9_:-]*)(?:\s*=\s*(?<value>"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\]\s]+))?\s*\](?<rest>.*)$/u,
                 modifiers
               ) ->
             %{"name" => name, "value" => value, "rest" => rest} = captures
@@ -1064,7 +1273,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   defp unquote_selector_value(value) do
     case value do
       <<quote, inner::binary>> when quote in [?", ?'] ->
-        binary_part(inner, 0, byte_size(inner) - 1)
+        inner
+        |> binary_part(0, byte_size(inner) - 1)
+        |> String.replace(~r/\\([\\"'])/u, "\\1")
 
       value ->
         value
@@ -1125,25 +1336,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   end
 
   defp first_css_issue(css) do
-    rule_sources = Regex.scan(~r/[^{}]+\{[^{}]*\}/u, css) |> Enum.map(&List.first/1)
-    unparsed = Regex.replace(~r/[^{}]+\{[^{}]*\}/u, css, "")
-
-    case String.trim(unparsed) do
-      "" ->
+    case rule_sources(css) do
+      {:ok, rule_sources} ->
         Enum.find_value(rule_sources, {:stylesheet, String.trim(css)}, &rule_issue/1)
 
-      unparsed ->
-        {:stylesheet, String.trim(unparsed)}
+      {:error, source} ->
+        {:stylesheet, String.trim(source)}
     end
   end
 
-  defp rule_issue(rule_source) do
-    %{"selectors" => selectors, "declarations" => declarations} =
-      Regex.named_captures(
-        ~r/^\s*(?<selectors>[^{}]+)\{(?<declarations>[^{}]*)\}\s*$/u,
-        rule_source
-      )
-
+  defp rule_issue(%{selectors: selectors, declarations: declarations}) do
     cond do
       invalid_selector(selectors) ->
         {:selector, invalid_selector(selectors)}
@@ -1158,7 +1360,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   defp invalid_selector(selectors) do
     selectors
-    |> String.split(",")
+    |> split_selector_list()
     |> Enum.map(&String.trim/1)
     |> Enum.find(fn selector ->
       selector == "" or match?({:error, :invalid_css}, parse_selector(selector))
@@ -1186,29 +1388,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   @doc false
   @spec declaration_sources(String.t()) :: [String.t()]
   def declaration_sources(source) do
-    {parts, current, _quote, _depth} =
+    {parts, current, _quote, _depth, _escaped?} =
       source
       |> String.graphemes()
-      |> Enum.reduce({[], [], nil, 0}, fn character, {parts, current, quote, depth} ->
-        cond do
-          character in ["\"", "'"] and is_nil(quote) ->
-            {parts, [character | current], character, depth}
+      |> Enum.reduce({[], [], nil, 0, false}, fn character,
+                                                 {parts, current, quote, depth, escaped?} ->
+        case quoted_character_state(character, quote, escaped?) do
+          {:quoted, quote, escaped?} ->
+            {parts, [character | current], quote, depth, escaped?}
 
-          character == quote ->
-            {parts, [character | current], nil, depth}
+          :syntax ->
+            cond do
+              character == "(" ->
+                {parts, [character | current], nil, depth + 1, false}
 
-          is_nil(quote) and character == "(" ->
-            {parts, [character | current], quote, depth + 1}
+              character == ")" ->
+                {parts, [character | current], nil, max(depth - 1, 0), false}
 
-          is_nil(quote) and character == ")" ->
-            {parts, [character | current], quote, max(depth - 1, 0)}
+              depth == 0 and character == ";" ->
+                part = current |> Enum.reverse() |> Enum.join()
+                {[part | parts], [], nil, depth, false}
 
-          is_nil(quote) and depth == 0 and character == ";" ->
-            part = current |> Enum.reverse() |> Enum.join()
-            {[part | parts], [], quote, depth}
-
-          true ->
-            {parts, [character | current], quote, depth}
+              true ->
+                {parts, [character | current], nil, depth, false}
+            end
         end
       end)
 
