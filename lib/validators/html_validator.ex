@@ -247,7 +247,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             )
 
           true ->
-            with {:ok, {intrinsic_width, intrinsic_height}} <- svg_intrinsic_dimensions(svg),
+            with :ok <- validate_svg_resource_references(svg),
+                 {:ok, {intrinsic_width, intrinsic_height}} <- svg_intrinsic_dimensions(svg),
                  {:ok, {width, height}} <-
                    svg_raster_dimensions(raster_options, intrinsic_width, intrinsic_height),
                  :ok <- validate_svg_raster_budget(width, height),
@@ -893,6 +894,27 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       false ->
         Diagnostics.error(:options, :invalid_options, "render options must be a keyword list")
+    end
+  end
+
+  defp validate_svg_resource_references(svg) do
+    # Resvg resolves even image href="#file.png" as a filesystem path. Reject
+    # image elements entirely, including filter images and namespace prefixes.
+    # Other elements may use literal fragments. Entity declarations cannot be
+    # allowed to introduce markup or disguise a resource reference.
+    case Regex.match?(
+           ~r/<!ENTITY\b|<(?:[^\s<>]+:)?(?:image|feImage)\b|\bhref\s*=\s*["'](?!#)/iu,
+           svg
+         ) do
+      true ->
+        Diagnostics.error(
+          :style,
+          :invalid_document,
+          "SVG resource references are not authorized; use self-contained SVG shapes and internal #id references"
+        )
+
+      false ->
+        :ok
     end
   end
 

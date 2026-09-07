@@ -3827,13 +3827,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       true ->
         with {:ok, validated_raster_options} <-
                HtmlValidator.validate_svg_raster(svg, raster_options, image_budget) do
-          sanitized_svg =
-            svg
-            |> String.replace(~r/<\?xml[^>]*>/iu, "")
-            |> String.replace(~r/<!DOCTYPE[^>]*(?:\[[\s\S]*?\]\s*)?>/iu, "")
-
           case Resvg.svg_string_to_png_buffer(
-                 sanitized_svg,
+                 svg,
                  [
                    resources_dir: System.tmp_dir!(),
                    shape_rendering: :optimize_speed,

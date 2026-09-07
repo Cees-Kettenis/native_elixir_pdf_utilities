@@ -101,6 +101,11 @@ not editable PDF fields.
 
 ### Images and backgrounds
 
+SVGs must be self-contained shapes, text, and internal literal `#id` references.
+SVG image elements, including filter images and data URIs, and XML entity declarations are
+rejected before rasterization. SVG resources do not inherit authorization from
+`:assets`, `:base_url`, or the asset resolver.
+
 The renderer accepts JPEG, 8-bit non-interlaced RGB or RGBA PNG, and SVG data
 URIs. Images work in block, table, flex, and grid layouts. Background images
 support explicit sizes, `cover`, `contain`, repeat modes, and positioning.

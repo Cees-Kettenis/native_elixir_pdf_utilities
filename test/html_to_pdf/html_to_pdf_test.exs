@@ -1194,6 +1194,66 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "/Filter /FlateDecode"
   end
 
+  test "render rejects SVG resources before the native resolver can read local files" do
+    directory =
+      Path.join(System.tmp_dir!(), "svg-authorization-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(directory)
+    on_exit(fn -> File.rm_rf!(directory) end)
+    image_path = Path.join(directory, "private.png")
+    File.write!(image_path, png_fixture(1, 1))
+
+    nested_svg =
+      ~s(<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><image href="#{image_path}" width="1" height="1"/></svg>)
+
+    nested_path = Path.join(directory, "nested.svg")
+    File.write!(nested_path, nested_svg)
+
+    for reference <- [
+          image_path,
+          "../#{Path.basename(directory)}/private.png",
+          "file://#{image_path}",
+          nested_path,
+          "data:image/svg+xml;base64,#{Base.encode64(nested_svg)}",
+          "data:image/png;base64,#{Base.encode64(png_fixture(1, 1))}",
+          String.replace(image_path, "/", "&#47;"),
+          "&#35;internal"
+        ],
+        attribute <- ["href", "xlink:href"] do
+      svg =
+        ~s(<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1" height="1"><image #{attribute}='#{reference}' width="1" height="1"/></svg>)
+
+      src = "data:image/svg+xml;base64,#{Base.encode64(svg)}"
+
+      for html <- [
+            ~s(<img src="#{src}">),
+            ~s|<div style="width:1px;height:1px;background-image:url('#{src}')"></div>|
+          ] do
+        assert {:error,
+                {:invalid_document,
+                 %{
+                   stage: :style,
+                   reason: :invalid_document,
+                   operation: :render,
+                   module: NativeElixirPdfUtilities.HtmlToPdf,
+                   message: message
+                 }}} = HtmlToPdf.render(html)
+
+        assert message =~ "SVG resource references are not authorized"
+      end
+    end
+
+    for separator <- ["<?xml version='1.0'?>", "<!DOCTYPE svg>"] do
+      svg =
+        ~s(<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><image hr#{separator}ef="#{image_path}" width="1" height="1"/></svg>)
+
+      src = "data:image/svg+xml;base64,#{Base.encode64(svg)}"
+
+      assert {:error, {:invalid_document, %{operation: :render, reason: :invalid_document}}} =
+               HtmlToPdf.render(~s(<img src="#{src}">))
+    end
+  end
+
   test "render rejects SVG raster dimensions over the native allocation budget" do
     svg =
       ~s(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"><rect width="2" height="1" fill="red"/></svg>)

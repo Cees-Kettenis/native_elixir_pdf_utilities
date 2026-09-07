@@ -7,6 +7,28 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
+  test "SVG authorization permits literal fragments and rejects entity declarations" do
+    svg =
+      ~s(<svg width="1" height="1"><defs><rect id="pixel" width="1" height="1"/></defs><use href="#pixel"/></svg>)
+
+    assert {:ok, [width: 1, height: 1]} = HtmlValidator.validate_svg_raster(svg, [])
+
+    for source <- [
+          ~s(<!DOCTYPE svg [<!ENTITY resource "/tmp/private.png">]>#{svg}),
+          ~s(<svg width="1" height="1"><image href="#private.png"/></svg>),
+          ~s(<svg width="1" height="1"><s:image xmlns:s="http://www.w3.org/2000/svg" href="#private.png"/></svg>),
+          ~s(<svg width="1" height="1"><filter><feImage href="#private.png"/></filter></svg>),
+          ~s(<svg width="1" height="1"><use href="/tmp/private.svg#shape"/></svg>),
+          ~s(<svg width="1" height="1"><image href = "/tmp/private.png"/></svg>),
+          ~s(<svg width="1" height="1"><image href=" &amp;resource;"/></svg>)
+        ] do
+      assert {:error, {:invalid_document, %{stage: :style, message: message}}} =
+               HtmlValidator.validate_svg_raster(source, [])
+
+      assert message =~ "SVG resource references are not authorized"
+    end
+  end
+
   test "source, link, furniture-fit, and styled-tree rules are validator owned" do
     assert {:ok, "<p>Hello</p>"} = HtmlValidator.validate_html_source("<p>Hello</p>")
     assert {:error, {:invalid_html, %{stage: :html}}} = HtmlValidator.validate_html_source(nil)
