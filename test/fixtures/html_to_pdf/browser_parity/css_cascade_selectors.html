@@ -28,6 +28,14 @@
       section.duplicates > div:nth-child(even) { text-align: right; }
       section.duplicates > div:nth-child(2) { color: #7c3aed; }
       .forward-reference { color: var(--forward-color); --forward-color: #7c3aed; }
+      .case-sensitive-vars {
+        --Accent: #be123c;
+        --accent: #1d4ed8;
+        color: var(--Accent);
+        background-color: var(--accent);
+        margin-top: 12pt;
+        padding: 5pt;
+      }
       #important { color: #1d4ed8 !important; }
       .hidden { display: none; }
     </style>
@@ -43,6 +51,10 @@
       </section>
       <section class="panel duplicates">
         <div>repeated sibling</div><div>repeated sibling</div><div>repeated sibling</div>
+      </section>
+      <section class="case-sensitive-vars">case-sensitive stylesheet variables</section>
+      <section style="--Accent: #15803d; --accent: #fef3c7; color: var(--Accent); background-color: var(--accent); margin-top: 6pt; padding: 5pt">
+        case-sensitive inline variables
       </section>
     </main>
   </body>

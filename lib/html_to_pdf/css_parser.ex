@@ -1081,7 +1081,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   defp parse_declaration(declaration) do
     case String.split(declaration, ":", parts: 2) do
       [property, value] ->
-        property = property |> String.trim() |> String.downcase()
+        property = String.trim(property)
+
+        property =
+          case String.starts_with?(property, "--") do
+            true -> property
+            false -> String.downcase(property)
+          end
+
         value = String.trim(value)
         important? = String.match?(value, ~r/\s*!important\s*$/iu)
 

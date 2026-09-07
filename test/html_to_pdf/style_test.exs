@@ -1917,6 +1917,49 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert later_override.color == {1, 0, 0}
   end
 
+  test "compute preserves case-sensitive custom properties in stylesheets and inline styles" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "style",
+          attributes: %{},
+          children: [
+            %{
+              type: :text,
+              text:
+                ".stylesheet { --Accent: red; --accent: blue; color: var(--Accent); background-color: var(--accent); }"
+            }
+          ]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{"class" => "stylesheet"},
+          children: [%{type: :text, text: "Stylesheet"}]
+        },
+        %{
+          type: :element,
+          tag: "p",
+          attributes: %{
+            "style" =>
+              "--Accent: green; --accent: blue; color: var(--Accent); background-color: var(--accent)"
+          },
+          children: [%{type: :text, text: "Inline"}]
+        }
+      ]
+    }
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    [stylesheet, inline] = styled_tree.children
+
+    assert stylesheet.style.color == {1, 0, 0}
+    assert stylesheet.style.background_color == {0, 0, 1}
+    assert inline.style.color == {0, 0.5019607843, 0}
+    assert inline.style.background_color == {0, 0, 1}
+  end
+
   test "compute recursively resolves custom properties and rejects cycles" do
     nested =
       style_for!(
