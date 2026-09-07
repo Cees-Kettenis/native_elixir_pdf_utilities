@@ -117,6 +117,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     end
   end
 
+  test "layout gives minimum dimensions precedence over conflicting maximums" do
+    html = """
+    <div style="width: 200pt">
+      <div style="width: 60pt; min-width: 80pt; max-width: 40pt; height: 10pt; background: red"></div>
+      <div style="width: 50%; min-width: 75%; max-width: 25%; height: 10pt; background: blue"></div>
+      <div style="width: 10pt; height: 30pt; min-height: 50pt; max-height: 20pt; background: green"></div>
+    </div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom)
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {240, 120}, margin: 10)
+
+    red = Enum.find(layout_tree.boxes, &(&1.type == :rect and &1.fill_color == {1.0, 0.0, 0.0}))
+
+    blue =
+      Enum.find(layout_tree.boxes, &(&1.type == :rect and &1.fill_color == {0.0, 0.0, 1.0}))
+
+    green =
+      Enum.find(
+        layout_tree.boxes,
+        &(&1.type == :rect and &1.fill_color == {0.0, 0.5019607843, 0.0})
+      )
+
+    assert_in_delta red.width, 80.0, 0.0001
+    assert_in_delta blue.width, 150.0, 0.0001
+    assert_in_delta green.height, 50.0, 0.0001
+  end
+
   test "layout applies size constraints to auto-sized border-box blocks" do
     html = """
     <div style="box-sizing: border-box; max-width: 60pt; min-height: 30pt; padding: 5pt; background: #eee; font-size: 10pt; line-height: 12pt">

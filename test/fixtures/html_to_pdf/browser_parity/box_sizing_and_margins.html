@@ -51,6 +51,28 @@
       .percentage-border { box-sizing: border-box; background-color: #dcfce7; }
       .percentage-flex { display: flex; box-sizing: content-box; background-color: #fce7f3; }
       .percentage-grid { display: grid; box-sizing: border-box; background-color: #ede9fe; }
+      .constraint-conflicts { width: 300pt; margin-top: 14pt; }
+      .conflict-width {
+        width: 120pt;
+        min-width: 180pt;
+        max-width: 80pt;
+        height: 20pt;
+        background-color: #fee2e2;
+      }
+      .conflict-percent {
+        width: 50%;
+        min-width: 75%;
+        max-width: 25%;
+        height: 20pt;
+        background-color: #dbeafe;
+      }
+      .conflict-height {
+        width: 180pt;
+        height: 18pt;
+        min-height: 32pt;
+        max-height: 10pt;
+        background-color: #dcfce7;
+      }
     </style>
   </head>
   <body>
@@ -63,6 +85,11 @@
         <div class="percentage-border">border-box percentage</div>
         <div class="percentage-flex">flex percentage</div>
         <div class="percentage-grid">grid percentage</div>
+      </section>
+      <section class="constraint-conflicts">
+        <div class="conflict-width">minimum width wins</div>
+        <div class="conflict-percent">percentage minimum wins</div>
+        <div class="conflict-height">minimum height wins</div>
       </section>
     </main>
   </body>

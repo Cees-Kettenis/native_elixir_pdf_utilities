@@ -2724,13 +2724,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     case {property, size} do
       {:width, size} when is_number(size) ->
         size
-        |> apply_min_size(style, :min_width, available_size)
         |> apply_max_size(style, :max_width, available_size)
+        |> apply_min_size(style, :min_width, available_size)
 
       {:height, size} when is_number(size) ->
         size
-        |> apply_min_size(style, :min_height, available_size)
         |> apply_max_size(style, :max_height, available_size)
+        |> apply_min_size(style, :min_height, available_size)
 
       _ ->
         size
