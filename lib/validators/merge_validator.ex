@@ -308,10 +308,11 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
             end
           end)
           |> case do
-            {:ok, prepared, next_id, _page_count} ->
+            {:ok, prepared, next_id, page_count} ->
               prepared = Enum.reverse(prepared)
 
-              with :ok <- validate_outline_object_capacity(prepared, next_id) do
+              with :ok <- validate_combined_outlines(prepared, page_count),
+                   :ok <- validate_outline_object_capacity(prepared, next_id) do
                 validate_reference_remapping(prepared)
               end
 
@@ -355,6 +356,22 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
   defp merged_output_entry_limit do
     min(Limits.get(:max_merged_objects), Limits.get(:max_pdf_objects))
+  end
+
+  defp validate_combined_outlines(inputs, page_count) do
+    outlines = Enum.flat_map(inputs, &Map.get(&1, :outlines, []))
+
+    case OutlineValidator.normalize(outlines, page_count) do
+      {:ok, _outlines} ->
+        :ok
+
+      {:error, {reason, diagnostic}} ->
+        {:error,
+         {reason,
+          diagnostic
+          |> Map.put(:operation, :merge)
+          |> Map.put(:module, __MODULE__)}}
+    end
   end
 
   defp validate_outline_object_capacity(inputs, next_id) do

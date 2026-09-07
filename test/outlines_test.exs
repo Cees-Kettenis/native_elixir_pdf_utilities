@@ -243,6 +243,45 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
     assert {:ok, [%{title: "Second", page: 1}]} = Outlines.get(second_page)
   end
 
+  test "merge enforces aggregate outline item and title byte limits" do
+    pdfs =
+      Enum.map(["aa", "bb", "cc"], fn title ->
+        assert {:ok, pdf} = HtmlToPdf.render("<p>#{title}</p>", outlines: [{title, 1}])
+        pdf
+      end)
+
+    original = Limits.effective()
+    Limits.install(%{original | max_pdf_outline_items: 2})
+
+    assert {:ok, at_item_limit} = Merge.merge(Enum.take(pdfs, 2))
+    assert {:ok, item_limit_outlines} = Outlines.get(at_item_limit)
+    assert Enum.map(item_limit_outlines, & &1.title) == ["aa", "bb"]
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{
+               stage: :limits,
+               operation: :merge,
+               module: Merge,
+               message: "outline item count exceeds the limit"
+             }}} = Merge.merge(pdfs)
+
+    Limits.install(%{original | max_pdf_outline_total_title_bytes: 4})
+
+    assert {:ok, at_title_limit} = Merge.merge(Enum.take(pdfs, 2))
+    assert {:ok, title_limit_outlines} = Outlines.get(at_title_limit)
+    assert Enum.map(title_limit_outlines, & &1.title) == ["aa", "bb"]
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{
+               stage: :limits,
+               operation: :merge,
+               module: Merge,
+               message: "aggregate outline title bytes exceed the limit"
+             }}} = Merge.merge(pdfs)
+  end
+
   test "resolves legacy and name-tree destinations" do
     pdf =
       pdf([
