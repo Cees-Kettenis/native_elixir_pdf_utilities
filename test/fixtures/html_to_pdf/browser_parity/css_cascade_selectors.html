@@ -19,6 +19,14 @@
       section.panel > div:first-child { background-color: #dbeafe; }
       section.panel > div:last-child { background-color: #dcfce7; }
       section.panel > div:nth-child(2) { font-weight: 700; }
+      section.duplicates { margin-top: 12pt; }
+      section.duplicates > div:first-child { background-color: #fee2e2; }
+      section.duplicates > div:last-child { background-color: #dcfce7; }
+      section.duplicates > div:first-of-type { font-weight: 700; }
+      section.duplicates > div:last-of-type { font-style: italic; }
+      section.duplicates > div:nth-child(odd) { border-left: 4pt solid #0f766e; }
+      section.duplicates > div:nth-child(even) { text-align: right; }
+      section.duplicates > div:nth-child(2) { color: #7c3aed; }
       .forward-reference { color: var(--forward-color); --forward-color: #7c3aed; }
       #important { color: #1d4ed8 !important; }
       .hidden { display: none; }
@@ -32,6 +40,9 @@
         <div class="hidden">this should not render</div>
         <div class="forward-reference">custom property declared after use</div>
         <div>last child rule</div>
+      </section>
+      <section class="panel duplicates">
+        <div>repeated sibling</div><div>repeated sibling</div><div>repeated sibling</div>
       </section>
     </main>
   </body>

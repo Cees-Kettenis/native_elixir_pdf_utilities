@@ -93,6 +93,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                  font_registry
                ),
              {:ok, rules} <- stylesheet_rules(stylesheet_entries) do
+          children = assign_selector_ids(children)
           style_opts = Keyword.put(opts, :__image_budget__, image_budget)
 
           base_style = %{
@@ -184,6 +185,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
         {:error, reason} ->
           {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp assign_selector_ids(nodes) do
+    Enum.map(nodes, fn node ->
+      case node do
+        %{type: :element, children: children} ->
+          node
+          |> Map.put(:_selector_id, make_ref())
+          |> Map.put(:children, assign_selector_ids(children))
+
+        _ ->
+          node
       end
     end)
   end
@@ -1536,7 +1551,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             children
             |> Enum.filter(&match?(%{type: :element}, &1))
             |> List.first()
-            |> Kernel.==(node)
+            |> same_element?(node)
 
           _ ->
             false
@@ -1548,7 +1563,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             children
             |> Enum.filter(&match?(%{type: :element}, &1))
             |> List.last()
-            |> Kernel.==(node)
+            |> same_element?(node)
 
           _ ->
             false
@@ -1560,7 +1575,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             children
             |> Enum.filter(&(match?(%{type: :element}, &1) and &1.tag == node.tag))
             |> List.first()
-            |> Kernel.==(node)
+            |> same_element?(node)
 
           _ ->
             false
@@ -1572,7 +1587,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             children
             |> Enum.filter(&(match?(%{type: :element}, &1) and &1.tag == node.tag))
             |> List.last()
-            |> Kernel.==(node)
+            |> same_element?(node)
 
           _ ->
             false
@@ -1584,7 +1599,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             element_index =
               children
               |> Enum.filter(&match?(%{type: :element}, &1))
-              |> Enum.find_index(&(&1 == node))
+              |> Enum.find_index(&same_element?(&1, node))
 
             case {index, element_index} do
               {:odd, element_index} -> rem(element_index + 1, 2) == 1
@@ -1595,6 +1610,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           _ ->
             false
         end
+    end
+  end
+
+  defp same_element?(candidate, node) do
+    case {candidate, node} do
+      {%{_selector_id: selector_id}, %{_selector_id: selector_id}} -> true
+      _ -> false
     end
   end
 

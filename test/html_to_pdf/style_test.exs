@@ -1562,6 +1562,45 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert last.style.text_align == :right
   end
 
+  test "compute distinguishes identical siblings for positional selectors" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <style>
+               p:first-child { color: red; }
+               p:last-child { background-color: blue; }
+               p:first-of-type { font-weight: bold; }
+               p:last-of-type { font-style: italic; }
+               p:nth-child(odd) { letter-spacing: 1pt; }
+               p:nth-child(even) { text-align: center; }
+               p:nth-child(2) { font-size: 14pt; }
+             </style>
+             <div><p>X</p><p>X</p><p>X</p></div>
+             """)
+
+    assert {:ok, styled_tree} = Style.compute(dom)
+    [container] = styled_tree.children
+    [first, second, third] = container.children
+
+    assert first.style.color == {1, 0, 0}
+    assert first.style.font_weight == 700
+    assert first.style.font_style == :normal
+    assert first.style.letter_spacing == 1.0
+    assert Map.get(first.style, :background_color) == nil
+
+    assert second.style.color == {0, 0, 0}
+    assert second.style.font_weight == 400
+    assert second.style.font_style == :normal
+    assert second.style.letter_spacing == 0.0
+    assert second.style.text_align == :center
+    assert second.style.font_size == 14.0
+
+    assert third.style.color == {0, 0, 0}
+    assert third.style.font_weight == 400
+    assert third.style.font_style == :italic
+    assert third.style.letter_spacing == 1.0
+    assert third.style.background_color == {0, 0, 1}
+  end
+
   test "compute inserts before and after content without applying pseudo styles to the element" do
     dom = %{
       type: :document,
