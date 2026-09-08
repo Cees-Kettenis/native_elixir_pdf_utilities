@@ -118,7 +118,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
           result =
             RenderCache.run(fn cache ->
-              context = %{rules: rules, cache: cache}
+              context = %{rules: group_pseudo_element_rules(rules), cache: cache}
 
               case fragment_root_style(children, base_style, context, style_opts) do
                 {:ok, nil} ->
@@ -395,7 +395,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       [] ->
         {:ok, [], counters}
 
-      _matched_declarations ->
+      matched_declarations ->
         generated_style =
           inherited_style
           |> text_style()
@@ -406,7 +406,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                node,
                ancestors,
                rules,
-               pseudo_element
+               pseudo_element,
+               matched_declarations
              ) do
           {:ok, style} ->
             counters =
@@ -1548,7 +1549,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     result
   end
 
-  defp apply_author_styles(style, node, ancestors, rules, pseudo_element \\ nil) do
+  defp group_pseudo_element_rules(rules) do
+    Map.new([nil, :before, :after], fn pseudo_element ->
+      grouped =
+        Enum.flat_map(rules, fn rule ->
+          selectors =
+            Enum.filter(rule.selectors, &(List.last(&1.parts).pseudo_element == pseudo_element))
+
+          case selectors do
+            [] -> []
+            selectors -> [%{rule | selectors: selectors}]
+          end
+        end)
+
+      {pseudo_element, grouped}
+    end)
+  end
+
+  defp apply_author_styles(
+         style,
+         node,
+         ancestors,
+         rules,
+         pseudo_element \\ nil,
+         matched_declarations \\ nil
+       ) do
     inline_style =
       case pseudo_element do
         nil -> Map.get(node.attributes, "style", "")
@@ -1563,8 +1588,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     case parsed do
       {:ok, inline_declarations} ->
         declarations =
-          rules
-          |> matching_declarations(node, ancestors, pseudo_element)
+          (matched_declarations || matching_declarations(rules, node, ancestors, pseudo_element))
           |> Kernel.++(
             inline_declarations
             |> Enum.with_index()
@@ -1610,6 +1634,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp matching_declarations(context, node, ancestors, pseudo_element) do
     context.rules
+    |> Map.fetch!(pseudo_element)
     |> Enum.flat_map(fn rule ->
       case matching_specificity(rule.selectors, node, ancestors, pseudo_element) do
         nil ->

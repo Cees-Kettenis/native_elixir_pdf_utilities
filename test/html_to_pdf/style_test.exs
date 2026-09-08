@@ -3,6 +3,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
+  test "mixed normal and pseudo selectors keep their own specificity and counters" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <style>
+             div { counter-reset: item; }
+             p, #target::before { color: red; }
+             #target { color: blue; }
+             p::before, p::after { content: counter(item); counter-increment: item; }
+             p::before { color: green; }
+             </style><div><p id="target">Body</p><p>Next</p></div>
+             """)
+
+    assert {:ok, %{children: [container]}} = Style.compute_detailed(dom)
+    [first, second] = container.children
+    [before, body, after_content] = first.children
+    assert first.style.color == {0, 0, 1}
+    assert body.style.color == {0, 0, 1}
+    assert before.style.color == {1, 0, 0}
+    assert hd(before.children).text == "1"
+    assert hd(after_content.children).text == "2"
+    assert hd(hd(second.children).children).text == "3"
+  end
+
   test "repeated inline declarations resolve against each element and each render" do
     html = """
     <div style="--ink: red; --pad: 10pt; font-size: 10pt"><p style="color: var(--ink); padding: var(--pad)">First</p></div>
