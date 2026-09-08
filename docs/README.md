@@ -35,6 +35,8 @@ each public API supports and which work remains the caller's responsibility.
   examples for common rendering workflows.
 - [HTML to PDF compatibility](html-to-pdf-compatibility.md) is the supported
   options, HTML, CSS, rendering behavior, and known limitations reference.
+- [Benchmarking HTML rendering](html-to-pdf-examples.md#benchmark-rendering)
+  shows how to measure a synthetic large document or a private local HTML file.
 - [HTML to PDF browser parity coverage](html-to-pdf-browser-parity-coverage.md)
   explains the Chromium comparison suite and maps behavior to its fixtures.
 
@@ -48,3 +50,17 @@ each public API supports and which work remains the caller's responsibility.
   describes the planned path toward `1.0.0`.
 - [Contributing](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/CONTRIBUTING.md)
   explains local development and the quality gates required for changes.
+
+## Manual testing app
+
+The local app provides forms for the PDF APIs, including exact and detected
+outlines. Start it from the repository:
+
+```bash
+cd dev/manual_web
+mise exec -- mix deps.get
+mise exec -- mix run --no-halt
+```
+
+Open `http://127.0.0.1:4001`. The OpenAPI document is at `/openapi.json`.
+The app is development tooling and is not included in the Hex package.

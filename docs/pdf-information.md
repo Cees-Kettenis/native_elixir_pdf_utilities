@@ -35,6 +35,14 @@ Use `page_count/1` for the validated page-tree count:
 rotation values, normalizes rotation to `0`, `90`, `180`, or `270`, and reports
 dimensions in PDF points. Width and height reflect the normalized rotation.
 
+The page's `UserUnit` scales width and height into physical PDF points. Direct
+and indirectly referenced positive numeric values are supported; an omitted
+value defaults to `1`. The returned `media_box` coordinates remain in the
+page's default user-space units before scaling. For example, a `100 x 200`
+MediaBox with `UserUnit: 2` and rotation `90` reports width `400` and height
+`200`, while retaining the original MediaBox coordinates. Invalid `UserUnit`
+values return a diagnostic identifying the page.
+
 ```elixir
 {:ok, pages} = Info.page_sizes(pdf)
 
@@ -97,6 +105,11 @@ An update appends an incremental revision. The original bytes remain at the
 start of the result, and the writer preserves unspecified common fields,
 unknown information dictionary entries, the document root, and the permanent
 trailer identifier. An empty patch returns the original binary unchanged.
+
+When the active trailer has an `ID` pair, an incremental update preserves its
+first, permanent identifier and refreshes its second, revision identifier.
+A malformed pair returns `:invalid_pdf_input` at `:incremental_write`. An
+absent `ID` remains absent. Outline updates use the same identifier handling.
 
 The API updates the PDF information dictionary only. It does not read or write
 XMP metadata, decrypt documents, add signatures, or guarantee that an existing

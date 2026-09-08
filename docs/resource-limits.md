@@ -1,9 +1,9 @@
 # Configurable resource limits
 
-Native Elixir PDF Utilities uses configurable limits to bound the memory, CPU,
-parsing work, and native raster allocation requested while processing PDF,
-HTML, CSS, image, SVG, and font data. These limits keep malformed or untrusted
-input from consuming resources without a predictable upper bound.
+Native Elixir PDF Utilities uses configurable limits for parsing work,
+collection sizes, decoded data, and native raster allocation while processing
+PDF, HTML, CSS, image, SVG, and font data. The table below defines the scope of
+each limit.
 
 The library provides built-in values so every application starts with one
 consistent resource policy. Applications can override those values to match
@@ -76,6 +76,7 @@ override these values.
 | `max_text_instruction_uses` | 1,000,000 | Aggregate content instruction work |
 | `max_text_form_expansions` | 10,000 | Form XObject executions |
 | `max_text_spans` | 25,000 | Extracted spans per page |
+| `max_text_layout_whitespace_bytes` | 1,000,000 | Coordinate-based padding spaces reconstructed across one text extraction |
 | `max_cmap_bytes` | 1,000,000 | One CMap stream |
 | `max_cmap_entries` | 100,000 | Mappings in one CMap |
 | `max_cid_width_entries` | 65,536 | CID width entries |
@@ -86,6 +87,17 @@ override these values.
 `NativeElixirPdfUtilities.Limits.defaults/0` returns these built-in values, and
 `NativeElixirPdfUtilities.Limits.effective/0` returns the values loaded for the
 current application instance.
+
+## Cache scope
+
+`max_font_cache_entries` and `max_system_font_cache_entries` count entries in
+shared font caches, not bytes. They do not cap the temporary style and fallback
+caches, which have no separate entry or byte limit and are discarded after use.
+
+Resource limits do not impose an overall render-time or process-memory ceiling.
+Set application timeouts and concurrency limits for your workload.
+
+## Changing limits
 
 Increasing a limit increases the maximum memory, CPU, parsing work, or native
 raster allocation an untrusted document can request. Consider the application's

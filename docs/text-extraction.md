@@ -66,6 +66,12 @@ traversed in `/Contents` order. A Form XObject is traversed where its `Do`
 operator occurs, including nested and repeated Forms, so each emitted span has
 a deterministic execution index.
 
+Instruction parsing carries pending operands and array state across a page's
+ordered `/Contents` streams. An instruction's operands and operator can occur
+in different streams without resetting execution state. Individual tokens,
+including literal strings, must be complete within a stream. Form content is
+parsed and executed in its own invocation context.
+
 Callers can request the same heuristic visual line grouping used by string
 layout extraction:
 
@@ -110,6 +116,15 @@ PDF containing only empty pages or non-text content returns a positioned `:ok`
 result with empty span lists, while the string API returns
 `:no_extractable_text`.
 
+## Character maps
+
+ToUnicode and Type0 Encoding CMap parsing ignores comments and applies mappings
+in source order. Later definitions replace earlier ones. Mapping limits apply
+across all sections.
+
+ToUnicode `usecmap` inheritance and vertical Type0 Encoding CMaps remain
+unsupported. See the shared diagnostic result below for decoding failures.
+
 ## What positioned extraction preserves
 
 Positioned extraction is not a lossless representation of every PDF text
@@ -126,14 +141,18 @@ other explainable extraction failure returns the shared diagnostic contract:
 {:error, {reason, diagnostic}}
 ```
 
-Each extraction keeps a request-scoped cache of decoded streams and raw content
-instructions keyed by the terminal indirect-stream reference. Repeated page and
-Form references therefore reuse decoding and tokenization work without sharing
-state across documents or callers. Extraction also bounds aggregate decoded
+Each extraction caches decoded streams and parsed content sequences. Repeated
+references reuse this work within the extraction. Limits cap total decoded
 content to 50 MB, unique parsed instructions to 100,000, stream uses to 100,000,
 executed instruction uses to 1,000,000, and Form expansions to 10,000. Exceeding
 one of these operation-wide limits returns `:resource_limit_exceeded` rather
 than a partial result.
+
+With `layout: true`, `max_text_layout_whitespace_bytes` also caps spaces added
+from coordinates at 1,000,000 bytes per extraction. The check runs before
+allocation and identifies the page on failure. It excludes source text and
+line/page separators. This limit does not apply to `layout: false` or span
+extraction. See [Configurable resource limits](resource-limits.md) for defaults.
 
 Use the positioned API when document layout matters. Use the string API when
 readable text is enough.

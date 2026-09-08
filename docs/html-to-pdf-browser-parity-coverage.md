@@ -31,7 +31,8 @@ Set `PDFTOPPM_BIN` when `pdftoppm` is not on `PATH`.
 ## Coverage
 
 The suite has 41 focused fixtures and 8 production-document fixtures. All 49
-comparisons currently pass their configured thresholds.
+comparisons have configured thresholds. Two tests check fixture-to-threshold
+coverage, giving 51 tests in the parity suite.
 
 | Area | Focused fixtures |
 | --- | --- |
@@ -50,6 +51,16 @@ The production fixtures cover these document types:
 | `government_application_form.html`, `purchase_order.html`, `material_requisition.html`, `invoice_012.html`, `statement_012.html`, `multi_page_report_012.html` | A4 forms, orders, invoices, statements, and multi-page reports |
 | `stock_sticker.html` | Production-size stock label |
 | `trim_card.html` | Production-size landscape trim card with nested tables and page breaks |
+
+## Performance regression checks
+
+Unit tests cover selector matching, inherited styles, font selection, output
+order, and cache cleanup. Browser parity checks visual output within configured
+thresholds; it does not measure speed or require identical PDF bytes.
+
+Use the [render benchmark](html-to-pdf-examples.md#benchmark-rendering) to compare
+runtime and output hashes with the same fonts, assets, and options. When hashes
+differ, compare text, pagination, and rasterized pages.
 
 ## Adding coverage
 

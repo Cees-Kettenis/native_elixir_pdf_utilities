@@ -50,6 +50,16 @@ items in input order. Outline destinations are remapped to the corresponding
 output pages. It rebuilds the top-level catalog, so it does not carry metadata,
 viewer preferences, portfolios, or AcroForm configuration into the output.
 
+Internal links are remapped to the corresponding pages from their own input,
+including names resolved through legacy destination dictionaries or name
+trees. Resolvable named links become explicit destinations in the merged PDF;
+unresolved named links are omitted. External URI links remain.
+
+Outline item and aggregate title-byte limits apply to the combined output,
+even when each input outline individually fits within its limits. Assembly
+also reserves object capacity for the generated outline tree. See
+[PDF outlines and bookmarks](pdf-outlines.md) for preservation and limit rules.
+
 ## Errors
 
 An empty input list and invalid PDF input return diagnostics:

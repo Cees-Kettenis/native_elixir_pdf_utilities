@@ -36,6 +36,15 @@ markers, structural keywords, content operators, and stream data. Whitespace
 and PDF comments are skipped. Hexadecimal escapes in names and escapes in
 literal strings are decoded.
 
+PDF real numbers accept spellings such as `.5`, `-.5`, `+.5`, and `1.`.
+Exponent notation such as `1e2` or `1.0e2` is rejected, as are malformed or
+unrepresentable real values.
+
+Unescaped CR, CRLF, and LF line endings inside literal strings become a single
+LF. Explicit escapes such as `\r` retain their escaped value. A backslash
+followed by a line ending continues the string without inserting a character.
+Byte spans still refer to the original input bytes.
+
 ## Byte spans
 
 Use `next_with_span/1` or `tokenize_all_with_spans/1` when the original byte

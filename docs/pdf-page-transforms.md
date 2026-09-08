@@ -84,9 +84,11 @@ numbers.
 
 The rebuild materializes effective inherited `Resources`, `MediaBox`,
 `CropBox`, and `Rotate` values. Every emitted indirect reference resolves.
-Internal link annotations targeting retained pages are remapped. Links to
-removed pages and named destinations are omitted, while external URI links
-remain.
+Internal link annotations targeting retained pages are remapped, including
+direct destinations and local `GoTo` actions whose names resolve through
+legacy destination dictionaries or destination name trees. Resolvable named
+links are rewritten to explicit destinations in the output. Links targeting
+removed pages and unresolved named links are omitted; external URI links remain.
 
 Deleting a page is not secure redaction. A resource shared with a retained page
 must remain in the output. Outlines targeting retained pages are preserved and

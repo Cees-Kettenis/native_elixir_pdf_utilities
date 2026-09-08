@@ -38,6 +38,9 @@ The returned `:xref` map describes the active entry for each object number.
 The returned `:objects` map is keyed by `{object_number, generation}`. It omits
 free entries and superseded revisions.
 
+Cross-reference parsing stops at the current revision's trailer dictionary.
+Object parsing and stream lookahead stop at `endobj`.
+
 ## Streams
 
 `Reader.decoded_stream/2` validates `/Length` and supports these PDF filters,
@@ -54,6 +57,10 @@ TIFF predictor 2 and PNG predictors 10 through 15 are supported through
 and predictors return `:unsupported_pdf_feature` diagnostics. ASCII85 decoding
 enforces group boundaries, the 32-bit value ceiling, and valid final partial
 groups.
+
+Flate decoding requires a complete compressed stream. Truncated data returns
+`:invalid_pdf_input` at the `:filter` stage even when inflation produced a
+partial prefix; partial decoded bytes are not returned as a successful result.
 
 ## Errors and limits
 

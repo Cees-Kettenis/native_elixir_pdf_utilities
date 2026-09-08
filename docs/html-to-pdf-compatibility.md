@@ -22,6 +22,7 @@ ignoring it. Failures use the shared [diagnostic contract](diagnostics.md). See
 | `:fonts` | Static TrueType faces supplied as maps, keyword lists, or `{family, path}` tuples |
 | `:system_font_discovery` | Enables installed-font lookup; defaults to `true` |
 | `:metadata` | `:title`, `:author`, `:subject`, `:keywords`, `:producer`, `:creation_date`, and `:modification_date` |
+| `:outlines` | `:headings`, an exact outline list, `false`, or `nil`; see [PDF outlines and bookmarks](pdf-outlines.md) |
 | `:page_furniture` | Optional `:header` and `:footer` templates with `:default`, `:first`, `:odd`, and `:even` variants |
 | `:unsupported_glyphs` | `:replace`, the default, or `:error` |
 
@@ -74,6 +75,27 @@ Unknown properties, unsupported values, malformed selectors, and invalid
 
 ## Rendering behavior
 
+### Cascade and generated content
+
+Positional selectors distinguish sibling elements even when their tags,
+attributes, and text are identical. Custom property names are case-sensitive,
+so `--Accent` and `--accent` are separate variables in stylesheets and inline
+declarations. Supported quoted selector values and generated-content strings
+preserve embedded punctuation, escaped quotes, and comment-like text.
+
+Counters follow document order through elements and their pseudo-elements.
+Nested resets establish inner scopes; later outer siblings resume the enclosing
+counter. Counters created by preceding siblings and pseudo-elements remain
+available where their scope permits.
+
+### Sizing and wrapping
+
+Percentage widths resolve against the containing width. Supported minimum
+dimensions take precedence when a minimum exceeds the corresponding maximum,
+including flex items and images. Emergency word breaking keeps an indivisible
+grapheme intact; it may overflow a line narrower than that grapheme instead of
+repeatedly attempting to split it.
+
 ### Pagination
 
 The renderer handles automatic and explicit page breaks, paragraph
@@ -85,12 +107,18 @@ pagination. `{{page}}` and `{{pages}}` insert page numbers. Furniture that does
 not fit returns `:invalid_layout`. On page one, `:first` takes precedence;
 later pages use `:odd` or `:even`, then `:default`.
 
+Image and background-image clipping regions move with page furniture into the
+header or footer margin, including images using `object-fit`.
+
 ### Tables
 
 Tables support automatic and fixed layouts, column hints, `colspan`, `rowspan`,
 `tfoot`, repeated multi-row headers, nested tables, explicit heights, and
 separate or collapsed borders. A short row does not span undeclared trailing
 columns.
+
+A cell's `rowspan` stops at its row-group boundary. It cannot occupy cells in
+a later `thead`, `tbody`, or `tfoot` group.
 
 ### Static forms
 
@@ -119,6 +147,22 @@ same across hosts.
 
 Font fallback happens before layout. Missing graphemes become U+FFFD by default;
 `unsupported_glyphs: :error` returns `:unsupported_glyph` instead.
+
+### Performance and cache lifetime
+
+The renderer indexes selectors and reuses parsed inline styles, resolved fonts,
+and fallback candidates within each style or fallback computation. CSS values
+still resolve against each element's inherited styles. These optimizations
+require no new options.
+
+Body and page-furniture computations use separate temporary caches. The caches
+are discarded after use and have no separate size limit. Shared font-cache
+limits are described in [Configurable resource limits](resource-limits.md#cache-scope).
+
+Large tables still measure and lay out cell content separately. Repeated images
+are decoded or rasterized during styling before the PDF writer deduplicates
+resources. Use the [render benchmark](html-to-pdf-examples.md#benchmark-rendering)
+to measure your workload.
 
 ## Known limits
 

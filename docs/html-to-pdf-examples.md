@@ -216,3 +216,41 @@ end
 
 Use the reason for program flow and the diagnostic for logs or template fixes.
 See [Diagnostics](diagnostics.md) for the full contract.
+
+## Benchmark rendering
+
+Run the synthetic 250-item purchase-order benchmark from the repository:
+
+```bash
+mise exec -- mix run scripts/benchmark-html-render.exs
+```
+
+To measure a local HTML file:
+
+```bash
+mise exec -- mix run scripts/benchmark-html-render.exs /path/to/private-document.html
+```
+
+The script prints measurements without saving HTML or PDF output. Keep private
+inputs outside tracked fixtures. Use synthetic data for committed fixtures,
+preserving document structure, text lengths, and character coverage.
+
+Each report includes stage times, caller-process reductions, full
+`HtmlToPdf.render/1` time, page count, PDF size, and SHA-256. Three warm runs also
+report sampled peak VM memory.
+
+Read the measurements as follows:
+
+- Stage timings exclude option preparation. The public-render timing includes
+  validation and metadata preparation.
+- Stages run before the public call and warm shared font caches, even in the
+  report labelled `cold`. Measure a public call in a fresh VM for cold latency.
+- Peak memory covers the whole VM during both pipelines. Sampling can miss
+  short-lived peaks. Reductions do not measure native rasterization work.
+- Page count comes from the staged pipeline; size and hash come from the public
+  render.
+
+The script uses default options and CSS page settings. For custom fonts,
+assets, page furniture, or other options, time the public renderer in your
+application. Keep runtime, fonts, assets, and machine load consistent between
+comparisons.

@@ -32,12 +32,27 @@ and caller-provided metadata patches. It prepares serialized field values and
 checks information-specific byte and incremental-object limits before the
 writer appends an update.
 
+It also validates direct or indirect page `UserUnit` values before scaling
+physical page dimensions. The raw MediaBox coordinates remain in default
+user-space units.
+
+`NativeElixirPdfUtilities.Validators.OutlineValidator` owns exact outline input,
+source outline structure, named-destination resolution, and outline item,
+depth, and title limits. It normalizes both detected and caller-supplied trees
+before writing.
+
+The internal incremental validator validates and prepares trailer identifiers
+for metadata and outline updates.
+
 `NativeElixirPdfUtilities.Validators.TextValidator` uses the shared context and
 checks page geometry, content-stream references, decoded content, content
 syntax, text-operator operands, and PDF numeric tokens. The text executor
 handles state-dependent behavior. It prepares only the fonts, encodings, and
 CMaps used by reachable text operations, so an unused font resource does not
 cause extraction to fail.
+
+Text validation also checks reconstructed padding limits before allocation.
+CMap preparation enforces mapping limits across all sections.
 
 `NativeElixirPdfUtilities.Validators.MergeValidator` consumes the shared
 context and owns page materialization, inherited serialization tokens,
@@ -51,6 +66,11 @@ selected-page dependency closure, rejects missing reachable objects before any
 write, removes internal links to discarded pages, and rejects other
 dependencies that would reintroduce an unselected page. The assembly writer
 receives only validated, completely remapped objects.
+
+Assembly resolves named internal links to explicit retained-page destinations
+and carries remapped outlines into each output. Combined outline budgets and
+the object capacity needed for generated outline objects are checked before
+serialization.
 
 ## What the validated context contains
 
