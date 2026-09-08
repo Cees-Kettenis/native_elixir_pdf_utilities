@@ -8,11 +8,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   @fixtures_dir Path.expand("../fixtures/html_to_pdf/browser_parity", __DIR__)
   @real_fixtures_dir Path.expand("../fixtures/html_to_pdf", __DIR__)
 
+  @furniture_image "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjAiIGhlaWdodD0iNDAiPjxyZWN0IHdpZHRoPSIxMjAiIGhlaWdodD0iNDAiIGZpbGw9IiMxZDRlZDgiLz48L3N2Zz4="
   @page_furniture_header """
-  <div style="color: #1f4b7a; font-family: 'DejaVu Sans'; font-size: 8pt; line-height: 24pt">Quarterly report</div>
+  <div style="height: 24pt; display: flex; align-items: center; gap: 6pt; color: #1f4b7a; font-family: 'DejaVu Sans'; font-size: 8pt; line-height: 12pt; background-image: url('#{@furniture_image}'); background-repeat: no-repeat; background-position: right center; background-size: 12pt 12pt">
+    <img src="#{@furniture_image}" style="display: block; width: 18pt; height: 14pt; object-fit: cover">
+    <span>Quarterly report</span>
+  </div>
   """
   @page_furniture_footer """
-  <div style="height: 14pt; color: #52606d; font-family: 'DejaVu Sans'; font-size: 8pt; line-height: 10pt; text-align: right">Page {{page}} of {{pages}}</div>
+  <div style="height: 14pt; display: flex; align-items: center; justify-content: flex-end; gap: 6pt; color: #52606d; font-family: 'DejaVu Sans'; font-size: 8pt; line-height: 10pt">
+    <span>Page {{page}} of {{pages}}</span>
+    <img src="#{@furniture_image}" style="display: block; width: 18pt; height: 10pt; object-fit: contain">
+  </div>
   """
 
   @fixture_thresholds [
@@ -178,6 +185,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
 
       assert page_count >= 1
       assert File.dir?(artifact_dir)
+
+      if @fixture_name == "page_furniture.html" do
+        native_page = File.read!(Path.join(artifact_dir, "native-1.ppm"))
+        assert :binary.match(native_page, <<29, 78, 216>>) != :nomatch
+      end
     end
   end
 

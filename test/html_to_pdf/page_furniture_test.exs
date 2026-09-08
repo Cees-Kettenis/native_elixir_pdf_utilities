@@ -6,6 +6,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
 
   @page_size {200.0, 100.0}
   @margin 20.0
+  @wide_image "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjAiIGhlaWdodD0iNDAiPjxyZWN0IHdpZHRoPSIxMjAiIGhlaWdodD0iNDAiIGZpbGw9IiMxZDRlZDgiLz48L3N2Zz4="
 
   test "decorate leaves pages unchanged when page furniture is disabled" do
     pages = pages(1)
@@ -296,6 +297,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
                    "<div style=\"height: 12pt; background: #eeeeee; font-size: 8pt\">Too tall</div>"
                ]
              )
+  end
+
+  test "decorate moves clipped images with header and footer furniture" do
+    cases = [
+      {:header, :cover,
+       "<img src=\"#{@wide_image}\" style=\"width: 10pt; height: 10pt; object-fit: cover\">"},
+      {:footer, :contain,
+       "<img src=\"#{@wide_image}\" style=\"width: 10pt; height: 10pt; object-fit: contain\">"},
+      {:header, :background,
+       "<div style=\"width: 20pt; height: 10pt; background-image: url('#{@wide_image}'); background-repeat: no-repeat; background-position: left top; background-size: 20pt 10pt\"></div>"},
+      {:footer, :background,
+       "<div style=\"width: 20pt; height: 10pt; background-image: url('#{@wide_image}'); background-repeat: no-repeat; background-position: left top; background-size: 20pt 10pt\"></div>"}
+    ]
+
+    for {position, kind, template} <- cases do
+      assert {:ok, [page]} =
+               PageFurniture.decorate(pages(1), layout_tree(),
+                 page_furniture: [{position, template}]
+               )
+
+      images = Enum.filter(page.boxes, &(&1.type == :image))
+      assert images != [], "#{kind} #{position} fixture did not produce an image"
+
+      Enum.each(images, fn image ->
+        clip = Map.fetch!(image, :clip)
+        assert clip.y < image.y + image.height
+        assert clip.y + clip.height > image.y
+
+        case position do
+          :header -> assert clip.y >= elem(@page_size, 1) - @margin
+          :footer -> assert clip.y < @margin
+        end
+      end)
+    end
   end
 
   defp pages(count) do

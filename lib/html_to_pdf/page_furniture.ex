@@ -302,7 +302,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
 
   defp shift_boxes(boxes, delta_y) do
     Enum.map(boxes, fn %{y: y} = box ->
-      Map.put(box, :y, y + delta_y)
+      box = Map.put(box, :y, y + delta_y)
+
+      case Map.get(box, :clip) do
+        %{y: clip_y} = clip -> Map.put(box, :clip, %{clip | y: clip_y + delta_y})
+        _ -> box
+      end
     end)
   end
 
