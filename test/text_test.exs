@@ -1307,6 +1307,79 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert {rest.text, rest.x, rest.end_x} == {"BCDEFG", 30.0, 61.0}
   end
 
+  test "ignores comments and preserves mapping order in ToUnicode CMaps" do
+    cmap =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "% /Adobe-Identity-UCS usecmap\n" <>
+        "1 beginbfchar\n<41> <0041>\n% <41> <0058>\nendbfchar\n" <>
+        "% 1 beginbfchar <41> <0059> endbfchar\n" <>
+        "1 beginbfrange\n<41> <41> <0042>\nendbfrange"
+
+    font =
+      "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    pdf =
+      page_pdf("BT /F1 10 Tf <41> Tj ET",
+        font: font,
+        cmap: cmap,
+        descendant: "<< /Type /Font /Subtype /CIDFontType2 /DW 500 >>"
+      )
+
+    assert Text.extract(pdf, layout: false) == {:ok, "B"}
+  end
+
+  test "limits aggregate ToUnicode mappings across ordered sections" do
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+    Limits.install(%{original_limits | max_cmap_entries: 1})
+
+    cmap =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "2 beginbfchar\n<41> <0041>\n<42> <0042>\nendbfchar"
+
+    pdf =
+      page_pdf("BT /F1 10 Tf <41> Tj ET", font: "<< /Type /Font /ToUnicode 7 0 R >>", cmap: cmap)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Text.extract(pdf, layout: false)
+
+    assert %{
+             stage: :cmap,
+             reason: :resource_limit_exceeded,
+             operation: :extract,
+             module: Text,
+             message: "ToUnicode CMap entry count exceeds the limit; page 1"
+           } = diagnostic
+  end
+
+  test "ignores comments and preserves mapping order in Type0 Encoding CMaps" do
+    to_unicode =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 beginbfchar\n<41> <0041>\nendbfchar"
+
+    encoding =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "% /Identity-H usecmap\n" <>
+        "% /WMode 1 def\n" <>
+        "1 begincidchar\n<41> 5\n% <41> 8\nendcidchar\n" <>
+        "% 1 begincidchar <41> 9 endcidchar\n" <>
+        "1 begincidrange\n<41> <41> 6\nendcidrange"
+
+    font =
+      "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    pdf =
+      page_pdf("BT /F1 10 Tf 1 0 0 1 10 20 Tm <41> Tj ET",
+        font: font,
+        cmap: to_unicode,
+        descendant: "<< /Type /Font /Subtype /CIDFontType2 /DW 500 /W [5 [1000 2000]] >>",
+        extra_objects: [{9, stream_object("", encoding)}]
+      )
+
+    assert {:ok, %{pages: [%{spans: [span]}]}} = Text.extract_spans(pdf)
+    assert {span.text, span.x, span.end_x} == {"A", 10.0, 30.0}
+  end
+
   test "applies Type0 word spacing only to a one-byte code 20" do
     multibyte_cmap =
       "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n" <>

@@ -10,6 +10,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   import Bitwise
 
   @max_cid 65_535
+  @unicode_mapping_section ~r/(\d+)\s+begin(bfchar|bfrange)\s*.*?\s*end\2/s
+  @cid_mapping_section ~r/(\d+)\s+begin(cidchar|cidrange|notdefchar|notdefrange)\s*.*?\s*end\2/s
 
   @doc """
   Prepares reachable fonts, strings, and Form XObjects for text execution.
@@ -716,35 +718,37 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
           font: font
         )
 
-      Regex.match?(~r/\/\S+\s+usecmap\b/, stream) ->
-        error(
-          :cmap,
-          :unsupported_text_encoding,
-          "ToUnicode usecmap inheritance is unsupported",
-          page: page,
-          font: font
-        )
-
       true ->
-        with {:ok, codespaces} <- parse_codespaces(stream, "ToUnicode"),
-             {:ok, bfchar} <- parse_bfchar(stream),
-             {:ok, bfrange} <- parse_bfrange(stream, map_size(bfchar)),
-             mappings = Map.merge(bfrange, bfchar),
-             true <- map_size(mappings) <= Limits.get(:max_cmap_entries),
-             true <- map_size(mappings) > 0 do
-          {:ok, %{codespaces: codespaces, mappings: mappings}}
-        else
-          false ->
+        stream = strip_cmap_comments(stream)
+
+        case Regex.match?(~r/\/\S+\s+usecmap\b/, stream) do
+          true ->
             error(
               :cmap,
               :unsupported_text_encoding,
-              "ToUnicode CMap has no usable Unicode mappings",
+              "ToUnicode usecmap inheritance is unsupported",
               page: page,
               font: font
             )
 
-          {:error, _} = error ->
-            error
+          false ->
+            with {:ok, codespaces} <- parse_codespaces(stream, "ToUnicode"),
+                 {:ok, mappings} <- parse_unicode_mappings(stream),
+                 true <- map_size(mappings) > 0 do
+              {:ok, %{codespaces: codespaces, mappings: mappings}}
+            else
+              false ->
+                error(
+                  :cmap,
+                  :unsupported_text_encoding,
+                  "ToUnicode CMap has no usable Unicode mappings",
+                  page: page,
+                  font: font
+                )
+
+              {:error, _} = error ->
+                error
+            end
         end
     end
   end
@@ -757,61 +761,127 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
           font: font
         )
 
-      Regex.match?(~r/\/\S+\s+usecmap\b/, stream) ->
-        error(
-          :cmap,
-          :unsupported_text_encoding,
-          "Type0 Encoding usecmap inheritance is unsupported",
-          page: page,
-          font: font
-        )
-
-      Regex.match?(~r/\/WMode\s+1\s+def\b/, stream) ->
-        error(
-          :cmap,
-          :unsupported_text_encoding,
-          "vertical Type0 Encoding CMaps are unsupported",
-          page: page,
-          font: font
-        )
-
       true ->
-        with {:ok, codespaces} <- parse_codespaces(stream, "Type0 Encoding"),
-             {:ok, cidchar} <- parse_cid_char(stream, "cidchar", 0),
-             {:ok, cidrange} <-
-               parse_cid_range(stream, "cidrange", map_size(cidchar), :sequential),
-             mappings = Map.merge(cidrange, cidchar),
-             {:ok, notdefchar} <-
-               parse_cid_char(stream, "notdefchar", map_size(mappings)),
-             {:ok, notdefrange} <-
-               parse_cid_range(
-                 stream,
-                 "notdefrange",
-                 map_size(mappings) + map_size(notdefchar),
-                 :constant
-               ),
-             notdef = Map.merge(notdefrange, notdefchar) do
-          {:ok, %{codespaces: codespaces, mappings: mappings, notdef: notdef}}
-        else
-          :limit ->
+        stream = strip_cmap_comments(stream)
+
+        cond do
+          Regex.match?(~r/\/\S+\s+usecmap\b/, stream) ->
             error(
               :cmap,
-              :resource_limit_exceeded,
-              "Type0 Encoding CMap entry count exceeds the limit",
+              :unsupported_text_encoding,
+              "Type0 Encoding usecmap inheritance is unsupported",
               page: page,
               font: font
             )
 
-          :error ->
-            error(:cmap, :invalid_pdf_input, "Type0 Encoding CMap mappings are malformed",
+          Regex.match?(~r/\/WMode\s+1\s+def\b/, stream) ->
+            error(
+              :cmap,
+              :unsupported_text_encoding,
+              "vertical Type0 Encoding CMaps are unsupported",
               page: page,
               font: font
             )
 
-          {:error, _} = cmap_error ->
-            cmap_error
+          true ->
+            with {:ok, codespaces} <- parse_codespaces(stream, "Type0 Encoding"),
+                 {:ok, mappings} <-
+                   parse_cid_mappings(stream, ["cidchar", "cidrange"], 0),
+                 {:ok, notdef} <-
+                   parse_cid_mappings(
+                     stream,
+                     ["notdefchar", "notdefrange"],
+                     map_size(mappings)
+                   ) do
+              {:ok, %{codespaces: codespaces, mappings: mappings, notdef: notdef}}
+            else
+              :limit ->
+                error(
+                  :cmap,
+                  :resource_limit_exceeded,
+                  "Type0 Encoding CMap entry count exceeds the limit",
+                  page: page,
+                  font: font
+                )
+
+              :error ->
+                error(:cmap, :invalid_pdf_input, "Type0 Encoding CMap mappings are malformed",
+                  page: page,
+                  font: font
+                )
+
+              {:error, _} = cmap_error ->
+                cmap_error
+            end
         end
     end
+  end
+
+  defp strip_cmap_comments(stream) do
+    Regex.replace(~r/%[^\r\n]*/, stream, "")
+  end
+
+  defp parse_unicode_mappings(stream) do
+    @unicode_mapping_section
+    |> Regex.scan(stream)
+    |> Enum.reduce_while({:ok, %{}}, fn [section, _count, operator], {:ok, mappings} ->
+      parsed =
+        case operator do
+          "bfchar" -> parse_bfchar(section)
+          "bfrange" -> parse_bfrange(section, map_size(mappings))
+        end
+
+      case parsed do
+        {:ok, section_mappings} ->
+          mappings = Map.merge(mappings, section_mappings)
+
+          case map_size(mappings) <= Limits.get(:max_cmap_entries) do
+            true ->
+              {:cont, {:ok, mappings}}
+
+            false ->
+              {:halt,
+               error(
+                 :cmap,
+                 :resource_limit_exceeded,
+                 "ToUnicode CMap entry count exceeds the limit"
+               )}
+          end
+
+        {:error, _} = mapping_error ->
+          {:halt, mapping_error}
+      end
+    end)
+  end
+
+  defp parse_cid_mappings(stream, operators, existing) do
+    @cid_mapping_section
+    |> Regex.scan(stream)
+    |> Enum.filter(fn [_section, _count, operator] -> operator in operators end)
+    |> Enum.reduce_while({:ok, %{}}, fn [section, _count, operator], {:ok, mappings} ->
+      parsed =
+        case operator do
+          "cidchar" ->
+            parse_cid_char(section, operator, existing + map_size(mappings))
+
+          "cidrange" ->
+            parse_cid_range(section, operator, existing + map_size(mappings), :sequential)
+
+          "notdefchar" ->
+            parse_cid_char(section, operator, existing + map_size(mappings))
+
+          "notdefrange" ->
+            parse_cid_range(section, operator, existing + map_size(mappings), :constant)
+        end
+
+      case parsed do
+        {:ok, section_mappings} ->
+          {:cont, {:ok, Map.merge(mappings, section_mappings)}}
+
+        failure ->
+          {:halt, failure}
+      end
+    end)
   end
 
   defp parse_codespaces(stream, label) do
@@ -865,7 +935,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
             end)
 
           case Enum.all?(parsed, fn {source, cid} ->
-                 is_binary(source) and cid in 0..65_535
+                 is_binary(source) and cid in 0..@max_cid
                end) do
             true ->
               mappings = Map.merge(mappings, Map.new(parsed))
@@ -909,7 +979,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
                 count = :binary.decode_unsigned(last) - :binary.decode_unsigned(first) + 1
 
                 cond do
-                  cid > 65_535 or (mapping_type == :sequential and cid + count - 1 > 65_535) ->
+                  cid > @max_cid or
+                      (mapping_type == :sequential and cid + count - 1 > @max_cid) ->
                     {:halt, :error}
 
                   existing + map_size(mappings) + count > Limits.get(:max_cmap_entries) ->
@@ -1019,7 +1090,6 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   defp cmap_section_consumed?(section, entry_pattern) do
     section
     |> then(&Regex.replace(entry_pattern, &1, ""))
-    |> String.replace(~r/%[^\r\n]*/, "")
     |> String.trim()
     |> then(&(&1 == ""))
   end
