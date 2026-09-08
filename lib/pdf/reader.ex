@@ -879,6 +879,9 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
             :none
         end
 
+      :endobj ->
+        :none
+
       {:eof, nil} ->
         :none
 

@@ -29,6 +29,50 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
     assert_error(Reader.resolve(document, {:ref, {3, 7}}), :invalid_pdf_input, :resolution)
   end
 
+  test "does not scan inactive indirect-length streams past a live object's endobj" do
+    generated =
+      classic_pdf([
+        {1, 0, "<< /Type /Catalog /Pages 3 0 R >>"},
+        {2, 0, "<< /Length 5 0 R >>\nstream\nold\nendstream"},
+        {3, 0, "<< /Type /Pages /Kids [4 0 R] /Count 1 >>"},
+        {4, 0, "<< /Type /Page /Parent 3 0 R /MediaBox [0 0 100 100] >>"},
+        {5, 0, "3"}
+      ])
+
+    freed =
+      generated.pdf
+      |> String.replace(
+        classic_entry(0, 65_535, "f"),
+        classic_entry(2, 65_535, "f"),
+        global: false
+      )
+      |> String.replace(
+        classic_entry(generated.offsets[2], 0, "n"),
+        classic_entry(0, 1, "f"),
+        global: false
+      )
+
+    replacement = "2 0 obj\n(replacement)\nendobj\n"
+    replacement_offset = byte_size(generated.pdf)
+    xref = replacement_offset + byte_size(replacement)
+
+    superseded =
+      generated.pdf <>
+        replacement <>
+        "xref\n2 1\n" <>
+        classic_entry(replacement_offset, 0, "n") <>
+        "trailer\n<< /Size 6 /Root 1 0 R /Prev #{generated.xref} >>\n" <>
+        "startxref\n#{xref}\n%%EOF\n"
+
+    assert {:ok, freed_document} = Reader.read(freed)
+    assert freed_document.xref[2] == {:free, 0, 1}
+    assert length(freed_document.pages) == 1
+
+    assert {:ok, superseded_document} = Reader.read(superseded)
+    assert superseded_document.xref[2] == {:uncompressed, replacement_offset, 0}
+    assert length(superseded_document.pages) == 1
+  end
+
   test "rejects malformed classic xref sections and revision pointers" do
     valid =
       classic_pdf([
