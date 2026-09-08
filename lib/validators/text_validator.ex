@@ -21,6 +21,9 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   @typedoc "A validated content instruction with operands in source order."
   @type instruction :: %{required(:operator) => binary(), required(:operands) => [term()]}
 
+  @typedoc false
+  @type instruction_cache_key :: PdfValidator.ref() | {:contents, [PdfValidator.ref()]}
+
   @typedoc "One page prepared for strict text extraction."
   @type page_context :: %{
           required(:number) => pos_integer(),
@@ -35,7 +38,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
           required(:stream_refs) => %{optional(PdfValidator.value()) => PdfValidator.ref()},
           required(:decoded_streams) => %{optional(PdfValidator.ref()) => binary()},
           required(:instructions) => %{
-            optional(PdfValidator.ref()) => [instruction()]
+            optional(instruction_cache_key()) => [instruction()]
           },
           required(:decoded_bytes) => non_neg_integer(),
           required(:parsed_instructions) => non_neg_integer(),
@@ -319,59 +322,78 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   end
 
   @doc """
-  Validates and tokenizes one decoded PDF content stream into instructions.
+  Validates and tokenizes one decoded PDF content stream, or a page's ordered
+  content streams, into instructions.
   """
-  @spec instructions(binary(), pos_integer()) ::
+  @spec instructions(binary() | [binary()], pos_integer()) ::
           {:ok, [instruction()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def instructions(content, page_number) do
-    case is_binary(content) and is_integer(page_number) and page_number > 0 do
+    valid_content? =
+      is_binary(content) or (is_list(content) and Enum.all?(content, &is_binary/1))
+
+    case valid_content? and is_integer(page_number) and page_number > 0 do
       true ->
-        tokens = Tokenizer.new(content) |> Tokenizer.tokenize_all()
+        contents = if is_binary(content), do: [content], else: content
 
-        case Enum.any?(tokens, &match?({:error, _}, &1)) do
-          true ->
-            error(:content, :invalid_pdf_input, "content stream contains invalid syntax",
-              page: page_number
-            )
+        contents
+        |> Enum.reduce_while({:ok, [], []}, fn content, instruction_state ->
+          tokens = Tokenizer.new(content) |> Tokenizer.tokenize_all()
 
-          false ->
-            tokens
-            |> Enum.reduce_while({:ok, [], []}, fn token, {:ok, operations, operands} ->
-              case token do
-                :lbracket ->
-                  {:cont, {:ok, operations, [:array_start | operands]}}
+          case Enum.any?(tokens, &match?({:error, _}, &1)) do
+            true ->
+              {:halt,
+               error(:content, :invalid_pdf_input, "content stream contains invalid syntax",
+                 page: page_number
+               )}
 
-                :rbracket ->
-                  case close_array(operands) do
-                    {:ok, operands} -> {:cont, {:ok, operations, operands}}
-                    :error -> {:halt, content_error("content array is unbalanced", page_number)}
-                  end
+            false ->
+              case reduce_instruction_tokens(tokens, instruction_state, page_number) do
+                {:ok, _operations, _operands} = instruction_state ->
+                  {:cont, instruction_state}
 
-                {:op, operator} ->
-                  case prepare_instruction(operator, Enum.reverse(operands), page_number) do
-                    {:ok, operation} -> {:cont, {:ok, [operation | operations], []}}
-                    {:error, _} = instruction_error -> {:halt, instruction_error}
-                  end
-
-                token ->
-                  {:cont, {:ok, operations, [token | operands]}}
+                {:error, _} = instruction_error ->
+                  {:halt, instruction_error}
               end
-            end)
-            |> case do
-              {:ok, operations, []} ->
-                {:ok, Enum.reverse(operations)}
+          end
+        end)
+        |> case do
+          {:ok, operations, []} ->
+            {:ok, Enum.reverse(operations)}
 
-              {:ok, _operations, _operands} ->
-                content_error("content stream has dangling operands", page_number)
+          {:ok, _operations, _operands} ->
+            content_error("content stream has dangling operands", page_number)
 
-              {:error, _} = content_error ->
-                content_error
-            end
+          {:error, _} = content_error ->
+            content_error
         end
 
       false ->
         error(:content, :invalid_pdf_input, "content stream input is malformed")
     end
+  end
+
+  defp reduce_instruction_tokens(tokens, instruction_state, page_number) do
+    Enum.reduce_while(tokens, instruction_state, fn token, {:ok, operations, operands} ->
+      case token do
+        :lbracket ->
+          {:cont, {:ok, operations, [:array_start | operands]}}
+
+        :rbracket ->
+          case close_array(operands) do
+            {:ok, operands} -> {:cont, {:ok, operations, operands}}
+            :error -> {:halt, content_error("content array is unbalanced", page_number)}
+          end
+
+        {:op, operator} ->
+          case prepare_instruction(operator, Enum.reverse(operands), page_number) do
+            {:ok, operation} -> {:cont, {:ok, [operation | operations], []}}
+            {:error, _} = instruction_error -> {:halt, instruction_error}
+          end
+
+        token ->
+          {:cont, {:ok, operations, [token | operands]}}
+      end
+    end)
   end
 
   @doc """
@@ -585,31 +607,51 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   end
 
   defp prepare_contents(document, content_refs, page_number, preparation_context) do
-    Enum.reduce_while(
-      content_refs,
-      {:ok, [], preparation_context},
-      fn content_ref, {:ok, contents, preparation_context} ->
-        case prepare_content_stream(document, content_ref, page_number, preparation_context) do
-          {:ok, operations, preparation_context} ->
-            {:cont, {:ok, [operations | contents], preparation_context}}
+    case content_refs do
+      [] ->
+        {:ok, [], preparation_context}
 
-          {:error, {reason, diagnostic}} ->
-            diagnostic = append_details(diagnostic, page: page_number)
-            {:halt, {:error, {reason, diagnostic}}}
+      content_refs ->
+        content_refs
+        |> Enum.reduce_while(
+          {:ok, [], [], preparation_context},
+          fn content_ref, {:ok, stream_refs, content_parts, preparation_context} ->
+            case cached_stream(document, content_ref, page_number, preparation_context) do
+              {:ok, stream_ref, content, preparation_context} ->
+                {:cont,
+                 {:ok, [stream_ref | stream_refs], [content | content_parts], preparation_context}}
+
+              {:error, {reason, diagnostic}} ->
+                diagnostic = append_details(diagnostic, page: page_number)
+                {:halt, {:error, {reason, diagnostic}}}
+            end
+          end
+        )
+        |> case do
+          {:ok, stream_refs, content_parts, preparation_context} ->
+            stream_refs = Enum.reverse(stream_refs)
+            content_parts = Enum.reverse(content_parts)
+
+            cache_key =
+              case stream_refs do
+                [stream_ref] -> stream_ref
+                stream_refs -> {:contents, stream_refs}
+              end
+
+            with {:ok, operations, preparation_context} <-
+                   cached_instructions(
+                     cache_key,
+                     content_parts,
+                     preparation_context,
+                     page_number
+                   ),
+                 :ok <- validate_scopes([operations], page_number) do
+              {:ok, [operations], preparation_context}
+            end
+
+          {:error, _} = content_error ->
+            content_error
         end
-      end
-    )
-    |> case do
-      {:ok, contents, preparation_context} ->
-        contents = Enum.reverse(contents)
-
-        case validate_scopes(contents, page_number) do
-          :ok -> {:ok, contents, preparation_context}
-          {:error, _} = scope_error -> scope_error
-        end
-
-      {:error, _} = content_error ->
-        content_error
     end
   end
 
@@ -675,8 +717,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     end
   end
 
-  defp cached_instructions(stream_ref, content, preparation_context, page_number) do
-    case Map.fetch(preparation_context.instructions, stream_ref) do
+  defp cached_instructions(cache_key, content, preparation_context, page_number) do
+    case Map.fetch(preparation_context.instructions, cache_key) do
       {:ok, operations} ->
         with {:ok, preparation_context} <-
                charge_instruction_uses(preparation_context, length(operations), page_number) do
@@ -686,7 +728,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
       :error ->
         with {:ok, operations} <- instructions(content, page_number),
              {:ok, preparation_context} <-
-               cache_instructions(preparation_context, stream_ref, operations, page_number),
+               cache_instructions(preparation_context, cache_key, operations, page_number),
              {:ok, preparation_context} <-
                charge_instruction_uses(preparation_context, length(operations), page_number) do
           {:ok, operations, preparation_context}
@@ -694,7 +736,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     end
   end
 
-  defp cache_instructions(preparation_context, stream_ref, operations, page_number) do
+  defp cache_instructions(preparation_context, cache_key, operations, page_number) do
     parsed_instructions = preparation_context.parsed_instructions + length(operations)
 
     case parsed_instructions <= Limits.get(:max_text_parsed_instructions) do
@@ -702,7 +744,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
         {:ok,
          %{
            preparation_context
-           | instructions: Map.put(preparation_context.instructions, stream_ref, operations),
+           | instructions: Map.put(preparation_context.instructions, cache_key, operations),
              parsed_instructions: parsed_instructions
          }}
 

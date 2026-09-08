@@ -211,6 +211,28 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert Text.extract(pdf(objects), layout: false) == {:ok, "Across"}
   end
 
+  test "parses operands and operators across page content stream boundaries" do
+    cases = [
+      {["BT /F1 12 Tf (Hello)", "Tj ET"], "Hello"},
+      {["BT /F1 12 Tf [(Hel)", "(lo)] TJ ET"], "Hello"},
+      {["BT /F1 12 Tf 1 0 0", " 1 10 20 Tm (Matrix) Tj ET"], "Matrix"}
+    ]
+
+    for {[first_stream, second_stream], expected} <- cases do
+      objects = [
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents [6 0 R 7 0 R] >>"},
+        {4, "<< /Font << /F1 5 0 R >> >>"},
+        {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+        {6, stream_object("", first_stream)},
+        {7, stream_object("", second_stream)}
+      ]
+
+      assert Text.extract(pdf(objects), layout: false) == {:ok, expected}
+    end
+  end
+
   test "opens objects stored in an object stream" do
     path = Path.expand("fixtures/pdf_reader/object-stream.pdf", __DIR__)
     assert Text.extract(File.read!(path), layout: false) == {:ok, "Reader milestone fixture"}
