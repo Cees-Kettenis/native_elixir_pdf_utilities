@@ -3,6 +3,45 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
+  test "font resolution cache respects weight, style and separate configured registries" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <div style="font-family: 'Provided Sans'">
+             <p style="font-family: 'Provided Sans'">Normal</p><p style="font-weight: bold">Bold</p>
+             <p style="font-style: italic">Italic</p><p style="font-family: 'Provided Sans'">Repeated</p>
+             </div>
+             """)
+
+    directory = Application.app_dir(:native_elixir_pdf_utilities, "priv/fonts/dejavu")
+
+    faces = [
+      %{family: "Provided Sans", path: Path.join(directory, "DejaVuSans.ttf"), weight: 400},
+      %{family: "Provided Sans", path: Path.join(directory, "DejaVuSans-Bold.ttf"), weight: 700},
+      %{
+        family: "Provided Sans",
+        path: Path.join(directory, "DejaVuSans-Oblique.ttf"),
+        weight: 400,
+        style: :italic
+      }
+    ]
+
+    assert {:ok, %{children: children}} = Style.compute_detailed(dom, fonts: faces)
+    [container] = Enum.filter(children, &(&1.type == :element))
+    [normal, bold, italic, repeated] = Enum.filter(container.children, &(&1.type == :element))
+    assert normal.style.font_face.weight == 400
+    assert bold.style.font_face.weight == 700
+    assert italic.style.font_face.style == :italic
+    assert repeated.style.font_face == normal.style.font_face
+
+    replacement = [
+      %{family: "Provided Sans", path: Path.join(directory, "DejaVuSans-Bold.ttf"), weight: 400}
+    ]
+
+    assert {:ok, %{children: children}} = Style.compute_detailed(dom, fonts: replacement)
+    [other] = Enum.filter(children, &(&1.type == :element))
+    assert other.style.font_face.id != container.style.font_face.id
+  end
+
   test "class matching preserves whitespace, duplicates, case and ancestor negations" do
     assert {:ok, dom} =
              HtmlParser.parse("""

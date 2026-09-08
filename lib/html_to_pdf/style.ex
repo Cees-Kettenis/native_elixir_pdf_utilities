@@ -1560,8 +1560,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     {line, column}
   end
 
-  defp resolve_font(family_value, weight, style, registry) do
-    {:ok, _families, _font_face} = result = Font.resolve(family_value, weight, style, registry)
+  defp resolve_font(family_value, weight, style, registry, cache \\ nil) do
+    result =
+      case cache do
+        nil ->
+          Font.resolve(family_value, weight, style, registry)
+
+        cache ->
+          RenderCache.fetch(cache, {:font, family_value, weight, style}, fn ->
+            Font.resolve(family_value, weight, style, registry)
+          end)
+      end
+
+    {:ok, _families, _font_face} = result
     result
   end
 
@@ -1660,7 +1671,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           end)
           |> Enum.map(& &1.declaration)
 
-        with {:ok, style} <- apply_declarations(style, declarations),
+        with {:ok, style} <- apply_declarations(style, declarations, rules.cache),
              style =
                style
                |> resolve_rem_values()
@@ -1669,7 +1680,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                |> Map.delete(:_root_element)
                |> resolve_current_color_values(),
              style = apply_border_styles(style),
-             {:ok, style} <- put_font_face(style) do
+             {:ok, style} <- put_font_face(style, rules.cache) do
           {:ok, put_line_height(style)}
         end
 
@@ -1851,7 +1862,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp apply_declarations(style, declarations) do
+  defp apply_declarations(style, declarations, cache) do
     {custom_property_declarations, ordinary_declarations} =
       Enum.split_with(declarations, &custom_property_declaration?/1)
 
@@ -1863,8 +1874,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         end
       end)
 
-    with {:ok, style} <- apply_declaration_list(style, custom_property_declarations),
-         {:ok, style} <- apply_declaration_list(style, foundational_declarations) do
+    with {:ok, style} <- apply_declaration_list(style, custom_property_declarations, cache),
+         {:ok, style} <- apply_declaration_list(style, foundational_declarations, cache) do
       style = resolve_rem_font_size(style)
 
       style =
@@ -1873,7 +1884,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           false -> style
         end
 
-      apply_declaration_list(style, dependent_declarations)
+      apply_declaration_list(style, dependent_declarations, cache)
     end
   end
 
@@ -1885,9 +1896,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp apply_declaration_list(style, declarations) do
+  defp apply_declaration_list(style, declarations, cache) do
     Enum.reduce_while(declarations, {:ok, style}, fn declaration, {:ok, acc} ->
-      case apply_declaration(acc, declaration) do
+      case apply_declaration(acc, declaration, cache) do
         {:ok, style} -> {:cont, {:ok, style}}
         {:error, reason} -> {:halt, {:error, reason}}
         _ -> {:halt, {:error, :invalid_document}}
@@ -1902,14 +1913,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp apply_declaration(style, declaration) do
+  defp apply_declaration(style, declaration, cache \\ nil) do
     case declaration do
-      {property, value} -> apply_declaration_value(style, property, value)
-      {property, value, :important} -> apply_declaration_value(style, property, value)
+      {property, value} -> apply_declaration_value(style, property, value, cache)
+      {property, value, :important} -> apply_declaration_value(style, property, value, cache)
     end
   end
 
-  defp apply_declaration_value(style, property, value) do
+  defp apply_declaration_value(style, property, value, cache) do
     case property do
       "--" <> _custom_property when is_binary(value) ->
         custom_properties =
@@ -1921,14 +1932,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       _ ->
         with {:ok, value} <- resolved_css_value(style, value) do
-          apply_resolved_declaration_value(style, property, value)
+          apply_resolved_declaration_value(style, property, value, cache)
         else
           :error -> {:error, :invalid_document}
         end
     end
   end
 
-  defp apply_resolved_declaration_value(style, property, value) do
+  defp apply_resolved_declaration_value(style, property, value, cache) do
     case property do
       "color" ->
         with {:ok, color} <-
@@ -2140,7 +2151,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         put_font_style(style, value)
 
       "font-family" ->
-        put_font_family(style, value)
+        put_font_family(style, value, cache)
 
       "display" ->
         put_display(style, value)
@@ -3364,13 +3375,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp put_font_family(style, value) do
+  defp put_font_family(style, value, cache) do
     with {:ok, families, font_face} <-
            resolve_font(
              value,
              Map.fetch!(style, :font_weight),
              Map.fetch!(style, :font_style),
-             Map.fetch!(style, :_font_registry)
+             Map.fetch!(style, :_font_registry),
+             cache
            ) do
       {:ok,
        style
@@ -3380,13 +3392,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp put_font_face(style) do
+  defp put_font_face(style, cache) do
     with {:ok, families, font_face} <-
            resolve_font(
              Map.fetch!(style, :font_families),
              Map.fetch!(style, :font_weight),
              Map.fetch!(style, :font_style),
-             Map.fetch!(style, :_font_registry)
+             Map.fetch!(style, :_font_registry),
+             cache
            ) do
       {:ok,
        style

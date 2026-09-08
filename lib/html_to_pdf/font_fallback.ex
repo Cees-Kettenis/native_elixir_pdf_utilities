@@ -49,10 +49,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
   end
 
   defp prepare_candidates(%{type: :document, children: children} = document) do
-    %{document | children: Enum.map(children, &prepare_candidate_node/1)}
+    {children, _cache} = Enum.map_reduce(children, {nil, %{}}, &prepare_candidate_node/2)
+    %{document | children: children}
   end
 
-  defp prepare_candidate_node(node) do
+  defp prepare_candidate_node(node, {cached_registry, cached_candidates} = cache) do
     case node do
       %{type: :text, style: style} ->
         registry = Map.fetch!(style, :_font_registry)
@@ -61,11 +62,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
         weight = Map.fetch!(style, :font_weight)
         font_style = Map.fetch!(style, :font_style)
 
-        requested = Font.requested_faces(families, weight, font_style, registry)
+        # Keep the registry out of map keys: hashing its font payloads per node
+        # would cost more than the candidate lookup being cached.
+        cached_candidates = if registry == cached_registry, do: cached_candidates, else: %{}
+        key = {families, weight, font_style}
 
-        candidates =
-          [selected | requested ++ Font.fallback_faces(registry, weight, font_style)]
-          |> Enum.uniq_by(&Font.pdf_name/1)
+        {candidates, cached_candidates} =
+          case Map.fetch(cached_candidates, key) do
+            {:ok, {previous_selected, candidates}} when previous_selected == selected ->
+              {candidates, cached_candidates}
+
+            _ ->
+              requested = Font.requested_faces(families, weight, font_style, registry)
+
+              candidates =
+                [selected | requested ++ Font.fallback_faces(registry, weight, font_style)]
+                |> Enum.uniq_by(&Font.pdf_name/1)
+
+              {candidates, Map.put(cached_candidates, key, {selected, candidates})}
+          end
 
         graphemes =
           node.text
@@ -81,12 +96,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
             %{text: grapheme, layout_whitespace?: layout_whitespace?}
           end)
 
-        node
-        |> Map.put(:_font_candidates, candidates)
-        |> Map.put(:_font_graphemes, graphemes)
+        prepared =
+          node
+          |> Map.put(:_font_candidates, candidates)
+          |> Map.put(:_font_graphemes, graphemes)
+
+        {prepared, {registry, cached_candidates}}
 
       %{type: :element, children: children} = element ->
-        %{element | children: Enum.map(children, &prepare_candidate_node/1)}
+        {children, cache} = Enum.map_reduce(children, cache, &prepare_candidate_node/2)
+        {%{element | children: children}, cache}
     end
   end
 

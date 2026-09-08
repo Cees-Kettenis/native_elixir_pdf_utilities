@@ -4,6 +4,62 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallbackTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback
 
+  test "candidate reuse respects selected faces, registry changes and nested text" do
+    assert {:ok, first_registry} =
+             Font.load_registry(fonts: [%{family: "First Provided", path: bundled_font_path()}])
+
+    assert {:ok, second_registry} =
+             Font.load_registry(fonts: [%{family: "Second Provided", path: bundled_font_path()}])
+
+    first_style = text_style_with_registry(first_registry)
+    second_style = text_style_with_registry(second_registry)
+    selected = hd(first_registry.embedded)
+    selected_style = %{first_style | font_face: selected, font_family: selected.family}
+
+    tree = %{
+      type: :document,
+      children: [
+        %{type: :text, text: "α", style: first_style},
+        %{type: :text, text: "α", style: first_style},
+        %{type: :text, text: "A", style: selected_style},
+        %{type: :text, text: "A", style: first_style},
+        %{
+          type: :element,
+          tag: "p",
+          style: %{},
+          children: [
+            %{type: :text, text: "α", style: second_style},
+            %{type: :text, text: "α", style: second_style}
+          ]
+        },
+        %{type: :text, text: "α", style: first_style}
+      ]
+    }
+
+    assert {:ok, %{children: [first, repeated, selected_run, reset, nested, last]}} =
+             FontFallback.resolve(tree)
+
+    assert first.style.font_family == "First Provided"
+    assert repeated.style.font_face == first.style.font_face
+    assert selected_run.style.font_face == selected
+    assert reset.style.font_family == "Helvetica"
+
+    assert Enum.map(nested.children, & &1.style.font_family) == [
+             "Second Provided",
+             "Second Provided"
+           ]
+
+    assert last.style.font_face == first.style.font_face
+
+    assert {:ok, %{children: [separate]}} =
+             FontFallback.resolve(%{
+               type: :document,
+               children: [%{type: :text, text: "α", style: second_style}]
+             })
+
+    assert separate.style.font_family == "Second Provided"
+  end
+
   test "long alternating font runs preserve grapheme and face order" do
     text = String.duplicate("Aα", 200)
     tree = %{type: :document, children: [%{type: :text, text: text, style: text_style()}]}
