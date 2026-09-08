@@ -783,6 +783,22 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
     assert decoded_stream(compressed, {:name, "FlateDecode"}) == {:ok, data}
   end
 
+  test "rejects truncated Flate streams even when inflation returns output" do
+    compressed = :zlib.compress("BT /F1 12 Tf (Hello) Tj ET")
+
+    for removed_bytes <- [4, 8, 12] do
+      truncated = binary_part(compressed, 0, byte_size(compressed) - removed_bytes)
+
+      assert {:error,
+              {:invalid_pdf_input,
+               %{
+                 stage: :filter,
+                 reason: :invalid_pdf_input,
+                 message: "FlateDecode data is invalid; object 1 0"
+               }}} = decoded_stream(truncated, {:name, "FlateDecode"})
+    end
+  end
+
   test "decodes LZW dictionary references and grows the code width" do
     codes = [65 | Enum.to_list(258..510)]
 

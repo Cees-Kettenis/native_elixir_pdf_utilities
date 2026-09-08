@@ -1158,6 +1158,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
       rest == <<>> ->
         final = :zlib.inflate(zlib, <<>>)
+        :ok = :zlib.inflateEnd(zlib)
         {:ok, IO.iodata_to_binary(Enum.reverse([final, output | decoded]))}
 
       true ->
