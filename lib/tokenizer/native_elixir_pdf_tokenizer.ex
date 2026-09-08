@@ -66,6 +66,8 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
   # NUL, HT, LF, FF, CR, SP
   @whitespace [0, 9, 10, 12, 13, 32]
   @delims ~c"()<>[]{}/%"
+  @pdf_integer ~r/\A[+-]?[0-9]+\z/
+  @pdf_real ~r/\A[+-]?(?:[0-9]+\.[0-9]*|\.[0-9]+)\z/
 
   @doc """
   Initialize the tokenizer from a binary.
@@ -611,21 +613,30 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
 
   # Interpret a bareword as a PDF integer or real; otherwise return {:error, {:not_a_number, word}}.
   defp parse_number_from_word(word, st) do
-    # PDF numbers don't have exponents per spec; we allow a leading +/-, decimal dot.
-    if String.contains?(word, ".") do
-      case Float.parse(word) do
-        {f, ""} -> {{:real, f}, st}
-        _ -> {{:error, {:not_a_number, word}}, st}
-      end
-    else
-      case Integer.parse(word) do
-        {i, ""} ->
-          st2 = maybe_capture_length_int(st, i)
-          {{:int, i}, st2}
+    cond do
+      Regex.match?(@pdf_integer, word) ->
+        {integer, ""} = Integer.parse(word)
+        st = maybe_capture_length_int(st, integer)
+        {{:int, integer}, st}
 
-        _ ->
-          {{:error, {:not_a_number, word}}, st}
-      end
+      Regex.match?(@pdf_real, word) ->
+        normalized =
+          cond do
+            String.starts_with?(word, ".") -> "0" <> word
+            String.starts_with?(word, "+.") -> "+0" <> binary_part(word, 1, byte_size(word) - 1)
+            String.starts_with?(word, "-.") -> "-0" <> binary_part(word, 1, byte_size(word) - 1)
+            String.ends_with?(word, ".") -> word <> "0"
+            true -> word
+          end
+
+        try do
+          {{:real, :erlang.binary_to_float(normalized)}, st}
+        rescue
+          ArgumentError -> {{:error, {:not_a_number, word}}, st}
+        end
+
+      true ->
+        {{:error, {:not_a_number, word}}, st}
     end
   end
 

@@ -34,6 +34,24 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
            ] = toks(input)
   end
 
+  test "accepts PDF real spellings and rejects exponent notation" do
+    assert [
+             {:real, 0.5},
+             {:real, -0.5},
+             {:real, 0.5},
+             {:real, 1.0},
+             {:real, 1.0},
+             {:real, -1.0}
+           ] = toks(".5 -.5 +.5 1. +1. -1.")
+
+    for invalid <- ["1e2", "1.0e2", "-1.0E-2", ".5e2", ".", "+.", "-.", "1..0"] do
+      assert [{:error, {:not_a_number, ^invalid}}] = toks(invalid)
+    end
+
+    unrepresentable = String.duplicate("9", 309) <> ".0"
+    assert [{:error, {:not_a_number, ^unrepresentable}}] = toks(unrepresentable)
+  end
+
   test "names with hex escapes" do
     input = "/A#20B#2fC /A#zzB"
     assert [{:name, "A B/C"}, {:name, "A#zzB"}] = toks(input)
