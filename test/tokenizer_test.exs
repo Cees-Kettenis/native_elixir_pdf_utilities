@@ -65,6 +65,12 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
     assert [{:error, {:unterminated_literal_string, 0}}] = toks("(unterminated\\")
   end
 
+  test "normalizes literal string line endings without changing escapes or continuations" do
+    assert [{:string, "A\nB\nC\nD"}] = toks("(A\rB\r\nC\nD)")
+    assert [{:string, "A\rB"}] = toks("(A\\rB)")
+    assert [{:string, "ABCD"}] = toks("(A\\\rB\\\r\nC\\\nD)")
+  end
+
   test "hex strings" do
     input = "<48656C6C6F> <4 1 2> << >> >"
 

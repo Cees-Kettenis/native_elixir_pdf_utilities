@@ -383,6 +383,14 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
             collect_lit(bump(st, 1), balance - 1, [?) | acc])
           end
 
+        ?\r ->
+          st2 = bump(st, 1)
+          st3 = if st2.pos < st2.size and byte_at(st2) == ?\n, do: bump(st2, 1), else: st2
+          collect_lit(st3, balance, [?\n | acc])
+
+        ?\n ->
+          collect_lit(bump(st, 1), balance, [?\n | acc])
+
         c ->
           collect_lit(bump(st, 1), balance, [c | acc])
       end
