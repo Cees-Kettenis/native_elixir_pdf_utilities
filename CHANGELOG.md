@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.16.0 - 2026-09-08
+
+### Added
+
+- Added `NativeElixirPdfUtilities.Outlines` with `get/1`, `put/2`, `detect/1`,
+  and `automatic/1` to read, replace, detect, and write PDF bookmarks.
+- Added HTML-to-PDF outlines through `outlines: :headings` or an exact outline
+  list. Heading destinations follow their final positions after pagination.
+- Added outline preservation during merging, page transforms, and splitting.
+- Added limits for outline items, depth, title bytes, name-tree nodes, named
+  destinations, and spaces reconstructed during text extraction.
+- Added manual testing forms for outline workflows and a synthetic 250-item
+  HTML render benchmark with stage timings, reductions, and sampled VM memory.
+
+### Changed
+
+- Indexed CSS selectors, separated pseudo-element matching, and prepared class
+  membership once per element to reduce repeated style-matching work.
+- Cached inline declaration parsing, font resolution, and fallback candidate
+  preparation within each style or fallback computation.
+- Replaced repeated list appends in selected style, layout, font-run, and
+  cross-reference paths with linear list construction.
+- Updated the guides for outline workflows, supported rendering behavior,
+  parsing, resource limits, and benchmarking.
+
+### Fixed
+
+- Preserved resolvable named internal links when assembling PDFs. Output links
+  use explicit destinations; unresolved links and links to removed pages are
+  omitted.
+- Applied page `UserUnit` scaling to dimensions returned by `Info.page_sizes/1`.
+- Preserved the permanent trailer identifier and refreshed the revision
+  identifier during metadata and outline updates.
+- Corrected outline depth checks and leaf expansion state, validated detected
+  outlines, and enforced combined outline limits and output object capacity.
+- Preserved heading bookmarks across forced page breaks and in flex and grid
+  containers. Repeated table headers produce one bookmark, and heading line
+  breaks retain word separation.
+- Limited cross-reference parsing to the current revision and stopped object
+  parsing and stream lookahead at `endobj`.
+- Accepted PDF decimal spellings such as `.5` and `1.`, normalized literal-string
+  line endings, and rejected truncated Flate streams instead of returning
+  partial decoded data.
+- Retained pending operands and array state across page content streams during
+  text extraction. CMap parsing now ignores comments and applies mappings in
+  source order while enforcing aggregate mapping limits.
+- Preserved case-sensitive CSS custom properties and quoted CSS syntax,
+  distinguished identical siblings in positional selectors, and restored
+  enclosing counter scopes after nested resets.
+- Resolved percentage widths against containers, gave minimum dimensions
+  precedence over smaller maxima, and stopped repeated wrapping attempts for
+  indivisible graphemes.
+- Clamped table rowspans to their row groups and moved image clipping regions
+  with page headers and footers.
+- Rejected SVG resource references and XML entity declarations before
+  rasterization. SVGs must use self-contained content and internal references.
+
 ## 0.15.0 - 2026-09-01
 
 ### Added

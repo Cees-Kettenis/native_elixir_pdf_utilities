@@ -88,14 +88,8 @@ override these values.
 `NativeElixirPdfUtilities.Limits.effective/0` returns the values loaded for the
 current application instance.
 
-## Cache scope
-
-`max_font_cache_entries` and `max_system_font_cache_entries` count entries in
-shared font caches, not bytes. They do not cap the temporary style and fallback
-caches, which have no separate entry or byte limit and are discarded after use.
-
-Resource limits do not impose an overall render-time or process-memory ceiling.
-Set application timeouts and concurrency limits for your workload.
+The shared font-cache limits do not apply to temporary style and fallback
+caches, which are discarded after use.
 
 ## Changing limits
 

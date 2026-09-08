@@ -157,7 +157,7 @@ require no new options.
 
 Body and page-furniture computations use separate temporary caches. The caches
 are discarded after use and have no separate size limit. Shared font-cache
-limits are described in [Configurable resource limits](resource-limits.md#cache-scope).
+limits are described in [Configurable resource limits](resource-limits.md).
 
 Large tables still measure and lay out cell content separately. Repeated images
 are decoded or rasterized during styling before the PDF writer deduplicates

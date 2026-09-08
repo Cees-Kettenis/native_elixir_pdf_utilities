@@ -19,24 +19,6 @@ breaking API changes are allowed, but they should be explained clearly in
 
 ## Milestones
 
-### 0.16.0 - Bookmarks and Outlines
-
-Milestone goal: support navigation metadata for generated reports and assembled document
-packets.
-
-#### Scope
-
-- Add bookmarks and outlines for generated or transformed PDFs.
-- Add outline preservation where practical when merging or transforming PDFs.
-
-#### Design Notes
-
-- Document outline creation, preservation, and loss cases.
-
-#### Completion Criteria
-
-- Add unit and fixture tests for outline creation and outline preservation.
-
 ### 0.17.0 - Stamping and Existing-PDF Page Numbers
 
 Milestone goal: add common overlay workflows for drafts, approvals, internal documents,
@@ -221,7 +203,6 @@ it properly.
 
 - Improve HTML-to-PDF runtime and memory scaling:
   - store embedded-font glyph widths in a constant-time lookup structure
-  - cache font-fallback candidates by family, weight, and style within a render
   - construct fallback runs and inline layout collections without repeated list
     appends, last-element updates, or binary concatenation
   - cache repeated text measurements and avoid recomputing complete line widths
