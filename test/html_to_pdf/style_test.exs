@@ -3,6 +3,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
+  test "class matching preserves whitespace, duplicates, case and ancestor negations" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <style>
+             .outer .A.B:not(.excluded) { color: red; }
+             .outer:not(.missing) > .excluded { color: blue; }
+             .a { font-weight: bold; }
+             </style><div class="outer outer"><p class="A\t A\nB">First</p><p class="A B excluded">Second</p></div>
+             """)
+
+    assert {:ok, %{children: [container]}} = Style.compute_detailed(dom)
+    [first, second] = container.children
+    assert first.style.color == {1, 0, 0}
+    assert second.style.color == {0, 0, 1}
+    assert first.style.font_weight == 400
+    assert second.style.font_weight == 400
+    refute Map.has_key?(first, :_selector_classes)
+  end
+
   test "positional selectors retain fragment-root behavior without an element parent" do
     assert {:ok, dom} =
              HtmlParser.parse("""

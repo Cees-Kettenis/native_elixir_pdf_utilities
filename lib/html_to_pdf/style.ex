@@ -235,6 +235,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         %{type: :element, children: children} ->
           node
           |> Map.put(:_selector_id, make_ref())
+          |> Map.put(
+            :_selector_classes,
+            node.attributes
+            |> Map.get("class", "")
+            |> String.split(~r/\s+/u, trim: true)
+            |> MapSet.new()
+          )
           |> Map.put(:children, assign_selector_ids(children))
 
         _ ->
@@ -569,7 +576,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, base_style}
 
       false ->
-        body_node = %{type: :element, tag: "body", attributes: %{}, children: []}
+        body_node = %{
+          type: :element,
+          tag: "body",
+          attributes: %{},
+          children: [],
+          _selector_classes: MapSet.new()
+        }
 
         with {:ok, body_style} <- element_style(body_node, base_style, rules, [], opts) do
           case Map.get(body_style, :display) do
@@ -1671,12 +1684,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       _ ->
         attributes = node.attributes
-        classes = attributes |> Map.get("class", "") |> String.split(~r/\s+/u, trim: true)
+        classes = node._selector_classes
 
         keys = [
           :universal,
           {:id, Map.get(attributes, "id")},
-          {:tag, node.tag} | Enum.map(Enum.uniq(classes), &{:class, &1})
+          {:tag, node.tag} | Enum.map(classes, &{:class, &1})
         ]
 
         keys
@@ -1731,11 +1744,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp matches_simple_selector?(part, node, ancestors) do
     attributes = Map.get(node, :attributes, %{})
-    classes = attributes |> Map.get("class", "") |> String.split(~r/\s+/u, trim: true)
+    classes = node._selector_classes
 
     tag_matches? = is_nil(part.tag) or Map.get(node, :tag) == part.tag
     id_matches? = is_nil(part.id) or Map.get(attributes, "id") == part.id
-    classes_match? = Enum.all?(part.classes, &(&1 in classes))
+    classes_match? = Enum.all?(part.classes, &MapSet.member?(classes, &1))
     attributes_match? = Enum.all?(part.attributes, &attribute_selector_matches?(&1, attributes))
 
     pseudo_classes_match? =
