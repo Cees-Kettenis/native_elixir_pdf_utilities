@@ -127,7 +127,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
             append_run(runs, node, style, font_face, text)
           end)
 
-        resolved
+        Enum.reverse(resolved)
 
       %{type: :element, children: children} = element when is_list(children) ->
         [%{element | children: resolve_prepared_nodes(children, unsupported_glyphs)}]
@@ -135,9 +135,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
   end
 
   defp append_run(runs, node, style, font_face, grapheme) do
-    case List.last(runs) do
-      %{style: %{font_face: previous_face}} when previous_face == font_face ->
-        List.update_at(runs, -1, &%{&1 | text: &1.text <> grapheme})
+    case runs do
+      [%{style: %{font_face: previous_face}} = previous | remaining]
+      when previous_face == font_face ->
+        [%{previous | text: previous.text <> grapheme} | remaining]
 
       _ ->
         resolved_style =
@@ -145,7 +146,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
           |> Map.put(:font_face, font_face)
           |> Map.put(:font_family, font_face.family)
 
-        runs ++ [%{node | text: grapheme, style: resolved_style}]
+        [%{node | text: grapheme, style: resolved_style} | runs]
     end
   end
 end

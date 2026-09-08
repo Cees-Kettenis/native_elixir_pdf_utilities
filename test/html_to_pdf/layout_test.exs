@@ -6,6 +6,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Limits
 
+  test "large block, row-group and list accumulators preserve text and vertical order" do
+    html =
+      Enum.map_join(1..80, fn index ->
+        "<article><p>H#{index}</p><table><tbody><tr><td>A#{index}<br>B#{index}</td></tr></tbody>" <>
+          "<tbody><tr><td>C#{index}</td></tr></tbody></table><ol><li>D#{index}</li></ol></article>"
+      end)
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled)
+
+    text_boxes =
+      Enum.filter(
+        layout.boxes,
+        &(Map.get(&1, :type) == :text and Regex.match?(~r/^[HABCD]\d+$/, &1.text))
+      )
+
+    expected =
+      Enum.flat_map(1..80, fn index -> Enum.map(["H", "A", "B", "C", "D"], &"#{&1}#{index}") end)
+
+    assert Enum.map(text_boxes, & &1.text) == expected
+    ys = Enum.map(text_boxes, & &1.y)
+    assert ys == Enum.sort(ys, :desc)
+  end
+
   test "layout positions a paragraph text box on the first page" do
     styled_tree = %{
       type: :document,

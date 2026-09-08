@@ -4,6 +4,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallbackTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback
 
+  test "long alternating font runs preserve grapheme and face order" do
+    text = String.duplicate("Aα", 200)
+    tree = %{type: :document, children: [%{type: :text, text: text, style: text_style()}]}
+    assert {:ok, resolved} = FontFallback.resolve(tree)
+    assert Enum.map_join(resolved.children, & &1.text) == text
+
+    assert Enum.map(resolved.children, & &1.style.font_family) ==
+             List.flatten(List.duplicate(["Helvetica", "DejaVu Sans"], 200))
+  end
+
   test "keeps supported ASCII in the selected face and falls back per grapheme" do
     style = text_style()
 

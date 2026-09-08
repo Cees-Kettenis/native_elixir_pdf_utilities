@@ -209,10 +209,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                  parent_counters
                ) do
             {:ok, styled_children, nil, latest_counters} ->
-              {:cont, {:ok, acc ++ styled_children, previous_sibling_counters, latest_counters}}
+              {:cont,
+               {:ok, Enum.reverse(styled_children, acc), previous_sibling_counters,
+                latest_counters}}
 
             {:ok, styled_children, element_counters, latest_counters} ->
-              {:cont, {:ok, acc ++ styled_children, element_counters, latest_counters}}
+              {:cont,
+               {:ok, Enum.reverse(styled_children, acc), element_counters, latest_counters}}
 
             {:error, reason} ->
               {:halt, {:error, reason}}
@@ -222,7 +225,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
     case result do
       {:ok, styled_children, _previous_sibling_counters, latest_counters} ->
-        {:ok, styled_children, latest_counters}
+        {:ok, Enum.reverse(styled_children), latest_counters}
 
       {:error, reason} ->
         {:error, reason}

@@ -95,26 +95,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp collect_positioned_children(children) do
-    Enum.reduce(children, {[], []}, fn child, {normal, positioned} ->
-      case child do
-        %{type: :element, children: nested_children, style: style} = element ->
-          {nested_children, nested_positioned} = collect_positioned_children(nested_children)
+    {normal, positioned} =
+      Enum.reduce(children, {[], []}, fn child, {normal, positioned} ->
+        case child do
+          %{type: :element, children: nested_children, style: style} = element ->
+            {nested_children, nested_positioned} = collect_positioned_children(nested_children)
 
-          element =
-            element
-            |> Map.put(:children, nested_children)
-            |> maybe_attach_positioned_children(nested_positioned)
+            element =
+              element
+              |> Map.put(:children, nested_children)
+              |> maybe_attach_positioned_children(nested_positioned)
 
-          case Map.get(style, :position, :static) do
-            :absolute -> {normal, positioned ++ [element]}
-            :relative -> {normal ++ [element], positioned}
-            _ -> {normal ++ [element], positioned ++ nested_positioned}
-          end
+            case Map.get(style, :position, :static) do
+              :absolute -> {normal, [element | positioned]}
+              :relative -> {[element | normal], positioned}
+              _ -> {[element | normal], Enum.reverse(nested_positioned, positioned)}
+            end
 
-        child ->
-          {normal ++ [child], positioned}
-      end
-    end)
+          child ->
+            {[child | normal], positioned}
+        end
+      end)
+
+    {Enum.reverse(normal), Enum.reverse(positioned)}
   end
 
   defp maybe_attach_positioned_children(element, positioned_children) do
@@ -141,13 +144,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                y,
                page_width - margins.left - margins.right
              ) do
-          {:ok, block_boxes, next_y} -> {:cont, {:ok, boxes ++ block_boxes, next_y}}
+          {:ok, block_boxes, next_y} -> {:cont, {:ok, Enum.reverse(block_boxes, boxes), next_y}}
           {:error, reason} -> {:halt, {:error, reason}}
         end
       end)
 
     case result do
-      {:ok, boxes, _y} -> {:ok, boxes}
+      {:ok, boxes, _y} -> {:ok, Enum.reverse(boxes)}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -756,7 +759,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 margin_bottom
               )
 
-            {:cont, {:ok, boxes ++ child_boxes, next_y, next_margin_bottom}}
+            {:cont, {:ok, Enum.reverse(child_boxes, boxes), next_y, next_margin_bottom}}
 
           {:error, reason} ->
             {:halt, {:error, reason}}
@@ -764,7 +767,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       end)
 
     case result do
-      {:ok, boxes, next_y, _margin_bottom} -> {:ok, boxes, next_y}
+      {:ok, boxes, next_y, _margin_bottom} -> {:ok, Enum.reverse(boxes), next_y}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -3044,13 +3047,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       |> Enum.with_index()
       |> Enum.reduce_while({:ok, []}, fn {child, group_index}, {:ok, rows} ->
         case table_child_rows(child, group_index) do
-          {:ok, table_rows} -> {:cont, {:ok, rows ++ table_rows}}
+          {:ok, table_rows} -> {:cont, {:ok, Enum.reverse(table_rows, rows)}}
           {:error, reason} -> {:halt, {:error, reason}}
         end
       end)
 
     case result do
-      {:ok, rows} when rows != [] -> {:ok, rows}
+      {:ok, rows} when rows != [] -> {:ok, Enum.reverse(rows)}
       _ -> {:error, :invalid_layout}
     end
   end
@@ -3102,10 +3105,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
         Enum.reduce_while(group_rows, {:ok, []}, fn group_row, {:ok, rows} ->
           case table_group_row(group_row, section, group_index, child.style) do
-            {:ok, table_rows} -> {:cont, {:ok, rows ++ table_rows}}
+            {:ok, table_rows} -> {:cont, {:ok, Enum.reverse(table_rows, rows)}}
             {:error, reason} -> {:halt, {:error, reason}}
           end
         end)
+        |> case do
+          {:ok, rows} -> {:ok, Enum.reverse(rows)}
+          {:error, reason} -> {:error, reason}
+        end
 
       _ ->
         {:error, :invalid_layout}
@@ -3210,10 +3217,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               vertical_spacing
             )
 
-          {boxes ++ row_boxes, next_y - vertical_spacing}
+          {Enum.reverse(row_boxes, boxes), next_y - vertical_spacing}
         end)
 
-      {:ok, boxes, next_y}
+      {:ok, Enum.reverse(boxes), next_y}
     end
   end
 
@@ -4003,17 +4010,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 )
 
               case table_cell_height(placement.cell, width, border_collapse) do
-                {:ok, height} -> {:cont, {:ok, cell_heights ++ [height]}}
+                {:ok, height} -> {:cont, {:ok, [height | cell_heights]}}
                 {:error, reason} -> {:halt, {:error, reason}}
               end
             end)
 
           case result do
             {:ok, cell_heights} ->
-              intrinsic_height = Enum.max(cell_heights, fn -> 0.0 end)
+              intrinsic_height = cell_heights |> Enum.reverse() |> Enum.max(fn -> 0.0 end)
 
               {:cont,
-               {:ok, row_heights ++ [max(intrinsic_height, table_row_declared_height(style))]}}
+               {:ok, [max(intrinsic_height, table_row_declared_height(style)) | row_heights]}}
 
             {:error, reason} ->
               {:halt, {:error, reason}}
@@ -4023,6 +4030,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     adjusted_heights =
       case initial_heights do
         {:ok, heights} ->
+          heights = Enum.reverse(heights)
+
           rows
           |> Enum.with_index()
           |> Enum.reduce_while({:ok, heights}, fn {%{cells: cells}, row_index},
@@ -4270,7 +4279,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 margin_bottom
               )
 
-            {:cont, {:ok, boxes ++ child_boxes, next_y, next_margin_bottom}}
+            {:cont, {:ok, Enum.reverse(child_boxes, boxes), next_y, next_margin_bottom}}
 
           {:error, reason} ->
             {:halt, {:error, reason}}
@@ -4278,7 +4287,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       end)
 
     case result do
-      {:ok, boxes, next_y, _margin_bottom} -> {:ok, boxes, next_y}
+      {:ok, boxes, next_y, _margin_bottom} -> {:ok, Enum.reverse(boxes), next_y}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -4378,13 +4387,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       |> Enum.with_index(1)
       |> Enum.reduce_while({:ok, [], y}, fn {child, index}, {:ok, boxes, current_y} ->
         case layout_list_item(child, marker_type, index, x, current_y, width) do
-          {:ok, item_boxes, next_y} -> {:cont, {:ok, boxes ++ item_boxes, next_y}}
+          {:ok, item_boxes, next_y} -> {:cont, {:ok, Enum.reverse(item_boxes, boxes), next_y}}
           {:error, reason} -> {:halt, {:error, reason}}
         end
       end)
 
     case result do
-      {:ok, boxes, next_y} -> {:ok, boxes, next_y}
+      {:ok, boxes, next_y} -> {:ok, Enum.reverse(boxes), next_y}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -4463,13 +4472,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             run_boxes =
               inline_run_boxes(run, current_x, line_top, baseline_y, width, line_metadata)
 
-            {acc ++ run_boxes, current_x + inline_run_width(run, width)}
+            {Enum.reverse(run_boxes, acc), current_x + inline_run_width(run, width)}
           end)
 
-        {boxes ++ line_boxes, consumed_height + current_line_height}
+        {line_boxes ++ boxes, consumed_height + current_line_height}
       end)
 
-    {position_inline_contexts(boxes, width), inline_content_height(runs, lines, line_height)}
+    {position_inline_contexts(Enum.reverse(boxes), width),
+     inline_content_height(runs, lines, line_height)}
   end
 
   defp inline_run_boxes(run, x, line_top, baseline_y, width, metadata) do
