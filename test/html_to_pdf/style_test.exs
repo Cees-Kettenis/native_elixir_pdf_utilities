@@ -3,6 +3,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
+  test "positional selectors retain fragment-root behavior without an element parent" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <style>
+             p:first-child, p:last-child, p:first-of-type, p:last-of-type, p:nth-child(1) { color: red; }
+             </style><p>Root paragraph</p>
+             """)
+
+    assert {:ok, %{children: [paragraph]}} = Style.compute_detailed(dom)
+    assert paragraph.style.color == {0, 0, 0}
+  end
+
+  test "selector candidates preserve grouped specificity, source order and general selectors" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <style>
+             * { color: black; }
+             [data-tone] { background-color: blue; }
+             :not(.excluded) { letter-spacing: 1pt; }
+             .selected, #target { color: red; padding: 1pt; padding: 2pt; }
+             .scope .selected { color: blue; }
+             .missing #target { color: green; }
+             .selected { font-size: 11pt; }
+             .selected { font-size: 12pt; }
+             .scope > p.selected[data-tone] { font-weight: bold; }
+             </style><div class="scope"><p id="target" class="selected selected" data-tone="yes">First</p><p class="selected excluded">Second</p><span>Third</span></div>
+             """)
+
+    assert {:ok, %{children: [container]}} = Style.compute_detailed(dom)
+    [first, second, third] = container.children
+    assert first.style.color == {1, 0, 0}
+    assert second.style.color == {0, 0, 1}
+    assert first.style.background_color == {0, 0, 1}
+    assert second.style.background_color == nil
+    assert first.style.padding.left == 2.0
+    assert first.style.font_size == 12.0
+    assert first.style.font_weight == 700
+    assert second.style.font_weight == 400
+    assert third.style.color == {0, 0, 0}
+  end
+
   test "mixed normal and pseudo selectors keep their own specificity and counters" do
     assert {:ok, dom} =
              HtmlParser.parse("""

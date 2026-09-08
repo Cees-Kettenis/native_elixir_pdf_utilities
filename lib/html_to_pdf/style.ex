@@ -118,7 +118,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
           result =
             RenderCache.run(fn cache ->
-              context = %{rules: group_pseudo_element_rules(rules), cache: cache}
+              context = %{rules: compile_selector_rules(rules), cache: cache}
 
               case fragment_root_style(children, base_style, context, style_opts) do
                 {:ok, nil} ->
@@ -1549,21 +1549,51 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     result
   end
 
-  defp group_pseudo_element_rules(rules) do
-    Map.new([nil, :before, :after], fn pseudo_element ->
-      grouped =
-        Enum.flat_map(rules, fn rule ->
-          selectors =
-            Enum.filter(rule.selectors, &(List.last(&1.parts).pseudo_element == pseudo_element))
+  defp compile_selector_rules(rules) do
+    Enum.reduce(
+      rules,
+      %{selectors: %{nil => %{}, :before => %{}, :after => %{}}, declarations: %{}},
+      fn rule, compiled ->
+        declarations =
+          rule.declarations
+          |> Enum.with_index()
+          |> Enum.map(fn {declaration, declaration_index} ->
+            %{
+              declaration: declaration,
+              important: important_declaration?(declaration),
+              inline: false,
+              order: rule.order,
+              declaration_index: declaration_index
+            }
+          end)
 
-          case selectors do
-            [] -> []
-            selectors -> [%{rule | selectors: selectors}]
-          end
-        end)
+        selectors =
+          Enum.reduce(rule.selectors, compiled.selectors, fn selector, indexes ->
+            [rightmost | _] = parts = Enum.reverse(selector.parts)
 
-      {pseudo_element, grouped}
-    end)
+            # Index only a positive requirement of the rightmost compound selector.
+            # Attribute-only and negation-only selectors must remain general candidates.
+            key =
+              cond do
+                rightmost.id != nil -> {:id, rightmost.id}
+                rightmost.classes != [] -> {:class, hd(rightmost.classes)}
+                rightmost.tag != nil -> {:tag, rightmost.tag}
+                true -> :universal
+              end
+
+            entry = {rule.order, %{selector | parts: parts}}
+
+            Map.update!(indexes, rightmost.pseudo_element, fn index ->
+              Map.update(index, key, [entry], &[entry | &1])
+            end)
+          end)
+
+        %{
+          selectors: selectors,
+          declarations: Map.put(compiled.declarations, rule.order, declarations)
+        }
+      end
+    )
   end
 
   defp apply_author_styles(
@@ -1633,42 +1663,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp matching_declarations(context, node, ancestors, pseudo_element) do
-    context.rules
-    |> Map.fetch!(pseudo_element)
-    |> Enum.flat_map(fn rule ->
-      case matching_specificity(rule.selectors, node, ancestors, pseudo_element) do
-        nil ->
-          []
+    index = Map.fetch!(context.rules.selectors, pseudo_element)
 
-        specificity ->
-          rule.declarations
-          |> Enum.with_index()
-          |> Enum.map(fn {declaration, declaration_index} ->
-            %{
-              declaration: declaration,
-              important: important_declaration?(declaration),
-              inline: false,
-              specificity: specificity,
-              order: rule.order,
-              declaration_index: declaration_index
-            }
-          end)
-      end
-    end)
-  end
+    case map_size(index) do
+      0 ->
+        []
 
-  defp matching_specificity(selectors, node, ancestors, pseudo_element) do
-    selectors
-    |> Enum.filter(&matches_selector?(&1, node, ancestors, pseudo_element))
-    |> Enum.map(& &1.specificity)
-    |> Enum.max(fn -> nil end)
-  end
+      _ ->
+        attributes = node.attributes
+        classes = attributes |> Map.get("class", "") |> String.split(~r/\s+/u, trim: true)
 
-  defp matches_selector?(selector, node, ancestors, pseudo_element) do
-    [rightmost | _remaining] = parts = Enum.reverse(selector.parts)
+        keys = [
+          :universal,
+          {:id, Map.get(attributes, "id")},
+          {:tag, node.tag} | Enum.map(Enum.uniq(classes), &{:class, &1})
+        ]
 
-    rightmost.pseudo_element == pseudo_element and
-      match_selector_parts(parts, node, ancestors)
+        keys
+        |> Enum.flat_map(&Map.get(index, &1, []))
+        |> Enum.reduce(%{}, fn {order, selector}, matched ->
+          case match_selector_parts(selector.parts, node, ancestors) do
+            true ->
+              Map.update(matched, order, selector.specificity, &max(&1, selector.specificity))
+
+            false ->
+              matched
+          end
+        end)
+        |> Enum.flat_map(fn {order, specificity} ->
+          context.rules.declarations
+          |> Map.fetch!(order)
+          |> Enum.map(&Map.put(&1, :specificity, specificity))
+        end)
+    end
   end
 
   defp match_selector_parts(parts, node, ancestors) do
