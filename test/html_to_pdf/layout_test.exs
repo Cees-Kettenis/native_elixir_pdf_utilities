@@ -1253,6 +1253,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
                     0.0001
   end
 
+  test "layout clamps rowspans at adjacent tbody boundaries" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <table style="width: 200pt">
+               <tbody><tr><td rowspan="2">A</td><td>B</td></tr></tbody>
+               <tbody><tr><td>C</td><td>D</td></tr></tbody>
+             </table>
+             """)
+
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {240, 160}, margin: 0)
+
+    text_boxes =
+      layout_tree.boxes
+      |> Enum.filter(&(&1.type == :text))
+      |> Map.new(&{&1.text, &1})
+
+    a = Map.fetch!(text_boxes, "A")
+    b = Map.fetch!(text_boxes, "B")
+    c = Map.fetch!(text_boxes, "C")
+    d = Map.fetch!(text_boxes, "D")
+
+    assert b.x > a.x
+    assert_in_delta c.x, a.x, 0.0001
+    assert_in_delta d.x, b.x, 0.0001
+  end
+
   test "layout positions row flex items with order gap justify-content and align-items" do
     dom = %{
       type: :document,

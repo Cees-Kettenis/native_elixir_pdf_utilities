@@ -3039,8 +3039,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp table_rows(children) do
     result =
-      Enum.reduce_while(children, {:ok, []}, fn child, {:ok, rows} ->
-        case table_child_rows(child) do
+      children
+      |> Enum.with_index()
+      |> Enum.reduce_while({:ok, []}, fn {child, group_index}, {:ok, rows} ->
+        case table_child_rows(child, group_index) do
           {:ok, table_rows} -> {:cont, {:ok, rows ++ table_rows}}
           {:error, reason} -> {:halt, {:error, reason}}
         end
@@ -3071,7 +3073,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end)
   end
 
-  defp table_child_rows(child) do
+  defp table_child_rows(child, group_index) do
     case child do
       %{style: %{display: display}}
       when display in [:none, :table_caption, :table_column_group] ->
@@ -3084,14 +3086,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
           visible_cells ->
             {:ok,
-             [%{row: Map.put(child, :children, visible_cells), section: :body, group_style: nil}]}
+             [
+               %{
+                 row: Map.put(child, :children, visible_cells),
+                 section: :body,
+                 row_group: :implicit,
+                 group_style: nil
+               }
+             ]}
         end
 
       %{style: %{display: :table_row_group}, children: group_rows} when is_list(group_rows) ->
         section = child.style |> Map.get(:table_section, :body)
 
         Enum.reduce_while(group_rows, {:ok, []}, fn group_row, {:ok, rows} ->
-          case table_group_row(group_row, section, child.style) do
+          case table_group_row(group_row, section, group_index, child.style) do
             {:ok, table_rows} -> {:cont, {:ok, rows ++ table_rows}}
             {:error, reason} -> {:halt, {:error, reason}}
           end
@@ -3102,7 +3111,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp table_group_row(row, section, group_style) do
+  defp table_group_row(row, section, row_group, group_style) do
     case row do
       %{style: %{display: :none}} ->
         {:ok, []}
@@ -3118,6 +3127,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                %{
                  row: Map.put(row, :children, visible_cells),
                  section: section,
+                 row_group: row_group,
                  group_style: group_style
                }
              ]}
@@ -3328,7 +3338,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         row_group_length =
           rows
           |> Enum.drop(row_index)
-          |> Enum.take_while(&(&1.section == row.section))
+          |> Enum.take_while(&(&1.row_group == row.row_group))
           |> length()
 
         active_columns =
