@@ -219,6 +219,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     Enum.map_join(children, "", fn child ->
       case child do
         %{type: :text, text: text} -> text
+        %{type: :element, tag: "br"} -> " "
         %{children: nested} when is_list(nested) -> outline_text(nested)
         _ -> ""
       end

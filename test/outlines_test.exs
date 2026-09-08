@@ -146,6 +146,13 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
     assert {:ok, []} = Outlines.get(none)
   end
 
+  test "preserves heading line breaks in semantic outline titles" do
+    html = "<h1>Quarterly <span>sales</span><br><strong>Regional</strong> <em>report</em></h1>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, outlines: :headings)
+    assert {:ok, [%{title: "Quarterly sales Regional report", page: 1}]} = Outlines.get(pdf)
+  end
+
   test "creates semantic outlines for headings inside flex and grid containers" do
     html = """
     <div style="display: flex; flex-direction: column">
