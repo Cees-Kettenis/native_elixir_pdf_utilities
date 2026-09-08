@@ -12,6 +12,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
   alias NativeElixirPdfUtilities.HtmlToPdf.AssetLoader
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
@@ -116,19 +117,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           }
 
           result =
-            case fragment_root_style(children, base_style, rules, style_opts) do
-              {:ok, nil} ->
-                {:ok, %{type: :document, children: []}}
+            RenderCache.run(fn cache ->
+              context = %{rules: rules, cache: cache}
 
-              {:ok, root_style} ->
-                with {:ok, styled_children, _counters} <-
-                       style_children(children, root_style, rules, [], style_opts, [], []) do
-                  {:ok, %{type: :document, children: styled_children}}
-                end
+              case fragment_root_style(children, base_style, context, style_opts) do
+                {:ok, nil} ->
+                  {:ok, %{type: :document, children: []}}
 
-              {:error, reason} ->
-                {:error, reason}
-            end
+                {:ok, root_style} ->
+                  with {:ok, styled_children, _counters} <-
+                         style_children(children, root_style, context, [], style_opts, [], []) do
+                    {:ok, %{type: :document, children: styled_children}}
+                  end
+
+                {:error, reason} ->
+                  {:error, reason}
+              end
+            end)
 
           case result do
             {:ok, styled_tree} ->
@@ -1550,7 +1555,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         _pseudo_element -> ""
       end
 
-    case CssParser.parse_declarations(inline_style) do
+    parsed =
+      RenderCache.fetch(rules.cache, {:inline, inline_style}, fn ->
+        CssParser.parse_declarations(inline_style)
+      end)
+
+    case parsed do
       {:ok, inline_declarations} ->
         declarations =
           rules
@@ -1598,8 +1608,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp matching_declarations(rules, node, ancestors, pseudo_element) do
-    rules
+  defp matching_declarations(context, node, ancestors, pseudo_element) do
+    context.rules
     |> Enum.flat_map(fn rule ->
       case matching_specificity(rule.selectors, node, ancestors, pseudo_element) do
         nil ->

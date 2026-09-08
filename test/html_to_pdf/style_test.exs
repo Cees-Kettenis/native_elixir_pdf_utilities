@@ -3,6 +3,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
+  test "repeated inline declarations resolve against each element and each render" do
+    html = """
+    <div style="--ink: red; --pad: 10pt; font-size: 10pt"><p style="color: var(--ink); padding: var(--pad)">First</p></div>
+    <div style="--ink: blue; --pad: 20pt; font-size: 20pt"><p style="color: var(--ink); padding: var(--pad)">Second</p></div>
+    <div style="display: none"><p style="not valid CSS">Skipped</p></div>
+    """
+
+    for source <- [html, String.replace(html, "--ink: red", "--ink: green")] do
+      assert {:ok, dom} = HtmlParser.parse(source)
+      assert {:ok, %{children: children}} = Style.compute_detailed(dom)
+      [first, second, hidden] = Enum.filter(children, &(&1.type == :element))
+      assert hidden.children == []
+      assert hidden.style.display == :none
+      [first_text] = first.children
+      [second_text] = second.children
+      assert first_text.style.color != second_text.style.color
+      assert first_text.style.padding.left == 10.0
+      assert second_text.style.padding.left == 20.0
+    end
+
+    assert {:ok, invalid} = HtmlParser.parse("<p style='not valid CSS'>Invalid</p>")
+
+    assert {:error, {:invalid_css, %{stage: :css, reason: :invalid_css, message: message}}} =
+             Style.compute_detailed(invalid)
+
+    assert is_binary(message)
+  end
+
   test "compute applies default paragraph styles" do
     dom = %{
       type: :document,
