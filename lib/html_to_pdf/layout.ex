@@ -173,17 +173,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp attach_outline_anchor(block, boxes) do
     heading =
       case block do
-        %{type: :element, tag: <<"h", level>>, children: children}
-        when level in ?1..?6 and is_list(children) ->
-          title = children |> outline_text() |> String.replace(~r/\s+/u, " ") |> String.trim()
-
-          case title do
-            "" -> nil
-            title -> %{title: title, level: level - ?0}
-          end
-
-        _ ->
-          nil
+        %{outline_anchor: heading} -> heading
+        block -> outline_heading(block)
       end
 
     case heading do
@@ -198,6 +189,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {page_breaks, [first | rest]} ->
             page_breaks ++ [Map.put(first, :outline_anchor, heading) | rest]
         end
+    end
+  end
+
+  defp outline_heading(block) do
+    case block do
+      %{type: :element, tag: <<"h", level>>, children: children}
+      when level in ?1..?6 and is_list(children) ->
+        title = children |> outline_text() |> String.replace(~r/\s+/u, " ") |> String.trim()
+
+        case title do
+          "" -> nil
+          title -> %{title: title, level: level - ?0}
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp preserve_item_outline(item, child) do
+    case outline_heading(child) do
+      nil -> item
+      heading -> Map.put(item, :outline_anchor, heading)
     end
   end
 
@@ -1008,7 +1022,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     |> Enum.reduce_while({:ok, []}, fn {child, index}, {:ok, acc} ->
       case grid_item(child, index) do
         {:ok, nil} -> {:cont, {:ok, acc}}
-        {:ok, item} -> {:cont, {:ok, acc ++ [item]}}
+        {:ok, item} -> {:cont, {:ok, acc ++ [preserve_item_outline(item, child)]}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
@@ -1578,7 +1592,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       {:ok, boxes} = flex_item_boxes(item, :row)
       tagged_boxes = tag_atomic_boxes(boxes, %{flow_id: container_flow_id})
-      {:cont, {:ok, acc ++ tagged_boxes}}
+      anchored_boxes = attach_outline_anchor(item, tagged_boxes)
+      {:cont, {:ok, acc ++ anchored_boxes}}
     end)
   end
 
@@ -1785,7 +1800,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     |> Enum.reduce_while({:ok, []}, fn {child, index}, {:ok, acc} ->
       case flex_item(child, index, main_axis, available_main, available_cross) do
         {:ok, nil} -> {:cont, {:ok, acc}}
-        {:ok, item} -> {:cont, {:ok, acc ++ [item]}}
+        {:ok, item} -> {:cont, {:ok, acc ++ [preserve_item_outline(item, child)]}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
@@ -2242,7 +2257,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     Enum.reduce_while(lines, {:ok, []}, fn item, {:ok, acc} ->
       {:ok, boxes} = flex_item_boxes(item, main_axis)
       tagged_boxes = tag_atomic_boxes(boxes, %{flow_id: container_flow_id})
-      {:cont, {:ok, acc ++ tagged_boxes}}
+      anchored_boxes = attach_outline_anchor(item, tagged_boxes)
+      {:cont, {:ok, acc ++ anchored_boxes}}
     end)
   end
 

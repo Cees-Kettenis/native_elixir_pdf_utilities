@@ -146,6 +146,27 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
     assert {:ok, []} = Outlines.get(none)
   end
 
+  test "creates semantic outlines for headings inside flex and grid containers" do
+    html = """
+    <div style="display: flex; flex-direction: column">
+      <h2 style="order: 2">Flex section</h2>
+      <h1 style="order: 1">Flex report</h1>
+    </div>
+    <div style="display: grid; grid-template-columns: 1fr">
+      <h1>Grid report</h1>
+      <h2>Grid section</h2>
+    </div>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, outlines: :headings)
+    assert {:ok, [flex_report, grid_report]} = Outlines.get(pdf)
+
+    assert flex_report.title == "Flex report"
+    assert Enum.map(flex_report.children, & &1.title) == ["Flex section"]
+    assert grid_report.title == "Grid report"
+    assert Enum.map(grid_report.children, & &1.title) == ["Grid section"]
+  end
+
   test "keeps semantic outlines for headings with forced page breaks" do
     for break_style <- ["break-before: page", "page-break-before: always"] do
       html = """
