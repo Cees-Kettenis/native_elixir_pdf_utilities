@@ -26,6 +26,27 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @css_variable_regex ~r/"(?:\\.|[^"\\])*"(*SKIP)(*F)|'(?:\\.|[^'\\])*'(*SKIP)(*F)|var\(\s*(--[a-zA-Z_][a-zA-Z0-9_-]*)\s*\)/u
 
   @doc false
+  @spec validate_png_transparency(integer(), binary() | nil) ::
+          {:ok, nil | {non_neg_integer(), non_neg_integer(), non_neg_integer()}}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_png_transparency(color_type, transparency) do
+    case {color_type, transparency} do
+      {_color_type, nil} ->
+        {:ok, nil}
+
+      {2, <<red::16, green::16, blue::16>>} when red <= 255 and green <= 255 and blue <= 255 ->
+        {:ok, {red, green, blue}}
+
+      _ ->
+        Diagnostics.error(
+          :style,
+          :invalid_document,
+          "PNG tRNS must contain a valid transparent color for an 8-bit RGB image"
+        )
+    end
+  end
+
+  @doc false
   @spec compute_custom_properties(map()) :: map()
   def compute_custom_properties(properties) do
     Map.new(properties, fn {name, value} ->

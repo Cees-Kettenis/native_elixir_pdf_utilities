@@ -4183,6 +4183,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
            idat: idat
          }
          when width > 0 and height > 0 and color_type in [2, 6] <- parsed,
+         {:ok, transparent_color} <-
+           HtmlValidator.validate_png_transparency(color_type, Map.get(parsed, :transparency)),
          bytes_per_pixel = if(color_type == 2, do: 3, else: 4),
          decoded_size = height * (width * bytes_per_pixel + 1),
          :ok <-
@@ -4192,7 +4194,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                   image_budget,
                   width,
                   height,
-                  bytes_per_pixel
+                  if(is_nil(transparent_color), do: bytes_per_pixel, else: 4)
                 )
 
               false ->
@@ -4201,6 +4203,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
          {:ok, inflated} <-
            png_inflate(idat |> Enum.reverse() |> IO.iodata_to_binary(), decoded_size),
          {:ok, rgb_data, alpha_data} <- png_image_data(inflated, width, height, color_type) do
+      alpha_data =
+        case transparent_color do
+          nil ->
+            alpha_data
+
+          color ->
+            for <<red, green, blue <- rgb_data>>, into: <<>> do
+              if {red, green, blue} == color, do: <<0>>, else: <<255>>
+            end
+        end
+
       image = %{
         format: :png,
         data: rgb_data,
@@ -4257,6 +4270,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           _ ->
             :error
         end
+
+      "tRNS" ->
+        png_chunks(rest, Map.put(acc, :transparency, data))
 
       "IDAT" ->
         png_chunks(rest, Map.update!(acc, :idat, &[data | &1]))

@@ -3,6 +3,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
+  test "RGB PNG transparent colors generate alpha masks and malformed tRNS fails" do
+    signature = <<137, 80, 78, 71, 13, 10, 26, 10>>
+    header = png_chunk("IHDR", <<2::32, 1::32, 8, 2, 0, 0, 0>>)
+    pixels = png_chunk("IDAT", :zlib.compress(<<0, 255, 0, 0, 0, 0, 255>>))
+    ending = png_chunk("IEND", "")
+    png = signature <> header <> png_chunk("tRNS", <<255::16, 0::16, 0::16>>) <> pixels <> ending
+    assert {:ok, style} = image_style("data:image/png;base64," <> Base.encode64(png), [])
+    assert style.image.data == <<255, 0, 0, 0, 0, 255>>
+    assert style.image.alpha_data == <<0, 255>>
+
+    for invalid <- [<<1>>, <<256::16, 0::16, 0::16>>] do
+      png = signature <> header <> png_chunk("tRNS", invalid) <> pixels <> ending
+      html = "<img src='data:image/png;base64,#{Base.encode64(png)}'>"
+
+      assert {:error, {:invalid_document, diagnostic}} =
+               NativeElixirPdfUtilities.HtmlToPdf.render(html)
+
+      assert diagnostic.stage == :style
+      assert diagnostic.message =~ "tRNS"
+    end
+  end
+
   test "descendants inherit computed custom properties and invalid values stay invalid" do
     assert {:ok, dom} =
              HtmlParser.parse(
