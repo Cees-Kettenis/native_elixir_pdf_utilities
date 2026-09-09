@@ -494,9 +494,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   defp load_first_supported_font(paths) do
     Enum.reduce_while(paths, :error, fn path, :error ->
       result =
-        FontCache.fetch(path, fn absolute_path ->
-          with {:ok, data} <- File.read(absolute_path),
-               {:ok, parsed} <- parse_ttf(data) do
+        FontCache.fetch(path, fn data ->
+          with {:ok, parsed} <- parse_ttf(data) do
             {:ok, {data, parsed}}
           else
             {:error, {_reason, _diagnostic}} = error -> error

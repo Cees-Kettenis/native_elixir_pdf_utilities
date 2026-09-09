@@ -6,13 +6,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
   @table __MODULE__
 
   @type load_result :: {:ok, term()} | :error | {:error, {atom(), map()}}
-  @type loader :: (String.t() -> load_result())
-  @type fingerprint :: {
-          non_neg_integer(),
-          integer() | :undefined,
-          integer() | :undefined,
-          non_neg_integer()
-        }
+  @type loader :: (binary() -> load_result())
+  @type fingerprint :: binary()
 
   @doc false
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -23,18 +18,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
   @doc """
   Returns a parsed font-file value from the process-wide cache.
 
-  The loader receives an absolute file path and runs only when the file is not
-  cached with the same size, modification time, change time, and inode. Failed
-  loads are not retained. When the library application is not running, the
-  loader runs without caching.
+  Each fetch reads the file and fingerprints its contents. The loader receives
+  those same bytes and runs only when that content is not cached for the path.
+  Failed loads are not retained. When the library application is not running,
+  the loader runs without caching.
   """
   @spec fetch(String.t(), loader()) :: load_result()
   def fetch(path, loader) do
     absolute_path = Path.expand(path)
 
-    case File.stat(absolute_path, time: :posix) do
-      {:ok, stat} ->
-        fingerprint = {stat.size, stat.mtime, stat.ctime, stat.inode}
+    case File.read(absolute_path) do
+      {:ok, data} ->
+        fingerprint = :crypto.hash(:sha256, data)
 
         case cached(absolute_path, fingerprint) do
           {:hit, result} ->
@@ -43,12 +38,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
           :miss ->
             case Process.whereis(__MODULE__) do
               nil ->
-                loader.(absolute_path)
+                loader.(data)
 
               _pid ->
                 GenServer.call(
                   __MODULE__,
-                  {:fetch, absolute_path, fingerprint, loader},
+                  {:fetch, absolute_path, fingerprint, data, loader},
                   :infinity
                 )
             end
@@ -76,13 +71,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
   @impl GenServer
   def handle_call(request, _from, state) do
     case request do
-      {:fetch, path, fingerprint, loader} ->
+      {:fetch, path, fingerprint, data, loader} ->
         case cached(path, fingerprint) do
           {:hit, result} ->
             {:reply, result, state}
 
           :miss ->
-            result = loader.(path)
+            result = loader.(data)
 
             case result do
               {:ok, _value} ->
