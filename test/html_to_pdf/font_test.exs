@@ -2,6 +2,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
   use ExUnit.Case
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.HtmlToPdf
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.FontValidator
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
 
   test "load_registry loads explicit TTF fonts and resolves fallback families" do
     font_path = ttf_font_path!()
@@ -271,6 +280,107 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
              Font.resolve("Fallback Cmap Sans", 400, :normal, registry)
 
     assert Map.has_key?(font.cmap, ?A)
+  end
+
+  test "rejects overlapping font segments and reads outside the declared subtable" do
+    overlapping =
+      <<4::16, 32::16, 0::16, 4::16, 0::16, 0::16, 0::16, 100::16, 110::16, 0::16, 65::16, 70::16,
+        1::16, 1::16, 0::16, 0::16>>
+
+    short_length =
+      <<4::16, 16::16, binary_part(cmap_format4_table(65, 65, 1, 0), 4, 20)::binary>>
+
+    for format4 <- [
+          overlapping,
+          short_length,
+          cmap_format4_table(70, 65, 1, 0),
+          cmap_format4_table(65, 65, 0, 1),
+          cmap_format4_table(65, 65, 0, 1000),
+          # The pointer reaches trailing cmap bytes but not the declared subtable.
+          cmap_format4_table(65, 65, 0, 2) <> <<66::16>>
+        ] do
+      cmap = <<0::16, 1::16, 3::16, 1::16, 12::32, format4::binary>>
+      data = valid_tables() |> Map.put("cmap", cmap) |> ttf_fixture()
+      assert :error = Font.load_registry(fonts: [%{family: "Invalid Cmap", data: data}])
+
+      assert {:error, {:invalid_document, diagnostic}} =
+               HtmlToPdf.render("<p>A</p>", fonts: [%{family: "Invalid Cmap", data: data}])
+
+      assert diagnostic.reason == :invalid_document
+      assert diagnostic.operation == :render
+      assert diagnostic.module == HtmlToPdf
+      assert is_binary(diagnostic.message)
+    end
+  end
+
+  test "bounds total font cmap preparation and deduplicates encoding references" do
+    format4 = cmap_format4_table(65, 65, 1, 0)
+    duplicated = <<0::16, 2::16, 0::16, 0::16, 20::32, 1::16, 0::16, 20::32, format4::binary>>
+
+    Limits.install(%{Limits.effective() | max_font_cmap_work: 4})
+    assert {:ok, [[{65, 65, 1, nil}]]} = FontValidator.prepare_cmap(duplicated)
+
+    for budget <- [1, 2, 3] do
+      Limits.install(%{Limits.effective() | max_font_cmap_work: budget})
+
+      assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
+               FontValidator.prepare_cmap(duplicated)
+    end
+
+    for cmap <- [:bad, <<>>, <<0::16, 0::16>>, <<0::16, 1::16>>] do
+      assert :error = FontValidator.prepare_cmap(cmap)
+    end
+
+    # A skipped subtable still consumes its segment-inspection budget.
+    malformed = cmap_format4_table(65, 65, 0, 1000)
+
+    alternatives =
+      <<0::16, 2::16, 3::16, 10::16, 20::32, 3::16, 1::16, 44::32, malformed::binary,
+        format4::binary>>
+
+    Limits.install(%{Limits.effective() | max_font_cmap_work: 4})
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
+             FontValidator.prepare_cmap(alternatives)
+
+    Limits.install(%{Limits.effective() | max_font_cmap_work: 6})
+    assert {:ok, [[{65, 65, 1, nil}]]} = FontValidator.prepare_cmap(alternatives)
+  end
+
+  test "font work limits return diagnostics through file and byte loading" do
+    data = ttf_fixture(valid_tables())
+
+    path =
+      Path.join(System.tmp_dir!(), "font-work-limit-#{System.unique_integer([:positive])}.ttf")
+
+    File.write!(path, data)
+    on_exit(fn -> File.rm(path) end)
+    Limits.install(%{Limits.effective() | max_font_cmap_work: 1})
+
+    for source <- [%{data: data}, %{path: path}] do
+      fonts = [Map.put(source, :family, "Bounded Font")]
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = Font.load_registry(fonts: fonts)
+      assert diagnostic.stage == :limits
+      assert diagnostic.module == Font
+      assert diagnostic.operation == :load_registry
+      assert diagnostic.message =~ "character-map work"
+
+      assert {:error, {:resource_limit_exceeded, %{module: Font, operation: :load_registry}}} =
+               HtmlToPdf.render("<p>A</p>", fonts: fonts)
+    end
+  end
+
+  test "uses validated glyph-array slices and preserves missing glyph entries" do
+    format4 =
+      <<4::16, 30::16, 0::16, 2::16, 0::16, 0::16, 0::16, 67::16, 0::16, 65::16, -1::signed-16,
+        2::16, 0::16, 67::16, 68::16>>
+
+    cmap = <<0::16, 1::16, 3::16, 1::16, 12::32, format4::binary>>
+    data = valid_tables() |> Map.put("cmap", cmap) |> ttf_fixture()
+    assert {:ok, registry} = Font.load_registry(fonts: [%{family: "Glyph Array", data: data}])
+    assert {:ok, _, font} = Font.resolve("Glyph Array", 400, :normal, registry)
+    assert font.cmap == %{66 => 66, 67 => 67}
   end
 
   test "load_registry rejects unsupported font config" do

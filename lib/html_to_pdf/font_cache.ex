@@ -5,7 +5,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
 
   @table __MODULE__
 
-  @type load_result :: {:ok, term()} | :error
+  @type load_result :: {:ok, term()} | :error | {:error, {atom(), map()}}
   @type loader :: (String.t() -> load_result())
   @type fingerprint :: {
           non_neg_integer(),
@@ -106,8 +106,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
 
                 {:reply, result, %{state | sequence: sequence}}
 
-              :error ->
-                {:reply, :error, state}
+              failure ->
+                {:reply, failure, state}
             end
         end
     end

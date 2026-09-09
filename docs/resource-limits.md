@@ -83,6 +83,7 @@ override these values.
 | `max_cmap_entries` | 100,000 | Mappings in one CMap |
 | `max_cid_width_entries` | 65,536 | CID width entries |
 | `max_form_xobject_depth` | 20 | Form XObject nesting |
+| `max_font_cmap_work` | 1,000,000 | Encoding records, segments, and codepoint visits prepared per TTF character map |
 | `max_font_cache_entries` | 64 | Parsed font files retained by the cache |
 | `max_system_font_cache_entries` | 64 | Positive and negative installed-font discovery results retained by the cache |
 

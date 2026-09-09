@@ -67,6 +67,7 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_cmap_entries: 100_000,
     max_cid_width_entries: 65_536,
     max_form_xobject_depth: 20,
+    max_font_cmap_work: 1_000_000,
     max_font_cache_entries: 64,
     max_system_font_cache_entries: 64
   }
@@ -125,6 +126,7 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_cmap_entries
           | :max_cid_width_entries
           | :max_form_xobject_depth
+          | :max_font_cmap_work
           | :max_font_cache_entries
           | :max_system_font_cache_entries
 

@@ -8,6 +8,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.FontCache
   alias NativeElixirPdfUtilities.HtmlToPdf.SystemFontCache
+  alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type font_style :: :normal | :italic
@@ -86,7 +87,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   candidates; `:weight` and `:style` are optional.
   """
   @spec load_registry(keyword()) ::
-          {:ok, registry()} | :error | {:error, {:invalid_document, map()}}
+          {:ok, registry()}
+          | :error
+          | {:error, {:invalid_document | :resource_limit_exceeded, map()}}
   def load_registry(opts) do
     with {:ok, prepared_opts} <- normalize_options(opts),
          :ok <- HtmlValidator.validate_font_configs(Keyword.fetch!(prepared_opts, :fonts)),
@@ -103,7 +106,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
          system_font_discovery: Keyword.get(prepared_opts, :system_font_discovery, true)
        }}
     else
-      {:error, {:invalid_document, _diagnostic}} = error -> error
+      {:error, {_reason, _diagnostic}} = error -> error
       _ -> :error
     end
   end
@@ -483,7 +486,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
          data: data
        })}
     else
-      {:error, {:invalid_document, _diagnostic}} = error -> error
+      {:error, {_reason, _diagnostic}} = error -> error
       _ -> :error
     end
   end
@@ -496,12 +499,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
                {:ok, parsed} <- parse_ttf(data) do
             {:ok, {data, parsed}}
           else
+            {:error, {_reason, _diagnostic}} = error -> error
             _ -> :error
           end
         end)
 
       case result do
         {:ok, {data, parsed}} -> {:halt, {:ok, data, parsed}}
+        {:error, {_reason, _diagnostic}} = error -> {:halt, error}
         :error -> {:cont, :error}
       end
     end)
@@ -511,7 +516,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     Enum.reduce_while(candidates, :error, fn data, :error ->
       case parse_ttf(data) do
         {:ok, parsed} -> {:halt, {:ok, data, parsed}}
-        _ -> {:cont, :error}
+        {:error, {_reason, _diagnostic}} = error -> {:halt, error}
+        :error -> {:cont, :error}
       end
     end)
   end
@@ -700,134 +706,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   end
 
   defp parse_cmap(cmap) do
-    with {:ok, subtable_offsets} <- cmap_subtable_offsets(cmap) do
-      subtable_offsets
-      |> Enum.map(&parse_cmap_subtable(cmap, &1))
-      |> Enum.find(fn result ->
-        case result do
-          {:ok, map} -> map_size(map) > 0
-          _ -> false
-        end
-      end)
-      |> case do
-        {:ok, map} -> {:ok, map}
-        _ -> :error
-      end
-    end
-  end
-
-  defp cmap_subtable_offsets(cmap) do
-    with {:ok, count} <- read_u16(cmap, 2),
-         true <- count > 0,
-         true <- byte_size(cmap) >= 4 + count * 8 do
-      offsets =
-        0..(count - 1)
-        |> Enum.map(fn index ->
-          offset = 4 + index * 8
-          {:ok, platform_id} = read_u16(cmap, offset)
-          {:ok, encoding_id} = read_u16(cmap, offset + 2)
-          {:ok, subtable_offset} = read_u32(cmap, offset + 4)
-          {platform_id, encoding_id, subtable_offset}
-        end)
-        |> Enum.sort_by(fn {platform_id, encoding_id, _offset} ->
-          cond do
-            platform_id == 3 and encoding_id == 10 -> 0
-            platform_id == 3 and encoding_id == 1 -> 1
-            platform_id == 0 -> 2
-            true -> 3
-          end
-        end)
-        |> Enum.map(fn {_platform_id, _encoding_id, offset} -> offset end)
-
-      {:ok, offsets}
-    else
-      _ -> :error
-    end
-  end
-
-  defp parse_cmap_subtable(cmap, offset) do
-    with true <- byte_size(cmap) >= offset + 2,
-         {:ok, format} <- read_u16(cmap, offset) do
-      case format do
-        4 -> parse_cmap_format4(cmap, offset)
-        _ -> :error
-      end
-    else
-      _ -> :error
-    end
-  end
-
-  defp parse_cmap_format4(cmap, offset) do
-    with {:ok, length} <- read_u16(cmap, offset + 2),
-         true <- byte_size(cmap) >= offset + length,
-         {:ok, seg_count_x2} <- read_u16(cmap, offset + 6),
-         true <- seg_count_x2 > 0 and rem(seg_count_x2, 2) == 0 do
-      seg_count = div(seg_count_x2, 2)
-      end_codes_offset = offset + 14
-      start_codes_offset = end_codes_offset + seg_count * 2 + 2
-      id_deltas_offset = start_codes_offset + seg_count * 2
-      id_range_offsets_offset = id_deltas_offset + seg_count * 2
-
-      0..(seg_count - 1)
-      |> Enum.reduce_while({:ok, %{}}, fn index, {:ok, acc} ->
-        with {:ok, end_code} <- read_u16(cmap, end_codes_offset + index * 2),
-             {:ok, start_code} <- read_u16(cmap, start_codes_offset + index * 2),
-             {:ok, id_delta} <- read_i16(cmap, id_deltas_offset + index * 2),
-             {:ok, range_offset} <- read_u16(cmap, id_range_offsets_offset + index * 2),
-             true <- start_code <= end_code do
-          mappings =
-            start_code..end_code
+    with {:ok, subtables} <- FontValidator.prepare_cmap(cmap) do
+      Enum.find_value(subtables, :error, fn segments ->
+        mappings =
+          Enum.reduce(segments, %{}, fn {first, last, delta, glyphs}, mappings ->
+            first..last
             |> Enum.reject(&(&1 == 0xFFFF))
-            |> Enum.reduce(acc, fn codepoint, mappings ->
+            |> Enum.reduce(mappings, fn codepoint, mappings ->
               glyph_id =
-                cmap_format4_glyph_id(
-                  cmap,
-                  codepoint,
-                  start_code,
-                  id_delta,
-                  range_offset,
-                  id_range_offsets_offset + index * 2
-                )
+                case glyphs do
+                  nil ->
+                    rem(codepoint + delta, 65_536)
 
-              case glyph_id do
-                glyph_id when is_integer(glyph_id) and glyph_id > 0 ->
-                  Map.put(mappings, codepoint, glyph_id)
+                  glyphs ->
+                    case :binary.decode_unsigned(binary_part(glyphs, 2 * (codepoint - first), 2)) do
+                      0 -> 0
+                      glyph_id -> rem(glyph_id + delta, 65_536)
+                    end
+                end
 
-                _ ->
-                  mappings
+              case glyph_id > 0 do
+                true -> Map.put(mappings, codepoint, glyph_id)
+                false -> mappings
               end
             end)
+          end)
 
-          {:cont, {:ok, mappings}}
-        else
-          _ -> {:halt, :error}
-        end
+        if map_size(mappings) > 0, do: {:ok, mappings}
       end)
-    else
-      _ -> :error
-    end
-  end
-
-  defp cmap_format4_glyph_id(
-         cmap,
-         codepoint,
-         start_code,
-         id_delta,
-         range_offset,
-         range_word_offset
-       ) do
-    case range_offset do
-      0 ->
-        rem(codepoint + id_delta, 65_536)
-
-      range_offset ->
-        glyph_offset = range_word_offset + range_offset + 2 * (codepoint - start_code)
-
-        case read_u16(cmap, glyph_offset) do
-          {:ok, 0} -> 0
-          {:ok, glyph_id} -> rem(glyph_id + id_delta, 65_536)
-          :error -> 0
-        end
     end
   end
 

@@ -149,7 +149,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           {:error, {:font_load_failed, sources}} ->
             {:error, font_load_error(sources)}
 
-          {:error, {:invalid_document, _diagnostic}} = error ->
+          {:error, {_reason, _diagnostic}} = error ->
             error
 
           {:error, :invalid_document} ->
@@ -1375,7 +1375,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       :error ->
         {:error, :invalid_document}
 
-      {:error, {:invalid_document, _diagnostic}} = error ->
+      {:error, {_reason, _diagnostic}} = error ->
         error
     end
   end
