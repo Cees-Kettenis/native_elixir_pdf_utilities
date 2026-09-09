@@ -359,6 +359,54 @@ defmodule NativeElixirPdfUtilities.StampTest do
              Stamp.overlay(pdf, one_page_pdf("O", {300, 200}))
   end
 
+  test "stops overlay decoding at the aggregate budget before reading later streams" do
+    target = one_page_pdf("Target", {300, 200})
+    Limits.install(%{Limits.effective() | max_stamp_decoded_content_bytes: 6})
+
+    for {entries, data} <- [{"", "q Q"}, {"/Filter /FlateDecode", :zlib.compress("q Q")}] do
+      overlay =
+        pdf([
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>"},
+          {3, "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 4 0 R 5 0 R] >>"},
+          {4, stream_object(entries, data)},
+          {5, stream_object("/Filter /FlateDecode", "invalid compressed data")}
+        ])
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = Stamp.overlay(target, overlay)
+      assert diagnostic.stage == :limits
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.operation == :overlay_pdf
+      assert diagnostic.module == Stamp
+      assert diagnostic.message == "decoded overlay content exceeds the limit"
+    end
+  end
+
+  test "charges overlay separators and distinct source pages without charging repeated placements" do
+    target = three_page_pdf(["One", "Two"], {300, 200})
+
+    for content <- ["", "q Q"] do
+      overlay =
+        pdf([
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2, "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 200] >>"},
+          {3, "<< /Type /Page /Parent 2 0 R /Contents [5 0 R 5 0 R] >>"},
+          {4, "<< /Type /Page /Parent 2 0 R /Contents [5 0 R 5 0 R] >>"},
+          {5, stream_object("", content)}
+        ])
+
+      page_bytes = 2 * byte_size(content) + 1
+      Limits.install(%{Limits.effective() | max_stamp_decoded_content_bytes: page_bytes})
+      assert {:ok, _stamped} = Stamp.overlay(target, overlay)
+
+      assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
+               Stamp.overlay(target, overlay, overlay_pages: :match)
+
+      Limits.install(%{Limits.effective() | max_stamp_decoded_content_bytes: 2 * page_bytes})
+      assert {:ok, _stamped} = Stamp.overlay(target, overlay, overlay_pages: :match)
+    end
+  end
+
   test "validates malformed prepared writer and incremental contexts" do
     assert {:error, {:invalid_pdf_input, %{stage: :validation}}} =
              StampValidator.prepare_text(%{}, "x", [], :text)

@@ -605,17 +605,12 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
       page = Map.fetch!(indexed, page_number)
 
       with {:ok, prepared} <- prepare_page(context.document, page, page_number),
-           {:ok, content} <- decode_page_contents(context.document, prepared.contents),
-           decoded_bytes = decoded_bytes + byte_size(content),
-           true <- decoded_bytes <= Limits.get(:max_stamp_decoded_content_bytes),
+           {:ok, content, decoded_bytes} <-
+             decode_page_contents(context.document, prepared.contents, decoded_bytes),
            {:ok, group} <- resolved_group(context.document, page.dictionary) do
         prepared = Map.merge(prepared, %{content: content, group: group})
         {:cont, {:ok, Map.put(pages, page_number, prepared), decoded_bytes}}
       else
-        false ->
-          {:halt,
-           error(:limits, :resource_limit_exceeded, "decoded overlay content exceeds the limit")}
-
         {:error, _error} = page_error ->
           {:halt, page_error}
       end
@@ -626,17 +621,36 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
     end
   end
 
-  defp decode_page_contents(document, references) do
+  defp decode_page_contents(document, references, decoded_bytes) do
+    limit = Limits.get(:max_stamp_decoded_content_bytes)
+
     references
-    |> Enum.reduce_while({:ok, []}, fn reference, {:ok, parts} ->
+    |> Enum.reduce_while({:ok, [], decoded_bytes}, fn reference, {:ok, parts, decoded_bytes} ->
       case Reader.decoded_stream(document, reference) do
-        {:ok, content} -> {:cont, {:ok, [content | parts]}}
-        {:error, _error} = stream_error -> {:halt, stream_error}
+        {:ok, content} ->
+          decoded_bytes = decoded_bytes + byte_size(content) + if(parts == [], do: 0, else: 1)
+
+          case decoded_bytes <= limit do
+            true ->
+              {:cont, {:ok, [content | parts], decoded_bytes}}
+
+            false ->
+              {:halt,
+               error(
+                 :limits,
+                 :resource_limit_exceeded,
+                 "decoded overlay content exceeds the limit"
+               )}
+          end
+
+        {:error, _error} = stream_error ->
+          {:halt, stream_error}
       end
     end)
     |> case do
-      {:ok, parts} ->
-        {:ok, parts |> Enum.reverse() |> Enum.intersperse("\n") |> IO.iodata_to_binary()}
+      {:ok, parts, decoded_bytes} ->
+        {:ok, parts |> Enum.reverse() |> Enum.intersperse("\n") |> IO.iodata_to_binary(),
+         decoded_bytes}
 
       {:error, _error} = stream_error ->
         stream_error
