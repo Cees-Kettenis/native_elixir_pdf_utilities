@@ -755,6 +755,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
     case defaults do
       defaults when is_map(defaults) ->
+        defaults =
+          if Map.get(defaults, :font_weight) == 400 and
+               tag not in ["input", "select", "textarea", "button"] do
+            Map.delete(defaults, :font_weight)
+          else
+            defaults
+          end
+
         style =
           inherited_style
           |> text_style()

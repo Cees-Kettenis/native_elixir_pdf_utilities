@@ -23,6 +23,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   """
 
   @fixture_thresholds [
+    {"weight_inheritance.html", max_changed_ratio: 0.05, max_average_delta: 0.035},
     {"distributed_gaps.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"block_box_model.html", max_changed_ratio: 0.05, max_average_delta: 0.02},
     {"border_style_variants.html", max_changed_ratio: 0.05, max_average_delta: 0.03},

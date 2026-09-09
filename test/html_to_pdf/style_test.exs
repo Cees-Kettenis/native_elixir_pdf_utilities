@@ -3,6 +3,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
+  test "ordinary blocks inherit weight while explicit and semantic weights remain effective" do
+    for tag <- ["div", "section", "p", "article", "aside", "header"] do
+      assert {:ok, dom} =
+               HtmlParser.parse(
+                 "<div style='font-weight:700'><#{tag}>Inherited</#{tag}><p style='font-weight:400'>Normal</p><strong>Strong</strong></div>"
+               )
+
+      assert {:ok, %{children: [parent]}} = Style.compute_detailed(dom)
+      [inherited, normal, strong] = parent.children
+      assert inherited.style.font_weight == 700
+      assert normal.style.font_weight == 400
+      assert strong.style.font_weight == 700
+    end
+  end
+
   test "font resolution cache respects weight, style and separate configured registries" do
     assert {:ok, dom} =
              HtmlParser.parse("""
