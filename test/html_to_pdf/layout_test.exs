@@ -6,6 +6,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Limits
 
+  test "grid stretch honors explicit dimensions and size constraints" do
+    for {size, expected} <- [
+          {"width:20pt;height:10pt", {20, 10}},
+          {"width:150pt;height:100pt", {150, 100}},
+          {"width:50%;height:50%", {50, 40}},
+          {"max-width:60pt;max-height:30pt", {60, 30}},
+          {"", {100, 80}},
+          {"width:20pt;height:10pt;padding:5pt;box-sizing:border-box", {20, 10}}
+        ] do
+      html =
+        "<div style='display:grid;grid-template-columns:100pt;grid-template-rows:80pt'><div style='background:red;#{size}'></div></div>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, margin: 0)
+      [box] = Enum.filter(layout.boxes, &(&1.type == :rect))
+      assert_in_delta box.width, elem(expected, 0), 0.001
+      assert_in_delta box.height, elem(expected, 1), 0.001
+    end
+  end
+
   test "empty flex containers retain specified and constrained height" do
     for child <- ["", "<span style='display:none'>Hidden</span>"],
         {sizing, expected} <- [

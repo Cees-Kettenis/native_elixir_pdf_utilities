@@ -1686,10 +1686,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         :height -> item.intrinsic_height
       end
 
-    case align do
-      :stretch -> max(area_size - margin, 0.0)
-      _ -> min(intrinsic, max(area_size - margin, 0.0))
-    end
+    box_size =
+      case {align, Map.get(item.style, axis), Map.has_key?(item, :image)} do
+        {:stretch, auto, false} when auto in [nil, :auto] -> max(area_size - margin, 0.0)
+        _ -> intrinsic
+      end
+
+    decoration =
+      case axis do
+        :width -> horizontal_box_size(item.style)
+        :height -> vertical_box_size(item.style)
+      end
+
+    resolved_content_size(item.style, axis, area_size, max(box_size - decoration, 0.0)) +
+      decoration
   end
 
   defp grid_axis_position(align, box_size, area_size) do
