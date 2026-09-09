@@ -3,6 +3,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
+  test "variable functions inside quoted strings remain literal" do
+    alias NativeElixirPdfUtilities.Validators.HtmlValidator
+
+    for value <- [~S|"var(--missing)"|, ~S|'var(--missing)'|, ~S|"escaped \" var(--missing)"|] do
+      assert {:ok, ^value} = HtmlValidator.resolve_css_variables(value, %{}, %{})
+    end
+
+    assert {:ok, ~S|"literal var(--ink)" red blue|} =
+             HtmlValidator.resolve_css_variables(
+               ~S|"literal var(--ink)" var(--ink) var(--other)|,
+               %{"--ink" => "red", "--other" => "blue"},
+               %{}
+             )
+
+    assert {:ok, _pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(
+               ~S|<style>p::before{content:"var(--missing)"}</style><p></p>|
+             )
+  end
+
   test "ordinary blocks inherit weight while explicit and semantic weights remain effective" do
     for tag <- ["div", "section", "p", "article", "aside", "header"] do
       assert {:ok, dom} =

@@ -2810,42 +2810,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp resolved_css_value(style, value) do
     normalized = String.trim(value)
     custom_properties = Map.get(style, :_custom_properties, %{})
-    resolve_css_variables(normalized, custom_properties, %{})
-  end
-
-  defp resolve_css_variables(value, custom_properties, resolving) do
-    variable_references =
-      ~r/var\(\s*(--[a-zA-Z_][a-zA-Z0-9_-]*)\s*\)/u
-      |> Regex.scan(value, capture: :all_but_first)
-      |> List.flatten()
-      |> Enum.uniq()
-
-    case variable_references do
-      [] ->
-        {:ok, value}
-
-      references ->
-        Enum.reduce_while(references, {:ok, value}, fn name, {:ok, resolved_value} ->
-          case {Map.has_key?(resolving, name), Map.get(custom_properties, name)} do
-            {false, custom_value} when is_binary(custom_value) ->
-              case resolve_css_variables(
-                     custom_value,
-                     custom_properties,
-                     Map.put(resolving, name, true)
-                   ) do
-                {:ok, replacement} ->
-                  pattern = ~r/var\(\s*#{Regex.escape(name)}\s*\)/u
-                  {:cont, {:ok, Regex.replace(pattern, resolved_value, replacement)}}
-
-                :error ->
-                  {:halt, :error}
-              end
-
-            {_cycle_or_missing, _value} ->
-              {:halt, :error}
-          end
-        end)
-    end
+    HtmlValidator.resolve_css_variables(normalized, custom_properties, %{})
   end
 
   defp flex_container_defaults(style) do

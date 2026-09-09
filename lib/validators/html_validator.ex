@@ -23,6 +23,49 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @variant_keys [:default, :first, :odd, :even]
   @type image_budget :: :atomics.atomics_ref()
 
+  @css_variable_regex ~r/"(?:\\.|[^"\\])*"(*SKIP)(*F)|'(?:\\.|[^'\\])*'(*SKIP)(*F)|var\(\s*(--[a-zA-Z_][a-zA-Z0-9_-]*)\s*\)/u
+
+  @doc false
+  @spec resolve_css_variables(String.t(), map(), map()) :: {:ok, String.t()} | :error
+  def resolve_css_variables(value, custom_properties, resolving) do
+    variable_references =
+      @css_variable_regex
+      |> Regex.scan(value, capture: :all_but_first)
+      |> List.flatten()
+      |> Enum.uniq()
+
+    case variable_references do
+      [] ->
+        {:ok, value}
+
+      references ->
+        Enum.reduce_while(references, {:ok, value}, fn name, {:ok, resolved_value} ->
+          case {Map.has_key?(resolving, name), Map.get(custom_properties, name)} do
+            {false, custom_value} when is_binary(custom_value) ->
+              case resolve_css_variables(
+                     custom_value,
+                     custom_properties,
+                     Map.put(resolving, name, true)
+                   ) do
+                {:ok, replacement} ->
+                  substituted =
+                    Regex.replace(@css_variable_regex, resolved_value, fn match, variable ->
+                      if variable == name, do: replacement, else: match
+                    end)
+
+                  {:cont, {:ok, substituted}}
+
+                :error ->
+                  {:halt, :error}
+              end
+
+            {_cycle_or_missing, _value} ->
+              {:halt, :error}
+          end
+        end)
+    end
+  end
+
   @doc false
   @spec new_image_budget() :: image_budget()
   def new_image_budget do
