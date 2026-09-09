@@ -60,7 +60,7 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
       end)
 
     copied = copied_object_entries(copied_objects, reference_map)
-    forms = form_entries(source_pages, form_ids, reference_map)
+    forms = form_entries(source_pages, form_ids, reference_map, opacity)
 
     graphics_state =
       case graphics_state_id do
@@ -128,8 +128,14 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
     end)
   end
 
-  defp form_entries(source_pages, form_ids, reference_map) do
+  defp form_entries(source_pages, form_ids, reference_map, opacity) do
     Enum.map(source_pages, fn source ->
+      group =
+        case {source.group, opacity < 1.0} do
+          {nil, true} -> %{"S" => {:name, "Transparency"}, "I" => true, "K" => false}
+          {group, _translucent?} -> group
+        end
+
       dictionary =
         %{
           "Type" => {:name, "XObject"},
@@ -139,7 +145,7 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
           "Matrix" => source.normalization,
           "Resources" => remap_value(source.resources, reference_map)
         }
-        |> put_optional("Group", remap_value(source.group, reference_map))
+        |> put_optional("Group", remap_value(group, reference_map))
 
       {Map.fetch!(form_ids, source.page_number), 0, {:stream, dictionary, source.content}}
     end)

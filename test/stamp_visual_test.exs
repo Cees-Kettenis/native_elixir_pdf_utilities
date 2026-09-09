@@ -7,6 +7,66 @@ defmodule NativeElixirPdfUtilities.StampVisualTest do
 
   @moduletag :browser_parity
 
+  test "overlay opacity applies to composed artwork even when source alpha is explicit" do
+    alias NativeElixirPdfUtilities.Pdf.{Reader, IncrementalWriter}
+    assert {:ok, blank} = PdfWriter.render([%{size: {300.0, 200.0}, boxes: []}])
+    assert {:ok, context} = Reader.read_validated(blank)
+    page = hd(context.pages)
+    {page_id, generation} = page.ref
+    stream_id = context.document.trailer["Size"]
+
+    directory =
+      Path.join(System.tmp_dir!(), "stamp-opacity-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(directory)
+    on_exit(fn -> File.rm_rf!(directory) end)
+
+    for source_alpha <- [1.0, 0.5],
+        group <- [nil, %{"S" => {:name, "Transparency"}, "I" => true}],
+        opacity <- [0.0, 0.25, 1.0] do
+      dictionary =
+        Map.merge(page.dictionary, %{
+          "Contents" => {:ref, {stream_id, 0}},
+          "Resources" => %{
+            "ExtGState" => %{
+              "OwnAlpha" => %{
+                "Type" => {:name, "ExtGState"},
+                "ca" => source_alpha,
+                "CA" => source_alpha
+              }
+            }
+          }
+        })
+
+      dictionary = if group, do: Map.put(dictionary, "Group", group), else: dictionary
+
+      assert {:ok, source} =
+               IncrementalWriter.write(context, [
+                 {stream_id, 0, {:stream, %{}, "/OwnAlpha gs 1 0 0 rg 10 10 50 50 re f"}},
+                 {page_id, generation, {:value, dictionary}}
+               ])
+
+      assert {:ok, stamped} = Stamp.overlay(blank, source, opacity: opacity)
+      pdf_path = Path.join(directory, "stamped.pdf")
+      prefix = Path.join(directory, "stamped")
+      File.write!(pdf_path, stamped)
+
+      assert {_output, 0} =
+               System.cmd("pdftoppm", ["-r", "72", "-singlefile", pdf_path, prefix],
+                 stderr_to_stdout: true
+               )
+
+      ["P6", "300 200", "255", pixels] =
+        String.split(File.read!(prefix <> ".ppm"), "\n", parts: 4)
+
+      <<red, green, blue>> = binary_part(pixels, (150 * 300 + 20) * 3, 3)
+      expected = round(255 * (1 - opacity * source_alpha))
+      assert red == 255
+      assert_in_delta green, expected, 1
+      assert_in_delta blue, expected, 1
+    end
+  end
+
   test "isolates existing transforms and clips while preserving artwork and repeated stamps" do
     assert {:ok, blank} = PdfWriter.render([%{size: {300.0, 200.0}, boxes: []}])
     assert {:ok, context} = NativeElixirPdfUtilities.Pdf.Reader.read_validated(blank)
