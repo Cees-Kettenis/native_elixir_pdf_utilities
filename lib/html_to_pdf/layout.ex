@@ -1129,11 +1129,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp place_grid_items(items, style) do
-    column_count = style |> Map.get(:grid_template_columns, []) |> length() |> max(1)
+    explicit_count = style |> Map.get(:grid_template_columns, []) |> length() |> max(1)
 
-    {_occupied, placed} =
-      Enum.reduce(items, {MapSet.new(), []}, fn item, {occupied, acc} ->
-        placement = grid_item_placement(item, column_count, occupied)
+    column_count =
+      Enum.reduce(items, explicit_count, fn item, count ->
+        span = grid_axis_span(item.column_start, item.column_end)
+        start = grid_line_start(item.column_start, item.column_end)
+        max(count, if(is_integer(start), do: start + span - 1, else: span))
+      end)
+
+    ordered_items =
+      Enum.sort_by(items, fn item ->
+        row = grid_line_start(item.row_start, item.row_end)
+        column = grid_line_start(item.column_start, item.column_end)
+
+        cond do
+          is_integer(row) and is_integer(column) -> 0
+          is_integer(row) -> 1
+          true -> 2
+        end
+      end)
+
+    {_occupied, _cursor, placed} =
+      Enum.reduce(ordered_items, {MapSet.new(), {1, 1}, []}, fn item, {occupied, cursor, acc} ->
+        placement = grid_item_placement(item, column_count, occupied, cursor)
 
         occupied =
           placement.row_start..(placement.row_end - 1)
@@ -1142,13 +1161,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             |> Enum.reduce(row_acc, &MapSet.put(&2, {row, &1}))
           end)
 
-        {occupied, acc ++ [Map.merge(item, placement)]}
+        cursor =
+          if grid_line_start(item.row_start, item.row_end) == :auto,
+            do: {placement.row_start, placement.column_start},
+            else: cursor
+
+        {occupied, cursor, [Map.merge(item, placement) | acc]}
       end)
 
-    placed
+    Enum.sort_by(placed, & &1.index)
   end
 
-  defp grid_item_placement(item, column_count, occupied) do
+  defp grid_item_placement(item, column_count, occupied, {cursor_row, cursor_column} = cursor) do
     column_start = grid_line_start(item.column_start, item.column_end)
     row_start = grid_line_start(item.row_start, item.row_end)
     column_span = grid_axis_span(item.column_start, item.column_end)
@@ -1159,16 +1183,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         grid_placement(row_start, column_start, row_span, column_span)
 
       {row_start, :auto} when is_integer(row_start) ->
-        column_start = first_free_grid_column(occupied, row_start, column_count, column_span)
+        column_start =
+          first_free_grid_column(occupied, row_start, column_count, row_span, column_span)
+
         grid_placement(row_start, column_start, row_span, column_span)
 
       {:auto, column_start} when is_integer(column_start) ->
-        row_start = first_free_grid_row(occupied, column_start, row_span, column_span)
+        start_row = if column_start < cursor_column, do: cursor_row + 1, else: cursor_row
+        row_start = first_free_grid_row(occupied, column_start, row_span, column_span, start_row)
         grid_placement(row_start, column_start, row_span, column_span)
 
       _ ->
         {row_start, column_start} =
-          first_free_grid_cell(occupied, column_count, row_span, column_span)
+          first_free_grid_cell(occupied, column_count, row_span, column_span, cursor)
 
         grid_placement(row_start, column_start, row_span, column_span)
     end
@@ -1212,28 +1239,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp first_free_grid_column(occupied, row_start, column_count, column_span) do
+  defp first_free_grid_column(occupied, row_start, column_count, row_span, column_span) do
     1..column_count
-    |> Enum.find(&grid_cells_free?(occupied, row_start, &1, 1, column_span))
+    |> Enum.find(&grid_cells_free?(occupied, row_start, &1, row_span, column_span))
     |> case do
       nil -> column_count + 1
       column -> column
     end
   end
 
-  defp first_free_grid_row(occupied, column_start, row_span, column_span) do
-    1
+  defp first_free_grid_row(occupied, column_start, row_span, column_span, start_row) do
+    start_row
     |> Stream.iterate(&(&1 + 1))
     |> Enum.find(&grid_cells_free?(occupied, &1, column_start, row_span, column_span))
   end
 
-  defp first_free_grid_cell(occupied, column_count, row_span, column_span) do
-    1
+  defp first_free_grid_cell(
+         occupied,
+         column_count,
+         row_span,
+         column_span,
+         {cursor_row, cursor_column}
+       ) do
+    cursor_row
     |> Stream.iterate(&(&1 + 1))
     |> Enum.reduce_while(nil, fn row, _acc ->
       column =
-        1..column_count
-        |> Enum.find(&grid_cells_free?(occupied, row, &1, row_span, column_span))
+        1..max(column_count - column_span + 1, 1)
+        |> Enum.find(fn column ->
+          (row > cursor_row or column >= cursor_column) and
+            grid_cells_free?(occupied, row, column, row_span, column_span)
+        end)
 
       case column do
         nil -> {:cont, nil}

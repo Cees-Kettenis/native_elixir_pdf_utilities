@@ -6,6 +6,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Limits
 
+  test "sparse grid placement preserves its cursor and reserves definite cells first" do
+    for {items, expected} <- [
+          {"<div style='grid-column:2;background:red'></div><div style='background:blue'></div>",
+           [{40, 0}, {0, 20}]},
+          {"<div style='background:red'></div><div style='grid-column:1;grid-row:1;background:blue'></div>",
+           [{40, 0}, {0, 0}]},
+          {"<div style='grid-column:2;background:red'></div><div style='grid-column:span 2;background:blue'></div>",
+           [{40, 0}, {0, 20}]}
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse(
+                 "<div style='display:grid;grid-template-columns:40pt 40pt;grid-auto-rows:20pt'>#{items}</div>"
+               )
+
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {240, 240}, margin: 0)
+      boxes = Enum.filter(layout.boxes, &(&1.type == :rect))
+      assert length(boxes) == length(expected)
+
+      for {box, {x, y}} <- Enum.zip(boxes, expected) do
+        assert_in_delta box.x, x, 0.001
+        assert_in_delta 240 - box.y - box.height, y, 0.001
+      end
+    end
+  end
+
   test "grid spans and automatic starts resolve against definite end lines" do
     for {placement, expected_start, expected_size} <- [
           {"span 2 / 4", 40, 80},
