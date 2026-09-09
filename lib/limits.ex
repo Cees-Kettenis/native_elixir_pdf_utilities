@@ -47,6 +47,8 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_pdf_outline_total_title_bytes: 5_000_000,
     max_pdf_name_tree_nodes: 10_000,
     max_pdf_named_destinations: 10_000,
+    max_stamp_text_bytes: 1_000_000,
+    max_stamp_decoded_content_bytes: 50_000_000,
     max_merge_inputs: 100,
     max_aggregate_merge_input_bytes: 100_000_000,
     max_merged_objects: 100_000,
@@ -103,6 +105,8 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_pdf_outline_total_title_bytes
           | :max_pdf_name_tree_nodes
           | :max_pdf_named_destinations
+          | :max_stamp_text_bytes
+          | :max_stamp_decoded_content_bytes
           | :max_merge_inputs
           | :max_aggregate_merge_input_bytes
           | :max_merged_objects

@@ -9,8 +9,9 @@
 # Native Elixir PDF Utilities
 
 Native Elixir PDF Utilities renders HTML/CSS to PDF, reads and updates metadata
-and bookmarks, extracts embedded text, and merges, transforms, and splits PDFs.
-It runs inside Elixir applications without external PDF command-line tools.
+and bookmarks, extracts embedded text, and merges, transforms, splits, and
+stamps PDFs. It runs inside Elixir applications without external PDF
+command-line tools.
 
 ## Package and docs
 
@@ -24,8 +25,9 @@ It runs inside Elixir applications without external PDF command-line tools.
 3. [Merger](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-merging.md) - combines multiple PDF binaries into a fresh PDF with rewritten object references.
 4. [Page transforms and splitting](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-page-transforms.md) - rebuild PDFs after selecting, reordering, deleting, rotating, or splitting pages.
 5. [Outlines and bookmarks](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-outlines.md) - read or replace bookmarks, detect headings in existing PDFs, and generate bookmarks from HTML headings. Merging, transforms, and splitting preserve supported outlines.
-6. [Reader](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-reader.md) and [text extraction](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/text-extraction.md) - strictly resolve embedded Unicode text from classic and modern PDFs.
-7. [HTML to PDF](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/html-to-pdf-compatibility.md) - renders a strict, document-oriented HTML/CSS subset to native PDF bytes, with [examples](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/html-to-pdf-examples.md) for common workflows. It supports configured fonts and cross-platform discovery of installed system fonts. Rendering does not require Chromium, wkhtmltopdf, Node, Python, SaaS calls, or a Rust toolchain.
+6. [Stamping and page numbers](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-stamping.md) - adds text stamps, translucent watermarks, page numbers, and PDF artwork overlays to existing PDFs through incremental updates.
+7. [Reader](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-reader.md) and [text extraction](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/text-extraction.md) - strictly resolve embedded Unicode text from classic and modern PDFs.
+8. [HTML to PDF](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/html-to-pdf-compatibility.md) - renders a strict, document-oriented HTML/CSS subset to native PDF bytes, with [examples](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/html-to-pdf-examples.md) for common workflows. It supports configured fonts and cross-platform discovery of installed system fonts. Rendering does not require Chromium, wkhtmltopdf, Node, Python, SaaS calls, or a Rust toolchain.
 
 See the [documentation](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/tree/main/docs) for feature guides, configurable resource limits, and quick reference.
 

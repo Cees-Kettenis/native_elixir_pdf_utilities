@@ -1,8 +1,8 @@
 # Documentation
 
 Native Elixir PDF Utilities inspects, updates, merges, transforms, splits,
-extracts text from, and generates PDF documents. These guides document what
-each public API supports and which work remains the caller's responsibility.
+stamps, extracts text from, and generates PDF documents. These guides document
+what each public API supports and which work remains the caller's responsibility.
 
 ## Reading and manipulating PDFs
 
@@ -23,6 +23,9 @@ each public API supports and which work remains the caller's responsibility.
   behavior and data-retention limitations.
 - [PDF outlines and bookmarks](pdf-outlines.md) covers exact outline updates,
   best-effort detection, HTML headings, and preservation during assembly.
+- [PDF stamping and page numbers](pdf-stamping.md) covers text stamps,
+  watermarks, PDF artwork overlays, page numbering, page selections, and the
+  displayed-page coordinate system.
 - [Diagnostics](diagnostics.md) explains why public APIs share one recoverable
   error shape and how callers can use its debugging context.
 - [Configurable resource limits](resource-limits.md) lists every tunable
@@ -53,8 +56,9 @@ each public API supports and which work remains the caller's responsibility.
 
 ## Manual testing app
 
-The local app provides forms for the PDF APIs, including exact and detected
-outlines. Start it from the repository:
+The local app provides forms for the PDF APIs, including stamping,
+watermarking, page numbering, overlays, and exact and detected outlines. Start
+it from the repository:
 
 ```bash
 cd dev/manual_web

@@ -103,6 +103,53 @@ defmodule ManualWeb.ValidatorTest do
              Validator.outline_items("{}", :put_outlines)
   end
 
+  test "normalizes stamping form options" do
+    params = %{
+      "pages" => "2-3",
+      "position" => "bottom_right",
+      "size" => "9",
+      "margin" => "12",
+      "opacity" => "0.5",
+      "rotation" => "15",
+      "color" => "#336699",
+      "format" => "{{page}}/{{pages}}",
+      "numbering" => "selection"
+    }
+
+    assert {:ok, options} = Validator.stamp_text_options(params, :page_numbers)
+    assert options[:pages] == [2..3//1]
+    assert options[:position] == :bottom_right
+    assert options[:size] == 9.0
+    assert options[:color] == {0.2, 0.4, 0.6}
+    assert options[:numbering] == :selection
+
+    assert {:ok, overlay} =
+             Validator.stamp_overlay_options(%{
+               "pages" => "",
+               "opacity" => "1",
+               "fit" => "contain",
+               "overlay_mode" => "match"
+             })
+
+    assert overlay == [pages: :all, opacity: 1.0, fit: :contain, overlay_pages: :match]
+
+    for result <- [
+          Validator.stamp_text_options(:bad, :stamp_text),
+          Validator.stamp_text_options(%{"position" => "bad"}, :stamp_text),
+          Validator.stamp_text_options(%{"size" => "0"}, :stamp_text),
+          Validator.stamp_text_options(%{"margin" => "-1"}, :stamp_text),
+          Validator.stamp_text_options(%{"opacity" => "2"}, :stamp_text),
+          Validator.stamp_text_options(%{"rotation" => "bad"}, :stamp_text),
+          Validator.stamp_text_options(%{"color" => "red"}, :stamp_text),
+          Validator.stamp_text_options(%{"numbering" => "bad"}, :stamp_text),
+          Validator.stamp_overlay_options(%{"fit" => "bad"}),
+          Validator.stamp_overlay_options(%{"overlay_mode" => "bad"}),
+          Validator.stamp_overlay_options(%{"overlay_mode" => "repeat", "overlay_page" => "0"})
+        ] do
+      assert {:error, {:invalid_input, %{stage: :manual_web}}} = result
+    end
+  end
+
   test "builds metadata patches with remove taking precedence" do
     assert Validator.info_patch(%{"Title" => "ignored"}) == {:ok, %{}}
 

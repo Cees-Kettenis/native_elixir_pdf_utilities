@@ -26,6 +26,17 @@ defmodule ManualWeb.Validator do
     "creation_date" => :creation_date,
     "modification_date" => :modification_date
   }
+  @stamp_positions %{
+    "top_left" => :top_left,
+    "top_center" => :top_center,
+    "top_right" => :top_right,
+    "center_left" => :center_left,
+    "center" => :center,
+    "center_right" => :center_right,
+    "bottom_left" => :bottom_left,
+    "bottom_center" => :bottom_center,
+    "bottom_right" => :bottom_right
+  }
 
   @type detailed_error :: {atom(), Diagnostics.diagnostic()}
 
@@ -161,6 +172,77 @@ defmodule ManualWeb.Validator do
     end
   end
 
+  @doc "Builds text, watermark, or page-number options from a manual form."
+  @spec stamp_text_options(map(), atom()) :: {:ok, keyword()} | {:error, detailed_error()}
+  def stamp_text_options(params, operation) do
+    position =
+      case params do
+        params when is_map(params) ->
+          Map.get(@stamp_positions, Map.get(params, "position", "center"))
+
+        _ ->
+          nil
+      end
+
+    with true <- is_map(params),
+         true <- not is_nil(position),
+         {:ok, pages} <- optional_page_selection(Map.get(params, "pages"), operation),
+         {:ok, size} <- positive_float(Map.get(params, "size", "12"), operation, "font size"),
+         {:ok, margin} <- nonnegative_float(Map.get(params, "margin", "24"), operation, "margin"),
+         {:ok, opacity} <- unit_float(Map.get(params, "opacity", "1"), operation, "opacity"),
+         {:ok, rotation} <- float(Map.get(params, "rotation", "0"), operation, "rotation"),
+         {:ok, color} <- rgb_color(Map.get(params, "color", "#404040"), operation) do
+      options = [
+        pages: pages,
+        position: position,
+        size: size,
+        margin: margin,
+        opacity: opacity,
+        rotation: rotation,
+        color: color
+      ]
+
+      options =
+        case optional_text(Map.get(params, "format")) do
+          nil -> options
+          format -> Keyword.put(options, :format, format)
+        end
+
+      options =
+        case Map.get(params, "numbering") do
+          "document" -> Keyword.put(options, :numbering, :document)
+          "selection" -> Keyword.put(options, :numbering, :selection)
+          nil -> options
+          _ -> :invalid
+        end
+
+      case options do
+        :invalid -> error(operation, "select a supported numbering mode")
+        options -> {:ok, options}
+      end
+    else
+      false -> error(operation, "stamp form input is malformed")
+      {:error, _error} = stamp_error -> stamp_error
+    end
+  end
+
+  @doc "Builds PDF-overlay options from a manual form."
+  @spec stamp_overlay_options(map()) :: {:ok, keyword()} | {:error, detailed_error()}
+  def stamp_overlay_options(params) do
+    operation = :overlay_pdf
+
+    with true <- is_map(params),
+         {:ok, pages} <- optional_page_selection(Map.get(params, "pages"), operation),
+         {:ok, opacity} <- unit_float(Map.get(params, "opacity", "1"), operation, "opacity"),
+         {:ok, fit} <- overlay_fit(Map.get(params, "fit", "exact")),
+         {:ok, overlay_pages} <- overlay_pages(params) do
+      {:ok, [pages: pages, opacity: opacity, fit: fit, overlay_pages: overlay_pages]}
+    else
+      false -> error(operation, "overlay form input is malformed")
+      {:error, _error} = overlay_error -> overlay_error
+    end
+  end
+
   @doc "Parses a required integer used by page and rotation operations."
   @spec integer(term(), atom(), String.t()) :: {:ok, integer()} | {:error, detailed_error()}
   def integer(value, operation, message) do
@@ -248,7 +330,10 @@ defmodule ManualWeb.Validator do
     end
   end
 
-  defp required_text(value, message, operation) do
+  @doc "Validates a required manual-form text value."
+  @spec required_text(term(), String.t(), atom()) ::
+          {:ok, String.t()} | {:error, detailed_error()}
+  def required_text(value, message, operation) do
     case optional_text(value) do
       nil -> error(operation, message)
       text -> {:ok, text}
@@ -298,6 +383,97 @@ defmodule ManualWeb.Validator do
           {:ok, selectors} -> {:ok, Enum.reverse(selectors)}
           {:error, _error} = selection_error -> selection_error
         end
+    end
+  end
+
+  defp optional_page_selection(value, operation) do
+    case page_selection(value, true, operation) do
+      {:ok, []} -> {:ok, :all}
+      {:ok, pages} -> {:ok, pages}
+      {:error, _error} = selection_error -> selection_error
+    end
+  end
+
+  defp positive_float(value, operation, label) do
+    with {:ok, number} <- float(value, operation, label),
+         true <- number > 0 do
+      {:ok, number}
+    else
+      false -> error(operation, "#{label} must be positive")
+      {:error, _error} = number_error -> number_error
+    end
+  end
+
+  defp nonnegative_float(value, operation, label) do
+    with {:ok, number} <- float(value, operation, label),
+         true <- number >= 0 do
+      {:ok, number}
+    else
+      false -> error(operation, "#{label} must not be negative")
+      {:error, _error} = number_error -> number_error
+    end
+  end
+
+  defp unit_float(value, operation, label) do
+    with {:ok, number} <- float(value, operation, label),
+         true <- number >= 0 and number <= 1 do
+      {:ok, number}
+    else
+      false -> error(operation, "#{label} must be between 0 and 1")
+      {:error, _error} = number_error -> number_error
+    end
+  end
+
+  defp float(value, operation, label) do
+    case optional_text(value) do
+      nil ->
+        error(operation, "enter a #{label}")
+
+      value ->
+        case Float.parse(value) do
+          {number, ""} -> {:ok, number}
+          _ -> error(operation, "#{label} must be a number")
+        end
+    end
+  end
+
+  defp rgb_color(value, operation) do
+    case optional_text(value) do
+      "#" <> hex when byte_size(hex) == 6 ->
+        case Base.decode16(hex, case: :mixed) do
+          {:ok, <<red, green, blue>>} -> {:ok, {red / 255, green / 255, blue / 255}}
+          :error -> error(operation, "color must use #RRGGBB syntax")
+        end
+
+      _ ->
+        error(operation, "color must use #RRGGBB syntax")
+    end
+  end
+
+  defp overlay_fit(value) do
+    case value do
+      "exact" -> {:ok, :exact}
+      "contain" -> {:ok, :contain}
+      "cover" -> {:ok, :cover}
+      "stretch" -> {:ok, :stretch}
+      _ -> error(:overlay_pdf, "select a supported overlay fit")
+    end
+  end
+
+  defp overlay_pages(params) do
+    case Map.get(params, "overlay_mode", "repeat") do
+      "match" ->
+        {:ok, :match}
+
+      "repeat" ->
+        case integer(Map.get(params, "overlay_page", "1"), :overlay_pdf, "enter an overlay page") do
+          {:ok, page} when page > 0 -> {:ok, {:repeat, page}}
+          {:ok, _page} -> error(:overlay_pdf, "overlay page must be positive")
+          {:error, _error} = page_error -> page_error
+        end
+
+      _ ->
+        error(:overlay_pdf, "select repeat or matched overlay pages")
     end
   end
 

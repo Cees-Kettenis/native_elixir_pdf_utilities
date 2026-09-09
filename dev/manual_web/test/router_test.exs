@@ -8,6 +8,7 @@ defmodule ManualWeb.RouterTest do
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.Info
   alias NativeElixirPdfUtilities.Outlines
+  alias NativeElixirPdfUtilities.Text
 
   @router_options Router.init([])
 
@@ -19,6 +20,7 @@ defmodule ManualWeb.RouterTest do
     assert response.resp_body =~ "href=\"/favicon.ico\""
     refute response.resp_body =~ "Manual PDF checks"
     assert response.resp_body =~ "Merge PDFs"
+    assert response.resp_body =~ "Stamp and watermark PDFs"
     assert response.resp_body =~ "Transform pages"
     assert response.resp_body =~ "Split PDFs"
     assert response.resp_body =~ "HTML to PDF"
@@ -44,6 +46,10 @@ defmodule ManualWeb.RouterTest do
                "/info/update",
                "/merge",
                "/openapi.json",
+               "/stamp/overlay",
+               "/stamp/page-numbers",
+               "/stamp/text",
+               "/stamp/watermark",
                "/outlines",
                "/outlines/automatic",
                "/outlines/detect",
@@ -158,6 +164,82 @@ defmodule ManualWeb.RouterTest do
     assert rotated.status == 200
     assert {:ok, sizes} = Info.page_sizes(rotated.resp_body)
     assert Enum.map(sizes, & &1.rotation) == [0, 90, 0]
+  end
+
+  test "adds text, watermarks, page numbers, and PDF overlays" do
+    pdf = multi_page_pdf()
+
+    text =
+      post("/stamp/text", %{
+        "pdf" => upload(pdf, "text-stamp.pdf"),
+        "text" => "APPROVED",
+        "pages" => "2",
+        "position" => "top_right",
+        "size" => "14",
+        "margin" => "12",
+        "color" => "#008844",
+        "opacity" => "1",
+        "rotation" => "0",
+        "disposition" => "inline"
+      })
+
+    assert text.status == 200
+    assert {:ok, extracted} = Text.extract(text.resp_body, layout: false)
+    assert extracted =~ "Second page body text. APPROVED"
+
+    watermark =
+      post("/stamp/watermark", %{
+        "pdf" => upload(pdf, "watermark.pdf"),
+        "text" => "DRAFT",
+        "position" => "center",
+        "size" => "72",
+        "margin" => "24",
+        "color" => "#5f6b7a",
+        "opacity" => "0.15",
+        "rotation" => "45",
+        "disposition" => "inline"
+      })
+
+    assert watermark.status == 200
+    assert {:ok, watermark_text} = Text.extract(watermark.resp_body, layout: false)
+    assert watermark_text =~ "DRAFT"
+
+    numbered =
+      post("/stamp/page-numbers", %{
+        "pdf" => upload(pdf, "page-numbers.pdf"),
+        "format" => "{{page}}/{{pages}}",
+        "numbering" => "selection",
+        "pages" => "2-3",
+        "position" => "bottom_center",
+        "size" => "9",
+        "margin" => "24",
+        "color" => "#404040",
+        "opacity" => "1",
+        "rotation" => "0",
+        "disposition" => "attachment"
+      })
+
+    assert numbered.status == 200
+    assert {:ok, numbered_text} = Text.extract(numbered.resp_body, layout: false)
+    assert numbered_text =~ "Second page body text. 1/2"
+
+    overlay_pdf = rendered_pdf("OVERLAY")
+
+    overlaid =
+      post("/stamp/overlay", %{
+        "pdf" => upload(pdf, "overlay-target.pdf"),
+        "overlay_pdf" => upload(overlay_pdf, "overlay-source.pdf"),
+        "pages" => "1",
+        "overlay_mode" => "repeat",
+        "overlay_page" => "1",
+        "fit" => "contain",
+        "opacity" => "0.5",
+        "disposition" => "inline"
+      })
+
+    assert overlaid.status == 200
+    assert {:ok, overlay_text} = Text.extract(overlaid.resp_body, layout: false)
+    assert overlay_text =~ "First First page body text. OVERLAY"
   end
 
   test "downloads every split mode as a ZIP of valid PDFs" do

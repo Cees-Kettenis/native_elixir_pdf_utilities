@@ -29,6 +29,92 @@ defmodule ManualWeb.Page do
           </form>
         </section>
 
+        <section id="stamping">
+          <h2>Stamp and watermark PDFs</h2>
+          <p>Try text stamps, diagonal watermarks, existing-PDF overlays, and page numbers. Leave pages empty to stamp every page. Selections use <code>1,3-5</code>.</p>
+
+          <form action="/stamp/text" method="post" enctype="multipart/form-data" target="_blank">
+            <h3>Text stamp</h3>
+            <label>PDF file <input type="file" name="pdf" accept="application/pdf,.pdf" required></label>
+            <label>Text <input type="text" name="text" value="APPROVED" required></label>
+            <div class="fields">
+              <label>Pages <input type="text" name="pages" placeholder="Empty means all"></label>
+              <label>Position
+                <select name="position">
+                  <option value="top_left">Top left</option>
+                  <option value="top_center">Top center</option>
+                  <option value="top_right" selected>Top right</option>
+                  <option value="center_left">Center left</option>
+                  <option value="center">Center</option>
+                  <option value="center_right">Center right</option>
+                  <option value="bottom_left">Bottom left</option>
+                  <option value="bottom_center">Bottom center</option>
+                  <option value="bottom_right">Bottom right</option>
+                </select>
+              </label>
+              <label>Size <input type="text" name="size" value="14"></label>
+              <label>Margin <input type="text" name="margin" value="24"></label>
+              <label>Color <input type="color" name="color" value="#16834a"></label>
+              <label>Opacity <input type="text" name="opacity" value="1"></label>
+              <label>Rotation <input type="text" name="rotation" value="0"></label>
+              <label>Response
+                <select name="disposition"><option value="inline">Open in browser</option><option value="attachment">Download</option></select>
+              </label>
+            </div>
+            <button type="submit">Add text stamp</button>
+          </form>
+
+          <form action="/stamp/watermark" method="post" enctype="multipart/form-data" target="_blank">
+            <h3>Watermark</h3>
+            <label>PDF file <input type="file" name="pdf" accept="application/pdf,.pdf" required></label>
+            <label>Text <input type="text" name="text" value="DRAFT" required></label>
+            <div class="fields">
+              <label>Pages <input type="text" name="pages" placeholder="Empty means all"></label>
+              <label>Position <select name="position"><option value="center" selected>Center</option><option value="top_center">Top center</option><option value="bottom_center">Bottom center</option></select></label>
+              <label>Size <input type="text" name="size" value="72"></label>
+              <label>Margin <input type="text" name="margin" value="24"></label>
+              <label>Color <input type="color" name="color" value="#5f6b7a"></label>
+              <label>Opacity <input type="text" name="opacity" value="0.15"></label>
+              <label>Clockwise rotation <input type="text" name="rotation" value="45"></label>
+              <label>Response <select name="disposition"><option value="inline">Open in browser</option><option value="attachment">Download</option></select></label>
+            </div>
+            <button type="submit">Add watermark</button>
+          </form>
+
+          <form action="/stamp/page-numbers" method="post" enctype="multipart/form-data" target="_blank">
+            <h3>Page numbers</h3>
+            <label>PDF file <input type="file" name="pdf" accept="application/pdf,.pdf" required></label>
+            <label>Format <input type="text" name="format" value="Page {{page}} of {{pages}}" required></label>
+            <div class="fields">
+              <label>Pages <input type="text" name="pages" placeholder="Empty means all"></label>
+              <label>Numbering <select name="numbering"><option value="document">Whole document</option><option value="selection">Selected pages only</option></select></label>
+              <label>Position <select name="position"><option value="bottom_center" selected>Bottom center</option><option value="bottom_left">Bottom left</option><option value="bottom_right">Bottom right</option><option value="top_center">Top center</option></select></label>
+              <label>Size <input type="text" name="size" value="9"></label>
+              <label>Margin <input type="text" name="margin" value="24"></label>
+              <label>Color <input type="color" name="color" value="#404040"></label>
+              <input type="hidden" name="opacity" value="1">
+              <input type="hidden" name="rotation" value="0">
+              <label>Response <select name="disposition"><option value="inline">Open in browser</option><option value="attachment">Download</option></select></label>
+            </div>
+            <button type="submit">Add page numbers</button>
+          </form>
+
+          <form action="/stamp/overlay" method="post" enctype="multipart/form-data" target="_blank">
+            <h3>PDF overlay</h3>
+            <label>Target PDF <input type="file" name="pdf" accept="application/pdf,.pdf" required></label>
+            <label>Overlay PDF <input type="file" name="overlay_pdf" accept="application/pdf,.pdf" required></label>
+            <div class="fields">
+              <label>Target pages <input type="text" name="pages" placeholder="Empty means all"></label>
+              <label>Overlay mapping <select name="overlay_mode"><option value="repeat">Repeat one overlay page</option><option value="match">Match pages in order</option></select></label>
+              <label>Repeated overlay page <input type="text" name="overlay_page" value="1"></label>
+              <label>Fit <select name="fit"><option value="exact">Exact size</option><option value="contain">Contain</option><option value="cover">Cover</option><option value="stretch">Stretch</option></select></label>
+              <label>Opacity <input type="text" name="opacity" value="1"></label>
+              <label>Response <select name="disposition"><option value="inline">Open in browser</option><option value="attachment">Download</option></select></label>
+            </div>
+            <button type="submit">Apply PDF overlay</button>
+          </form>
+        </section>
+
         <section>
           <h2>Transform pages</h2>
           <p>Pick, reorder, delete, or rotate pages. Page selections use <code>1,3-5</code> syntax.</p>

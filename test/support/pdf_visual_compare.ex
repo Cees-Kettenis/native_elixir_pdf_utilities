@@ -15,6 +15,16 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
           required(:artifact_dir) => String.t()
         }
 
+  @type visual_change_stats :: %{
+          required(:page) => pos_integer(),
+          required(:width) => pos_integer(),
+          required(:height) => pos_integer(),
+          required(:changed_pixels) => pos_integer(),
+          required(:changed_ratio) => float(),
+          required(:bounds) =>
+            {non_neg_integer(), non_neg_integer(), non_neg_integer(), non_neg_integer()}
+        }
+
   @doc false
   @spec assert_browser_match!(String.t(), keyword()) :: comparison_stats()
   def assert_browser_match!(fixture_path, opts \\ []) do
@@ -101,6 +111,38 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
            """
 
     stats
+  end
+
+  @doc false
+  @spec assert_pdf_visual_change!(binary(), binary(), keyword()) :: [visual_change_stats()]
+  def assert_pdf_visual_change!(before_pdf, after_pdf, opts \\ []) do
+    artifact_dir = Keyword.get(opts, :artifact_dir, Path.join("tmp", "stamp_visual"))
+    pdftoppm_bin = Keyword.get(opts, :pdftoppm_bin, pdftoppm_bin!())
+    dpi = Keyword.get(opts, :dpi, 72)
+
+    File.rm_rf!(artifact_dir)
+    File.mkdir_p!(artifact_dir)
+
+    before_path = Path.join(artifact_dir, "before.pdf")
+    after_path = Path.join(artifact_dir, "after.pdf")
+    File.write!(before_path, before_pdf)
+    File.write!(after_path, after_pdf)
+
+    before_pages =
+      rasterize_pdf!(pdftoppm_bin, before_path, Path.join(artifact_dir, "before"), dpi)
+
+    after_pages =
+      rasterize_pdf!(pdftoppm_bin, after_path, Path.join(artifact_dir, "after"), dpi)
+
+    assert length(before_pages) == length(after_pages),
+           "Visual comparison page count changed; artifacts: #{Path.expand(artifact_dir)}"
+
+    before_pages
+    |> Enum.zip(after_pages)
+    |> Enum.with_index(1)
+    |> Enum.map(fn {{before_page, after_page}, page_number} ->
+      visual_change_stats!(before_page, after_page, page_number, artifact_dir)
+    end)
   end
 
   defp default_render_opts(fixture_path) do
@@ -415,6 +457,64 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       crop_pixels(chromium, comparison_width, comparison_height),
       crop_pixels(native, comparison_width, comparison_height)
     )
+  end
+
+  defp visual_change_stats!(before_page, after_page, page_number, artifact_dir) do
+    before = read_ppm!(before_page)
+    after_image = read_ppm!(after_page)
+
+    assert {before.width, before.height} == {after_image.width, after_image.height},
+           "Visual comparison page dimensions changed on page #{page_number}; artifacts: #{Path.expand(artifact_dir)}"
+
+    initial = %{
+      changed_pixels: 0,
+      min_x: before.width,
+      min_y: before.height,
+      max_x: 0,
+      max_y: 0
+    }
+
+    changes =
+      Enum.reduce(0..(before.width * before.height - 1), initial, fn pixel, acc ->
+        offset = pixel * 3
+
+        changed? =
+          Enum.any?(0..2, fn channel ->
+            abs(
+              :binary.at(before.pixels, offset + channel) -
+                :binary.at(after_image.pixels, offset + channel)
+            ) > 12
+          end)
+
+        case changed? do
+          true ->
+            x = rem(pixel, before.width)
+            y = div(pixel, before.width)
+
+            %{
+              changed_pixels: acc.changed_pixels + 1,
+              min_x: min(acc.min_x, x),
+              min_y: min(acc.min_y, y),
+              max_x: max(acc.max_x, x),
+              max_y: max(acc.max_y, y)
+            }
+
+          false ->
+            acc
+        end
+      end)
+
+    assert changes.changed_pixels > 0,
+           "Visual comparison found no changed pixels on page #{page_number}; artifacts: #{Path.expand(artifact_dir)}"
+
+    %{
+      page: page_number,
+      width: before.width,
+      height: before.height,
+      changed_pixels: changes.changed_pixels,
+      changed_ratio: changes.changed_pixels / (before.width * before.height),
+      bounds: {changes.min_x, changes.min_y, changes.max_x, changes.max_y}
+    }
   end
 
   defp crop_pixels(image, width, height) do

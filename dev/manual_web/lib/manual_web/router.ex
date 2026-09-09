@@ -15,6 +15,7 @@ defmodule ManualWeb.Router do
   alias NativeElixirPdfUtilities.Merge
   alias NativeElixirPdfUtilities.Outlines
   alias NativeElixirPdfUtilities.Split
+  alias NativeElixirPdfUtilities.Stamp
   alias NativeElixirPdfUtilities.Text
   alias NativeElixirPdfUtilities.Tokenizer
   alias NativeElixirPdfUtilities.Transform
@@ -64,6 +65,55 @@ defmodule ManualWeb.Router do
          {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),
          {:ok, merged} <- Merge.merge(pdfs) do
       send_pdf(conn, merged, "merged.pdf", disposition)
+    else
+      {:error, _} = operation_error -> send_error(conn, operation_error)
+    end
+  end
+
+  post "/stamp/text" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :stamp_text),
+         {:ok, text} <-
+           Validator.required_text(conn.params["text"], "enter stamp text", :stamp_text),
+         {:ok, options} <- Validator.stamp_text_options(conn.params, :stamp_text),
+         {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),
+         {:ok, stamped} <- Stamp.text(pdf, text, options) do
+      send_pdf(conn, stamped, "text-stamped.pdf", disposition)
+    else
+      {:error, _} = operation_error -> send_error(conn, operation_error)
+    end
+  end
+
+  post "/stamp/watermark" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :watermark),
+         {:ok, text} <-
+           Validator.required_text(conn.params["text"], "enter watermark text", :watermark),
+         {:ok, options} <- Validator.stamp_text_options(conn.params, :watermark),
+         {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),
+         {:ok, stamped} <- Stamp.watermark(pdf, text, options) do
+      send_pdf(conn, stamped, "watermarked.pdf", disposition)
+    else
+      {:error, _} = operation_error -> send_error(conn, operation_error)
+    end
+  end
+
+  post "/stamp/page-numbers" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :page_numbers),
+         {:ok, options} <- Validator.stamp_text_options(conn.params, :page_numbers),
+         {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),
+         {:ok, stamped} <- Stamp.page_numbers(pdf, options) do
+      send_pdf(conn, stamped, "page-numbered.pdf", disposition)
+    else
+      {:error, _} = operation_error -> send_error(conn, operation_error)
+    end
+  end
+
+  post "/stamp/overlay" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :overlay_pdf),
+         {:ok, overlay} <- Validator.read_pdf(conn.params["overlay_pdf"], :overlay_pdf),
+         {:ok, options} <- Validator.stamp_overlay_options(conn.params),
+         {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),
+         {:ok, stamped} <- Stamp.overlay(pdf, overlay, options) do
+      send_pdf(conn, stamped, "overlay-stamped.pdf", disposition)
     else
       {:error, _} = operation_error -> send_error(conn, operation_error)
     end

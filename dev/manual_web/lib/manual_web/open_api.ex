@@ -43,6 +43,59 @@ defmodule ManualWeb.OpenApi do
               "application/pdf"
             )
         },
+        "/stamp/text" => %{
+          "post" =>
+            upload_operation(
+              "Add text to selected PDF pages",
+              stamp_text_properties(%{"text" => %{"type" => "string"}}),
+              ["pdf", "text"],
+              "application/pdf"
+            )
+        },
+        "/stamp/watermark" => %{
+          "post" =>
+            upload_operation(
+              "Add a diagonal text watermark",
+              stamp_text_properties(%{"text" => %{"type" => "string"}}),
+              ["pdf", "text"],
+              "application/pdf"
+            )
+        },
+        "/stamp/page-numbers" => %{
+          "post" =>
+            upload_operation(
+              "Add formatted page numbers",
+              stamp_text_properties(%{
+                "format" => %{"type" => "string", "default" => "Page {{page}} of {{pages}}"},
+                "numbering" => %{
+                  "type" => "string",
+                  "enum" => ["document", "selection"]
+                }
+              }),
+              ["pdf"],
+              "application/pdf"
+            )
+        },
+        "/stamp/overlay" => %{
+          "post" =>
+            upload_operation(
+              "Place artwork from another PDF over selected pages",
+              pdf_properties(%{
+                "overlay_pdf" => %{"type" => "string", "format" => "binary"},
+                "pages" => %{"type" => "string", "examples" => ["1,3-5"]},
+                "overlay_mode" => %{"type" => "string", "enum" => ["repeat", "match"]},
+                "overlay_page" => %{"type" => "integer", "minimum" => 1},
+                "fit" => %{
+                  "type" => "string",
+                  "enum" => ["exact", "contain", "cover", "stretch"]
+                },
+                "opacity" => %{"type" => "number", "minimum" => 0, "maximum" => 1},
+                "disposition" => disposition_schema()
+              }),
+              ["pdf", "overlay_pdf"],
+              "application/pdf"
+            )
+        },
         "/transform/pick" => %{
           "post" =>
             upload_operation(
@@ -253,6 +306,24 @@ defmodule ManualWeb.OpenApi do
 
   defp pdf_properties(additional \\ %{}) do
     Map.put(additional, "pdf", %{"type" => "string", "format" => "binary"})
+  end
+
+  defp stamp_text_properties(additional) do
+    pdf_properties(
+      Map.merge(
+        %{
+          "pages" => %{"type" => "string", "examples" => ["1,3-5"]},
+          "position" => %{"type" => "string"},
+          "size" => %{"type" => "number", "exclusiveMinimum" => 0},
+          "margin" => %{"type" => "number", "minimum" => 0},
+          "color" => %{"type" => "string", "pattern" => "^#[0-9A-Fa-f]{6}$"},
+          "opacity" => %{"type" => "number", "minimum" => 0, "maximum" => 1},
+          "rotation" => %{"type" => "number"},
+          "disposition" => disposition_schema()
+        },
+        additional
+      )
+    )
   end
 
   defp info_update_properties do
