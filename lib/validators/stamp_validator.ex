@@ -346,7 +346,7 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
          {:ok, rotation} <- resolved_rotation(document, page.rotate),
          {:ok, user_unit} <- resolved_user_unit(document, page.dictionary),
          {:ok, resources} <- resolved_resources(document, page.resources),
-         {:ok, contents} <- content_references(page.dictionary) do
+         {:ok, contents} <- PdfValidator.content_references(document, page.dictionary) do
       {width, height} =
         case rotation in [90, 270] do
           true -> {(top - bottom) * user_unit, (right - left) * user_unit}
@@ -417,25 +417,6 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
           {:ok, dictionary} -> {:ok, Map.put(resources, category, dictionary)}
           {:error, _error} -> :error
         end
-    end
-  end
-
-  defp content_references(dictionary) do
-    case Map.get(dictionary, "Contents") do
-      nil ->
-        {:ok, []}
-
-      {:ref, _ref} = reference ->
-        {:ok, [reference]}
-
-      references when is_list(references) ->
-        case Enum.all?(references, &match?({:ref, _ref}, &1)) do
-          true -> {:ok, references}
-          false -> :error
-        end
-
-      _ ->
-        :error
     end
   end
 

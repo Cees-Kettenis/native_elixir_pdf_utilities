@@ -545,7 +545,11 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   defp prepare_page(document, page, page_number, preparation_context) do
     with {:ok, media_box} <- page_rectangle(document, page.media_box, page_number),
          {:ok, rotation} <- page_rotation(document, page.rotate, page_number),
-         {:ok, content_refs} <- content_references(page.dictionary, page.ref),
+         {:ok, content_refs} <-
+           PdfValidator.content_references(document, page.dictionary,
+             operation: :extract,
+             module: __MODULE__
+           ),
          {:ok, contents, preparation_context} <-
            prepare_contents(document, content_refs, page_number, preparation_context),
          {:ok, contents, preparation_context} <-
@@ -591,28 +595,6 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
         error(:page_tree, :invalid_pdf_input, "page MediaBox or Rotate value is malformed",
           page: page_number
         )
-    end
-  end
-
-  defp content_references(dictionary, page_ref) do
-    case Map.get(dictionary, "Contents") do
-      nil ->
-        {:ok, []}
-
-      {:ref, _} = content_ref ->
-        {:ok, [content_ref]}
-
-      content_refs when is_list(content_refs) ->
-        case Enum.all?(content_refs, &match?({:ref, _}, &1)) do
-          true ->
-            {:ok, content_refs}
-
-          false ->
-            error(:content, :invalid_pdf_input, "Contents array contains a non-stream reference")
-        end
-
-      _ ->
-        error(:content, :invalid_pdf_input, "page Contents is malformed", object: page_ref)
     end
   end
 
@@ -874,7 +856,6 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     message =
       Enum.reduce(details, diagnostic.message, fn detail, message ->
         case detail do
-          {:object, {object, generation}} -> "#{message}; object #{object} #{generation}"
           {:page, page} -> "#{message}; page #{page}"
         end
       end)

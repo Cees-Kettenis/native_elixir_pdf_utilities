@@ -402,6 +402,48 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   end
 
   @doc """
+  Resolves a page's Contents value into an ordered list of validated stream references.
+  Accepts an absent value, a stream reference, or a direct or indirect stream array.
+  """
+  @spec content_references(document(), map(), [diagnostic_option()]) ::
+          {:ok, [value()]} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def content_references(document, dictionary, opts \\ []) do
+    value = Map.get(dictionary, "Contents")
+
+    with {:ok, resolved} <- resolve(document, value, opts) do
+      references =
+        case resolved do
+          nil -> []
+          references when is_list(references) -> references
+          _ -> [value]
+        end
+
+      case Enum.all?(references, &match?({:ref, _}, &1)) do
+        true ->
+          references
+          |> Enum.reduce_while({:ok, []}, fn reference, {:ok, streams} ->
+            case validate_stream(document, reference, opts) do
+              {:ok, stream} -> {:cont, {:ok, [{:ref, stream.ref} | streams]}}
+              {:error, _} = stream_error -> {:halt, stream_error}
+            end
+          end)
+          |> case do
+            {:ok, streams} -> {:ok, Enum.reverse(streams)}
+            {:error, _} = stream_error -> stream_error
+          end
+
+        false ->
+          error(
+            :content,
+            :invalid_pdf_input,
+            "page Contents must be a stream reference or an array of stream references",
+            opts
+          )
+      end
+    end
+  end
+
+  @doc """
   Resolves a dictionary and returns one of its values.
   """
   @spec fetch(document(), value(), binary(), [diagnostic_option()]) ::

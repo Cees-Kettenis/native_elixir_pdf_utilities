@@ -8,6 +8,35 @@ defmodule NativeElixirPdfUtilities.ValidatorsTest do
 
   @fixture_directory Path.expand("fixtures/pdf_reader", __DIR__)
 
+  test "normalizes Contents and rejects missing, cyclic, and non-stream references" do
+    document = %{
+      objects: %{
+        {1, 0} => %{value: %{"Length" => 0}, stream: ""},
+        {2, 0} => %{value: [{:ref, {1, 0}}], stream: nil},
+        {3, 0} => %{value: {:ref, {3, 0}}, stream: nil},
+        {4, 0} => %{value: %{}, stream: nil}
+      }
+    }
+
+    for value <- [nil, []] do
+      assert {:ok, []} = PdfValidator.content_references(document, %{"Contents" => value})
+    end
+
+    for value <- [{:ref, {1, 0}}, [{:ref, {1, 0}}], {:ref, {2, 0}}] do
+      assert {:ok, [{:ref, {1, 0}}]} =
+               PdfValidator.content_references(document, %{"Contents" => value})
+    end
+
+    for value <- [3, [3], {:ref, {3, 0}}, {:ref, {4, 0}}, {:ref, {99, 0}}, [{:ref, {2, 0}}]] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} =
+               PdfValidator.content_references(document, %{"Contents" => value})
+
+      assert diagnostic.reason == :invalid_pdf_input
+      assert is_atom(diagnostic.stage)
+      assert is_binary(diagnostic.message)
+    end
+  end
+
   test "binary validation is a reusable façade over reader parsing" do
     pdf = File.read!(Path.join(@fixture_directory, "classic-xref.pdf"))
     assert {:ok, %{document: %{pages: [_page]}}} = PdfValidator.validate_pdf(pdf)

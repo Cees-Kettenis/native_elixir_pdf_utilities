@@ -100,6 +100,47 @@ defmodule NativeElixirPdfUtilities.StampTest do
              Text.extract(selection_numbers, layout: false)
   end
 
+  test "preserves ordered contents through indirect arrays for extraction and stamping" do
+    for contents <- ["[4 0 R 6 0 R]", "7 0 R"] do
+      source =
+        pdf([
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>"},
+          {3,
+           "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 8 0 R >> >> >>"},
+          {4, stream_object("", "q BT /F1 12 Tf (One) Tj")},
+          {5, contents},
+          {6, stream_object("", "(Two) Tj ET Q")},
+          {7, "[4 0 R 6 0 R]"},
+          {8, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"}
+        ])
+
+      assert {:ok, "OneTwo"} = Text.extract(source, layout: false)
+      assert {:ok, stamped} = Stamp.text(source, "Mark")
+      assert {:ok, "OneTwo Mark"} = Text.extract(stamped, layout: false)
+      assert {:ok, overlaid} = Stamp.overlay(one_page_pdf("Target", {300, 200}), source)
+      assert {:ok, "Target OneTwo"} = Text.extract(overlaid, layout: false)
+    end
+  end
+
+  test "returns diagnostics when a validated overlay stream cannot be decoded" do
+    overlay =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>"},
+        {4, stream_object("/Filter /FlateDecode", "invalid compressed bytes")}
+      ])
+
+    assert {:error, {reason, diagnostic}} =
+             Stamp.overlay(one_page_pdf("Target", {300, 200}), overlay)
+
+    assert reason == :invalid_pdf_input
+    assert diagnostic.reason == reason
+    assert diagnostic.message =~ "FlateDecode"
+    assert diagnostic.module == Stamp
+  end
+
   test "imports resource streams with indirect lengths" do
     content = "BT /F1 12 Tf (Imported) Tj ET"
 
