@@ -141,6 +141,18 @@ defmodule NativeElixirPdfUtilities.StampTest do
     assert diagnostic.module == Stamp
   end
 
+  test "counts the graphics-state isolation stream in object capacity" do
+    target = one_page_pdf("Original", {300, 200})
+    assert {:ok, stamped} = Stamp.text(target, "Mark")
+    assert {:ok, context} = Reader.read_validated(stamped)
+    maximum_objects = context.document.trailer["Size"] - 1
+    original = Limits.effective()
+    Limits.install(%{original | max_pdf_objects: maximum_objects})
+    assert {:ok, _stamped} = Stamp.text(target, "Mark")
+    Limits.install(%{original | max_pdf_objects: maximum_objects - 1})
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} = Stamp.text(target, "Mark")
+  end
+
   test "imports resource streams with indirect lengths" do
     content = "BT /F1 12 Tf (Imported) Tj ET"
 

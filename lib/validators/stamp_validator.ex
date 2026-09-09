@@ -760,7 +760,7 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
   defp validate_object_capacity(context, copied_objects, source_pages, target_pages, opacity) do
     size = context.document.trailer["Size"]
     unique_source_pages = Enum.uniq_by(source_pages, & &1.page_number)
-    generated = length(copied_objects) + length(unique_source_pages) + length(target_pages)
+    generated = length(copied_objects) + length(unique_source_pages) + length(target_pages) + 1
     generated = if opacity < 1.0, do: generated + 1, else: generated
 
     case is_integer(size) and size + generated <= Limits.get(:max_pdf_objects) + 1 do

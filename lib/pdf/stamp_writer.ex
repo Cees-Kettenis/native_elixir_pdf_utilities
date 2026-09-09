@@ -51,8 +51,13 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
         false -> {nil, next_id}
       end
 
+    # Save the initial page state before existing content changes its transform or clip.
+    save_state_id = next_id
+
     {invocation_ids, _next_id} =
-      Enum.map_reduce(placements, next_id, fn _placement, next_id -> {next_id, next_id + 1} end)
+      Enum.map_reduce(placements, next_id + 1, fn _placement, next_id ->
+        {next_id, next_id + 1}
+      end)
 
     copied = copied_object_entries(copied_objects, reference_map)
     forms = form_entries(source_pages, form_ids, reference_map)
@@ -82,12 +87,16 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
         matrix = placement_matrix(placement)
 
         invocation =
-          invocation_stream(matrix, xobject_name, graphics_state_name)
+          "\nQ\n" <> invocation_stream(matrix, xobject_name, graphics_state_name)
 
         page_dictionary =
           placement.target.dictionary
           |> Map.put("Resources", resources)
-          |> Map.put("Contents", placement.target.contents ++ [{:ref, {invocation_id, 0}}])
+          |> Map.put(
+            "Contents",
+            [{:ref, {save_state_id, 0}} | placement.target.contents] ++
+              [{:ref, {invocation_id, 0}}]
+          )
 
         {page_object, page_generation} = placement.target.ref
 
@@ -97,7 +106,8 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
         ]
       end)
 
-    copied ++ forms ++ graphics_state ++ page_entries
+    [{save_state_id, 0, {:stream, %{}, "q\n"}}] ++
+      copied ++ forms ++ graphics_state ++ page_entries
   end
 
   defp copied_object_entries(copied_objects, reference_map) do
