@@ -6,6 +6,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Limits
 
+  test "grid spans and automatic starts resolve against definite end lines" do
+    for {placement, expected_start, expected_size} <- [
+          {"span 2 / 4", 40, 80},
+          {"auto / 4", 80, 40}
+        ] do
+      html =
+        "<div style='display:grid;grid-template-columns:40pt 40pt 40pt;grid-template-rows:40pt 40pt 40pt'><div style='grid-column:#{placement};grid-row:#{placement};background:red'></div></div>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {240, 240}, margin: 0)
+      [box] = Enum.filter(layout.boxes, &(&1.type == :rect))
+      assert_in_delta box.x, expected_start, 0.001
+      assert_in_delta box.y + box.height, 240 - expected_start, 0.001
+      assert_in_delta box.width, expected_size, 0.001
+      assert_in_delta box.height, expected_size, 0.001
+    end
+  end
+
   test "grid stretch honors explicit dimensions and size constraints" do
     for {size, expected} <- [
           {"width:20pt;height:10pt", {20, 10}},

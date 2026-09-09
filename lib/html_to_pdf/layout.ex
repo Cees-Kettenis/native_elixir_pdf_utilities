@@ -1149,8 +1149,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp grid_item_placement(item, column_count, occupied) do
-    column_start = grid_line_start(item.column_start)
-    row_start = grid_line_start(item.row_start)
+    column_start = grid_line_start(item.column_start, item.column_end)
+    row_start = grid_line_start(item.row_start, item.row_end)
     column_span = grid_axis_span(item.column_start, item.column_end)
     row_span = grid_axis_span(item.row_start, item.row_end)
 
@@ -1183,10 +1183,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     }
   end
 
-  defp grid_line_start(line) do
-    case line do
-      line when is_integer(line) -> line
-      _ -> :auto
+  defp grid_line_start(start_line, end_line) do
+    case {start_line, end_line} do
+      {line, _end_line} when is_integer(line) ->
+        line
+
+      {_start_line, line} when is_integer(line) ->
+        max(line - grid_axis_span(start_line, end_line), 1)
+
+      _ ->
+        :auto
     end
   end
 
