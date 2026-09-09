@@ -193,7 +193,42 @@ strict input validation and bounded resource use.
 - Confirm grayscale and three-component JPEG rendering remains unchanged.
 - Preserve 100% test coverage and pass the full HTML-to-PDF quality gate.
 
-### 0.21.0 - Optimization and Archive-Friendly Output
+### 0.21.0 - Browser parity below 2%
+
+Milestone goal: bring every browser-parity fixture below a 2% changed-pixel
+ratio against Chromium before optimizing the renderer internals.
+
+#### Scope
+
+- Reduce every configured browser-parity fixture's worst-page changed-pixel
+  ratio to less than 2%.
+- Fix shared fidelity gaps in font metrics, text placement, line wrapping, box
+  sizing, table geometry, border placement, and CSS pixel-grid rounding.
+- Preserve the existing page-count and average-delta requirements while
+  tightening the changed-pixel requirement.
+- Document the comparison environment and metric so browser-parity results are
+  reproducible and any public parity claim states exactly what was measured.
+
+#### Design Notes
+
+- Compare native output against Chromium with the existing 72 DPI rasterization
+  and per-channel changed-pixel definition.
+- Apply the target to every fixture without higher per-fixture exemptions.
+- Improve renderer behavior rather than weakening fixtures or excluding dense
+  documents from the result.
+- Complete fidelity work before optimization so later internal changes preserve
+  a stronger visual baseline.
+
+#### Completion Criteria
+
+- Every browser-parity fixture has a worst-page changed-pixel ratio below 2%.
+- The browser-parity suite enforces a maximum changed-pixel ratio of 0.02 for
+  every fixture.
+- The documented result includes the Chromium version, fonts, rasterizer, DPI,
+  fixture count, and changed-pixel definition used for the comparison.
+- Preserve 100% test coverage and pass the full quality matrix.
+
+### 0.22.0 - Optimization and Archive-Friendly Output
 
 Milestone goal: improve render-time scaling, memory use, output size, and archive
 readiness without claiming full PDF/A compliance before the library can validate
@@ -244,7 +279,7 @@ it properly.
   pagination, and browser-parity results.
 - Add fixture coverage for best-effort archive-friendly output.
 
-### 0.22.0 - Documentation, Fixtures, and Release Polish
+### 0.23.0 - Documentation, Fixtures, and Release Polish
 
 Milestone goal: remove small documentation and example friction before the release
 candidate.
@@ -275,7 +310,7 @@ candidate.
 - Confirm README, HexDocs guide links, changelog links, and roadmap links are
   valid.
 
-### 0.23.0 - Release Candidate and API Freeze
+### 0.24.0 - Release Candidate and API Freeze
 
 Milestone goal: stop expanding scope and harden the public API before `1.0.0`.
 
