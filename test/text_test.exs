@@ -6,6 +6,30 @@ defmodule NativeElixirPdfUtilities.TextTest do
   alias NativeElixirPdfUtilities.Text
   alias NativeElixirPdfUtilities.Validators.TextValidator
 
+  test "rejects inline images before interpreting binary pixels as instructions" do
+    for pixels <- [
+          "BT /F1 12 Tf (FAKE) Tj ET",
+          <<255, 0, 40, 60>>,
+          " EI BT /F1 12 Tf (FAKE) Tj ET"
+        ] do
+      content =
+        "BI /W #{byte_size(pixels)} /H 1 /BPC 8 /CS /G ID " <>
+          pixels <> " EI BT /F1 12 Tf (REAL) Tj ET"
+
+      for result <- [Text.extract(page_pdf(content)), Text.extract_spans(page_pdf(content))] do
+        assert {:error, {:unsupported_pdf_feature, diagnostic}} = result
+        assert diagnostic.stage == :content
+        assert diagnostic.reason == :unsupported_pdf_feature
+        assert diagnostic.message =~ "inline images"
+        assert diagnostic.message =~ "page 1"
+        assert diagnostic.module == Text
+      end
+    end
+
+    assert {:ok, "BI ID EI"} =
+             Text.extract(page_pdf("% BI\nBT /F1 12 Tf (BI ID EI) Tj ET"), layout: false)
+  end
+
   test "extracts a Type0 ToUnicode CMap without mixing it with another font" do
     cmap =
       "begincmap\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n2 beginbfchar\n<0001> <0048>\n<0002> <0069>\nendbfchar\nendcmap"

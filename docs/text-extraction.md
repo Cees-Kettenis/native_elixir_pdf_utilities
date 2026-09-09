@@ -131,6 +131,9 @@ Positioned extraction is not a lossless representation of every PDF text
 feature. It retains every non-empty text operand that the strict decoder maps
 to Unicode, even when its render mode does not paint text.
 
+Inline images return `:unsupported_pdf_feature` at the content stage before their
+binary pixels are tokenized. Use image XObjects when text extraction is required.
+
 The result does not expose internal reader or font structs. It also does not
 provide OCR, semantic table cells, glyph outlines, exact ink bounds,
 clipping-path visibility, or a partial result for undecodable content. An

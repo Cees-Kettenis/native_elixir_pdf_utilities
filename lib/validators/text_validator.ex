@@ -337,23 +337,12 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
 
         contents
         |> Enum.reduce_while({:ok, [], []}, fn content, instruction_state ->
-          tokens = Tokenizer.new(content) |> Tokenizer.tokenize_all()
-
-          case Enum.any?(tokens, &match?({:error, _}, &1)) do
-            true ->
-              {:halt,
-               error(:content, :invalid_pdf_input, "content stream contains invalid syntax",
-                 page: page_number
-               )}
-
-            false ->
-              case reduce_instruction_tokens(tokens, instruction_state, page_number) do
-                {:ok, _operations, _operands} = instruction_state ->
-                  {:cont, instruction_state}
-
-                {:error, _} = instruction_error ->
-                  {:halt, instruction_error}
-              end
+          with {:ok, tokens} <- content_tokens(Tokenizer.new(content), [], page_number),
+               {:ok, _operations, _operands} = next_state <-
+                 reduce_instruction_tokens(tokens, instruction_state, page_number) do
+            {:cont, next_state}
+          else
+            {:error, _} = instruction_error -> {:halt, instruction_error}
           end
         end)
         |> case do
@@ -369,6 +358,27 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
 
       false ->
         error(:content, :invalid_pdf_input, "content stream input is malformed")
+    end
+  end
+
+  defp content_tokens(tokenizer, tokens, page_number) do
+    case Tokenizer.next(tokenizer) do
+      {{:eof, nil}, _tokenizer} ->
+        {:ok, Enum.reverse(tokens)}
+
+      {{:op, "BI"}, _tokenizer} ->
+        error(
+          :content,
+          :unsupported_pdf_feature,
+          "inline images are not supported by text extraction; use an image XObject instead",
+          page: page_number
+        )
+
+      {{:error, _}, _tokenizer} ->
+        content_error("content stream contains invalid syntax", page_number)
+
+      {token, tokenizer} ->
+        content_tokens(tokenizer, [token | tokens], page_number)
     end
   end
 
