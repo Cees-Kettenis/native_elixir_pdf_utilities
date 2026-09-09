@@ -142,8 +142,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                                  )
   @page_percentage_regex Regex.compile!("^[+-]?#{@page_number_pattern}%$", "u")
   @css_wide_keywords ~w(initial inherit unset revert revert-layer)
-  @page_rule_regex ~r/@page\s*\{(?<declarations>[^{}]*)\}/ui
-  @page_rule_candidate_regex ~r/@page[^{;]*(?=\{|;|$)/ui
+  @css_string_pattern ~S/(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/
+  @page_rule_regex Regex.compile!(
+                     "#{@css_string_pattern}(*SKIP)(*F)|@page\\s*\\{(?<declarations>(?:#{@css_string_pattern}|[^{}])*)\\}",
+                     "ui"
+                   )
+  @page_rule_candidate_regex Regex.compile!(
+                               "#{@css_string_pattern}(*SKIP)(*F)|@page[^{;]*(?=\\{|;|$)",
+                               "ui"
+                             )
+  @font_face_rule_regex Regex.compile!(
+                          "#{@css_string_pattern}(*SKIP)(*F)|@font-face\\s*\\{(?<declarations>(?:#{@css_string_pattern}|[^{}])*)\\}",
+                          "ui"
+                        )
+  @media_rule_regex Regex.compile!(
+                      "#{@css_string_pattern}(*SKIP)(*F)|@media\\s+(?<query>[^{}]+)\\{(?<body>(?:#{@css_string_pattern}|[^{}]|\\{(?:#{@css_string_pattern}|[^{}])*\\})*)\\}",
+                      "ui"
+                    )
+  @media_candidate_regex Regex.compile!("#{@css_string_pattern}(*SKIP)(*F)|@media\\b", "ui")
+  @css_block_regex Regex.compile!(
+                     "#{@css_string_pattern}(*SKIP)(*F)|\\{(?:#{@css_string_pattern}|[^{}])*\\}",
+                     "u"
+                   )
 
   @doc """
   Parses a CSS stylesheet into strict renderer rules.
@@ -324,14 +344,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   end
 
   defp strip_font_face_rules(css) do
-    Regex.replace(~r/@font-face\s*\{[^{}]*\}/ui, css, "")
+    Regex.replace(@font_face_rule_regex, css, "")
   end
 
   defp active_media_rules(css) do
-    media_rule = ~r/@media\s+(?<query>[^{}]+)\{(?<body>(?:[^{}]|\{[^{}]*\})*)\}/ui
-
     active_css =
-      Regex.replace(media_rule, css, fn _rule, query, body ->
+      Regex.replace(@media_rule_regex, css, fn _rule, query, body ->
         query = query |> String.trim() |> String.downcase()
 
         case query in ["print", "only print", "all", "only all"] do
@@ -340,14 +358,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         end
       end)
 
-    case Regex.match?(~r/@media\b/ui, active_css) do
+    case Regex.match?(@media_candidate_regex, active_css) do
       true -> {:error, :invalid_css}
       false -> {:ok, active_css}
     end
   end
 
   defp parse_font_faces(css, diagnostic_css) do
-    ~r/@font-face\s*\{(?<declarations>[^{}]*)\}/ui
+    @font_face_rule_regex
     |> Regex.scan(css, capture: ["declarations"])
     |> List.flatten()
     |> Enum.reduce_while({:ok, []}, fn block, {:ok, acc} ->
@@ -617,7 +635,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   defp invalid_page_rule_source(css) do
     css
     |> strip_page_rules()
-    |> then(&Regex.replace(~r/\{[^{}]*\}/u, &1, "{}"))
+    |> then(&Regex.replace(@css_block_regex, &1, "{}"))
     |> then(&Regex.run(@page_rule_candidate_regex, &1))
     |> case do
       [source] -> String.trim(source)

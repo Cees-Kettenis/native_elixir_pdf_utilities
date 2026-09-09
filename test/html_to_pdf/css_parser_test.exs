@@ -3,6 +3,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
 
+  test "at-rule preprocessing preserves quoted strings and braces" do
+    for literal <- [
+          ~S|"@media print {BOGUS}"|,
+          ~S|"@font-face {src: broken}"|,
+          ~S|"@page {size: broken}"|,
+          ~S|"escaped \" @media print {BOGUS}"|
+        ] do
+      css = "p::before {content:" <> literal <> "}"
+      assert {:ok, [rule]} = CssParser.parse(css)
+      assert rule.declarations == [{"content", literal}]
+      assert {:ok, []} = CssParser.font_faces(css)
+      assert {:ok, []} = CssParser.page_options(css)
+      assert {:ok, [rule]} = CssParser.parse("@media print {" <> css <> "}")
+      assert rule.declarations == [{"content", literal}]
+    end
+
+    assert {:ok, [%{sources: ["brace{font}.ttf"]}]} =
+             CssParser.font_faces(~S|@font-face {font-family:X;src:url("brace{font}.ttf")} |)
+  end
+
   test "parse accepts strict selector groups and declarations" do
     assert {:ok, [rule]} =
              CssParser.parse("p, .copy, #intro, p.lead { color: red; margin-bottom: 4pt }")
