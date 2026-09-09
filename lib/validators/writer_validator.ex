@@ -207,16 +207,20 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       when format in [:png, :jpeg] and is_binary(data) and is_integer(width_px) and
              is_integer(height_px) and width_px > 0 and height_px > 0 and
              color_space in [:device_gray, :device_rgb, :device_cmyk] ->
-        case Map.get(image, :alpha_data) do
-          nil ->
-            true
+        inverted = Map.get(image, :inverted_cmyk, false)
 
-          alpha when is_binary(alpha) ->
-            image.format == :png and byte_size(alpha) == image.width_px * image.height_px
+        is_boolean(inverted) and
+          (not inverted or (format == :jpeg and color_space == :device_cmyk)) and
+          case Map.get(image, :alpha_data) do
+            nil ->
+              true
 
-          _ ->
-            false
-        end
+            alpha when is_binary(alpha) ->
+              image.format == :png and byte_size(alpha) == image.width_px * image.height_px
+
+            _ ->
+              false
+          end
 
       _ ->
         false

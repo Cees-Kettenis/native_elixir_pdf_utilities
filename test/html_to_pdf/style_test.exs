@@ -3,6 +3,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
+  test "JPEG Adobe markers preserve CMYK polarity before and after the frame" do
+    for file <- ["adobe_cmyk.jpg", "adobe_ycck.jpg"] do
+      data = File.read!(Path.expand("../fixtures/html_to_pdf/" <> file, __DIR__))
+      assert {:ok, style} = image_style("data:image/jpeg;base64," <> Base.encode64(data), [])
+      assert style.image.color_space == :device_cmyk
+      assert style.image.inverted_cmyk
+    end
+
+    alias NativeElixirPdfUtilities.Validators.HtmlValidator
+    frame = <<255, 192, 0, 8, 8, 1::16, 1::16, 4>>
+    adobe = <<255, 238, 0, 14, "Adobe", 100::16, 0::16, 0::16, 0>>
+
+    for body <- [adobe <> frame, frame <> adobe, <<255>> <> adobe <> frame] do
+      assert {:ok, %{inverted_cmyk: true}} =
+               HtmlValidator.jpeg_metadata(<<255, 216>> <> body <> <<255, 217>>)
+    end
+
+    assert HtmlValidator.jpeg_metadata("") == :error
+    assert HtmlValidator.jpeg_metadata(<<255, 216, 255, 217>>) == :error
+    assert HtmlValidator.jpeg_metadata(<<255, 216, 255, 192, 0, 3, 0, 255, 217>>) == :error
+  end
+
   test "RGB PNG transparent colors generate alpha masks and malformed tRNS fails" do
     signature = <<137, 80, 78, 71, 13, 10, 26, 10>>
     header = png_chunk("IHDR", <<2::32, 1::32, 8, 2, 0, 0, 0>>)

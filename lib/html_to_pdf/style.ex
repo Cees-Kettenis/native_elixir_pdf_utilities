@@ -4468,57 +4468,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp decode_jpeg(data) do
-    with {:ok, width, height, color_space} <- jpeg_dimensions(data) do
+    with {:ok, metadata} <- HtmlValidator.jpeg_metadata(data) do
       {:ok,
-       %{
+       Map.merge(metadata, %{
          format: :jpeg,
          data: data,
-         width_px: width,
-         height_px: height,
-         width: width * 0.75,
-         height: height * 0.75,
-         color_space: color_space,
+         width: metadata.width_px * 0.75,
+         height: metadata.height_px * 0.75,
          bits_per_component: 8
-       }}
-    end
-  end
-
-  defp jpeg_dimensions(<<255, 216, rest::binary>>) do
-    jpeg_marker_dimensions(rest)
-  end
-
-  defp jpeg_marker_dimensions(data) do
-    case data do
-      <<255, marker, rest::binary>> when marker in [192, 194] ->
-        case rest do
-          <<_length::16, 8, height::16, width::16, components, _component_data::binary>>
-          when width > 0 and height > 0 and components in [1, 3, 4] ->
-            {:ok, width, height, jpeg_color_space(components)}
-
-          _ ->
-            :error
-        end
-
-      <<255, marker, rest::binary>> when marker in [216, 217] ->
-        jpeg_marker_dimensions(rest)
-
-      <<255, marker, rest::binary>> when marker >= 208 and marker <= 215 ->
-        jpeg_marker_dimensions(rest)
-
-      <<255, _marker, length::16, _segment::binary-size(length - 2), rest::binary>>
-      when length >= 2 ->
-        jpeg_marker_dimensions(rest)
-
-      _ ->
-        :error
-    end
-  end
-
-  defp jpeg_color_space(components) do
-    case components do
-      1 -> :device_gray
-      3 -> :device_rgb
-      4 -> :device_cmyk
+       })}
     end
   end
 

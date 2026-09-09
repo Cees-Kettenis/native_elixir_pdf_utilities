@@ -3,6 +3,41 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidatorTest do
 
   alias NativeElixirPdfUtilities.Validators.WriterValidator
 
+  test "CMYK inversion is restricted to JPEG CMYK images and boolean flags" do
+    for {flag, color_space, expected} <- [
+          {true, :device_cmyk, :ok},
+          {false, :device_cmyk, :ok},
+          {:invalid, :device_cmyk, :error},
+          {true, :device_rgb, :error}
+        ] do
+      image = %{
+        format: :jpeg,
+        data: "jpeg",
+        width_px: 1,
+        height_px: 1,
+        color_space: color_space,
+        bits_per_component: 8,
+        inverted_cmyk: flag
+      }
+
+      pages = [
+        %{
+          size: {100, 100},
+          boxes: [%{type: :image, x: 0, y: 0, width: 10, height: 10, image: image}]
+        }
+      ]
+
+      case expected do
+        :ok ->
+          assert {:ok, _plan} = WriterValidator.prepare(pages, [])
+
+        :error ->
+          assert {:error, {:invalid_pdf_input, %{stage: :pdf}}} =
+                   WriterValidator.prepare(pages, [])
+      end
+    end
+  end
+
   test "prepares valid pages and normalized metadata for serialization" do
     pages = [
       %{

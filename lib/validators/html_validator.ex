@@ -26,6 +26,61 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @css_variable_regex ~r/"(?:\\.|[^"\\])*"(*SKIP)(*F)|'(?:\\.|[^'\\])*'(*SKIP)(*F)|var\(\s*(--[a-zA-Z_][a-zA-Z0-9_-]*)\s*\)/u
 
   @doc false
+  @spec jpeg_metadata(binary()) :: {:ok, map()} | :error
+  def jpeg_metadata(data) do
+    case data do
+      <<255, 216, rest::binary>> -> jpeg_marker_metadata(rest, nil, nil)
+      _ -> :error
+    end
+  end
+
+  defp jpeg_marker_metadata(data, dimensions, adobe_transform) do
+    case data do
+      <<255, marker, _rest::binary>> when marker in [217, 218] ->
+        case dimensions do
+          {width, height, components} ->
+            {:ok,
+             %{
+               width_px: width,
+               height_px: height,
+               color_space:
+                 Map.fetch!(%{1 => :device_gray, 3 => :device_rgb, 4 => :device_cmyk}, components),
+               inverted_cmyk: components == 4 and adobe_transform in [0, 2]
+             }}
+
+          nil ->
+            :error
+        end
+
+      <<255, 255, rest::binary>> ->
+        jpeg_marker_metadata(<<255, rest::binary>>, dimensions, adobe_transform)
+
+      <<255, marker, rest::binary>> when marker == 216 or marker in 208..215 ->
+        jpeg_marker_metadata(rest, dimensions, adobe_transform)
+
+      <<255, marker, length::16, segment::binary-size(length - 2), rest::binary>>
+      when length >= 2 ->
+        case {marker, segment} do
+          {marker, <<8, height::16, width::16, components, _component_data::binary>>}
+          when marker in [192, 194] and width > 0 and height > 0 and components in [1, 3, 4] ->
+            jpeg_marker_metadata(rest, {width, height, components}, adobe_transform)
+
+          {marker, _segment} when marker in [192, 194] ->
+            :error
+
+          {238, <<"Adobe", _version::16, _flags0::16, _flags1::16, transform, _rest::binary>>} ->
+            jpeg_marker_metadata(rest, dimensions, transform)
+
+          _ ->
+            jpeg_marker_metadata(rest, dimensions, adobe_transform)
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  @doc false
   @spec validate_png_transparency(integer(), binary() | nil) ::
           {:ok, nil | {non_neg_integer(), non_neg_integer(), non_neg_integer()}}
           | {:error, {atom(), Diagnostics.diagnostic()}}
