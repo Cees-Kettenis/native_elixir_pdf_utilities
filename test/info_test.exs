@@ -15,6 +15,23 @@ defmodule NativeElixirPdfUtilities.InfoTest do
     :ok
   end
 
+  test "preserves control characters through metadata, outlines, and HTML rendering" do
+    for byte <- 0..127 do
+      title = <<65, byte, 66>>
+      assert {:ok, updated} = Info.put(pdf(base_objects()), title: title)
+      assert {:ok, %{title: ^title}} = Info.get(updated)
+      assert {:ok, outlined} = NativeElixirPdfUtilities.Outlines.put(updated, [{title, 1}])
+      assert {:ok, [%{title: ^title}]} = NativeElixirPdfUtilities.Outlines.get(outlined)
+
+      assert {:ok, rendered} =
+               NativeElixirPdfUtilities.HtmlToPdf.render("<p>Visible</p>",
+                 metadata: [title: title]
+               )
+
+      assert {:ok, %{title: ^title}} = Info.get(rendered)
+    end
+  end
+
   test "reads common information fields and normalizes PDF dates" do
     pdf =
       pdf(

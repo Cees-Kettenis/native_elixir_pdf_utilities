@@ -37,11 +37,11 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoCodec do
   def encode_text(text) do
     case text do
       text when is_binary(text) ->
-        case Enum.all?(:binary.bin_to_list(text), &(&1 <= 0x7F)) do
-          true ->
+        case decode_pdf_doc(text) do
+          {:ok, ^text} ->
             {:string, text}
 
-          false ->
+          _ ->
             {:hex, <<0xFE, 0xFF>> <> :unicode.characters_to_binary(text, :utf8, {:utf16, :big})}
         end
     end
