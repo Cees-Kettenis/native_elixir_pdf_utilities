@@ -250,6 +250,74 @@ defmodule NativeElixirPdfUtilities.PageTransformsTest do
     assert link_target_pages(first, 1) == []
   end
 
+  test "preserves direct named annotations in direct and indirect arrays" do
+    annotations =
+      "[<< /Subtype /Link /Rect [0 0 10 10] /Dest /Legacy >> " <>
+        "<< /Subtype /Link /Rect [0 0 10 10] /A << /S /GoTo /D (modern) >> >>]"
+
+    for {entry, extra} <- [{annotations, []}, {"16 0 R", [{16, annotations}]}] do
+      source =
+        three_page_pdf(
+          "/Annots #{entry}",
+          extra ++
+            [
+              {18, "<< /Names [(modern) 19 0 R] >>"},
+              {19, "<< /D [4 0 R /Fit] >>"}
+            ],
+          "/Dests << /Legacy [5 0 R /Fit] >> /Names << /Dests 18 0 R >>"
+        )
+
+      assert {:ok, merged} = Merge.merge([source, source])
+      assert link_target_pages(merged, 1) == [3, 2]
+      assert link_target_pages(merged, 4) == [6, 5]
+      assert {:ok, "One\nTwo\nThree\nOne\nTwo\nThree"} = Text.extract(merged, layout: false)
+      assert {:ok, %{pages: pages, trailer: trailer} = document} = Reader.read(merged)
+      assert {:ok, catalog} = Reader.resolve(document, trailer["Root"])
+      assert Enum.all?(pages, &(document.objects[&1.ref].value["Parent"] == catalog["Pages"]))
+
+      assert {:ok, picked} = Transform.pick_pages(source, [3, 2, 1])
+      assert link_target_pages(picked, 3) == [1, 2]
+      assert {:ok, deleted} = Transform.delete_pages(source, [2])
+      assert link_target_pages(deleted, 1) == [2]
+      assert {:ok, rotated} = Transform.rotate_pages(source, 90)
+      assert link_target_pages(rotated, 1) == [3, 2]
+      assert {:ok, sizes} = Info.page_sizes(rotated)
+      assert Enum.map(sizes, & &1.rotation) == [90, 180, 90]
+      assert {:ok, [range]} = Split.by_ranges(source, [1..3])
+      assert link_target_pages(range, 1) == [3, 2]
+      assert {:ok, [first, _second, _third]} = Split.by_page(source)
+      assert link_target_pages(first, 1) == []
+    end
+  end
+
+  test "direct named annotation errors retain diagnostics and effective page inheritance" do
+    annotation = "<< /Subtype /Link /Rect [0 0 10 10] /Dest /Target >>"
+    source = three_page_pdf("/Annots [#{annotation}]", [], "/Dests << /Target (broken) >>")
+
+    for result <- [Merge.merge([source]), Transform.pick_pages(source, [1])] do
+      assert {:error, {:invalid_pdf_input, %{stage: stage, message: message}}} = result
+      assert stage in [:merge, :annotations]
+      assert message =~ "named destination"
+    end
+
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R /Dests << /Target [3 0 R /Fit] >> >>"},
+        {2,
+         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] /CropBox [10 10 290 190] /Rotate 90 /Resources << /Font << /F1 5 0 R >> >> >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Annots [#{annotation}] >>"},
+        {4, stream("BT /F1 12 Tf (Inherited) Tj ET")},
+        {5, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"}
+      ])
+
+    assert {:ok, merged} = Merge.merge([source])
+    assert {:ok, "Inherited"} = Text.extract(merged)
+    assert {:ok, %{pages: [page]} = document} = Reader.read(merged)
+    assert document.objects[page.ref].value["CropBox"] == [10, 10, 290, 190]
+    assert document.objects[page.ref].value["Rotate"] == 90
+    assert link_target_pages(merged, 1) == [1]
+  end
+
   test "rejects malformed annotations instead of emitting dangling structures" do
     malformed_sources = [
       three_page_pdf("/Annots 42"),

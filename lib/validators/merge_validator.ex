@@ -187,6 +187,12 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
           :none -> false
         end
 
+      values when is_list(values) ->
+        Enum.any?(values, &named_link_destination?(document, &1))
+
+      dictionary when is_map(dictionary) ->
+        Enum.any?(dictionary, fn {_key, value} -> named_link_destination?(document, value) end)
+
       _ ->
         false
     end
@@ -222,18 +228,42 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   end
 
   defp normalize_named_link_object(document, named_destinations, object) do
-    case object.value do
+    with {:ok, value} <- normalize_named_link_value(document, named_destinations, object.value) do
+      case value == object.value do
+        true -> {:ok, object}
+        false -> {:ok, Map.put(object, :value_override, value)}
+      end
+    end
+  end
+
+  defp normalize_named_link_value(document, named_destinations, value) do
+    case value do
       %{"Subtype" => {:name, "Link"}} = dictionary ->
-        with {:ok, dictionary} <-
-               normalize_named_link_dictionary(document, named_destinations, dictionary) do
-          case dictionary == object.value do
-            true -> {:ok, object}
-            false -> {:ok, Map.put(object, :value_override, dictionary)}
+        normalize_named_link_dictionary(document, named_destinations, dictionary)
+
+      dictionary when is_map(dictionary) ->
+        Enum.reduce_while(dictionary, {:ok, %{}}, fn {key, value}, {:ok, normalized} ->
+          case normalize_named_link_value(document, named_destinations, value) do
+            {:ok, value} -> {:cont, {:ok, Map.put(normalized, key, value)}}
+            {:error, _} = error -> {:halt, error}
           end
+        end)
+
+      values when is_list(values) ->
+        values
+        |> Enum.reduce_while({:ok, []}, fn value, {:ok, normalized} ->
+          case normalize_named_link_value(document, named_destinations, value) do
+            {:ok, value} -> {:cont, {:ok, [value | normalized]}}
+            {:error, _} = error -> {:halt, error}
+          end
+        end)
+        |> case do
+          {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+          error -> error
         end
 
-      _ ->
-        {:ok, object}
+      value ->
+        {:ok, value}
     end
   end
 

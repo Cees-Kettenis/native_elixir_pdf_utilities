@@ -171,6 +171,29 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
         render_tokens(tokens, id_map)
 
       value ->
+        value =
+          case page_context do
+            nil ->
+              value
+
+            inherited ->
+              Enum.reduce(
+                [
+                  {"MediaBox", inherited.mediabox_value},
+                  {"Resources", inherited.resources_value},
+                  {"CropBox", inherited.cropbox_value},
+                  {"Rotate", Map.get(value, "Rotate") || inherited.rotate_value}
+                ],
+                Map.put(value, "Parent", :generated_parent),
+                fn {key, inherited_value}, dictionary ->
+                  case inherited_value do
+                    nil -> Map.delete(dictionary, key)
+                    inherited_value -> Map.put(dictionary, key, inherited_value)
+                  end
+                end
+              )
+          end
+
         parent_id =
           case page_context do
             %{parent_id: parent_id} -> parent_id

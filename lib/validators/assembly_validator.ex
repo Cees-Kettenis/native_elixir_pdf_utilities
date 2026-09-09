@@ -17,9 +17,16 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
            Map.new(input.objects, fn object ->
              {{object.obj, object.gen}, Map.get(object, :value_override, object.value)}
            end),
+         document = %{
+           context.document
+           | objects:
+               Map.new(context.document.objects, fn {ref, object} ->
+                 {ref, %{object | value: Map.get(object_values, ref, object.value)}}
+               end)
+         },
          {:ok, overrides} <-
            page_overrides(
-             context.document,
+             document,
              object_values,
              selected_pages,
              input.inherited,
@@ -52,12 +59,13 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
     |> Enum.with_index(1)
     |> Enum.reduce_while({:ok, %{}}, fn {page, output_number}, {:ok, overrides} ->
       inherited = Map.fetch!(inheritances, page.ref)
+      dictionary = Map.fetch!(object_values, page.ref)
 
       with {:ok, annotations} <-
              sanitized_annotations(
                document,
                object_values,
-               Map.get(page.dictionary, "Annots"),
+               Map.get(dictionary, "Annots"),
                selected_refs,
                all_page_refs
              ) do
@@ -65,7 +73,7 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
           Integer.mod((inherited.rotate_value || 0) + Map.get(rotations, output_number, 0), 360)
 
         dictionary =
-          page.dictionary
+          dictionary
           |> Map.put("Type", {:name, "Page"})
           |> Map.put("Parent", :generated_parent)
           |> Map.put("MediaBox", inherited.mediabox_value)
@@ -273,7 +281,7 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
                 nested_references =
                   case Map.fetch(overrides, ref) do
                     {:ok, value} -> value_references(value)
-                    :error -> token_references(object.tokens)
+                    :error -> value_references(Map.get(object, :value_override, object.value))
                   end
 
                 walk_references(
@@ -310,20 +318,6 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
       _ ->
         []
     end
-  end
-
-  defp token_references(tokens) do
-    {references, _pending} =
-      Enum.reduce(tokens, {[], []}, fn token, {references, pending} ->
-        pending = Enum.take([token | pending], 3)
-
-        case pending do
-          [:R, {:int, generation}, {:int, object}] -> {[{object, generation} | references], []}
-          _ -> {references, pending}
-        end
-      end)
-
-    references
   end
 
   defp page_object?(object) do
