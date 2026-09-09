@@ -104,15 +104,14 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
     Enum.map(copied_objects, fn {reference, parsed} ->
       id = Map.fetch!(reference_map, reference)
       {_object, generation} = reference
-      value = remap_value(parsed.value, reference_map)
 
       body =
         case parsed.stream do
           stream when is_binary(stream) ->
-            {:stream, Map.delete(value, "Length"), stream}
+            {:stream, remap_value(Map.delete(parsed.value, "Length"), reference_map), stream}
 
           nil ->
-            {:value, value}
+            {:value, remap_value(parsed.value, reference_map)}
         end
 
       {id, generation, body}

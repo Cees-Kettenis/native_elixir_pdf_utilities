@@ -100,6 +100,26 @@ defmodule NativeElixirPdfUtilities.StampTest do
              Text.extract(selection_numbers, layout: false)
   end
 
+  test "imports resource streams with indirect lengths" do
+    content = "BT /F1 12 Tf (Imported) Tj ET"
+
+    overlay =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Form 5 0 R >> >> >>"},
+        {4, stream_object("", "/Form Do")},
+        {5,
+         "<< /Type /XObject /Subtype /Form /BBox [0 0 300 200] /Resources << /Font << /F1 7 0 R >> >> /Length 6 0 R >>\nstream\n#{content}\nendstream"},
+        {6, Integer.to_string(byte_size(content))},
+        {7, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"}
+      ])
+
+    assert {:ok, stamped} = Stamp.overlay(one_page_pdf("Original", {300, 200}), overlay)
+    assert {:ok, "Original Imported"} = Text.extract(stamped, layout: false)
+  end
+
   test "repeats and matches PDF overlay pages" do
     target = document_pdf()
     overlay = one_page_pdf("LETTERHEAD", {300, 200})
