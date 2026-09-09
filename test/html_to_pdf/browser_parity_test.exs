@@ -23,6 +23,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   """
 
   @fixture_thresholds [
+    {"hidden_tables.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     # Poppler color-manages DeviceCMYK; Chromium converts JPEG pixels to RGB.
     # The average-delta bound rejects inverted CMYK while allowing that conversion difference.
     {"cmyk_jpeg_colors.html", max_changed_ratio: 0.23, max_average_delta: 0.03},

@@ -1811,9 +1811,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           box_height = content_height + vertical_box_size(style)
 
           background_box =
-            if box_width > 0 and box_height > 0,
-              do: background_box(style, box_x, box_top - box_height, box_width, box_height),
-              else: []
+            background_box(style, box_x, box_top - box_height, box_width, box_height)
 
           {:ok, tag_boxes(background_box, break_metadata(style)),
            box_top - box_height - margin.bottom}
@@ -3108,7 +3106,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       end)
 
     case result do
-      {:ok, rows} when rows != [] -> {:ok, Enum.reverse(rows)}
+      {:ok, rows} -> {:ok, Enum.reverse(rows)}
       _ -> {:error, :invalid_layout}
     end
   end
@@ -3217,65 +3215,71 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
          table_layout,
          available_height
        ) do
-    grid_rows = table_grid(rows)
-    column_count = max(table_column_count(grid_rows), length(columns))
+    case rows do
+      [] ->
+        {:ok, [], y - (available_height || 0.0)}
 
-    {horizontal_spacing, vertical_spacing} =
-      case {border_collapse, border_spacing} do
-        {:separate, {horizontal, vertical}}
-        when is_number(horizontal) and is_number(vertical) ->
-          {
-            Float.floor(horizontal / @css_pixel_points) * @css_pixel_points,
-            Float.floor(vertical / @css_pixel_points) * @css_pixel_points
-          }
+      _ ->
+        grid_rows = table_grid(rows)
+        column_count = max(table_column_count(grid_rows), length(columns))
 
-        _ ->
-          {0.0, 0.0}
-      end
+        {horizontal_spacing, vertical_spacing} =
+          case {border_collapse, border_spacing} do
+            {:separate, {horizontal, vertical}}
+            when is_number(horizontal) and is_number(vertical) ->
+              {
+                Float.floor(horizontal / @css_pixel_points) * @css_pixel_points,
+                Float.floor(vertical / @css_pixel_points) * @css_pixel_points
+              }
 
-    column_grid_width = max(width - horizontal_spacing * (column_count + 1), 0.0)
+            _ ->
+              {0.0, 0.0}
+          end
 
-    column_widths =
-      table_column_widths(
-        grid_rows,
-        columns,
-        column_count,
-        column_grid_width,
-        table_layout,
-        border_collapse
-      )
+        column_grid_width = max(width - horizontal_spacing * (column_count + 1), 0.0)
 
-    with {:ok, row_heights} <-
-           table_row_heights(
-             grid_rows,
-             column_widths,
-             horizontal_spacing,
-             vertical_spacing,
-             available_height,
-             border_collapse
-           ) do
-      {boxes, next_y} =
-        grid_rows
-        |> Enum.with_index()
-        |> Enum.reduce({[], y - vertical_spacing}, fn {row, index}, {boxes, current_y} ->
-          {:ok, row_boxes, next_y} =
-            layout_table_row(
-              row,
-              table_id,
-              index,
-              x,
-              current_y,
-              column_widths,
-              row_heights,
-              border_collapse,
-              horizontal_spacing,
-              vertical_spacing
-            )
+        column_widths =
+          table_column_widths(
+            grid_rows,
+            columns,
+            column_count,
+            column_grid_width,
+            table_layout,
+            border_collapse
+          )
 
-          {Enum.reverse(row_boxes, boxes), next_y - vertical_spacing}
-        end)
+        with {:ok, row_heights} <-
+               table_row_heights(
+                 grid_rows,
+                 column_widths,
+                 horizontal_spacing,
+                 vertical_spacing,
+                 available_height,
+                 border_collapse
+               ) do
+          {boxes, next_y} =
+            grid_rows
+            |> Enum.with_index()
+            |> Enum.reduce({[], y - vertical_spacing}, fn {row, index}, {boxes, current_y} ->
+              {:ok, row_boxes, next_y} =
+                layout_table_row(
+                  row,
+                  table_id,
+                  index,
+                  x,
+                  current_y,
+                  column_widths,
+                  row_heights,
+                  border_collapse,
+                  horizontal_spacing,
+                  vertical_spacing
+                )
 
-      {:ok, Enum.reverse(boxes), next_y}
+              {Enum.reverse(row_boxes, boxes), next_y - vertical_spacing}
+            end)
+
+          {:ok, Enum.reverse(boxes), next_y}
+        end
     end
   end
 
@@ -5248,14 +5252,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       border_radius: Map.get(style, :border_radius, 0.0)
     }
 
-    case Map.get(style, :background_image) do
-      nil ->
+    case {width > 0 and height > 0, Map.get(style, :background_image)} do
+      {false, _image} ->
+        []
+
+      {true, nil} ->
         case {fill_color, border_visible?} do
           {nil, false} -> []
           _ -> [rect]
         end
 
-      image ->
+      {true, image} ->
         fill_boxes =
           case fill_color do
             nil ->

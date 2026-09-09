@@ -6,6 +6,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Limits
 
+  test "tables with all rows or cells hidden leave an empty visible layout" do
+    for collapse <- ["separate", "collapse"],
+        rows <- [
+          "<tr style='display:none'><td>Hidden</td></tr>",
+          "<tr><td style='display:none'>Hidden</td></tr>",
+          "<tbody style='display:none'><tr><td>Hidden</td></tr></tbody>"
+        ] do
+      html =
+        "<table style='width:100pt;background:red;border-collapse:#{collapse}'>#{rows}</table><div style='height:10pt;background:blue'></div>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {240, 240}, margin: 0)
+      [box] = layout.boxes
+      assert box.type == :rect
+      assert_in_delta box.y + box.height, 240, 0.001
+      assert {:ok, _pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html)
+    end
+  end
+
   test "sparse grid placement preserves its cursor and reserves definite cells first" do
     for {items, expected} <- [
           {"<div style='grid-column:2;background:red'></div><div style='background:blue'></div>",
@@ -3492,7 +3512,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       ]
     }
 
-    assert Layout.layout(document([empty_table]), []) == {:error, :invalid_layout}
+    assert {:ok, _layout} = Layout.layout(document([empty_table]), [])
 
     bad_caption = %{
       type: :element,
@@ -4555,12 +4575,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert {:ok, styled_tree} = Style.compute(dom, [])
     assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {240, 100}, margin: 10)
 
-    [first, second, third] =
+    [first, second] =
       Enum.filter(layout_tree.boxes, &(Map.get(&1, :role) == :table_cell_background))
 
     assert_in_delta first.width, 100.0, 0.0001
     assert_in_delta second.width, 100.0, 0.0001
-    assert_in_delta third.width, 0.0, 0.0001
   end
 
   test "layout does not inflate table rows for empty inline cells" do
