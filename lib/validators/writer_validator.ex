@@ -161,7 +161,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     case box do
       %{type: :text, text: text, x: x, y: y, font_size: font_size, font: font, color: color}
       when is_binary(text) and is_number(x) and is_number(y) and is_number(font_size) and
-             font_size > 0 and is_binary(font) ->
+             font_size >= 0 and is_binary(font) ->
         valid_color?(color) and valid_font_box?(box) and valid_link_box?(box)
 
       %{

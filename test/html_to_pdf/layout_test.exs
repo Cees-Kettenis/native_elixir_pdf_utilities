@@ -6,6 +6,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Limits
 
+  test "zero font size renders alongside visible text" do
+    html = "<p style='font-size:0;margin:0'>Hidden</p><p style='margin:0'>Visible</p>"
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled, margin: 0)
+    [hidden, visible] = Enum.filter(layout.boxes, &(&1.type == :text))
+    assert hidden.font_size == 0
+    assert visible.font_size > 0
+    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html, margin: 0)
+    assert pdf =~ "%PDF"
+  end
+
   test "distributed flex and grid alignment keeps fixed gaps out of outer space" do
     for display <- ["flex", "grid"],
         {justify, expected} <- [
