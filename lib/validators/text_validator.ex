@@ -451,9 +451,14 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   @spec number(term()) :: {:ok, number()} | :error
   def number(value) do
     case value do
-      {:int, value} -> {:ok, value}
-      {:real, value} -> {:ok, value}
-      _ -> :error
+      {kind, value} when kind in [:int, :real] ->
+        case PdfValidator.valid_number?(value) do
+          true -> {:ok, value}
+          false -> :error
+        end
+
+      _ ->
+        :error
     end
   end
 

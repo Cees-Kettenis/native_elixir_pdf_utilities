@@ -250,7 +250,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
         font_value ->
           case Reader.resolve(document, font_value) do
             {:ok, [{:ref, _ref} = font_ref, size]} when is_number(size) ->
-              with {:ok, font_dictionary} <- Reader.dictionary(document, font_ref),
+              with true <- PdfValidator.valid_number?(size),
+                   {:ok, font_dictionary} <- Reader.dictionary(document, font_ref),
                    {:ok, font, preparation_context} <-
                      prepare_font(
                        document,
@@ -261,7 +262,16 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
                      ) do
                 {:ok, %{font: font, font_size: size * 1.0}, preparation_context}
               else
-                {:error, _} = font_error -> font_error
+                false ->
+                  error(
+                    :resources,
+                    :invalid_pdf_input,
+                    "ExtGState resource #{name} font size exceeds the numeric magnitude limit",
+                    page: page
+                  )
+
+                {:error, _} = font_error ->
+                  font_error
               end
 
             {:ok, _malformed} ->
@@ -396,7 +406,9 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
 
     with true <- is_integer(first_char) and first_char >= 0,
          {:ok, widths} <- Reader.resolve(document, Map.get(font, "Widths")),
-         true <- is_nil(widths) or (is_list(widths) and Enum.all?(widths, &is_number/1)),
+         true <-
+           is_nil(widths) or
+             (is_list(widths) and Enum.all?(widths, &PdfValidator.valid_number?/1)),
          {:ok, default_width} <- simple_default_width(document, font) do
       width_map =
         case widths do
@@ -423,9 +435,11 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
 
       descriptor ->
         with {:ok, descriptor} <- Reader.dictionary(document, descriptor) do
-          case Map.get(descriptor, "MissingWidth", 500) do
-            width when is_number(width) -> {:ok, width}
-            _ -> error(:font, :invalid_pdf_input, "font MissingWidth is malformed")
+          width = Map.get(descriptor, "MissingWidth", 500)
+
+          case PdfValidator.valid_number?(width) do
+            true -> {:ok, width}
+            false -> error(:font, :invalid_pdf_input, "font MissingWidth is malformed")
           end
         end
     end
@@ -435,7 +449,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
     with {:ok, descendants} <- Reader.resolve(document, Map.get(font, "DescendantFonts")),
          [descendant | _] <- descendants,
          {:ok, descendant} <- Reader.dictionary(document, descendant),
-         default_width when is_number(default_width) <- Map.get(descendant, "DW", 1000),
+         default_width = Map.get(descendant, "DW", 1000),
+         true <- PdfValidator.valid_number?(default_width),
          {:ok, widths} <- Reader.resolve(document, Map.get(descendant, "W")),
          {:ok, widths} <- cid_widths(widths) do
       {:ok, widths, default_width}
@@ -466,7 +481,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
       [first, listed | rest] when is_integer(first) and first >= 0 and is_list(listed) ->
         count = length(listed)
 
-        with true <- Enum.all?(listed, &is_number/1),
+        with true <- Enum.all?(listed, &PdfValidator.valid_number?/1),
              :ok <- validate_cid_width_entries(first, count, entry_count) do
           listed_widths =
             Map.new(Enum.with_index(listed, first), fn {width, code} -> {code, width} end)
@@ -482,9 +497,20 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
              is_number(width) ->
         count = last - first + 1
 
-        with :ok <- validate_cid_width_entries(first, count, entry_count) do
+        with true <- PdfValidator.valid_number?(width),
+             :ok <- validate_cid_width_entries(first, count, entry_count) do
           range_widths = Map.new(first..last, &{&1, width})
           parse_cid_widths(rest, Map.merge(widths, range_widths), entry_count + count)
+        else
+          false ->
+            error(
+              :font,
+              :invalid_pdf_input,
+              "CID font range width exceeds the numeric magnitude limit"
+            )
+
+          {:error, _} = width_error ->
+            width_error
         end
 
       _ ->

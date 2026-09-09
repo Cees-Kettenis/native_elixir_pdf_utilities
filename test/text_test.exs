@@ -6,6 +6,100 @@ defmodule NativeElixirPdfUtilities.TextTest do
   alias NativeElixirPdfUtilities.Text
   alias NativeElixirPdfUtilities.Validators.TextValidator
 
+  test "oversized text operands return diagnostics before floating-point conversion" do
+    for number <- [
+          String.duplicate("9", 400),
+          "-" <> String.duplicate("9", 400),
+          String.duplicate("9", 308) <> ".0"
+        ],
+        operation <- [
+          "/F1 #{number} Tf",
+          "#{number} 0 0 1 0 0 Tm",
+          "#{number} 0 0 1 0 0 cm",
+          "#{number} 0 Td",
+          "#{number} 0 TD",
+          "#{number} TL",
+          "#{number} Tc",
+          "#{number} Tw",
+          "#{number} Tz",
+          "#{number} Ts",
+          "#{number} Tr",
+          "[(A) #{number}] TJ",
+          "#{number} 0 (A) \""
+        ] do
+      source = page_pdf("BT /F1 12 Tf #{operation} (A) Tj ET")
+
+      for result <- [Text.extract(source), Text.extract_spans(source)] do
+        assert {:error, {:invalid_pdf_input, diagnostic}} = result
+        assert diagnostic.reason == :invalid_pdf_input
+        assert diagnostic.stage == :content
+        assert diagnostic.module == Text
+        assert diagnostic.operation in [:extract, :extract_spans]
+        assert diagnostic.message =~ "invalid operands"
+        assert diagnostic.message =~ "page 1"
+      end
+    end
+
+    assert {:ok, "A"} = Text.extract(page_pdf("BT /F1 12 Tf -10 20 Td (A) Tj ET"))
+  end
+
+  test "oversized font metrics and graphics-state font sizes are rejected" do
+    number = String.duplicate("9", 400)
+
+    for font <- [
+          "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding /FirstChar 65 /Widths [#{number}] >>",
+          "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding /FontDescriptor << /MissingWidth #{number} >> >>",
+          "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] >>"
+        ],
+        descendant <- ["/DW #{number}", "/W [65 [#{number}]]", "/W [65 65 #{number}]"] do
+      source =
+        page_pdf("BT /F1 12 Tf (A) Tj ET",
+          font: font,
+          descendant: "<< /Type /Font /Subtype /CIDFontType2 #{descendant} >>"
+        )
+
+      for result <- [Text.extract(source), Text.extract_spans(source)] do
+        assert {:error, {:invalid_pdf_input, %{stage: :font, module: Text}}} = result
+      end
+    end
+
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /Resources << /ExtGState << /GS1 4 0 R >> >> /Contents 6 0 R >>"},
+        {4, "<< /Font [5 0 R #{number}] >>"},
+        {5, "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>"},
+        {6, stream_object("", "/GS1 gs BT (A) Tj ET")}
+      ])
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} = Text.extract_spans(source)
+    assert diagnostic.stage == :resources
+    assert diagnostic.message =~ "font size exceeds"
+  end
+
+  test "oversized indirect Form matrix values are rejected before interpretation" do
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /Form 4 0 R >> >> /Contents 5 0 R >>"},
+        {4,
+         stream_object(
+           "/Type /XObject /Subtype /Form /Matrix [1 0 0 1 6 0 R 0] /BBox [0 0 10 10]",
+           ""
+         )},
+        {5, stream_object("", "/Form Do")},
+        {6, String.duplicate("9", 400)}
+      ])
+
+    for result <- [Text.extract(source), Text.extract_spans(source)] do
+      assert {:error, {:invalid_pdf_input, %{module: Text}}} = result
+    end
+  end
+
   test "rejects inline images before interpreting binary pixels as instructions" do
     for pixels <- [
           "BT /F1 12 Tf (FAKE) Tj ET",

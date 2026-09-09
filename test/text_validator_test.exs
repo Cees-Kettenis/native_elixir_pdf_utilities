@@ -3,6 +3,15 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidatorTest do
 
   alias NativeElixirPdfUtilities.Validators.TextValidator
 
+  test "numeric tokens must fit the shared PDF magnitude limit" do
+    assert {:ok, 1_000_000_000} = TextValidator.number({:int, 1_000_000_000})
+
+    for value <- [{:int, Integer.pow(10, 400)}, {:real, 1.0e308}, {:int, :bad}] do
+      assert :error = TextValidator.number(value)
+      assert :error = TextValidator.numbers([value], 1)
+    end
+  end
+
   test "public text requests are normalized by the validator" do
     assert {:ok, %{pdf: "%PDF", options: %{layout: false}}} =
              TextValidator.validate_request("%PDF", [layout: false], :extract)

@@ -516,6 +516,12 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end)
   end
 
+  @doc false
+  @spec valid_number?(term()) :: boolean()
+  def valid_number?(value) do
+    is_number(value) and abs(value) <= Limits.get(:max_pdf_numeric_magnitude)
+  end
+
   @doc """
   Resolves a fixed-length array whose elements must all be numbers.
 
@@ -531,9 +537,14 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         values
         |> Enum.reduce_while({:ok, []}, fn item, {:ok, numbers} ->
           case resolve(document, item, opts) do
-            {:ok, number} when is_number(number) -> {:cont, {:ok, [number | numbers]}}
-            {:ok, _value} -> {:halt, :invalid}
-            {:error, _} = resolution_error -> {:halt, resolution_error}
+            {:ok, number} ->
+              case valid_number?(number) do
+                true -> {:cont, {:ok, [number | numbers]}}
+                false -> {:halt, :invalid}
+              end
+
+            {:error, _} = resolution_error ->
+              {:halt, resolution_error}
           end
         end)
         |> case do
