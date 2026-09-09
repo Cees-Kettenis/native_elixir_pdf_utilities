@@ -1755,10 +1755,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
            ) do
       case items do
         [] ->
-          box_height = border_widths.top + padding.top + padding.bottom + border_widths.bottom
+          content_height = resolved_content_size(style, :height, nil, 0.0)
+          box_height = content_height + vertical_box_size(style)
 
           background_box =
-            background_box(style, box_x, box_top - box_height, box_width, box_height)
+            if box_width > 0 and box_height > 0,
+              do: background_box(style, box_x, box_top - box_height, box_width, box_height),
+              else: []
 
           {:ok, tag_boxes(background_box, break_metadata(style)),
            box_top - box_height - margin.bottom}

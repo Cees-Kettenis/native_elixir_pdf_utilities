@@ -6,6 +6,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Limits
 
+  test "empty flex containers retain specified and constrained height" do
+    for child <- ["", "<span style='display:none'>Hidden</span>"],
+        {sizing, expected} <- [
+          {"height:100pt", 100},
+          {"min-height:80pt", 80},
+          {"height:100pt;max-height:60pt", 60},
+          {"height:100pt;padding:10pt;box-sizing:border-box", 100}
+        ] do
+      html =
+        "<div style='display:flex;background:red;#{sizing}'>#{child}</div><div style='height:10pt;background:blue'></div>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {240, 240}, margin: 0)
+      [container, after_box] = Enum.filter(layout.boxes, &(&1.type == :rect))
+      assert_in_delta container.height, expected, 0.001
+      assert_in_delta after_box.y + after_box.height, 240 - expected, 0.001
+      assert {:ok, _pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html)
+    end
+
+    assert {:ok, _pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(
+               "<div style='display:flex;background:red'></div>"
+             )
+  end
+
   test "zero font size renders alongside visible text" do
     html = "<p style='font-size:0;margin:0'>Hidden</p><p style='margin:0'>Visible</p>"
     assert {:ok, dom} = HtmlParser.parse(html)
@@ -2593,8 +2619,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
              })
 
     assert {:ok, empty_layout} = Layout.layout(empty_tree, page_size: {100, 100}, margin: 10)
-    assert [%{type: :rect, height: height}] = empty_layout.boxes
-    assert_in_delta height, 0.0, 0.0001
+    assert empty_layout.boxes == []
 
     assert {:ok, shrink_tree} =
              Style.compute(%{
