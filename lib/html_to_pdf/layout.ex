@@ -1645,11 +1645,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       :space_around when count > 0 ->
         distributed_gap = gap + free_space / count
-        {distributed_gap / 2, distributed_gap}
+        {free_space / count / 2, distributed_gap}
 
       :space_evenly when count > 0 ->
         distributed_gap = gap + free_space / (count + 1)
-        {distributed_gap, distributed_gap}
+        {free_space / (count + 1), distributed_gap}
 
       _ ->
         {0.0, gap}
@@ -2519,11 +2519,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       :space_around when count > 0 ->
         item_gap = gap + free_space / count
-        {item_gap / 2, item_gap}
+        {free_space / count / 2, item_gap}
 
       :space_evenly when count > 0 ->
         item_gap = gap + free_space / (count + 1)
-        {item_gap, item_gap}
+        {free_space / (count + 1), item_gap}
 
       _ ->
         {0.0, gap}

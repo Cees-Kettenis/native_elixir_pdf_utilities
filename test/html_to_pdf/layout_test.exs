@@ -6,6 +6,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Limits
 
+  test "distributed flex and grid alignment keeps fixed gaps out of outer space" do
+    for display <- ["flex", "grid"],
+        {justify, expected} <- [
+          {"space-around", [25.0, 135.0]},
+          {"space-evenly", [100 / 3, 380 / 3]}
+        ] do
+      html =
+        "<div style='display:#{display};width:200pt;grid-template-columns:40pt 40pt;gap:20pt;justify-content:#{justify}'><div style='width:40pt;height:20pt;background:red'></div><div style='width:40pt;height:20pt;background:blue'></div></div>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, margin: 0)
+      rectangles = Enum.filter(layout.boxes, &(&1.type == :rect))
+      assert length(rectangles) == 2
+      for {box, x} <- Enum.zip(rectangles, expected), do: assert_in_delta(box.x, x, 0.001)
+    end
+  end
+
   test "large block, row-group and list accumulators preserve text and vertical order" do
     html =
       Enum.map_join(1..80, fn index ->
