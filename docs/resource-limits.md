@@ -42,6 +42,7 @@ override these values.
 | `max_decoded_image_bytes` | 40,000,000 | One decoded image |
 | `max_aggregate_decoded_image_bytes` | 80,000,000 | Decoded images in one render |
 | `max_background_image_tiles` | 10,000 | Repeated background tiles in one render |
+| `max_css_numeric_magnitude` | 1,000,000,000 | Absolute CSS numeric operands and converted lengths, excluding identifiers and quoted text |
 | `max_layout_cardinality` | 1,000 | Grid tracks, placements, and table spans |
 | `max_pdf_input_bytes` | 50,000,000 | One PDF input |
 | `max_pdf_objects` | 100,000 | Parsed PDF objects |

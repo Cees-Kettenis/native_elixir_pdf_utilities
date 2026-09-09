@@ -3155,8 +3155,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, :auto}
 
       Regex.match?(~r/^\d+(?:\.\d+)?fr$/u, normalized) ->
-        {number, "fr"} = Float.parse(normalized)
-        {:ok, {:fr, number}}
+        with {number, "fr"} <- HtmlValidator.parse_css_number(normalized),
+             do: {:ok, {:fr, number}}
 
       true ->
         with {:ok, length} <- parse_length(normalized), do: {:ok, {:length, length}}
@@ -3463,11 +3463,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
     cond do
       Regex.match?(~r/^\d+(?:\.\d+)?%$/u, normalized) ->
-        {number, "%"} = Float.parse(normalized)
-        {:ok, number |> max(0.0) |> min(100.0) |> Kernel./(100.0)}
+        with {number, "%"} <- HtmlValidator.parse_css_number(normalized) do
+          {:ok, number |> max(0.0) |> min(100.0) |> Kernel./(100.0)}
+        end
 
       true ->
-        case Float.parse(normalized) do
+        case HtmlValidator.parse_css_number(normalized) do
           {number, ""} -> {:ok, number |> max(0.0) |> min(255.0) |> Kernel./(255.0)}
           _ -> :error
         end
@@ -3479,11 +3480,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
     cond do
       Regex.match?(~r/^\d+(?:\.\d+)?%$/u, normalized) ->
-        {number, "%"} = Float.parse(normalized)
-        {:ok, number |> max(0.0) |> min(100.0) |> Kernel./(100.0)}
+        with {number, "%"} <- HtmlValidator.parse_css_number(normalized) do
+          {:ok, number |> max(0.0) |> min(100.0) |> Kernel./(100.0)}
+        end
 
       true ->
-        case Float.parse(normalized) do
+        case HtmlValidator.parse_css_number(normalized) do
           {number, ""} -> {:ok, number |> max(0.0) |> min(1.0)}
           _ -> :error
         end
@@ -3560,8 +3562,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
     cond do
       Regex.match?(~r/^\d+(?:\.\d+)?%$/u, normalized) ->
-        {number, "%"} = Float.parse(normalized)
-        {:ok, {:percent, number / 100}}
+        with {number, "%"} <- HtmlValidator.parse_css_number(normalized),
+             do: {:ok, {:percent, number / 100}}
 
       String.starts_with?(String.downcase(normalized), "min(") ->
         parse_min_size(normalized)
@@ -3576,8 +3578,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
     case Regex.run(~r/^(-?\d+(?:\.\d+)?)%$/u, normalized) do
       [_, percentage] ->
-        {number, ""} = Float.parse(percentage)
-        {:ok, {:percent, number / 100.0}}
+        with {number, ""} <- HtmlValidator.parse_css_number(percentage),
+             do: {:ok, {:percent, number / 100.0}}
 
       _ ->
         parse_length(normalized, :margin)
@@ -3683,17 +3685,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, 0.0}
 
       [_, "", value, unit] ->
-        {number, ""} = Float.parse(value)
+        scale = if unit == "rem", do: 1.0, else: points_per_unit(unit)
 
-        case length_context == :margin or number >= 0 do
-          true ->
-            case unit do
-              "rem" -> {:ok, {:rem, number}}
-              unit -> {:ok, number * points_per_unit(unit)}
-            end
-
-          false ->
-            :error
+        with {number, ""} <- HtmlValidator.parse_css_number(value, scale) do
+          case length_context == :margin or number >= 0 do
+            true -> if unit == "rem", do: {:ok, {:rem, number}}, else: {:ok, number}
+            false -> :error
+          end
         end
 
       _ ->
@@ -3709,16 +3707,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, 0.0}
 
       [_, "", value, "em"] ->
-        {number, ""} = Float.parse(value)
-        {:ok, number * font_size}
+        with {number, ""} <- HtmlValidator.parse_css_number(value, font_size), do: {:ok, number}
 
       [_, "", value, "rem"] ->
-        {number, ""} = Float.parse(value)
-        {:ok, {:rem, number}}
+        with {number, ""} <- HtmlValidator.parse_css_number(value), do: {:ok, {:rem, number}}
 
       [_, "", value, unit] ->
-        {number, ""} = Float.parse(value)
-        {:ok, number * points_per_unit(unit)}
+        with {number, ""} <- HtmlValidator.parse_css_number(value, points_per_unit(unit)),
+             do: {:ok, number}
 
       _ ->
         :error
@@ -3766,14 +3762,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp parse_positive_number(value) do
-    case Float.parse(String.trim(value)) do
+    case HtmlValidator.parse_css_number(String.trim(value)) do
       {number, ""} when number > 0 -> {:ok, number}
       _ -> :error
     end
   end
 
   defp parse_nonnegative_number(value) do
-    case Float.parse(String.trim(value)) do
+    case HtmlValidator.parse_css_number(String.trim(value)) do
       {number, ""} when number >= 0 -> {:ok, number}
       _ -> :error
     end

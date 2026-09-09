@@ -3,6 +3,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometryTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
 
+  test "oversized CSS page lengths fail without raising" do
+    number = String.duplicate("9", 400)
+    assert {:error, :invalid_page_size} = PageGeometry.normalize_page_size("#{number}in 10in")
+    assert {:error, :invalid_margin} = PageGeometry.normalize_margins("#{number}pt")
+
+    assert {:error, {_reason, %{message: message}}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render("<p>A</p>", margin: "#{number}pt")
+
+    assert is_binary(message)
+  end
+
   test "normalizes every named page size and orientation form" do
     expected_sizes = %{
       a5: {419.53, 595.28},

@@ -407,9 +407,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
     case Regex.run(@absolute_length_regex, value) do
       [_, number, unit] ->
         number = if String.starts_with?(number, "."), do: "0" <> number, else: number
-        {number, ""} = Float.parse(number)
 
-        {:ok, number * points_per_unit(String.downcase(unit))}
+        with {number, ""} <-
+               HtmlValidator.parse_css_number(number, points_per_unit(String.downcase(unit))) do
+          {:ok, number}
+        end
 
       _ ->
         :error

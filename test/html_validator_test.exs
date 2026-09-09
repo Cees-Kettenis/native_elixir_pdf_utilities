@@ -7,6 +7,26 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
+  test "CSS number validation bounds operands and converted units" do
+    assert {72.0, ""} = HtmlValidator.parse_css_number("1", 72.0)
+    assert {100.0, "pt"} = HtmlValidator.parse_css_number("+1e2pt")
+    assert {1.0, "."} = HtmlValidator.parse_css_number("1.")
+    assert {-0.5, "%"} = HtmlValidator.parse_css_number("-0.5%")
+    assert {1_000_000_000.0, ""} = HtmlValidator.parse_css_number("1000000000")
+
+    for {value, scale} <- [
+          {"1000000001", 1},
+          {"1000000000", 72},
+          {"1", 1_000_000_001},
+          {String.duplicate("9", 400), 1},
+          {"invalid", 1},
+          {123, 1},
+          {"1", :invalid}
+        ] do
+      assert :error = HtmlValidator.parse_css_number(value, scale)
+    end
+  end
+
   test "SVG authorization permits literal fragments and rejects entity declarations" do
     svg =
       ~s(<svg width="1" height="1"><defs><rect id="pixel" width="1" height="1"/></defs><use href="#pixel"/></svg>)

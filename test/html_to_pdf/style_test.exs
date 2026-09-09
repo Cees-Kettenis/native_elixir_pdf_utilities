@@ -3,6 +3,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
+  test "oversized CSS numbers return diagnostics in every numeric value family" do
+    alias NativeElixirPdfUtilities.HtmlToPdf
+    number = String.duplicate("9", 400)
+
+    for declaration <- [
+          "margin-left: #{number}pt",
+          "padding: #{number}in",
+          "width: #{number}%",
+          "grid-template-columns: #{number}fr",
+          "color: rgb(#{number}%, 0%, 0%)",
+          "color: rgba(0, 0, 0, #{number}%)",
+          "letter-spacing: #{number}em",
+          "letter-spacing: #{number}rem",
+          "letter-spacing: #{number}px",
+          "background-position: #{number}% 0%",
+          "font-size: #{number}rem",
+          "line-height: #{number}",
+          "aspect-ratio: #{number} / 1",
+          # Representable as a float, but not as a usable CSS length.
+          "margin-left: #{String.duplicate("9", 308)}in",
+          "--distance: #{number}pt; margin-left: var(--distance)"
+        ] do
+      assert {:error, {reason, diagnostic}} = HtmlToPdf.render("<p style='#{declaration}'>A</p>")
+      assert reason in [:invalid_css, :invalid_document]
+      assert diagnostic.reason == reason
+      assert diagnostic.stage in [:css, :style]
+      assert is_binary(diagnostic.message)
+      assert diagnostic.module == HtmlToPdf
+    end
+
+    assert {:ok, _pdf} =
+             HtmlToPdf.render("<p style='margin-left: 1in; letter-spacing: 0.5pt'>A</p>")
+  end
+
   test "JPEG Adobe markers preserve CMYK polarity before and after the frame" do
     for file <- ["adobe_cmyk.jpg", "adobe_ycck.jpg"] do
       data = File.read!(Path.expand("../fixtures/html_to_pdf/" <> file, __DIR__))

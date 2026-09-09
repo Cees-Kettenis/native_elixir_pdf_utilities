@@ -911,6 +911,40 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec parse_css_number(term(), number()) :: {float(), binary()} | :error
+  def parse_css_number(value, scale \\ 1.0) do
+    limit = Limits.get(:max_css_numeric_magnitude)
+
+    case is_binary(value) and is_number(scale) do
+      true ->
+        case Regex.run(~r/\A([+-]?\d+)(\.\d+)?([eE][+-]?\d+)?(.*)\z/s, value) do
+          [_, integer, fraction, exponent, rest] ->
+            fraction = if fraction == "", do: ".0", else: fraction
+
+            try do
+              number = :erlang.binary_to_float(integer <> fraction <> exponent)
+
+              with true <- abs(number) <= limit and abs(scale) <= limit,
+                   scaled = number * scale,
+                   true <- abs(scaled) <= limit do
+                {scaled, rest}
+              else
+                false -> :error
+              end
+            rescue
+              ArgumentError -> :error
+            end
+
+          _ ->
+            :error
+        end
+
+      false ->
+        :error
+    end
+  end
+
+  @doc false
   @spec validate_font_configs(term()) :: :ok | :error
   def validate_font_configs(fonts) do
     valid? =
