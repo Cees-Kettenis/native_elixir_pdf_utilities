@@ -1883,6 +1883,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       end)
 
     with {:ok, style} <- apply_declaration_list(style, custom_property_declarations, cache),
+         style =
+           Map.update!(style, :_custom_properties, &HtmlValidator.compute_custom_properties/1),
          {:ok, style} <- apply_declaration_list(style, foundational_declarations, cache) do
       style = resolve_rem_font_size(style)
 

@@ -3,6 +3,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
+  test "descendants inherit computed custom properties and invalid values stay invalid" do
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               "<div style='--base:red;--alias:var(--base);--unused:var(--missing)'><p style='--base:blue;color:var(--alias)'>Inherited</p><p style='--base:green;--alias:var(--base);color:var(--alias)'>Local</p></div>"
+             )
+
+    assert {:ok, %{children: [parent]}} = Style.compute_detailed(dom)
+    [inherited, local] = parent.children
+    assert inherited.style.color == {1, 0, 0}
+    assert local.style.color == {0, 0.5019607843, 0}
+    assert parent.style._custom_properties["--alias"] == "red"
+    assert inherited.style._custom_properties["--unused"] == nil
+
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               "<div style='--alias:var(--missing)'><p style='--missing:red;color:var(--alias)'>Invalid</p></div>"
+             )
+
+    assert {:error, _} = Style.compute_detailed(dom)
+  end
+
   test "variable functions inside quoted strings remain literal" do
     alias NativeElixirPdfUtilities.Validators.HtmlValidator
 

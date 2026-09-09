@@ -26,6 +26,26 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @css_variable_regex ~r/"(?:\\.|[^"\\])*"(*SKIP)(*F)|'(?:\\.|[^'\\])*'(*SKIP)(*F)|var\(\s*(--[a-zA-Z_][a-zA-Z0-9_-]*)\s*\)/u
 
   @doc false
+  @spec compute_custom_properties(map()) :: map()
+  def compute_custom_properties(properties) do
+    Map.new(properties, fn {name, value} ->
+      computed =
+        case value do
+          value when is_binary(value) ->
+            case resolve_css_variables(value, properties, %{name => true}) do
+              {:ok, resolved} -> resolved
+              :error -> nil
+            end
+
+          nil ->
+            nil
+        end
+
+      {name, computed}
+    end)
+  end
+
+  @doc false
   @spec resolve_css_variables(String.t(), map(), map()) :: {:ok, String.t()} | :error
   def resolve_css_variables(value, custom_properties, resolving) do
     variable_references =
