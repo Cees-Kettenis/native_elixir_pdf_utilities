@@ -36,7 +36,7 @@ See the [documentation](https://github.com/Cees-Kettenis/native_elixir_pdf_utili
 ```elixir
 def deps do
   [
-    {:native_elixir_pdf_utilities, "~> 0.16.0"}
+    {:native_elixir_pdf_utilities, "~> 0.17.0"}
   ]
 end
 ```

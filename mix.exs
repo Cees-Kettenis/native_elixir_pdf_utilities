@@ -4,11 +4,11 @@ defmodule NativeElixirPdfUtilities.MixProject do
   def project do
     [
       app: :native_elixir_pdf_utilities,
-      version: "0.16.0",
+      version: "0.17.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       description:
-        "Pure Elixir utilities for PDF inspection, metadata, tokenizing, merging, page transforms, splitting, outlines, text extraction, and native HTML/CSS rendering.",
+        "Pure Elixir utilities for PDF inspection, metadata, tokenizing, merging, page transforms, splitting, stamping, outlines, text extraction, and native HTML/CSS rendering.",
       deps: deps(),
       package: package(),
       docs: docs(),
@@ -71,6 +71,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
         "docs/pdf-merging.md",
         "docs/pdf-page-transforms.md",
         "docs/pdf-outlines.md",
+        "docs/pdf-stamping.md",
         "docs/html-to-pdf-compatibility.md",
         "docs/html-to-pdf-browser-parity-coverage.md",
         "docs/html-to-pdf-examples.md"
@@ -88,7 +89,8 @@ defmodule NativeElixirPdfUtilities.MixProject do
           "docs/text-extraction.md",
           "docs/pdf-merging.md",
           "docs/pdf-page-transforms.md",
-          "docs/pdf-outlines.md"
+          "docs/pdf-outlines.md",
+          "docs/pdf-stamping.md"
         ],
         "HTML to PDF": [
           "docs/html-to-pdf-compatibility.md",
@@ -104,6 +106,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
           NativeElixirPdfUtilities.Merge,
           NativeElixirPdfUtilities.Outlines,
           NativeElixirPdfUtilities.Split,
+          NativeElixirPdfUtilities.Stamp,
           NativeElixirPdfUtilities.Text,
           NativeElixirPdfUtilities.Tokenizer,
           NativeElixirPdfUtilities.Transform
@@ -134,7 +137,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
           NativeElixirPdfUtilities.Validators.WriterValidator
         ]
       ],
-      source_ref: "v0.16.0",
+      source_ref: "v0.17.0",
       source_url: "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"
     ]
   end

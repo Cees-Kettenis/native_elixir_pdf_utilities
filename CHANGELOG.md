@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.17.0 - 2026-09-10
+
+### Breaking changes
+
+- Tokenizer failures now return `{:error, {reason, diagnostic}}` directly from
+  `next/1`, `peek/1`, `next_with_span/1`, `tokenize_all/1`, and
+  `tokenize_all_with_spans/1`. They no longer appear as error tokens inside a
+  token/state pair or a list. Bulk calls stop at the first failure without
+  returning partial tokens. Successful return values are unchanged.
+- Code using the tokenizer directly must match the diagnostic error before
+  handling tokens or lists. Diagnostics include the operation, a specific
+  syntax explanation, one-based line and byte column, and a zero-based byte
+  offset in the message. Positions refer to the binary passed to `new/1`.
+- New numeric and font-processing limits can reject inputs previously accepted
+  without bounds. Configure them through `NativeElixirPdfUtilities.Limits`.
+
+### Added
+
+- Added `NativeElixirPdfUtilities.Stamp` with `text/3`, `watermark/3`,
+  `page_numbers/2`, and `overlay/3` for adding content to existing PDFs through
+  incremental updates.
+- Added page selection, named or explicit positions, font selection, size,
+  color, opacity, and rotation for text stamps. Coordinates account for page
+  cropping, rotation, and UserUnit scaling.
+- Added configurable page-number formats with document or selection numbering,
+  and PDF overlays with repeated or matched pages and exact, contain, cover,
+  or stretch sizing. Overlays import artwork and resources only.
+- Added `max_stamp_text_bytes`, `max_stamp_decoded_content_bytes`,
+  `max_css_numeric_magnitude`, `max_pdf_numeric_magnitude`, and
+  `max_font_cmap_work` resource limits.
+- Added stamping forms and OpenAPI entries to the manual testing app, visual
+  stamp regressions, and browser comparisons for the rendering fixes below.
+
+### Changed
+
+- Reworked public guides around user tasks, supported values, examples, and
+  cross-references. Added stamping to the README and HexDocs navigation.
+- Updated the roadmap with remaining work and a browser-parity milestone
+  targeting less than 2% changed pixels before performance work.
+- Reader and text-extraction callers reuse tokenizer error explanations and
+  locations while retaining their existing `:invalid_pdf_input` reason. The
+  manual tokenizer form now displays syntax failures as diagnostic errors.
+
+### Fixed
+
+- Isolated stamps from the target page's graphics state and applied overlay
+  opacity to the composed artwork, including overlays with their own opacity.
+- Enforced the decoded overlay-content budget before accumulating streams.
+- Resolved indirect page content arrays and imported streams with indirect
+  lengths during PDF assembly and stamping.
+- Preserved nested named links during merging, page transforms, and splitting,
+  including page inheritance and reachable resources when rewriting objects.
+- Preserved metadata control characters through PDF text encoding.
+- Rejected inline images during text extraction before their pixel bytes could
+  be interpreted as text operators.
+- Validated oversized PDF text numbers, font metrics, and page geometry before
+  numeric conversion. Bounded CSS numbers and page-option lengths before
+  conversion across supported Elixir runtimes.
+- Bounded TrueType character-map preparation and validated subtable ranges
+  before expanding mappings.
+- Invalidated cached fonts when file contents change, including replacements
+  with unchanged file size and timestamps.
+- Preserved quoted text in CSS variables and at-rules, and inherited computed
+  custom-property values without resolving them again in the child scope.
+- Inherited font weight through ordinary block elements and rendered documents
+  containing zero-size text without losing other content.
+- Distributed flex and grid alignment space independently of gaps, and retained
+  the height of empty flex containers.
+- Preserved explicit grid-item dimensions, resolved spans from definite end
+  lines, and retained sparse grid placement order.
+- Rendered tables with empty visible rows while respecting hidden content.
+- Preserved RGB PNG transparent-color masks and accounted for their decoded
+  memory. Recognized Adobe CMYK and YCCK JPEG polarity when writing images.
+
 ## 0.16.0 - 2026-09-08
 
 ### Added

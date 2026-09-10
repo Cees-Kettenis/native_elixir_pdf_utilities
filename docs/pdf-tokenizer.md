@@ -47,9 +47,14 @@ stream bytes; indirect lengths are not resolved by the tokenizer. Use
 
 ## Errors and boundaries
 
-Malformed syntax produces an `{:error, reason}` token with position details.
-This is different from the [diagnostic tuple](diagnostics.md) used by the
-higher-level APIs.
+Malformed syntax returns `{:error, {reason, diagnostic}}` from all token-reading
+functions, using the shared [diagnostic contract](diagnostics.md). Bulk calls
+stop at the first error without returning partial tokens.
+
+The diagnostic includes the failed operation, a syntax explanation, one-based
+line and byte column, and a zero-based byte offset in its message. Positions
+refer to the binary passed to `new/1`. Match errors before handling a token/state
+pair or token list.
 
 The tokenizer does not validate the PDF document or apply document-wide
 resource limits. Bound input size and token consumption when using it directly.

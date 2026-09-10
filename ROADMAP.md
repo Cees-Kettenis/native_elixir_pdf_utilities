@@ -8,18 +8,6 @@ The versions below describe planned scope. Implemented work is called out where
 it affects what remains; it does not imply that a version has been published.
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 
-## 0.17.0: Stamping and page numbers
-
-Add text, watermarks, PDF overlays, and page numbers to existing PDFs.
-
-Implemented behavior includes page selection and configurable placement, fonts,
-colors, and number formats. Audit fixes preserve the original page's graphics
-state, apply overlay opacity to the whole stamp, and handle indirect content
-arrays and stream lengths.
-
-Maintain the coordinate-system and page-range documentation, unit tests, and
-visual regressions as later PDF features land.
-
 ## 0.18.0: Forms and attachments
 
 Let applications fill existing PDF forms and bundle supporting files.
