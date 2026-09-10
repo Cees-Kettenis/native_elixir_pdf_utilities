@@ -1,78 +1,41 @@
-# PDF merging
+# Combining PDFs
 
-`NativeElixirPdfUtilities.Merge` combines a non-empty list of PDF binaries and
-returns a new PDF.
+Use `NativeElixirPdfUtilities.Merge.merge/1` to combine PDF binaries in order.
 
 ```elixir
 alias NativeElixirPdfUtilities.Merge
 
 with {:ok, first} <- File.read("first.pdf"),
      {:ok, second} <- File.read("second.pdf"),
-     {:ok, merged} <- Merge.merge([first, second]),
-     :ok <- File.write("merged.pdf", merged) do
-  :ok
+     {:ok, combined} <- Merge.merge([first, second]) do
+  File.write("combined.pdf", combined)
 end
 ```
 
-Input order determines page order. `merge/1` accepts PDF binaries rather than
-paths so callers control file access, storage, and error handling.
+The list must contain at least one PDF. All pages from the first input appear
+before all pages from the second. For only part of a document, use
+[page selection](pdf-page-transforms.md#select-reorder-or-delete-pages) first.
 
-## Supported inputs
+## What the output keeps
 
-Merging uses the shared PDF reader and therefore supports:
+| Kept | Not preserved as document features |
+| --- | --- |
+| Page content, images, resources, and page geometry | Metadata, viewer preferences, portfolios, and form configuration |
+| Bookmarks, in input order, with updated page targets | Original document signatures |
+| External URI links and resolvable internal page links | Source destination dictionaries and name trees |
 
-- classic cross-reference tables
-- cross-reference streams and object streams
-- incremental revisions and hybrid-reference files
-- active object generations and free entries
-- inherited page `Resources`, `MediaBox`, `CropBox`, and `Rotate` values,
-  including indirectly referenced page rectangles
-- the stream filters and resource limits described in the
-  [PDF reader guide](pdf-reader.md)
+Resolved named links become explicit page links. Unresolved names remain in
+copied annotations and may not work. See [bookmark behavior](pdf-outlines.md#merge-and-transform-behavior).
 
-Malformed, encrypted, unsupported, or resource-intensive inputs fail through
-the shared diagnostic contract. The merger does not decrypt PDFs.
+Merging creates a new PDF 1.7 document. It can retain unused source objects,
+so it is not a way to remove confidential content. Use
+[stamping](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-stamping.md) to add content while preserving a target document's
+metadata and form configuration.
 
-## Output behavior
+## Errors and limits
 
-The merger emits a PDF 1.7 document with a new cross-reference table,
-trailer, catalog, and flat page tree. Active input objects receive new object
-numbers, their indirect references are rewritten, and stream bytes and filter
-declarations are preserved. Effective inherited page resources, media and crop
-boxes, and rotation values are written onto the merged pages where required.
-Existing page-level entries such as `BleedBox`, `TrimBox`, `ArtBox`, and
-`UserUnit` remain on copied page dictionaries.
-If required page geometry is missing or malformed, the merger returns a
-diagnostic that identifies the problem. It does not invent a page size.
+An empty list returns `:empty_pdf_list`. Encrypted, malformed, or unsupported
+inputs return a [diagnostic](diagnostics.md). No partial merged PDF is returned.
 
-The merger combines page content and appends each input's top-level outline
-items in input order. Outline destinations are remapped to the corresponding
-output pages. It rebuilds the top-level catalog, so it does not carry metadata,
-viewer preferences, portfolios, or AcroForm configuration into the output.
-
-Internal links are remapped to the corresponding pages from their own input,
-including names resolved through legacy destination dictionaries or name
-trees. Resolvable named links become explicit destinations in the merged PDF;
-unresolved named links are omitted. External URI links remain.
-
-Outline item and aggregate title-byte limits apply to the combined output,
-even when each input outline individually fits within its limits. Assembly
-also reserves object capacity for the generated outline tree. See
-[PDF outlines and bookmarks](pdf-outlines.md) for preservation and limit rules.
-
-## Errors
-
-An empty input list and invalid PDF input return diagnostics:
-
-```elixir
-case Merge.merge(pdf_binaries) do
-  {:ok, merged_pdf} ->
-    merged_pdf
-
-  {:error, {_reason, diagnostic}} ->
-    Logger.warning(diagnostic.message)
-end
-```
-
-See [Diagnostics](diagnostics.md) for the common error shape and the fields
-available for logging and support.
+See [supported PDF inputs](pdf-reader.md#supported-inputs) and
+[merge limits](resource-limits.md#merging-and-splitting).

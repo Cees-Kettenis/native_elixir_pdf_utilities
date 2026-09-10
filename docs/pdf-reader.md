@@ -1,95 +1,67 @@
-# PDF reader
+# Inspecting PDF objects
 
-`NativeElixirPdfUtilities.Pdf.Reader` parses existing PDF documents for the
-other PDF utilities. It builds on `NativeElixirPdfUtilities.Tokenizer`:
+Use `NativeElixirPdfUtilities.Pdf.Reader` when you need individual PDF
+objects. For common tasks, use [information](pdf-information.md),
+[text extraction](text-extraction.md), or [merging](pdf-merging.md) directly.
 
-- The tokenizer converts PDF bytes into lexical tokens. It does not decide
-  which revision of an object is active or resolve references.
-- The reader starts at the final `startxref`, follows the document's
-  cross-reference revisions, and loads the active objects. The PDF validator
-  then checks references, streams, the catalog, and the page tree before the
-  reader returns the document map.
+## Read a PDF
 
-For document information and metadata updates, use
-`NativeElixirPdfUtilities.Info`. For text extraction or merging, use
-`NativeElixirPdfUtilities.Text` or `NativeElixirPdfUtilities.Merge`. Use the
-reader directly to inspect parsed objects or build another PDF utility on the
-same document model.
+```elixir
+alias NativeElixirPdfUtilities.Pdf.Reader
 
-`Reader.read_validated/1` returns the full validation context needed by another
-PDF operation. `Reader.read/1` returns the existing map
-with `:binary`, `:objects`, `:trailer`, `:pages`, and `:xref` fields.
+{:ok, pdf} = File.read("report.pdf")
+{:ok, document} = Reader.read(pdf)
+{:ok, catalog} = Reader.dictionary(document, document.trailer["Root"])
+```
 
-## Supported object structures
+The document contains `:pages`, `:objects`, `:trailer`, `:xref`, `:xref_offset`,
+and the original `:binary`. Objects are keyed by `{object_number, generation}`.
+Each object has a parsed `:value`, optional raw `:stream`, `:tokens`, and
+`:offset`. Superseded and free objects are omitted.
 
-The reader supports:
+## Inspecting values
 
-- classic cross-reference tables
-- cross-reference streams, including `/W` and `/Index`
-- object streams and type-2 compressed-object entries
-- incremental revisions through `/Prev`
-- hybrid-reference files through `/XRefStm`
-- active generation and free-entry selection from the newest revision
-- recursive indirect value and stream resolution with cycle detection
-- page-tree traversal with cycle and duplicate-reference detection, required
-  `/Count` validation, and descendant-count consistency checks
+Dictionary keys are strings. Values can be numbers, booleans, `nil`, lists,
+dictionaries, or tagged PDF values:
 
-The returned `:xref` map describes the active entry for each object number.
-The returned `:objects` map is keyed by `{object_number, generation}`. It omits
-free entries and superseded revisions.
+| Value | Meaning |
+| --- | --- |
+| `{:name, "Page"}` | A PDF name |
+| `{:string, bytes}` or `{:hex, bytes}` | String bytes; not necessarily UTF-8 |
+| `{:ref, {object, generation}}` | An indirect reference |
 
-Cross-reference parsing stops at the current revision's trailer dictionary.
-Object parsing and stream lookahead stop at `endobj`.
+`resolve/2` follows a reference. `dictionary/2` also checks that the resolved
+value is a dictionary. `fetch/3` resolves a dictionary and returns a key's value,
+or `nil` if absent; it does not resolve the returned value.
+
+```elixir
+{:ok, pages_ref} = Reader.fetch(document, catalog, "Pages")
+{:ok, page_tree} = Reader.dictionary(document, pages_ref)
+```
+
+Each `document.pages` entry has `:ref`, `:resources`, `:media_box`, and
+`:rotate`. Resolve `{:ref, page.ref}` for its dictionary. For page dimensions,
+use [Info.page_sizes/1](pdf-information.md#page-count-and-geometry).
+
+`read_validated/1` returns a richer context with `:document`, `:catalog`,
+`:catalog_ref`, `:page_tree_ref`, and `:pages`. Its page entries also expose the
+page dictionary, CropBox, and inherited values.
 
 ## Streams
 
-`Reader.decoded_stream/2` validates `/Length` and supports these PDF filters,
-including their abbreviated names:
+`Reader.decoded_stream(document, stream_reference)` returns `{:ok, bytes}`.
+Supported filters are `FlateDecode`, `ASCIIHexDecode`, `ASCII85Decode`,
+`RunLengthDecode`, and `LZWDecode`, including their PDF abbreviations. TIFF
+predictor 2 and PNG predictors 10 through 15 are supported.
 
-- Flate
-- ASCII hexadecimal
-- ASCII85
-- run-length
-- LZW
+Unknown filters return `:unsupported_pdf_feature`. Malformed or truncated
+compressed streams return an error rather than partial decoded bytes.
 
-TIFF predictor 2 and PNG predictors 10 through 15 are supported through
-`/DecodeParms`. Filter arrays are applied in declaration order. Unknown filters
-and predictors return `:unsupported_pdf_feature` diagnostics. ASCII85 decoding
-enforces group boundaries, the 32-bit value ceiling, and valid final partial
-groups.
+## Supported inputs
 
-Flate decoding requires a complete compressed stream. Truncated data returns
-`:invalid_pdf_input` at the `:filter` stage even when inflation produced a
-partial prefix; partial decoded bytes are not returned as a successful result.
+The reader supports classic cross-reference tables, cross-reference streams,
+object streams, hybrid files, and incremental revisions. It reads the active
+revision, not the full edit history. Encrypted documents are rejected.
 
-## Errors and limits
-
-Reader failures use the shared diagnostic result:
-
-```elixir
-{:error, {reason, diagnostic}}
-```
-
-Malformed headers, final xref pointers, xref records, object boundaries,
-reference chains, stream metadata, and page trees return
-`:invalid_pdf_input`. Encrypted files are detected and return `:encrypted_pdf`;
-the reader does not decrypt them.
-
-Input size, object count, revision depth, page count, decoded stream size, and
-decompression ratio are bounded. Exceeding a bound returns
-`:resource_limit_exceeded` instead of a partial document.
-
-The reader currently does not support encrypted content or stream filters other
-than those listed above. Linearization metadata is tolerated but is not used as
-an alternate loading path; the final cross-reference chain remains
-authoritative.
-
-## Shared utility behavior
-
-Information, text extraction, and merging use the same validated context. They
-share the active revision, compressed-object handling, stream validation,
-page-tree traversal, encryption detection, and malformed-input diagnostics.
-New PDF inspection or transformation utilities should use
-`PdfValidator.validate_pdf/1` or `Reader.read_validated/1` instead of scanning
-every token for indirect objects. See
-[Layered PDF validation](pdf-validation.md) for invariant ownership.
+See [Checking a PDF](pdf-validation.md), [Diagnostics](diagnostics.md), and
+[Resource limits](resource-limits.md) for failure handling.

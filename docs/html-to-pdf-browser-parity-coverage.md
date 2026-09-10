@@ -1,72 +1,32 @@
-# HTML to PDF browser parity coverage
+# Supported browser rendering
 
-The browser parity suite checks the renderer's documented visual behavior
-against Chromium. It does not claim full browser compatibility. The supported
-HTML and CSS subset is defined in
-[HTML to PDF compatibility](html-to-pdf-compatibility.md).
+The HTML renderer supports a document-oriented subset of browser rendering for
+reports, invoices, statements, forms, and labels. Use the overview below to
+choose a layout, then follow the linked reference for supported values and
+restrictions.
 
-## How comparison works
+## Supported behavior
 
-For each fixture, the suite:
+| Area                                                                         | What you can use                                                                                              |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| [HTML and text](html-to-pdf-compatibility.md#html-support)                    | Headings, paragraphs, inline emphasis, lists, links, character references, and static form controls           |
+| [CSS](html-to-pdf-compatibility.md#css-support)                               | Supported selectors, the cascade, custom properties, generated content, colors, borders, and spacing          |
+| [Sizing and layout](html-to-pdf-compatibility.md#css-support)                 | Block and inline layout, flexbox, grid, size constraints, text wrapping, and relative or absolute positioning |
+| [Tables](html-to-pdf-compatibility.md#tables)                                 | Column sizing, spanning cells, nested tables, repeated headers, and separate or collapsed borders             |
+| [Images and backgrounds](html-to-pdf-compatibility.md#images-and-backgrounds) | JPEG, supported PNG formats, self-contained SVG, image fitting, and background sizing and repetition          |
+| [Pages](html-to-pdf-compatibility.md#pagination)                              | Page sizes and margins, automatic and explicit breaks, running headers and footers, and page numbers          |
+| [Fonts](html-to-pdf-compatibility.md#fonts-and-text)                          | Bundled DejaVu Sans, registered TrueType fonts, optional system-font discovery, and glyph fallback            |
 
-1. Renders one PDF with Chromium and one with the native renderer.
-2. Checks that both PDFs have the same page count.
-3. Rasterizes each page with `pdftoppm`.
-4. Compares changed pixels and average color-channel differences against the
-   fixture's thresholds.
+This subset does not include JavaScript, interactive PDF form fields, or full
+browser layout and typography. See [Known limits](html-to-pdf-compatibility.md#known-limits)
+before adapting a browser template. The renderer reports unsupported HTML and
+CSS through the [diagnostic contract](diagnostics.md).
 
-Thresholds live in
-`test/html_to_pdf/browser_parity_test.exs`. Guard tests require a threshold for
-every fixture. Failed comparisons write PDFs and rasterized pages to
-`tmp/browser_parity/<fixture-name>/`.
+## Visual parity
 
-Run the suite with:
+We compare rendered documents with Chromium. Most reference documents use a
+tolerance of at most **5% differing pixels**. Our target is **less than 2%** across the supported subset.
 
-```bash
-CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity
-```
-
-Set `PDFTOPPM_BIN` when `pdftoppm` is not on `PATH`.
-
-## Coverage
-
-The suite has 41 focused fixtures and 8 production-document fixtures. All 49
-comparisons have configured thresholds. Two tests check fixture-to-threshold
-coverage, giving 51 tests in the parity suite.
-
-| Area | Focused fixtures |
-| --- | --- |
-| HTML and text flow | `html_semantics_typography.html`, `links_entities_and_protocols.html`, `inline_text_flow.html`, `whitespace_pre_line.html`, `static_form_controls.html`, `display_lists_and_inline_block.html` |
-| Cascade, generated content, and box styling | `block_box_model.html`, `border_style_variants.html`, `box_sizing_and_margins.html`, `css_cascade_selectors.html`, `css_remaining_supported_values.html`, `generated_content_counters.html`, `text_style_variants.html`, `units_and_sizing.html` |
-| Positioning | `absolute_positioning.html`, `inline_positioning.html`, `root_absolute_pagination.html` |
-| Images and backgrounds | `images_data_uris.html`, `image_object_fitting.html`, `background_images.html` |
-| Flexbox, grid, and mixed layouts | `flex_direction_and_justification.html`, `flex_grid_alignment.html`, `grid_tracks_and_placement.html`, `layout_compositions_remaining.html`, `nested_table_grid_flex.html` |
-| Tables | `nested_table_collapsed_borders.html`, `table_collapsed_borders.html`, `table_column_layout.html`, `table_header_near_page_row.html`, `table_pagination_headers.html`, `table_rowspan_tfoot.html`, `table_separate_borders.html` |
-| Pages, fonts, and glyph fallback | `break_variants.html`, `fonts_and_print_media.html`, `page_furniture.html`, `page_geometry_asymmetric.html`, `page_rules_landscape.html`, `pagination_breaks.html`, `paragraph_pagination.html`, `system_font_inheritance.html`, `unsupported_glyph_replacement.html` |
-
-The production fixtures cover these document types:
-
-| Fixtures | Document type |
-| --- | --- |
-| `government_application_form.html`, `purchase_order.html`, `material_requisition.html`, `invoice_012.html`, `statement_012.html`, `multi_page_report_012.html` | A4 forms, orders, invoices, statements, and multi-page reports |
-| `stock_sticker.html` | Production-size stock label |
-| `trim_card.html` | Production-size landscape trim card with nested tables and page breaks |
-
-## Performance regression checks
-
-Unit tests cover selector matching, inherited styles, font selection, output
-order, and cache cleanup. Browser parity checks visual output within configured
-thresholds; it does not measure speed or require identical PDF bytes.
-
-Use the [render benchmark](html-to-pdf-examples.md#benchmark-rendering) to compare
-runtime and output hashes with the same fonts, assets, and options. When hashes
-differ, compare text, pagination, and rasterized pages.
-
-## Adding coverage
-
-New renderer behavior needs a focused unit test. If it changes visible output:
-
-1. Add or update a focused parity fixture.
-2. Add its thresholds to `browser_parity_test.exs`.
-3. Update the coverage table above.
-4. Run the parity suite and inspect the rendered output.
+These percentages describe visual comparisons, not a percentage of browser
+features supported. Start with the [rendering examples](html-to-pdf-examples.md)
+for working templates.

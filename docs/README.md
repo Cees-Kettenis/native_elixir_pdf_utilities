@@ -1,70 +1,43 @@
-# Documentation
+# User guide
 
-Native Elixir PDF Utilities inspects, updates, merges, transforms, splits,
-stamps, extracts text from, and generates PDF documents. These guides document
-what each public API supports and which work remains the caller's responsibility.
+Choose the task you want to perform.
 
-## Reading and manipulating PDFs
+| I want to | Guide |
+| --- | --- |
+| Create a PDF from HTML | [Rendering examples](html-to-pdf-examples.md) |
+| Check which HTML and CSS I can use | [HTML and CSS support](html-to-pdf-compatibility.md) |
+| Compare supported rendering with a browser | [Browser rendering](html-to-pdf-browser-parity-coverage.md) |
+| Read or change a PDF's title, author, or dates | [PDF information](pdf-information.md) |
+| Get page counts and dimensions | [Page geometry](pdf-information.md#page-count-and-geometry) |
+| Extract text or its position on a page | [Text extraction](text-extraction.md) |
+| Combine PDFs | [Merging](pdf-merging.md) |
+| Select, reorder, delete, rotate, or split pages | [Page transforms](pdf-page-transforms.md) |
+| Add or read bookmarks | [Outlines](pdf-outlines.md) |
+| Add a watermark, stamp, letterhead, or page numbers | [Stamping](pdf-stamping.md) |
+| Check whether a PDF can be read | [PDF validation](pdf-validation.md) |
+| Handle an error | [Diagnostics](diagnostics.md) |
+| Adjust document size or processing limits | [Resource limits](resource-limits.md) |
 
-- [PDF tokenizer](pdf-tokenizer.md) explains lexical tokens, byte spans, stream
-  length hints, and the boundary between tokenization and document parsing.
-- [PDF reader](pdf-reader.md) describes the shared document model, supported
-  cross-reference and object structures, stream decoding, limits, and errors.
-- [PDF information and metadata](pdf-information.md) covers document
-  information, page count and geometry, encryption status, and incremental
-  metadata updates.
-- [Text extraction](text-extraction.md) covers reconstructed strings and
-  page-preserving positioned spans, including ordering, coordinates, font
-  context, and rendering modes.
-- [PDF merging](pdf-merging.md) covers supported inputs, output behavior,
-  diagnostics, and document-level features that are not preserved.
-- [PDF page transforms and splitting](pdf-page-transforms.md) covers selecting,
-  reordering, deleting, rotating, and splitting pages, including rebuild
-  behavior and data-retention limitations.
-- [PDF outlines and bookmarks](pdf-outlines.md) covers exact outline updates,
-  best-effort detection, HTML headings, and preservation during assembly.
-- [PDF stamping and page numbers](pdf-stamping.md) covers text stamps,
-  watermarks, PDF artwork overlays, page numbering, page selections, and the
-  displayed-page coordinate system.
-- [Diagnostics](diagnostics.md) explains why public APIs share one recoverable
-  error shape and how callers can use its debugging context.
-- [Configurable resource limits](resource-limits.md) lists every tunable
-  parsing, information, rendering, extraction, merge, transform, split, and
-  cache ceiling and its default.
+## Working with files
 
-## Generating PDFs from HTML
+Most PDF operations accept file contents as a binary:
 
-- [HTML to PDF examples](html-to-pdf-examples.md) provides short, runnable
-  examples for common rendering workflows.
-- [HTML to PDF compatibility](html-to-pdf-compatibility.md) is the supported
-  options, HTML, CSS, rendering behavior, and known limitations reference.
-- [Benchmarking HTML rendering](html-to-pdf-examples.md#benchmark-rendering)
-  shows how to measure a synthetic large document or a private local HTML file.
-- [HTML to PDF browser parity coverage](html-to-pdf-browser-parity-coverage.md)
-  explains the Chromium comparison suite and maps behavior to its fixtures.
+```elixir
+alias NativeElixirPdfUtilities.Info
 
-## Project references
-
-- [Licenses](licenses.md) contains the MIT, Bitstream Vera, WHATWG, and Adobe
-  license texts used by the project, bundled fonts, and derived data.
-- [Changelog](../CHANGELOG.md) records released behavior and compatibility
-  changes.
-- [Roadmap](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/ROADMAP.md)
-  describes the planned path toward `1.0.0`.
-- [Contributing](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/CONTRIBUTING.md)
-  explains local development and the quality gates required for changes.
-
-## Manual testing app
-
-The local app provides forms for the PDF APIs, including stamping,
-watermarking, page numbering, overlays, and exact and detected outlines. Start
-it from the repository:
-
-```bash
-cd dev/manual_web
-mise exec -- mix deps.get
-mise exec -- mix run --no-halt
+with {:ok, pdf} <- File.read("report.pdf") do
+  Info.page_count(pdf)
+end
 ```
 
-Open `http://127.0.0.1:4001`. The OpenAPI document is at `/openapi.json`.
-The app is development tooling and is not included in the Hex package.
+HTML rendering and text extraction also provide file helpers. Each task guide
+shows the relevant function and its return value.
+
+## Inspecting PDF syntax
+
+For access to individual PDF objects, use the [PDF reader](pdf-reader.md).
+For raw syntax tokens and byte positions, use the [tokenizer](pdf-tokenizer.md).
+Neither is needed for the common tasks above.
+
+See [Licenses](licenses.md) for the project and bundled-data notices, and the
+[Changelog](../CHANGELOG.md) for released changes.

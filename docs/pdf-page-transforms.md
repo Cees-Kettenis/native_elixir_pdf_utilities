@@ -1,110 +1,66 @@
-# PDF page transforms and splitting
+# Selecting, rotating, and splitting pages
 
-`NativeElixirPdfUtilities.Transform` selects, reorders, deletes, and rotates
-pages. `NativeElixirPdfUtilities.Split` rebuilds one source document as several
-PDFs. Both APIs accept PDF binaries so callers retain control of file and
-storage access.
+`Transform` changes which pages appear in a PDF. `Split` returns separate PDFs.
+Both accept PDF binaries and return new binaries.
 
 ```elixir
 alias NativeElixirPdfUtilities.{Split, Transform}
+
+{:ok, pdf} = File.read("report.pdf")
 ```
 
-## Page numbering
-
-Page numbers begin at one and follow the source PDF page-tree order. Ranges are
-inclusive, ascending, and use a step of one, such as `1..3` or `1..3//1`.
-Transform selections reject zero, negative, descending, stepped,
-out-of-bounds, and duplicate pages, including duplicates produced by
-overlapping selectors. Split ranges are independent and may overlap.
-
-Selections refer to the original input document. For example:
+## Select, reorder, or delete pages
 
 ```elixir
-{:ok, reordered} = Transform.pick_pages(pdf, [4, 1..2])
-{:ok, without_appendix} = Transform.delete_pages(pdf, [8..10])
+{:ok, selected} = Transform.pick_pages(pdf, [4, 1..2])
+{:ok, shortened} = Transform.delete_pages(pdf, [8..10])
 ```
 
-The first operation outputs source pages 4, 1, and 2 in that order. The second
-removes source pages 8 through 10 while retaining the order of every other
-page. Picking the same page more than once and deleting every page are rejected.
-An empty pick selection is rejected. An empty delete selection rebuilds the
-document without removing any pages.
+The first example produces pages 4, 1, and 2 in that order. The second removes
+pages 8 through 10 and keeps the remaining order. Save a result with
+`File.write/2`.
+
+Selections use one-based page numbers from the input. Mix numbers and ascending,
+unit-step ranges. Duplicates and out-of-range pages are rejected. You cannot
+pick an empty selection or delete every page. Deleting an empty selection
+rebuilds the document without removing pages.
 
 ## Rotation
-
-`Transform.rotate_pages/3` rotates pages clockwise by an integer multiple of 90
-degrees. Rotation is relative to each page's effective existing rotation and is
-normalized to 0, 90, 180, or 270 degrees.
 
 ```elixir
 {:ok, rotated} = Transform.rotate_pages(pdf, 90, pages: [1, 3..5])
 {:ok, all_rotated} = Transform.rotate_pages(pdf, -90)
 ```
 
-The `:pages` option defaults to `:all`.
+Positive angles rotate clockwise relative to the existing page rotation.
+Use an integer multiple of 90. The `:pages` option defaults to `:all`.
+Check the result with [Info.page_sizes/1](pdf-information.md#page-count-and-geometry).
 
 ## Splitting
 
-`Split.by_page/1` returns one rebuilt PDF per source page. An empty source
-document returns an empty list.
+| Function | Result on success |
+| --- | --- |
+| `Split.by_page(pdf)` | `{:ok, [page_pdf, ...]}` |
+| `Split.by_ranges(pdf, [1..3, 8..10])` | `{:ok, [first_pdf, second_pdf]}` |
+| `Split.after_page(pdf, 5)` | `{:ok, {first_pdf, second_pdf}}` |
 
-```elixir
-{:ok, page_pdfs} = Split.by_page(pdf)
-```
-
-`Split.by_ranges/2` requires a non-empty list and returns one PDF per inclusive,
-ascending, unit-step range. Ranges may overlap because each describes an
-independent output.
-
-```elixir
-{:ok, [summary, appendix]} = Split.by_ranges(pdf, [1..3, 8..10])
-```
-
-On success, `Split.after_page/2` returns exactly two non-empty PDFs. The selected
-page ends the first output. The configured split-output limit must allow at
-least two outputs.
-
-```elixir
-{:ok, {first_packet, second_packet}} = Split.after_page(pdf, 5)
-```
-
-The split point must fall between the first and penultimate source pages.
-
-All split operations enforce the configured output, object-write, and aggregate
-output-byte limits. `Split.by_page/1` charges one output per source page,
-`Split.by_ranges/2` charges one per range, and `Split.after_page/2` charges two.
+`after_page/2` puts the selected page at the end of the first output. The split
+point must leave at least one page in each output. `by_ranges/2` requires a
+non-empty list of ascending, unit-step ranges; ranges may overlap because
+each output is independent. `by_page/1` returns `{:ok, []}` for a zero-page PDF.
 
 ## Rebuild behavior
 
-Every output PDF receives a fresh PDF 1.7 catalog, flat page tree, object-number
-mapping, cross-reference table, and trailer. It copies only the selected pages
-and the objects reachable from those pages. Page content and other streams
-retain their original bytes while indirect references receive new object
-numbers.
+| Preserved | Not preserved as document features |
+| --- | --- |
+| Selected page content, images, resources, and geometry | Metadata, page labels, viewer preferences, and form configuration |
+| External URI links and internal links to retained pages | Links to removed pages and unresolved named links |
+| Bookmarks with retained destinations or children | Bookmarks whose destinations and children were all removed |
 
-The rebuild materializes effective inherited `Resources`, `MediaBox`,
-`CropBox`, and `Rotate` values. Every emitted indirect reference resolves.
-Internal link annotations targeting retained pages are remapped, including
-direct destinations and local `GoTo` actions whose names resolve through
-legacy destination dictionaries or destination name trees. Resolvable named
-links are rewritten to explicit destinations in the output. Links targeting
-removed pages and unresolved named links are omitted; external URI links remain.
+Outputs are rebuilt PDFs. A retained page may share resources with removed
+pages, so deletion is not secure redaction. Interactive form behavior is not
+guaranteed. See [bookmark preservation](pdf-outlines.md#merge-and-transform-behavior).
 
-Deleting a page is not secure redaction. A resource shared with a retained page
-must remain in the output. Outlines targeting retained pages are preserved and
-remapped. Items targeting removed pages are dropped when they have no retained
-children; otherwise they remain as destinationless grouping items. Forms, page
-labels, viewer preferences, and metadata are not preserved by these operations.
-
-A missing object required by a retained page is reported as malformed input.
-A retained non-navigation dependency on an unselected page is reported as an
-unsupported PDF feature because copying it would reintroduce that page.
-Malformed input, invalid selections, unsupported page dependencies, and
-resource limits use the shared diagnostic result:
-
-```elixir
-{:error, {reason, diagnostic}}
-```
-
-See [Diagnostics](diagnostics.md) and [Resource limits](resource-limits.md) for
-the common fields and process-wide limits.
+Failures return [diagnostics](diagnostics.md). Invalid selections, unsupported
+page dependencies, and [split limits](resource-limits.md#merging-and-splitting)
+can prevent an operation from completing.

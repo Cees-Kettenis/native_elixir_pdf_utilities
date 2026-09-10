@@ -1,8 +1,9 @@
-# HTML to PDF examples
+# Create PDFs from HTML
 
-These examples show common `NativeElixirPdfUtilities.HtmlToPdf` workflows. See
-[HTML to PDF compatibility](html-to-pdf-compatibility.md) for the supported
-HTML, CSS, options, and known limits.
+Use `NativeElixirPdfUtilities.HtmlToPdf` to render HTML into PDF bytes or a file.
+The examples below reuse the alias from the first example. Supply your own
+files where paths are shown. See [HTML and CSS support](html-to-pdf-compatibility.md)
+for supported features and options.
 
 ## Render HTML
 
@@ -11,31 +12,27 @@ HTML, CSS, options, and known limits.
 ```elixir
 alias NativeElixirPdfUtilities.HtmlToPdf
 
+html = "<h1>Invoice</h1><p>Amount due: 200.00</p>"
+
+{:ok, pdf} = HtmlToPdf.render(html, page_size: :a4, margin: "18mm")
+File.write!("/tmp/invoice.pdf", pdf)
+```
+
+### Add a styled table
+
+```elixir
 html = """
 <style>
-  @page { size: A4; margin: 18mm; }
-  body { font-family: "DejaVu Sans"; font-size: 10pt; }
-  h1 { border-bottom: 2pt solid #22344a; padding-bottom: 6pt; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { border: 1pt solid #d3d3d3; padding: 5pt; }
-  th { background-color: #eeeeee; text-align: left; }
-  .amount { text-align: right; }
+  th, td { border: 1pt solid #cccccc; padding: 5pt; text-align: left; }
 </style>
-
-<h1>Invoice INV-0001</h1>
 <table>
-  <thead>
-    <tr><th>Item</th><th>Description</th><th class="amount">Amount</th></tr>
-  </thead>
-  <tbody>
-    <tr><td>PO-1</td><td>Cutting and sewing</td><td class="amount">120.00</td></tr>
-    <tr><td>PO-2</td><td>Finishing</td><td class="amount">80.00</td></tr>
-  </tbody>
+  <thead><tr><th>Item</th><th>Amount</th></tr></thead>
+  <tbody><tr><td>Printing</td><td>200.00</td></tr></tbody>
 </table>
 """
 
-{:ok, pdf} = HtmlToPdf.render(html)
-File.write!("/tmp/invoice.pdf", pdf)
+{:ok, pdf} = HtmlToPdf.render(html, margin: "18mm")
 ```
 
 ## Render a file
@@ -55,10 +52,13 @@ File.write!("/tmp/invoice.pdf", pdf)
 ```
 
 Use `{:css, css}` for inline CSS and `{:file, path}` for a stylesheet file.
+The renderer does not infer `:base_url` from the input file's directory. Reading
+and writing errors use the [diagnostic contract](diagnostics.md).
 
 ## Add headers, footers, and page numbers
 
-Page furniture is opt-in. Reserve page margins large enough for it:
+Use `:page_furniture` for header and footer templates. Leave enough page
+margin for them:
 
 ```elixir
 {:ok, pdf} =
@@ -78,7 +78,8 @@ Page furniture is opt-in. Reserve page margins large enough for it:
 ```
 
 Use `:first`, `:odd`, `:even`, and `:default` variants when pages need
-different furniture.
+different headers or footers. A `false` or `nil` variant disables that template on the
+matching page. To number an existing PDF, use [Stamp.page_numbers/2](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-stamping.md#page-numbers).
 
 ## Load local images
 
@@ -98,8 +99,8 @@ paths must stay beneath that directory.
   )
 ```
 
-To supply assets without filesystem access, map document references to bytes
-or trusted files:
+Map document references to bytes to avoid filesystem reads for those assets,
+or to trusted files to authorize specific paths:
 
 ```elixir
 HtmlToPdf.render(html,
@@ -111,6 +112,22 @@ HtmlToPdf.render(html,
 ```
 
 The HTML or CSS can use those exact references in `src` or `url(...)`.
+For caller-managed asset loading, supply a resolver:
+
+```elixir
+resolver = fn
+  %{reference: "company-logo", kind: :image} -> {:ok, png_bytes}
+  _request -> :not_found
+end
+
+{:ok, pdf} =
+  HtmlToPdf.render(~s(<img src="company-logo" style="width: 30mm">),
+    asset_resolver: resolver
+  )
+```
+
+See [Local files and assets](html-to-pdf-compatibility.md#assets-and-local-files)
+for the path and callback rules.
 
 ## Register a font
 
@@ -120,9 +137,13 @@ Pass a static TrueType font when output must use the same face on every host:
 {:ok, pdf} =
   HtmlToPdf.render(
     ~s(<p style="font-family: 'Report Sans'">Café</p>),
-    fonts: [%{family: "Report Sans", path: "priv/fonts/report-sans.ttf"}]
+    fonts: [%{family: "Report Sans", path: "priv/fonts/report-sans.ttf"}],
+    system_font_discovery: false
   )
 ```
+
+Use `data: ttf_bytes` instead of `path:` for an in-memory font. Font fallback
+and embedding restrictions are covered in [Fonts and text](html-to-pdf-compatibility.md#fonts-and-text).
 
 A document can also load a font beneath `:base_url` with `@font-face`:
 
@@ -159,7 +180,8 @@ A document can also load a font beneath `:base_url` with `@font-face`:
 ```
 
 The first non-empty HTML `<title>` becomes the PDF title unless
-`metadata[:title]` is set.
+`metadata[:title]` is set. To change metadata in an existing PDF, use
+[Info.put/2](pdf-information.md#updating-information).
 
 ## Create bookmarks from headings
 
@@ -188,11 +210,13 @@ Form controls become visible, non-editable PDF content:
 
 ```elixir
 html = """
-<input type="text" value="Amira Tan">
-<input type="checkbox" checked>
-<select><option selected>Approved</option></select>
-<textarea>Documents verified</textarea>
-<button type="button">Record application</button>
+<div>
+  <input type="text" value="Amira Tan">
+  <input type="checkbox" checked>
+  <select><option selected>Approved</option></select>
+  <textarea>Documents verified</textarea>
+  <button type="button">Record application</button>
+</div>
 """
 
 {:ok, pdf} = HtmlToPdf.render(html)
@@ -203,6 +227,8 @@ html = """
 Rendering uses the library's shared diagnostic result:
 
 ```elixir
+require Logger
+
 case HtmlToPdf.render(html) do
   {:ok, pdf} ->
     File.write!("/tmp/document.pdf", pdf)
@@ -216,41 +242,3 @@ end
 
 Use the reason for program flow and the diagnostic for logs or template fixes.
 See [Diagnostics](diagnostics.md) for the full contract.
-
-## Benchmark rendering
-
-Run the synthetic 250-item purchase-order benchmark from the repository:
-
-```bash
-mise exec -- mix run scripts/benchmark-html-render.exs
-```
-
-To measure a local HTML file:
-
-```bash
-mise exec -- mix run scripts/benchmark-html-render.exs /path/to/private-document.html
-```
-
-The script prints measurements without saving HTML or PDF output. Keep private
-inputs outside tracked fixtures. Use synthetic data for committed fixtures,
-preserving document structure, text lengths, and character coverage.
-
-Each report includes stage times, caller-process reductions, full
-`HtmlToPdf.render/1` time, page count, PDF size, and SHA-256. Three warm runs also
-report sampled peak VM memory.
-
-Read the measurements as follows:
-
-- Stage timings exclude option preparation. The public-render timing includes
-  validation and metadata preparation.
-- Stages run before the public call and warm shared font caches, even in the
-  report labelled `cold`. Measure a public call in a fresh VM for cold latency.
-- Peak memory covers the whole VM during both pipelines. Sampling can miss
-  short-lived peaks. Reductions do not measure native rasterization work.
-- Page count comes from the staged pipeline; size and hash come from the public
-  render.
-
-The script uses default options and CSS page settings. For custom fonts,
-assets, page furniture, or other options, time the public renderer in your
-application. Keep runtime, fonts, assets, and machine load consistent between
-comparisons.

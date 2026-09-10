@@ -1,173 +1,96 @@
-# Text extraction
+# Extracting text
 
-`NativeElixirPdfUtilities.Text` has two result formats:
+Use `NativeElixirPdfUtilities.Text` to read embedded text. It does not perform
+OCR on scanned pages.
 
-- `extract/2` and `extract_file/2` return reconstructed strings for convenient
-  reading and searching.
-- `extract_spans/2` and `extract_file_spans/2` return decoded, positioned text
-  operations for applications that need to interpret rows, columns, tables, or
-  another document-specific layout.
-
-This API reads drawing and text-positioning operations, not semantic tables.
-It returns PDF-level information. Callers decide what that information means
-for their documents.
-No extraction function performs OCR.
-
-## Positioned text
+## Reconstructed strings
 
 ```elixir
 alias NativeElixirPdfUtilities.Text
 
-with {:ok, document} <- Text.extract_file_spans("invoice.pdf") do
-  Enum.each(document.pages, fn page ->
-    Enum.each(page.spans, fn span ->
-      IO.inspect({page.number, span.source_index, span.text, span.x, span.y})
-    end)
-  end)
-end
+{:ok, text} = Text.extract_file("invoice.pdf")
 ```
 
-The document result contains `:page_count` and a `:pages` list. Every resolved
-page is retained, including a page whose `:spans` list is empty. Each page
-contains its one-based `:number`, `[left, bottom, right, top]` `:media_box`,
-effective inherited `:rotation`, and positioned spans.
+For a binary already in memory, use `Text.extract(pdf)`.
 
-Span baseline coordinates use a normalized display system:
+| Option | Result |
+| --- | --- |
+| `layout: true`, the default | Approximate visual lines and spacing; text pages separated by `"\f"` |
+| `layout: false` | Text in drawing order; text pages separated by `"\n"` |
 
-- The origin is the top-left of the rotated MediaBox.
-- X increases to the right and Y increases downward.
-- Page rotation and page/Form current transformation matrices are applied.
-- Values are in PDF default user-space units, normally 1/72 inch.
-- `x` and `y` are the baseline start; `end_x` and `end_y` are the baseline end,
-  not a glyph or ink bounding box.
+Both omit pages with no painted text. A document with no extractable painted
+text returns `:no_extractable_text`. Extraction fails if shown text cannot be
+decoded reliably; it does not return a partial result.
 
-The end point follows the text advance calculated from the PDF font widths,
-font size, spacing, and horizontal scale available to the extractor. It can be
-approximate when a PDF font omits explicit width metrics.
+## Positioned text
 
-`text_matrix` is the PDF text matrix at the start of the decoded operand. `ctm`
-is the active PDF current transformation matrix and includes Form XObject
-transforms. These raw PDF matrices do not include the final page-rotation and
-MediaBox normalization used by the baseline coordinates. `font_resource` is
-the active PDF resource key, such as `"F1"`; it is not guaranteed to be a font
-family or PostScript name. `font_size` is the text-space `Tf` value rather than
-a calculated display-space height.
+Use spans when you need to interpret columns, rows, or other document-specific
+layout:
+
+```elixir
+{:ok, document} = Text.extract_file_spans("invoice.pdf")
+
+Enum.each(document.pages, fn page ->
+  Enum.each(page.spans, fn span ->
+    IO.inspect({page.number, span.text, span.x, span.y})
+  end)
+end)
+```
+
+For a binary, use `Text.extract_spans(pdf)`. The result contains `:page_count`
+and `:pages`. Every page is retained, even if its `:spans` list is empty.
+Each page has `:number`, `:media_box`, `:rotation`, and `:spans`.
+
+### Span fields
+
+| Field | Meaning |
+| --- | --- |
+| `:text` | Decoded text |
+| `:x`, `:y` | Start of the text baseline |
+| `:end_x`, `:end_y` | End of the baseline, based on text advance |
+| `:source_index` | Zero-based drawing-order index within the page |
+| `:font_resource` | PDF font resource name, not necessarily a family name |
+| `:font_size` | Font size in PDF text space |
+| `:text_matrix`, `:ctm` | Original text and current transformation matrices |
+| `:render_mode` | PDF text rendering mode, from 0 through 7 |
+| `:paints_text?` | Whether the mode requests filled or stroked text |
+| `:adds_to_clip_path?` | Whether the mode adds text to the clipping path |
+| `:joins_previous?` | Whether this text continues the preceding showing operation |
+
+Coordinates start at the top-left of the rotated MediaBox. X increases right;
+Y increases down. They use PDF default user-space units, normally 1/72 inch.
+CropBox offsets and UserUnit scaling are not applied. Baselines are not glyph
+bounding boxes, and endpoints can be approximate when font widths are absent.
+
+These coordinates differ from [stamp coordinates](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-stamping.md#coordinates-and-page-geometry).
+Use [Info.page_sizes/1](pdf-information.md#page-count-and-geometry) for physical
+page dimensions.
 
 ## Source and visual order
 
-Source execution order is the default:
+Span order defaults to `:source`. Request `order: :visual` for approximate
+line grouping:
 
 ```elixir
-Text.extract_spans(pdf, order: :source)
+{:ok, document} = Text.extract_spans(pdf, order: :visual)
 ```
 
-`source_index` is zero-based within each page. Page content streams are
-traversed in `/Contents` order. A Form XObject is traversed where its `Do`
-operator occurs, including nested and repeated Forms, so each emitted span has
-a deterministic execution index.
-
-Instruction parsing carries pending operands and array state across a page's
-ordered `/Contents` streams. An instruction's operands and operator can occur
-in different streams without resetting execution state. Individual tokens,
-including literal strings, must be complete within a stream. Form content is
-parsed and executed in its own invocation context.
-
-Callers can request the same heuristic visual line grouping used by string
-layout extraction:
-
-```elixir
-Text.extract_spans(pdf, order: :visual)
-```
-
-Visual ordering changes the span list order but never changes `source_index`,
-so source order can be restored with `Enum.sort_by(spans, & &1.source_index)`.
-
-For `Text.extract(pdf, layout: false)`, consecutive text-showing operands are
-concatenated according to PDF operator execution. For example, `(Hel) Tj (lo)
-Tj` produces `"Hello"`; the extractor does not invent a space between those
-operations. Text-positioning, text-object, Form XObject, and graphics-matrix
-boundaries start a separate source-order segment. The `joins_previous?` span
-field exposes this operator-defined continuity without using coordinate
-tolerances or visual-layout guessing.
+`source_index` stays unchanged, so you can restore drawing order by sorting on
+it. It is an ordering key, not a persistent identifier across edited PDFs.
+Neither order identifies semantic table cells automatically.
 
 ## Rendering modes and visibility
 
-Positioned extraction retains decoded text for all PDF text rendering modes:
+Spans include invisible text modes 3 and 7. String extraction excludes them.
+The `:paints_text?` flag describes the drawing mode, not guaranteed visibility:
+text may still be hidden by clipping, transparency, or other content.
 
-| Mode | PDF operation | `paints_text?` | `adds_to_clip_path?` |
-| ---: | --- | --- | --- |
-| 0 | Fill | true | false |
-| 1 | Stroke | true | false |
-| 2 | Fill and stroke | true | false |
-| 3 | Neither paint nor clip | false | false |
-| 4 | Fill and add to clipping path | true | true |
-| 5 | Stroke and add to clipping path | true | true |
-| 6 | Fill, stroke, and add to clipping path | true | true |
-| 7 | Add to clipping path only | false | true |
+## Errors and limits
 
-These flags describe what the text rendering mode requests. They are not a
-claim of visual visibility. The extractor does not evaluate the active clipping
-path, transparency, optional-content state, later occlusion, or whether painted
-content falls outside the visible crop. In particular, `adds_to_clip_path?`
-does not mean the text was itself visually clipped.
+Unsupported font encodings, vertical Type0 CMaps, inherited `usecmap` mappings,
+and inline images can prevent extraction. Encrypted PDFs are not supported.
+Failures use the [diagnostic tuple](diagnostics.md).
 
-The string API keeps its existing behavior and excludes modes 3 and 7. A valid
-PDF containing only empty pages or non-text content returns a positioned `:ok`
-result with empty span lists, while the string API returns
-`:no_extractable_text`.
-
-## Character maps
-
-ToUnicode and Type0 Encoding CMap parsing ignores comments and applies mappings
-in source order. Later definitions replace earlier ones. Mapping limits apply
-across all sections.
-
-ToUnicode `usecmap` inheritance and vertical Type0 Encoding CMaps remain
-unsupported. See the shared diagnostic result below for decoding failures.
-
-## What positioned extraction preserves
-
-Positioned extraction is not a lossless representation of every PDF text
-feature. It retains every non-empty text operand that the strict decoder maps
-to Unicode, even when its render mode does not paint text.
-
-Inline images return `:unsupported_pdf_feature` at the content stage before their
-binary pixels are tokenized. Use image XObjects when text extraction is required.
-
-The result does not expose internal reader or font structs. It also does not
-provide OCR, semantic table cells, glyph outlines, exact ink bounds,
-clipping-path visibility, or a partial result for undecodable content. An
-unsupported encoding, malformed stream, invalid supported text operator, or
-other explainable extraction failure returns the shared diagnostic contract:
-
-```elixir
-{:error, {reason, diagnostic}}
-```
-
-Each extraction caches decoded streams and parsed content sequences. Repeated
-references reuse this work within the extraction. Limits cap total decoded
-content to 50 MB, unique parsed instructions to 100,000, stream uses to 100,000,
-executed instruction uses to 1,000,000, and Form expansions to 10,000. Exceeding
-one of these operation-wide limits returns `:resource_limit_exceeded` rather
-than a partial result.
-
-With `layout: true`, `max_text_layout_whitespace_bytes` also caps spaces added
-from coordinates at 1,000,000 bytes per extraction. The check runs before
-allocation and identifies the page on failure. It excludes source text and
-line/page separators. This limit does not apply to `layout: false` or span
-extraction. See [Configurable resource limits](resource-limits.md) for defaults.
-
-Use the positioned API when document layout matters. Use the string API when
-readable text is enough.
-
-## Public contract
-
-The four extraction functions and the documented `text_document`, `text_page`,
-and `text_span` types are public APIs. Existing required fields will not be
-renamed, removed, or assigned a different meaning in a compatible release. New
-fields or options may be added where that remains backward compatible.
-
-`source_index` is a deterministic ordering key, not a persistent identifier for
-a piece of PDF content. Editing the PDF or a future release gaining support for
-additional text operations can introduce spans and therefore change later
-indexes. The relative execution-order guarantee remains the stable contract.
+[Extraction limits](resource-limits.md#text-extraction) cap content, work, spans,
+and reconstructed spacing. Oversized numeric operands or font metrics return
+`:invalid_pdf_input` before execution. No partial text is returned on failure.

@@ -1,54 +1,28 @@
-# PDF tokenizer
+# Reading PDF syntax tokens
 
-`NativeElixirPdfUtilities.Tokenizer` converts a PDF byte stream into lexical
-tokens without resolving the document structure. It is useful for inspecting
-PDF syntax or building custom PDF tools. Applications that need active
-objects, decoded streams, page traversal, text extraction, or merging should
-use `NativeElixirPdfUtilities.Pdf.Reader`,
-`NativeElixirPdfUtilities.Text`, or `NativeElixirPdfUtilities.Merge` instead.
+Use `NativeElixirPdfUtilities.Tokenizer` for raw PDF syntax and byte positions.
+Use the [PDF reader](pdf-reader.md) to resolve objects, references, and pages.
 
 ## Tokenizing a binary
-
-Create tokenizer state with `new/1`, then consume one token at a time:
 
 ```elixir
 alias NativeElixirPdfUtilities.Tokenizer
 
 state = Tokenizer.new("<< /Type /Example /Count 2 >>")
-
-{first_token, state} = Tokenizer.next(state)
-{second_token, _state} = Tokenizer.next(state)
-
-first_token
-#=> :dict_start
-
-second_token
-#=> {:name, "Type"}
+{:dict_start, state} = Tokenizer.next(state)
+{{:name, "Type"}, state} = Tokenizer.next(state)
+tokens = Tokenizer.tokenize_all(state)
 ```
 
-`peek/1` returns the next token without advancing the supplied state.
-`tokenize_all/1` consumes the remaining input and returns every token except
-the final `{:eof, nil}` marker.
+`new/1` takes a binary. `next/1` returns `{token, next_state}`; `peek/1` returns
+the next token without advancing. `tokenize_all/1` returns remaining tokens
+without the final `{:eof, nil}` marker.
 
-The tokenizer recognizes integers, real numbers, booleans, `null`, PDF names,
-literal and hexadecimal strings, arrays, dictionaries, indirect-reference
-markers, structural keywords, content operators, and stream data. Whitespace
-and PDF comments are skipped. Hexadecimal escapes in names and escapes in
-literal strings are decoded.
-
-PDF real numbers accept spellings such as `.5`, `-.5`, `+.5`, and `1.`.
-Exponent notation such as `1e2` or `1.0e2` is rejected, as are malformed or
-unrepresentable real values.
-
-Unescaped CR, CRLF, and LF line endings inside literal strings become a single
-LF. Explicit escapes such as `\r` retain their escaped value. A backslash
-followed by a line ending continues the string without inserting a character.
-Byte spans still refer to the original input bytes.
+Tokens represent numbers, names, strings, booleans, null, array/dictionary
+boundaries, PDF keywords, operators, and stream bytes. Whitespace and comments
+are skipped; name and string escapes are decoded.
 
 ## Byte spans
-
-Use `next_with_span/1` or `tokenize_all_with_spans/1` when the original byte
-range is needed:
 
 ```elixir
 state = Tokenizer.new("/Title (Report)")
@@ -59,34 +33,23 @@ state = Tokenizer.new("/Title (Report)")
 ] = Tokenizer.tokenize_all_with_spans(state)
 ```
 
-`:from` is inclusive and `:to` is exclusive. For stream data, the span starts
-after the end-of-line sequence following the `stream` keyword. The
-`:stream_mode?` field reports whether the data boundary came from a direct
-length or from scanning for `endstream`.
+`:from` is inclusive and `:to` is exclusive in the original bytes.
+`next_with_span/1` returns one token and span at a time. For stream data,
+`:stream_mode?` indicates whether its boundary came from a direct length or
+an `endstream` scan.
 
 ## Stream lengths
 
-After the tokenizer emits `:stream`, `pending_stream_length/1` reports the
-length information found in the preceding dictionary:
-
-- `{:direct, length}` for a non-negative direct `/Length`
-- `{:indirect, {object, generation}}` for an indirect `/Length`
-- `:unknown` when no length hint is available
-
-The tokenizer uses a direct length when available. It can report an indirect
-length reference, but it does not resolve that reference; unresolved stream
-data is located by scanning for `endstream`. Use the PDF reader when stream
-boundaries must be validated against resolved document objects.
+After `:stream`, `pending_stream_length/1` returns `{:direct, length}`,
+`{:indirect, {object, generation}}`, or `:unknown`. Direct lengths locate the
+stream bytes; indirect lengths are not resolved by the tokenizer. Use
+[Reader.decoded_stream/2](pdf-reader.md#streams) for validated, decoded content.
 
 ## Errors and boundaries
 
-Malformed lexical input is returned as an `{:error, reason}` token. Tokenizer
-errors include the relevant byte position, but this low-level API does not use
-the shared diagnostic tuple returned by the reader, merger, text extractor, and
-HTML renderer.
+Malformed syntax produces an `{:error, reason}` token with position details.
+This is different from the [diagnostic tuple](diagnostics.md) used by the
+higher-level APIs.
 
-`new/1` expects a binary, and the tokenizer does not impose the process-wide PDF
-input or document-complexity limits. Callers using it directly are responsible
-for bounding input size and token-consumption work. The shared PDF reader
-applies the configured limits and validates cross-reference revisions, active
-object generations, indirect references, streams, encryption, and page trees.
+The tokenizer does not validate the PDF document or apply document-wide
+resource limits. Bound input size and token consumption when using it directly.

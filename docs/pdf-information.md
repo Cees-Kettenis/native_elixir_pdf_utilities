@@ -1,132 +1,85 @@
 # PDF information and metadata
 
-`NativeElixirPdfUtilities.Info` reads document information and page geometry
-from existing PDF binaries. It can also update common information fields
-without rebuilding the document.
+Use `NativeElixirPdfUtilities.Info` to read metadata, count pages, check page
+sizes, or update a document's title and other information.
 
 ```elixir
 alias NativeElixirPdfUtilities.Info
 
+{:ok, pdf} = File.read("report.pdf")
 {:ok, information} = Info.get(pdf)
-
-information.title
-information.author
-information.subject
-information.keywords
-information.producer
-information.creation_date
-information.modification_date
+{:ok, page_count} = Info.page_count(pdf)
 ```
 
-Every key is present in the returned map. A missing field has the value `nil`.
-The text decoder accepts PDFDocEncoding and Unicode information strings. PDF
-dates become `NaiveDateTime` values. A PDF date's timezone suffix is validated,
-but the returned value retains the document's wall-clock time.
+## Read metadata
 
-## Page count and geometry
+`Info.get/1` returns a map with these keys. Missing fields are `nil`.
 
-Use `page_count/1` for the validated page-tree count:
+| Keys | Returned value |
+| --- | --- |
+| `:title`, `:author`, `:subject`, `:keywords`, `:producer` | String or `nil` |
+| `:creation_date`, `:modification_date` | `NaiveDateTime` or `nil` |
 
-```elixir
-{:ok, 3} = Info.page_count(pdf)
-```
-
-`page_sizes/1` returns one entry per page. It resolves inherited MediaBox and
-rotation values, normalizes rotation to `0`, `90`, `180`, or `270`, and reports
-dimensions in PDF points. Width and height reflect the normalized rotation.
-
-The page's `UserUnit` scales width and height into physical PDF points. Direct
-and indirectly referenced positive numeric values are supported; an omitted
-value defaults to `1`. The returned `media_box` coordinates remain in the
-page's default user-space units before scaling. For example, a `100 x 200`
-MediaBox with `UserUnit: 2` and rotation `90` reports width `400` and height
-`200`, while retaining the original MediaBox coordinates. Invalid `UserUnit`
-values return a diagnostic identifying the page.
-
-```elixir
-{:ok, pages} = Info.page_sizes(pdf)
-
-[
-  %{
-    page_number: 1,
-    width: 841.89,
-    height: 595.28,
-    unit: :point,
-    rotation: 90,
-    media_box: %{
-      left: 0.0,
-      bottom: 0.0,
-      right: 595.28,
-      top: 841.89
-    }
-  }
-] = pages
-```
-
-## Encryption status
-
-`encrypted?/1` validates the PDF header, cross-reference chain, and active
-trailer before checking for encryption. It does not load or decrypt encrypted
-objects.
-
-```elixir
-case Info.encrypted?(pdf) do
-  {:ok, false} -> Info.get(pdf)
-  {:ok, true} -> {:error, :encrypted_document}
-  {:error, {_reason, diagnostic}} -> {:error, diagnostic}
-end
-```
-
-The other `Info` operations reject encrypted documents because the library does
-not decrypt PDF content.
+Dates retain the document's wall-clock time. A timezone suffix is validated,
+but the returned date is not converted to UTC. XMP metadata is not read.
 
 ## Updating information
-
-`put/2` accepts a map or keyword list. Omitted fields remain unchanged and
-`nil` removes a field. Keywords may be a string or a list of strings.
 
 ```elixir
 {:ok, updated_pdf} =
   Info.put(pdf,
-    title: "August statement",
-    author: "Finance Operations",
-    subject: "Customer statement",
+    title: "Monthly statement",
+    author: "Finance team",
     keywords: ["statement", "monthly"],
-    producer: "Accounts service",
     modification_date: DateTime.utc_now()
   )
+
+File.write!("updated.pdf", updated_pdf)
 ```
 
-Supported date inputs are `Date`, `NaiveDateTime`, `DateTime`, ISO 8601 strings,
-and valid PDF date strings. Text must be valid UTF-8. Unknown fields and invalid
-values return the shared diagnostic tuple.
+Pass a map or keyword list using the fields above. Omitted fields stay
+unchanged; `nil` removes a field. Keywords accept a string or a list of strings.
+Text must be valid UTF-8. Dates accept `Date`, `NaiveDateTime`, `DateTime`,
+ISO 8601 strings, or valid PDF date strings.
 
-An update appends an incremental revision. The original bytes remain at the
-start of the result, and the writer preserves unspecified common fields,
-unknown information dictionary entries, the document root, and the permanent
-trailer identifier. An empty patch returns the original binary unchanged.
+The update preserves page content and unrelated information. It appends a
+revision, so old metadata remains in the file's earlier bytes. This is not
+secure deletion and may affect existing signatures. XMP is not updated.
+An empty patch returns the original binary.
 
-When the active trailer has an `ID` pair, an incremental update preserves its
-first, permanent identifier and refreshes its second, revision identifier.
-A malformed pair returns `:invalid_pdf_input` at `:incremental_write`. An
-absent `ID` remains absent. Outline updates use the same identifier handling.
-
-The API updates the PDF information dictionary only. It does not read or write
-XMP metadata, decrypt documents, add signatures, or guarantee that an existing
-signature remains valid after an update.
-
-## Supported inputs and limits
-
-Information operations use the shared PDF reader and support its classic
-cross-reference tables, cross-reference streams, object streams, hybrid files,
-and incremental revisions. Malformed, unsupported, encrypted, or oversized
-inputs return:
+## Page count and geometry
 
 ```elixir
-{:error, {reason, diagnostic}}
+{:ok, count} = Info.page_count(pdf)
+{:ok, pages} = Info.page_sizes(pdf)
+
+Enum.each(pages, fn page ->
+  IO.inspect({page.page_number, page.width, page.height, page.rotation})
+end)
 ```
 
-Metadata update values are bounded by `max_pdf_info_value_bytes` per value and
-`max_pdf_info_total_bytes` in total. Reader input, object, page, reference, and
-revision limits apply to every information operation. See [Configurable resource
-limits](resource-limits.md) and [Diagnostics](diagnostics.md).
+Each size entry contains:
+
+| Field | Meaning |
+| --- | --- |
+| `:page_number` | One-based page number |
+| `:width`, `:height` | MediaBox dimensions after rotation and UserUnit scaling |
+| `:unit` | Always `:point`, or 1/72 inch |
+| `:rotation` | `0`, `90`, `180`, or `270` degrees |
+| `:media_box` | `%{left: ..., bottom: ..., right: ..., top: ...}` before UserUnit scaling |
+
+Dimensions use the MediaBox, not the visible CropBox. For placing stamps, see
+[stamp coordinates](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-stamping.md#coordinates-and-page-geometry).
+
+## Encryption status
+
+```elixir
+{:ok, encrypted?} = Info.encrypted?(pdf)
+```
+
+This checks encryption without decrypting the document. Other information
+operations require an unencrypted PDF.
+
+Failures return the shared [diagnostic tuple](diagnostics.md). See
+[PDF input support](pdf-reader.md#supported-inputs) and
+[metadata limits](resource-limits.md#metadata-and-bookmarks) for restrictions.

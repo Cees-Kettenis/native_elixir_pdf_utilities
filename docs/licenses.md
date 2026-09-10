@@ -1,7 +1,8 @@
 # Licenses
 
-The project distributes source code, bundled fonts, generated
-character-reference data, and glyph-name assignments under the licenses below.
+The project code uses the MIT license. Bundled fonts and derived data have the
+notices below. Dependencies retain their own license terms. For custom font
+support, see [Fonts](html-to-pdf-compatibility.md#fonts-and-text).
 
 ## Project: MIT License
 
