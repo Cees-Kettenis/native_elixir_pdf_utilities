@@ -535,6 +535,23 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert_error(Text.extract(pdf), :invalid_pdf_input, :filter)
   end
 
+  test "text and span extraction preserve tokenizer failures with page context" do
+    input = page_pdf("BT /F1 12 Tf\n(unfinished")
+
+    for operation <- [:extract, :extract_spans] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = apply(Text, operation, [input])
+      assert diagnostic.reason == :invalid_pdf_input
+      assert diagnostic.stage == :content
+      assert diagnostic.module == Text
+      assert diagnostic.operation == operation
+      assert diagnostic.line == 2
+      assert diagnostic.column == 1
+      assert diagnostic.message =~ "closing )"
+      assert diagnostic.message =~ "tokenizer input byte 13"
+      assert diagnostic.message =~ "; page 1"
+    end
+  end
+
   test "rejects malformed text operations instead of returning partial text" do
     pdf = page_pdf("BT /F1 12 Tf (OK) Tj (LOST) (EXTRA) Tj ET")
     assert_error(Text.extract(pdf), :invalid_pdf_input, :content)

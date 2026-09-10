@@ -15,7 +15,7 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
   end
 
   test "numbers and keywords" do
-    input = "1 0 obj endobj xref trailer startxref 12 -3 +4 5.25 .bad +bad"
+    input = "1 0 obj endobj xref trailer startxref 12 -3 +4 5.25"
 
     assert [
              {:int, 1},
@@ -28,9 +28,7 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
              {:int, 12},
              {:int, -3},
              {:int, 4},
-             {:real, 5.25},
-             {:error, {:not_a_number, ".bad"}},
-             {:error, {:not_a_number, "+bad"}}
+             {:real, 5.25}
            ] = toks(input)
   end
 
@@ -45,11 +43,48 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
            ] = toks(".5 -.5 +.5 1. +1. -1.")
 
     for invalid <- ["1e2", "1.0e2", "-1.0E-2", ".5e2", ".", "+.", "-.", "1..0"] do
-      assert [{:error, {:not_a_number, ^invalid}}] = toks(invalid)
+      assert {:error, {:not_a_number, %{reason: :not_a_number}}} = toks(invalid)
     end
 
     unrepresentable = String.duplicate("9", 309) <> ".0"
-    assert [{:error, {:not_a_number, ^unrepresentable}}] = toks(unrepresentable)
+    assert {:error, {:not_a_number, %{reason: :not_a_number}}} = toks(unrepresentable)
+  end
+
+  test "all token APIs return diagnostics for expected syntax failures" do
+    failures = [
+      {"@", :unexpected_char, 0},
+      {">", :unexpected_gt, 0},
+      {".bad", :not_a_number, 0},
+      {"+bad", :not_a_number, 0},
+      {"(unfinished", :unterminated_literal_string, 0},
+      {"<41", :unterminated_hex_string, 0},
+      {"<41GG>", :invalid_hex_string, 3}
+    ]
+
+    for operation <- [:next, :peek, :next_with_span, :tokenize_all, :tokenize_all_with_spans],
+        {input, reason, offset} <- failures do
+      assert {:error, {^reason, diagnostic}} = apply(Tokenizer, operation, [Tokenizer.new(input)])
+      assert diagnostic.reason == reason
+      assert diagnostic.stage == :tokenizer
+      assert diagnostic.module == Tokenizer
+      assert diagnostic.operation == operation
+      assert diagnostic.line == 1
+      assert diagnostic.column == offset + 1
+      assert diagnostic.message =~ "tokenizer input byte #{offset}"
+    end
+  end
+
+  test "bulk errors stop at the first invalid token and retain byte locations" do
+    for operation <- [:tokenize_all, :tokenize_all_with_spans] do
+      input = "%" <> <<255>> <> "\r\n1\r2\n  @ .bad"
+
+      assert {:error, {:unexpected_char, diagnostic}} =
+               apply(Tokenizer, operation, [Tokenizer.new(input)])
+
+      assert diagnostic.line == 4
+      assert diagnostic.column == 3
+      assert diagnostic.message =~ "tokenizer input byte 10"
+    end
   end
 
   test "names with hex escapes" do
@@ -61,8 +96,12 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
     input = "(a(b)c\\r\\t\\b\\f\\\\\\\n\\\r\n\\101\\4\\z)"
     [{:string, s}] = toks(input)
     assert s == "a(b)c\r\t\b\f\\A" <> <<4>> <> "z"
-    assert [{:error, {:unterminated_literal_string, 0}}] = toks("(unterminated")
-    assert [{:error, {:unterminated_literal_string, 0}}] = toks("(unterminated\\")
+
+    assert {:error, {:unterminated_literal_string, %{reason: :unterminated_literal_string}}} =
+             toks("(unterminated")
+
+    assert {:error, {:unterminated_literal_string, %{reason: :unterminated_literal_string}}} =
+             toks("(unterminated\\")
   end
 
   test "normalizes literal string line endings without changing escapes or continuations" do
@@ -72,19 +111,22 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
   end
 
   test "hex strings" do
-    input = "<48656C6C6F> <4 1 2> << >> >"
+    input = "<48656C6C6F> <4 1 2> << >>"
 
     assert [
              {:hex_string, "Hello"},
              {:hex_string, <<0x41, 0x20>>},
              :dict_start,
-             :dict_end,
-             {:error, {:unexpected_gt, _}}
+             :dict_end
            ] = toks(input)
 
-    assert [{:error, {:unterminated_hex_string, 0}}] = toks("<48656C6C6F")
-    assert [{:error, {:invalid_hex_string, 3}}] = toks("<41GG42>")
-    assert [{:error, {:invalid_hex_string, 3}}] = toks("<41% comment\n42>")
+    assert {:error, {:unterminated_hex_string, %{reason: :unterminated_hex_string}}} =
+             toks("<48656C6C6F")
+
+    assert {:error, {:invalid_hex_string, %{reason: :invalid_hex_string}}} = toks("<41GG42>")
+
+    assert {:error, {:invalid_hex_string, %{reason: :invalid_hex_string}}} =
+             toks("<41% comment\n42>")
   end
 
   test "arrays and refs" do
@@ -112,7 +154,7 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
   end
 
   test "operators returned as op tokens" do
-    input = "BT 1 0 0 1 0 0 cm ET @ true false null"
+    input = "BT 1 0 0 1 0 0 cm ET true false null"
 
     assert [
              {:op, "BT"},
@@ -124,7 +166,6 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
              {:int, 0},
              {:op, "cm"},
              {:op, "ET"},
-             {:error, {:unexpected_char, ?@, _}},
              true,
              false,
              :null

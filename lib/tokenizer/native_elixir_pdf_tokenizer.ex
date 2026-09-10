@@ -16,7 +16,14 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
     * After emitting `:stream`, the next token is `{:stream_data, binary}` either read by
       the preceding dictionary `/Length` (if an integer) or by scanning until `endstream`.
     * The tokenizer does not resolve indirect `/Length` references.
+
+  Token-reading functions return `{:error, {reason, diagnostic}}` on invalid syntax.
+  Bulk calls stop at the first error instead of returning partial tokens.
+  Diagnostic lines and byte columns are one-based; byte offsets in messages are
+  zero-based. All positions refer to the binary passed to `new/1`.
   """
+
+  alias NativeElixirPdfUtilities.Diagnostics
 
   defstruct bin: <<>>,
             pos: 0,
@@ -52,16 +59,16 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
           | :trailer
           | :startxref
           | :R
-          | {:error, tokenizer_error()}
           | {:eof, nil}
 
-  @type tokenizer_error ::
-          {:unexpected_char, byte(), non_neg_integer()}
-          | {:unexpected_gt, non_neg_integer()}
-          | {:not_a_number, binary()}
-          | {:unterminated_literal_string, non_neg_integer()}
-          | {:unterminated_hex_string, non_neg_integer()}
-          | {:invalid_hex_string, non_neg_integer()}
+  @type error_reason ::
+          :unexpected_char
+          | :unexpected_gt
+          | :not_a_number
+          | :unterminated_literal_string
+          | :unterminated_hex_string
+          | :invalid_hex_string
+  @type tokenizer_error :: {:error, {error_reason(), Diagnostics.diagnostic()}}
 
   # NUL, HT, LF, FF, CR, SP
   @whitespace [0, 9, 10, 12, 13, 32]
@@ -82,49 +89,54 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
   @doc """
   Return the next token and updated tokenizer state.
   """
-  @spec next(t()) :: {token(), t()}
+  @spec next(t()) :: {token(), t()} | tokenizer_error()
   def next(%__MODULE__{} = st) do
-    # If we are currently positioned at stream data, return it first
-    if st.in_stream do
-      return_stream_data(st)
-    else
-      st = skip_ws_and_comments(st)
-
-      if st.pos >= st.size do
-        {{:eof, nil}, st}
+    result =
+      if st.in_stream do
+        return_stream_data(st)
       else
-        case byte_at(st) do
-          ?/ ->
-            parse_name(st)
+        st = skip_ws_and_comments(st)
 
-          ?( ->
-            parse_literal_string(st)
+        if st.pos >= st.size do
+          {{:eof, nil}, st}
+        else
+          case byte_at(st) do
+            ?/ ->
+              parse_name(st)
 
-          ?< ->
-            parse_lt(st)
+            ?( ->
+              parse_literal_string(st)
 
-          ?> ->
-            parse_gt(st)
+            ?< ->
+              parse_lt(st)
 
-          ?[ ->
-            {:lbracket, bump(st, 1)}
+            ?> ->
+              parse_gt(st)
 
-          ?] ->
-            {:rbracket, bump(st, 1)}
+            ?[ ->
+              {:lbracket, bump(st, 1)}
 
-          c when c in [?', ?"] ->
-            {{:op, <<c>>}, bump(st, 1)}
+            ?] ->
+              {:rbracket, bump(st, 1)}
 
-          c when (c >= ?0 and c <= ?9) or c == ?+ or c == ?- or c == ?. ->
-            parse_number_or_keyword(st)
+            c when c in [?', ?"] ->
+              {{:op, <<c>>}, bump(st, 1)}
 
-          c when (c >= ?A and c <= ?Z) or (c >= ?a and c <= ?z) ->
-            parse_keyword(st)
+            c when (c >= ?0 and c <= ?9) or c == ?+ or c == ?- or c == ?. ->
+              parse_number_or_keyword(st)
 
-          _ ->
-            {{:error, {:unexpected_char, byte_at(st), st.pos}}, bump(st, 1)}
+            c when (c >= ?A and c <= ?Z) or (c >= ?a and c <= ?z) ->
+              parse_keyword(st)
+
+            _ ->
+              {{:error, {:unexpected_char, byte_at(st), st.pos}}, bump(st, 1)}
+          end
         end
       end
+
+    case result do
+      {{:error, failure}, _state} -> lexical_error(failure, st.bin)
+      success -> success
     end
   end
 
@@ -137,6 +149,7 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
   @spec next_with_span(t()) ::
           {{token(),
             %{from: non_neg_integer(), to: non_neg_integer(), stream_mode?: atom() | nil}}, t()}
+          | tokenizer_error()
   def next_with_span(%__MODULE__{} = st) do
     if st.in_stream do
       # compute start after the single EOL that precedes stream data
@@ -147,48 +160,97 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
     else
       st_ws = skip_ws_and_comments(st)
       start = st_ws.pos
-      {tok, st2} = next(st)
-      {{tok, %{from: start, to: st2.pos, stream_mode?: nil}}, st2}
+
+      case next(st) do
+        {:error, _} = error -> error_operation(error, :next_with_span)
+        {tok, st2} -> {{tok, %{from: start, to: st2.pos, stream_mode?: nil}}, st2}
+      end
     end
   end
 
   @doc """
   Look at the next token without advancing the tokenizer state.
   """
-  @spec peek(t()) :: token()
+  @spec peek(t()) :: token() | tokenizer_error()
   def peek(%__MODULE__{} = st) do
-    {tok, _} = next(st)
-    tok
+    case next(st) do
+      {:error, _} = error -> error_operation(error, :peek)
+      {tok, _state} -> tok
+    end
   end
 
   @doc """
   Tokenize the entire binary, returning a list of tokens.
   """
-  @spec tokenize_all(t()) :: [token()]
+  @spec tokenize_all(t()) :: [token()] | tokenizer_error()
   def tokenize_all(%__MODULE__{} = st) do
-    st
-    |> Stream.unfold(fn
-      %__MODULE__{} = s ->
-        {tok, s2} = next(s)
-        if tok == {:eof, nil}, do: nil, else: {tok, s2}
-    end)
-    |> Enum.to_list()
+    collect_tokens(st, :tokenize_all, [])
   end
 
   @doc """
   Tokenize the entire binary, returning a list of {token, span}.
   """
-  @spec tokenize_all_with_spans(t()) :: [
-          {token(), %{from: non_neg_integer(), to: non_neg_integer(), stream_mode?: atom() | nil}}
-        ]
+  @spec tokenize_all_with_spans(t()) ::
+          [
+            {token(),
+             %{from: non_neg_integer(), to: non_neg_integer(), stream_mode?: atom() | nil}}
+          ]
+          | tokenizer_error()
   def tokenize_all_with_spans(%__MODULE__{} = st) do
-    st
-    |> Stream.unfold(fn
-      %__MODULE__{} = s ->
-        {{tok, span}, s2} = next_with_span(s)
-        if tok == {:eof, nil}, do: nil, else: {{tok, span}, s2}
-    end)
-    |> Enum.to_list()
+    collect_tokens(st, :tokenize_all_with_spans, [])
+  end
+
+  defp collect_tokens(st, operation, tokens) do
+    result = if operation == :tokenize_all, do: next(st), else: next_with_span(st)
+
+    case result do
+      {:error, _} = error -> error_operation(error, operation)
+      {{:eof, nil}, _state} -> Enum.reverse(tokens)
+      {{{:eof, nil}, _span}, _state} -> Enum.reverse(tokens)
+      {token, state} -> collect_tokens(state, operation, [token | tokens])
+    end
+  end
+
+  defp error_operation({:error, {reason, diagnostic}}, operation) do
+    {:error, {reason, Map.put(diagnostic, :operation, operation)}}
+  end
+
+  defp lexical_error(failure, bin) do
+    {reason, position, message} =
+      case failure do
+        {:unexpected_char, byte, position} ->
+          {:unexpected_char, position, "unexpected byte #{inspect(<<byte>>)}"}
+
+        {:unexpected_gt, position} ->
+          {:unexpected_gt, position, "unexpected >; close a dictionary with >>"}
+
+        {:not_a_number, word, position} ->
+          {:not_a_number, position, "invalid or unrepresentable PDF number #{inspect(word)}"}
+
+        {:unterminated_literal_string, position} ->
+          {:unterminated_literal_string, position, "literal string is missing its closing )"}
+
+        {:unterminated_hex_string, position} ->
+          {:unterminated_hex_string, position, "hex string is missing its closing >"}
+
+        {:invalid_hex_string, position} ->
+          {:invalid_hex_string, position, "hex string contains a non-hexadecimal byte"}
+      end
+
+    newlines = :binary.matches(binary_part(bin, 0, position), ["\r\n", "\r", "\n"])
+
+    line_start =
+      case List.last(newlines) do
+        nil -> 0
+        {offset, length} -> offset + length
+      end
+
+    Diagnostics.error(:tokenizer, reason, "#{message}; tokenizer input byte #{position}",
+      operation: :next,
+      module: __MODULE__,
+      line: length(newlines) + 1,
+      column: position - line_start + 1
+    )
   end
 
   @doc """
@@ -619,7 +681,7 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
     end
   end
 
-  # Interpret a bareword as a PDF integer or real; otherwise return {:error, {:not_a_number, word}}.
+  # Interpret a bareword as a PDF integer or real, retaining the start of invalid numbers.
   defp parse_number_from_word(word, st) do
     cond do
       Regex.match?(@pdf_integer, word) ->
@@ -640,11 +702,11 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
         try do
           {{:real, :erlang.binary_to_float(normalized)}, st}
         rescue
-          ArgumentError -> {{:error, {:not_a_number, word}}, st}
+          ArgumentError -> {{:error, {:not_a_number, word, st.pos - byte_size(word)}}, st}
         end
 
       true ->
-        {{:error, {:not_a_number, word}}, st}
+        {{:error, {:not_a_number, word, st.pos - byte_size(word)}}, st}
     end
   end
 

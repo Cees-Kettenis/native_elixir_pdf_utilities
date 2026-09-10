@@ -374,8 +374,17 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
           page: page_number
         )
 
-      {{:error, _}, _tokenizer} ->
-        content_error("content stream contains invalid syntax", page_number)
+      {:error, {_reason, diagnostic}} ->
+        {:error,
+         {:invalid_pdf_input,
+          %{
+            diagnostic
+            | reason: :invalid_pdf_input,
+              stage: :content,
+              message: diagnostic.message <> "; page #{page_number}",
+              operation: :extract,
+              module: __MODULE__
+          }}}
 
       {token, tokenizer} ->
         content_tokens(tokenizer, [token | tokens], page_number)

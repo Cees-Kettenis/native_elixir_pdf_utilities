@@ -371,6 +371,17 @@ defmodule ManualWeb.RouterTest do
             }} = Info.get(update.resp_body)
   end
 
+  test "shows tokenizer diagnostics as operation errors" do
+    response = post("/tokenize", %{"source" => "(unfinished"})
+
+    assert response.status == 422
+    assert response.resp_body =~ ":unterminated_literal_string"
+    assert response.resp_body =~ "closing )"
+    assert response.resp_body =~ "line: 1"
+    assert response.resp_body =~ "column: 1"
+    refute response.resp_body =~ "Tokenizer output"
+  end
+
   test "shows tokenizer tokens with byte spans" do
     response = post("/tokenize", %{"source" => "<< /Type /Example /Count 2 >>"})
 

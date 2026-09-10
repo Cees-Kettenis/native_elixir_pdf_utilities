@@ -44,6 +44,42 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
     assert {:ok, _document} = Reader.read(null_encrypt)
   end
 
+  test "reports a missing object terminator without a tokenizer failure" do
+    input =
+      pdf([{1, "<< /Type /Catalog /Pages 2 0 R >>"}, {2, "<< /Type /Pages /Kids [] /Count 0 >>"}])
+      |> String.replace("endobj", "      ", global: false)
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} = Reader.read(input)
+    assert diagnostic.stage == :object
+    assert diagnostic.message =~ "indirect object boundary is malformed"
+  end
+
+  test "preserves tokenizer diagnostics in xrefs, objects, and stream boundaries" do
+    base = [{1, "<< /Type /Catalog /Pages 2 0 R >>"}, {2, "<< /Type /Pages /Kids [] /Count 0 >>"}]
+
+    inputs = [
+      {pdf(base, "/Root 1 0 R /Bad <GG>"), :xref, "non-hexadecimal"},
+      {pdf(base ++ [{3, "(unfinished"}]), :object, "closing )"},
+      {pdf(base ++ [{3, stream_object("", "abc", true) <> " @"}]), :object, "unexpected byte"},
+      {pdf(base ++ [{3, "<< /Length 4 0 R >> stream\nabc\n@ endstream"}, {4, "3"}]), :object,
+       "unexpected byte"},
+      {pdf(base ++ [{3, "<< /Length 4 0 R >> stream\nabc\nendstream @"}, {4, "3"}]), :object,
+       "unexpected byte"}
+    ]
+
+    for {input, stage, message} <- inputs do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Reader.read(input)
+      assert diagnostic.reason == :invalid_pdf_input
+      assert diagnostic.stage == stage
+      assert diagnostic.module == Reader
+      assert diagnostic.operation == :read
+      assert diagnostic.message =~ message
+      assert diagnostic.message =~ "tokenizer input byte"
+      assert diagnostic.line > 0
+      assert diagnostic.column > 0
+    end
+  end
+
   test "limits generic array and dictionary nesting before recursive descent" do
     valid_array = String.duplicate("[", 100) <> "0" <> String.duplicate("]", 100)
 

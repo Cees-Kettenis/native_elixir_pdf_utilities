@@ -269,8 +269,9 @@ defmodule ManualWeb.Router do
 
   post "/tokenize" do
     with {:ok, source} <-
-           Validator.read_token_source(conn.params["pdf"], conn.params["source"]) do
-      tokens = source |> Tokenizer.new() |> Tokenizer.tokenize_all_with_spans()
+           Validator.read_token_source(conn.params["pdf"], conn.params["source"]),
+         tokens when is_list(tokens) <-
+           source |> Tokenizer.new() |> Tokenizer.tokenize_all_with_spans() do
       send_html(conn, 200, Page.term_result("Tokenizer output", tokens))
     else
       {:error, _} = operation_error -> send_error(conn, operation_error)

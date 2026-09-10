@@ -380,6 +380,22 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
     assert nested_diagnostic.message == "PDF value nesting depth exceeds the 100-level limit"
   end
 
+  test "preserves tokenizer failures in decoded compressed objects" do
+    catalog = "<< /Type /Catalog /Pages 2 0 R >>"
+    header = "1 0 2 #{byte_size(catalog) + 1} "
+    input = object_stream_pdf(header <> catalog <> "\n<GG>", byte_size(header))
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} = Reader.read(input)
+    assert diagnostic.stage == :object_stream
+    assert diagnostic.reason == :invalid_pdf_input
+    assert diagnostic.module == Reader
+    assert diagnostic.operation == :read
+    assert diagnostic.line == 1
+    assert diagnostic.column == 2
+    assert diagnostic.message =~ "non-hexadecimal"
+    assert diagnostic.message =~ "tokenizer input byte 1"
+  end
+
   test "limits object-stream entries before scanning the decoded header" do
     excessive_entries = object_stream_pdf("", 0, 10_001)
 

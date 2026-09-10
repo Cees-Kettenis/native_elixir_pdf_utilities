@@ -277,40 +277,42 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp take_classic_xref_tokens(tokenizer, state, tokens) do
-    {token, tokenizer} = Tokenizer.next(tokenizer)
+    with {token, %Tokenizer{} = tokenizer} <- Tokenizer.next(tokenizer) do
+      case {state, token} do
+        {_state, {:eof, nil}} ->
+          Enum.reverse(tokens)
 
-    case {state, token} do
-      {_state, {:eof, nil}} ->
-        Enum.reverse(tokens)
+        {:sections, :trailer} ->
+          take_classic_xref_tokens(tokenizer, :trailer_value, [:trailer | tokens])
 
-      {:sections, :trailer} ->
-        take_classic_xref_tokens(tokenizer, :trailer_value, [:trailer | tokens])
+        {:trailer_value, :dict_start} ->
+          take_classic_xref_tokens(tokenizer, {:trailer_dictionary, 1}, [:dict_start | tokens])
 
-      {:trailer_value, :dict_start} ->
-        take_classic_xref_tokens(tokenizer, {:trailer_dictionary, 1}, [:dict_start | tokens])
+        {:trailer_value, token} ->
+          Enum.reverse([token | tokens])
 
-      {:trailer_value, token} ->
-        Enum.reverse([token | tokens])
+        {{:trailer_dictionary, 1}, :dict_end} ->
+          Enum.reverse([:dict_end | tokens])
 
-      {{:trailer_dictionary, 1}, :dict_end} ->
-        Enum.reverse([:dict_end | tokens])
+        {{:trailer_dictionary, depth}, :dict_start} ->
+          take_classic_xref_tokens(
+            tokenizer,
+            {:trailer_dictionary, depth + 1},
+            [:dict_start | tokens]
+          )
 
-      {{:trailer_dictionary, depth}, :dict_start} ->
-        take_classic_xref_tokens(
-          tokenizer,
-          {:trailer_dictionary, depth + 1},
-          [:dict_start | tokens]
-        )
+        {{:trailer_dictionary, depth}, :dict_end} ->
+          take_classic_xref_tokens(
+            tokenizer,
+            {:trailer_dictionary, depth - 1},
+            [:dict_end | tokens]
+          )
 
-      {{:trailer_dictionary, depth}, :dict_end} ->
-        take_classic_xref_tokens(
-          tokenizer,
-          {:trailer_dictionary, depth - 1},
-          [:dict_end | tokens]
-        )
-
-      {state, token} ->
-        take_classic_xref_tokens(tokenizer, state, [token | tokens])
+        {state, token} ->
+          take_classic_xref_tokens(tokenizer, state, [token | tokens])
+      end
+    else
+      {:error, _} = error -> tokenizer_error(error, :xref)
     end
   end
 
@@ -799,10 +801,12 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           ref = {object, generation}
 
           case indirect_stream_source(slice, offset, limit) do
+            {:error, _} = error ->
+              error
+
             {:ok, prefix, source} ->
               with true <- generation in 0..65_535,
                    [{:int, ^object}, {:int, ^generation}, :obj | body] <- prefix,
-                   false <- Enum.any?(body, &match?({:error, _}, &1)),
                    {:ok, value, [:stream]} <- parse_value(body),
                    true <- is_map(value),
                    true <- Map.get(value, "Length") == {:ref, source.length_ref} do
@@ -823,7 +827,6 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
               with {:ok, [{:int, ^object}, {:int, ^generation}, :obj | body]} <-
                      tokenize_indirect_object(slice),
                    true <- generation in 0..65_535,
-                   false <- Enum.any?(body, &match?({:error, _}, &1)),
                    {:ok, value, value_rest} <- parse_value(body),
                    {:ok, stream, []} <- parse_optional_stream(value_rest) do
                 {:ok, ref, %{value: value, stream: stream, offset: offset, tokens: body}}
@@ -848,12 +851,11 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp take_indirect_object_tokens(tokenizer, tokens) do
-    {token, tokenizer} = Tokenizer.next(tokenizer)
-
-    case token do
-      :endobj -> {:ok, Enum.reverse(tokens)}
-      {:eof, nil} -> :error
-      token -> take_indirect_object_tokens(tokenizer, [token | tokens])
+    case Tokenizer.next(tokenizer) do
+      {:error, _} = error -> tokenizer_error(error, :object)
+      {:endobj, _tokenizer} -> {:ok, Enum.reverse(tokens)}
+      {{:eof, nil}, _tokenizer} -> :error
+      {token, tokenizer} -> take_indirect_object_tokens(tokenizer, [token | tokens])
     end
   end
 
@@ -864,29 +866,31 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp find_indirect_stream(tokenizer, tokens, offset, limit) do
-    {{token, _span}, tokenizer} = Tokenizer.next_with_span(tokenizer)
+    with {{token, _span}, %Tokenizer{} = tokenizer} <- Tokenizer.next_with_span(tokenizer) do
+      case token do
+        :stream ->
+          case Tokenizer.pending_stream_length(tokenizer) do
+            {:indirect, length_ref} ->
+              {{_stream_data, span}, _tokenizer} = Tokenizer.next_with_span(tokenizer)
 
-    case token do
-      :stream ->
-        case Tokenizer.pending_stream_length(tokenizer) do
-          {:indirect, length_ref} ->
-            {{_stream_data, span}, _tokenizer} = Tokenizer.next_with_span(tokenizer)
+              {:ok, Enum.reverse([:stream | tokens]),
+               %{from: offset + span.from, limit: limit, length_ref: length_ref}}
 
-            {:ok, Enum.reverse([:stream | tokens]),
-             %{from: offset + span.from, limit: limit, length_ref: length_ref}}
+            _ ->
+              :none
+          end
 
-          _ ->
-            :none
-        end
+        :endobj ->
+          :none
 
-      :endobj ->
-        :none
+        {:eof, nil} ->
+          :none
 
-      {:eof, nil} ->
-        :none
-
-      _ ->
-        find_indirect_stream(tokenizer, [token | tokens], offset, limit)
+        _ ->
+          find_indirect_stream(tokenizer, [token | tokens], offset, limit)
+      end
+    else
+      {:error, _} = error -> tokenizer_error(error, :object)
     end
   end
 
@@ -935,6 +939,9 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
                tokens: parsed.tokens ++ [{:stream_data, data}, :endstream]
            }}
         else
+          {:error, _} = error ->
+            tokenizer_error(error, :object)
+
           _ ->
             error(
               :object,
@@ -1019,33 +1026,35 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           if length >= 0 and first + relative_offset + length <= byte_size(data) do
             slice = binary_part(data, first + relative_offset, length)
 
-            tokens = Tokenizer.new(slice) |> Tokenizer.tokenize_all()
+            with tokens when is_list(tokens) <- Tokenizer.new(slice) |> Tokenizer.tokenize_all() do
+              case parse_value(tokens) do
+                {:ok, value, []} when object > 0 ->
+                  case MapSet.member?(seen, object) do
+                    false ->
+                      parsed = %{value: value, stream: nil, offset: nil, tokens: tokens}
 
-            case parse_value(tokens) do
-              {:ok, value, []} when object > 0 ->
-                case MapSet.member?(seen, object) do
-                  false ->
-                    parsed = %{value: value, stream: nil, offset: nil, tokens: tokens}
+                      {:cont,
+                       {:ok, Map.put(acc, index, {object, parsed}), MapSet.put(seen, object),
+                        index - 1, relative_offset}}
 
-                    {:cont,
-                     {:ok, Map.put(acc, index, {object, parsed}), MapSet.put(seen, object),
-                      index - 1, relative_offset}}
+                    true ->
+                      {:halt,
+                       error(:object_stream, :invalid_pdf_input, "compressed object is malformed",
+                         object: ref
+                       )}
+                  end
 
-                  true ->
-                    {:halt,
-                     error(:object_stream, :invalid_pdf_input, "compressed object is malformed",
-                       object: ref
-                     )}
-                end
+                {:error, {_reason, _diagnostic}} = error ->
+                  {:halt, error}
 
-              {:error, {_reason, _diagnostic}} = error ->
-                {:halt, error}
-
-              _ ->
-                {:halt,
-                 error(:object_stream, :invalid_pdf_input, "compressed object is malformed",
-                   object: ref
-                 )}
+                _ ->
+                  {:halt,
+                   error(:object_stream, :invalid_pdf_input, "compressed object is malformed",
+                     object: ref
+                   )}
+              end
+            else
+              {:error, _} = error -> {:halt, tokenizer_error(error, :object_stream)}
             end
           else
             {:halt,
@@ -1656,6 +1665,19 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       byte in ?A..?F -> byte - ?A + 10
       true -> byte - ?a + 10
     end
+  end
+
+  # Keep the reader's public reason while retaining the tokenizer's explanation and location.
+  defp tokenizer_error({:error, {_reason, diagnostic}}, stage) do
+    {:error,
+     {:invalid_pdf_input,
+      %{
+        diagnostic
+        | reason: :invalid_pdf_input,
+          stage: stage,
+          operation: :read,
+          module: __MODULE__
+      }}}
   end
 
   defp error(stage, reason, message, details \\ []) do
