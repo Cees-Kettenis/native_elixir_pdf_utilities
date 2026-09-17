@@ -48,6 +48,86 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
     assert {:error, _} = FormValidator.inspect_document(bad)
   end
 
+  test "resolves indirect text, button states and choice array values" do
+    for {field, value, expected} <- [
+          {%{}, {:string, "Indirect text"}, "Indirect text"},
+          {%{}, {:hex, <<254, 255, 0, 65>>}, "A"},
+          {%{"FT" => {:name, "Btn"}}, {:name, "Off"}, false},
+          {%{"FT" => {:name, "Btn"}}, {:name, "Yes"}, true},
+          {%{"FT" => {:name, "Btn"}, "Ff" => 32_768}, {:name, "Yes"}, "Yes"},
+          {%{"FT" => {:name, "Ch"}}, [{:ref, {11, 0}}], ["Choice"]}
+        ] do
+      pdf = external_pdf(Map.put(field, "V", {:ref, {9, 0}}))
+      {:ok, context} = Reader.read_validated(pdf)
+
+      {:ok, pdf} =
+        IncrementalWriter.write(context, [
+          {9, 0, {:value, {:ref, {10, 0}}}},
+          {10, 0, {:value, value}},
+          {11, 0, {:value, {:string, "Choice"}}}
+        ])
+
+      assert {:ok, [%{value: ^expected}]} = Forms.fields(pdf)
+    end
+  end
+
+  test "inspects indirect dictionaries for unsupported fields without allowing modification" do
+    value = %{"CustomValue" => {:string, "retained"}}
+    pdf = external_pdf(%{"FT" => {:name, "Custom"}, "V" => {:ref, {9, 0}}})
+    {:ok, context} = Reader.read_validated(pdf)
+    {:ok, pdf} = IncrementalWriter.write(context, [{9, 0, {:value, value}}])
+
+    assert {:ok, [%{type: :unsupported, value: ^value}]} = Forms.fields(pdf)
+    assert {:error, {:unsupported_form, _}} = Forms.fill(pdf, %{"field" => "changed"})
+  end
+
+  test "missing and cyclic field values return resolution diagnostics" do
+    for {objects, fragment} <- [
+          {[], "missing"},
+          {[{9, 0, {:value, {:ref, {10, 0}}}}, {10, 0, {:value, {:ref, {9, 0}}}}], "cycle"}
+        ],
+        field <- [
+          %{"V" => {:ref, {9, 0}}},
+          %{"FT" => {:name, "Btn"}, "V" => {:ref, {9, 0}}},
+          %{"FT" => {:name, "Ch"}, "V" => [{:ref, {9, 0}}]}
+        ] do
+      {:ok, context} = Reader.read_validated(external_pdf(field))
+      {:ok, pdf} = IncrementalWriter.write(context, objects)
+
+      assert {:error,
+              {:invalid_pdf_input,
+               %{
+                 stage: :resolution,
+                 reason: :invalid_pdf_input,
+                 module: Forms,
+                 operation: :fields,
+                 message: message
+               }}} = Forms.fields(pdf)
+
+      assert message =~ fragment
+    end
+  end
+
+  test "rejects resolved values that do not match the field type" do
+    for {type, value} <- [
+          {"Tx", {:name, "Off"}},
+          {"Btn", {:string, "Off"}},
+          {"Ch", %{}},
+          {"Ch", [1]}
+        ] do
+      pdf = external_pdf(%{"FT" => {:name, type}, "V" => {:ref, {9, 0}}})
+      {:ok, context} = Reader.read_validated(pdf)
+      {:ok, pdf} = IncrementalWriter.write(context, [{9, 0, {:value, value}}])
+
+      assert {:error,
+              {:invalid_form,
+               %{stage: :forms, reason: :invalid_form, operation: :fields, message: message}}} =
+               Forms.fields(pdf)
+
+      assert is_binary(message) and message != ""
+    end
+  end
+
   test "supports combined field widgets and partial nested flattening" do
     pdf =
       external_pdf(%{
@@ -101,7 +181,7 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
 
     for value <- [%{"Type" => {:name, "Sig"}}, {:ref, {8, 0}}] do
       pdf = external_pdf(%{"FT" => {:name, "Sig"}, "V" => value})
-      assert {:ok, [%{type: :signature}]} = Forms.fields(pdf)
+      assert {:ok, [%{type: :signature, value: ^value}]} = Forms.fields(pdf)
       assert {:error, {:unsupported_form, _}} = Forms.fill(pdf, %{})
     end
   end
@@ -362,10 +442,11 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
           %{
             "T" => {:string, "group"},
             "FT" => {:name, "Tx"},
-            "V" => {:string, "Inherited"},
+            "V" => {:ref, {12, 0}},
             "Q" => 1,
             "Kids" => [{:ref, {6, 0}}]
-          }}}
+          }}},
+        {12, 0, {:value, {:string, "Inherited"}}}
       ])
 
     pdf = patch_page(pdf, %{"Annots" => [{:ref, {7, 0}}, {:ref, {9, 0}}, {:ref, {10, 0}}]})
@@ -452,7 +533,7 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
           %{
             "FT" => {:name, "Tx"},
             "T" => {:string, "field"},
-            "V" => {:string, "Old"},
+            "V" => if(field["FT"] == {:name, "Btn"}, do: {:name, "Off"}, else: {:string, "Old"}),
             "Kids" => [{:ref, {7, 0}}]
           },
           field

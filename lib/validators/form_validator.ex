@@ -360,29 +360,28 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
          :ok <- field_metadata(name, effective),
          {:ok, choices} <- choices(document, Map.get(effective, "Opt", [])),
          {:ok, widgets} <- widgets(document, widget_dicts, page_widgets),
-         {:ok, value} <- read_value(Map.get(effective, "V")) do
-      type =
-        case effective["FT"] do
-          {:name, "Tx"} ->
-            :text
+         type <-
+           (case effective["FT"] do
+              {:name, "Tx"} ->
+                :text
 
-          {:name, "Btn"} ->
-            cond do
-              (flags &&& 65_536) != 0 -> :pushbutton
-              (flags &&& 32_768) != 0 -> :radio
-              true -> :checkbox
-            end
+              {:name, "Btn"} ->
+                cond do
+                  (flags &&& 65_536) != 0 -> :pushbutton
+                  (flags &&& 32_768) != 0 -> :radio
+                  true -> :checkbox
+                end
 
-          {:name, "Ch"} ->
-            :choice
+              {:name, "Ch"} ->
+                :choice
 
-          {:name, "Sig"} ->
-            :signature
+              {:name, "Sig"} ->
+                :signature
 
-          _ ->
-            :unsupported
-        end
-
+              _ ->
+                :unsupported
+            end),
+         {:ok, value} <- read_value(document, Map.get(effective, "V"), type) do
       value = if type == :checkbox, do: value not in [nil, "Off"], else: value
 
       {:ok,
@@ -494,30 +493,44 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
     end
   end
 
-  defp read_value(value) do
-    case value do
-      nil ->
-        {:ok, nil}
-
-      {:name, value} ->
+  defp read_value(document, value, type) do
+    case {type, value} do
+      {:signature, value} when is_nil(value) or is_map(value) ->
         {:ok, value}
 
-      values when is_list(values) ->
-        Enum.reduce_while(values, {:ok, []}, fn value, {:ok, acc} ->
-          case text(value) do
-            {:ok, value} -> {:cont, {:ok, acc ++ [value]}}
-            failure -> {:halt, failure}
+      {:signature, {:ref, _} = value} ->
+        # Signature inspection preserves the opaque value; modification is unsupported.
+        {:ok, value}
+
+      _ ->
+        with {:ok, value} <- PdfValidator.resolve(document, value) do
+          case {type, value} do
+            {_, nil} ->
+              {:ok, nil}
+
+            {type, {:name, value}} when type in [:checkbox, :radio, :pushbutton, :unsupported] ->
+              {:ok, value}
+
+            {:choice, values} when is_list(values) ->
+              Enum.reduce_while(values, {:ok, []}, fn value, {:ok, acc} ->
+                with {:ok, value} <- PdfValidator.resolve(document, value),
+                     {:ok, value} <- text(value) do
+                  {:cont, {:ok, acc ++ [value]}}
+                else
+                  failure -> {:halt, failure}
+                end
+              end)
+
+            {:unsupported, value} when is_map(value) ->
+              {:ok, value}
+
+            {type, value} when type in [:text, :choice, :pushbutton, :unsupported] ->
+              text(value)
+
+            _ ->
+              error(:invalid_form, "field V value does not match its #{type} field type")
           end
-        end)
-
-      value when is_map(value) ->
-        {:ok, value}
-
-      {:ref, _} = value ->
-        {:ok, value}
-
-      value ->
-        text(value)
+        end
     end
   end
 
