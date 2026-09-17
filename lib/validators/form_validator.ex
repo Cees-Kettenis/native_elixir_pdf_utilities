@@ -144,6 +144,38 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   def prepare_flatten(context, fields) do
     Enum.flat_map(fields, & &1.widgets)
     |> Enum.reduce_while({:ok, []}, fn widget, {:ok, acc} ->
+      page = Enum.at(context.pages, widget.page - 1)
+
+      with {:ok, resources} <- PdfValidator.dictionary(context.document, page.resources || %{}),
+           {:ok, xobjects} <-
+             PdfValidator.dictionary(context.document, Map.get(resources, "XObject", %{})),
+           {:ok, contents} <- PdfValidator.content_references(context.document, page.dictionary),
+           {:ok, annots} <-
+             PdfValidator.resolve(context.document, Map.get(page.dictionary, "Annots", [])),
+           {:ok, placement} <-
+             flatten_placement(context.document, widget, %{
+               widget: widget,
+               page: page,
+               resources: Map.put(resources, "XObject", xobjects),
+               contents: contents,
+               annots: annots
+             }) do
+        {:cont, {:ok, [placement | acc]}}
+      else
+        {:error, _} = failure -> {:halt, failure}
+      end
+    end)
+    |> case do
+      {:ok, placements} -> {:ok, Enum.reverse(placements)}
+      failure -> failure
+    end
+  end
+
+  # Hidden and NoView suppress screen artwork. Print does not affect this policy.
+  defp flatten_placement(document, widget, placement) do
+    if widget.hidden do
+      {:ok, Map.put(placement, :stream, nil)}
+    else
       normal = widget.ap["N"]
 
       normal =
@@ -157,23 +189,14 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
               end
             ]
 
-      page = Enum.at(context.pages, widget.page - 1)
-
-      with {:ok, stream} <- PdfValidator.validate_stream(context.document, normal),
-           {:ok, bbox} <-
-             PdfValidator.number_array(context.document, stream.dictionary["BBox"], 4),
+      with {:ok, stream} <- PdfValidator.validate_stream(document, normal),
+           {:ok, bbox} <- PdfValidator.number_array(document, stream.dictionary["BBox"], 4),
            {:ok, matrix} <-
              PdfValidator.number_array(
-               context.document,
+               document,
                Map.get(stream.dictionary, "Matrix", [1, 0, 0, 1, 0, 0]),
                6
-             ),
-           {:ok, resources} <- PdfValidator.dictionary(context.document, page.resources || %{}),
-           {:ok, xobjects} <-
-             PdfValidator.dictionary(context.document, Map.get(resources, "XObject", %{})),
-           {:ok, contents} <- PdfValidator.content_references(context.document, page.dictionary),
-           {:ok, annots} <-
-             PdfValidator.resolve(context.document, Map.get(page.dictionary, "Annots", [])) do
+             ) do
         [a, b, c, d, e, f] = matrix
         [x0, y0, x1, y1] = bbox
         corners = for x <- [x0, x1], y <- [y0, y1], do: {a * x + c * y + e, b * x + d * y + f}
@@ -185,31 +208,19 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
         height = Enum.max(ys) - min_y
         [left, bottom, right, top] = widget.rect
 
-        if width > 0 and height > 0 and is_list(annots) do
+        if width > 0 and height > 0 do
           sx = (right - left) / width
           sy = (top - bottom) / height
 
-          placement = %{
-            widget: widget,
-            stream: stream.ref,
-            page: page,
-            resources: Map.put(resources, "XObject", xobjects),
-            contents: contents,
-            annots: annots,
-            matrix: [sx, 0, 0, sy, left - sx * min_x, bottom - sy * min_y]
-          }
-
-          {:cont, {:ok, [placement | acc]}}
+          {:ok,
+           Map.merge(placement, %{
+             stream: stream.ref,
+             matrix: [sx, 0, 0, sy, left - sx * min_x, bottom - sy * min_y]
+           })}
         else
-          {:halt, error(:unsupported_form, "appearance has a degenerate BBox or Matrix")}
+          error(:unsupported_form, "appearance has a degenerate BBox or Matrix")
         end
-      else
-        {:error, _} = failure -> {:halt, failure}
       end
-    end)
-    |> case do
-      {:ok, placements} -> {:ok, Enum.reverse(placements)}
-      failure -> failure
     end
   end
 
@@ -411,7 +422,10 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
 
   defp widgets(document, dictionaries, page_widgets) do
     Enum.reduce_while(dictionaries, {:ok, []}, fn {ref, dictionary}, {:ok, acc} ->
-      with true <- match?({:ref, _}, ref),
+      flags = Map.get(dictionary, "F", 0)
+
+      with true <- is_integer(flags) and flags >= 0,
+           true <- match?({:ref, _}, ref),
            [page] <- Map.get(page_widgets, ref, []),
            {:ok, rect} <- PdfValidator.number_array(document, dictionary["Rect"], 4),
            [left, bottom, right, top] <- rect,
@@ -431,6 +445,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
         widget = %{
           ref: ref,
           dictionary: dictionary,
+          hidden: (flags &&& (2 ||| 32)) != 0,
           page: page,
           rect: rect,
           ap: ap,
@@ -448,7 +463,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
           {:halt,
            error(
              :invalid_form,
-             "widget must be an indirect annotation on one page with a positive Rect"
+             "widget must have non-negative integer F flags and be an indirect annotation on one page with a positive Rect"
            )}
       end
     end)

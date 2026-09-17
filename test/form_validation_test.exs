@@ -137,6 +137,28 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
     assert {:ok, _} = Forms.flatten(radio)
   end
 
+  test "flatten removes hidden widgets without requiring an appearance" do
+    for flags <- [2, 32, 34, 36] do
+      pdf = external_pdf(%{}, %{"F" => flags, "AP" => %{}})
+      assert {:ok, flat} = Forms.flatten(pdf)
+      assert {:ok, []} = Forms.fields(flat)
+      assert {:ok, context} = Reader.read_validated(flat)
+      assert hd(context.pages).dictionary["Annots"] == []
+      refute Map.has_key?(context.catalog, "AcroForm")
+    end
+  end
+
+  test "invalid annotation flags return actionable diagnostics" do
+    for flags <- [-1, 1.5, {:name, "Hidden"}, nil] do
+      assert {:error,
+              {:invalid_form,
+               %{stage: :forms, operation: :flatten, module: Forms, message: message}}} =
+               Forms.flatten(external_pdf(%{}, %{"F" => flags}))
+
+      assert message =~ "non-negative integer F flags"
+    end
+  end
+
   test "flatten validates appearances and handles missing AS as Off" do
     assert {:error, _} = Forms.flatten(external_pdf(%{}, %{"AP" => %{}}))
     pdf = external_pdf()

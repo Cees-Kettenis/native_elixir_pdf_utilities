@@ -5,6 +5,38 @@ defmodule NativeElixirPdfUtilities.FormsVisualTest do
 
   @moduletag :browser_parity
 
+  test "flattening preserves hidden widget visibility" do
+    {:ok, pdf} =
+      HtmlToPdf.render("""
+      <div><input name="hidden" value="Secret"></div>
+      <div><input type="radio" name="choice" value="shown" checked>
+      <input type="radio" name="choice" value="hidden"></div>
+      """)
+
+    {:ok, context} = NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf)
+    {:ok, form} = NativeElixirPdfUtilities.Validators.FormValidator.inspect_document(context)
+
+    for flags <- [2, 32, 36] do
+      patches =
+        for field <- form.fields,
+            {widget, index} <- Enum.with_index(field.widgets),
+            field.name == "hidden" or index == 1 do
+          {:ref, {id, gen}} = widget.ref
+          {id, gen, {:value, Map.put(widget.dictionary, "F", flags)}}
+        end
+
+      {:ok, hidden} = NativeElixirPdfUtilities.Pdf.IncrementalWriter.write(context, patches)
+      assert {:ok, flattened} = Forms.flatten(hidden)
+
+      for stats <-
+            PdfVisualCompare.pdf_visual_stats!(hidden, flattened,
+              artifact_dir: "tmp/forms_visual/hidden-#{flags}"
+            ) do
+        assert stats.changed_pixels == 0
+      end
+    end
+  end
+
   test "interactive controls match static artwork and flattening preserves filled appearances" do
     html = """
     <style>

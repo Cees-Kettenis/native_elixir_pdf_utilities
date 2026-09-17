@@ -36,6 +36,60 @@ defmodule NativeElixirPdfUtilities.FormsTest do
     assert {:ok, [%{type: :checkbox}]} = Forms.fields(flattened)
   end
 
+  test "flatten preserves screen visibility for mixed widgets and all-hidden pages" do
+    {:ok, pdf} =
+      HtmlToPdf.render("""
+      <div>Public text<input name="secret" value="Confidential">
+      <input type="radio" name="choice" value="shown" checked>
+      <input type="radio" name="choice" value="hidden"></div>
+      <div style="break-before: page"><input name="second" value="Private"></div>
+      """)
+
+    {:ok, context} = Reader.read_validated(pdf)
+    {:ok, form} = NativeElixirPdfUtilities.Validators.FormValidator.inspect_document(context)
+
+    for flags <- [2, 32, 36] do
+      patches =
+        for field <- form.fields,
+            {widget, index} <- Enum.with_index(field.widgets),
+            field.name != "choice" or index == 1 do
+          {:ref, {id, gen}} = widget.ref
+          {id, gen, {:value, Map.put(widget.dictionary, "F", flags)}}
+        end
+
+      {:ok, hidden} = IncrementalWriter.write(context, patches)
+      assert {:ok, flattened} = Forms.flatten(hidden)
+      assert {:ok, []} = Forms.fields(flattened)
+      assert {:ok, flat_context} = Reader.read_validated(flattened)
+      assert Enum.all?(flat_context.pages, &(&1.dictionary["Annots"] == []))
+      assert {:ok, text} = Text.extract(flattened)
+      refute text =~ "Confidential"
+      refute text =~ "Private"
+
+      assert {:ok, filled} = Forms.fill(hidden, %{"secret" => "Still private"}, flatten: true)
+      assert {:ok, text} = Text.extract(filled)
+      refute text =~ "Still private"
+      assert {:ok, remaining} = Forms.fields(filled)
+      assert Enum.map(remaining, & &1.name) == ["choice", "second"]
+    end
+
+    # Both printable and screen-only widgets retain their screen appearances.
+    for flags <- [0, 1, 4] do
+      field = Enum.find(form.fields, &(&1.name == "secret"))
+      widget = hd(field.widgets)
+      {:ref, {id, gen}} = widget.ref
+
+      {:ok, visible} =
+        IncrementalWriter.write(context, [
+          {id, gen, {:value, Map.put(widget.dictionary, "F", flags)}}
+        ])
+
+      assert {:ok, flat} = Forms.flatten(visible, fields: ["secret"])
+      assert {:ok, text} = Text.extract(flat)
+      assert text =~ "Confidential"
+    end
+  end
+
   test "radio groups, multiline text and choices retain their semantics" do
     html = """
     <div><input type="radio" name="contact" value="email" checked>

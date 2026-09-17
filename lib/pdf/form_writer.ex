@@ -336,7 +336,9 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
         first = hd(placements)
 
         {resources, invocations} =
-          Enum.reduce(placements, {first.resources, []}, fn placement, {resources, commands} ->
+          placements
+          |> Enum.reject(&is_nil(&1.stream))
+          |> Enum.reduce({first.resources, []}, fn placement, {resources, commands} ->
             xobjects = resources["XObject"]
 
             name =

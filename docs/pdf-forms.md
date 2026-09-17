@@ -116,7 +116,12 @@ not depend on a viewer regenerating them.
 Flattening paints current appearances into page content, removes selected
 widgets and prunes their field tree. Remaining fields stay interactive.
 Appearance transforms, page rotation and existing resource names are preserved.
-Missing or degenerate appearances return errors.
+Flattening preserves screen visibility. Widgets marked Hidden or NoView are
+removed without painting their appearances, including fields whose widgets
+are all hidden. The Print flag does not change this screen policy;
+print-only widgets are omitted and screen-only widgets become ordinary page
+content. Invisible does not hide the supported Widget annotation type.
+Missing or degenerate appearances on visible widgets return errors.
 
 Updates are incremental. Earlier field values and attachments can remain in
 historical revisions. Flattening removes active interactivity and is not secure

@@ -60,7 +60,13 @@ defmodule NativeElixirPdfUtilities.Forms do
     own_error(result, :fill)
   end
 
-  @doc "Flattens all supported fields, or the names supplied in `fields: [...]`, using their current appearances."
+  @doc """
+  Flattens all supported fields, or the names supplied in `fields: [...]`.
+
+  Uses current screen appearances. Hidden and NoView widgets are removed without
+  painting. The Print flag does not affect flattening, so print-only widgets are
+  omitted and screen-only widgets become ordinary page content.
+  """
   @spec flatten(binary(), keyword()) ::
           {:ok, binary()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def flatten(pdf, opts \\ []) do
