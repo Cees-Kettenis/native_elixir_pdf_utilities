@@ -3,6 +3,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometryTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
 
+  test "text line bounds preserve measured ascent and leading through pagination" do
+    box = %{
+      type: :text,
+      y: 80.0,
+      font_size: 10.0,
+      line_height: 14.0,
+      line_baseline_depth: 9.75,
+      line_box_height: 14.0
+    }
+
+    assert PageGeometry.box_vertical_bounds(box) == {89.75, 75.75}
+    assert PageGeometry.box_vertical_bounds(%{box | y: 30.0}) == {39.75, 25.75}
+  end
+
   test "oversized CSS page lengths fail without raising" do
     number = String.duplicate("9", 400)
     assert {:error, :invalid_page_size} = PageGeometry.normalize_page_size("#{number}in 10in")

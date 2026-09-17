@@ -30,6 +30,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
           widths: [non_neg_integer()],
           default_width: non_neg_integer(),
           cmap: %{optional(non_neg_integer()) => non_neg_integer()},
+          kerning: %{optional({non_neg_integer(), non_neg_integer()}) => integer()},
           ascent: integer(),
           descent: integer(),
           bbox: {integer(), integer(), integer(), integer()},
@@ -219,12 +220,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   def text_width(text, font, font_size) do
     case font do
       %{type: :embedded, units_per_em: units_per_em} ->
-        text
-        |> String.to_charlist()
-        |> Enum.reduce(0, fn codepoint, acc ->
-          glyph_id = Map.get(font.cmap, codepoint, 0)
-          acc + glyph_width(font, glyph_id)
+        {glyphs, maximum_glyph} =
+          text
+          |> String.to_charlist()
+          |> Enum.map_reduce(-1, fn codepoint, maximum ->
+            glyph = Map.get(font.cmap, codepoint, 0)
+            {glyph, max(glyph, maximum)}
+          end)
+
+        NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_render_resource(
+          :max_layout_text_work,
+          maximum_glyph + 1,
+          :layout
+        )
+
+        widths = font.widths |> Enum.take(maximum_glyph + 1) |> List.to_tuple()
+
+        glyphs
+        |> Enum.reduce({0, nil}, fn glyph_id, {acc, previous} ->
+          adjustment = Map.get(Map.get(font, :kerning, %{}), {previous, glyph_id}, 0)
+
+          width =
+            if glyph_id < tuple_size(widths), do: elem(widths, glyph_id), else: font.default_width
+
+          {acc + width + adjustment, glyph_id}
         end)
+        |> elem(0)
         |> Kernel./(units_per_em)
         |> Kernel.*(font_size)
 
@@ -640,6 +661,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
          {:ok, glyph_count} <- read_u16(maxp, 4),
          {:ok, widths} <- parse_hmtx(hmtx, glyph_count, hmetric_count),
          {:ok, cmap} <- parse_cmap(cmap),
+         {:ok, kerning} <-
+           FontValidator.prepare_kerning(
+             case table(data, tables, "kern") do
+               {:ok, kern} -> kern
+               :error -> <<>>
+             end,
+             glyph_count
+           ),
          {:ok, embedding_flags} <- font_embedding_flags(data, tables) do
       {:ok,
        %{
@@ -647,6 +676,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
          widths: widths,
          default_width: List.last(widths) || 600,
          cmap: cmap,
+         kerning: kerning,
          ascent: ascent,
          descent: descent,
          bbox: bbox,
@@ -767,10 +797,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
         if map_size(mappings) > 0, do: {:ok, mappings}
       end)
     end
-  end
-
-  defp glyph_width(font, glyph_id) do
-    Enum.at(font.widths, glyph_id, font.default_width)
   end
 
   defp pdf_safe_name(name) do

@@ -87,6 +87,11 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       artifact_dir: Path.expand(artifact_dir)
     }
 
+    File.write!(
+      Path.join(artifact_dir, "stats.exs"),
+      inspect(stats, pretty: true, limit: :infinity)
+    )
+
     max_changed_ratio = Keyword.get(opts, :max_changed_ratio, 0.12)
     max_average_delta = Keyword.get(opts, :max_average_delta, 0.03)
 

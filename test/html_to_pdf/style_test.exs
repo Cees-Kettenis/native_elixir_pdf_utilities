@@ -401,13 +401,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert Enum.map(empty_radio.children, & &1.text) == ["○"]
     assert Enum.map(selected.children, & &1.text) == ["Approved"]
     assert selected.style.width == 90.0
+    assert selected.style.padding.left == 5.25
+    assert selected.style.padding.right == 14.25
     assert Enum.map(first.children, & &1.text) == ["First"]
     assert Enum.map(textarea.children, & &1.text) == ["Line one\nLine two"]
     assert textarea.style.white_space == :pre_line
     assert Enum.map(textarea_fallback.children, & &1.text) == ["Fallback"]
     assert [%{tag: "strong", children: [%{text: "Save"}]}] = button.children
-    assert button.style.font_weight == 700
+    assert button.style.font_weight == 400
+    assert button.style.font_size == 10.0
+    assert button.style.box_sizing == :border_box
+    assert button.style.font_families == ["Arial", "sans-serif"]
     assert Enum.map(button_fallback.children, & &1.text) == ["Fallback button"]
+  end
+
+  test "button author typography overrides the browser defaults" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <div style="font-size: 20pt; line-height: 30pt; font-style: italic">
+               <button style="font-family: serif; font-size: 14pt; font-weight: 700; line-height: 18pt">Save</button>
+             </div>
+             """)
+
+    assert {:ok, tree} = Style.compute(dom)
+    [container] = tree.children
+    [button] = Enum.reject(container.children, &match?(%{type: :text}, &1))
+    assert button.style.font_families == ["serif"]
+    assert button.style.font_size == 14.0
+    assert button.style.font_weight == 700
+    assert button.style.font_style == :normal
+    assert button.style.line_height == 18.0
   end
 
   test "compute honors display none on static form controls" do
@@ -788,7 +811,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert element.style.margin == edges(6.0)
 
     Enum.each(element.style.border_widths, fn {_side, width} ->
-      assert_in_delta width, 2.4, 0.0001
+      assert_in_delta width, 2.25, 0.0001
     end)
 
     assert_in_delta element.style.border_radius, 4.8, 0.0001
@@ -931,7 +954,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     assert absolute.style.line_height == 9.0
     assert unitless.style.line_height == 15.0
-    assert normal.style.line_height == 11.640625
+    assert normal.style.line_height == 11.25
 
     assert Style.compute(
              %{
@@ -1003,8 +1026,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     assert unitless_parent.style.line_height == 24.0
     assert unitless_child.style.line_height == 40.0
-    assert_in_delta normal_parent.style.line_height, 13.96875, 0.0001
-    assert normal_child.style.line_height == 23.28125
+    assert_in_delta normal_parent.style.line_height, 14.25, 0.0001
+    assert normal_child.style.line_height == 23.25
     assert absolute_parent.style.line_height == 15.0
     assert absolute_child.style.line_height == 15.0
   end
@@ -1030,7 +1053,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     [paragraph] = styled_tree.children
     %{ascent: ascent, descent: descent, units_per_em: units_per_em} = paragraph.style.font_face
 
-    expected_line_height = (ascent - descent) / units_per_em * 10.0
+    expected_line_height =
+      (round(ascent / units_per_em * 10.0 / 0.75) +
+         round(-descent / units_per_em * 10.0 / 0.75)) * 0.75
 
     assert_in_delta paragraph.style.line_height, expected_line_height, 0.0001
   end
@@ -1117,7 +1142,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert paragraph.style.margin == %{top: 2.0, right: 4.0, bottom: 6.0, left: 8.0}
     assert paragraph.style.margin_after == 6.0
     assert paragraph.style.padding == %{top: 3.0, right: 5.0, bottom: 3.0, left: 5.0}
-    assert paragraph.style.border_widths == %{top: 1.0, right: 1.0, bottom: 1.0, left: 1.0}
+    assert paragraph.style.border_widths == %{top: 0.75, right: 0.75, bottom: 0.75, left: 0.75}
     assert paragraph.style.border_color == {0.2, 0.4, 0.6}
     assert paragraph.style.border_colors == edges({0.2, 0.4, 0.6})
     assert paragraph.style.border_radius == 2.0
@@ -1351,7 +1376,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert count.style.border_widths == %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
     assert count.style.border_styles == %{top: :none, right: :none, bottom: :none, left: :none}
     assert alpha.style.padding == %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0}
-    assert alpha.style.border_widths == %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0}
+    assert alpha.style.border_widths == %{top: 1.5, right: 1.5, bottom: 1.5, left: 1.5}
     assert alpha.style.border_color == {0, 0, 1}
     assert amount.style.text_align == :left
     assert alpha.style.colspan == 2
@@ -1712,7 +1737,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert span.style.color == {0.2, 0.4, 0.6}
     assert span.style.font_size == 16.0
     assert span.style.font_weight == 700
-    assert span.style.line_height == 18.625
+    assert span.style.line_height == 18.75
     assert text.style.color == {0.2, 0.4, 0.6}
     assert text.style.font_size == 16.0
   end
@@ -3125,7 +3150,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       {"border: none", :border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}},
       {"border-right: none", :border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}},
       {"border-left: 2pt solid red", :border_widths,
-       %{top: 0.0, right: 0.0, bottom: 0.0, left: 2.0}},
+       %{top: 0.0, right: 0.0, bottom: 0.0, left: 1.5}},
       {"border-top-width: 3pt", :border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}},
       {"border-bottom-color: rgb(51, 102, 153)", :border_colors,
        %{top: {0, 0, 0}, right: {0, 0, 0}, bottom: {0.2, 0.4, 0.6}, left: {0, 0, 0}}},
@@ -3250,7 +3275,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                  "border-color: rgb(255, 0, 0) green transparent #fff"
              )
 
-    assert sides.border_widths == %{top: 0.75, right: 2.25, bottom: 3.75, left: 4.0}
+    assert sides.border_widths == %{top: 0.75, right: 2.25, bottom: 3.75, left: 3.75}
     assert sides.border_styles == %{top: :dotted, right: :dashed, bottom: :double, left: :groove}
 
     assert sides.border_colors == %{
@@ -3266,7 +3291,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                "border-width: 1pt 2pt; border-style: dotted dashed; border-color: red blue"
              )
 
-    assert two_values.border_widths == %{top: 1.0, right: 2.0, bottom: 1.0, left: 2.0}
+    assert two_values.border_widths == %{top: 0.75, right: 1.5, bottom: 0.75, left: 1.5}
 
     assert two_values.border_styles == %{
              top: :dotted,
@@ -3289,7 +3314,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                  "border-color: red green blue"
              )
 
-    assert three_values.border_widths == %{top: 1.0, right: 2.0, bottom: 3.0, left: 2.0}
+    assert three_values.border_widths == %{top: 0.75, right: 1.5, bottom: 3.0, left: 1.5}
 
     assert three_values.border_styles == %{
              top: :solid,
@@ -3308,7 +3333,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert {:ok, reordered} =
              style_for("div", "border-style: none; border-width: 2pt; border-style: dashed")
 
-    assert reordered.border_widths == %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0}
+    assert reordered.border_widths == %{top: 1.5, right: 1.5, bottom: 1.5, left: 1.5}
 
     assert reordered.border_styles == %{
              top: :dashed,
@@ -3318,7 +3343,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
            }
 
     assert {:ok, transparent} = style_for("div", "border: 2pt solid transparent")
-    assert transparent.border_widths == %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0}
+    assert transparent.border_widths == %{top: 1.5, right: 1.5, bottom: 1.5, left: 1.5}
     assert transparent.border_colors == %{top: nil, right: nil, bottom: nil, left: nil}
   end
 

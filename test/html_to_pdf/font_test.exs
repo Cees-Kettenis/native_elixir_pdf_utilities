@@ -12,6 +12,118 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     :ok
   end
 
+  test "high glyph indexes use constant-time widths during repeated text measurement" do
+    font = %{
+      type: :embedded,
+      units_per_em: 1000,
+      cmap: %{?A => 65_534, ?B => 65_535},
+      widths: List.duplicate(600, 65_535),
+      default_width: 700
+    }
+
+    text = String.duplicate("A", 2000)
+    {:reductions, before_work} = Process.info(self(), :reductions)
+    assert Font.text_width(text, font, 10) == 12_000.0
+    {:reductions, after_work} = Process.info(self(), :reductions)
+    # A linked-list lookup per character needs over 100 million reductions here.
+    assert after_work - before_work < 1_000_000
+    assert Font.text_width("B", font, 10) == 7.0
+  end
+
+  test "short low-index text avoids scanning the entire font and high-index scans share a budget" do
+    font = %{
+      type: :embedded,
+      units_per_em: 1000,
+      cmap: %{?A => 1, ?B => 65_534},
+      widths: List.duplicate(600, 65_535),
+      default_width: 700
+    }
+
+    {:reductions, before_work} = Process.info(self(), :reductions)
+    for _ <- 1..1000, do: assert(Font.text_width("A", font, 10) == 6.0)
+    {:reductions, after_work} = Process.info(self(), :reductions)
+    assert after_work - before_work < 200_000
+
+    limits = Limits.effective()
+    Limits.install(%{limits | max_layout_text_work: 70_000})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.Validators.HtmlValidator.with_render_budget(fn ->
+               assert Font.text_width("B", font, 10) == 6.0
+               Font.text_width("B", font, 10)
+             end)
+
+    assert diagnostic.stage == :layout
+    assert diagnostic.message =~ "max_layout_text_work"
+    assert Font.text_width("", font, 10) == 0.0
+  end
+
+  test "validates bounded horizontal kerning and measures pair advances" do
+    subtable = <<0::16, 20::16, 1::16, 1::16, 0::48, 1::16, 2::16, -100::signed-16>>
+    kern = <<0::16, 1::16, subtable::binary>>
+    assert {:ok, %{{1, 2} => -100}} = FontValidator.prepare_kerning(kern, 3)
+
+    assert {:ok, %{{1, 2} => -200}} =
+             FontValidator.prepare_kerning(
+               <<0::16, 2::16, subtable::binary, subtable::binary>>,
+               3
+             )
+
+    override = <<0::16, 20::16, 9::16, 1::16, 0::48, 1::16, 2::16, -20::signed-16>>
+
+    assert {:ok, %{{1, 2} => -20}} =
+             FontValidator.prepare_kerning(
+               <<0::16, 2::16, subtable::binary, override::binary>>,
+               3
+             )
+
+    font = %{
+      type: :embedded,
+      units_per_em: 1000,
+      cmap: %{?A => 1, ?V => 2},
+      widths: [0, 600, 600],
+      default_width: 600,
+      kerning: %{{1, 2} => -100}
+    }
+
+    assert Font.text_width("AV", font, 10) == 11.0
+    assert Font.text_width("VA", font, 10) == 12.0
+
+    unsorted =
+      <<0::16, 1::16, 0::16, 26::16, 1::16, 2::16, 0::48, 2::16, 1::16, -20::signed-16, 1::16,
+        2::16, -20::signed-16>>
+
+    assert :error = FontValidator.prepare_kerning(unsorted, 3)
+    assert :error = FontValidator.prepare_kerning(kern, 2)
+    assert :error = FontValidator.prepare_kerning(binary_part(kern, 0, byte_size(kern) - 1), 3)
+    assert :error = FontValidator.prepare_kerning(kern <> <<0>>, 3)
+    assert :error = FontValidator.prepare_kerning(<<0::16, 1::16, 0::16, 6::16, 1::16>>, 3)
+    assert {:ok, %{}} = FontValidator.prepare_kerning(<<0x10000::32>>, 3)
+    unsupported = <<0::16, 6::16, 1::8, 1::8>>
+    assert {:ok, %{}} = FontValidator.prepare_kerning(<<0::16, 1::16, unsupported::binary>>, 3)
+
+    Limits.install(%{Limits.effective() | max_font_kerning_pairs: 1})
+
+    for data <- [kern, <<0::16, 2::16>>] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               FontValidator.prepare_kerning(data, 3)
+
+      assert diagnostic.stage == :limits
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.operation == :load_registry
+      assert diagnostic.source == "kern"
+      assert diagnostic.message =~ "kerning"
+    end
+
+    Limits.install(%{Limits.effective() | max_font_kerning_pairs: 2})
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             FontValidator.prepare_kerning(
+               <<0::16, 2::16, subtable::binary, unsupported::binary>>,
+               3
+             )
+  end
+
   test "load_registry loads explicit TTF fonts and resolves fallback families" do
     font_path = ttf_font_path!()
 

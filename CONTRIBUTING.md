@@ -28,6 +28,13 @@ available:
 
 - `CHROMIUM_BIN=/path/to/chromium mix test.browser_parity --warnings-as-errors`
 
+Browser comparisons require matching installed fonts. Native system-font
+selection follows Fontconfig on Linux, while Chromium has separate default
+family preferences. The matrix image installs Liberation faces and configures
+`sans-serif`, `serif`, and `monospace` to use Liberation Sans, Serif, and Mono.
+Its build checks those aliases with `fc-match`. Local parity runs should use
+the same aliases, or inspect both PDFs' embedded fonts when a comparison fails.
+
 Before a maintainer considers a change PR-ready, run the complete supported
 Elixir matrix:
 

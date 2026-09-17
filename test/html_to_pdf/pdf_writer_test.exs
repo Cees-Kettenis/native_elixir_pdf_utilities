@@ -6,6 +6,218 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
   alias NativeElixirPdfUtilities.Text
 
+  test "CSS rectangle edges snap relative to the page top" do
+    box = %{
+      type: :rect,
+      x: 10,
+      y: 20,
+      width: 30,
+      height: 40,
+      border_radius: 0,
+      fill_color: {0, 0, 0},
+      stroke_color: nil,
+      stroke_width: 0,
+      snap_to_css_pixel_grid: true
+    }
+
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box]}], [])
+    assert pdf =~ "9.75 19.75 30 40.5 re f"
+  end
+
+  test "advanced embedded fonts retain default widths beyond supplied metrics" do
+    assert {:ok, registry} = Font.load_registry(fonts: [{"Fixture Sans", ttf_font_path!()}])
+    assert {:ok, _, font} = Font.resolve("Fixture Sans", 400, :normal, registry)
+    font = %{font | widths: [600], default_width: 700, kerning: %{}}
+
+    box = %{
+      type: :text,
+      text: "A",
+      x: 0,
+      y: 20,
+      font: Font.pdf_name(font),
+      font_face: font,
+      font_size: 10,
+      color: {0, 0, 0},
+      snap_to_css_pixel_grid: true
+    }
+
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box]}], [])
+    assert pdf =~ "] TJ"
+    assert pdf =~ "1 [#{Float.round(700 * 1000 / font.units_per_em, 4)}]"
+    assert {:ok, "A"} = Text.extract(pdf, layout: false)
+  end
+
+  test "collapsed table borders paint around grid edges without changing layout bounds" do
+    box = %{
+      type: :rect,
+      role: :table_border,
+      x: 10,
+      y: 20,
+      width: 30,
+      height: 40,
+      border_radius: 0,
+      fill_color: nil,
+      stroke_color: {0, 0, 0},
+      stroke_width: 2
+    }
+
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box]}], [])
+    assert pdf =~ "10 20 30 40 re S"
+    assert NativeElixirPdfUtilities.HtmlToPdf.PageGeometry.box_vertical_bounds(box) == {60, 20}
+  end
+
+  test "writer validates optional advanced-font kerning maps before serialization" do
+    alias NativeElixirPdfUtilities.Limits
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    assert {:ok, registry} = Font.load_registry(fonts: [{"Fixture Sans", ttf_font_path!()}])
+    assert {:ok, _, font} = Font.resolve("Fixture Sans", 400, :normal, registry)
+
+    box = %{
+      type: :text,
+      text: "A",
+      x: 0,
+      y: 20,
+      font: Font.pdf_name(font),
+      font_face: font,
+      font_size: 10,
+      color: {0, 0, 0}
+    }
+
+    for kerning <- [
+          nil,
+          [],
+          "pairs",
+          %{1 => 2},
+          %{{1, 2} => "bad"},
+          %{{1, 2} => Integer.pow(10, 400)},
+          %{{1, 2} => -Integer.pow(10, 400)},
+          %{{1, 2} => 32_767 * 65_535 + 1},
+          %{{1, 2} => -32_768 * 65_535 - 1},
+          %{{-1, 2} => 0},
+          %{{1, -2} => 0},
+          %{{1.0, 2} => 0},
+          %{{1, 2.0} => 0},
+          %{{length(font.widths), 1} => 0},
+          %{{1, length(font.widths)} => 0}
+        ] do
+      invalid = %{box | font_face: Map.put(font, :kerning, kerning)}
+      assert_invalid_pdf_input(PdfWriter.render([%{size: {100, 100}, boxes: [invalid]}], []))
+    end
+
+    for prepared <- [Map.delete(font, :kerning), Map.put(font, :kerning, %{})] do
+      assert {:ok, _} =
+               PdfWriter.render([%{size: {100, 100}, boxes: [%{box | font_face: prepared}]}], [])
+    end
+
+    for adjustment <- [-32_768 * 65_535, 32_767 * 65_535] do
+      prepared = Map.put(font, :kerning, %{{font.cmap[?A], font.cmap[?V]} => adjustment})
+      boundary = %{box | text: "AV", font_face: prepared}
+      assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [boundary]}], [])
+      assert pdf =~ "] TJ"
+    end
+
+    Limits.install(%{limits | max_font_kerning_pairs: 1})
+    invalid = %{box | font_face: Map.put(font, :kerning, %{{1, 1} => 0, {1, 2} => 0})}
+    assert_invalid_pdf_input(PdfWriter.render([%{size: {100, 100}, boxes: [invalid]}], []))
+  end
+
+  test "writer rejects malformed pixel snapping flags for every drawing kind" do
+    boxes = [
+      %{type: :text, text: "A", x: 0, y: 20, font: "Courier", font_size: 10, color: {0, 0, 0}},
+      %{
+        type: :rect,
+        x: 0,
+        y: 0,
+        width: 20,
+        height: 10,
+        border_radius: 0,
+        fill_color: {0, 0, 0},
+        stroke_color: nil,
+        stroke_width: 0
+      },
+      %{
+        type: :image,
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        image: image_fixture(:png, <<0, 0, 0>>, 1, 1, :device_rgb)
+      }
+    ]
+
+    for box <- boxes, flag <- [nil, :yes, 0, "true", %{}] do
+      invalid = Map.put(box, :snap_to_css_pixel_grid, flag)
+      assert_invalid_pdf_input(PdfWriter.render([%{size: {100, 100}, boxes: [invalid]}], []))
+    end
+
+    for flag <- [false, true] do
+      prepared = Enum.map(boxes, &Map.put(&1, :snap_to_css_pixel_grid, flag))
+      assert {:ok, _} = PdfWriter.render([%{size: {100, 100}, boxes: prepared}], [])
+    end
+  end
+
+  test "black relief borders retain a visible light side" do
+    box = %{
+      type: :rect,
+      x: 0.0,
+      y: 0.0,
+      width: 30.0,
+      height: 20.0,
+      border_radius: 0.0,
+      fill_color: nil,
+      stroke_color: {0, 0, 0},
+      stroke_width: 3.0,
+      border_widths: %{top: 3.0, right: 3.0, bottom: 3.0, left: 3.0},
+      border_styles: %{top: :inset, right: :inset, bottom: :inset, left: :inset}
+    }
+
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box]}], [])
+    assert pdf =~ "0.3294 0.3294 0.3294 RG"
+    assert pdf =~ "0 0 0 RG"
+  end
+
+  test "CSS font painting preserves shaped advances and text extraction" do
+    assert {:ok, registry} = Font.load_registry(fonts: [{"Fixture Sans", ttf_font_path!()}])
+    assert {:ok, _families, font} = Font.resolve("Fixture Sans", 400, :normal, registry)
+
+    box = %{
+      type: :text,
+      text: "AV",
+      x: 0.0,
+      y: 80.25,
+      font: Font.pdf_name(font),
+      font_face: font,
+      font_size: 10.0,
+      color: {0, 0, 0},
+      snap_to_css_pixel_grid: true
+    }
+
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box]}], [])
+    assert pdf =~ "/F1 9.9975 Tf"
+    assert pdf =~ "0 80.5001 Td ["
+    assert pdf =~ "] TJ"
+    assert {:ok, "AV"} = Text.extract(pdf, layout: false)
+  end
+
+  test "CSS images keep far raster edges inside their allocated rectangle" do
+    image = image_fixture(:png, <<0, 0, 0>>, 1, 1, :device_rgb)
+
+    box = %{
+      type: :image,
+      x: 0.0,
+      y: 0.0,
+      width: 21.0,
+      height: 12.0,
+      image: image,
+      snap_to_css_pixel_grid: true
+    }
+
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box]}], [])
+    assert pdf =~ "q 20.9999 0 0 11.9999 0 0.0001 cm /Im1 Do Q"
+    assert pdf =~ "/Width 1 /Height 1"
+  end
+
   test "render writes a valid PDF for a text page" do
     pages = [
       %{
@@ -426,8 +638,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
     assert {:ok, pdf} = PdfWriter.render(pages, [])
     assert pdf =~ "<< /Type /ExtGState /CA 0.5 >>"
-    assert pdf =~ ~r/q \/GS\d+ gs 0\.2 0\.3 0\.4 RG/
-    assert pdf =~ ~r/q \/GS\d+ gs 0\.7 0\.8 0\.9 RG/
+    assert pdf =~ ~r/q \/GS\d+ gs 0\.2353 0\.3529 0\.4706 RG/
+    assert pdf =~ ~r/q \/GS\d+ gs 0\.502 0\.749 1 RG/
   end
 
   test "render writes fill-only and stroke-only rectangle boxes" do
@@ -494,12 +706,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     ]
 
     assert {:ok, pdf} = PdfWriter.render(pages, [])
-    assert pdf =~ "q 0.1 0.2 0.3 RG 1 w 10 50 m 50 50 l S Q"
-    assert pdf =~ "10 50 m 50 50 l S"
+    assert pdf =~ "q 0.1 0.2 0.3 RG 1 w 10 49.5 m 50 49.5 l S Q"
+    assert pdf =~ "10 49.5 m 50 49.5 l S"
     refute pdf =~ "50 20 m 50 50 l S"
-    assert pdf =~ "q 0.8 0.9 1 RG 1 w 10 20 m 50 20 l S Q"
-    assert pdf =~ "10 20 m 50 20 l S"
-    assert pdf =~ "10 20 m 10 50 l S"
+    assert pdf =~ "q 0.8 0.9 1 RG 1 w 10 20.5 m 50 20.5 l S Q"
+    assert pdf =~ "10 20.5 m 50 20.5 l S"
+    assert pdf =~ "10.5 20 m 10.5 50 l S"
 
     stroke_only_pages = [
       %{
@@ -522,7 +734,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     ]
 
     assert {:ok, stroke_only_pdf} = PdfWriter.render(stroke_only_pages, [])
-    assert stroke_only_pdf =~ "50 20 m 50 50 l S"
+    assert stroke_only_pdf =~ "49.5 20 m 49.5 50 l S"
     refute stroke_only_pdf =~ "10 20 40 30 re f"
   end
 
@@ -594,18 +806,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "[0 4] 0 d 1 J"
     assert pdf =~ "[6 6] 0 d 0 J"
 
-    assert pdf =~ "0.2 0.4 0.6 RG 1 w 50 20 m 60 20 l S"
-    assert pdf =~ "0.2 0.4 0.6 RG 1 w 50 18 m 60 18 l S"
+    assert pdf =~ "0.2 0.4 0.6 RG 1 w 50 19.5 m 60 19.5 l S"
+    assert pdf =~ "0.2 0.4 0.6 RG 1 w 50 17.5 m 60 17.5 l S"
 
-    assert pdf =~ "0.1 0.2 0.3 RG 1.5 w 10 40 m 20 40 l S"
-    assert pdf =~ "0.6 0.7 0.8 RG 1.5 w 10 38.5 m 20 38.5 l S"
-    assert pdf =~ "0.6 0.7 0.8 RG 1.5 w 30 40 m 40 40 l S"
-    assert pdf =~ "0.1 0.2 0.3 RG 1.5 w 30 38.5 m 40 38.5 l S"
+    assert pdf =~ "0.0902 0.1804 0.2706 RG 1.5 w 10 39.25 m 20 39.25 l S"
+    assert pdf =~ "0.3098 0.6196 0.9294 RG 1.5 w 10 37.75 m 20 37.75 l S"
+    assert pdf =~ "0.3098 0.6196 0.9294 RG 1.5 w 30 39.25 m 40 39.25 l S"
+    assert pdf =~ "0.0902 0.1804 0.2706 RG 1.5 w 30 37.75 m 40 37.75 l S"
 
-    assert pdf =~ "0.1 0.2 0.3 RG 3 w 50 40 m 60 40 l S"
-    assert pdf =~ "0.1 0.2 0.3 RG 3 w 80 10 m 80 20 l S"
+    assert pdf =~ "0.0902 0.1804 0.2706 RG 3 w 50 38.5 m 60 38.5 l S"
+    assert pdf =~ "0.0902 0.1804 0.2706 RG 3 w 78.5 10 m 78.5 20 l S"
 
-    assert pdf =~ "1 0 0 RG 1 w 80 30 m 80 40 l S"
+    assert pdf =~ "1 0 0 RG 1 w 79.5 30 m 79.5 40 l S"
     refute pdf =~ "70 40 m 80 40 l S"
     refute pdf =~ "70 30 m 80 30 l S"
     refute pdf =~ "70 30 m 70 40 l S"
@@ -614,8 +826,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "30 50 10 10 re f"
 
     refute pdf =~ "10 80 m 20 80 l S"
-    assert pdf =~ "20 70 m 20 80 l S"
-    assert pdf =~ "0.2 0.4 0.6 RG 1 w 30 80 m 40 80 l S"
+    assert pdf =~ "19.5 70 m 19.5 80 l S"
+    assert pdf =~ "0.2 0.4 0.6 RG 1 w 30 79.5 m 40 79.5 l S"
     assert pdf =~ "0.2 0.4 0.6 RG 1 w 50.5 70.5 9 9 re S"
   end
 
@@ -762,7 +974,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
     assert {:ok, pdf} = PdfWriter.render(pages, [])
     assert pdf =~ "/ColorSpace /DeviceGray"
-    assert pdf =~ "/ColorSpace /DeviceCMYK"
+    assert pdf =~ "/ColorSpace [/DeviceN [/JpegC /JpegM /JpegY /JpegK] /DeviceRGB"
+    assert pdf =~ "/FunctionType 0 /Domain [0 1 0 1 0 1 0 1] /Range [0 1 0 1 0 1]"
+    assert pdf =~ "/Size [2 2 2 2] /BitsPerSample 8 /Length 48"
   end
 
   test "render embeds TTF fonts with Type0 Unicode text output" do
@@ -794,6 +1008,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "/ToUnicode"
     assert pdf =~ "/Encoding /Identity-H"
     assert pdf =~ "BT /F1 12 Tf 0 0 0 rg 10 80 Td <"
+    assert {:ok, "Café"} = Text.extract(pdf, layout: false)
     refute pdf =~ "(Café) Tj"
   end
 

@@ -5,6 +5,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Text
 
+  test "render quantizes CSS viewport width and margin origins without changing the PDF page" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render("<div style='height:10pt;background:red'></div>",
+               page_size: {100, 100},
+               margin: 28
+             )
+
+    assert pdf =~ "/MediaBox [0 0 100 100]"
+    assert pdf =~ "27.75 62.5 44.25 9.75 re"
+  end
+
   test "render converts a simple paragraph to a valid PDF binary" do
     assert {:ok, pdf} = HtmlToPdf.render("<p>Hello</p>")
 
@@ -218,7 +229,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
     assert pdf =~ "0.9333 0.9333 0.9333 rg"
-    assert pdf =~ "1 0 0 RG 1 w"
+    assert pdf =~ "1 0 0 RG 0.75 w"
     assert_pdf_text(pdf, "Boxed")
   end
 
@@ -238,11 +249,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, css_pdf} = HtmlToPdf.render(html)
     assert css_pdf =~ "/MediaBox [0 0 841.89 595.28]"
-    assert css_pdf =~ "20 563.75 801.5 11 re S"
+    assert css_pdf =~ "19.875 564.905 801.75 10.5 re S"
 
     assert {:ok, override_pdf} = HtmlToPdf.render(html, page_size: {200, 100}, margin: 0)
     assert override_pdf =~ "/MediaBox [0 0 200 100]"
-    assert override_pdf =~ "0.5 88.25 199.25 11 re S"
+    assert override_pdf =~ "0.375 89.125 199.5 10.5 re S"
   end
 
   test "render applies complete page geometry and explicit option precedence" do
@@ -259,7 +270,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, css_pdf} = HtmlToPdf.render(html)
     assert css_pdf =~ "/MediaBox [0 0 595.28 419.53]"
-    assert css_pdf =~ "50.75 398 524 11 re S"
+    assert css_pdf =~ "50.625 398.905 525 10.5 re S"
 
     assert {:ok, override_pdf} =
              HtmlToPdf.render(html,
@@ -268,7 +279,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              )
 
     assert override_pdf =~ "/MediaBox [0 0 200 100]"
-    assert override_pdf =~ "4.25 87.5 193.25 11 re S"
+    assert override_pdf =~ "4.125 88.375 193.5 10.5 re S"
   end
 
   test "render uses page CSS defaults from configured stylesheets" do
@@ -308,7 +319,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                stylesheets: [{:css, "@page { margin: 10pt 20pt; }"}]
              )
 
-    assert pdf =~ "40.25 78.5 139.25 11 re S"
+    assert pdf =~ "40.125 79.375 139.5 10.5 re S"
   end
 
   test "render returns detailed diagnostics for invalid page declarations" do
@@ -713,7 +724,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert_pdf_text(pdf, ["Summary", "Name", "Docs", "Alpha", "Link"])
     assert pdf =~ "/BaseFont /DejaVuSans"
     assert pdf =~ "0.9333 0.9333 0.9333 rg"
-    assert pdf =~ "0 0 0 RG 1 w"
+    assert pdf =~ "0 0 0 RG 0.75 w"
     assert pdf =~ "/Subtype /Link"
     assert pdf =~ "/URI (https://example.com)"
   end
@@ -776,8 +787,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {100, 100}, margin: 0)
     assert {:ok, %{page_count: 2, pages: [first_page, second_page]}} = Text.extract_spans(pdf)
 
-    assert Enum.map(first_page.spans, & &1.text) == ["First page", "Root marker"]
-    assert Enum.map(second_page.spans, & &1.text) == ["Second page"]
+    assert Enum.map_join(first_page.spans, & &1.text) == "First pageRoot marker"
+    assert Enum.map_join(second_page.spans, & &1.text) == "Second page"
   end
 
   test "render fragments a paragraph taller than the printable page" do
@@ -894,7 +905,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                reason: :invalid_layout,
                operation: :decorate_pages,
                module: NativeElixirPdfUtilities.HtmlToPdf.PageFurniture,
-               message: "footer page furniture height 13.97pt exceeds the 0.0pt page margin"
+               message: "footer page furniture height 14.25pt exceeds the 0.0pt page margin"
              }}} =
              HtmlToPdf.render("<p>Hello</p>", page_furniture: [footer: "Page {{page}}"])
 

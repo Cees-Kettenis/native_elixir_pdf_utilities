@@ -77,7 +77,8 @@ or elapsed time. Configure a caller-owned timeout and concurrency ceiling too.
 | `max_css_work` | 5,000,000 | CSS scanned bytes, selector parsing work, and selector comparisons |
 | `max_layout_boxes` | 100,000 | Drawing-box construction attempts, including measurements and furniture |
 | `max_rendered_text_bytes` | 10,000,000 | Text production bytes, including generated-content parts before joining and transformations |
-| `max_layout_text_work` | 20,000,000 | Text bytes measured, including repeated measurements |
+| `max_layout_text_work` | 20,000,000 | Text bytes measured and glyph-width entries visited, including repeated measurements |
+| `max_table_grid_work` | 1,000,000 | Table row scans, column expansion and probes, and collapsed-border edge visits, reserved before expanding spans |
 | `max_rendered_pages` | 1,000 | Generated PDF pages, also bounded by `max_pdf_pages` |
 | `max_rendered_pdf_bytes` | 50,000,000 | Serialized PDF output before flattening its iodata |
 
@@ -119,6 +120,7 @@ See [render options and supported formats](html-to-pdf-compatibility.md).
 
 | Setting | Default | Applies to |
 | --- | ---: | --- |
+| `max_font_kerning_pairs` | 100,000 | Kerning subtables and glyph pairs inspected per font |
 | `max_font_cmap_work` | 1,000,000 | Encoding records, segments, and codepoint visits prepared per TTF character map |
 | `max_font_cache_entries` | 64 | Parsed font files retained by the cache |
 | `max_system_font_cache_entries` | 64 | Positive and negative installed-font discovery results retained by the cache |

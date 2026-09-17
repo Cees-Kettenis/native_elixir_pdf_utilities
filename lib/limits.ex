@@ -29,6 +29,7 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_layout_boxes: 100_000,
     max_rendered_text_bytes: 10_000_000,
     max_layout_text_work: 20_000_000,
+    max_table_grid_work: 1_000_000,
     max_rendered_pages: 1_000,
     max_rendered_pdf_bytes: 50_000_000,
     max_font_source_bytes: 10_000_000,
@@ -110,6 +111,7 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_cmap_entries: 100_000,
     max_cid_width_entries: 65_536,
     max_form_xobject_depth: 20,
+    max_font_kerning_pairs: 100_000,
     max_font_cmap_work: 1_000_000,
     max_font_cache_entries: 64,
     max_system_font_cache_entries: 64
@@ -132,6 +134,7 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_layout_boxes
           | :max_rendered_text_bytes
           | :max_layout_text_work
+          | :max_table_grid_work
           | :max_rendered_pages
           | :max_rendered_pdf_bytes
           | :max_font_source_bytes
@@ -212,6 +215,7 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_cmap_entries
           | :max_cid_width_entries
           | :max_form_xobject_depth
+          | :max_font_kerning_pairs
           | :max_font_cmap_work
           | :max_font_cache_entries
           | :max_system_font_cache_entries

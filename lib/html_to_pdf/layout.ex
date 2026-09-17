@@ -12,7 +12,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @css_pixel_points 0.75
-  @line_wrap_tolerance 1.0
+  # Browser layout rounds lengths to 1/64 CSS pixel. This is a fixed precision allowance.
+  @line_wrap_tolerance 0.01171875
 
   @type box :: map()
   @type layout_tree :: %{
@@ -48,13 +49,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       case HtmlValidator.validate_layout_input(styled_tree, opts, page_size, margins) do
         :ok ->
-          styled_tree = attach_positioned_descendants(styled_tree)
+          styled_tree = styled_tree |> collapse_child_margins() |> attach_positioned_descendants()
           {:ok, page_size} = page_size
           {:ok, margins} = margins
+
+          {layout_page_size, margins} =
+            case Map.get(styled_tree, :_css_pixel_viewport, false) do
+              true ->
+                {page_width, page_height} = page_size
+
+                content_width =
+                  Float.ceil((page_width - margins.left - margins.right) / 0.75) * 0.75
+
+                margins =
+                  Map.new(margins, fn {side, value} -> {side, round(value / 0.75) * 0.75} end)
+
+                {{content_width + margins.left + margins.right, page_height}, margins}
+
+              false ->
+                {page_size, margins}
+            end
+
           children = styled_tree.children
           positioned_children = Map.get(styled_tree, :positioned_children, [])
 
-          with {:ok, boxes} <- layout_blocks(children, page_size, margins),
+          with {:ok, boxes} <- layout_blocks(children, layout_page_size, margins),
                {:ok, boxes} <-
                  layout_positioned_children(
                    positioned_children,
@@ -62,13 +81,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                    %{
                      x: margins.left,
                      top: elem(page_size, 1) - margins.top,
-                     width: elem(page_size, 0) - margins.left - margins.right,
+                     width: elem(layout_page_size, 0) - margins.left - margins.right,
                      height: elem(page_size, 1) - margins.top - margins.bottom
                    },
                    :root
                  ),
                false <- Enum.any?(boxes, &(Map.get(&1, :type) == :layout_error)) do
-            {page_width, page_height} = page_size
+            {page_width, page_height} = layout_page_size
 
             {:ok,
              %{
@@ -89,6 +108,67 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {:error, reason}
       end
     end)
+  end
+
+  defp collapse_child_margins(node, parent_display \\ nil) do
+    case node do
+      %{children: children} ->
+        display = node |> Map.get(:style, %{}) |> Map.get(:display)
+        node = %{node | children: Enum.map(children, &collapse_child_margins(&1, display))}
+
+        case node do
+          %{style: %{display: :block} = style, children: children} ->
+            first =
+              Enum.find_index(children, fn child ->
+                case child do
+                  %{type: :text, text: text} -> String.trim(text) != ""
+                  %{style: %{display: :none}} -> false
+                  _ -> true
+                end
+              end)
+
+            padding = Map.get(style, :padding, edges(0.0))
+            borders = Map.get(style, :border_widths, edges(0.0))
+
+            case is_integer(first) and Enum.at(children, first) do
+              %{style: %{display: :block} = child_style} = child
+              when padding.top == 0 and borders.top == 0 ->
+                case Map.get(style, :position, :static) == :absolute or
+                       parent_display in [:flex, :inline_flex, :grid, :inline_grid] do
+                  true ->
+                    node
+
+                  false ->
+                    margin = Map.get(style, :margin, edges(0.0))
+                    child_margin = Map.get(child_style, :margin, edges(0.0))
+
+                    collapsed =
+                      max(max(margin.top, child_margin.top), 0.0) +
+                        min(min(margin.top, child_margin.top), 0.0)
+
+                    child = %{
+                      child
+                      | style: Map.put(child_style, :margin, %{child_margin | top: 0.0})
+                    }
+
+                    %{
+                      node
+                      | style: Map.put(style, :margin, %{margin | top: collapsed}),
+                        children: List.replace_at(children, first, child)
+                    }
+                end
+
+              _ ->
+                node
+            end
+
+          _ ->
+            node
+        end
+
+      _ ->
+        node
+    end
   end
 
   defp attach_positioned_descendants(%{type: :document, children: children} = document) do
@@ -792,17 +872,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp collapsed_sibling_margin(previous_margin_bottom, margin_top) do
     case previous_margin_bottom do
-      previous when is_number(previous) -> min(max(previous, 0.0), max(margin_top, 0.0))
-      _ -> 0.0
+      previous when is_number(previous) ->
+        collapsed = max(max(previous, margin_top), 0.0) + min(min(previous, margin_top), 0.0)
+        previous + margin_top - collapsed
+
+      _ ->
+        0.0
     end
   end
 
   defp following_sibling_margin(child_boxes, previous_margin_bottom, margin_top, margin_bottom) do
     case child_boxes do
       [] ->
-        [previous_margin_bottom, margin_top, margin_bottom]
-        |> Enum.reject(&is_nil/1)
-        |> Enum.max(fn -> 0.0 end)
+        margins =
+          [previous_margin_bottom, margin_top, margin_bottom]
+          |> Enum.reject(&is_nil/1)
+
+        max(Enum.max(margins), 0.0) + min(Enum.min(margins), 0.0)
 
       _ ->
         margin_bottom
@@ -836,7 +922,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         true
 
       %{type: :element, style: %{display: display}} ->
-        display in [:inline, :inline_block, :line_break, :none]
+        display in [:inline, :inline_block, :inline_flex, :inline_grid, :line_break, :none]
     end
   end
 
@@ -1369,13 +1455,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp grid_item_content_height(item, content_width) do
     cond do
       Map.has_key?(item, :runs) ->
-        line_height = Map.get(item.style, :line_height, 14.4)
-
         resolved_content_size(
           item.style,
           :height,
           nil,
-          inline_content_height(item.runs, content_width, line_height)
+          inline_content_height(item.runs, content_width, item.style)
         )
 
       Map.has_key?(item, :children) ->
@@ -1924,7 +2008,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       case main_axis do
         :row ->
           content_main = flex_basis(style, :width, available_main, text_width)
-          content_height = inline_content_height(runs, content_main, line_height)
+          content_height = inline_content_height(runs, content_main, style)
           {content_main, resolved_content_size(style, :height, nil, content_height)}
 
         :column ->
@@ -2919,141 +3003,136 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp layout_table(style, children, x, y, width) do
     margin = Map.get(style, :margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
     padding = Map.get(style, :padding, edges(0.0))
-    border_widths = Map.get(style, :border_widths, edges(0.0))
+    borders = Map.get(style, :border_widths, edges(0.0))
+    collapsed? = Map.get(style, :border_collapse, :separate) == :collapse
     box_x = x + margin.left
     box_top = y - margin.top
-    available_box_width = width - margin.left - margin.right
-    collapsed? = Map.get(style, :border_collapse, :separate) == :collapse
-
-    content_width =
-      case {collapsed?, Map.get(style, :width)} do
-        {collapsed?, declared_width} when not is_nil(declared_width) ->
-          style
-          |> resolved_size(:width, width, available_box_width)
-          |> Kernel.-(if(collapsed?, do: 0.0, else: horizontal_box_size(style)))
-          |> max(0.0)
-
-        _ ->
-          resolved_content_size(
-            style,
-            :width,
-            width,
-            available_box_width - horizontal_box_size(style)
-          )
-      end
+    available_width = width - margin.left - margin.right
 
     box_width =
-      case collapsed? do
-        true ->
-          content_width
-
-        false ->
-          content_width + border_widths.left + padding.left + padding.right +
-            border_widths.right
+      case Map.get(style, :width) do
+        declared when not is_nil(declared) -> resolved_size(style, :width, width, available_width)
+        _ -> available_width
       end
 
-    content_x =
-      case collapsed? do
-        true -> box_x + padding.left
-        false -> box_x + border_widths.left + padding.left
-      end
-
-    content_top =
-      case collapsed? do
-        true -> box_top - padding.top
-        false -> box_top - border_widths.top - padding.top
-      end
-
-    table_id = {:table, content_x, content_top}
-    table_metadata = break_metadata(style)
-
-    with {:ok, caption_boxes, rows_top} <-
-           layout_table_caption(children, content_x, content_top, content_width, table_id),
-         {:ok, rows} <- table_rows(children),
-         {:ok, row_boxes, content_bottom} <-
-           layout_table_rows(
-             rows,
-             table_columns(children),
-             content_x,
-             rows_top,
-             content_width,
-             table_id,
-             Map.get(style, :border_collapse, :separate),
-             Map.get(style, :border_spacing, {0.0, 0.0}),
-             Map.get(style, :table_layout, :auto),
-             if(collapsed?,
-               do: resolved_size(style, :height, nil, nil),
-               else: resolved_content_size(style, :height, nil, nil)
-             )
-           ) do
-      content_height = content_top - content_bottom
-
-      box_height =
+    with {:ok, rows} <- table_rows(children) do
+      outer =
         case collapsed? do
           true ->
-            border_widths.top + padding.top + content_height + padding.bottom +
-              border_widths.bottom
+            cells = table_grid(rows)
+            row_count = length(cells)
+            column_count = if cells == [], do: 0, else: table_column_count(cells)
+
+            Enum.with_index(cells)
+            |> Enum.reduce(borders, fn {row, row_index}, outer ->
+              Enum.reduce(row.cells, outer, fn placement, acc ->
+                cell_borders = Map.get(placement.cell.style, :border_widths, edges(0.0))
+
+                %{
+                  left:
+                    if(placement.column == 0,
+                      do: max(acc.left, cell_borders.left),
+                      else: acc.left
+                    ),
+                  right:
+                    if(placement.column + placement.colspan == column_count,
+                      do: max(acc.right, cell_borders.right),
+                      else: acc.right
+                    ),
+                  top: if(row_index == 0, do: max(acc.top, cell_borders.top), else: acc.top),
+                  bottom:
+                    if(row_index + placement.rowspan == row_count,
+                      do: max(acc.bottom, cell_borders.bottom),
+                      else: acc.bottom
+                    )
+                }
+              end)
+            end)
 
           false ->
-            border_widths.top + padding.top + content_height + padding.bottom +
-              border_widths.bottom
+            borders
         end
 
-      table_boxes =
-        table_background_boxes(
-          style,
-          box_x,
-          box_top - box_height,
-          box_width,
-          box_height,
-          rows_top,
-          content_bottom,
-          Map.get(style, :border_collapse, :separate),
-          Map.merge(table_metadata, %{flow_id: table_id, table_id: table_id})
-        )
+      insets =
+        if collapsed?,
+          do: Map.new(outer, fn {edge, value} -> {edge, value / 2} end),
+          else: borders
 
-      next_y = box_top - box_height - margin.bottom
-      {:ok, table_boxes.before ++ caption_boxes ++ row_boxes ++ table_boxes.after, next_y}
+      content_x = box_x + insets.left + padding.left
+
+      content_width =
+        max(box_width - insets.left - insets.right - padding.left - padding.right, 0.0)
+
+      table_id = {:table, box_x, box_top}
+      table_metadata = break_metadata(style)
+
+      declared_height =
+        if collapsed?,
+          do: resolved_size(style, :height, nil, nil),
+          else: resolved_content_size(style, :height, nil, nil)
+
+      available_height =
+        if is_number(declared_height) and collapsed?,
+          do: max(declared_height - insets.top - insets.bottom, 0.0),
+          else: declared_height
+
+      with {:ok, caption_boxes, table_top} <-
+             layout_table_caption(children, box_x, box_top, box_width, table_id),
+           rows_top = table_top - padding.top - insets.top,
+           {:ok, row_boxes, content_bottom} <-
+             layout_table_rows(
+               rows,
+               table_columns(children),
+               content_x,
+               rows_top,
+               content_width,
+               table_id,
+               Map.get(style, :border_collapse, :separate),
+               Map.get(style, :border_spacing, {1.5, 1.5}),
+               Map.get(style, :table_layout, :auto),
+               available_height,
+               outer
+             ) do
+        bottom = content_bottom - padding.bottom - insets.bottom
+        box_height = table_top - bottom
+
+        table_boxes =
+          table_background_boxes(
+            style,
+            box_x,
+            bottom,
+            box_width,
+            box_height,
+            Map.get(style, :border_collapse, :separate),
+            Map.merge(table_metadata, %{flow_id: table_id, table_id: table_id})
+          )
+
+        {:ok, table_boxes.before ++ caption_boxes ++ row_boxes ++ table_boxes.after,
+         bottom - margin.bottom}
+      end
     end
   end
 
-  defp table_background_boxes(
-         style,
-         x,
-         y,
-         width,
-         height,
-         rows_top,
-         content_bottom,
-         border_collapse,
-         metadata
-       ) do
+  defp table_background_boxes(style, x, y, width, height, border_collapse, metadata) do
     case border_collapse do
       :collapse ->
-        row_grid_height = rows_top - content_bottom
-
         background =
           style
           |> Map.put(:border_widths, edges(0.0))
-          |> background_box(x, content_bottom, width, row_grid_height)
+          |> background_box(x, y, width, height)
           |> tag_boxes(metadata)
 
         border =
           style
           |> Map.put(:background_color, nil)
           |> Map.put(:background_image, nil)
-          |> background_box(x, content_bottom, width, row_grid_height)
+          |> background_box(x, y, width, height)
           |> tag_boxes(metadata)
 
         %{before: background, after: border}
 
       _ ->
-        boxes =
-          style
-          |> background_box(x, y, width, height)
-          |> tag_boxes(metadata)
-
-        %{before: boxes, after: []}
+        %{before: style |> background_box(x, y, width, height) |> tag_boxes(metadata), after: []}
     end
   end
 
@@ -3124,12 +3203,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       case Enum.filter(columns, &match?(%{style: %{display: :table_column}}, &1)) do
         [] ->
-          List.duplicate(%{width: group_width}, Map.get(group_style, :span, 1))
+          span = Map.get(group_style, :span, 1)
+          HtmlValidator.reserve_render_resource(:max_table_grid_work, span, :layout)
+          List.duplicate(%{width: group_width}, span)
 
         columns ->
           Enum.flat_map(columns, fn %{style: column_style} ->
             column = %{width: Map.get(column_style, :width) || group_width}
-            List.duplicate(column, Map.get(column_style, :span, 1))
+            span = Map.get(column_style, :span, 1)
+            HtmlValidator.reserve_render_resource(:max_table_grid_work, span, :layout)
+            List.duplicate(column, span)
           end)
       end
     end)
@@ -3218,7 +3301,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
          border_collapse,
          border_spacing,
          table_layout,
-         available_height
+         available_height,
+         outer
        ) do
     case rows do
       [] ->
@@ -3226,7 +3310,128 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       _ ->
         grid_rows = table_grid(rows)
+        row_count = length(grid_rows)
         column_count = max(table_column_count(grid_rows), length(columns))
+
+        grid_rows =
+          case border_collapse do
+            :collapse ->
+              shared_edges =
+                grid_rows
+                |> Enum.with_index()
+                |> Enum.reduce(%{}, fn {row, row_index}, shared ->
+                  Enum.reduce(row.cells, shared, fn placement, edges ->
+                    HtmlValidator.reserve_render_resource(
+                      :max_table_grid_work,
+                      2 * (placement.colspan + placement.rowspan),
+                      :layout
+                    )
+
+                    widths = Map.get(placement.cell.style, :border_widths, edges(0.0))
+
+                    horizontal =
+                      Enum.flat_map(
+                        placement.column..(placement.column + placement.colspan - 1),
+                        fn column ->
+                          [
+                            {{:horizontal, row_index, column}, widths.top},
+                            {{:horizontal, row_index + placement.rowspan, column}, widths.bottom}
+                          ]
+                        end
+                      )
+
+                    vertical =
+                      Enum.flat_map(row_index..(row_index + placement.rowspan - 1), fn row ->
+                        [
+                          {{:vertical, row, placement.column}, widths.left},
+                          {{:vertical, row, placement.column + placement.colspan}, widths.right}
+                        ]
+                      end)
+
+                    Enum.reduce(horizontal ++ vertical, edges, fn {key, width}, acc ->
+                      Map.update(acc, key, width, &max(&1, width))
+                    end)
+                  end)
+                end)
+
+              Enum.with_index(grid_rows, fn row, row_index ->
+                cells =
+                  Enum.map(row.cells, fn placement ->
+                    cell = placement.cell
+
+                    HtmlValidator.reserve_render_resource(
+                      :max_table_grid_work,
+                      2 * (placement.colspan + placement.rowspan),
+                      :layout
+                    )
+
+                    horizontal = placement.column..(placement.column + placement.colspan - 1)
+                    vertical = row_index..(row_index + placement.rowspan - 1)
+
+                    borders = %{
+                      top:
+                        Enum.map(
+                          horizontal,
+                          &Map.fetch!(shared_edges, {:horizontal, row_index, &1})
+                        )
+                        |> Enum.max(),
+                      bottom:
+                        Enum.map(
+                          horizontal,
+                          &Map.fetch!(
+                            shared_edges,
+                            {:horizontal, row_index + placement.rowspan, &1}
+                          )
+                        )
+                        |> Enum.max(),
+                      left:
+                        Enum.map(
+                          vertical,
+                          &Map.fetch!(shared_edges, {:vertical, &1, placement.column})
+                        )
+                        |> Enum.max(),
+                      right:
+                        Enum.map(
+                          vertical,
+                          &Map.fetch!(
+                            shared_edges,
+                            {:vertical, &1, placement.column + placement.colspan}
+                          )
+                        )
+                        |> Enum.max()
+                    }
+
+                    borders = %{
+                      left:
+                        if(placement.column == 0,
+                          do: max(borders.left, outer.left),
+                          else: borders.left
+                        ),
+                      right:
+                        if(placement.column + placement.colspan == column_count,
+                          do: max(borders.right, outer.right),
+                          else: borders.right
+                        ),
+                      top: if(row_index == 0, do: max(borders.top, outer.top), else: borders.top),
+                      bottom:
+                        if(row_index + placement.rowspan == row_count,
+                          do: max(borders.bottom, outer.bottom),
+                          else: borders.bottom
+                        )
+                    }
+
+                    %{
+                      placement
+                      | cell: %{cell | style: Map.put(cell.style, :_collapsed_borders, borders)}
+                    }
+                  end)
+
+                %{row | cells: cells}
+              end)
+
+            _ ->
+              grid_rows
+          end
 
         {horizontal_spacing, vertical_spacing} =
           case {border_collapse, border_spacing} do
@@ -3403,10 +3608,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp table_grid(rows) do
+    row_count = length(rows)
+
     {grid_rows, _occupied_until} =
       rows
       |> Enum.with_index()
       |> Enum.map_reduce(%{}, fn {%{row: %{children: cells}} = row, row_index}, occupied_until ->
+        HtmlValidator.reserve_render_resource(
+          :max_table_grid_work,
+          row_count + map_size(occupied_until),
+          :layout
+        )
+
         row_group_length =
           rows
           |> Enum.drop(row_index)
@@ -3430,6 +3643,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             occupied =
               case rowspan > 1 do
                 true ->
+                  HtmlValidator.reserve_render_resource(:max_table_grid_work, colspan, :layout)
+
                   Enum.reduce(column..(column + colspan - 1), occupied, fn occupied_column, acc ->
                     Map.put(acc, occupied_column, row_index + rowspan)
                   end)
@@ -3467,6 +3682,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp next_table_cell_column(occupied_until, row_index, candidate, colspan) do
+    HtmlValidator.reserve_render_resource(:max_table_grid_work, colspan, :layout)
+
     occupied? =
       Enum.any?(candidate..(candidate + colspan - 1), fn column ->
         Map.get(occupied_until, column, 0) > row_index
@@ -3490,7 +3707,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
          last_row?
        ) do
     padding = Map.get(style, :padding, edges(0.0))
-    border_widths = Map.get(style, :border_widths, edges(0.0))
+
+    border_widths =
+      case border_collapse do
+        :collapse ->
+          Map.get(style, :_collapsed_borders, Map.get(style, :border_widths, edges(0.0)))
+          |> Map.new(fn {edge, value} -> {edge, value / 2} end)
+
+        _ ->
+          Map.get(style, :border_widths, edges(0.0))
+      end
+
     content_x = x + border_widths.left + padding.left
 
     content_width =
@@ -3758,11 +3985,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                   nil
 
                 {:auto, 1, width} when width in [nil, :auto] ->
-                  case {MapSet.member?(explicitly_sized_columns, index), percentage_total > 0} do
-                    {true, _has_percentage_widths?} ->
+                  case MapSet.member?(explicitly_sized_columns, index) do
+                    true ->
                       nil
 
-                    {false, true} ->
+                    false ->
                       table_cell_preferred_width(
                         cell,
                         table_width,
@@ -3770,9 +3997,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                         table_layout,
                         border_collapse
                       )
-
-                    {false, false} ->
-                      nil
                   end
 
                 _ ->
@@ -3808,13 +4032,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         :fixed -> List.duplicate(0.0, column_count)
         _ -> table_minimum_column_widths(rows, column_count)
       end
-      |> Enum.with_index()
-      |> Enum.map(fn {width, index} ->
-        case MapSet.member?(explicitly_sized_columns, index) do
-          true -> 0.0
-          false -> width
-        end
-      end)
 
     fixed_total = preferred |> Enum.reject(&is_nil/1) |> Enum.sum()
     flexible_count = Enum.count(preferred, &is_nil/1)
@@ -3834,21 +4051,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         extra_width = max((table_width - fixed_total) / column_count, 0.0)
         Enum.map(preferred, &(&1 + extra_width))
 
-      fixed_total > table_width and fixed_total > 0 and flexible_count > 0 ->
-        Enum.map(preferred, fn
-          nil -> 0.0
-          width -> width / fixed_total * table_width
-        end)
-
       fixed_total > table_width and fixed_total > 0 and percentage_total <= 0 ->
-        Enum.map(preferred, &(&1 / fixed_total * table_width))
+        Enum.map(preferred, &((&1 || 0.0) / fixed_total * table_width))
 
       fixed_total > table_width and fixed_total > 0 ->
         preferred
+        |> Enum.map(&(&1 || 0.0))
+        |> shrink_largest_columns(List.duplicate(0.0, column_count), fixed_total - table_width)
         |> Enum.with_index()
-        |> Enum.map(fn {width, index} ->
-          max(width, Enum.at(minimum, index))
-        end)
+        |> Enum.map(fn {width, index} -> max(width, Enum.at(minimum, index)) end)
         |> shrink_columns_to_width(minimum, table_width)
 
       flexible_count > 0 ->
@@ -3871,8 +4082,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         end)
         |> shrink_columns_to_width(minimum, table_width)
 
+      fixed_total == 0 ->
+        List.duplicate(table_width / column_count, column_count)
+
       true ->
-        Enum.map(preferred, &(&1 / fixed_total * table_width))
+        Enum.map(preferred, &((&1 || 0.0) / fixed_total * table_width))
     end
   end
 
@@ -3905,7 +4119,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         case inline_runs(children) do
           {:ok, runs} ->
             padding = Map.get(style, :padding, edges(0.0))
-            border_widths = Map.get(style, :border_widths, edges(0.0))
+
+            border_widths =
+              case Map.get(style, :_collapsed_borders) do
+                nil -> Map.get(style, :border_widths, edges(0.0))
+                borders -> Map.new(borders, fn {edge, value} -> {edge, value / 2} end)
+              end
 
             content_width =
               runs
@@ -3954,7 +4173,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
         case {shrinkable_total > 0, overflow <= shrinkable_total} do
           {true, true} ->
-            shrink_largest_columns(widths, minimum, overflow)
+            Enum.zip_with(widths, shrinkable, fn width, capacity ->
+              width - overflow * capacity / shrinkable_total
+            end)
 
           _ ->
             Enum.map(widths, &(&1 / total_width * table_width))
@@ -4015,7 +4236,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {:ok, runs} ->
             runs
             |> Enum.reduce(0.0, fn run, width -> width + inline_run_width(run, nil) end)
-            |> Kernel.+(horizontal_box_size(style))
+            |> Kernel.+(table_cell_horizontal_box_size(style, border_collapse))
             |> min(table_width)
 
           {:error, _reason} ->
@@ -4156,26 +4377,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     case adjusted_heights do
       {:ok, heights} ->
-        heights =
-          case {border_collapse, available_height} do
-            {:collapse, available_height} when not is_number(available_height) ->
-              outer_bottom_border =
-                rows
-                |> List.last(%{cells: []})
-                |> Map.fetch!(:cells)
-                |> Enum.map(fn %{cell: cell} ->
-                  cell.style
-                  |> Map.get(:border_widths, edges(0.0))
-                  |> Map.fetch!(:bottom)
-                end)
-                |> Enum.max()
-
-              List.update_at(heights, -1, &(&1 + outer_bottom_border))
-
-            _ ->
-              heights
-          end
-
         {:ok, stretch_table_row_heights(rows, heights, available_height, vertical_spacing)}
 
       {:error, reason} ->
@@ -4236,7 +4437,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     case cell do
       %{style: %{display: :table_cell} = style, children: children} when is_list(children) ->
         padding = Map.get(style, :padding, edges(0.0))
-        border_widths = Map.get(style, :border_widths, edges(0.0))
+
+        border_widths =
+          case border_collapse do
+            :collapse ->
+              Map.get(style, :_collapsed_borders, Map.get(style, :border_widths, edges(0.0)))
+              |> Map.new(fn {edge, value} -> {edge, value / 2} end)
+
+            _ ->
+              Map.get(style, :border_widths, edges(0.0))
+          end
 
         content_width =
           width - border_widths.left - padding.left - padding.right - border_widths.right
@@ -4247,7 +4457,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
           border_height =
             case border_collapse do
-              :collapse -> max(border_widths.top, border_widths.bottom)
+              :collapse -> border_widths.top + border_widths.bottom
               _ -> border_widths.top + border_widths.bottom
             end
 
@@ -4470,7 +4680,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           marker_gap = 18.0
           marker = list_marker(marker_type, index)
           marker_style = text_style(style)
-          baseline_y = y - Map.fetch!(style, :font_size)
+          baseline_y = y - inline_line_baseline_depth([], style)
           text_x = x + marker_gap
           text_width = width - marker_gap
           flow_metadata = %{flow_id: {:list_item, x, y, index}}
@@ -4496,7 +4706,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp inline_text_boxes(runs, style, x, y, width, metadata) do
-    line_height = Map.fetch!(style, :line_height)
     lines = inline_lines(runs, width)
     last_line_index = length(lines) - 1
 
@@ -4504,7 +4713,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       lines
       |> Enum.with_index()
       |> Enum.reduce({[], 0.0}, fn {line_runs, index}, {boxes, consumed_height} ->
-        current_line_height = inline_line_height(line_runs, line_height, width)
+        current_line_height = inline_line_height(line_runs, style, width)
         baseline_depth = inline_line_baseline_depth(line_runs, style)
         line_top = y - consumed_height
         baseline_y = line_top - baseline_depth
@@ -4531,6 +4740,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               metadata
           end
 
+        line_metadata =
+          line_metadata
+          |> Map.put(:line_baseline_depth, baseline_depth)
+          |> Map.put(:line_box_height, current_line_height)
+
         {line_boxes, _next_x} =
           Enum.reduce(line_runs, {[], start_x}, fn run, {acc, current_x} ->
             run_boxes =
@@ -4543,11 +4757,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       end)
 
     {position_inline_contexts(Enum.reverse(boxes), width),
-     inline_content_height(runs, lines, line_height)}
+     inline_content_height(runs, lines, style)}
   end
 
   defp inline_run_boxes(run, x, line_top, baseline_y, width, metadata) do
     case run do
+      %{type: :inline_block, style: %{display: display} = style, children: children}
+      when display in [:inline_flex, :inline_grid] ->
+        content_width = inline_block_content_width(run, width)
+
+        style =
+          Map.put(
+            style,
+            :width,
+            declared_size_for_border_box(
+              style,
+              :width,
+              content_width + horizontal_box_size(style)
+            )
+          )
+
+        case layout_block(
+               %{type: :element, style: style, children: children},
+               x,
+               line_top,
+               inline_run_width(run, width)
+             ) do
+          {:ok, boxes, _next_y} -> Enum.map(boxes, &Map.merge(&1, metadata))
+          {:error, _} -> [%{type: :layout_error}]
+        end
+
       %{type: :inline_block, style: style} ->
         margin = Map.get(style, :margin, edges(0.0))
         padding = Map.get(style, :padding, edges(0.0))
@@ -4770,23 +5009,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     shift_layout_boxes(boxes, delta_x, delta_y)
   end
 
-  defp inline_content_height(runs, width_or_lines, line_height) do
+  defp inline_content_height(runs, width_or_lines, style) do
     case width_or_lines do
       width when is_number(width) ->
         runs
         |> inline_lines(width)
-        |> then(&inline_content_height(runs, &1, line_height))
+        |> then(&inline_content_height(runs, &1, style))
 
       lines when is_list(lines) ->
         case runs do
           [] -> 0.0
-          _ -> Enum.reduce(lines, 0.0, &(&2 + inline_line_height(&1, line_height, nil)))
+          _ -> Enum.reduce(lines, 0.0, &(&2 + inline_line_height(&1, style, nil)))
         end
     end
   end
 
-  defp inline_line_height(line_runs, line_height, available_width) do
-    Enum.reduce(line_runs, line_height, fn run, height ->
+  defp inline_line_height(line_runs, parent_style, available_width) do
+    parent_depth = text_baseline_depth(parent_style)
+    parent_height = Map.fetch!(parent_style, :line_height)
+
+    {ascent, descent} =
+      Enum.reduce(line_runs, {parent_depth, parent_height - parent_depth}, fn run,
+                                                                              {above, below} ->
+        case run do
+          %{type: :inline_block} ->
+            {above, below}
+
+          %{style: style} ->
+            depth = text_baseline_depth(style)
+            {max(above, depth), max(below, Map.fetch!(style, :line_height) - depth)}
+        end
+      end)
+
+    Enum.reduce(line_runs, ascent + descent, fn run, height ->
       case run do
         %{type: :inline_block, style: style} ->
           margin = Map.get(style, :margin, edges(0.0))
@@ -4798,28 +5053,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               margin.top + margin.bottom
           )
 
-        _ ->
-          height
+        %{style: style} ->
+          max(height, Map.fetch!(style, :line_height))
       end
     end)
   end
 
   defp inline_line_baseline_depth(line_runs, parent_style) do
-    parent_font_size = Map.fetch!(parent_style, :font_size)
-
-    largest_text_font_size =
-      Enum.reduce(line_runs, parent_font_size, fn run, font_size ->
-        case run do
-          %{type: :inline_block} -> font_size
-          _ -> max(font_size, Map.fetch!(run.style, :font_size))
-        end
-      end)
-
-    text_baseline_depth =
-      case largest_text_font_size > parent_font_size do
-        true -> max(parent_font_size, Map.fetch!(parent_style, :line_height))
-        false -> parent_font_size
-      end
+    text_baseline_depth = text_baseline_depth(parent_style)
 
     Enum.reduce(line_runs, text_baseline_depth, fn run, depth ->
       case run do
@@ -4828,10 +5069,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           border_widths = Map.get(style, :border_widths, edges(0.0))
           max(depth, border_widths.top + padding.top + Map.fetch!(style, :font_size))
 
-        _ ->
-          depth
+        %{style: style} ->
+          max(depth, text_baseline_depth(style))
       end
     end)
+  end
+
+  defp text_baseline_depth(style) do
+    font_size = Map.fetch!(style, :font_size)
+    line_height = Map.fetch!(style, :line_height)
+
+    case text_font_face(style) do
+      %{ascent: ascent, descent: descent, units_per_em: units_per_em} ->
+        ascent_pixels = round(font_size * ascent / units_per_em / 0.75)
+        descent_pixels = round(-font_size * descent / units_per_em / 0.75)
+        leading_pixels = Float.floor((line_height / 0.75 - ascent_pixels - descent_pixels) / 2)
+        (ascent_pixels + leading_pixels) * 0.75
+
+      _ ->
+        font_size
+    end
   end
 
   defp inline_lines(runs, width) do
@@ -4941,6 +5198,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         ~r/[^ \t\n\f\r]+[ \t\n\f\r]*|[ \t\n\f\r]+/u
         |> Regex.scan(text)
         |> Enum.map(&List.first/1)
+        |> Enum.flat_map(&String.split(&1, ~r/(?<=[\p{L}\p{N}]-)(?=[\p{L}\p{N}])/u))
     end
   end
 
@@ -5057,14 +5315,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             {:error, reason}
         end
 
-      %{type: :element, style: %{display: :inline_block} = style, children: children} = element
-      when is_list(children) ->
+      %{type: :element, style: %{display: display} = style, children: children} = element
+      when display in [:inline_block, :inline_flex, :inline_grid] and is_list(children) ->
+        inline_children = if display == :inline_block, do: inline_runs(children), else: :container
+
         run =
-          case inline_runs(children) do
+          case inline_children do
             {:ok, child_runs} ->
               %{type: :inline_block, text: "", style: style, runs: child_runs}
 
-            {:error, _reason} ->
+            _ ->
               %{type: :inline_block, text: "", style: style, children: children}
           end
 
@@ -5121,7 +5381,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           Enum.reduce(runs, 0.0, &(&2 + inline_run_width(&1, available_width)))
 
         %{children: children} ->
-          intrinsic_width = flex_block_intrinsic_width(children)
+          intrinsic_width =
+            case Map.get(style, :display) do
+              :inline_grid ->
+                {:ok, items} = grid_items(children)
+                placed = place_grid_items(items, style)
+                count = grid_axis_count(placed, style, :column)
+                tracks = grid_tracks(style, :column, count)
+                intrinsics = grid_column_intrinsics(placed, count)
+
+                sizes =
+                  resolve_grid_columns(
+                    tracks,
+                    intrinsics,
+                    Enum.sum(intrinsics),
+                    grid_column_gap(style)
+                  )
+
+                grid_tracks_size(sizes, grid_column_gap(style))
+
+              :inline_flex ->
+                Enum.sum(Enum.map(children, &flex_child_intrinsic_width/1))
+
+              _ ->
+                flex_block_intrinsic_width(children)
+            end
+
           margin = Map.get(style, :margin, edges(0.0))
 
           case available_width do
@@ -5148,8 +5433,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     intrinsic_height =
       case run do
         %{runs: runs} ->
-          line_height = Map.fetch!(style, :line_height)
-          inline_content_height(runs, content_width, line_height)
+          inline_content_height(runs, content_width, style)
 
         %{children: children} ->
           case layout_container_content_height(style, children, content_width) do

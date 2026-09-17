@@ -295,7 +295,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   end
 
   defp layout_document(styled_tree, opts) do
-    case apply(Layout, :layout, [styled_tree, opts]) do
+    case apply(Layout, :layout, [Map.put(styled_tree, :_css_pixel_viewport, true), opts]) do
       {:ok, layout_tree} ->
         {:ok, layout_tree}
 

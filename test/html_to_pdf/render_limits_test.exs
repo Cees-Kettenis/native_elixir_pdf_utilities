@@ -86,6 +86,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsTest do
     assert {:ok, _} = HtmlToPdf.render("<p>safe</p>")
   end
 
+  test "table grid expansion shares a bounded budget and reports layout diagnostics" do
+    table = "<table style='border-collapse:collapse'><tr><td colspan='20'>x</td></tr></table>"
+
+    for maximum <- [1, 50, 110] do
+      Limits.install(%{Limits.effective() | max_table_grid_work: maximum})
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(table)
+      assert diagnostic.stage == :layout
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.operation == :render
+      assert diagnostic.message =~ "max_table_grid_work"
+    end
+
+    Limits.install(%{Limits.effective() | max_table_grid_work: 50})
+
+    for columns <- ["<colgroup span='100'></colgroup>", "<colgroup><col span='100'></colgroup>"] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlToPdf.render("<table>#{columns}<tr><td>x</td></tr></table>")
+
+      assert diagnostic.stage == :layout
+      assert diagnostic.message =~ "max_table_grid_work"
+    end
+
+    Limits.install(%{Limits.effective() | max_table_grid_work: 1_000})
+    assert {:ok, _pdf} = HtmlToPdf.render(table)
+  end
+
   test "generated boxes and repeated text measurements are charged before allocation" do
     Limits.install(%{Limits.effective() | max_layout_boxes: 1})
 

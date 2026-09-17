@@ -238,6 +238,104 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     end
   end
 
+  @doc false
+  @spec prepare_kerning(binary(), pos_integer()) ::
+          {:ok, map()} | :error | {:error, {:resource_limit_exceeded, Diagnostics.diagnostic()}}
+  def prepare_kerning(data, glyph_count) do
+    limit = Limits.get(:max_font_kerning_pairs)
+
+    case data do
+      <<0::16, count::16, subtables::binary>> when count <= limit ->
+        Enum.reduce_while(List.duplicate(nil, count), {:ok, %{}, subtables, 0}, fn _,
+                                                                                   {:ok, pairs,
+                                                                                    remaining,
+                                                                                    work} ->
+          case {work < limit, remaining} do
+            {true,
+             <<0::16, length::16, format::8, _reserved::4, override::1, cross_stream::1,
+               minimum::1, horizontal::1, rest::binary>>}
+            when length >= 6 and length - 6 <= byte_size(rest) ->
+              <<body::binary-size(^length - 6), rest::binary>> = rest
+
+              case {format, horizontal, minimum, cross_stream, body} do
+                {0, 1, 0, 0, <<pair_count::16, _search::binary-size(6), records::binary>>}
+                when byte_size(records) == pair_count * 6 ->
+                  case work + pair_count + 1 <= limit do
+                    true ->
+                      parsed =
+                        for <<left::16, right::16, value::signed-16 <- records>>,
+                          do: {{left, right}, value}
+
+                      prepared =
+                        Enum.reduce_while(parsed, {:ok, pairs, nil}, fn
+                          {{left, right} = key, value}, {:ok, acc, previous} ->
+                            case left < glyph_count and right < glyph_count and
+                                   (is_nil(previous) or previous < key) do
+                              true ->
+                                acc =
+                                  if override == 1,
+                                    do: Map.put(acc, key, value),
+                                    else: Map.update(acc, key, value, &(&1 + value))
+
+                                {:cont, {:ok, acc, key}}
+
+                              false ->
+                                {:halt, :error}
+                            end
+                        end)
+
+                      case prepared do
+                        {:ok, pairs, _} ->
+                          {:cont, {:ok, pairs, rest, work + pair_count + 1}}
+
+                        :error ->
+                          {:halt, :error}
+                      end
+
+                    false ->
+                      {:halt, kerning_limit_error()}
+                  end
+
+                {0, 1, 0, 0, _} ->
+                  {:halt, :error}
+
+                _ ->
+                  {:cont, {:ok, pairs, rest, work + 1}}
+              end
+
+            {false, _} ->
+              {:halt, kerning_limit_error()}
+
+            _ ->
+              {:halt, :error}
+          end
+        end)
+        |> case do
+          {:ok, pairs, <<>>, _} -> {:ok, pairs}
+          {:ok, _, _, _} -> :error
+          failure -> failure
+        end
+
+      <<0::16, count::16, _::binary>> when count > limit ->
+        kerning_limit_error()
+
+      # Apple and other kerning formats are not interpreted.
+      _ ->
+        {:ok, %{}}
+    end
+  end
+
+  defp kerning_limit_error do
+    Diagnostics.error(
+      :limits,
+      :resource_limit_exceeded,
+      "font kerning-pair work exceeds the limit",
+      operation: :load_registry,
+      module: NativeElixirPdfUtilities.HtmlToPdf.Font,
+      source: "kern"
+    )
+  end
+
   defp limit_error do
     Diagnostics.error(
       :limits,

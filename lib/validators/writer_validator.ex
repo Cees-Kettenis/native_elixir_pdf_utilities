@@ -6,6 +6,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   writer can serialize without revalidating the page model.
   """
 
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
@@ -150,7 +151,10 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     case page do
       %{size: {width, height}, boxes: boxes}
       when is_number(width) and is_number(height) and width > 0 and height > 0 and is_list(boxes) ->
-        Enum.all?(boxes, &valid_box?/1)
+        Enum.all?(boxes, fn box ->
+          is_map(box) and is_boolean(Map.get(box, :snap_to_css_pixel_grid, false)) and
+            valid_box?(box)
+        end)
 
       _ ->
         false
@@ -347,7 +351,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
              is_integer(default_width) and default_width >= 0 and is_map(cmap) and
              is_integer(ascent) and is_integer(descent) and is_integer(x_min) and
              is_integer(y_min) and is_integer(x_max) and is_integer(y_max) ->
-        box.font == Font.pdf_name(box.font_face) and
+        valid_kerning?(Map.get(box.font_face, :kerning, %{}), length(widths)) and
+          box.font == Font.pdf_name(box.font_face) and
           Regex.match?(~r/\A[A-Za-z0-9_.+-]+\z/, pdf_name) and
           units_per_em <= 65_535 and default_width <= 65_535 and
           Enum.all?([ascent, descent, x_min, y_min, x_max, y_max], &(&1 in -32_768..32_767)) and
@@ -369,6 +374,28 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       nil ->
         box.font in @built_in_fonts and
           Font.supports_text?(%{type: :built_in, family: box.font, pdf_name: box.font}, box.text)
+
+      _ ->
+        false
+    end
+  end
+
+  defp valid_kerning?(kerning, glyph_count) do
+    case kerning do
+      pairs when is_map(pairs) ->
+        map_size(pairs) <= Limits.get(:max_font_kerning_pairs) and
+          Enum.all?(pairs, fn
+            {{left, right}, value} ->
+              # Legacy kern records are signed 16-bit adjustments and their
+              # table count is unsigned 16-bit. These format invariants bound
+              # every possible accumulated adjustment, independent of budgets.
+              is_integer(left) and left >= 0 and left < glyph_count and
+                is_integer(right) and right >= 0 and right < glyph_count and
+                is_integer(value) and value >= -32_768 * 65_535 and value <= 32_767 * 65_535
+
+            _ ->
+              false
+          end)
 
       _ ->
         false

@@ -919,7 +919,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       case {styled_tree, opts} do
         {%{type: :document, children: children}, opts}
         when is_list(children) and is_list(opts) ->
-          case Keyword.keyword?(opts) do
+          case Keyword.keyword?(opts) and
+                 is_boolean(Map.get(styled_tree, :_css_pixel_viewport, false)) do
             true ->
               validate_render_tree(children)
 
@@ -1564,14 +1565,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     case Enum.all?(nodes, fn node ->
            case node do
              %{type: :text, text: text, style: style} ->
-               is_binary(text) and String.valid?(text) and is_map(style)
+               is_binary(text) and String.valid?(text) and valid_layout_style?(style)
 
-             %{type: :element, style: %{display: display}}
+             %{type: :element, style: %{display: display} = style}
              when display in [:image, :none] ->
-               true
+               valid_layout_style?(style)
 
              %{type: :element, style: style, children: children} ->
-               is_map(style) and is_list(children) and validate_layout_nodes(children) == :ok
+               valid_layout_style?(style) and is_list(children) and
+                 validate_layout_nodes(children) == :ok
 
              _ ->
                false
@@ -1580,6 +1582,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       true -> :ok
       false -> :invalid_layout
     end
+  end
+
+  defp valid_layout_style?(style) do
+    # Collapsed edge metadata is created by Layout after input validation.
+    # Incoming styled trees must not supply internal border calculations.
+    is_map(style) and not Map.has_key?(style, :_collapsed_borders)
   end
 
   defp invalid_pagination do

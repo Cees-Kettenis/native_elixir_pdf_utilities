@@ -255,7 +255,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   defp content_object(page, font_resources, image_resources, graphics_state_resources) do
     content =
-      content_stream(page.boxes, font_resources, image_resources, graphics_state_resources)
+      content_stream(
+        page.boxes,
+        elem(page.size, 1),
+        font_resources,
+        image_resources,
+        graphics_state_resources
+      )
 
     length = byte_size(content)
 
@@ -268,14 +274,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     |> String.trim()
   end
 
-  defp content_stream(boxes, font_resources, image_resources, graphics_state_resources) do
+  defp content_stream(
+         boxes,
+         page_height,
+         font_resources,
+         image_resources,
+         graphics_state_resources
+       ) do
     Enum.map_join(boxes, "\n", fn box ->
       case box.type do
         :text ->
-          text_stream(box, font_resources, graphics_state_resources)
+          text_stream(box, page_height, font_resources, graphics_state_resources)
 
         :rect ->
-          rect_stream(box, graphics_state_resources)
+          rect_stream(box, page_height, graphics_state_resources)
 
         :image ->
           image_stream(box, image_resources)
@@ -312,7 +324,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     |> String.trim()
   end
 
-  defp text_stream(box, font_resources, graphics_state_resources) do
+  defp text_stream(box, page_height, font_resources, graphics_state_resources) do
     {red, green, blue} = color_channels(box.color)
     font_resource = Map.fetch!(font_resources, font_key(box))
     text_operator = text_operator(box, font_resource)
@@ -320,7 +332,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     text_y =
       case Map.get(box, :snap_to_css_pixel_grid, false) do
         true ->
-          Float.ceil(box.y / @css_pixel_points) * @css_pixel_points + 0.5
+          # Resolve raster boundary ties toward the top of the line. This is below
+          # visible PDF precision but avoids an extra subpixel raster row.
+          page_height -
+            Float.floor((page_height - box.y) / @css_pixel_points + 0.5) * @css_pixel_points +
+            0.0001
 
         false ->
           box.y
@@ -332,7 +348,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         " /",
         font_resource.name,
         " ",
-        format_number(box.font_size),
+        format_number(painted_font_size(box)),
         " Tf",
         " ",
         format_number(red),
@@ -356,11 +372,81 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
+  defp painted_font_size(box) do
+    case Map.get(box, :snap_to_css_pixel_grid, false) do
+      true -> Float.floor(box.font_size / @css_pixel_points * 100) / 100 * @css_pixel_points
+      false -> box.font_size
+    end
+  end
+
   defp text_operator(box, font_resource) do
     operator =
       case Map.get(font_resource, :font_face) do
-        %{type: :embedded} ->
-          " <" <> Font.encode_embedded_text(box.text, font_resource.encoding) <> "> Tj"
+        %{type: :embedded} = font ->
+          size = box.font_size
+
+          shaped_size =
+            if Map.get(box, :snap_to_css_pixel_grid, false),
+              do: Float.floor(size / 0.75 * 64) / 64 * 0.75,
+              else: size
+
+          painted_size = painted_font_size(box)
+
+          case painted_size > 0 and
+                 (shaped_size != painted_size or map_size(Map.get(font, :kerning, %{})) > 0) do
+            true ->
+              glyphs =
+                box.text
+                |> String.to_charlist()
+                |> Enum.chunk_every(2, 1, [nil])
+                |> Enum.map(fn [codepoint, next] ->
+                  glyph_id = Map.get(font.cmap, codepoint, 0)
+                  next_id = Map.get(font.cmap, next, 0)
+
+                  width =
+                    if glyph_id < tuple_size(font_resource.widths),
+                      do: elem(font_resource.widths, glyph_id),
+                      else: font.default_width
+
+                  kerning = Map.get(Map.get(font, :kerning, %{}), {glyph_id, next_id}, 0)
+
+                  adjustment =
+                    (width * (1 - shaped_size / painted_size) -
+                       kerning * shaped_size / painted_size) * 1000 / font.units_per_em
+
+                  {Font.encode_embedded_text(<<codepoint::utf8>>, font_resource.encoding),
+                   format_number(adjustment)}
+                end)
+
+              {segments, pending} =
+                Enum.reduce(glyphs, {[], []}, fn {encoded, adjustment}, {segments, pending} ->
+                  pending = [encoded | pending]
+
+                  case adjustment do
+                    "0" ->
+                      {segments, pending}
+
+                    _ ->
+                      text = pending |> Enum.reverse() |> IO.iodata_to_binary()
+                      {["<" <> text <> "> " <> adjustment | segments], []}
+                  end
+                end)
+
+              trailing = pending |> Enum.reverse() |> IO.iodata_to_binary()
+
+              case segments do
+                [] ->
+                  " <" <> trailing <> "> Tj"
+
+                _ ->
+                  " [" <>
+                    Enum.join(Enum.reverse(segments), " ") <>
+                    if(trailing == "", do: "", else: " <" <> trailing <> ">") <> "] TJ"
+              end
+
+            false ->
+              " <" <> Font.encode_embedded_text(box.text, font_resource.encoding) <> "> Tj"
+          end
 
         _ ->
           " (" <> escape_text(box.text) <> ") Tj"
@@ -375,14 +461,48 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp rect_stream(box, graphics_state_resources) do
+  defp rect_stream(box, page_height, graphics_state_resources) do
+    box =
+      case Map.get(box, :snap_to_css_pixel_grid, false) do
+        true ->
+          snapped = snap_box_to_css_pixel_grid(%{box | y: page_height - box.y - box.height})
+          %{snapped | y: page_height - snapped.y - snapped.height}
+
+        false ->
+          box
+      end
+
+    box =
+      case Map.get(box, :role) do
+        :table_border ->
+          borders =
+            Map.get(box, :border_widths, %{
+              top: box.stroke_width,
+              right: box.stroke_width,
+              bottom: box.stroke_width,
+              left: box.stroke_width
+            })
+
+          # Collapsed table borders straddle grid edges. Expand only the paint
+          # rectangle so pagination retains the original cell bounds.
+          %{
+            box
+            | x: box.x - borders.left / 2,
+              y: box.y - borders.bottom / 2,
+              width: box.width + (borders.left + borders.right) / 2,
+              height: box.height + (borders.top + borders.bottom) / 2
+          }
+
+        _ ->
+          box
+      end
+
     case side_specific_border?(box) do
       true ->
         side_specific_rect_stream(box, graphics_state_resources)
 
       false ->
         border_style = uniform_border_style(box)
-        box = snap_box_to_css_pixel_grid(box)
 
         fill_stream =
           case box.fill_color do
@@ -449,6 +569,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   defp image_stream(box, image_resources) do
     box = snap_box_to_css_pixel_grid(box)
+
+    box =
+      case Map.get(box, :snap_to_css_pixel_grid, false) do
+        true ->
+          # Keep the far edges inside the CSS rectangle. Exact integer boundaries
+          # otherwise make PDF rasterizers allocate an extra resampling pixel.
+          %{
+            box
+            | width: max(box.width - 0.0001, 0.0),
+              height: max(box.height - 0.0001, 0.0),
+              y: box.y + 0.0001
+          }
+
+        false ->
+          box
+      end
+
     image_resource = Map.fetch!(image_resources, image_key(box.image))
 
     clip =
@@ -733,7 +870,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     |> put_opacity(color, :stroke, graphics_state_resources)
     |> put_stroke_color(color, stroke_width)
     |> put_stroke_pattern(border_style, stroke_width)
-    |> Kernel.++([border_side_path(box, side, inset), "S", "Q"])
+    |> Kernel.++([border_side_path(box, side, inset + stroke_width / 2), "S", "Q"])
   end
 
   defp relief_pair(color, side, border_style) do
@@ -761,38 +898,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         :outset -> not dark_side?
       end
 
-    case dark? do
-      true -> shade_color(color, 0.5)
-      false -> tint_color(color, 0.5)
-    end
-  end
+    channels = color |> Tuple.to_list() |> Enum.take(3)
+    value = Enum.max(channels)
 
-  defp shade_color(color, amount) do
-    case color do
-      {red, green, blue} ->
-        {red * amount, green * amount, blue * amount}
+    adjusted =
+      case {dark?, value} do
+        {false, value} when value == 0 ->
+          List.duplicate(84 / 255, 3)
 
-      {red, green, blue, alpha} ->
-        {red * amount, green * amount, blue * amount, alpha}
-    end
-  end
+        {dark?, value} ->
+          target = if dark?, do: max(0.0, value - 0.33), else: min(1.0, value + 0.33)
+          multiplier = if value == 0.0, do: 0.0, else: target / value
+          Enum.map(channels, &(round(&1 * multiplier * 255) / 255))
+      end
 
-  defp tint_color(color, amount) do
-    case color do
-      {red, green, blue} ->
-        {
-          red + (1 - red) * amount,
-          green + (1 - green) * amount,
-          blue + (1 - blue) * amount
-        }
-
-      {red, green, blue, alpha} ->
-        {
-          red + (1 - red) * amount,
-          green + (1 - green) * amount,
-          blue + (1 - blue) * amount,
-          alpha
-        }
+    case tuple_size(color) do
+      3 -> List.to_tuple(adjusted)
+      4 -> List.to_tuple(adjusted ++ [elem(color, 3)])
     end
   end
 
@@ -975,6 +1097,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           to_unicode_object_id: object_id + 5,
           object_count: 6,
           font_face: font,
+          widths: List.to_tuple(font.widths),
           encoding: encoding,
           pdf_name: font.pdf_name
         }
@@ -1079,8 +1202,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       resource.encoding.cid_to_gid
       |> Enum.sort_by(fn {cid, _glyph_id} -> cid end)
       |> Enum.map(fn {cid, glyph_id} ->
-        width = Enum.at(font.widths, glyph_id, font.default_width)
-        "#{cid} [#{scale_metric(width, font.units_per_em)}]"
+        width =
+          if glyph_id < tuple_size(resource.widths),
+            do: elem(resource.widths, glyph_id),
+            else: font.default_width
+
+        "#{cid} [#{format_number(width * 1000 / font.units_per_em)}]"
       end)
       |> Enum.join(" ")
 
@@ -1104,12 +1231,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     |> Enum.reduce({%{}, first_object_id, 1}, fn image, {resources, object_id, index} ->
       key = image_key(image)
       mask_object_id = if Map.has_key?(image, :alpha_data), do: object_id + 1
-      object_count = if is_nil(mask_object_id), do: 1, else: 2
+      base_object_count = if is_nil(mask_object_id), do: 1, else: 2
+      tint_object_id = if image.color_space == :device_cmyk, do: object_id + base_object_count
+      object_count = base_object_count + if(is_nil(tint_object_id), do: 0, else: 1)
 
       resource = %{
         name: "Im#{index}",
         object_id: object_id,
         mask_object_id: mask_object_id,
+        tint_object_id: tint_object_id,
         image: image
       }
 
@@ -1122,10 +1252,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     image_resources
     |> Map.values()
     |> Enum.reduce(0, fn resource, count ->
-      case resource.mask_object_id do
-        nil -> count + 1
-        _ -> count + 2
-      end
+      count + 1 + if(is_nil(resource.mask_object_id), do: 0, else: 1) +
+        if(is_nil(resource.tint_object_id), do: 0, else: 1)
     end)
   end
 
@@ -1140,9 +1268,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp image_objects_for_resource(resource) do
     image_object = {resource.object_id, image_object(resource)}
 
-    case resource.mask_object_id do
-      nil -> [image_object]
-      mask_object_id -> [image_object, {mask_object_id, image_mask_object(resource.image)}]
+    objects =
+      case resource.mask_object_id do
+        nil -> [image_object]
+        mask_object_id -> [image_object, {mask_object_id, image_mask_object(resource.image)}]
+      end
+
+    case resource.tint_object_id do
+      nil ->
+        objects
+
+      object_id ->
+        # Multilinear interpolation reproduces the unprofiled JPEG conversion
+        # R=(1-C)*(1-K), G=(1-M)*(1-K), B=(1-Y)*(1-K).
+        samples =
+          for black <- 0..1, yellow <- 0..1, magenta <- 0..1, cyan <- 0..1, into: <<>> do
+            <<255 * (1 - cyan) * (1 - black), 255 * (1 - magenta) * (1 - black),
+              255 * (1 - yellow) * (1 - black)>>
+          end
+
+        tint =
+          "<< /FunctionType 0 /Domain [0 1 0 1 0 1 0 1] /Range [0 1 0 1 0 1] /Size [2 2 2 2] /BitsPerSample 8 /Length 48 >>\nstream\n" <>
+            samples <> "\nendstream"
+
+        objects ++ [{object_id, tint}]
     end
   end
 
@@ -1174,9 +1323,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         _ -> ""
       end
 
+    color_space =
+      case resource.tint_object_id do
+        nil -> pdf_color_space(image.color_space)
+        id -> "[/DeviceN [/JpegC /JpegM /JpegY /JpegK] /DeviceRGB #{id} 0 R]"
+      end
+
     decode = if Map.get(image, :inverted_cmyk, false), do: " /Decode [1 0 1 0 1 0 1 0]", else: ""
 
-    "<< /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace #{pdf_color_space(image.color_space)} /BitsPerComponent #{image.bits_per_component} /Filter #{filter}#{smask}#{decode}#{color_transform} /Length #{byte_size(data)} >>\nstream\n" <>
+    "<< /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace #{color_space} /BitsPerComponent #{image.bits_per_component} /Filter #{filter}#{smask}#{decode}#{color_transform} /Length #{byte_size(data)} >>\nstream\n" <>
       data <> "\nendstream"
   end
 
@@ -1243,7 +1398,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     case color_space do
       :device_gray -> "/DeviceGray"
       :device_rgb -> "/DeviceRGB"
-      :device_cmyk -> "/DeviceCMYK"
     end
   end
 

@@ -12,3 +12,11 @@ RUN apt-get update \
       poppler-utils \
       python3 \
     && rm -rf /var/lib/apt/lists/*
+
+# Native generic families use Fontconfig; Chromium defaults to the corresponding
+# Arial, Times New Roman, and Courier New metric-compatible Liberation faces.
+COPY fonts-browser-parity.conf /etc/fonts/conf.d/99-native-pdf-browser-parity.conf
+
+RUN test "$(fc-match -f '%{family}' sans-serif)" = "Liberation Sans" \
+    && test "$(fc-match -f '%{family}' serif)" = "Liberation Serif" \
+    && test "$(fc-match -f '%{family}' monospace)" = "Liberation Mono"

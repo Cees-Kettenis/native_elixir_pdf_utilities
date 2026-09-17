@@ -272,6 +272,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
       when type in [:rect, :image] and is_number(y) and is_number(height) ->
         {y + height, y}
 
+      %{type: :text, y: y, line_baseline_depth: depth, line_box_height: height}
+      when is_number(y) and is_number(depth) and is_number(height) ->
+        {y + depth, y + depth - height}
+
       %{type: :text, y: y, font_size: font_size, line_height: line_height}
       when is_number(y) and is_number(font_size) and is_number(line_height) ->
         {y + font_size, y + font_size - line_height}

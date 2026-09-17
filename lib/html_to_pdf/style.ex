@@ -834,6 +834,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           finalize_background_image_style(style, opts, image_budget)
         end
 
+      {"select", {:ok, style}} ->
+        # Native menu lists reserve internal inline space in addition to CSS padding.
+        # Chromium's default theme uses 4px at the start and 16px for the arrow.
+        padding = style.padding
+
+        style = %{
+          style
+          | padding: %{padding | left: padding.left + 3.0, right: padding.right + 12.0}
+        }
+
+        finalize_background_image_style(style, opts, image_budget)
+
       {_tag, {:ok, style}} ->
         finalize_background_image_style(style, opts, image_budget)
 
@@ -921,7 +933,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     %{type: :embedded, ascent: ascent, descent: descent, units_per_em: units_per_em} =
       Map.fetch!(style, :font_face)
 
-    max((ascent - descent) / units_per_em * font_size, font_size)
+    ascent_pixels = round(ascent / units_per_em * font_size / 0.75)
+    descent_pixels = round(-descent / units_per_em * font_size / 0.75)
+    max((ascent_pixels + descent_pixels) * 0.75, font_size)
   end
 
   defp text_style(style) do
@@ -1001,7 +1015,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     |> Map.merge(%{
       display: :table,
       border_collapse: :separate,
-      border_spacing: {0.0, 0.0},
+      border_spacing: {1.5, 1.5},
       margin: edges(0.0),
       padding: edges(0.0),
       table_layout: :auto
@@ -1009,7 +1023,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp table_caption_defaults(font_size) do
-    block_defaults(font_size, 700, 0.0)
+    block_defaults(font_size, 400, 0.0)
     |> Map.merge(%{
       display: :table_caption,
       text_align: :center
@@ -1169,9 +1183,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       "button" ->
         base
         |> Map.put(:background_color, {0.94, 0.94, 0.94})
-        |> Map.put(:font_weight, 700)
+        |> Map.put(:box_sizing, :border_box)
+        |> Map.put(:font_families, ["Arial", "sans-serif"])
+        |> Map.put(:font_size, 10.0)
+        |> Map.put(:font_style, :normal)
+        |> Map.put(:line_height_multiplier, nil)
+        |> Map.put(:line_height_normal, true)
         |> Map.put(:text_align, :center)
-        |> Map.put(:width, font_size * 10.5)
+        |> Map.put(:width, 105.0)
 
       _ ->
         Map.put(base, :width, font_size * 10.5)
@@ -2578,8 +2597,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       |> Map.get(:border_widths, edges(@medium_border_width))
       |> Enum.map(fn {side, width} ->
         case Map.fetch!(border_styles, side) in [:none, :hidden] do
-          true -> {side, 0.0}
-          false -> {side, width}
+          true ->
+            {side, 0.0}
+
+          false ->
+            {side, if(width > 0, do: max(0.75, Float.floor(width / 0.75) * 0.75), else: 0.0)}
         end
       end)
       |> Map.new()
