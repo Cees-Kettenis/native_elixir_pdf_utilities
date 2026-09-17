@@ -183,7 +183,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   @spec render(String.t(), [render_option()]) ::
           {:ok, binary()} | {:error, detailed_error_reason()}
   def render(html, opts \\ []) do
-    case do_render(html, opts) do
+    case HtmlValidator.with_render_budget(fn -> do_render(html, opts) end) do
       {:ok, pdf_binary} ->
         {:ok, pdf_binary}
 

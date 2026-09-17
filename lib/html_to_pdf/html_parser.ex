@@ -39,7 +39,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   Parses an HTML binary into a renderer DOM tree.
   """
   @spec parse(term()) ::
-          {:ok, dom_tree()} | {:error, :invalid_encoding | :invalid_html | :unsupported_html}
+          {:ok, dom_tree()}
+          | {:error,
+             :invalid_encoding | :invalid_html | :unsupported_html | :resource_limit_exceeded}
   def parse(html) do
     case parse_detailed(html) do
       {:ok, dom} -> {:ok, dom}
@@ -52,18 +54,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   """
   @spec parse_detailed(term()) ::
           {:ok, dom_tree()}
-          | {:error, {:invalid_encoding | :invalid_html | :unsupported_html, map()}}
+          | {:error,
+             {:invalid_encoding | :invalid_html | :unsupported_html | :resource_limit_exceeded,
+              map()}}
   def parse_detailed(html) do
-    case HtmlValidator.validate_html_source(html) do
-      {:ok, html} ->
-        case parse_document(html) do
-          {:ok, dom} -> {:ok, dom}
-          {:error, reason} -> {:error, {reason, html_error_detail(reason, html)}}
-        end
+    HtmlValidator.with_render_budget(fn ->
+      case HtmlValidator.validate_html_source(html) do
+        {:ok, html} ->
+          HtmlValidator.reserve_render_resource(
+            :max_aggregate_html_source_bytes,
+            byte_size(html),
+            :html
+          )
 
-      {:error, {reason, diagnostic}} ->
-        {:error, {reason, diagnostic}}
-    end
+          case parse_document(html) do
+            {:ok, dom} -> {:ok, dom}
+            {:error, reason} -> {:error, {reason, html_error_detail(reason, html)}}
+          end
+
+        {:error, {reason, diagnostic}} ->
+          {:error, {reason, diagnostic}}
+      end
+    end)
   end
 
   defp parse_document(html) do
@@ -82,6 +94,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   end
 
   defp scan_tokens(html, mode, tokens) do
+    HtmlValidator.reserve_render_resource(:max_html_nodes, 1, :html)
+
     case {html, mode} do
       {"", :data} ->
         {:ok, Enum.reverse(tokens)}
@@ -174,7 +188,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   defp parse_children(tokens, context, closing_tag, children) do
     case tokens do
       [] when is_nil(closing_tag) ->
-        {:ok, children, []}
+        {:ok, Enum.reverse(children), []}
 
       [] ->
         {:error, :unsupported_html}
@@ -194,7 +208,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
       String.starts_with?(token, "</") ->
         case parse_closing_tag(token) do
-          {:ok, tag} when tag == closing_tag -> {:ok, children, remaining}
+          {:ok, tag} when tag == closing_tag -> {:ok, Enum.reverse(children), remaining}
           _ -> {:error, :unsupported_html}
         end
 
@@ -210,7 +224,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
             children: element_children
           }
 
-          parse_children(rest, context, closing_tag, children ++ [element])
+          parse_children(rest, context, closing_tag, [element | children])
         else
           _ -> {:error, :unsupported_html}
         end
@@ -238,7 +252,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
           remaining,
           context,
           closing_tag,
-          children ++ [%{type: :text, text: HtmlEntities.decode(token, :text)}]
+          [%{type: :text, text: HtmlEntities.decode(token, :text)} | children]
         )
     end
   end
@@ -246,7 +260,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   defp parse_text_content_child(token, remaining, context, closing_tag, children) do
     case parse_closing_tag(token) do
       {:ok, tag} when tag == closing_tag ->
-        {:ok, children, remaining}
+        {:ok, Enum.reverse(children), remaining}
 
       _ ->
         text =
@@ -259,7 +273,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
           remaining,
           context,
           closing_tag,
-          children ++ [%{type: :text, text: text}]
+          [%{type: :text, text: text} | children]
         )
     end
   end
@@ -409,8 +423,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
   defp element_children(tag, remaining, self_closing?) do
     case self_closing? do
-      true -> {:ok, [], remaining}
-      false -> parse_children(remaining, tag, tag, [])
+      true ->
+        {:ok, [], remaining}
+
+      false ->
+        HtmlValidator.within_html_element(fn -> parse_children(remaining, tag, tag, []) end)
     end
   end
 

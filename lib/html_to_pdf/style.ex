@@ -76,89 +76,91 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
              {:invalid_css | :invalid_document | :invalid_options | :resource_limit_exceeded,
               map()}}
   def compute_detailed(dom, opts, image_budget) do
-    font_options = Font.normalize_options(opts)
+    HtmlValidator.with_render_budget(fn ->
+      font_options = Font.normalize_options(opts)
 
-    case HtmlValidator.validate_style_input(dom, opts, font_options) do
-      :ok ->
-        {:ok, opts} = font_options
-        %{type: :document, children: children} = dom
+      case HtmlValidator.validate_style_input(dom, opts, font_options) do
+        :ok ->
+          {:ok, opts} = font_options
+          %{type: :document, children: children} = dom
 
-        with {:ok, stylesheet_entries} <- load_stylesheets(dom, opts),
-             {:ok, css_fonts} <- stylesheet_fonts(stylesheet_entries, opts),
-             {:ok, font_registry} <- font_registry(opts, css_fonts),
-             {:ok, font_families, font_face} <-
-               resolve_font(
-                 Keyword.get(opts, :default_font, "DejaVu Sans"),
-                 400,
-                 :normal,
-                 font_registry
-               ),
-             {:ok, rules} <- stylesheet_rules(stylesheet_entries) do
-          children = assign_selector_ids(children)
-          style_opts = Keyword.put(opts, :__image_budget__, image_budget)
+          with {:ok, stylesheet_entries} <- load_stylesheets(dom, opts),
+               {:ok, css_fonts} <- stylesheet_fonts(stylesheet_entries, opts),
+               {:ok, font_registry} <- font_registry(opts, css_fonts),
+               {:ok, font_families, font_face} <-
+                 resolve_font(
+                   Keyword.get(opts, :default_font, "DejaVu Sans"),
+                   400,
+                   :normal,
+                   font_registry
+                 ),
+               {:ok, rules} <- stylesheet_rules(stylesheet_entries) do
+            children = assign_selector_ids(children)
+            style_opts = Keyword.put(opts, :__image_budget__, image_budget)
 
-          base_style = %{
-            _custom_properties: %{},
-            _font_registry: font_registry,
-            _root_font_size: 12.0,
-            color: {0, 0, 0},
-            font_face: font_face,
-            font_families: font_families,
-            font_family: font_face.family,
-            font_size: 12.0,
-            font_style: :normal,
-            font_weight: 400,
-            letter_spacing: 0.0,
-            line_height: 14.4,
-            line_height_normal: true,
-            text_align: :left,
-            text_transform: :none,
-            white_space: :normal
-          }
+            base_style = %{
+              _custom_properties: %{},
+              _font_registry: font_registry,
+              _root_font_size: 12.0,
+              color: {0, 0, 0},
+              font_face: font_face,
+              font_families: font_families,
+              font_family: font_face.family,
+              font_size: 12.0,
+              font_style: :normal,
+              font_weight: 400,
+              letter_spacing: 0.0,
+              line_height: 14.4,
+              line_height_normal: true,
+              text_align: :left,
+              text_transform: :none,
+              white_space: :normal
+            }
 
-          result =
-            RenderCache.run(fn cache ->
-              context = %{rules: compile_selector_rules(rules), cache: cache}
+            result =
+              RenderCache.run(fn cache ->
+                context = %{rules: compile_selector_rules(rules), cache: cache}
 
-              case fragment_root_style(children, base_style, context, style_opts) do
-                {:ok, nil} ->
-                  {:ok, %{type: :document, children: []}}
+                case fragment_root_style(children, base_style, context, style_opts) do
+                  {:ok, nil} ->
+                    {:ok, %{type: :document, children: []}}
 
-                {:ok, root_style} ->
-                  with {:ok, styled_children, _counters} <-
-                         style_children(children, root_style, context, [], style_opts, [], []) do
-                    {:ok, %{type: :document, children: styled_children}}
-                  end
+                  {:ok, root_style} ->
+                    with {:ok, styled_children, _counters} <-
+                           style_children(children, root_style, context, [], style_opts, [], []) do
+                      {:ok, %{type: :document, children: styled_children}}
+                    end
 
-                {:error, reason} ->
-                  {:error, reason}
-              end
-            end)
+                  {:error, reason} ->
+                    {:error, reason}
+                end
+              end)
 
-          case result do
-            {:ok, styled_tree} ->
-              {:ok, styled_tree}
+            case result do
+              {:ok, styled_tree} ->
+                {:ok, styled_tree}
 
-            {:error, :invalid_document} ->
-              {:error, style_error_detail(dom, opts)}
+              {:error, :invalid_document} ->
+                {:error, style_error_detail(dom, opts)}
+
+              {:error, {_reason, _diagnostic}} = error ->
+                error
+            end
+          else
+            {:error, {:font_load_failed, sources}} ->
+              {:error, font_load_error(sources)}
 
             {:error, {_reason, _diagnostic}} = error ->
               error
+
+            {:error, :invalid_document} ->
+              {:error, style_error_detail(dom, opts)}
           end
-        else
-          {:error, {:font_load_failed, sources}} ->
-            {:error, font_load_error(sources)}
 
-          {:error, {_reason, _diagnostic}} = error ->
-            error
-
-          {:error, :invalid_document} ->
-            {:error, style_error_detail(dom, opts)}
-        end
-
-      {:error, {_reason, _diagnostic}} = error ->
-        error
-    end
+        {:error, {_reason, _diagnostic}} = error ->
+          error
+      end
+    end)
   end
 
   @doc false
@@ -570,19 +572,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp generated_content_text(content, attributes, counters) do
     Enum.map_join(content_parts(content), "", fn part ->
-      case part do
-        {:string, text} ->
-          text
+      text =
+        case part do
+          {:string, text} ->
+            text
 
-        {:attr, name} ->
-          Map.get(attributes, name, "")
+          {:attr, name} ->
+            Map.get(attributes, name, "")
 
-        {:counter, name} ->
-          case innermost_counter_index(counters, name) do
-            nil -> "0"
-            index -> counters |> Enum.at(index) |> elem(2) |> Integer.to_string()
-          end
-      end
+          {:counter, name} ->
+            case innermost_counter_index(counters, name) do
+              nil -> "0"
+              index -> counters |> Enum.at(index) |> elem(2) |> Integer.to_string()
+            end
+        end
+
+      HtmlValidator.reserve_render_resource(:max_rendered_text_bytes, byte_size(text), :style)
+      text
     end)
   end
 
@@ -1786,6 +1792,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp matches_simple_selector?(part, node, ancestors) do
+    HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
     attributes = Map.get(node, :attributes, %{})
     classes = node._selector_classes
 
@@ -2824,12 +2831,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp transform_text(text, transform) do
-    case transform do
-      :uppercase -> String.upcase(text)
-      :lowercase -> String.downcase(text)
-      :capitalize -> Regex.replace(~r/\b\p{L}/u, text, &String.upcase/1)
-      _ -> text
-    end
+    HtmlValidator.reserve_render_resource(:max_rendered_text_bytes, byte_size(text), :style)
+
+    transformed =
+      case transform do
+        :uppercase -> String.upcase(text)
+        :lowercase -> String.downcase(text)
+        :capitalize -> Regex.replace(~r/\b\p{L}/u, text, &String.upcase/1)
+        _ -> text
+      end
+
+    HtmlValidator.reserve_render_resource(
+      :max_rendered_text_bytes,
+      max(byte_size(transformed) - byte_size(text), 0),
+      :style
+    )
+
+    transformed
   end
 
   defp css_budget(cache) do

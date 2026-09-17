@@ -23,7 +23,9 @@ call. Invalid settings prevent startup and identify the problem.
 
 Values must be positive integers. Aggregate image and metadata limits must
 allow at least one maximum-size item. The settings below do not impose an
-application-wide memory cap, timeout, or general HTML-source/output byte limit.
+application-wide memory cap or timeout. Render budgets cover one synchronous
+operation, including repeated header/footer templates. Concurrent requests each
+have their own budget; applications should also limit concurrency.
 
 ## PDF inputs
 
@@ -44,6 +46,31 @@ These limits apply when reading existing PDFs.
 | `max_pdf_decompression_ratio` | 100 | Decoded-to-encoded stream ratio |
 | `max_pdf_xref_length_candidates` | 1,000 | Candidate indirect `/Length` objects |
 | `max_pdf_xref_revisions` | 1,000 | Incremental cross-reference revisions |
+
+## HTML processing and output
+
+| Setting | Default | Applies to |
+| --- | ---: | --- |
+| `max_html_source_bytes` | 2,000,000 | One HTML source or advanced tree text node |
+| `max_aggregate_html_source_bytes` | 10,000,000 | Body and all expanded furniture sources |
+| `max_css_source_bytes` | 1,000,000 | One stylesheet or inline declaration source |
+| `max_aggregate_css_source_bytes` | 20,000,000 | CSS bytes processed, including repeated parsing passes and furniture |
+| `max_html_nodes` | 25,000 | HTML token processing steps across a render, and nodes in an advanced input tree |
+| `max_html_depth` | 128 | Nested HTML elements or advanced input tree depth |
+| `max_css_rules` | 10,000 | Parsed stylesheet rules across a render |
+| `max_css_work` | 5,000,000 | CSS scanned bytes, selector parsing work, and selector comparisons |
+| `max_layout_boxes` | 100,000 | Drawing-box construction attempts, including measurements and furniture |
+| `max_rendered_text_bytes` | 10,000,000 | Text production bytes, including generated-content parts before joining and transformations |
+| `max_layout_text_work` | 20,000,000 | Text bytes measured, including repeated measurements |
+| `max_rendered_pages` | 1,000 | Generated PDF pages, also bounded by `max_pdf_pages` |
+| `max_rendered_pdf_bytes` | 50,000,000 | Serialized PDF output before flattening its iodata |
+
+Work counters charge repeated processing rather than just retained results.
+Reaching a limit aborts the operation with an actionable diagnostic and clears
+its budget. Standalone parser, style, layout, pagination, furniture, and writer
+calls create their own budget. Nested pipeline stages share the active budget.
+CSS source validation retains its `:invalid_css` diagnostic contract; other new
+render limits return `:resource_limit_exceeded`.
 
 ## HTML, images, and layout
 

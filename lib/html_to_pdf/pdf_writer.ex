@@ -12,6 +12,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
   alias NativeElixirPdfUtilities.Pdf.OutlineBuilder
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.WriterValidator
 
   # CSS defines one pixel as 1/96 inch, which is a fixed 0.75 PDF points.
@@ -21,7 +22,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   @type page :: NativeElixirPdfUtilities.HtmlToPdf.Pagination.page()
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
-  @type error_reason :: :invalid_pdf_input
+  @type error_reason :: :invalid_pdf_input | :resource_limit_exceeded
 
   @doc """
   Renders paginated drawing instructions to a PDF binary.
@@ -29,26 +30,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   @spec render([page()], [render_option()]) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def render(pages, opts \\ []) do
-    case WriterValidator.prepare(pages, opts) do
-      {:ok, context} ->
-        with {:ok, pages, controls} <-
-               NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare(context.pages, opts) do
-          pdf = pages_to_pdf(pages, context.metadata, context.outlines)
+    HtmlValidator.with_render_budget(fn ->
+      case WriterValidator.prepare(pages, opts) do
+        {:ok, context} ->
+          HtmlValidator.check_render_resource(:max_rendered_pages, length(context.pages), :writer)
+          HtmlValidator.check_render_resource(:max_pdf_pages, length(context.pages), :writer)
 
-          case controls do
-            [] ->
-              {:ok, pdf}
+          Enum.reduce(context.pages, 0, fn page, count ->
+            count = count + length(page.boxes)
+            HtmlValidator.check_render_resource(:max_layout_boxes, count, :writer)
+            count
+          end)
 
-            _ ->
-              with {:ok, document} <- NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf) do
-                NativeElixirPdfUtilities.Pdf.FormWriter.create(document, controls)
-              end
+          with {:ok, pages, controls} <-
+                 NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare(
+                   context.pages,
+                   opts
+                 ) do
+            pdf = pages_to_pdf(pages, context.metadata, context.outlines)
+
+            case controls do
+              [] ->
+                {:ok, pdf}
+
+              _ ->
+                with {:ok, document} <- NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf) do
+                  NativeElixirPdfUtilities.Pdf.FormWriter.create(document, controls)
+                end
+            end
           end
-        end
 
-      {:error, {reason, diagnostic}} ->
-        {:error, {reason, Map.put(diagnostic, :module, __MODULE__)}}
-    end
+        {:error, {reason, diagnostic}} ->
+          {:error, {reason, Map.put(diagnostic, :module, __MODULE__)}}
+      end
+    end)
   end
 
   defp pages_to_pdf(pages, metadata, outlines) do
@@ -1255,6 +1270,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     {body, offsets, position} =
       Enum.reduce(objects, {[], [], byte_size(header)}, fn {id, content},
                                                            {pieces, offsets, position} ->
+        HtmlValidator.check_render_resource(
+          :max_rendered_pdf_bytes,
+          position + IO.iodata_length(content),
+          :writer
+        )
+
         object = "#{id} 0 obj\n#{content}\nendobj\n"
 
         {[object | pieces], [position | offsets], position + byte_size(object)}
@@ -1272,13 +1293,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
     info_reference = if is_integer(info_object_id), do: " /Info #{info_object_id} 0 R", else: ""
 
-    IO.iodata_to_binary([
+    output = [
       header,
       body,
       "xref\n0 #{size}\n0000000000 65535 f \n",
       xref_entries,
       "trailer\n<< /Size #{size} /Root 1 0 R#{info_reference} >>\nstartxref\n#{xref_position}\n%%EOF\n"
-    ])
+    ]
+
+    HtmlValidator.check_render_resource(
+      :max_rendered_pdf_bytes,
+      IO.iodata_length(output),
+      :writer
+    )
+
+    IO.iodata_to_binary(output)
   end
 
   defp escape_text(text) do

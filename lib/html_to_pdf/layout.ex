@@ -28,62 +28,67 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   Converts a styled document tree into a layout tree.
   """
   @spec layout(term(), term()) ::
-          {:ok, layout_tree()} | {:error, :invalid_layout | :invalid_margin | :invalid_page_size}
+          {:ok, layout_tree()}
+          | {:error, :invalid_layout | :invalid_margin | :invalid_page_size}
+          | {:error,
+             {:resource_limit_exceeded, NativeElixirPdfUtilities.Diagnostics.diagnostic()}}
   def layout(styled_tree, opts \\ []) do
-    page_size =
-      case Keyword.keyword?(opts) do
-        true -> PageGeometry.normalize_page_size(Keyword.get(opts, :page_size, :a4))
-        false -> {:error, :invalid_page_size}
-      end
-
-    margins =
-      case Keyword.keyword?(opts) do
-        true -> PageGeometry.normalize_margins(Keyword.get(opts, :margin, 0))
-        false -> {:error, :invalid_margin}
-      end
-
-    case HtmlValidator.validate_layout_input(styled_tree, opts, page_size, margins) do
-      :ok ->
-        styled_tree = attach_positioned_descendants(styled_tree)
-        {:ok, page_size} = page_size
-        {:ok, margins} = margins
-        children = styled_tree.children
-        positioned_children = Map.get(styled_tree, :positioned_children, [])
-
-        with {:ok, boxes} <- layout_blocks(children, page_size, margins),
-             {:ok, boxes} <-
-               layout_positioned_children(
-                 positioned_children,
-                 boxes,
-                 %{
-                   x: margins.left,
-                   top: elem(page_size, 1) - margins.top,
-                   width: elem(page_size, 0) - margins.left - margins.right,
-                   height: elem(page_size, 1) - margins.top - margins.bottom
-                 },
-                 :root
-               ),
-             false <- Enum.any?(boxes, &(Map.get(&1, :type) == :layout_error)) do
-          {page_width, page_height} = page_size
-
-          {:ok,
-           %{
-             type: :layout,
-             page_size: page_size,
-             margin: PageGeometry.compact_margins(margins),
-             margins: margins,
-             boxes: boxes,
-             content_width: page_width - margins.left - margins.right,
-             content_height: page_height - margins.top - margins.bottom
-           }}
-        else
-          true -> {:error, :invalid_layout}
-          {:error, reason} -> {:error, reason}
+    HtmlValidator.with_render_budget(fn ->
+      page_size =
+        case Keyword.keyword?(opts) do
+          true -> PageGeometry.normalize_page_size(Keyword.get(opts, :page_size, :a4))
+          false -> {:error, :invalid_page_size}
         end
 
-      {:error, reason} ->
-        {:error, reason}
-    end
+      margins =
+        case Keyword.keyword?(opts) do
+          true -> PageGeometry.normalize_margins(Keyword.get(opts, :margin, 0))
+          false -> {:error, :invalid_margin}
+        end
+
+      case HtmlValidator.validate_layout_input(styled_tree, opts, page_size, margins) do
+        :ok ->
+          styled_tree = attach_positioned_descendants(styled_tree)
+          {:ok, page_size} = page_size
+          {:ok, margins} = margins
+          children = styled_tree.children
+          positioned_children = Map.get(styled_tree, :positioned_children, [])
+
+          with {:ok, boxes} <- layout_blocks(children, page_size, margins),
+               {:ok, boxes} <-
+                 layout_positioned_children(
+                   positioned_children,
+                   boxes,
+                   %{
+                     x: margins.left,
+                     top: elem(page_size, 1) - margins.top,
+                     width: elem(page_size, 0) - margins.left - margins.right,
+                     height: elem(page_size, 1) - margins.top - margins.bottom
+                   },
+                   :root
+                 ),
+               false <- Enum.any?(boxes, &(Map.get(&1, :type) == :layout_error)) do
+            {page_width, page_height} = page_size
+
+            {:ok,
+             %{
+               type: :layout,
+               page_size: page_size,
+               margin: PageGeometry.compact_margins(margins),
+               margins: margins,
+               boxes: boxes,
+               content_width: page_width - margins.left - margins.right,
+               content_height: page_height - margins.top - margins.bottom
+             }}
+          else
+            true -> {:error, :invalid_layout}
+            {:error, reason} -> {:error, reason}
+          end
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end)
   end
 
   defp attach_positioned_descendants(%{type: :document, children: children} = document) do
@@ -303,7 +308,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                   {[], top_inset} when top_inset > 0 ->
                     [
                       %{
-                        type: :rect,
+                        type: HtmlValidator.reserve_layout_box(:rect),
                         x: box_x,
                         y: box_top - top_inset,
                         width: 0.001,
@@ -328,7 +333,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
               page_break_box = fn position ->
                 %{
-                  type: :page_break,
+                  type: HtmlValidator.reserve_layout_box(:page_break),
                   x: box_x,
                   y: if(position == :before, do: box_top, else: next_y),
                   width: box_width,
@@ -3594,7 +3599,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           true ->
             [
               %{
-                type: :rect,
+                type: HtmlValidator.reserve_layout_box(:rect),
                 x: x,
                 y: y,
                 width: width,
@@ -5201,7 +5206,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     font_face = text_font_face(style)
 
     box = %{
-      type: :text,
+      type: HtmlValidator.reserve_layout_box(:text),
       text: run.text,
       x: x,
       y: y,
@@ -5238,7 +5243,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     border_visible? = visible_border?(border_widths, border_styles, border_colors)
 
     rect = %{
-      type: :rect,
+      type: HtmlValidator.reserve_layout_box(:rect),
       paint_layer: :container_background,
       snap_to_css_pixel_grid: true,
       x: x,
@@ -5297,7 +5302,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     case Map.get(style, :object_fit, :fill) do
       :fill ->
         %{
-          type: :image,
+          type: HtmlValidator.reserve_layout_box(:image),
           snap_to_css_pixel_grid: true,
           x: viewport_x,
           y: viewport_y,
@@ -5323,7 +5328,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           Map.get(style, :object_position, {{:percent, 0.5}, {:percent, 0.5}})
 
         %{
-          type: :image,
+          type: HtmlValidator.reserve_layout_box(:image),
           snap_to_css_pixel_grid: true,
           x: viewport_x + paint_position(horizontal, viewport_width - rendered_width),
           y:
@@ -5371,7 +5376,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       for tile_x <- x_positions, tile_y <- y_positions do
         %{
-          type: :image,
+          type: HtmlValidator.reserve_layout_box(:image),
           paint_layer: :container_background,
           snap_to_css_pixel_grid: true,
           x: tile_x,
@@ -5477,6 +5482,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   @spec text_width(String.t(), map()) :: number()
   defp text_width(text, style) do
+    HtmlValidator.reserve_render_resource(:max_layout_text_work, byte_size(text), :layout)
+
     text
     |> Font.text_width(text_font_face(style), Map.fetch!(style, :font_size))
     |> Kernel.+(letter_spacing_width(text, style))

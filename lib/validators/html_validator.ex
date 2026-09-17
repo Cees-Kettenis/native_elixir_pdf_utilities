@@ -390,14 +390,101 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec with_render_budget((-> result)) :: result | {:error, {atom(), Diagnostics.diagnostic()}}
+        when result: term()
+  def with_render_budget(fun) do
+    key = {__MODULE__, :render_budget}
+
+    case Process.get(key) do
+      nil ->
+        Process.put(key, %{})
+
+        try do
+          fun.()
+        catch
+          {:render_resource_limit, error} -> error
+        after
+          Process.delete(key)
+        end
+
+      _budget ->
+        fun.()
+    end
+  end
+
+  @doc false
+  @spec reserve_render_resource(Limits.key(), non_neg_integer(), atom()) :: :ok
+  def reserve_render_resource(limit, amount, stage) do
+    key = {__MODULE__, :render_budget}
+    budget = Process.get(key, %{})
+    used = Map.get(budget, limit, 0) + amount
+    check_render_resource(limit, used, stage)
+    if Process.get(key) != nil, do: Process.put(key, Map.put(budget, limit, used))
+    :ok
+  end
+
+  @doc false
+  @spec check_render_resource(Limits.key(), non_neg_integer(), atom()) :: :ok
+  def check_render_resource(limit, amount, stage) do
+    case amount <= Limits.get(limit) do
+      true ->
+        :ok
+
+      false ->
+        throw(
+          {:render_resource_limit,
+           Diagnostics.error(
+             stage,
+             :resource_limit_exceeded,
+             "rendering exceeds #{limit} (configured limit #{Limits.get(limit)})",
+             module: __MODULE__
+           )}
+        )
+    end
+  end
+
+  @doc false
+  @spec within_html_element((-> result)) :: result when result: term()
+  def within_html_element(fun) do
+    key = {__MODULE__, :render_budget}
+    budget = Process.get(key)
+    depth = Map.get(budget, :max_html_depth, 0)
+    check_render_resource(:max_html_depth, depth + 1, :html)
+    Process.put(key, Map.put(budget, :max_html_depth, depth + 1))
+
+    try do
+      fun.()
+    after
+      Process.put(key, Map.put(Process.get(key), :max_html_depth, depth))
+    end
+  end
+
+  @doc false
+  @spec reserve_layout_box(atom()) :: atom()
+  def reserve_layout_box(type) do
+    reserve_render_resource(:max_layout_boxes, 1, :layout)
+    type
+  end
+
+  @doc false
   @spec validate_html_source(term()) ::
           {:ok, binary()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_html_source(html) do
     case html do
       html when is_binary(html) ->
-        case String.valid?(html) do
-          true -> {:ok, html}
-          false -> Diagnostics.error(:html, :invalid_encoding, "HTML input must be valid UTF-8")
+        case {byte_size(html) <= Limits.get(:max_html_source_bytes), String.valid?(html)} do
+          {false, _} ->
+            Diagnostics.error(
+              :html,
+              :resource_limit_exceeded,
+              "HTML input exceeds max_html_source_bytes"
+            )
+
+          {true, true} ->
+            {:ok, html}
+
+          {true, false} ->
+            Diagnostics.error(:html, :invalid_encoding, "HTML input must be valid UTF-8")
         end
 
       _ ->
@@ -411,9 +498,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   def validate_css_source(css, kind \\ :stylesheet) do
     case {css, kind} do
       {css, kind} when is_binary(css) and kind in [:stylesheet, :declarations] ->
-        case String.valid?(css) do
-          true -> {:ok, css}
-          false -> Diagnostics.error(:css, :invalid_css, "CSS input must be valid UTF-8")
+        case {byte_size(css) <= Limits.get(:max_css_source_bytes), String.valid?(css)} do
+          {false, _} ->
+            Diagnostics.error(:css, :invalid_css, "CSS input exceeds max_css_source_bytes")
+
+          {true, true} ->
+            {:ok, css}
+
+          {true, false} ->
+            Diagnostics.error(:css, :invalid_css, "CSS input must be valid UTF-8")
         end
 
       {_css, :declarations} ->
@@ -832,73 +925,85 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec validate_style_input(term(), term(), term()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_style_input(dom, opts, font_options_result) do
-    with :ok <- validate_dom(dom),
-         :ok <- validate_style_options(opts, font_options_result) do
-      :ok
-    else
-      :invalid_document ->
-        Diagnostics.error(
-          :style,
-          :invalid_document,
-          "document tree must be a parsed HTML document"
-        )
+    with_render_budget(fn ->
+      with :ok <- validate_dom(dom),
+           :ok <- validate_style_options(opts, font_options_result) do
+        :ok
+      else
+        :invalid_document ->
+          Diagnostics.error(
+            :style,
+            :invalid_document,
+            "document tree must be a parsed HTML document"
+          )
 
-      {:error, {_reason, _diagnostic}} = error ->
-        error
-    end
+        {:error, {_reason, _diagnostic}} = error ->
+          error
+      end
+    end)
   end
 
   @doc false
   @spec validate_layout_input(term(), term(), term(), term()) ::
-          :ok | {:error, :invalid_layout | :invalid_margin | :invalid_page_size}
+          :ok
+          | {:error, :invalid_layout | :invalid_margin | :invalid_page_size}
+          | {:error, {:resource_limit_exceeded, Diagnostics.diagnostic()}}
   def validate_layout_input(styled_tree, opts, page_size_result, margins_result) do
-    case {styled_tree, opts} do
-      {%{type: :document, children: children}, opts}
-      when is_list(children) and is_list(opts) ->
-        case Keyword.keyword?(opts) do
-          true ->
-            with :ok <- validate_layout_nodes(children),
-                 {:ok, page_size} <- page_size_result,
-                 :ok <- validate_page_size(page_size),
-                 {:ok, margins} <- margins_result,
-                 :ok <- validate_margins(margins),
-                 :ok <- validate_printable_area(page_size, margins) do
-              :ok
-            else
-              :invalid_layout -> {:error, :invalid_layout}
-              {:error, reason} -> {:error, reason}
-            end
+    with_render_budget(fn ->
+      case {styled_tree, opts} do
+        {%{type: :document, children: children}, opts}
+        when is_list(children) and is_list(opts) ->
+          case Keyword.keyword?(opts) do
+            true ->
+              validate_render_tree(children)
 
-          false ->
-            {:error, :invalid_layout}
-        end
+              with :ok <- validate_layout_nodes(children),
+                   {:ok, page_size} <- page_size_result,
+                   :ok <- validate_page_size(page_size),
+                   {:ok, margins} <- margins_result,
+                   :ok <- validate_margins(margins),
+                   :ok <- validate_printable_area(page_size, margins) do
+                :ok
+              else
+                :invalid_layout -> {:error, :invalid_layout}
+                {:error, reason} -> {:error, reason}
+              end
 
-      _ ->
-        {:error, :invalid_layout}
-    end
+            false ->
+              {:error, :invalid_layout}
+          end
+
+        _ ->
+          {:error, :invalid_layout}
+      end
+    end)
   end
 
   @doc false
   @spec validate_pagination_input(term(), term(), term()) ::
-          :ok | {:error, {:invalid_layout, Diagnostics.diagnostic()}}
+          :ok | {:error, {:invalid_layout | :resource_limit_exceeded, Diagnostics.diagnostic()}}
   def validate_pagination_input(layout_tree, opts, margins_result) do
-    case {layout_tree, opts} do
-      {%{type: :layout, page_size: {width, height} = page_size, boxes: boxes}, opts}
-      when is_number(width) and width > 0 and is_number(height) and height > 0 and
-             is_list(boxes) and is_list(opts) ->
-        with true <- Keyword.keyword?(opts),
-             {:ok, margins} <- margins_result,
-             :ok <- validate_page_size(page_size),
-             :ok <- validate_margins(margins),
-             :ok <- validate_printable_area(page_size, margins) do
-          :ok
-        else
-          _ -> invalid_pagination()
-        end
+    with_render_budget(fn ->
+      case {layout_tree, opts} do
+        {%{type: :layout, page_size: {width, height} = page_size, boxes: boxes}, opts}
+        when is_number(width) and width > 0 and is_number(height) and height > 0 and
+               is_list(boxes) and is_list(opts) ->
+          check_render_resource(:max_layout_boxes, length(boxes), :pagination)
 
-      _ ->
-        invalid_pagination()
-    end
+          with true <- Keyword.keyword?(opts),
+               {:ok, margins} <- margins_result,
+               :ok <- validate_page_size(page_size),
+               :ok <- validate_margins(margins),
+               :ok <- validate_printable_area(page_size, margins) do
+            :ok
+          else
+            _ -> invalid_pagination()
+          end
+
+        _ ->
+          invalid_pagination()
+      end
+    end)
   end
 
   @doc false
@@ -1453,9 +1558,31 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     )
   end
 
+  # Walk before recursive semantic validation, without creating a flattened tree.
+  defp validate_render_tree(nodes, depth \\ 0, count \\ 0) do
+    check_render_resource(:max_html_depth, depth, :html)
+
+    Enum.reduce(nodes, count, fn node, count ->
+      check_render_resource(:max_html_nodes, count + 1, :html)
+
+      case node do
+        %{children: children} when is_list(children) ->
+          validate_render_tree(children, depth + 1, count + 1)
+
+        %{text: text} when is_binary(text) ->
+          check_render_resource(:max_html_source_bytes, byte_size(text), :html)
+          count + 1
+
+        _ ->
+          count + 1
+      end
+    end)
+  end
+
   defp validate_dom(node) do
     case node do
       %{type: :document, children: children} when is_list(children) ->
+        validate_render_tree(children)
         validate_dom_nodes(children)
 
       _ ->

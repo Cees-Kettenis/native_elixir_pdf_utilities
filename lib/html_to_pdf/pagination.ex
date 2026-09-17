@@ -9,7 +9,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
   @type page :: %{size: {float(), float()}, boxes: [term()]}
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
-  @type error_reason :: :invalid_layout
+  @type error_reason :: :invalid_layout | :resource_limit_exceeded
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
@@ -21,26 +21,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   @spec paginate(term(), [render_option()]) ::
           {:ok, [page()]} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def paginate(layout_tree, opts \\ []) do
-    margins =
-      case layout_tree do
-        layout_tree when is_map(layout_tree) ->
-          layout_tree
-          |> Map.get(:margins, Map.get(layout_tree, :margin, 0.0))
-          |> PageGeometry.normalize_margins()
+    HtmlValidator.with_render_budget(fn ->
+      margins =
+        case layout_tree do
+          layout_tree when is_map(layout_tree) ->
+            layout_tree
+            |> Map.get(:margins, Map.get(layout_tree, :margin, 0.0))
+            |> PageGeometry.normalize_margins()
 
-        _ ->
-          {:error, :invalid_margin}
+          _ ->
+            {:error, :invalid_margin}
+        end
+
+      case HtmlValidator.validate_pagination_input(layout_tree, opts, margins) do
+        :ok ->
+          {:ok, margins} = margins
+          paginate_boxes(layout_tree.page_size, layout_tree.boxes, margins)
+
+        {:error, {reason, diagnostic}} ->
+          {:error,
+           {reason,
+            Diagnostics.with_context(diagnostic, operation: :paginate, module: __MODULE__)}}
       end
-
-    case HtmlValidator.validate_pagination_input(layout_tree, opts, margins) do
-      :ok ->
-        {:ok, margins} = margins
-        paginate_boxes(layout_tree.page_size, layout_tree.boxes, margins)
-
-      {:error, {reason, diagnostic}} ->
-        {:error,
-         {reason, Diagnostics.with_context(diagnostic, operation: :paginate, module: __MODULE__)}}
-    end
+    end)
   end
 
   defp paginate_boxes(page_size, boxes, margins) do
@@ -92,6 +95,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
     initial_state = %{
       pages: [],
+      page_count: 0,
       current_boxes: [],
       current_y: content_top,
       position_delta: 0.0
@@ -104,7 +108,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
     pages =
       final_state.pages
-      |> Kernel.++([final_state.current_boxes])
+      |> Enum.reverse([final_state.current_boxes])
       |> Enum.reject(&(&1 == []))
       |> Enum.map(&%{size: page_size, boxes: &1})
 
@@ -153,6 +157,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
           state
 
         _ ->
+          HtmlValidator.check_render_resource(
+            :max_rendered_pages,
+            state.page_count + 1,
+            :pagination
+          )
+
+          HtmlValidator.check_render_resource(:max_pdf_pages, state.page_count + 1, :pagination)
+
           %{
             state
             | current_boxes: state.current_boxes ++ shifted_boxes,
@@ -205,10 +217,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     pages =
       case state.current_boxes do
         [] -> state.pages
-        boxes -> state.pages ++ [boxes]
+        boxes -> [boxes | state.pages]
       end
 
-    %{state | pages: pages, current_boxes: [], current_y: content_top, position_delta: nil}
+    %{
+      state
+      | pages: pages,
+        page_count: state.page_count + if(state.current_boxes == [], do: 0, else: 1),
+        current_boxes: [],
+        current_y: content_top,
+        position_delta: nil
+    }
   end
 
   defp flow_groups(boxes) do
@@ -312,6 +331,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   end
 
   defp shift_boxes(boxes, delta_y) do
+    HtmlValidator.reserve_render_resource(:max_layout_boxes, length(boxes), :pagination)
+
     Enum.map(boxes, fn box ->
       box =
         case Map.get(box, :y) do

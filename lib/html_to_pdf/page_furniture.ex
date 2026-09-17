@@ -20,7 +20,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
   @type layout_tree :: NativeElixirPdfUtilities.HtmlToPdf.Layout.layout_tree()
   @type render_option :: HtmlToPdf.render_option()
   @type error_reason ::
-          :invalid_css
+          :resource_limit_exceeded
+          | :invalid_css
           | :invalid_document
           | :invalid_encoding
           | :invalid_html
@@ -75,37 +76,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
           HtmlValidator.image_budget()
         ) :: {:ok, [page()]} | {:error, detailed_error()}
   def decorate(pages, layout_tree, opts, image_budget) do
-    margins =
-      case layout_tree do
-        layout_tree when is_map(layout_tree) ->
-          layout_tree
-          |> Map.get(:margins, Map.get(layout_tree, :margin, :missing))
-          |> PageGeometry.normalize_margins()
+    HtmlValidator.with_render_budget(fn ->
+      margins =
+        case layout_tree do
+          layout_tree when is_map(layout_tree) ->
+            layout_tree
+            |> Map.get(:margins, Map.get(layout_tree, :margin, :missing))
+            |> PageGeometry.normalize_margins()
 
-        _ ->
-          {:error, :invalid_margin}
+          _ ->
+            {:error, :invalid_margin}
+        end
+
+      furniture =
+        case Keyword.keyword?(opts) do
+          true -> opts |> Keyword.get(:page_furniture) |> normalize_option()
+          false -> {:error, :invalid_furniture_container}
+        end
+
+      case HtmlValidator.validate_furniture_input(pages, layout_tree, opts, margins, furniture) do
+        :ok ->
+          {:ok, margins} = margins
+          {:ok, furniture} = furniture
+          decorate_pages(pages, layout_tree.page_size, margins, furniture, opts, image_budget)
+
+        {:error, {reason, diagnostic}} ->
+          {:error,
+           {reason,
+            Diagnostics.with_context(diagnostic,
+              operation: :decorate_pages,
+              module: __MODULE__
+            )}}
       end
-
-    furniture =
-      case Keyword.keyword?(opts) do
-        true -> opts |> Keyword.get(:page_furniture) |> normalize_option()
-        false -> {:error, :invalid_furniture_container}
-      end
-
-    case HtmlValidator.validate_furniture_input(pages, layout_tree, opts, margins, furniture) do
-      :ok ->
-        {:ok, margins} = margins
-        {:ok, furniture} = furniture
-        decorate_pages(pages, layout_tree.page_size, margins, furniture, opts, image_budget)
-
-      {:error, {reason, diagnostic}} ->
-        {:error,
-         {reason,
-          Diagnostics.with_context(diagnostic,
-            operation: :decorate_pages,
-            module: __MODULE__
-          )}}
-    end
+    end)
   end
 
   defp decorate_pages(pages, page_size, margins, furniture, opts, image_budget) do

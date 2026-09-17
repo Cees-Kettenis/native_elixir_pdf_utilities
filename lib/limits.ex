@@ -17,6 +17,19 @@ defmodule NativeElixirPdfUtilities.Limits do
   """
 
   @defaults %{
+    max_aggregate_html_source_bytes: 10_000_000,
+    max_aggregate_css_source_bytes: 20_000_000,
+    max_html_source_bytes: 2_000_000,
+    max_css_source_bytes: 1_000_000,
+    max_html_nodes: 25_000,
+    max_html_depth: 128,
+    max_css_rules: 10_000,
+    max_css_work: 5_000_000,
+    max_layout_boxes: 100_000,
+    max_rendered_text_bytes: 10_000_000,
+    max_layout_text_work: 20_000_000,
+    max_rendered_pages: 1_000,
+    max_rendered_pdf_bytes: 50_000_000,
     max_pdf_attachments: 1_000,
     max_pdf_attachment_bytes: 10_000_000,
     max_pdf_attachment_total_bytes: 25_000_000,
@@ -91,6 +104,19 @@ defmodule NativeElixirPdfUtilities.Limits do
   @typedoc "A configurable resource-limit name."
   @type key ::
           :max_pdf_attachments
+          | :max_aggregate_html_source_bytes
+          | :max_aggregate_css_source_bytes
+          | :max_html_source_bytes
+          | :max_css_source_bytes
+          | :max_html_nodes
+          | :max_html_depth
+          | :max_css_rules
+          | :max_css_work
+          | :max_layout_boxes
+          | :max_rendered_text_bytes
+          | :max_layout_text_work
+          | :max_rendered_pages
+          | :max_rendered_pdf_bytes
           | :max_pdf_attachment_bytes
           | :max_pdf_attachment_total_bytes
           | :max_mime_container_bytes

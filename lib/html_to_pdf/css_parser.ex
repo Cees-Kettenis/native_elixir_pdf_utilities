@@ -168,11 +168,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   @doc """
   Parses a CSS stylesheet into strict renderer rules.
   """
-  @spec parse(String.t()) :: {:ok, stylesheet()} | {:error, :invalid_css}
+  @spec parse(String.t()) ::
+          {:ok, stylesheet()} | {:error, :invalid_css | :resource_limit_exceeded}
   def parse(css) do
     case parse_detailed(css) do
       {:ok, stylesheet} -> {:ok, stylesheet}
-      {:error, {:invalid_css, _detail}} -> {:error, :invalid_css}
+      {:error, {reason, _detail}} -> {:error, reason}
     end
   end
 
@@ -180,30 +181,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   Parses a CSS stylesheet and returns source-location details when parsing fails.
   """
   @spec parse_detailed(String.t()) ::
-          {:ok, stylesheet()} | {:error, {:invalid_css, map()}}
+          {:ok, stylesheet()} | {:error, {:invalid_css | :resource_limit_exceeded, map()}}
   def parse_detailed(css) do
-    case HtmlValidator.validate_css_source(css) do
-      {:ok, css} ->
-        with {:ok, active_css} <- css |> strip_comments() |> active_media_rules(),
-             {:ok, _font_faces} <- parse_font_faces(active_css, css),
-             {:ok, _page_options} <- parse_page_rules(active_css, css) do
-          parsed_css = active_css |> strip_font_face_rules() |> strip_page_rules()
+    HtmlValidator.with_render_budget(fn ->
+      case HtmlValidator.validate_css_source(css) do
+        {:ok, css} ->
+          HtmlValidator.reserve_render_resource(
+            :max_aggregate_css_source_bytes,
+            byte_size(css),
+            :css
+          )
 
-          case parse_rules(parsed_css) do
-            {:ok, stylesheet} -> {:ok, stylesheet}
-            {:error, :invalid_css} -> {:error, {:invalid_css, css_error_detail(css, parsed_css)}}
+          with {:ok, active_css} <- css |> strip_comments() |> active_media_rules(),
+               {:ok, _font_faces} <- parse_font_faces(active_css, css),
+               {:ok, _page_options} <- parse_page_rules(active_css, css) do
+            parsed_css = active_css |> strip_font_face_rules() |> strip_page_rules()
+
+            case parse_rules(parsed_css) do
+              {:ok, stylesheet} ->
+                {:ok, stylesheet}
+
+              {:error, :invalid_css} ->
+                {:error, {:invalid_css, css_error_detail(css, parsed_css)}}
+            end
+          else
+            {:error, {:invalid_css, detail}} ->
+              {:error, {:invalid_css, detail}}
+
+            {:error, :invalid_css} ->
+              {:error, {:invalid_css, css_error_detail(css, css)}}
           end
-        else
-          {:error, {:invalid_css, detail}} ->
-            {:error, {:invalid_css, detail}}
 
-          {:error, :invalid_css} ->
-            {:error, {:invalid_css, css_error_detail(css, css)}}
-        end
-
-      {:error, {:invalid_css, diagnostic}} ->
-        {:error, {:invalid_css, diagnostic}}
-    end
+        {:error, {:invalid_css, diagnostic}} ->
+          {:error, {:invalid_css, diagnostic}}
+      end
+    end)
   end
 
   @doc """
@@ -216,24 +228,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   their declared order so loading can fall back when an earlier file is
   unavailable or invalid.
   """
-  @spec font_faces(String.t()) :: {:ok, [font_face()]} | {:error, :invalid_css}
+  @spec font_faces(String.t()) ::
+          {:ok, [font_face()]}
+          | {:error, :invalid_css}
+          | {:error, {:resource_limit_exceeded, map()}}
   def font_faces(css) do
-    case HtmlValidator.validate_css_source(css) do
-      {:ok, css} ->
-        case css |> strip_comments() |> active_media_rules() do
-          {:ok, active_css} ->
-            case parse_font_faces(active_css, active_css) do
-              {:ok, font_faces} -> {:ok, font_faces}
-              {:error, {:invalid_css, _detail}} -> {:error, :invalid_css}
-            end
+    HtmlValidator.with_render_budget(fn ->
+      case HtmlValidator.validate_css_source(css) do
+        {:ok, css} ->
+          HtmlValidator.reserve_render_resource(
+            :max_aggregate_css_source_bytes,
+            byte_size(css),
+            :css
+          )
 
-          {:error, :invalid_css} ->
-            {:error, :invalid_css}
-        end
+          case css |> strip_comments() |> active_media_rules() do
+            {:ok, active_css} ->
+              case parse_font_faces(active_css, active_css) do
+                {:ok, font_faces} -> {:ok, font_faces}
+                {:error, {reason, _detail}} -> {:error, reason}
+              end
 
-      {:error, {:invalid_css, _diagnostic}} ->
-        {:error, :invalid_css}
-    end
+            {:error, :invalid_css} ->
+              {:error, :invalid_css}
+          end
+
+        {:error, {:invalid_css, _diagnostic}} ->
+          {:error, :invalid_css}
+      end
+    end)
   end
 
   @doc """
@@ -247,20 +270,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   named-page preludes, and misspelled `@page` at-rules return
   `{:error, :invalid_css}`.
   """
-  @spec page_options(String.t()) :: {:ok, [page_option()]} | {:error, :invalid_css}
+  @spec page_options(String.t()) ::
+          {:ok, [page_option()]}
+          | {:error, :invalid_css}
+          | {:error, {:resource_limit_exceeded, map()}}
   def page_options(css) do
-    case HtmlValidator.validate_css_source(css) do
-      {:ok, css} ->
-        with {:ok, active_css} <- css |> strip_comments() |> active_media_rules() do
-          case parse_page_rules(active_css, css) do
-            {:ok, page_options} -> {:ok, page_options}
-            {:error, {:invalid_css, _detail}} -> {:error, :invalid_css}
-          end
-        end
+    HtmlValidator.with_render_budget(fn ->
+      case HtmlValidator.validate_css_source(css) do
+        {:ok, css} ->
+          HtmlValidator.reserve_render_resource(
+            :max_aggregate_css_source_bytes,
+            byte_size(css),
+            :css
+          )
 
-      {:error, {:invalid_css, _diagnostic}} ->
-        {:error, :invalid_css}
-    end
+          with {:ok, active_css} <- css |> strip_comments() |> active_media_rules() do
+            case parse_page_rules(active_css, css) do
+              {:ok, page_options} -> {:ok, page_options}
+              {:error, {reason, _detail}} -> {:error, reason}
+            end
+          end
+
+        {:error, {:invalid_css, _diagnostic}} ->
+          {:error, :invalid_css}
+      end
+    end)
   end
 
   @doc """
@@ -268,11 +302,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   This is used for both stylesheet blocks and inline `style` attributes.
   """
-  @spec parse_declarations(String.t()) :: {:ok, [declaration()]} | {:error, :invalid_css}
+  @spec parse_declarations(String.t()) ::
+          {:ok, [declaration()]} | {:error, :invalid_css | :resource_limit_exceeded}
   def parse_declarations(css) do
     case parse_declarations_detailed(css) do
       {:ok, declarations} -> {:ok, declarations}
-      {:error, {:invalid_css, _detail}} -> {:error, :invalid_css}
+      {:error, {reason, _detail}} -> {:error, reason}
     end
   end
 
@@ -280,25 +315,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   Parses a CSS declaration block and returns source-location details on failure.
   """
   @spec parse_declarations_detailed(String.t()) ::
-          {:ok, [declaration()]} | {:error, {:invalid_css, map()}}
+          {:ok, [declaration()]} | {:error, {:invalid_css | :resource_limit_exceeded, map()}}
   def parse_declarations_detailed(css) do
-    case HtmlValidator.validate_css_source(css, :declarations) do
-      {:ok, css} ->
-        declarations = declaration_sources(css)
+    HtmlValidator.with_render_budget(fn ->
+      case HtmlValidator.validate_css_source(css, :declarations) do
+        {:ok, css} ->
+          HtmlValidator.reserve_render_resource(
+            :max_aggregate_css_source_bytes,
+            byte_size(css),
+            :css
+          )
 
-        Enum.reduce_while(declarations, {:ok, []}, fn declaration, {:ok, acc} ->
-          case parse_declaration(declaration) do
-            {:ok, parsed} ->
-              {:cont, {:ok, acc ++ [parsed]}}
+          declarations = declaration_sources(css)
 
-            {:error, :invalid_css} ->
-              {:halt, {:error, {:invalid_css, declaration_error_detail(css, declaration)}}}
-          end
-        end)
+          Enum.reduce_while(declarations, {:ok, []}, fn declaration, {:ok, acc} ->
+            case parse_declaration(declaration) do
+              {:ok, parsed} ->
+                {:cont, {:ok, acc ++ [parsed]}}
 
-      {:error, {:invalid_css, diagnostic}} ->
-        {:error, {:invalid_css, diagnostic}}
-    end
+              {:error, :invalid_css} ->
+                {:halt, {:error, {:invalid_css, declaration_error_detail(css, declaration)}}}
+            end
+          end)
+
+        {:error, {:invalid_css, diagnostic}} ->
+          {:error, {:invalid_css, diagnostic}}
+      end
+    end)
   end
 
   defp strip_comments(css) do
@@ -348,6 +391,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   end
 
   defp active_media_rules(css) do
+    HtmlValidator.reserve_render_resource(:max_css_work, byte_size(css), :css)
+
     active_css =
       Regex.replace(@media_rule_regex, css, fn _rule, query, body ->
         query = query |> String.trim() |> String.downcase()
@@ -867,6 +912,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   end
 
   defp rule_sources(css) do
+    HtmlValidator.reserve_render_resource(:max_css_work, byte_size(css), :css)
+
     initial = %{
       rules: [],
       selector: nil,
@@ -907,6 +954,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
               state.mode == :declarations and character == "}" ->
                 declarations = state.current |> Enum.reverse() |> Enum.join()
+
+                HtmlValidator.reserve_render_resource(:max_css_rules, 1, :css)
 
                 rule = %{
                   source: state.selector <> "{" <> declarations <> "}",
@@ -1011,6 +1060,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   end
 
   defp parse_selector(selector) do
+    HtmlValidator.reserve_render_resource(:max_css_work, byte_size(selector), :css)
+
     case selector_tokens(selector) do
       {:ok, []} -> {:error, :invalid_css}
       {:ok, tokens} -> selector_tokens_to_parts(tokens)
@@ -1164,6 +1215,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   end
 
   defp parse_selector_modifiers(modifiers, part) do
+    HtmlValidator.reserve_render_resource(:max_css_work, byte_size(modifiers), :css)
+
     case modifiers do
       "" ->
         {:ok, part}
