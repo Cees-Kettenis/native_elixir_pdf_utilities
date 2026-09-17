@@ -564,12 +564,13 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
       field.widgets == [] ->
         error(:unsupported_form, "field has no visible widgets")
 
-      Map.has_key?(field.dictionary, "AA") ->
-        error(:unsupported_form, "script-driven field actions are unsupported")
+      Map.has_key?(field.dictionary, "A") or Map.has_key?(field.dictionary, "AA") ->
+        error(:unsupported_form, "field primary and additional actions are unsupported")
 
       Enum.any?(
         field.widgets,
-        &(Map.has_key?(&1.dictionary, "AA") or Map.get(&1.mk, "R", 0) != 0)
+        &(Map.has_key?(&1.dictionary, "A") or Map.has_key?(&1.dictionary, "AA") or
+              Map.get(&1.mk, "R", 0) != 0)
       ) ->
         error(:unsupported_form, "widget actions and widget-specific rotation are unsupported")
 

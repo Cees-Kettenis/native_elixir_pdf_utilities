@@ -137,6 +137,12 @@ Malformed field trees, ambiguous names and widgets not uniquely associated
 with a page fail with diagnostics. Automatic detection or conversion of drawn
 or scanned forms is outside this API.
 
+Selected fields and widgets with either primary `/A` or additional `/AA`
+actions are rejected, including indirect actions and action chains. Inspection
+and editing unrelated fields do not certify a PDF as safe to open. Filling,
+flattening, merging and other edits are not document sanitization; applications
+must apply their own policy to uploaded PDFs before distributing them.
+
 See [resource limits](resource-limits.md#forms-and-attachments) for field,
 appearance-object and byte budgets, and [attachments](pdf-attachments.md) for
 embedding supporting files.

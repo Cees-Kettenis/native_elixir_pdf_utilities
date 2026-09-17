@@ -186,6 +186,58 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
     end
   end
 
+  test "rejects primary actions on selected fields and widgets including indirect chains" do
+    script = %{"S" => {:name, "JavaScript"}, "JS" => {:string, "app.alert('test')"}}
+
+    for location <- [:field, :widget],
+        action <- [script, {:ref, {9, 0}}] do
+      patch = %{"A" => action}
+
+      pdf =
+        case location do
+          :field -> external_pdf(patch)
+          :widget -> external_pdf(%{}, patch)
+        end
+
+      {:ok, context} = Reader.read_validated(pdf)
+
+      {:ok, pdf} =
+        IncrementalWriter.write(context, [
+          {9, 0,
+           {:value,
+            %{
+              "S" => {:name, "URI"},
+              "URI" => {:string, "https://example.com"},
+              "Next" => {:ref, {10, 0}}
+            }}},
+          {10, 0, {:value, script}}
+        ])
+
+      assert {:ok, [%{name: "field"}]} = Forms.fields(pdf)
+
+      for {operation, result} <- [
+            {:fill, Forms.fill(pdf, %{"field" => "new"})},
+            {:flatten, Forms.flatten(pdf)}
+          ] do
+        assert {:error,
+                {:unsupported_form,
+                 %{
+                   stage: :forms,
+                   reason: :unsupported_form,
+                   module: Forms,
+                   operation: ^operation,
+                   source: "field",
+                   message: message
+                 }}} = result
+
+        assert message =~ "actions"
+      end
+
+      assert {:ok, ^pdf} = Forms.fill(pdf, %{})
+      assert {:ok, ^pdf} = Forms.flatten(pdf, fields: [])
+    end
+  end
+
   test "validates values, max length, choice selection and glyph support" do
     assert {:error, {:invalid_form, _}} =
              Forms.fill(external_pdf(%{"MaxLen" => -1}), %{"field" => "x"})
