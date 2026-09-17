@@ -1014,7 +1014,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         [
           "#{length(section)} beginbfchar",
           Enum.map_join(section, "\n", fn {cid, unicode} ->
-            "<#{hex16(cid)}> <#{hex16(unicode)}>"
+            encoded = :unicode.characters_to_binary([unicode], :unicode, {:utf16, :big})
+            "<#{hex16(cid)}> <#{Base.encode16(encoded)}>"
           end),
           "endbfchar"
         ]

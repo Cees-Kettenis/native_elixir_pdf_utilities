@@ -321,13 +321,34 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
         type: :embedded,
         id: id,
         data: data,
+        pdf_name: pdf_name,
         units_per_em: units_per_em,
         widths: widths,
-        cmap: cmap
+        default_width: default_width,
+        cmap: cmap,
+        ascent: ascent,
+        descent: descent,
+        bbox: {x_min, y_min, x_max, y_max}
       }
-      when is_binary(id) and is_binary(data) and is_integer(units_per_em) and units_per_em > 0 and
-             is_list(widths) and is_map(cmap) ->
-        box.font == Font.pdf_name(box.font_face) and Font.supports_text?(box.font_face, box.text)
+      when is_binary(id) and is_binary(data) and is_binary(pdf_name) and
+             is_integer(units_per_em) and units_per_em > 0 and is_list(widths) and
+             is_integer(default_width) and default_width >= 0 and is_map(cmap) and
+             is_integer(ascent) and is_integer(descent) and is_integer(x_min) and
+             is_integer(y_min) and is_integer(x_max) and is_integer(y_max) ->
+        box.font == Font.pdf_name(box.font_face) and
+          Regex.match?(~r/\A[A-Za-z0-9_.+-]+\z/, pdf_name) and
+          units_per_em <= 65_535 and default_width <= 65_535 and
+          Enum.all?([ascent, descent, x_min, y_min, x_max, y_max], &(&1 in -32_768..32_767)) and
+          length(widths) <= 65_535 and
+          Enum.all?(widths, &(is_integer(&1) and &1 in 0..65_535)) and
+          map_size(cmap) <= 65_535 and
+          String.valid?(box.text) and
+          Enum.all?(String.to_charlist(box.text), fn codepoint ->
+            glyph = Map.get(cmap, codepoint, 0)
+            # PDF CIDToGIDMap entries are fixed unsigned 16-bit glyph indexes.
+            is_integer(glyph) and glyph in 1..65_535 and
+              codepoint <= 0x10FFFF and codepoint not in 0xD800..0xDFFF
+          end)
 
       %{type: :built_in, pdf_name: pdf_name} when is_binary(pdf_name) ->
         box.font == pdf_name and pdf_name in @built_in_fonts and

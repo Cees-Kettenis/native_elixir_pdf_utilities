@@ -802,7 +802,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert {:ok, _families, font} = Font.resolve("Fixture Sans", 400, :normal, registry)
 
     shared_glyph = Map.fetch!(font.cmap, ?A)
-    font = %{font | cmap: Map.put(font.cmap, ?B, shared_glyph)}
+
+    font = %{
+      font
+      | cmap: font.cmap |> Map.put(?B, shared_glyph) |> Map.put(0x1F600, shared_glyph)
+    }
 
     pages = [
       %{
@@ -810,7 +814,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
         boxes: [
           %{
             type: :text,
-            text: "AB",
+            text: "AB😀",
             x: 10.0,
             y: 80.0,
             font: Font.pdf_name(font),
@@ -827,7 +831,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     refute pdf =~ "/CIDToGIDMap /Identity"
     assert pdf =~ "<0001> <0041>"
     assert pdf =~ "<0002> <0042>"
-    assert {:ok, "AB"} = Text.extract(pdf, layout: false)
+    assert pdf =~ "<0003> <D83DDE00>"
+    assert {:ok, "AB😀"} = Text.extract(pdf, layout: false)
   end
 
   test "embedded font ToUnicode mappings use sections of at most 100 entries" do
