@@ -121,7 +121,7 @@ See the [table example](html-to-pdf-examples.md#add-a-styled-table).
 | --- | --- | --- |
 | Local directory | `base_url: "priv/static"` with `src="images/logo.png"` | Paths must stay beneath the directory and cannot contain symlinks. `render_file/3` does not infer this directory. |
 | Explicit asset map | `assets: %{"logo.png" => {:bytes, bytes}}` or a `{:file, path}` value | Mappings take precedence; mapped files do not require `:base_url`. |
-| Resolver callback | `asset_resolver: fn request -> ... end` | Used for references that are not authorized local paths. An unreadable authorized file returns an error. |
+| Resolver callback | `asset_resolver: fn request -> ... end` | Used when a local reference cannot be opened safely, including an unavailable confinement backend. Resource-limit failures do not fall back. |
 | Data URI | Put a supported data URI in the image reference | Image format restrictions still apply. |
 
 The resolver receives `%{reference: reference, kind: kind}`, where `kind` is
@@ -135,6 +135,21 @@ The resolver receives `%{reference: reference, kind: kind}`, where `kind` is
 
 The renderer never downloads remote assets itself. Caller-configured font
 paths and stylesheet files do not require `:base_url`.
+Implicit local image and font reads through `:base_url` require Python 3 on
+Linux 5.6 or newer, on x86_64 or aarch64. The kernel must allow `openat2`.
+The library opens the root and each asset without following symlinks, resolves
+the asset beneath the opened root, and reads that same file descriptor. Changes
+to a pathname after it is opened cannot redirect the read. The root's own path
+must also contain no symlinks. The helper rejects nonregular files, applies the
+remaining byte budget before reading, and exits when its caller disappears or
+`max_asset_file_read_timeout_ms` expires.
+
+Missing or unsupported confinement backends return an actionable diagnostic.
+Supply approved bytes with `:assets` or `:asset_resolver` on other platforms.
+Explicit caller-approved file mappings, configured font paths, and stylesheet
+paths use bounded regular-file reads but trust the caller's pathname. Keep
+those configured paths outside directories writable by untrusted users.
+
 See [image and asset examples](html-to-pdf-examples.md#load-local-images).
 
 ## Fonts and text

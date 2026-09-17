@@ -207,7 +207,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   def render_file(input_path, output_path, opts \\ []) do
     case HtmlValidator.validate_paths(input_path, output_path) do
       {:ok, %{input_path: input_path, output_path: output_path}} ->
-        case File.read(input_path) do
+        case NativeElixirPdfUtilities.FileReader.read(
+               input_path,
+               NativeElixirPdfUtilities.Limits.get(:max_html_source_bytes)
+             ) do
           {:ok, html} ->
             case render(html, opts) do
               {:ok, pdf_binary} ->
@@ -228,6 +231,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
                     source: input_path
                   )}}
             end
+
+          {:error, {reason, diagnostic}} ->
+            {:error,
+             {reason,
+              Diagnostics.with_context(diagnostic,
+                operation: :render_file,
+                module: __MODULE__,
+                source: input_path
+              )}}
 
           {:error, reason} ->
             file_error(reason, :read, input_path)

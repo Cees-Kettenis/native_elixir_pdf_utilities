@@ -13,6 +13,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   alias NativeElixirPdfUtilities.HtmlToPdf.AssetLoader
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
@@ -169,7 +170,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   @doc false
   @spec load_stylesheets(term(), [render_option()]) ::
           {:ok, [stylesheet_entry()]}
-          | {:error, :invalid_document | :invalid_stylesheet_options}
+          | {:error, :invalid_document | :invalid_stylesheet_options | {atom(), map()}}
   def load_stylesheets(dom, opts) do
     font_options = Font.normalize_options(opts)
 
@@ -1260,7 +1261,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, css}
 
       {:file, path} when is_binary(path) ->
-        case File.read(path) do
+        case NativeElixirPdfUtilities.FileReader.read(path, Limits.get(:max_css_source_bytes)) do
           {:ok, css} -> {:ok, css}
           {:error, _reason} -> {:error, :invalid_document}
         end
@@ -1289,7 +1290,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           {:cont, {:ok, acc ++ [entry]}}
 
         {:file, path} when is_binary(path) ->
-          case File.read(path) do
+          case NativeElixirPdfUtilities.FileReader.read(path, Limits.get(:max_css_source_bytes)) do
             {:ok, css} ->
               entry = %{
                 css: css,
@@ -1298,6 +1299,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               }
 
               {:cont, {:ok, acc ++ [entry]}}
+
+            {:error, {_reason, _diagnostic}} = error ->
+              {:halt, error}
 
             {:error, _reason} ->
               {:halt, {:error, :invalid_document}}
@@ -1312,13 +1316,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, font_faces} ->
           resolved =
             Enum.reduce_while(font_faces, {:ok, []}, fn font_face, {:ok, fonts} ->
-              sources =
-                Enum.flat_map(font_face.sources, fn source ->
-                  case font_asset_source(source, entry, opts) do
-                    {:ok, config} -> [config]
-                    _ -> []
+              {sources, source_error} =
+                Enum.reduce(
+                  font_face.sources,
+                  {[], {:error, {:font_load_failed, font_face.sources}}},
+                  fn source, {sources, source_error} ->
+                    case font_asset_source(source, entry, opts) do
+                      {:ok, config} -> {sources ++ [config], source_error}
+                      {:error, _} = error -> {sources, error}
+                    end
                   end
-                end)
+                )
 
               case sources do
                 [%{path: _path} | _remaining] ->
@@ -1336,7 +1344,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                   {:cont, {:ok, fonts ++ [font]}}
 
                 [] ->
-                  {:halt, {:error, {:font_load_failed, font_face.sources}}}
+                  {:halt, source_error}
               end
             end)
 

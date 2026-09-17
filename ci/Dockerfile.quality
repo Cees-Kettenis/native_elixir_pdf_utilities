@@ -10,4 +10,5 @@ RUN apt-get update \
       fonts-liberation \
       libfreetype6 \
       poppler-utils \
+      python3 \
     && rm -rf /var/lib/apt/lists/*

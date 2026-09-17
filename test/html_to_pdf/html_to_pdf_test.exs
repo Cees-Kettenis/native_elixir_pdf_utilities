@@ -420,13 +420,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert {:error,
             {:invalid_document,
              %{
-               stage: :style,
+               stage: :asset,
                reason: :invalid_document,
                source: ^missing_path,
                message: message
              }}} = HtmlToPdf.render(failed_html, base_url: Path.dirname(font_path))
 
-    assert message =~ "CSS font sources could not be resolved or loaded"
+    assert message =~ "not an authorized local file"
     refute message =~ "font-family"
   end
 
@@ -1048,11 +1048,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       assert {:error,
               {:invalid_document,
                %{
-                 stage: :asset,
+                 stage: stage,
                  reason: :invalid_document,
                  operation: :render,
                  module: NativeElixirPdfUtilities.HtmlToPdf
                }}} = HtmlToPdf.render(~s|<img src="#{source}">|, opts)
+
+      assert stage in [:asset, :file]
     end
 
     for {source, opts} <- [
@@ -1069,8 +1071,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       <p>Confined font</p>
       """
 
-      assert {:error, {:invalid_document, %{stage: :style}}} =
+      assert {:error, {:invalid_document, %{stage: stage}}} =
                HtmlToPdf.render(html, opts)
+
+      assert stage in [:asset, :file]
     end
 
     assert {:ok, trusted_pdf} =

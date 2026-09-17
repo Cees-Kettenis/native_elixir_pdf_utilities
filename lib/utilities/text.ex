@@ -238,7 +238,7 @@ defmodule NativeElixirPdfUtilities.Text do
   defp extract_file_with(path, opts, operation, extractor) do
     case TextValidator.validate_path(path, operation) do
       {:ok, path} ->
-        case File.read(path) do
+        case NativeElixirPdfUtilities.FileReader.read(path, Limits.get(:max_pdf_input_bytes)) do
           {:ok, pdf_binary} ->
             case extractor.(pdf_binary, opts) do
               {:ok, result} ->
@@ -248,6 +248,15 @@ defmodule NativeElixirPdfUtilities.Text do
                 {:error,
                  {reason, diagnostic |> Map.put(:source, path) |> Map.put(:operation, operation)}}
             end
+
+          {:error, {reason, diagnostic}} ->
+            {:error,
+             {reason,
+              Diagnostics.with_context(diagnostic,
+                operation: operation,
+                module: __MODULE__,
+                source: path
+              )}}
 
           {:error, reason} ->
             error(:file, reason, "file read failed: #{reason}", operation: :read, source: path)

@@ -163,6 +163,35 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec image_source_read_limit(image_budget() | nil) ::
+          {:ok, pos_integer()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def image_source_read_limit(budget) do
+    {count, bytes} =
+      if is_nil(budget), do: {0, 0}, else: {:atomics.get(budget, 1), :atomics.get(budget, 2)}
+
+    cond do
+      count >= Limits.get(:max_image_count) ->
+        Diagnostics.error(:limits, :resource_limit_exceeded, "image count exceeds the limit")
+
+      bytes >= Limits.get(:max_aggregate_image_source_bytes) ->
+        Diagnostics.error(
+          :limits,
+          :resource_limit_exceeded,
+          "aggregate image source bytes exceed the limit"
+        )
+
+      true ->
+        {:ok,
+         min(
+           Limits.get(:max_image_source_bytes),
+           Limits.get(:max_aggregate_image_source_bytes) - bytes
+         )}
+    end
+  rescue
+    ArgumentError -> Diagnostics.error(:style, :invalid_document, "image budget is invalid")
+  end
+
+  @doc false
   @spec reserve_image_source(image_budget(), non_neg_integer()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def reserve_image_source(budget, source_bytes) do
@@ -548,6 +577,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec validate_local_resource_path(term(), term()) ::
           {:ok, String.t()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_local_resource_path(source, base_url) do
+    with {:ok, context} <- prepare_local_resource_path(source, base_url), do: {:ok, context.path}
+  end
+
+  @doc false
+  @spec prepare_local_resource_path(term(), term()) ::
+          {:ok, %{root: String.t(), relative: String.t(), path: String.t()}}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_local_resource_path(source, base_url) do
     result =
       with source when is_binary(source) and source != "" <- source,
            false <- String.contains?(source, ["\0", "://"]),
@@ -562,16 +599,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
            true <-
              relative == "." or
                (Path.type(relative) == :relative and relative != ".." and
-                  not String.starts_with?(relative, "../")),
-           true <- symlink_free_resource_path?(base_path, relative) do
-        {:ok, path}
+                  not String.starts_with?(relative, "../")) do
+        {:ok, %{root: base_path, relative: relative, path: path}}
       else
         _ -> :error
       end
 
     case result do
-      {:ok, path} ->
-        {:ok, path}
+      {:ok, context} ->
+        {:ok, context}
 
       :error ->
         Diagnostics.error(
@@ -1125,21 +1161,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       _ ->
         :error
     end
-  end
-
-  defp symlink_free_resource_path?(base_path, relative) do
-    relative
-    |> Path.split()
-    |> Enum.reduce_while(base_path, fn component, current_path ->
-      path = Path.join(current_path, component)
-
-      case File.lstat(path) do
-        {:ok, %File.Stat{type: :symlink}} -> {:halt, false}
-        {:ok, _stat} -> {:cont, path}
-        {:error, _reason} -> {:halt, false}
-      end
-    end)
-    |> is_binary()
   end
 
   defp validate_render_options(opts, font_options_result) do

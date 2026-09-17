@@ -217,12 +217,22 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     assert {:ok, ^resource_root} =
              HtmlValidator.validate_local_resource_path(".", resource_root)
 
+    # Path preparation does not inspect mutable directory entries. The reader
+    # opens beneath a pinned root and rejects symlinks in that same syscall.
+    for relative <- ["linked.png", "linked-directory/nested.png", "missing.png"] do
+      assert {:ok, context} = HtmlValidator.prepare_local_resource_path(relative, resource_root)
+
+      assert {:error, {:invalid_document, _}} =
+               NativeElixirPdfUtilities.FileReader.read_confined(
+                 context.root,
+                 context.relative,
+                 100
+               )
+    end
+
     for {source, base_url} <- [
           {outside_path, resource_root},
           {"../outside.png", resource_root},
-          {"linked.png", resource_root},
-          {"linked-directory/nested.png", resource_root},
-          {"missing.png", resource_root},
           {"inside.png", nil},
           {"inside.png", "https://example.com"},
           {"inside.png", "file://remote#{resource_root}"},

@@ -243,8 +243,8 @@ for the reader under the current byte limit. Other reader limits still apply.
 
 File reads bind the regular-file and size checks to the opened handle and read
 at most the available byte allowance plus one sentinel byte. Actual returned
-bytes are checked again. These reads do not establish path confinement against
-symlink replacement; asset path authorization remains a separate boundary.
+bytes are checked again. Caller-configured paths are trusted. Document-selected local assets additionally
+use the confined backend described below.
 
 Configured bytes and document asset callbacks undergo the same font budgets.
 Repeated sources and parsed payloads are reused within a render. Process-wide
@@ -260,3 +260,26 @@ font read should set `system_font_discovery: false` and supply approved font
 bytes or files. Resolver callbacks likewise control their own I/O before
 returning bytes. None of these per-render settings imposes a global concurrency
 or native-memory cap.
+
+## File input and confined assets
+
+HTML source files, configured CSS files, and PDF text-extraction files use
+bounded regular-file reads before parsing. Their ceilings are
+`max_html_source_bytes`, `max_css_source_bytes`, and `max_pdf_input_bytes`.
+Image and font asset reads use the smaller of the individual source allowance
+and the remaining aggregate allowance. Metadata and reads use the same opened
+handle, and reads stop at the allowance plus one sentinel byte even if a file
+grows after its metadata is checked.
+
+| Setting | Default | Applies to |
+| --- | ---: | --- |
+| `max_asset_file_read_timeout_ms` | 5,000 | Entire confined local asset helper operation, including startup and opening |
+
+Implicit `:base_url` reads use Linux `openat2` with `RESOLVE_BENEATH` and
+`RESOLVE_NO_SYMLINKS`, with Python 3 as the transport. The backend supports
+Linux 5.6 or newer on x86_64 and aarch64. It opens special files nonblocking,
+requires regular-file metadata before authorizing reads, and exits on timeout
+or caller disconnection. Unsupported backends fail with a diagnostic; they do
+not fall back to unconfined reads. Caller-supplied bytes and resolver callbacks
+remain portable. Explicit caller-approved file paths use the portable bounded
+reader and require trusted filesystem configuration.
