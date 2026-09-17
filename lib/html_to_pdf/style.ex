@@ -232,12 +232,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp assign_selector_ids(nodes) do
-    Enum.map(nodes, fn node ->
+  defp assign_selector_ids(nodes, path \\ []) do
+    nodes
+    |> Enum.with_index()
+    |> Enum.map(fn {node, index} ->
       case node do
         %{type: :element, children: children} ->
           node
           |> Map.put(:_selector_id, make_ref())
+          |> Map.put(:_document_order, path ++ [index])
           |> Map.put(
             :_selector_classes,
             node.attributes
@@ -245,7 +248,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             |> String.split(~r/\s+/u, trim: true)
             |> MapSet.new()
           )
-          |> Map.put(:children, assign_selector_ids(children))
+          |> Map.put(:children, assign_selector_ids(children, path ++ [index]))
 
         _ ->
           node
@@ -346,6 +349,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                       parent_counters,
                       node._selector_id
                     )
+
+                  element_style =
+                    if tag in ["input", "select", "textarea"] do
+                      control = %{
+                        tag: tag,
+                        attributes: attributes,
+                        children: children,
+                        id: node._selector_id,
+                        order: node._document_order
+                      }
+
+                      element_style
+                      |> Map.put(:_form_control, control)
+                      |> Map.put(:_form_owner, node._selector_id)
+                    else
+                      element_style
+                    end
 
                   rendered_children = static_form_children(tag, attributes, children)
 
@@ -896,6 +916,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp text_style(style) do
     Map.take(style, [
+      :_form_owner,
       :_custom_properties,
       :_font_registry,
       :_root_font_size,

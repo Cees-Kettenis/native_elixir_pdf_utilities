@@ -6,6 +6,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   alias NativeElixirPdfUtilities.Limits
 
   @render_option_keys [
+    :forms,
     :page_size,
     :margin,
     :base_url,
@@ -1055,7 +1056,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
         case unknown do
           [] ->
-            validate_style_options(opts, font_options_result)
+            if Keyword.get(opts, :forms, :interactive) in [:interactive, :static] do
+              validate_style_options(opts, font_options_result)
+            else
+              Diagnostics.error(
+                :options,
+                :invalid_options,
+                "forms must be :interactive or :static"
+              )
+            end
 
           unknown ->
             Diagnostics.error(

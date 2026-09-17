@@ -29,6 +29,39 @@ defmodule ManualWeb.Page do
           </form>
         </section>
 
+        <section id="forms">
+          <h2>PDF forms</h2>
+          <form action="/forms" method="post" enctype="multipart/form-data" target="_blank">
+            <label>PDF <input type="file" name="pdf" accept=".pdf" required></label>
+            <button>Inspect fields</button>
+          </form>
+          <form action="/forms/fill" method="post" enctype="multipart/form-data" target="_blank">
+            <label>PDF <input type="file" name="pdf" accept=".pdf" required></label>
+            <label>Values as JSON <textarea name="values">{"full_name":"Cees Kettenis"}</textarea></label>
+            <label><input type="checkbox" name="flatten" value="true"> Flatten filled fields</label>
+            <button>Fill fields</button>
+          </form>
+          <form action="/forms/flatten" method="post" enctype="multipart/form-data" target="_blank">
+            <label>PDF <input type="file" name="pdf" accept=".pdf" required></label>
+            <label>Field names as a JSON array, empty for all <input name="fields" placeholder='["full_name"]'></label>
+            <button>Flatten fields</button>
+          </form>
+        </section>
+        <section id="attachments">
+          <h2>PDF attachments</h2>
+          <form action="/attachments" method="post" enctype="multipart/form-data" target="_blank">
+            <label>PDF <input type="file" name="pdf" accept=".pdf" required></label>
+            <button>List attachments</button>
+          </form>
+          <form action="/attachments/embed" method="post" enctype="multipart/form-data" target="_blank">
+            <label>PDF <input type="file" name="pdf" accept=".pdf" required></label>
+            <label>Approved attachment <input type="file" name="attachment" required></label>
+            <label>Description <input name="description"></label>
+            <p>Files are embedded as supplied. MIME detection does not scan for malware.</p>
+            <button>Embed attachment</button>
+          </form>
+        </section>
+
         <section id="stamping">
           <h2>Stamp and watermark PDFs</h2>
           <p>Try text stamps, diagonal watermarks, existing-PDF overlays, and page numbers. Leave pages empty to stamp every page. Selections use <code>1,3-5</code>.</p>
@@ -244,6 +277,7 @@ defmodule ManualWeb.Page do
         {"title":"Introduction","page":1,"view":"fit","open":true,"children":[]}
       ]</textarea>
             </label>
+            <label>Forms <select name="forms"><option value="interactive">Interactive</option><option value="static">Static</option></select></label>
             <button type="submit">Render and open</button>
           </form>
         </section>

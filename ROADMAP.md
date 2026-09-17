@@ -10,18 +10,18 @@ See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## 0.18.0: Forms and attachments
 
-Let applications fill existing PDF forms and bundle supporting files.
+Implemented in the working 0.18.0 release:
 
-Work to deliver:
+- Generate AcroForm fields from supported HTML controls by default, using explicit
+  names or `TYPE_PAGENR_ELEMENT`, with an explicit static-rendering option.
+- Inspect, fill and selectively flatten supported existing fields.
+- Embed and list attachments with bounded signature and extension MIME handling.
+- Document supported structures, failure diagnostics, limits and caller-owned
+  attachment approval. Include manual-app workflows and regression fixtures.
 
-- Fill AcroForm fields.
-- Optionally flatten filled fields into page content.
-- Embed file attachments.
-- Document supported form structures and return diagnostics for unsupported
-  ones. Explain how AcroForm filling differs from rendering HTML form controls.
-
-Complete when fixtures cover filling, flattening, and attachments, and the
-shared PDF reader can read the resulting documents.
+Automatic detection of fields in arbitrary PDFs and coordinate-based form
+conversion remain deferred. See [forms](docs/pdf-forms.md) and
+[attachments](docs/pdf-attachments.md) for the implemented boundaries.
 
 ## 0.19.0: Errors, limits, and API boundaries
 

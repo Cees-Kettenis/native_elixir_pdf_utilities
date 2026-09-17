@@ -116,6 +116,19 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   @doc false
   @spec assert_pdf_visual_change!(binary(), binary(), keyword()) :: [visual_change_stats()]
   def assert_pdf_visual_change!(before_pdf, after_pdf, opts \\ []) do
+    stats = pdf_visual_stats!(before_pdf, after_pdf, opts)
+
+    for page <- stats do
+      assert page.changed_pixels > 0,
+             "Visual comparison found no changed pixels on page #{page.page}"
+    end
+
+    stats
+  end
+
+  @doc false
+  @spec pdf_visual_stats!(binary(), binary(), keyword()) :: [visual_change_stats()]
+  def pdf_visual_stats!(before_pdf, after_pdf, opts \\ []) do
     artifact_dir = Keyword.get(opts, :artifact_dir, Path.join("tmp", "stamp_visual"))
     pdftoppm_bin = Keyword.get(opts, :pdftoppm_bin, pdftoppm_bin!())
     dpi = Keyword.get(opts, :dpi, 72)
@@ -503,9 +516,6 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
             acc
         end
       end)
-
-    assert changes.changed_pixels > 0,
-           "Visual comparison found no changed pixels on page #{page_number}; artifacts: #{Path.expand(artifact_dir)}"
 
     %{
       page: page_number,

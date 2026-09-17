@@ -60,6 +60,58 @@ defmodule ManualWeb.Router do
     send_asset(conn, @favicon, "image/x-icon")
   end
 
+  post "/forms" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :fields),
+         {:ok, fields} <- NativeElixirPdfUtilities.Forms.fields(pdf) do
+      send_html(conn, 200, Page.term_result("PDF form fields", fields))
+    else
+      {:error, _} = failure -> send_error(conn, failure)
+    end
+  end
+
+  post "/forms/fill" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :fill),
+         {:ok, values} <- Validator.form_json(conn.params["values"], :values),
+         {:ok, flatten} <- Validator.form_flatten(conn.params["flatten"]),
+         {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),
+         {:ok, updated} <- NativeElixirPdfUtilities.Forms.fill(pdf, values, flatten: flatten) do
+      send_pdf(conn, updated, "filled.pdf", disposition)
+    else
+      {:error, _} = failure -> send_error(conn, failure)
+    end
+  end
+
+  post "/forms/flatten" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :flatten),
+         {:ok, fields} <- Validator.form_json(conn.params["fields"], :fields),
+         {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),
+         {:ok, updated} <- NativeElixirPdfUtilities.Forms.flatten(pdf, fields: fields) do
+      send_pdf(conn, updated, "flattened.pdf", disposition)
+    else
+      {:error, _} = failure -> send_error(conn, failure)
+    end
+  end
+
+  post "/attachments" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :list_attachments),
+         {:ok, files} <- NativeElixirPdfUtilities.Attachments.list(pdf) do
+      send_html(conn, 200, Page.term_result("PDF attachments", files))
+    else
+      {:error, _} = failure -> send_error(conn, failure)
+    end
+  end
+
+  post "/attachments/embed" do
+    with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :embed),
+         {:ok, attachment} <- Validator.attachment(conn.params),
+         {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),
+         {:ok, updated} <- NativeElixirPdfUtilities.Attachments.embed(pdf, [attachment]) do
+      send_pdf(conn, updated, "with-attachment.pdf", disposition)
+    else
+      {:error, _} = failure -> send_error(conn, failure)
+    end
+  end
+
   post "/merge" do
     with {:ok, pdfs} <- Validator.read_pdfs(conn.params["pdfs"], 2, :merge),
          {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),

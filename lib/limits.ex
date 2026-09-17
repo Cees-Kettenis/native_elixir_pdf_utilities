@@ -17,6 +17,14 @@ defmodule NativeElixirPdfUtilities.Limits do
   """
 
   @defaults %{
+    max_pdf_attachments: 1_000,
+    max_pdf_attachment_bytes: 10_000_000,
+    max_pdf_attachment_total_bytes: 25_000_000,
+    max_mime_container_bytes: 10_000_000,
+    max_mime_container_entries: 10_000,
+    max_pdf_form_fields: 10_000,
+    max_pdf_form_depth: 64,
+    max_pdf_form_text_bytes: 1_000_000,
     max_svg_bytes: 5_000_000,
     max_svg_raster_dimension: 8_192,
     max_svg_raster_pixels: 16_777_216,
@@ -78,7 +86,15 @@ defmodule NativeElixirPdfUtilities.Limits do
 
   @typedoc "A configurable resource-limit name."
   @type key ::
-          :max_svg_bytes
+          :max_pdf_attachments
+          | :max_pdf_attachment_bytes
+          | :max_pdf_attachment_total_bytes
+          | :max_mime_container_bytes
+          | :max_mime_container_entries
+          | :max_pdf_form_fields
+          | :max_pdf_form_depth
+          | :max_pdf_form_text_bytes
+          | :max_svg_bytes
           | :max_svg_raster_dimension
           | :max_svg_raster_pixels
           | :max_image_count

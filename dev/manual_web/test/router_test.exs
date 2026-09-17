@@ -12,6 +12,38 @@ defmodule ManualWeb.RouterTest do
 
   @router_options Router.init([])
 
+  test "fills and flattens forms and embeds approved attachments" do
+    {:ok, pdf} = HtmlToPdf.render("<div><input name=\"full_name\"></div>")
+    form = upload(pdf, "form.pdf")
+    assert post("/forms", %{"pdf" => form}).status == 200
+    filled = post("/forms/fill", %{"pdf" => form, "values" => ~s({"full_name":"Cees"})})
+    assert filled.status == 200
+    assert {:ok, [%{value: "Cees"}]} = NativeElixirPdfUtilities.Forms.fields(filled.resp_body)
+
+    flattened =
+      post("/forms/flatten", %{"pdf" => upload(filled.resp_body, "filled.pdf")})
+
+    assert flattened.status == 200
+    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(flattened.resp_body)
+
+    embedded =
+      post("/attachments/embed", %{
+        "pdf" => form,
+        "attachment" => upload("a,b", "data.csv")
+      })
+
+    assert embedded.status == 200
+
+    assert {:ok, [%{filename: "data.csv"}]} =
+             NativeElixirPdfUtilities.Attachments.list(embedded.resp_body)
+
+    assert post("/attachments", %{"pdf" => upload(embedded.resp_body, "attached.pdf")}).status ==
+             200
+
+    assert post("/forms/fill", %{"pdf" => form, "values" => "invalid"}).status == 422
+    assert post("/attachments/embed", %{"pdf" => form}).status == 422
+  end
+
   test "serves the interface on the root route" do
     response = request(:get, "/")
 
@@ -45,6 +77,11 @@ defmodule ManualWeb.RouterTest do
                "/info",
                "/info/update",
                "/merge",
+               "/forms",
+               "/forms/fill",
+               "/forms/flatten",
+               "/attachments",
+               "/attachments/embed",
                "/openapi.json",
                "/stamp/overlay",
                "/stamp/page-numbers",

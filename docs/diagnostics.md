@@ -47,3 +47,24 @@ function names, such as `:stamp_text` or a file action named `:read`.
 | `:encrypted_pdf`                                           | Supply an unencrypted PDF; decryption is not supported                   |
 | `:unsupported_pdf_feature`, `:unsupported_text_encoding` | The relevant operation's supported inputs                                |
 | `:resource_limit_exceeded`                                 | Document size/complexity and your[configured limits](resource-limits.md)  |
+
+## Forms and attachments
+
+`Forms.fields/1`, `Forms.fill/3`, `Forms.flatten/2`, `Attachments.list/1` and
+`Attachments.embed/3` use the same error tuple. Errors include the public module
+and operation. Field-specific write errors include the field name in `:source`.
+
+| Reason | Action |
+| --- | --- |
+| `:invalid_form` | Correct malformed or ambiguous field structures or HTML names. |
+| `:unknown_form_field` | Inspect `Forms.fields/1` and use a returned name. |
+| `:invalid_form_value` | Match the field type, declared choices and text constraints. |
+| `:read_only_form_field` | Leave the read-only field unchanged. |
+| `:unsupported_form` | Check the message for unsupported features, appearances or signed-document restrictions. |
+| `:invalid_attachment` | Correct attachment metadata, duplicates or malformed embedded-file structures. |
+| `:invalid_mime_type` | Correct conflicting type evidence or unsupported container metadata. |
+| `:resource_limit_exceeded` | Reduce the workload or configure the named limit. |
+
+Shared reader failures retain their original diagnostic stage and reason.
+See [forms](pdf-forms.md) and [attachments](pdf-attachments.md) for supported
+inputs and examples.

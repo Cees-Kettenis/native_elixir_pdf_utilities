@@ -8,7 +8,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       description:
-        "Pure Elixir utilities for PDF inspection, metadata, tokenizing, merging, page transforms, splitting, stamping, outlines, text extraction, and native HTML/CSS rendering.",
+        "Pure Elixir utilities for PDF inspection, metadata, tokenizing, merging, page transforms, splitting, stamping, forms, attachments, outlines, text extraction, and native HTML/CSS rendering.",
       deps: deps(),
       package: package(),
       docs: docs(),
@@ -72,6 +72,8 @@ defmodule NativeElixirPdfUtilities.MixProject do
         "docs/pdf-page-transforms.md",
         "docs/pdf-outlines.md",
         "docs/pdf-stamping.md",
+        "docs/pdf-forms.md",
+        "docs/pdf-attachments.md",
         "docs/html-to-pdf-compatibility.md",
         "docs/html-to-pdf-browser-parity-coverage.md",
         "docs/html-to-pdf-examples.md"
@@ -90,7 +92,9 @@ defmodule NativeElixirPdfUtilities.MixProject do
           "docs/pdf-merging.md",
           "docs/pdf-page-transforms.md",
           "docs/pdf-outlines.md",
-          "docs/pdf-stamping.md"
+          "docs/pdf-stamping.md",
+          "docs/pdf-forms.md",
+          "docs/pdf-attachments.md"
         ],
         "HTML to PDF": [
           "docs/html-to-pdf-compatibility.md",
@@ -100,6 +104,8 @@ defmodule NativeElixirPdfUtilities.MixProject do
       ],
       groups_for_modules: [
         "Public APIs": [
+          NativeElixirPdfUtilities.Attachments,
+          NativeElixirPdfUtilities.Forms,
           NativeElixirPdfUtilities.HtmlToPdf,
           NativeElixirPdfUtilities.Info,
           NativeElixirPdfUtilities.Limits,

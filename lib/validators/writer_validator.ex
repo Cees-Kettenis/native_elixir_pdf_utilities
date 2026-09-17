@@ -182,7 +182,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           valid_border_widths?(Map.get(box, :border_widths)) and
           valid_border_colors?(Map.get(box, :border_colors)) and
           valid_border_styles?(Map.get(box, :border_styles)) and
-          (not is_nil(fill_color) or visible_border?(box))
+          (not is_nil(fill_color) or visible_border?(box) or is_map(Map.get(box, :form_control)))
 
       %{type: :image, x: x, y: y, width: width, height: height, image: image}
       when is_number(x) and is_number(y) and is_number(width) and is_number(height) and

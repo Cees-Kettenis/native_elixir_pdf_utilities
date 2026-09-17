@@ -141,3 +141,24 @@ See [Text extraction](text-extraction.md).
 
 `NativeElixirPdfUtilities.Limits.defaults/0` returns built-in values.
 `NativeElixirPdfUtilities.Limits.effective/0` returns the active configuration.
+
+## Forms and attachments
+
+| Setting | Default | Applies to |
+| --- | ---: | --- |
+| `max_pdf_form_fields` | 10,000 | HTML controls and visited field/widget nodes |
+| `max_pdf_form_depth` | 64 | AcroForm field-tree nesting |
+| `max_pdf_form_text_bytes` | 1,000,000 | Field names and filled text values |
+| `max_pdf_attachments` | 1,000 | Total embedded-file count |
+| `max_pdf_attachment_bytes` | 10,000,000 | One new attachment's bytes |
+| `max_pdf_attachment_total_bytes` | 25,000,000 | New payload bytes plus existing stored attachment stream bytes |
+| `max_mime_container_bytes` | 10,000,000 | ZIP bytes inspected for MIME evidence |
+| `max_mime_container_entries` | 10,000 | ZIP central-directory entries inspected |
+
+Form appearances also use `max_pdf_objects` and the existing font limits.
+Attachment metadata uses `max_pdf_info_value_bytes`; attachment name-tree
+traversal uses `max_pdf_name_tree_nodes` and `max_pdf_value_depth`. Existing
+attachment streams are counted as stored, without decompression. Declared
+uncompressed sizes are metadata, not a decompressed-byte budget. Document
+reading also enforces the existing PDF input limits. Incremental updates grow
+the original binary; these limits do not constitute a general output-size cap.

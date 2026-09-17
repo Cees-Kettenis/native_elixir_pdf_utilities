@@ -40,6 +40,49 @@ defmodule ManualWeb.Validator do
 
   @type detailed_error :: {atom(), Diagnostics.diagnostic()}
 
+  @doc "Parses form values or a field selection from JSON. Empty selection means all fields."
+  @spec form_json(term(), :values | :fields) :: {:ok, term()} | {:error, detailed_error()}
+  def form_json(value, kind) do
+    case {kind, value} do
+      {:fields, value} when value in [nil, ""] ->
+        {:ok, :all}
+
+      {_, value} when is_binary(value) ->
+        case Jason.decode(value) do
+          {:ok, decoded} -> {:ok, decoded}
+          _ -> error(:forms, "enter valid JSON for #{kind}")
+        end
+
+      _ ->
+        error(:forms, "enter JSON for #{kind}")
+    end
+  end
+
+  @doc "Validates the form flatten checkbox."
+  @spec form_flatten(term()) :: {:ok, boolean()} | {:error, detailed_error()}
+  def form_flatten(value) do
+    case value do
+      value when value in [nil, "false"] -> {:ok, false}
+      "true" -> {:ok, true}
+      _ -> error(:forms, "flatten must be true or false")
+    end
+  end
+
+  @doc "Reads an explicitly uploaded attachment; MIME detection belongs to the library validator."
+  @spec attachment(map()) :: {:ok, map()} | {:error, detailed_error()}
+  def attachment(params) do
+    case params["attachment"] do
+      %Plug.Upload{filename: filename} = upload ->
+        with {:ok, bytes} <- read_upload(upload, "attachment", :embed) do
+          {:ok,
+           %{filename: filename, bytes: bytes, description: Map.get(params, "description", "")}}
+        end
+
+      _ ->
+        error(:embed, "select a file to attach")
+    end
+  end
+
   @doc "Reads one uploaded PDF into memory."
   @spec read_pdf(term(), atom()) :: {:ok, binary()} | {:error, detailed_error()}
   def read_pdf(upload, operation) do
@@ -115,6 +158,9 @@ defmodule ManualWeb.Validator do
 
     with {:ok, outlines} <- html_outlines(params) do
       cond do
+        Map.get(params, "forms", "interactive") not in ["interactive", "static"] ->
+          error(:html_to_pdf, "select interactive or static forms")
+
         is_nil(page_size) ->
           error(:html_to_pdf, "select a supported page size")
 
@@ -126,6 +172,11 @@ defmodule ManualWeb.Validator do
 
         true ->
           options = [page_size: {page_size, orientation}, unsupported_glyphs: unsupported_glyphs]
+
+          options =
+            if Map.get(params, "forms") == "static",
+              do: Keyword.put(options, :forms, :static),
+              else: options
 
           options =
             case outlines do

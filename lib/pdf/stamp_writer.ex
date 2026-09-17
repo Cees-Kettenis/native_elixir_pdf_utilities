@@ -118,10 +118,15 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
       body =
         case parsed.stream do
           stream when is_binary(stream) ->
-            {:stream, remap_value(Map.delete(parsed.value, "Length"), reference_map), stream}
+            {:stream,
+             NativeElixirPdfUtilities.Pdf.ObjectMapping.remap(
+               Map.delete(parsed.value, "Length"),
+               reference_map
+             ), stream}
 
           nil ->
-            {:value, remap_value(parsed.value, reference_map)}
+            {:value,
+             NativeElixirPdfUtilities.Pdf.ObjectMapping.remap(parsed.value, reference_map)}
         end
 
       {id, generation, body}
@@ -143,9 +148,13 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
           "FormType" => 1,
           "BBox" => source.crop_box,
           "Matrix" => source.normalization,
-          "Resources" => remap_value(source.resources, reference_map)
+          "Resources" =>
+            NativeElixirPdfUtilities.Pdf.ObjectMapping.remap(source.resources, reference_map)
         }
-        |> put_optional("Group", remap_value(group, reference_map))
+        |> put_optional(
+          "Group",
+          NativeElixirPdfUtilities.Pdf.ObjectMapping.remap(group, reference_map)
+        )
 
       {Map.fetch!(form_ids, source.page_number), 0, {:stream, dictionary, source.content}}
     end)
@@ -258,22 +267,6 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
       a * e2 + c * f2 + e,
       b * e2 + d * f2 + f
     ]
-  end
-
-  defp remap_value(value, reference_map) do
-    case value do
-      {:ref, reference} ->
-        {:ref, {Map.fetch!(reference_map, reference), elem(reference, 1)}}
-
-      values when is_list(values) ->
-        Enum.map(values, &remap_value(&1, reference_map))
-
-      dictionary when is_map(dictionary) ->
-        Map.new(dictionary, fn {key, item} -> {key, remap_value(item, reference_map)} end)
-
-      value ->
-        value
-    end
   end
 
   defp put_optional(dictionary, key, value) do

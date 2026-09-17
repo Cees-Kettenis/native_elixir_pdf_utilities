@@ -15,12 +15,12 @@ features you need below. Unsupported HTML or CSS returns an
 | Lists | `ul`, `ol`, `li` |
 | Tables | `table`, `caption`, `colgroup`, `col`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td` |
 | Images | `img` with a `src` |
-| Static controls | Text, checkbox, and radio `input`; `select`, `option`, `textarea`, `button` |
+| Form controls | Text, checkbox, and radio `input`; `select`, `option`, `textarea`, `button` |
 
 Quote attribute values and close non-void tags. Put inline elements and form
 controls inside a block such as `div` or `p`. They cannot sit directly under
-`body` or at the document root. Controls show their values but are not editable
-PDF fields. Links support `http://`, `https://`, and `mailto:` destinations.
+`body` or at the document root. Supported controls create editable AcroForm fields by default. Use
+`forms: :static` for static artwork. See [field naming and filling](pdf-forms.md). Links support `http://`, `https://`, and `mailto:` destinations.
 
 Use `id`, `class`, and `style` to apply CSS. Supported elements also accept
 relevant image, link, table-span, and form-value attributes.
@@ -58,6 +58,7 @@ Pass options to `HtmlToPdf.render(html, options)` or `render_file/3`.
 | `:fonts` | Register TrueType fonts | `[]` | List of font definitions with `:family` and `:path` or `:data`. See [font registration](html-to-pdf-examples.md#register-a-font). |
 | `:system_font_discovery` | Look up installed fonts | `true` | `true` or `false` |
 | `:unsupported_glyphs` | Handle missing characters | `:replace` | `:replace` or `:error` |
+| `:forms` | Create AcroForm fields | `:interactive` | `:interactive` or `:static`; see [PDF forms](pdf-forms.md). |
 | `:metadata` | Set document information | HTML title when present | Metadata fields such as `:title` and `:author`. See [metadata options](html-to-pdf-examples.md#set-pdf-metadata). |
 | `:outlines` | Add PDF bookmarks | Disabled | `:headings`, bookmark list, `false`, or `nil`. See [bookmark examples](html-to-pdf-examples.md#create-bookmarks-from-headings). |
 | `:page_furniture` | Add headers and footers | Disabled | Keyword list or map of templates. See [template options](html-to-pdf-examples.md#add-headers-footers-and-page-numbers). |
@@ -169,7 +170,7 @@ For PDF viewer bookmarks, see [outlines from headings](html-to-pdf-examples.md#c
 | Not supported | What to use instead |
 | --- | --- |
 | JavaScript, canvas, video, audio, iframe | Static HTML and supported images |
-| Interactive form fields | Render the form's values as static controls |
+| XFA, JavaScript form actions, password fields | Use supported AcroForm fields or static artwork |
 | Floats, fixed positioning, transforms, animations | Block, flex, grid, relative, or absolute layout |
 | Named pages and CSS page-margin boxes | Page options and header/footer templates |
 | CSS `counter(page)` or `counter(pages)` | `{{page}}` and `{{pages}}` in header/footer templates |

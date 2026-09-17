@@ -5216,6 +5216,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       color: Map.fetch!(style, :color)
     }
 
+    box = Map.put(box, :form_owner, Map.get(style, :_form_owner))
+
     case Map.get(style, :link_url) do
       link_url when is_binary(link_url) -> Map.put(box, :link_url, link_url)
       _ -> box
@@ -5252,13 +5254,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       border_radius: Map.get(style, :border_radius, 0.0)
     }
 
+    rect =
+      rect
+      |> Map.put(:form_control, Map.get(style, :_form_control))
+      |> Map.put(:form_owner, Map.get(style, :_form_owner))
+
     case {width > 0 and height > 0, Map.get(style, :background_image)} do
       {false, _image} ->
         []
 
       {true, nil} ->
         case {fill_color, border_visible?} do
-          {nil, false} -> []
+          {nil, false} -> if Map.get(style, :_form_control), do: [rect], else: []
           _ -> [rect]
         end
 

@@ -31,7 +31,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   def render(pages, opts \\ []) do
     case WriterValidator.prepare(pages, opts) do
       {:ok, context} ->
-        {:ok, pages_to_pdf(context.pages, context.metadata, context.outlines)}
+        with {:ok, pages, controls} <-
+               NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare(context.pages, opts) do
+          pdf = pages_to_pdf(pages, context.metadata, context.outlines)
+
+          case controls do
+            [] ->
+              {:ok, pdf}
+
+            _ ->
+              with {:ok, document} <- NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf) do
+                NativeElixirPdfUtilities.Pdf.FormWriter.create(document, controls)
+              end
+          end
+        end
 
       {:error, {reason, diagnostic}} ->
         {:error, {reason, Map.put(diagnostic, :module, __MODULE__)}}

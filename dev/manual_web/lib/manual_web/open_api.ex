@@ -27,6 +27,55 @@ defmodule ManualWeb.OpenApi do
         "/openapi.json" => %{
           "get" => response_operation("Read this OpenAPI document", "application/json")
         },
+        "/forms" => %{
+          "post" =>
+            upload_operation("Inspect AcroForm fields", pdf_properties(), ["pdf"], "text/html")
+        },
+        "/forms/fill" => %{
+          "post" =>
+            upload_operation(
+              "Fill AcroForm fields",
+              pdf_properties(%{
+                "values" => %{"type" => "string", "description" => "Field value JSON object"},
+                "flatten" => %{"type" => "string", "enum" => ["true", "false"]},
+                "disposition" => disposition_schema()
+              }),
+              ["pdf", "values"],
+              "application/pdf"
+            )
+        },
+        "/forms/flatten" => %{
+          "post" =>
+            upload_operation(
+              "Flatten AcroForm fields",
+              pdf_properties(%{
+                "fields" => %{
+                  "type" => "string",
+                  "description" => "JSON array of names; empty means all"
+                },
+                "disposition" => disposition_schema()
+              }),
+              ["pdf"],
+              "application/pdf"
+            )
+        },
+        "/attachments" => %{
+          "post" =>
+            upload_operation("List embedded files", pdf_properties(), ["pdf"], "text/html")
+        },
+        "/attachments/embed" => %{
+          "post" =>
+            upload_operation(
+              "Embed an approved file",
+              pdf_properties(%{
+                "attachment" => %{"type" => "string", "format" => "binary"},
+                "description" => %{"type" => "string"},
+                "disposition" => disposition_schema()
+              }),
+              ["pdf", "attachment"],
+              "application/pdf"
+            )
+        },
         "/merge" => %{
           "post" =>
             upload_operation(
@@ -173,6 +222,11 @@ defmodule ManualWeb.OpenApi do
                 "orientation" => %{"type" => "string", "enum" => ["portrait", "landscape"]},
                 "margin" => %{"type" => "string"},
                 "unsupported_glyphs" => %{"type" => "string", "enum" => ["replace", "error"]},
+                "forms" => %{
+                  "type" => "string",
+                  "enum" => ["interactive", "static"],
+                  "default" => "interactive"
+                },
                 "outlines_mode" => %{
                   "type" => "string",
                   "enum" => ["none", "headings", "exact"]

@@ -29,7 +29,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     </div>
     """
 
-    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert {:ok, pdf} = HtmlToPdf.render(html, forms: :static)
 
     assert_pdf_text(pdf, ["Applicant Alice", "Approved", "Inspection notes", "Submit application"])
 

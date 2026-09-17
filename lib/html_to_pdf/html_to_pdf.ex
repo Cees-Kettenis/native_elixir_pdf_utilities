@@ -2,6 +2,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   @moduledoc """
   Public facade for native HTML/CSS to PDF rendering.
 
+  Supported controls generate interactive AcroForm fields by default. Set
+  `forms: :static` for static artwork. Names use HTML `name` or a generated
+  `TYPE_PAGENR_ELEMENT` key; see the [forms guide](pdf-forms.html).
+
   The renderer is intentionally structured as a small pipeline:
 
     * parse HTML into a document tree
@@ -87,7 +91,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   @type unsupported_glyphs :: :replace | :error
   @type outlines :: :headings | [NativeElixirPdfUtilities.Outlines.item_input()] | false | nil
   @type render_option ::
-          {:page_size, page_size()}
+          {:forms, :interactive | :static}
+          | {:page_size, page_size()}
           | {:margin, page_margin()}
           | {:base_url, String.t() | nil}
           | {:assets, %{optional(String.t()) => asset_source()}}

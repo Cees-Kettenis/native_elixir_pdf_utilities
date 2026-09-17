@@ -376,7 +376,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
              "Save"
            ]
 
-    assert length(rects) == 4
+    assert length(rects) == 6
     assert Enum.all?(rects, &(&1.width > 0 and &1.height > 0))
 
     assert text_boxes

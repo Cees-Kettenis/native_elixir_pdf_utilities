@@ -40,7 +40,7 @@
 
       <h2>1. Applicant information</h2>
       <table>
-        <tr><td class="field-name">Applicant name</td><td><input type="text" value="Amira Tan"></td></tr>
+        <tr><td class="field-name">Applicant name</td><td><input type="text" name="applicant_name" value="Amira Tan"></td></tr>
         <tr><td class="field-name">Application number</td><td><input type="text" value="PW-2026-0418" disabled></td></tr>
         <tr><td class="field-name">Permit category</td><td><select><option>Road opening</option><option selected>Drainage inspection</option><option>Temporary structure</option></select></td></tr>
       </table>
@@ -53,7 +53,7 @@
         </tr>
         <tr>
           <td class="field-name">Priority</td>
-          <td><div class="choices"><input type="radio" checked><span>Standard</span><input type="radio"><span>Urgent</span></div></td>
+          <td><div class="choices"><input type="radio" name="priority" value="standard" checked><span>Standard</span><input type="radio" name="priority" value="urgent"><span>Urgent</span></div></td>
         </tr>
         <tr><td class="field-name">Officer notes</td><td><textarea>Identity documents verified.
 Schedule field inspection within ten working days.</textarea></td></tr>
