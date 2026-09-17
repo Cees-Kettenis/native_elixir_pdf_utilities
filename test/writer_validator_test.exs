@@ -39,6 +39,28 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidatorTest do
     end
   end
 
+  test "rejects conflicting JPEG color conventions before writing" do
+    image = %{
+      format: :jpeg,
+      data: "jpeg",
+      width_px: 1,
+      height_px: 1,
+      color_space: :device_rgb,
+      bits_per_component: 8,
+      color_transform: :ycck,
+      inverted_cmyk: false
+    }
+
+    pages = [
+      %{
+        size: {100, 100},
+        boxes: [%{type: :image, x: 0, y: 0, width: 10, height: 10, image: image}]
+      }
+    ]
+
+    assert {:error, {:invalid_pdf_input, %{stage: :pdf}}} = WriterValidator.prepare(pages, [])
+  end
+
   test "prepares valid pages and normalized metadata for serialization" do
     pages = [
       %{

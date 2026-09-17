@@ -180,3 +180,20 @@ For PDF viewer bookmarks, see [outlines from headings](html-to-pdf-examples.md#c
 
 See [Resource limits](resource-limits.md) for configurable size limits and
 [Browser rendering](html-to-pdf-browser-parity-coverage.md) for visual tolerances.
+
+### JPEG color conventions
+
+JPEG metadata preserves grayscale, RGB, YCbCr, ordinary CMYK, Adobe CMYK, and
+Adobe YCCK separately. Frame components and Adobe markers must be consistent.
+Unsupported component identifiers without an Adobe marker, conflicting markers,
+and repeated frames fail with a diagnostic. Ordinary CMYK keeps its sample
+polarity; Adobe CMYK and YCCK use inverted samples. The PDF writer emits explicit
+DCT color-transform parameters for the supported conventions.
+
+The ordinary CMYK fixture contains standard non-inverted CMYK samples and no
+Adobe marker. It is independently rasterized alongside Adobe CMYK and YCCK.
+Some browser JPEG decoders assume inverted samples even without the Adobe
+marker, so browser decoding alone is not an oracle for ordinary CMYK polarity.
+
+The mapping follows the Adobe PDF reference, section 3.3, DCTDecode filter
+parameters: https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf

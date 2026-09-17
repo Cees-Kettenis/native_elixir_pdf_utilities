@@ -1167,9 +1167,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         mask_object_id -> " /SMask #{mask_object_id} 0 R"
       end
 
+    color_transform =
+      case Map.get(image, :color_transform) do
+        value when value in [:rgb, :cmyk, :adobe_cmyk] -> " /DecodeParms << /ColorTransform 0 >>"
+        value when value in [:ycbcr, :ycck] -> " /DecodeParms << /ColorTransform 1 >>"
+        _ -> ""
+      end
+
     decode = if Map.get(image, :inverted_cmyk, false), do: " /Decode [1 0 1 0 1 0 1 0]", else: ""
 
-    "<< /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace #{pdf_color_space(image.color_space)} /BitsPerComponent #{image.bits_per_component} /Filter #{filter}#{smask}#{decode} /Length #{byte_size(data)} >>\nstream\n" <>
+    "<< /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace #{pdf_color_space(image.color_space)} /BitsPerComponent #{image.bits_per_component} /Filter #{filter}#{smask}#{decode}#{color_transform} /Length #{byte_size(data)} >>\nstream\n" <>
       data <> "\nendstream"
   end
 

@@ -209,7 +209,19 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
              color_space in [:device_gray, :device_rgb, :device_cmyk] ->
         inverted = Map.get(image, :inverted_cmyk, false)
 
-        is_boolean(inverted) and
+        convention = Map.get(image, :color_transform)
+
+        valid_convention =
+          case {format, color_space, convention, inverted} do
+            {_, _, nil, _} -> true
+            {:jpeg, :device_gray, :gray, false} -> true
+            {:jpeg, :device_rgb, value, false} when value in [:rgb, :ycbcr] -> true
+            {:jpeg, :device_cmyk, :cmyk, false} -> true
+            {:jpeg, :device_cmyk, value, true} when value in [:adobe_cmyk, :ycck] -> true
+            _ -> false
+          end
+
+        valid_convention and is_boolean(inverted) and
           (not inverted or (format == :jpeg and color_space == :device_cmyk)) and
           case Map.get(image, :alpha_data) do
             nil ->

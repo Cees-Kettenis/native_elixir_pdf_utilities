@@ -46,7 +46,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     end
 
     alias NativeElixirPdfUtilities.Validators.HtmlValidator
-    frame = <<255, 192, 0, 8, 8, 1::16, 1::16, 4>>
+    frame = <<255, 192, 0, 20, 8, 1::16, 1::16, 4, 1, 17, 0, 2, 17, 0, 3, 17, 0, 4, 17, 0>>
     adobe = <<255, 238, 0, 14, "Adobe", 100::16, 0::16, 0::16, 0>>
 
     for body <- [adobe <> frame, frame <> adobe, <<255>> <> adobe <> frame] do
@@ -4198,8 +4198,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
   end
 
   defp jpeg_fixture(width, height, components) do
-    <<255, 216, 255, 224, 0, 16, "JFIF", 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 255, 192, 0, 17, 8,
-      height::16, width::16, components, 1, 17, 0, 2, 17, 0, 3, 17, 0, 255, 217>>
+    descriptors = for id <- 1..components, into: <<>>, do: <<id, 17, 0>>
+
+    <<255, 216, 255, 192, 8 + components * 3::16, 8, height::16, width::16, components,
+      descriptors::binary, 255, 217>>
   end
 
   defp restart_jpeg_fixture do
