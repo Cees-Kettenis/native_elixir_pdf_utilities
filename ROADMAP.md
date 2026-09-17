@@ -1,227 +1,117 @@
 # Roadmap
 
 Native Elixir PDF Utilities renders application documents and edits existing
-PDFs. The path to 1.0 focuses on common document workflows, predictable output,
-and a public API applications can depend on.
+PDFs. Upcoming releases focus on broader image support, closer browser rendering,
+more efficient document generation, and a stable public API.
 
-The versions below describe planned scope. Implemented work is called out where
-it affects what remains; it does not imply that a version has been published.
-See [CHANGELOG.md](CHANGELOG.md) for release history.
+The versions below describe planned scope, which may change as the work develops.
+See [CHANGELOG.md](CHANGELOG.md) for published releases.
 
 ## 0.18.0: Forms and attachments
 
-Implemented in the working 0.18.0 release:
+Create PDF forms from supported HTML controls, inspect and fill existing fields,
+and flatten selected fields into document content. Static rendering will remain
+available when interactive fields are not needed.
 
-- Generate AcroForm fields from supported HTML controls by default, using explicit
-  names or `TYPE_PAGENR_ELEMENT`, with an explicit static-rendering option.
-- Inspect, fill and selectively flatten supported existing fields.
-- Embed and list attachments with bounded signature and extension MIME handling.
-- Document supported structures, failure diagnostics, limits and caller-owned
-  attachment approval. Include manual-app workflows and regression fixtures.
+This release also introduces embedding and listing attachments, with documented
+file-type handling, size limits, and supported document structures.
 
-Automatic detection of fields in arbitrary PDFs and coordinate-based form
-conversion remain deferred. See [forms](docs/pdf-forms.md) and
-[attachments](docs/pdf-attachments.md) for the implemented boundaries.
+## 0.19.0: Image support, SVG safety, and resource limits
 
-## 0.19.0: Errors, limits, and API boundaries
+Use a wider range of image assets and get clearer failures when documents exceed
+supported formats or resource limits.
 
-Make failures predictable and define which APIs applications can rely on.
-Recent validation fixes cover individual PDF and image failures. The full
-public API review remains open.
+Planned improvements:
 
-Work to deliver:
+- Broader PNG decoding, including greyscale, indexed palettes, greyscale with
+  alpha, low-bit-depth and 16-bit images, and Adam7 interlacing.
+- Transparency handling across the additional PNG formats.
+- Isolated SVG rasterization with limits on input size, image dimensions,
+  rendering complexity, memory, processing time, concurrency, and output size.
+  Worker requirements and deployment support will be documented.
+- Resource-limit defaults reviewed for server workloads, with guidance on
+  configuration, timeouts, cancellation, and cleanup.
+- More complete error and recovery documentation, plus clearer guidance on
+  application-facing APIs and advanced building blocks.
 
-- Audit public entry points for ordinary invalid input and unsupported features.
-  Use the existing `{:error, {reason, diagnostic}}` contract for explainable
-  failures. Keep validation in the appropriate validator and avoid raising for
-  recoverable caller errors.
-- Add an error reference listing return shapes, reason atoms, diagnostic fields,
-  and recovery examples by module.
-- Add a maximum rendered-page limit for HTML-to-PDF output. Define it in `Limits`
-  and enforce validator-owned rules during pagination, including page furniture.
-- Review process-wide resource defaults against representative server workloads.
-  Keep limits positive and configurable; disabling them remains unsupported.
-- Document caller-owned timeout, cancellation, and cleanup patterns.
-- Publish an API boundary guide. Classify application-facing renderer and PDF
-  operations as stable, parser and pipeline modules as advanced, and serialization
-  helpers as internal. State which advanced data structures may still change.
+SVG file size is only one part of the planned protection: a small SVG can still
+require expensive rendering. Limits before rasterization and isolation during
+rendering will address different parts of that risk.
 
-Complete when public failure tests assert actionable diagnostics, resource tests
-cover values at and beyond limits, and the guides include executable examples.
+General color-profile support remains outside the planned pre-1.0 scope.
 
-## 0.20.0: PNG decoding and CMYK JPEG handling
+## 0.20.0: Browser parity below 1%
 
-Render standard PNG variants and recognized four-component JPEGs correctly,
-with bounded decoding and clear errors for unsupported or malformed input.
+Bring native PDF output closer to Chromium for supported document layouts,
+including text placement, wrapping, tables, borders, and images.
 
-Already implemented:
+The target is **less than 1% differing pixels** on every reference fixture's
+worst page. Feasibility will be assessed when work on this release begins; the
+target may need further discussion based on the remaining rendering differences.
 
-- 8-bit, non-interlaced RGB and RGBA PNGs. The audit added RGB `tRNS`
-  transparent-color masks, validation, and mask memory accounting.
-- Adobe CMYK and YCCK polarity recognition. The writer adds the PDF `/Decode`
-  inversion array, with real image fixtures and browser comparisons.
+Comparisons will retain the existing fixtures, page-count and color-difference
+checks, and 72 DPI rasterization. Results will identify the browser, fonts, and
+rasterizer used, so the measurements have a clear scope. This target does not
+imply support for every browser feature or identical output with arbitrary fonts.
 
-### Remaining PNG work
+## 0.21.0: Performance and archival output
 
-Complete support for this format matrix:
+Generate larger documents with less repeated processing and smaller output files,
+while preserving layout and rendering quality.
 
-| Color type | Bit depths |
-| --- | --- |
-| Greyscale | 1, 2, 4, 8, 16 |
-| RGB | 8, 16 |
-| Indexed color | 1, 2, 4, 8 |
-| Greyscale with alpha | 8, 16 |
-| RGBA | 8, 16 |
+Planned improvements:
 
-- Decode `PLTE` palettes and all applicable `tRNS` forms. Check palette indexes
-  and compare transparent colors at source precision before reducing bit depth.
-- Unpack low-bit-depth samples and convert 16-bit samples. Normalize output to
-  8-bit RGB with an optional 8-bit alpha mask.
-- Add Adam7 interlacing, including pass sizing, unfiltering, and reconstruction.
-- Validate every chunk CRC, required chunks, uniqueness, and ordering. Reject
-  unknown critical chunks and safely ignore unknown ancillary chunks.
-- Preserve dimension, decompression-ratio, decoded-byte, and total-image limits
-  across intermediate buffers, interlacing, and alpha masks. Keep tunable limits
-  in `Limits`.
+- More efficient text layout, repeated measurements, table sizing, and font and
+  document-resource handling.
+- Compression of remaining uncompressed PDF streams, safe removal of unused
+  objects, and optional font subsetting to reduce file size.
+- Best-effort archival output with embedded fonts, metadata, and documented
+  handling of transparency and unsupported features.
 
-### Remaining JPEG work
+The archival mode will not claim PDF/A conformance. Full PDF/A validation remains
+an objective for a future version 2.
 
-- Distinguish ordinary CMYK, Adobe-inverted CMYK, and YCCK in validated metadata.
-  The current inversion flag alone does not describe the full color transform.
-- Map each supported convention to the required PDF `/ColorSpace`, `/Decode`,
-  and `/DecodeParms` settings. Keep DCT image data compressed where the PDF
-  dictionary can express the correct behavior.
-- Reject unsupported transforms, conflicting markers, and ambiguous component
-  metadata with actionable diagnostics.
-- Add a real ordinary CMYK fixture alongside the Adobe CMYK and YCCK fixtures.
-  Verify grayscale and RGB JPEG behavior remains unchanged.
+## 0.22.0: Guides and examples
 
-Complete when focused tests cover every PNG combination above, all scanline
-filters and Adam7 passes, malformed chunks and samples, and resource boundaries.
-Browser fixtures must cover the new PNG variants and all three JPEG conventions.
-JPEG tests must check both PDF dictionaries and rendered colors.
+A final documentation review before 1.0 will make the supported workflows,
+examples, and limitations consistent with the library's behavior.
 
-General color-profile support remains outside the pre-1.0 scope unless common
-assets require it. The remaining Chromium/Poppler CMYK color difference must
-also meet the browser-parity requirement in 0.21.0.
+The review will cover rendering, forms, attachments, inspection, extraction,
+metadata, page transforms, stamping, and error handling. It will also address
+outdated examples, unclear unsupported-feature guidance, and navigation between
+the README and HexDocs.
 
-## 0.21.0: Browser parity below 2%
+## 0.23.0: Release candidate and API freeze
 
-Bring every fixture's worst-page changed-pixel ratio below 2% against Chromium.
-Finish this before performance work so optimizations preserve the improved output.
+A release candidate for validating the library with real documents and downstream
+applications before 1.0.
 
-The audit fixed flex and grid geometry, font inheritance, CSS custom properties,
-quoted CSS text, zero-size text, and empty visible tables. Regression fixtures
-cover those fixes, but several comparison thresholds still exceed 2%. The CMYK
-fixture permits 23% because Chromium and Poppler convert its colors differently.
-These allowances are not measured results or completion of this milestone.
+Public module names, functions, options, return values, and error shapes will be
+reviewed and frozen except for bug fixes. Migration notes and remaining guides
+will explain how to adopt the candidate and which advanced interfaces may still
+change.
 
-Work to deliver:
-
-- Record actual changed-pixel ratios, average deltas, and page counts for every
-  fixture. Use the differing regions to prioritize shared rendering fixes.
-- Resolve remaining font metrics, text placement, wrapping, box and table
-  geometry, border placement, pixel rounding, and image-color differences.
-- Enforce a maximum changed-pixel allowance of 0.02 for every fixture. Preserve
-  page-count and average-delta checks, with no higher per-fixture exceptions.
-- Document Chromium, fonts, rasterizer, fixture count, and the comparison metric.
-  Keep the existing 72 DPI rasterization and per-channel changed-pixel definition.
-
-Complete when every fixture measures below 2% in that environment and the suite
-runs with the tightened thresholds. Keep all existing fixtures in the comparison.
-
-## 0.22.0: Performance and archival output
-
-Reduce rendering time, memory use, and PDF size while preserving visible output.
-Add a best-effort archival mode with documented limits.
-
-Work to deliver:
-
-- Replace repeated list appends, binary concatenation, and full-line measurement
-  in text layout with work that scales linearly. Use constant-time glyph-width
-  lookup and cache repeated text measurements.
-- Reuse table intrinsic measurements and precompute column geometry.
-- Collect writer text and resources in linear passes. Carry font identifiers
-  through style and layout instead of copying the complete registry per element.
-- Compress uncompressed streams, deduplicate images, and remove unreachable
-  objects where safe. Add optional embedded-font subsetting.
-- Add archival output that embeds required fonts, includes metadata, avoids
-  unsupported transparency where practical, and explains remaining limitations
-  through diagnostics. Full PDF/A validation is a future version 2 objective.
-
-Complete when realistic text and table benchmarks bound per-element and per-token
-work using BEAM reductions alongside time and memory measurements. Optimized and
-archival fixtures must remain readable, with layout, pagination, font fallback,
-and browser-parity results preserved.
-
-## 0.23.0: Guides and examples
-
-Make the supported workflows easy to find, understand, and run.
-The audit added focused regression fixtures and clarified inline-image extraction
-limits. Final business-document examples and documentation review remain.
-
-Work to deliver:
-
-- Fill gaps in production-style invoice, report, label, and statement fixtures.
-- Finish examples for metadata, static HTML forms, PDF inspection, transforms,
-  stamping, and error handling.
-- Review unsupported-feature guides and provide caller-side alternatives.
-- Remove stale options, module names, and return shapes from generated docs.
-- Make README and HexDocs navigation consistent and check guide and release links.
-- Document how the changelog records breaking changes before 1.0.
-
-Complete when executable examples pass doctests or focused tests, visible examples
-have browser coverage, and documentation links resolve.
-
-## 0.24.0: Release candidate and API freeze
-
-Test the final feature set with real documents and downstream applications, then
-freeze public module names, functions, options, return values, and error shapes
-except for bug fixes.
-
-Work to deliver:
-
-- Recheck API classifications and diagnostic consistency after the earlier
-  milestones land. Remove or document unstable internals.
-- Finish migration notes and missing HexDocs guides, including renderer, merge,
-  extraction, inspection, and transform examples.
-- Decide whether the typography candidates below are required for 1.0.
-- Fix release-candidate regressions and retain tests for them.
-
-Complete when the candidate revision passes the full quality matrix, downstream
-workflow checks pass, and public API documentation and migration notes are ready.
+This stage will also address release-candidate regressions and settle whether
+additional typography support is required for 1.0.
 
 ## 1.0.0: Stable release
 
-Publish the stable API, compatibility guides, and final application examples.
-Supported HTML/CSS behavior and PDF workflows must match the documentation and
-have regression coverage. Public diagnostics and API boundaries must be settled.
+A stable public API with compatibility guides, application examples, and documented
+HTML/CSS and PDF workflow boundaries.
 
-Complete when the release revision passes the full quality matrix and the final
-guides and release notes are published. Follow SemVer after release: minor versions
-add compatible features, patch versions fix bugs, and major versions carry
-intentional breaking API changes.
+After 1.0, releases will follow SemVer: minor versions add compatible features,
+patch versions fix bugs, and major versions introduce intentional breaking changes.
 
-## Decisions outside the release sequence
+## Beyond the planned releases
 
-Before 1.0, evaluate better Unicode line breaking, soft hyphens, and optional
-hyphenation dictionaries. These are candidates, not scheduled commitments.
+Broader Unicode line breaking, soft hyphens, and optional hyphenation dictionaries
+remain under consideration for the pre-1.0 scope.
 
-Right-to-left layout, bidirectional text, and complex shaping for scripts such
-as Arabic, Indic scripts, and Thai, plus emoji sequences, remain likely post-1.0
-work.
+Right-to-left layout, bidirectional text, complex-script shaping, and emoji
+sequences are likely post-1.0 work. Automatic PDF field detection and
+coordinate-based form conversion also remain deferred.
 
-Asset fetching belongs to the caller. The renderer accepts approved local paths,
-supported data URIs, caller-provided bytes, and asset resolver callbacks. Reject
-remote URLs in HTML and CSS with diagnostics; applications should fetch and
-validate remote assets before passing them to the library.
-
-## Requirements for every milestone
-
-- Run `./scripts/quality-matrix` on each change and resolve failures and project
-  warnings before pushing. Preserve 100% test coverage.
-- Add focused tests for changed behavior and diagnostics. Add browser fixtures
-  for visible renderer changes.
-- Record pre-1.0 breaking changes in [CHANGELOG.md](CHANGELOG.md).
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for supported runtimes and quality checks.
+Remote asset fetching will remain the application's responsibility. The renderer
+accepts supported data URIs, approved local assets, caller-provided bytes, and
+asset resolver callbacks, allowing applications to control how external content
+is fetched and approved.
