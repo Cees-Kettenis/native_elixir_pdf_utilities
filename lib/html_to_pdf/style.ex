@@ -4215,20 +4215,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
          image_budget,
          reserve_decoded?
        ) do
-    with {:ok, parsed} <- png_chunks(chunks, %{idat: []}),
+    with {:ok, parsed} <- NativeElixirPdfUtilities.Validators.PngValidator.prepare(chunks),
          %{
            width_px: width,
            height_px: height,
-           bit_depth: 8,
            color_type: color_type,
-           compression: 0,
-           filter: 0,
-           interlace: 0,
-           idat: idat
-         }
-         when width > 0 and height > 0 and color_type in [2, 6] <- parsed,
-         {:ok, transparent_color} <-
-           HtmlValidator.validate_png_transparency(color_type, Map.get(parsed, :transparency)),
+           idat: idat,
+           transparency: transparent_color
+         } <- parsed,
          bytes_per_pixel = if(color_type == 2, do: 3, else: 4),
          decoded_size = height * (width * bytes_per_pixel + 1),
          :ok <-
@@ -4277,52 +4271,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     else
       {:error, {_reason, _diagnostic}} = error -> error
       _ -> :error
-    end
-  end
-
-  defp png_chunks(chunks, acc) do
-    case chunks do
-      <<0::32, "IEND", _crc::32>> ->
-        {:ok, acc}
-
-      <<length::32, type::binary-size(4), data::binary-size(length), _crc::32, rest::binary>> ->
-        png_chunk(type, data, rest, acc)
-
-      _ ->
-        :error
-    end
-  end
-
-  defp png_chunk(type, data, rest, acc) do
-    case type do
-      "IHDR" ->
-        case data do
-          <<width::32, height::32, bit_depth, color_type, compression, filter, interlace>> ->
-            png_chunks(
-              rest,
-              Map.merge(acc, %{
-                width_px: width,
-                height_px: height,
-                bit_depth: bit_depth,
-                color_type: color_type,
-                compression: compression,
-                filter: filter,
-                interlace: interlace
-              })
-            )
-
-          _ ->
-            :error
-        end
-
-      "tRNS" ->
-        png_chunks(rest, Map.put(acc, :transparency, data))
-
-      "IDAT" ->
-        png_chunks(rest, Map.update!(acc, :idat, &[data | &1]))
-
-      _ ->
-        png_chunks(rest, acc)
     end
   end
 

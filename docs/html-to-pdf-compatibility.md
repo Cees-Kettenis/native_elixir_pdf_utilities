@@ -104,7 +104,7 @@ See the [table example](html-to-pdf-examples.md#add-a-styled-table).
 | Format | Supported content |
 | --- | --- |
 | JPEG | Grayscale, RGB, and CMYK |
-| PNG | 8-bit, non-interlaced RGB/RGBA; transparency is supported |
+| PNG | 8-bit, non-interlaced RGB/RGBA; transparency is supported. Chunk CRCs, required order, uniqueness, and critical chunk support are validated. |
 | SVG | Self-contained SVG that does not load other images or external resources |
 
 | Image styling | Supported values or behavior |

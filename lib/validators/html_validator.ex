@@ -82,27 +82,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
-  @spec validate_png_transparency(integer(), binary() | nil) ::
-          {:ok, nil | {non_neg_integer(), non_neg_integer(), non_neg_integer()}}
-          | {:error, {atom(), Diagnostics.diagnostic()}}
-  def validate_png_transparency(color_type, transparency) do
-    case {color_type, transparency} do
-      {_color_type, nil} ->
-        {:ok, nil}
-
-      {2, <<red::16, green::16, blue::16>>} when red <= 255 and green <= 255 and blue <= 255 ->
-        {:ok, {red, green, blue}}
-
-      _ ->
-        Diagnostics.error(
-          :style,
-          :invalid_document,
-          "PNG tRNS must contain a valid transparent color for an 8-bit RGB image"
-        )
-    end
-  end
-
-  @doc false
   @spec new_css_budget() :: :atomics.atomics_ref()
   def new_css_budget, do: :atomics.new(2, signed: false)
 
