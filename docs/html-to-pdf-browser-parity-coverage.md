@@ -25,15 +25,22 @@ CSS through the [diagnostic contract](diagnostics.md).
 ## Visual parity
 
 We compare rendered documents with Chromium at 72 DPI. Every fixture enforces
-a ceiling of **2% differing pixels** or less. A pixel differs when at least one
+a ceiling of **3% differing pixels** or less. A pixel differs when at least one
 RGB channel differs by more than 12 out of 255. Each fixture also checks the
 page count and its existing average channel-delta limit.
+
+The comparison uses the installed fonts without forced font aliases. Results
+vary with the operating system, installed fonts, and browser version; the
+threshold applies to the tested fixtures, not every document or environment.
 
 These percentages describe visual comparisons, not a percentage of browser
 features supported. Start with the [rendering examples](html-to-pdf-examples.md)
 for working templates.
 
 ## Measured comparisons
+
+These historical measurements used forced font aliases to align native and
+Chromium font selection. They do not represent the current default-font setup.
 
 The table records the maximum changed-pixel ratio and maximum average channel
 delta across each fixture's pages, before and after the rendering corrections.
