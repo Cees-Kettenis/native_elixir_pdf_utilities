@@ -197,7 +197,57 @@ defmodule NativeElixirPdfUtilities.AttachmentValidationTest do
     Limits.install(Map.put(Limits.defaults(), :max_pdf_input_bytes, byte_size(pdf)))
 
     assert {:error, {:resource_limit_exceeded, _}} =
-             AttachmentValidator.prepare_write(context, existing, prepared)
+             Attachments.embed(pdf, [file])
+  end
+
+  test "serialized output budget includes metadata and the complete incremental revision", %{
+    pdf: pdf,
+    attached: attached
+  } do
+    {:ok, context} = Reader.read_validated(attached)
+    {:ok, names} = Reader.dictionary(context.document, context.catalog["Names"])
+
+    nested =
+      patch_catalog(attached, %{
+        "Names" => %{
+          "EmbeddedFiles" => %{"Kids" => [names["EmbeddedFiles"]]},
+          "Unrelated" => %{"Names" => [{:string, "retained"}, {:string, "value"}]}
+        }
+      })
+
+    for source <- [pdf, nested],
+        file <- [
+          %{filename: "empty.txt", bytes: ""},
+          %{filename: "証拠😀.txt", bytes: "x", description: String.duplicate("説明😀", 80)}
+        ] do
+      Limits.install(Limits.defaults())
+      assert {:ok, result} = Attachments.embed(source, [file])
+      size = byte_size(result)
+      assert size > byte_size(source) + byte_size(file.bytes)
+
+      Limits.install(Map.put(Limits.defaults(), :max_pdf_input_bytes, size))
+      assert {:ok, ^result} = Attachments.embed(source, [file])
+      assert {:ok, files} = Attachments.list(result)
+      assert Enum.any?(files, &(&1.filename == file.filename))
+
+      Limits.install(Map.put(Limits.defaults(), :max_pdf_input_bytes, size - 1))
+
+      assert {:error,
+              {:resource_limit_exceeded,
+               %{
+                 reason: :resource_limit_exceeded,
+                 stage: :limits,
+                 operation: :embed,
+                 module: Attachments,
+                 message: message
+               }}} = Attachments.embed(source, [file])
+
+      assert message =~ "requires #{size} bytes"
+      assert message =~ "max_pdf_input_bytes (#{size - 1})"
+
+      Limits.install(Map.put(Limits.defaults(), :max_pdf_input_bytes, byte_size(source)))
+      assert {:ok, ^source} = Attachments.embed(source, [])
+    end
   end
 
   test "rejects modification of signed PDFs", %{pdf: pdf} do

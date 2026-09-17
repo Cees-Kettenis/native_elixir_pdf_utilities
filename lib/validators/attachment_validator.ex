@@ -110,14 +110,24 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
         context.document.trailer["Size"] + 2 * length(attachments) > Limits.get(:max_pdf_objects) ->
           limit("PDF object count cannot accommodate attachments")
 
-        byte_size(context.document.binary) +
-          Enum.reduce(attachments, 0, &(byte_size(&1.bytes) + &2)) >
-            Limits.get(:max_pdf_input_bytes) ->
-          limit("document and attachments exceed max_pdf_input_bytes")
-
         true ->
           :ok
       end
+    end
+  end
+
+  @doc false
+  @spec validate_output(iodata()) :: :ok | {:error, {atom(), map()}}
+  def validate_output(output) do
+    size = :erlang.iolist_size(output)
+    maximum = Limits.get(:max_pdf_input_bytes)
+
+    if size <= maximum do
+      :ok
+    else
+      limit(
+        "serialized attachment document requires #{size} bytes, exceeding max_pdf_input_bytes (#{maximum})"
+      )
     end
   end
 

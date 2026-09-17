@@ -13,6 +13,15 @@ defmodule NativeElixirPdfUtilities.Pdf.IncrementalWriter do
   @spec write(PdfValidator.context(), [object_entry()]) ::
           {:ok, binary()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def write(context, objects) do
+    with {:ok, output} <- prepare(context, objects) do
+      {:ok, IO.iodata_to_binary(output)}
+    end
+  end
+
+  @doc false
+  @spec prepare(PdfValidator.context(), [object_entry()]) ::
+          {:ok, iodata()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare(context, objects) do
     case context do
       %{
         document: %{
@@ -85,7 +94,7 @@ defmodule NativeElixirPdfUtilities.Pdf.IncrementalWriter do
             end)
 
           {:ok,
-           IO.iodata_to_binary([
+           [
              pdf,
              separator,
              pieces,
@@ -96,7 +105,7 @@ defmodule NativeElixirPdfUtilities.Pdf.IncrementalWriter do
              "\nstartxref\n",
              Integer.to_string(xref_offset),
              "\n%%EOF\n"
-           ])}
+           ]}
         else
           {:error, _error} = write_error -> write_error
         end

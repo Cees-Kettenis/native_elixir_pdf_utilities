@@ -31,6 +31,11 @@ names are rejected, including collisions with existing attachments.
 and unrelated catalog name trees are preserved. Empty input returns the
 original PDF. Writes are incremental and reject signed documents.
 
+The complete serialized PDF must fit `max_pdf_input_bytes`, including encoded
+metadata, the updated name tree, object headers, cross-reference entries and
+the trailer. An oversized result returns a `:resource_limit_exceeded` diagnostic
+before the final output binary is allocated.
+
 `list/1` returns maps containing `:filename`, `:description`, `:mime_type`,
 and `:size`. Size is the declared uncompressed size and can be `nil` for an
 existing attachment. MIME type can also be absent. Listing reads metadata

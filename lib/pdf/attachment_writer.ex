@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.Pdf.AttachmentWriter do
   @moduledoc false
   alias NativeElixirPdfUtilities.Pdf.{IncrementalWriter, InfoCodec}
+  alias NativeElixirPdfUtilities.Validators.AttachmentValidator
 
   @doc false
   @spec write(map(), map(), [map()]) :: {:ok, binary()} | {:error, {atom(), map()}}
@@ -37,6 +38,11 @@ defmodule NativeElixirPdfUtilities.Pdf.AttachmentWriter do
     names = Map.put(existing.names, "EmbeddedFiles", %{"Names" => pairs})
     catalog = Map.put(context.catalog, "Names", names)
     {id, generation} = context.catalog_ref
-    IncrementalWriter.write(context, [{id, generation, {:value, catalog}} | objects])
+
+    with {:ok, output} <-
+           IncrementalWriter.prepare(context, [{id, generation, {:value, catalog}} | objects]),
+         :ok <- AttachmentValidator.validate_output(output) do
+      {:ok, IO.iodata_to_binary(output)}
+    end
   end
 end
