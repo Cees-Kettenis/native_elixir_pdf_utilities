@@ -53,6 +53,12 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_css_variable_work: 100_000,
     max_css_variable_depth: 64,
     max_css_numeric_magnitude: 1_000_000_000,
+    max_pdf_reader_decoded_bytes: 50_000_000,
+    max_pdf_reader_tokens: 1_000_000,
+    max_pdf_reader_values: 500_000,
+    max_pdf_reader_work: 250_000_000,
+    max_pdf_container_entries: 100_000,
+    max_pdf_numeric_token_bytes: 1_024,
     max_pdf_input_bytes: 50_000_000,
     max_pdf_numeric_magnitude: 1_000_000_000,
     max_pdf_objects: 100_000,
@@ -139,6 +145,12 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_css_variable_work
           | :max_css_variable_depth
           | :max_css_numeric_magnitude
+          | :max_pdf_reader_decoded_bytes
+          | :max_pdf_reader_tokens
+          | :max_pdf_reader_values
+          | :max_pdf_reader_work
+          | :max_pdf_container_entries
+          | :max_pdf_numeric_token_bytes
           | :max_pdf_input_bytes
           | :max_pdf_numeric_magnitude
           | :max_pdf_objects

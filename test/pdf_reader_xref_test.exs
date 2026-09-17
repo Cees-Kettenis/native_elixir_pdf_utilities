@@ -188,7 +188,35 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
     assert map_size(probe.xref) == 40_000
     assert probe.xref[0] == {:free, 0, 65_535}
     assert probe.xref[39_999] == {:free, 39_999, 0}
-    assert reductions < 25_000_000
+    # Aggregate budget checks add fixed work per token. Compare growth as well as
+    # a ceiling so coverage instrumentation on either runtime cannot hide quadratic work.
+    smaller_pdf = fragmented_xref_stream_pdf(20_000)
+    {{:ok, _}, smaller_reductions} = measured_reductions(fn -> Reader.probe(smaller_pdf) end)
+    assert reductions < smaller_reductions * 2.5
+    assert reductions < 35_000_000
+  end
+
+  test "candidate recovery cannot swallow budget failures or refund failed attempts" do
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
+    Limits.install(%{original | max_pdf_numeric_token_bytes: 10})
+
+    for pdf <- [
+          xref_stream_pdf(indirect_length: true, length_source: "11111111111"),
+          xref_stream_pdf(indirect_length: true, widths: [1, 11, 2])
+        ] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = Reader.read(pdf)
+      assert diagnostic.stage == :limits
+    end
+
+    pdf = xref_stream_pdf(indirect_length: true, candidate_prefix: "4 0 obj\n35\nendobj\n")
+    Limits.install(%{original | max_pdf_reader_decoded_bytes: 70})
+    assert {:ok, _} = Reader.read(pdf)
+    Limits.install(%{original | max_pdf_reader_decoded_bytes: 69})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Reader.read(pdf)
+    assert diagnostic.stage == :limits
   end
 
   test "rejects unsafe indirect xref stream Length objects" do
@@ -220,7 +248,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderXrefTest do
              )
 
     assert limit_diagnostic.stage == :limits
-    assert limit_diagnostic.message == "xref stream Length candidate limit exceeded"
+    assert limit_diagnostic.message =~ "max_pdf_xref_length_candidates"
 
     missing_endobj =
       xref_stream_pdf()

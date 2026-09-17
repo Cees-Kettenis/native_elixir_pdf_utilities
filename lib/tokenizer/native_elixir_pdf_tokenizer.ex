@@ -23,6 +23,7 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
   zero-based. All positions refer to the binary passed to `new/1`.
   """
 
+  alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Diagnostics
 
   defstruct bin: <<>>,
@@ -62,7 +63,8 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
           | {:eof, nil}
 
   @type error_reason ::
-          :unexpected_char
+          :resource_limit_exceeded
+          | :unexpected_char
           | :unexpected_gt
           | :not_a_number
           | :unterminated_literal_string
@@ -135,8 +137,16 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
       end
 
     case result do
-      {{:error, failure}, _state} -> lexical_error(failure, st.bin)
-      success -> success
+      {:error, _} = error ->
+        error
+
+      {{:error, failure}, _state} ->
+        lexical_error(failure, st.bin)
+
+      {token, state} = success ->
+        PdfValidator.charge_reader_budget(:max_pdf_reader_work, state.pos - st.pos)
+        if token != {:eof, nil}, do: PdfValidator.charge_reader_budget(:max_pdf_reader_tokens, 1)
+        success
     end
   end
 
@@ -156,6 +166,8 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
       start = st.pos + eol_len_at_pos(st)
       mode = if is_integer(st.last_length) and st.last_length >= 0, do: :length, else: :scanned
       {tok, st2} = return_stream_data(st)
+      PdfValidator.charge_reader_budget(:max_pdf_reader_work, st2.pos - st.pos)
+      PdfValidator.charge_reader_budget(:max_pdf_reader_tokens, 1)
       {{tok, %{from: start, to: st2.pos, stream_mode?: mode}}, st2}
     else
       st_ws = skip_ws_and_comments(st)
@@ -683,30 +695,32 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
 
   # Interpret a bareword as a PDF integer or real, retaining the start of invalid numbers.
   defp parse_number_from_word(word, st) do
-    cond do
-      Regex.match?(@pdf_integer, word) ->
-        {integer, ""} = Integer.parse(word)
-        st = maybe_capture_length_int(st, integer)
-        {{:int, integer}, st}
+    with :ok <- PdfValidator.validate_reader_size(byte_size(word), :max_pdf_numeric_token_bytes) do
+      cond do
+        Regex.match?(@pdf_integer, word) ->
+          {integer, ""} = Integer.parse(word)
+          st = maybe_capture_length_int(st, integer)
+          {{:int, integer}, st}
 
-      Regex.match?(@pdf_real, word) ->
-        normalized =
-          cond do
-            String.starts_with?(word, ".") -> "0" <> word
-            String.starts_with?(word, "+.") -> "+0" <> binary_part(word, 1, byte_size(word) - 1)
-            String.starts_with?(word, "-.") -> "-0" <> binary_part(word, 1, byte_size(word) - 1)
-            String.ends_with?(word, ".") -> word <> "0"
-            true -> word
+        Regex.match?(@pdf_real, word) ->
+          normalized =
+            cond do
+              String.starts_with?(word, ".") -> "0" <> word
+              String.starts_with?(word, "+.") -> "+0" <> binary_part(word, 1, byte_size(word) - 1)
+              String.starts_with?(word, "-.") -> "-0" <> binary_part(word, 1, byte_size(word) - 1)
+              String.ends_with?(word, ".") -> word <> "0"
+              true -> word
+            end
+
+          try do
+            {{:real, :erlang.binary_to_float(normalized)}, st}
+          rescue
+            ArgumentError -> {{:error, {:not_a_number, word, st.pos - byte_size(word)}}, st}
           end
 
-        try do
-          {{:real, :erlang.binary_to_float(normalized)}, st}
-        rescue
-          ArgumentError -> {{:error, {:not_a_number, word, st.pos - byte_size(word)}}, st}
-        end
-
-      true ->
-        {{:error, {:not_a_number, word, st.pos - byte_size(word)}}, st}
+        true ->
+          {{:error, {:not_a_number, word, st.pos - byte_size(word)}}, st}
+      end
     end
   end
 

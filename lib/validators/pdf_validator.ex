@@ -15,6 +15,97 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
 
+  # Reader work is synchronous. The scope is local to its process and shared by
+  # nested probes and stream decoders. An exhausted budget aborts candidate
+  # recovery too, and the outer scope always deletes it, including on exceptions.
+  @reader_budget_key {__MODULE__, :reader_budget}
+
+  @doc false
+  @spec with_reader_budget((-> result)) :: result | {:error, {atom(), Diagnostics.diagnostic()}}
+        when result: var
+  def with_reader_budget(fun) do
+    case Process.get(@reader_budget_key) do
+      nil ->
+        Process.put(@reader_budget_key, %{})
+
+        try do
+          fun.()
+        catch
+          {:pdf_reader_budget, error} -> error
+        after
+          Process.delete(@reader_budget_key)
+        end
+
+      _budget ->
+        fun.()
+    end
+  end
+
+  @doc false
+  @spec charge_reader_budget(Limits.key(), non_neg_integer()) :: :ok
+  def charge_reader_budget(key, amount) do
+    case Process.get(@reader_budget_key) do
+      nil ->
+        :ok
+
+      budget ->
+        total = Map.get(budget, key, 0) + amount
+
+        if total > Limits.get(key) do
+          abort_reader_budget(reader_limit_error(key))
+        end
+
+        Process.put(@reader_budget_key, Map.put(budget, key, total))
+        :ok
+    end
+  end
+
+  @doc false
+  @spec remaining_reader_decoded_bytes() :: non_neg_integer()
+  def remaining_reader_decoded_bytes do
+    budget = Process.get(@reader_budget_key, %{})
+    Limits.get(:max_pdf_reader_decoded_bytes) - Map.get(budget, :max_pdf_reader_decoded_bytes, 0)
+  end
+
+  @doc false
+  @spec validate_reader_size(non_neg_integer(), Limits.key()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_reader_size(size, key) do
+    if size <= Limits.get(key), do: :ok, else: reader_limit_error(key)
+  end
+
+  @doc false
+  @spec validate_reader_decoded_size(non_neg_integer()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_reader_decoded_size(size) do
+    cond do
+      size > remaining_reader_decoded_bytes() -> reader_limit_error(:max_pdf_reader_decoded_bytes)
+      true -> validate_reader_size(size, :max_pdf_decoded_stream_bytes)
+    end
+  end
+
+  @doc false
+  @spec reader_integer(binary()) :: integer()
+  def reader_integer(text) do
+    case validate_reader_size(byte_size(text), :max_pdf_numeric_token_bytes) do
+      :ok -> String.to_integer(text)
+      error -> abort_reader_budget(error)
+    end
+  end
+
+  @doc false
+  @spec abort_reader_budget({:error, {atom(), Diagnostics.diagnostic()}}) :: no_return()
+  def abort_reader_budget(error) do
+    throw({:pdf_reader_budget, error})
+  end
+
+  defp reader_limit_error(key) do
+    Diagnostics.error(:limits, :resource_limit_exceeded, "PDF reader exceeds #{key}",
+      operation: :read,
+      module: Reader
+    )
+  end
+
   @inheritable_page_keys ["Resources", "MediaBox", "CropBox", "Rotate"]
   @reference_resolution_option :__reference_resolution__
 

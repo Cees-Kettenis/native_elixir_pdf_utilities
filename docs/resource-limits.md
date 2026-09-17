@@ -35,6 +35,12 @@ These limits apply when reading existing PDFs.
 | --- | ---: | --- |
 | `max_pdf_numeric_magnitude` | 1,000,000,000 | Absolute numeric operands and font metrics used for text extraction, and shared PDF geometry arrays |
 | `max_pdf_input_bytes` | 50,000,000 | One PDF input |
+| `max_pdf_reader_decoded_bytes` | 50,000,000 | Decoded bytes across object streams, xref streams, revisions, candidate attempts, and each intermediate filter stage in one reader call |
+| `max_pdf_reader_tokens` | 1,000,000 | Tokens produced across all parsing passes in one reader call |
+| `max_pdf_reader_values` | 500,000 | Parsed values and expanded xref entries across one reader call |
+| `max_pdf_reader_work` | 250,000,000 | Bytes scanned by tokenizers, xref searches, stream decoding and predictor processing, including repeated passes |
+| `max_pdf_container_entries` | 100,000 | Entries in one array or dictionary, including repeated dictionary keys |
+| `max_pdf_numeric_token_bytes` | 1,024 | Decimal numeric-token bytes before integer/float conversion, and bytes in one binary xref integer |
 | `max_pdf_objects` | 100,000 | Parsed PDF objects |
 | `max_pdf_object_stream_entries` | 10,000 | Entries in one PDF object stream |
 | `max_pdf_pages` | 10,000 | Pages in one PDF |
@@ -46,6 +52,16 @@ These limits apply when reading existing PDFs.
 | `max_pdf_decompression_ratio` | 100 | Decoded-to-encoded stream ratio |
 | `max_pdf_xref_length_candidates` | 1,000 | Candidate indirect `/Length` objects |
 | `max_pdf_xref_revisions` | 1,000 | Incremental cross-reference revisions |
+
+Reader budgets span the complete synchronous operation, including nested probes
+and candidate recovery. A failed candidate does not refund its work. Exhaustion
+returns a diagnostic and releases the budget before another call starts. Stream
+decoding requested separately through `Reader.decoded_stream/2` gets a fresh
+budget; callers repeatedly decoding content still need their operation's own
+aggregate limit, as text extraction already has. Flate output is drained in
+bounded chunks, and expanding filters stop at the remaining decoded allowance.
+These counters bound parsing work and retained structures, not total BEAM memory
+or elapsed time. Configure a caller-owned timeout and concurrency ceiling too.
 
 ## HTML processing and output
 
