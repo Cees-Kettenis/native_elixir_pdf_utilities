@@ -1,8 +1,26 @@
 defmodule NativeElixirPdfUtilities.Validators.IncrementalValidator do
   @moduledoc false
 
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.PdfValidator
+
+  @doc false
+  @spec validate_output_size(non_neg_integer()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_output_size(bytes) do
+    limit = min(Limits.get(:max_pdf_input_bytes), Limits.get(:max_rendered_pdf_bytes))
+
+    if bytes <= limit do
+      :ok
+    else
+      Diagnostics.error(
+        :incremental_write,
+        :resource_limit_exceeded,
+        "incremental PDF output requires #{bytes} bytes, exceeding min(max_pdf_input_bytes, max_rendered_pdf_bytes) (#{limit})"
+      )
+    end
+  end
 
   @doc false
   @spec prepare_identifier(PdfValidator.value(), iodata()) ::

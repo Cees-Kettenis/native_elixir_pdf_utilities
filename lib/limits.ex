@@ -42,6 +42,8 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_pdf_attachment_total_bytes: 25_000_000,
     max_mime_container_bytes: 10_000_000,
     max_mime_container_entries: 10_000,
+    max_appearance_text_bytes: 5_000_000,
+    max_appearance_widgets: 10_000,
     max_pdf_form_fields: 10_000,
     max_pdf_form_depth: 64,
     max_pdf_form_text_bytes: 1_000_000,
@@ -141,6 +143,8 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_pdf_attachment_total_bytes
           | :max_mime_container_bytes
           | :max_mime_container_entries
+          | :max_appearance_text_bytes
+          | :max_appearance_widgets
           | :max_pdf_form_fields
           | :max_pdf_form_depth
           | :max_pdf_form_text_bytes

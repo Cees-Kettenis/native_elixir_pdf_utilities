@@ -112,19 +112,22 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineWriter do
                   ]
                 end)
 
-              {:ok,
-               IO.iodata_to_binary([
-                 pdf,
-                 separator,
-                 pieces,
-                 "xref\n",
-                 xref_entries,
-                 "trailer\n",
-                 trailer_io,
-                 "\nstartxref\n",
-                 Integer.to_string(xref_offset),
-                 "\n%%EOF\n"
-               ])}
+              output = [
+                pdf,
+                separator,
+                pieces,
+                "xref\n",
+                xref_entries,
+                "trailer\n",
+                trailer_io,
+                "\nstartxref\n",
+                Integer.to_string(xref_offset),
+                "\n%%EOF\n"
+              ]
+
+              with :ok <- IncrementalValidator.validate_output_size(IO.iodata_length(output)) do
+                {:ok, IO.iodata_to_binary(output)}
+              end
 
             :error ->
               error("incremental outline trailer cannot be serialized")

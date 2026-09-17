@@ -116,21 +116,6 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
     end
   end
 
-  @doc false
-  @spec validate_output(iodata()) :: :ok | {:error, {atom(), map()}}
-  def validate_output(output) do
-    size = :erlang.iolist_size(output)
-    maximum = Limits.get(:max_pdf_input_bytes)
-
-    if size <= maximum do
-      :ok
-    else
-      limit(
-        "serialized attachment document requires #{size} bytes, exceeding max_pdf_input_bytes (#{maximum})"
-      )
-    end
-  end
-
   defp prepare_attachment(input) do
     case input do
       %{filename: filename, bytes: bytes} when is_binary(filename) and is_binary(bytes) ->

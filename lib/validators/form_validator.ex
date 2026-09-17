@@ -107,23 +107,25 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
 
         true ->
           Enum.filter(form.fields, &(&1.name in selected))
-          |> Enum.reduce_while({:ok, []}, fn field, {:ok, acc} ->
+          |> Enum.reduce_while({:ok, [], 0, 0}, fn field, {:ok, acc, count, bytes} ->
             value = Map.get(values, field.name, field.value)
 
             with :ok <- writable(field, operation),
                  {:ok, value} <-
                    if(operation == :flatten, do: {:ok, value}, else: field_value(field, value)),
+                 {:ok, count, bytes} <- reserve_appearances(field, value, operation, count, bytes),
                  {:ok, appearances} <- prepare_appearances(field, value, operation),
                  :ok <- button_appearances(context.document, field) do
               {:cont,
-               {:ok, [Map.merge(field, %{new_value: value, appearances: appearances}) | acc]}}
+               {:ok, [Map.merge(field, %{new_value: value, appearances: appearances}) | acc],
+                count, bytes}}
             else
               {:error, {reason, diagnostic}} ->
                 {:halt, {:error, {reason, Map.put(diagnostic, :source, field.name)}}}
             end
           end)
           |> case do
-            {:ok, fields} -> {:ok, Enum.reverse(fields)}
+            {:ok, fields, _count, _bytes} -> {:ok, Enum.reverse(fields)}
             failure -> failure
           end
       end
@@ -657,6 +659,37 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
             {:ok, value}
         end
     end
+  end
+
+  defp reserve_appearances(field, value, operation, count, bytes) do
+    count = count + length(field.widgets)
+
+    text_bytes =
+      case {operation, field.type} do
+        {:fill, :text} ->
+          byte_size(value)
+
+        {:fill, :choice} ->
+          Enum.reduce(field.choices, 0, fn choice, total ->
+            if choice.value in List.wrap(value),
+              do: total + byte_size(choice.label) + 1,
+              else: total
+          end)
+
+        _ ->
+          0
+      end
+
+    bytes = bytes + text_bytes * length(field.widgets)
+
+    if count <= Limits.get(:max_appearance_widgets) and
+         bytes <= Limits.get(:max_appearance_text_bytes),
+       do: {:ok, count, bytes},
+       else:
+         error(
+           :resource_limit_exceeded,
+           "form appearances exceed the aggregate text or widget count limit"
+         )
   end
 
   defp prepare_appearances(field, value, operation) do

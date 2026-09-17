@@ -53,6 +53,11 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
          {:ok, options} <- normalize_options(options, @text_option_keys),
          {:ok, settings} <- text_settings(options, defaults),
          {:ok, target_pages} <- selected_target_pages(context, Map.get(options, :pages, :all)),
+         :ok <-
+           validate_appearance_expansion(
+             length(target_pages),
+             byte_size(text) * length(target_pages)
+           ),
          {:ok, font_face} <- selected_font(options, [text]),
          {:ok, appearances} <-
            text_appearances(
@@ -77,8 +82,7 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
          {:ok, numbering} <- numbering_mode(Map.get(options, :numbering, :document)),
          {:ok, settings} <- text_settings(options, defaults),
          {:ok, target_pages} <- selected_target_pages(context, Map.get(options, :pages, :all)),
-         texts = page_number_texts(target_pages, length(context.pages), format, numbering),
-         :ok <- validate_total_text_bytes(texts),
+         {:ok, texts} <- page_number_texts(target_pages, length(context.pages), format, numbering),
          {:ok, font_face} <- selected_font(options, texts),
          {:ok, appearances} <- text_appearances(target_pages, texts, font_face, settings) do
       {:ok, %{target_pages: target_pages, appearances: appearances}}
@@ -153,12 +157,16 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
     end
   end
 
-  defp validate_total_text_bytes(texts) do
-    case Enum.reduce(texts, 0, fn text, total -> total + byte_size(text) end) <=
-           Limits.get(:max_stamp_text_bytes) do
-      true -> :ok
-      false -> error(:limits, :resource_limit_exceeded, "stamp text exceeds the byte limit")
-    end
+  defp validate_appearance_expansion(count, bytes) do
+    if count <= Limits.get(:max_appearance_widgets) and
+         bytes <= Limits.get(:max_appearance_text_bytes),
+       do: :ok,
+       else:
+         error(
+           :limits,
+           :resource_limit_exceeded,
+           "stamp appearances exceed the aggregate text or appearance count limit"
+         )
   end
 
   defp normalize_options(options, allowed_keys) do
@@ -514,19 +522,42 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
   end
 
   defp page_number_texts(target_pages, document_count, format, numbering) do
-    target_pages
-    |> Enum.with_index(1)
-    |> Enum.map(fn {target, selection_number} ->
-      {page, pages} =
-        case numbering do
-          :document -> {target.page_number, document_count}
-          :selection -> {selection_number, length(target_pages)}
-        end
+    count = length(target_pages)
+    pages = if numbering == :document, do: document_count, else: count
+    page_tokens = length(:binary.matches(format, "{{page}}"))
+    pages_tokens = length(:binary.matches(format, "{{pages}}"))
+    literal_bytes = byte_size(format) - page_tokens * 8 - pages_tokens * 9
 
-      format
-      |> String.replace("{{page}}", Integer.to_string(page))
-      |> String.replace("{{pages}}", Integer.to_string(pages))
-    end)
+    page_digits =
+      target_pages
+      |> Enum.with_index(1)
+      |> Enum.reduce(0, fn {target, selection_number}, total ->
+        page = if numbering == :document, do: target.page_number, else: selection_number
+        total + byte_size(Integer.to_string(page))
+      end)
+
+    total_bytes =
+      literal_bytes * count + page_tokens * page_digits +
+        pages_tokens * byte_size(Integer.to_string(pages)) * count
+
+    with :ok <- validate_appearance_expansion(count, total_bytes) do
+      if total_bytes > Limits.get(:max_stamp_text_bytes) do
+        error(:limits, :resource_limit_exceeded, "stamp text exceeds the byte limit")
+      else
+        texts =
+          target_pages
+          |> Enum.with_index(1)
+          |> Enum.map(fn {target, selection_number} ->
+            page = if numbering == :document, do: target.page_number, else: selection_number
+
+            format
+            |> String.replace("{{page}}", Integer.to_string(page))
+            |> String.replace("{{pages}}", Integer.to_string(pages))
+          end)
+
+        {:ok, texts}
+      end
+    end
   end
 
   defp fit_mode(mode) do

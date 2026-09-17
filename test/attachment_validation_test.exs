@@ -236,14 +236,14 @@ defmodule NativeElixirPdfUtilities.AttachmentValidationTest do
               {:resource_limit_exceeded,
                %{
                  reason: :resource_limit_exceeded,
-                 stage: :limits,
+                 stage: :incremental_write,
                  operation: :embed,
                  module: Attachments,
                  message: message
                }}} = Attachments.embed(source, [file])
 
       assert message =~ "requires #{size} bytes"
-      assert message =~ "max_pdf_input_bytes (#{size - 1})"
+      assert message =~ "min(max_pdf_input_bytes, max_rendered_pdf_bytes) (#{size - 1})"
 
       Limits.install(Map.put(Limits.defaults(), :max_pdf_input_bytes, byte_size(source)))
       assert {:ok, ^source} = Attachments.embed(source, [])

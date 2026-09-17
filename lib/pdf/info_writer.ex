@@ -64,22 +64,25 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoWriter do
 
       {:ok, trailer_io} = InfoCodec.serialize_value(incremental_trailer)
 
-      {:ok,
-       IO.iodata_to_binary([
-         pdf,
-         separator,
-         object,
-         "xref\n",
-         Integer.to_string(object_number),
-         " 1\n",
-         padded_offset(object_offset),
-         " 00000 n \n",
-         "trailer\n",
-         trailer_io,
-         "\nstartxref\n",
-         Integer.to_string(xref_offset),
-         "\n%%EOF\n"
-       ])}
+      output = [
+        pdf,
+        separator,
+        object,
+        "xref\n",
+        Integer.to_string(object_number),
+        " 1\n",
+        padded_offset(object_offset),
+        " 00000 n \n",
+        "trailer\n",
+        trailer_io,
+        "\nstartxref\n",
+        Integer.to_string(xref_offset),
+        "\n%%EOF\n"
+      ]
+
+      with :ok <- IncrementalValidator.validate_output_size(IO.iodata_length(output)) do
+        {:ok, IO.iodata_to_binary(output)}
+      end
     else
       :error -> error("information dictionary cannot be serialized")
       {:error, _} = writer_error -> writer_error

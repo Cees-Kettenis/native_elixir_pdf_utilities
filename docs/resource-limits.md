@@ -212,8 +212,22 @@ Attachment metadata uses `max_pdf_info_value_bytes`; attachment name-tree
 traversal uses `max_pdf_name_tree_nodes` and `max_pdf_value_depth`. Existing
 attachment streams are counted as stored, without decompression. Declared
 uncompressed sizes are metadata, not a decompressed-byte budget. Document
-reading also enforces the existing PDF input limits. Incremental updates grow
-the original binary; these limits do not constitute a general output-size cap.
+reading also enforces the existing PDF input limits. Incremental updates retain
+the original binary, which counts toward the output byte limit described below.
+
+## Appearance expansion and incremental output
+
+`max_appearance_text_bytes` defaults to 5,000,000 bytes across form and stamp
+appearances. Repeating text on multiple pages or widgets charges each copy.
+`max_appearance_widgets` defaults to 10,000 generated appearances or selected
+widgets; HTML controls reserve both their normal and alternate appearances.
+These limits are checked before appearance rendering.
+
+The shared incremental writer checks serialized pieces as they accumulate. All
+incremental writers also check the complete iodata before
+flattening it. Output must fit both `max_pdf_input_bytes` and
+`max_rendered_pdf_bytes`, so an edit cannot return a document already too large
+for the reader under the current byte limit. Other reader limits still apply.
 
 ## Font sources and caches
 

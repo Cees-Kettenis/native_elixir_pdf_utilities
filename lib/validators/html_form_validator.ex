@@ -40,6 +40,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           |> MapSet.new()
 
         cond do
+          length(controls) * 2 > Limits.get(:max_appearance_widgets) ->
+            error(:resource_limit_exceeded, "HTML controls exceed the appearance count limit")
+
           length(controls) > Limits.get(:max_pdf_form_fields) ->
             error(:resource_limit_exceeded, "HTML controls exceed max_pdf_form_fields")
 
@@ -181,7 +184,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                     }
                   end)
 
-                {:ok, cleaned, Enum.reverse(fields)}
+                bytes =
+                  Enum.reduce(fields, 0, fn field, total ->
+                    Enum.reduce(field.appearance.boxes, total, fn box, total ->
+                      total + byte_size(Map.get(box, :text, ""))
+                    end)
+                  end)
+
+                if bytes <= Limits.get(:max_appearance_text_bytes),
+                  do: {:ok, cleaned, Enum.reverse(fields)},
+                  else:
+                    error(
+                      :resource_limit_exceeded,
+                      "HTML control appearance text exceeds the aggregate limit"
+                    )
 
               failure ->
                 failure

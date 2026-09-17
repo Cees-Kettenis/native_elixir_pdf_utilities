@@ -58,9 +58,17 @@ defmodule NativeElixirPdfUtilities.Pdf.IncrementalWriter do
                 "\nendobj\n"
               ]
 
-              {:cont,
-               {:ok, [piece | pieces], [{object, generation, position} | entries],
-                position + :erlang.iolist_size(piece)}}
+              next_position = position + :erlang.iolist_size(piece)
+
+              case IncrementalValidator.validate_output_size(next_position) do
+                :ok ->
+                  {:cont,
+                   {:ok, [piece | pieces], [{object, generation, position} | entries],
+                    next_position}}
+
+                failure ->
+                  {:halt, failure}
+              end
 
             :error ->
               {:halt, error("incremental object cannot be serialized")}
@@ -93,19 +101,22 @@ defmodule NativeElixirPdfUtilities.Pdf.IncrementalWriter do
               ]
             end)
 
-          {:ok,
-           [
-             pdf,
-             separator,
-             pieces,
-             "xref\n",
-             xref_entries,
-             "trailer\n",
-             trailer_io,
-             "\nstartxref\n",
-             Integer.to_string(xref_offset),
-             "\n%%EOF\n"
-           ]}
+          output = [
+            pdf,
+            separator,
+            pieces,
+            "xref\n",
+            xref_entries,
+            "trailer\n",
+            trailer_io,
+            "\nstartxref\n",
+            Integer.to_string(xref_offset),
+            "\n%%EOF\n"
+          ]
+
+          with :ok <- IncrementalValidator.validate_output_size(IO.iodata_length(output)) do
+            {:ok, output}
+          end
         else
           {:error, _error} = write_error -> write_error
         end
