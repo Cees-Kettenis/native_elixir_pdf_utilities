@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
   @moduledoc false
 
+  alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
@@ -10,6 +11,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
   @spec resolve(String.t(), kind(), keyword(), HtmlValidator.image_budget() | nil) ::
           {:ok, binary()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def resolve(reference, kind, opts, image_budget \\ nil) do
+    FontValidator.with_budget(fn ->
+      case kind do
+        :font ->
+          FontValidator.reserve(:max_font_candidates, 1)
+
+          case Map.get(Keyword.get(opts, :assets, %{}), reference) do
+            {:bytes, bytes} -> FontValidator.check(:max_font_source_bytes, byte_size(bytes))
+            _ -> :ok
+          end
+
+          FontValidator.memo(
+            {:asset, reference, Keyword.get(opts, :base_url),
+             Map.get(Keyword.get(opts, :assets, %{}), reference),
+             Keyword.get(opts, :asset_resolver)},
+            fn ->
+              do_resolve(reference, kind, opts, :font)
+            end
+          )
+
+        _ ->
+          do_resolve(reference, kind, opts, image_budget)
+      end
+    end)
+  end
+
+  defp do_resolve(reference, kind, opts, image_budget) do
     assets = Keyword.get(opts, :assets, %{})
 
     case Map.fetch(assets, reference) do
@@ -24,7 +51,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
   defp resolve_explicit_source(source, reference, image_budget) do
     case source do
       {:bytes, bytes} ->
-        with :ok <- reserve_image_source(image_budget, byte_size(bytes)) do
+        with :ok <- reserve_source_bytes(image_budget, bytes) do
           {:ok, bytes}
         end
 
@@ -63,7 +90,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
 
         case HtmlValidator.validate_asset_resolver_result(result, reference) do
           {:ok, bytes} ->
-            with :ok <- reserve_image_source(image_budget, byte_size(bytes)) do
+            with :ok <- reserve_source_bytes(image_budget, bytes) do
               {:ok, bytes}
             end
 
@@ -82,7 +109,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
   defp read_file(path, reference, image_budget) do
     with {:ok, %{size: source_bytes, type: :regular}} <- File.stat(path),
          :ok <- reserve_image_source(image_budget, source_bytes),
-         {:ok, bytes} <- File.read(path) do
+         {:ok, bytes} <-
+           (case image_budget do
+              :font ->
+                NativeElixirPdfUtilities.FileReader.read(path, FontValidator.read_limit())
+                |> FontValidator.source_result()
+
+              _ ->
+                File.read(path)
+            end),
+         :ok <-
+           (case image_budget do
+              :font -> FontValidator.reserve_source(bytes)
+              _ -> :ok
+            end) do
       {:ok, bytes}
     else
       {:error, {_reason, _diagnostic}} = error ->
@@ -101,7 +141,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
   defp reserve_image_source(image_budget, source_bytes) do
     case image_budget do
       nil -> :ok
+      :font -> FontValidator.check(:max_font_source_bytes, source_bytes)
       image_budget -> HtmlValidator.reserve_image_source(image_budget, source_bytes)
+    end
+  end
+
+  defp reserve_source_bytes(budget, bytes) do
+    case budget do
+      :font -> FontValidator.reserve_source(bytes)
+      _ -> reserve_image_source(budget, byte_size(bytes))
     end
   end
 

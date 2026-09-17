@@ -3,6 +3,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SystemFontCache do
 
   use GenServer
 
+  alias NativeElixirPdfUtilities.Validators.FontValidator
+
   @table __MODULE__
 
   @doc false
@@ -42,23 +44,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SystemFontCache do
 
       :miss ->
         result = loader.()
-        sequence = state.sequence + 1
-        :ets.insert(state.table, {key, result, sequence})
 
-        case :ets.info(state.table, :size) > state.maximum_entries do
+        case FontValidator.cacheable_result?(result) do
           true ->
-            {oldest_key, _result, _sequence} =
-              state.table
-              |> :ets.tab2list()
-              |> Enum.min_by(fn {_key, _result, entry_sequence} -> entry_sequence end)
+            sequence = state.sequence + 1
+            :ets.insert(state.table, {key, result, sequence})
 
-            :ets.delete(state.table, oldest_key)
+            state.table
+            |> :ets.tab2list()
+            |> FontValidator.cache_evictions(state.maximum_entries, :max_system_font_cache_bytes)
+            |> Enum.each(&:ets.delete(state.table, &1))
+
+            {:reply, result, %{state | sequence: sequence}}
 
           false ->
-            :ok
+            {:reply, result, state}
         end
-
-        {:reply, result, %{state | sequence: sequence}}
     end
   end
 

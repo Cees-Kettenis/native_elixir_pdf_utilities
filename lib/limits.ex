@@ -30,6 +30,13 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_layout_text_work: 20_000_000,
     max_rendered_pages: 1_000,
     max_rendered_pdf_bytes: 50_000_000,
+    max_font_source_bytes: 10_000_000,
+    max_aggregate_font_source_bytes: 40_000_000,
+    max_font_count: 128,
+    max_font_candidates: 256,
+    max_font_discoveries: 64,
+    max_font_cache_bytes: 100_000_000,
+    max_system_font_cache_bytes: 100_000_000,
     max_pdf_attachments: 1_000,
     max_pdf_attachment_bytes: 10_000_000,
     max_pdf_attachment_total_bytes: 25_000_000,
@@ -123,6 +130,13 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_layout_text_work
           | :max_rendered_pages
           | :max_rendered_pdf_bytes
+          | :max_font_source_bytes
+          | :max_aggregate_font_source_bytes
+          | :max_font_count
+          | :max_font_candidates
+          | :max_font_discoveries
+          | :max_font_cache_bytes
+          | :max_system_font_cache_bytes
           | :max_pdf_attachment_bytes
           | :max_pdf_attachment_total_bytes
           | :max_mime_container_bytes

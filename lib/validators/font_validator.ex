@@ -4,6 +4,190 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
 
+  @doc false
+  @spec with_budget((-> result)) :: result | {:error, {atom(), Diagnostics.diagnostic()}}
+        when result: term()
+  def with_budget(fun) do
+    key = {__MODULE__, :budget}
+
+    case Process.get(key) do
+      nil ->
+        Process.put(key, %{sources: MapSet.new(), faces: MapSet.new(), memo: %{}})
+
+        try do
+          fun.()
+        catch
+          {:font_resource_limit, error} -> error
+        after
+          Process.delete(key)
+        end
+
+      _ ->
+        fun.()
+    end
+  end
+
+  @doc false
+  @spec reserve(Limits.key(), non_neg_integer()) :: :ok
+  def reserve(limit, amount) do
+    key = {__MODULE__, :budget}
+    budget = Process.get(key)
+    used = Map.get(budget, limit, 0) + amount
+    check(limit, used)
+    Process.put(key, Map.put(budget, limit, used))
+    :ok
+  end
+
+  @doc false
+  @spec check(Limits.key(), non_neg_integer()) :: :ok
+  def check(limit, amount) do
+    case amount <= Limits.get(limit) do
+      true ->
+        :ok
+
+      false ->
+        throw(
+          {:font_resource_limit,
+           Diagnostics.error(
+             :font,
+             :resource_limit_exceeded,
+             "font loading exceeds #{limit} (configured limit #{Limits.get(limit)})",
+             operation: :load_registry,
+             module: __MODULE__
+           )}
+        )
+    end
+  end
+
+  @doc false
+  @spec read_limit() :: pos_integer()
+  def read_limit do
+    budget = Process.get({__MODULE__, :budget})
+    used = Map.get(budget, :max_aggregate_font_source_bytes, 0)
+    check(:max_aggregate_font_source_bytes, used + 1)
+    min(Limits.get(:max_font_source_bytes), Limits.get(:max_aggregate_font_source_bytes) - used)
+  end
+
+  @doc false
+  @spec discovery_result(map() | nil | {:error, {atom(), map()}}) :: map() | nil
+  def discovery_result(result) do
+    case result do
+      %{data: data} = font ->
+        reserve_source(data)
+        reserve_face(font)
+        font
+
+      {:error, {_reason, _diagnostic}} = error ->
+        throw({:font_resource_limit, error})
+
+      nil ->
+        nil
+    end
+  end
+
+  @doc false
+  @spec reserve_face(map()) :: :ok
+  def reserve_face(font) do
+    key = {__MODULE__, :budget}
+    budget = Process.get(key)
+    identity = {font.family, font.weight, font.style}
+    faces = MapSet.put(budget.faces, identity)
+    check(:max_font_count, MapSet.size(faces))
+    Process.put(key, %{budget | faces: faces})
+    :ok
+  end
+
+  @doc false
+  @spec reserve_source(binary()) :: :ok
+  def reserve_source(data) do
+    check(:max_font_source_bytes, byte_size(data))
+    identity = :crypto.hash(:sha256, data)
+    key = {__MODULE__, :budget}
+    budget = Process.get(key)
+
+    case MapSet.member?(budget.sources, identity) do
+      true ->
+        :ok
+
+      false ->
+        reserve(:max_aggregate_font_source_bytes, byte_size(data))
+        Process.put(key, %{Process.get(key) | sources: MapSet.put(budget.sources, identity)})
+        :ok
+    end
+  end
+
+  @doc false
+  @spec memo(term(), (-> result)) :: result when result: term()
+  def memo(identity, loader) do
+    key = {__MODULE__, :budget}
+    budget = Process.get(key)
+
+    case Map.fetch(budget.memo, identity) do
+      {:ok, result} ->
+        result
+
+      :error ->
+        result = loader.()
+        budget = Process.get(key)
+        Process.put(key, %{budget | memo: Map.put(budget.memo, identity, result)})
+        result
+    end
+  end
+
+  @doc false
+  @spec source_result(term()) :: term()
+  def source_result(result) do
+    case result do
+      {:error, {:resource_limit_exceeded, diagnostic}} ->
+        diagnostic = %{
+          diagnostic
+          | stage: :font,
+            message:
+              "font source exceeds max_font_source_bytes or remaining max_aggregate_font_source_bytes: " <>
+                diagnostic.message
+        }
+
+        throw({:font_resource_limit, {:error, {:resource_limit_exceeded, diagnostic}}})
+
+      result ->
+        result
+    end
+  end
+
+  @doc false
+  @spec cacheable_result?(term()) :: boolean()
+  def cacheable_result?(result) do
+    case result do
+      {:error, {:resource_limit_exceeded, _diagnostic}} -> false
+      _ -> true
+    end
+  end
+
+  @doc false
+  @spec cache_bytes(term()) :: non_neg_integer()
+  def cache_bytes(term) do
+    :erts_debug.flat_size(term) * :erlang.system_info(:wordsize) + :erlang.external_size(term)
+  end
+
+  @doc false
+  @spec cache_evictions([tuple()], pos_integer(), Limits.key()) :: [term()]
+  def cache_evictions(entries, maximum_entries, byte_limit) do
+    # Both cache formats put the insertion sequence last and their key first.
+    {_retained, _bytes, evicted} =
+      entries
+      |> Enum.sort_by(&elem(&1, tuple_size(&1) - 1), :desc)
+      |> Enum.reduce({0, 0, []}, fn entry, {count, bytes, evicted} ->
+        size = cache_bytes(entry)
+
+        case count < maximum_entries and bytes + size <= Limits.get(byte_limit) do
+          true -> {count + 1, bytes + size, evicted}
+          false -> {count, bytes, [elem(entry, 0) | evicted]}
+        end
+      end)
+
+    evicted
+  end
+
   @type segment :: {non_neg_integer(), non_neg_integer(), integer(), binary() | nil}
 
   @doc false

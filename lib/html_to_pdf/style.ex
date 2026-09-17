@@ -14,6 +14,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @border_styles [
@@ -77,89 +78,91 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               map()}}
   def compute_detailed(dom, opts, image_budget) do
     HtmlValidator.with_render_budget(fn ->
-      font_options = Font.normalize_options(opts)
+      FontValidator.with_budget(fn ->
+        font_options = Font.normalize_options(opts)
 
-      case HtmlValidator.validate_style_input(dom, opts, font_options) do
-        :ok ->
-          {:ok, opts} = font_options
-          %{type: :document, children: children} = dom
+        case HtmlValidator.validate_style_input(dom, opts, font_options) do
+          :ok ->
+            {:ok, opts} = font_options
+            %{type: :document, children: children} = dom
 
-          with {:ok, stylesheet_entries} <- load_stylesheets(dom, opts),
-               {:ok, css_fonts} <- stylesheet_fonts(stylesheet_entries, opts),
-               {:ok, font_registry} <- font_registry(opts, css_fonts),
-               {:ok, font_families, font_face} <-
-                 resolve_font(
-                   Keyword.get(opts, :default_font, "DejaVu Sans"),
-                   400,
-                   :normal,
-                   font_registry
-                 ),
-               {:ok, rules} <- stylesheet_rules(stylesheet_entries) do
-            children = assign_selector_ids(children)
-            style_opts = Keyword.put(opts, :__image_budget__, image_budget)
+            with {:ok, stylesheet_entries} <- load_stylesheets(dom, opts),
+                 {:ok, css_fonts} <- stylesheet_fonts(stylesheet_entries, opts),
+                 {:ok, font_registry} <- font_registry(opts, css_fonts),
+                 {:ok, font_families, font_face} <-
+                   resolve_font(
+                     Keyword.get(opts, :default_font, "DejaVu Sans"),
+                     400,
+                     :normal,
+                     font_registry
+                   ),
+                 {:ok, rules} <- stylesheet_rules(stylesheet_entries) do
+              children = assign_selector_ids(children)
+              style_opts = Keyword.put(opts, :__image_budget__, image_budget)
 
-            base_style = %{
-              _custom_properties: %{},
-              _font_registry: font_registry,
-              _root_font_size: 12.0,
-              color: {0, 0, 0},
-              font_face: font_face,
-              font_families: font_families,
-              font_family: font_face.family,
-              font_size: 12.0,
-              font_style: :normal,
-              font_weight: 400,
-              letter_spacing: 0.0,
-              line_height: 14.4,
-              line_height_normal: true,
-              text_align: :left,
-              text_transform: :none,
-              white_space: :normal
-            }
+              base_style = %{
+                _custom_properties: %{},
+                _font_registry: font_registry,
+                _root_font_size: 12.0,
+                color: {0, 0, 0},
+                font_face: font_face,
+                font_families: font_families,
+                font_family: font_face.family,
+                font_size: 12.0,
+                font_style: :normal,
+                font_weight: 400,
+                letter_spacing: 0.0,
+                line_height: 14.4,
+                line_height_normal: true,
+                text_align: :left,
+                text_transform: :none,
+                white_space: :normal
+              }
 
-            result =
-              RenderCache.run(fn cache ->
-                context = %{rules: compile_selector_rules(rules), cache: cache}
+              result =
+                RenderCache.run(fn cache ->
+                  context = %{rules: compile_selector_rules(rules), cache: cache}
 
-                case fragment_root_style(children, base_style, context, style_opts) do
-                  {:ok, nil} ->
-                    {:ok, %{type: :document, children: []}}
+                  case fragment_root_style(children, base_style, context, style_opts) do
+                    {:ok, nil} ->
+                      {:ok, %{type: :document, children: []}}
 
-                  {:ok, root_style} ->
-                    with {:ok, styled_children, _counters} <-
-                           style_children(children, root_style, context, [], style_opts, [], []) do
-                      {:ok, %{type: :document, children: styled_children}}
-                    end
+                    {:ok, root_style} ->
+                      with {:ok, styled_children, _counters} <-
+                             style_children(children, root_style, context, [], style_opts, [], []) do
+                        {:ok, %{type: :document, children: styled_children}}
+                      end
 
-                  {:error, reason} ->
-                    {:error, reason}
-                end
-              end)
+                    {:error, reason} ->
+                      {:error, reason}
+                  end
+                end)
 
-            case result do
-              {:ok, styled_tree} ->
-                {:ok, styled_tree}
+              case result do
+                {:ok, styled_tree} ->
+                  {:ok, styled_tree}
 
-              {:error, :invalid_document} ->
-                {:error, style_error_detail(dom, opts)}
+                {:error, :invalid_document} ->
+                  {:error, style_error_detail(dom, opts)}
+
+                {:error, {_reason, _diagnostic}} = error ->
+                  error
+              end
+            else
+              {:error, {:font_load_failed, sources}} ->
+                {:error, font_load_error(sources)}
 
               {:error, {_reason, _diagnostic}} = error ->
                 error
+
+              {:error, :invalid_document} ->
+                {:error, style_error_detail(dom, opts)}
             end
-          else
-            {:error, {:font_load_failed, sources}} ->
-              {:error, font_load_error(sources)}
 
-            {:error, {_reason, _diagnostic}} = error ->
-              error
-
-            {:error, :invalid_document} ->
-              {:error, style_error_detail(dom, opts)}
-          end
-
-        {:error, {_reason, _diagnostic}} = error ->
-          error
-      end
+          {:error, {_reason, _diagnostic}} = error ->
+            error
+        end
+      end)
     end)
   end
 

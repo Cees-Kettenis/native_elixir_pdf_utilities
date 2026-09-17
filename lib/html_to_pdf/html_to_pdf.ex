@@ -35,6 +35,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Pdf.OutlineDetector
+  alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type page_size :: PageGeometry.page_size_input()
@@ -183,7 +184,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   @spec render(String.t(), [render_option()]) ::
           {:ok, binary()} | {:error, detailed_error_reason()}
   def render(html, opts \\ []) do
-    case HtmlValidator.with_render_budget(fn -> do_render(html, opts) end) do
+    case HtmlValidator.with_render_budget(fn ->
+           FontValidator.with_budget(fn -> do_render(html, opts) end)
+         end) do
       {:ok, pdf_binary} ->
         {:ok, pdf_binary}
 

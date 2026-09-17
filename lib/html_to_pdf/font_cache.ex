@@ -3,6 +3,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
 
   use GenServer
 
+  alias NativeElixirPdfUtilities.Validators.FontValidator
+
   @table __MODULE__
 
   @type load_result :: {:ok, term()} | :error | {:error, {atom(), map()}}
@@ -18,40 +20,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
   @doc """
   Returns a parsed font-file value from the process-wide cache.
 
-  Each fetch reads the file and fingerprints its contents. The loader receives
-  those same bytes and runs only when that content is not cached for the path.
+  Each render reads one bounded snapshot per path and fingerprints its contents.
+  Standalone fetch calls each read a new snapshot. The loader receives those
+  same bytes and runs only when that content is not cached for the path.
   Failed loads are not retained. When the library application is not running,
   the loader runs without caching.
   """
   @spec fetch(String.t(), loader()) :: load_result()
   def fetch(path, loader) do
-    absolute_path = Path.expand(path)
+    FontValidator.with_budget(fn ->
+      FontValidator.memo({:file, Path.expand(path)}, fn ->
+        absolute_path = Path.expand(path)
 
-    case File.read(absolute_path) do
-      {:ok, data} ->
-        fingerprint = :crypto.hash(:sha256, data)
+        FontValidator.reserve(:max_font_candidates, 1)
 
-        case cached(absolute_path, fingerprint) do
-          {:hit, result} ->
-            result
+        case NativeElixirPdfUtilities.FileReader.read(
+               absolute_path,
+               FontValidator.read_limit()
+             ) do
+          {:ok, data} ->
+            FontValidator.reserve_source(data)
+            fingerprint = :crypto.hash(:sha256, data)
 
-          :miss ->
-            case Process.whereis(__MODULE__) do
-              nil ->
-                loader.(data)
+            case cached(absolute_path, fingerprint) do
+              {:hit, result} ->
+                result
 
-              _pid ->
-                GenServer.call(
-                  __MODULE__,
-                  {:fetch, absolute_path, fingerprint, data, loader},
-                  :infinity
-                )
+              :miss ->
+                case Process.whereis(__MODULE__) do
+                  nil ->
+                    loader.(data)
+
+                  _pid ->
+                    GenServer.call(
+                      __MODULE__,
+                      {:fetch, absolute_path, fingerprint, data, loader},
+                      :infinity
+                    )
+                end
             end
-        end
 
-      {:error, _reason} ->
-        :error
-    end
+          {:error, {_reason, _diagnostic}} = error ->
+            FontValidator.source_result(error)
+
+          {:error, _reason} ->
+            :error
+        end
+      end)
+    end)
   end
 
   @impl GenServer
@@ -84,20 +100,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
                 sequence = state.sequence + 1
                 :ets.insert(state.table, {path, fingerprint, result, sequence})
 
-                case :ets.info(state.table, :size) > state.maximum_entries do
-                  true ->
-                    {oldest_path, _fingerprint, _result, _sequence} =
-                      state.table
-                      |> :ets.tab2list()
-                      |> Enum.min_by(fn {_path, _fingerprint, _result, entry_sequence} ->
-                        entry_sequence
-                      end)
-
-                    :ets.delete(state.table, oldest_path)
-
-                  false ->
-                    :ok
-                end
+                state.table
+                |> :ets.tab2list()
+                |> FontValidator.cache_evictions(state.maximum_entries, :max_font_cache_bytes)
+                |> Enum.each(&:ets.delete(state.table, &1))
 
                 {:reply, result, %{state | sequence: sequence}}
 

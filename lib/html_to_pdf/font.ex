@@ -48,12 +48,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   @bundled_font_family "DejaVu Sans"
 
   @doc false
-  @spec normalize_options(term()) :: {:ok, keyword()} | :error
+  @spec normalize_options(term()) ::
+          {:ok, keyword()} | :error | {:error, {:resource_limit_exceeded, map()}}
   def normalize_options(opts) do
     case Keyword.keyword?(opts) do
       true ->
         case normalize_configs(Keyword.get(opts, :fonts, [])) do
           {:ok, fonts} -> {:ok, Keyword.put(opts, :fonts, fonts)}
+          {:error, {_reason, _diagnostic}} = error -> error
           :error -> :error
         end
 
@@ -63,20 +65,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   end
 
   @doc false
-  @spec normalize_configs(term()) :: {:ok, [map()]} | :error
+  @spec normalize_configs(term()) ::
+          {:ok, [map()]} | :error | {:error, {:resource_limit_exceeded, map()}}
   def normalize_configs(fonts) do
-    case is_list(fonts) do
-      true ->
-        Enum.reduce_while(fonts, {:ok, []}, fn font, {:ok, prepared} ->
-          case normalize_config(font) do
-            {:ok, normalized} -> {:cont, {:ok, prepared ++ [normalized]}}
-            :error -> {:halt, :error}
-          end
-        end)
+    FontValidator.with_budget(fn ->
+      case is_list(fonts) do
+        true ->
+          FontValidator.check(:max_font_count, length(fonts))
 
-      false ->
-        :error
-    end
+          Enum.reduce_while(fonts, {:ok, []}, fn font, {:ok, prepared} ->
+            case normalize_config(font) do
+              {:ok, normalized} -> {:cont, {:ok, prepared ++ [normalized]}}
+              :error -> {:halt, :error}
+            end
+          end)
+
+        false ->
+          :error
+      end
+    end)
   end
 
   @doc """
@@ -91,50 +98,56 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
           | :error
           | {:error, {:invalid_document | :resource_limit_exceeded, map()}}
   def load_registry(opts) do
-    with {:ok, prepared_opts} <- normalize_options(opts),
-         :ok <- HtmlValidator.validate_font_configs(Keyword.fetch!(prepared_opts, :fonts)),
-         {:ok, bundled_configs} <- normalize_configs(bundled_font_configs()),
-         :ok <- HtmlValidator.validate_font_configs(bundled_configs),
-         {:ok, configured} <- load_fonts(Keyword.fetch!(prepared_opts, :fonts), :configured),
-         {:ok, bundled} <- load_fonts(bundled_configs, :bundled) do
-      fallback = configured ++ bundled
+    FontValidator.with_budget(fn ->
+      with {:ok, prepared_opts} <- normalize_options(opts),
+           :ok <- HtmlValidator.validate_font_configs(Keyword.fetch!(prepared_opts, :fonts)),
+           {:ok, bundled_configs} <- normalize_configs(bundled_font_configs()),
+           :ok <- HtmlValidator.validate_font_configs(bundled_configs),
+           {:ok, configured} <- load_fonts(Keyword.fetch!(prepared_opts, :fonts), :configured),
+           {:ok, bundled} <- load_fonts(bundled_configs, :bundled) do
+        fallback = configured ++ bundled
 
-      {:ok,
-       %{
-         embedded: Enum.uniq_by(fallback, &font_key/1),
-         fallback: fallback,
-         system_font_discovery: Keyword.get(prepared_opts, :system_font_discovery, true)
-       }}
-    else
-      {:error, {_reason, _diagnostic}} = error -> error
-      _ -> :error
-    end
+        {:ok,
+         %{
+           embedded: Enum.uniq_by(fallback, &font_key/1),
+           fallback: fallback,
+           system_font_discovery: Keyword.get(prepared_opts, :system_font_discovery, true)
+         }}
+      else
+        {:error, {_reason, _diagnostic}} = error -> error
+        _ -> :error
+      end
+    end)
   end
 
   @doc """
   Resolves a CSS font-family value or fallback list to a supported font face.
   """
   @spec resolve(String.t() | [String.t()], number(), font_style(), registry()) ::
-          {:ok, [String.t()], font_face()} | :error
+          {:ok, [String.t()], font_face()} | :error | {:error, {:resource_limit_exceeded, map()}}
   def resolve(family_value, weight, style, registry) do
-    families = font_families(family_value)
+    FontValidator.with_budget(fn ->
+      families = font_families(family_value)
 
-    case List.first(requested_faces(families, weight, style, registry)) ||
-           embedded_family(@bundled_font_family, weight, style, registry) do
-      nil -> :error
-      font -> {:ok, families, font}
-    end
+      case List.first(requested_faces(families, weight, style, registry)) ||
+             embedded_family(@bundled_font_family, weight, style, registry) do
+        nil -> :error
+        font -> {:ok, families, font}
+      end
+    end)
   end
 
   @doc false
   @spec requested_faces(String.t() | [String.t()], number(), font_style(), registry()) ::
-          [embedded_font()]
+          [embedded_font()] | {:error, {:resource_limit_exceeded, map()}}
   def requested_faces(family_value, weight, style, registry) do
-    family_value
-    |> font_families()
-    |> Enum.map(&resolve_family(&1, weight, style, registry))
-    |> Enum.reject(&is_nil/1)
-    |> Enum.uniq_by(&pdf_name/1)
+    FontValidator.with_budget(fn ->
+      family_value
+      |> font_families()
+      |> Enum.map(&resolve_family(&1, weight, style, registry))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq_by(&pdf_name/1)
+    end)
   end
 
   @doc """
@@ -347,6 +360,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
             {:ok, %{data: [data]}}
 
           candidates when is_list(candidates) ->
+            FontValidator.check(:max_font_candidates, length(candidates))
+
             case candidates != [] and
                    Enum.all?(candidates, &(is_binary(&1) and byte_size(&1) > 0)) do
               true -> {:ok, %{data: candidates}}
@@ -371,6 +386,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
         end
 
       paths when is_list(paths) ->
+        FontValidator.check(:max_font_candidates, length(paths))
+
         case paths != [] and Enum.all?(paths, &(is_binary(&1) and String.trim(&1) != "")) do
           true -> {:ok, Enum.map(paths, &String.trim/1)}
           false -> :error
@@ -450,6 +467,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   end
 
   defp load_font(font) do
+    FontValidator.reserve_face(font)
+
     result =
       case font do
         %{path: paths} ->
@@ -513,7 +532,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
   defp load_first_supported_data(candidates) do
     Enum.reduce_while(candidates, :error, fn data, :error ->
-      case parse_ttf(data) do
+      FontValidator.reserve(:max_font_candidates, 1)
+      FontValidator.reserve_source(data)
+
+      case FontValidator.memo({:parsed, :crypto.hash(:sha256, data)}, fn -> parse_ttf(data) end) do
         {:ok, parsed} -> {:halt, {:ok, data, parsed}}
         {:error, {_reason, _diagnostic}} = error -> {:halt, error}
         :error -> {:cont, :error}
@@ -557,20 +579,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       true ->
         key = {String.downcase(family), weight, style}
 
-        SystemFontCache.fetch(key, fn ->
-          with {:ok, discovered} <- ElixirFontDiscovery.resolve(family, weight, style),
-               {:ok, loaded} <-
-                 load_font(%{
-                   family: discovered.family,
-                   data: [discovered.data],
-                   weight: discovered.weight,
-                   style: if(discovered.style == :oblique, do: :italic, else: discovered.style),
-                   source: :system
-                 }) do
-            loaded
-          else
-            _ -> nil
-          end
+        FontValidator.memo({:discovery, key}, fn ->
+          FontValidator.reserve(:max_font_discoveries, 1)
+
+          result =
+            SystemFontCache.fetch(key, fn ->
+              FontValidator.with_budget(fn ->
+                with {:ok, discovered} <- ElixirFontDiscovery.resolve(family, weight, style),
+                     {:ok, loaded} <-
+                       load_font(%{
+                         family: discovered.family,
+                         data: [discovered.data],
+                         weight: discovered.weight,
+                         style:
+                           if(discovered.style == :oblique, do: :italic, else: discovered.style),
+                         source: :system
+                       }) do
+                  loaded
+                else
+                  {:error, {_reason, _diagnostic}} = error -> error
+                  _ -> nil
+                end
+              end)
+            end)
+
+          FontValidator.discovery_result(result)
         end)
 
       false ->

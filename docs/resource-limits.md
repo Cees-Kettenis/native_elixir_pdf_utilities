@@ -214,3 +214,35 @@ attachment streams are counted as stored, without decompression. Declared
 uncompressed sizes are metadata, not a decompressed-byte budget. Document
 reading also enforces the existing PDF input limits. Incremental updates grow
 the original binary; these limits do not constitute a general output-size cap.
+
+## Font sources and caches
+
+| Setting | Default | Applies to |
+| --- | ---: | --- |
+| `max_font_source_bytes` | 10,000,000 | One configured, document-selected, bundled, or discovered font |
+| `max_aggregate_font_source_bytes` | 40,000,000 | Distinct font byte payloads used during one render, including furniture |
+| `max_font_count` | 128 | Family/weight/style combinations, including bundled fallbacks |
+| `max_font_candidates` | 256 | Font source lookup and parse attempts; repeated file snapshots reuse the render-local result |
+| `max_font_discoveries` | 64 | Distinct system discovery requests in one render, including process-cache hits |
+| `max_font_cache_bytes` | 100,000,000 | Retained font-file cache entries |
+| `max_system_font_cache_bytes` | 100,000,000 | Retained system-discovery cache entries |
+
+File reads bind the regular-file and size checks to the opened handle and read
+at most the available byte allowance plus one sentinel byte. Actual returned
+bytes are checked again. These reads do not establish path confinement against
+symlink replacement; asset path authorization remains a separate boundary.
+
+Configured bytes and document asset callbacks undergo the same font budgets.
+Repeated sources and parsed payloads are reused within a render. Process-wide
+caches evict entries by both count and retained size, conservatively including
+heap structures and binary payloads. Oversized cache entries can still serve a
+bounded request but are not retained. Resource failures are not cached.
+
+System discovery reads trusted installed fonts through its native dependency,
+which returns complete bytes rather than a file handle or path. Request count
+and returned bytes are bounded, but this API cannot enforce the source-byte
+limit before that native allocation. Applications that need to control every
+font read should set `system_font_discovery: false` and supply approved font
+bytes or files. Resolver callbacks likewise control their own I/O before
+returning bytes. None of these per-render settings imposes a global concurrency
+or native-memory cap.

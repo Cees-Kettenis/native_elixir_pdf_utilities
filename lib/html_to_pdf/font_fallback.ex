@@ -10,12 +10,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type styled_tree :: NativeElixirPdfUtilities.HtmlToPdf.Style.styled_tree()
   @type unsupported_glyphs :: :replace | :error
   @type error_reason ::
-          :invalid_document | :invalid_encoding | :invalid_options | :unsupported_glyph
+          :invalid_document
+          | :invalid_encoding
+          | :invalid_options
+          | :unsupported_glyph
+          | :resource_limit_exceeded
   @replacement_character "\uFFFD"
 
   @doc """
@@ -27,25 +32,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
   @spec resolve(styled_tree(), unsupported_glyphs()) ::
           {:ok, styled_tree()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def resolve(styled_tree, unsupported_glyphs \\ :replace) do
-    with :ok <- HtmlValidator.validate_font_fallback_input(styled_tree, unsupported_glyphs),
-         prepared <- prepare_candidates(styled_tree),
-         :ok <-
-           HtmlValidator.validate_font_coverage(
-             prepared,
-             unsupported_glyphs,
-             @replacement_character
-           ) do
-      {:ok,
-       %{
-         prepared
-         | children: resolve_prepared_nodes(prepared.children, unsupported_glyphs)
-       }}
-    else
-      {:error, {reason, diagnostic}} ->
-        {:error,
-         {reason,
-          Diagnostics.with_context(diagnostic, operation: :resolve_fonts, module: __MODULE__)}}
-    end
+    FontValidator.with_budget(fn ->
+      with :ok <- HtmlValidator.validate_font_fallback_input(styled_tree, unsupported_glyphs),
+           prepared <- prepare_candidates(styled_tree),
+           :ok <-
+             HtmlValidator.validate_font_coverage(
+               prepared,
+               unsupported_glyphs,
+               @replacement_character
+             ) do
+        {:ok,
+         %{
+           prepared
+           | children: resolve_prepared_nodes(prepared.children, unsupported_glyphs)
+         }}
+      else
+        {:error, {reason, diagnostic}} ->
+          {:error,
+           {reason,
+            Diagnostics.with_context(diagnostic, operation: :resolve_fonts, module: __MODULE__)}}
+      end
+    end)
   end
 
   defp prepare_candidates(%{type: :document, children: children} = document) do

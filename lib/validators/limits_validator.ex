@@ -43,6 +43,10 @@ defmodule NativeElixirPdfUtilities.Validators.LimitsValidator do
 
   defp validate_relationships(limits) do
     cond do
+      limits.max_aggregate_font_source_bytes < limits.max_font_source_bytes ->
+        {:error,
+         "resource limit :max_aggregate_font_source_bytes must be greater than or equal to :max_font_source_bytes"}
+
       limits.max_aggregate_image_source_bytes < limits.max_image_source_bytes ->
         {:error,
          "resource limit :max_aggregate_image_source_bytes must be greater than or equal to :max_image_source_bytes"}
