@@ -577,14 +577,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec validate_local_resource_path(term(), term()) ::
           {:ok, String.t()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_local_resource_path(source, base_url) do
-    with {:ok, context} <- prepare_local_resource_path(source, base_url), do: {:ok, context.path}
-  end
-
-  @doc false
-  @spec prepare_local_resource_path(term(), term()) ::
-          {:ok, %{root: String.t(), relative: String.t(), path: String.t()}}
-          | {:error, {atom(), Diagnostics.diagnostic()}}
-  def prepare_local_resource_path(source, base_url) do
     result =
       with source when is_binary(source) and source != "" <- source,
            false <- String.contains?(source, ["\0", "://"]),
@@ -599,15 +591,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
            true <-
              relative == "." or
                (Path.type(relative) == :relative and relative != ".." and
-                  not String.starts_with?(relative, "../")) do
-        {:ok, %{root: base_path, relative: relative, path: path}}
+                  not String.starts_with?(relative, "../")),
+           true <- symlink_free_resource_path?(base_path, relative) do
+        {:ok, path}
       else
         _ -> :error
       end
 
     case result do
-      {:ok, context} ->
-        {:ok, context}
+      {:ok, path} ->
+        {:ok, path}
 
       :error ->
         Diagnostics.error(
@@ -1162,6 +1155,21 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       _ ->
         :error
     end
+  end
+
+  defp symlink_free_resource_path?(base_path, relative) do
+    relative
+    |> Path.split()
+    |> Enum.reduce_while(base_path, fn component, current_path ->
+      path = Path.join(current_path, component)
+
+      case File.lstat(path) do
+        {:ok, %File.Stat{type: :symlink}} -> {:halt, false}
+        {:ok, _stat} -> {:cont, path}
+        {:error, _reason} -> {:halt, false}
+      end
+    end)
+    |> is_binary()
   end
 
   defp validate_render_options(opts, font_options_result) do

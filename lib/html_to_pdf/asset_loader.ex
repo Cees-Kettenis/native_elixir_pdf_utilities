@@ -67,7 +67,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
         resolve_with_callback(reference, kind, opts, image_budget, :remote)
 
       false ->
-        case HtmlValidator.prepare_local_resource_path(reference, Keyword.get(opts, :base_url)) do
+        case HtmlValidator.validate_local_resource_path(reference, Keyword.get(opts, :base_url)) do
           {:ok, context} ->
             case read_file(context, reference, image_budget) do
               {:error, {:invalid_document, _}} = error ->
@@ -123,14 +123,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
       end
 
     with {:ok, maximum} <- maximum,
-         result =
-           (case path do
-              %{root: root, relative: relative} ->
-                FileReader.read_confined(root, relative, maximum)
-
-              path ->
-                FileReader.read(path, maximum)
-            end),
+         result = FileReader.read(path, maximum),
          {:ok, bytes} <-
            if(image_budget == :font, do: FontValidator.source_result(result), else: result),
          :ok <- reserve_source_bytes(image_budget, bytes) do

@@ -17,7 +17,6 @@ defmodule NativeElixirPdfUtilities.Limits do
   """
 
   @defaults %{
-    max_asset_file_read_timeout_ms: 5_000,
     max_aggregate_html_source_bytes: 10_000_000,
     max_aggregate_css_source_bytes: 20_000_000,
     max_html_source_bytes: 2_000_000,
@@ -122,7 +121,6 @@ defmodule NativeElixirPdfUtilities.Limits do
   @typedoc "A configurable resource-limit name."
   @type key ::
           :max_pdf_attachments
-          | :max_asset_file_read_timeout_ms
           | :max_aggregate_html_source_bytes
           | :max_aggregate_css_source_bytes
           | :max_html_source_bytes

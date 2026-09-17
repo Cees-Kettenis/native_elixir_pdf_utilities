@@ -186,7 +186,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
              )
   end
 
-  test "local document resources are confined beneath their base directory" do
+  test "local document resource paths reject traversal and existing symlinks" do
     fixture_dir = Path.join(System.tmp_dir!(), "native-elixir-pdf-resource-validator")
     resource_root = Path.join(fixture_dir, "root")
     inside_path = Path.join(resource_root, "inside.png")
@@ -217,17 +217,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     assert {:ok, ^resource_root} =
              HtmlValidator.validate_local_resource_path(".", resource_root)
 
-    # Path preparation does not inspect mutable directory entries. The reader
-    # opens beneath a pinned root and rejects symlinks in that same syscall.
     for relative <- ["linked.png", "linked-directory/nested.png", "missing.png"] do
-      assert {:ok, context} = HtmlValidator.prepare_local_resource_path(relative, resource_root)
-
       assert {:error, {:invalid_document, _}} =
-               NativeElixirPdfUtilities.FileReader.read_confined(
-                 context.root,
-                 context.relative,
-                 100
-               )
+               HtmlValidator.validate_local_resource_path(relative, resource_root)
     end
 
     for {source, base_url} <- [
