@@ -105,4 +105,30 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoCodecTest do
     deeply_nested = Enum.reduce(1..101, 0, fn _index, nested -> [nested] end)
     assert InfoCodec.serialize_value(deeply_nested) == :error
   end
+
+  test "serializes extreme floats as round-trippable PDF decimal numbers" do
+    for value <- [
+          0.0,
+          -0.0,
+          1.25,
+          1.32e-6,
+          -1.846875e-7,
+          1.0e-14,
+          1.0e20,
+          -1.25e30,
+          1.2345678901234567e16,
+          1.0e-300,
+          1.7976931348623157e308
+        ] do
+      assert {:ok, encoded} = InfoCodec.serialize_value(value)
+      decimal = IO.iodata_to_binary(encoded)
+      refute String.contains?(decimal, ["e", "E"])
+      assert {^value, ""} = Float.parse(decimal)
+
+      assert [{:real, ^value}] =
+               decimal
+               |> NativeElixirPdfUtilities.Tokenizer.new()
+               |> NativeElixirPdfUtilities.Tokenizer.tokenize_all()
+    end
+  end
 end

@@ -349,7 +349,13 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
             resources =
               Map.put(resources, "XObject", Map.put(xobjects, name, {:ref, placement.stream}))
 
-            matrix = Enum.map_join(placement.matrix, " ", &to_string/1)
+            matrix =
+              Enum.map(placement.matrix, fn number ->
+                {:ok, encoded} = InfoCodec.serialize_value(number)
+                encoded
+              end)
+              |> Enum.intersperse(" ")
+
             {resources, [commands, "q ", matrix, " cm /", name, " Do Q\n"]}
           end)
 

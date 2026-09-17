@@ -296,7 +296,33 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoCodec do
         {:ok, Integer.to_string(value)}
 
       value when is_float(value) ->
-        {:ok, :erlang.float_to_binary(value, [:compact, decimals: 10])}
+        # PDF numbers cannot use exponents. Expand the shortest round-trippable
+        # float representation instead of rounding small transforms to zero.
+        decimal =
+          case String.split(:erlang.float_to_binary(value, [:short]), "e") do
+            [decimal] ->
+              decimal
+
+            [coefficient, exponent] ->
+              sign = if String.starts_with?(coefficient, "-"), do: "-", else: ""
+              [whole, fraction] = String.split(String.trim_leading(coefficient, "-"), ".")
+              digits = whole <> fraction
+              point = byte_size(whole) + String.to_integer(exponent)
+
+              expanded =
+                String.duplicate("0", max(-point, 0)) <>
+                  digits <>
+                  String.duplicate("0", max(point - byte_size(digits), 0))
+
+              {whole, fraction} = String.split_at(expanded, max(point, 0))
+
+              sign <>
+                if(whole == "", do: "0", else: whole) <>
+                "." <>
+                if(fraction == "", do: "0", else: fraction)
+          end
+
+        {:ok, decimal}
 
       {:name, name} when is_binary(name) ->
         {:ok, ["/", encode_name(name)]}

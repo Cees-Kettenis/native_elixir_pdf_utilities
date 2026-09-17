@@ -364,6 +364,57 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
     assert hd(context.pages).dictionary["Annots"] == [{:ref, {10, 0}}]
   end
 
+  test "flattened appearance matrices keep small nonzero scales in valid PDF syntax" do
+    {:ok, context} = Reader.read_validated(external_pdf())
+
+    for factor <- [1, 100_000_000] do
+      {:ok, pdf} =
+        IncrementalWriter.write(context, [
+          {8, 0,
+           {:stream,
+            %{
+              "Type" => {:name, "XObject"},
+              "Subtype" => {:name, "Form"},
+              "BBox" => [0, 0, 100_000_000, 100_000_000],
+              "Matrix" => [factor, 0, 0, factor, 0, 0],
+              "Resources" => %{}
+            }, "0 0 100000000 100000000 re f"}}
+        ])
+
+      assert {:ok, flat} = Forms.flatten(pdf)
+      assert {:ok, flattened} = Reader.read_validated(flat)
+
+      assert {:ok, contents} =
+               NativeElixirPdfUtilities.Validators.PdfValidator.content_references(
+                 flattened.document,
+                 hd(flattened.pages).dictionary
+               )
+
+      assert {:ok, invocation} = Reader.decoded_stream(flattened.document, List.last(contents))
+
+      assert [
+               {:op, "Q"},
+               {:op, "q"},
+               {:real, sx},
+               {:int, 0},
+               {:int, 0},
+               {:real, sy},
+               {:real, 10.0},
+               {:real, 10.0},
+               {:op, "cm"},
+               {:name, _},
+               {:op, "Do"},
+               {:op, "Q"}
+             ] =
+               invocation
+               |> NativeElixirPdfUtilities.Tokenizer.new()
+               |> NativeElixirPdfUtilities.Tokenizer.tokenize_all()
+
+      assert sx == 100 / (100_000_000 * factor)
+      assert sy == 20 / (100_000_000 * factor)
+    end
+  end
+
   defp external_pdf(field \\ %{}, widget \\ %{}, form \\ %{}) do
     {:ok, pdf} = PdfWriter.render([%{size: {200.0, 200.0}, boxes: []}])
     {:ok, context} = Reader.read_validated(pdf)
