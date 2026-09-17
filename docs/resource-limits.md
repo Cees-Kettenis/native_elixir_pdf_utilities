@@ -58,8 +58,17 @@ These limits apply when reading existing PDFs.
 | `max_decoded_image_bytes` | 40,000,000 | One decoded image |
 | `max_aggregate_decoded_image_bytes` | 80,000,000 | Decoded images in one render |
 | `max_background_image_tiles` | 10,000 | Repeated background tiles in one render |
+| `max_css_variable_bytes` | 1,000,000 | One CSS value before and after variable substitution |
+| `max_css_variable_total_bytes` | 10,000,000 | Aggregate computed CSS value bytes across one render |
+| `max_css_variable_work` | 100,000 | Custom-property resolutions, including cached and repeated references, across one render |
+| `max_css_variable_depth` | 64 | Custom-property dependency depth |
 | `max_css_numeric_magnitude` | 1,000,000,000 | Absolute CSS numeric operands and converted lengths, excluding identifiers and quoted text |
 | `max_layout_cardinality` | 1,000 | Grid tracks, placements, and table spans |
+
+CSS budgets include unused custom properties. Dependencies are memoized during
+each custom-property computation, and output sizes are checked before building
+expanded binaries. Cycles and missing variables retain their existing invalid-value
+behavior. A limit failure returns `:resource_limit_exceeded` at the `:limits` stage.
 
 See [render options and supported formats](html-to-pdf-compatibility.md).
 

@@ -1904,8 +1904,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       end)
 
     with {:ok, style} <- apply_declaration_list(style, custom_property_declarations, cache),
-         style =
-           Map.update!(style, :_custom_properties, &HtmlValidator.compute_custom_properties/1),
+         {:ok, custom_properties} <-
+           HtmlValidator.compute_custom_properties(style._custom_properties, css_budget(cache)),
+         style = Map.put(style, :_custom_properties, custom_properties),
          {:ok, style} <- apply_declaration_list(style, foundational_declarations, cache) do
       style = resolve_rem_font_size(style)
 
@@ -1962,10 +1963,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, Map.put(style, :_custom_properties, custom_properties)}
 
       _ ->
-        with {:ok, value} <- resolved_css_value(style, value) do
+        with {:ok, value} <- resolved_css_value(style, value, cache) do
           apply_resolved_declaration_value(style, property, value, cache)
         else
           :error -> {:error, :invalid_document}
+          {:error, _detail} = error -> error
         end
     end
   end
@@ -2830,10 +2832,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp resolved_css_value(style, value) do
+  defp css_budget(cache) do
+    case cache do
+      nil -> HtmlValidator.new_css_budget()
+      cache -> RenderCache.fetch(cache, :css_variable_budget, &HtmlValidator.new_css_budget/0)
+    end
+  end
+
+  defp resolved_css_value(style, value, cache) do
     normalized = String.trim(value)
     custom_properties = Map.get(style, :_custom_properties, %{})
-    HtmlValidator.resolve_css_variables(normalized, custom_properties, %{})
+    HtmlValidator.resolve_css_variables(normalized, custom_properties, %{}, css_budget(cache))
   end
 
   defp flex_container_defaults(style) do

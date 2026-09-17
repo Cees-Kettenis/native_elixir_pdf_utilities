@@ -103,63 +103,126 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
-  @spec compute_custom_properties(map()) :: map()
-  def compute_custom_properties(properties) do
-    Map.new(properties, fn {name, value} ->
-      computed =
-        case value do
-          value when is_binary(value) ->
-            case resolve_css_variables(value, properties, %{name => true}) do
-              {:ok, resolved} -> resolved
-              :error -> nil
-            end
+  @spec new_css_budget() :: :atomics.atomics_ref()
+  def new_css_budget, do: :atomics.new(2, signed: false)
 
-          nil ->
-            nil
-        end
-
-      {name, computed}
+  @doc false
+  @spec compute_custom_properties(map(), :atomics.atomics_ref()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def compute_custom_properties(properties, budget \\ new_css_budget()) do
+    Enum.reduce_while(properties, {:ok, %{}}, fn {name, _value}, {:ok, memo} ->
+      case resolve_custom_property(name, properties, %{}, memo, budget) do
+        {:ok, _value, _height, memo} -> {:cont, {:ok, memo}}
+        {:error, _detail} = error -> {:halt, error}
+      end
     end)
+    |> case do
+      {:ok, memo} ->
+        {:ok,
+         Map.new(properties, fn {name, _value} -> {name, elem(Map.fetch!(memo, name), 0)} end)}
+
+      error ->
+        error
+    end
   end
 
   @doc false
-  @spec resolve_css_variables(String.t(), map(), map()) :: {:ok, String.t()} | :error
-  def resolve_css_variables(value, custom_properties, resolving) do
-    variable_references =
-      @css_variable_regex
-      |> Regex.scan(value, capture: :all_but_first)
-      |> List.flatten()
-      |> Enum.uniq()
+  @spec resolve_css_variables(String.t(), map(), map(), :atomics.atomics_ref()) ::
+          {:ok, String.t()} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
+  def resolve_css_variables(value, properties, resolving, budget \\ new_css_budget()) do
+    case expand_css_value(value, properties, resolving, %{}, budget) do
+      {:ok, nil, _height, _memo} -> :error
+      {:ok, resolved, _height, _memo} -> {:ok, resolved}
+      error -> error
+    end
+  end
 
-    case variable_references do
-      [] ->
-        {:ok, value}
+  defp resolve_custom_property(name, properties, resolving, memo, budget) do
+    depth = map_size(resolving)
 
-      references ->
-        Enum.reduce_while(references, {:ok, value}, fn name, {:ok, resolved_value} ->
-          case {Map.has_key?(resolving, name), Map.get(custom_properties, name)} do
-            {false, custom_value} when is_binary(custom_value) ->
-              case resolve_css_variables(
-                     custom_value,
-                     custom_properties,
-                     Map.put(resolving, name, true)
-                   ) do
-                {:ok, replacement} ->
-                  substituted =
-                    Regex.replace(@css_variable_regex, resolved_value, fn match, variable ->
-                      if variable == name, do: replacement, else: match
-                    end)
+    with :ok <- css_limit(:max_css_variable_work, :atomics.add_get(budget, 2, 1)),
+         :ok <- css_limit(:max_css_variable_depth, depth + 1) do
+      case {Map.has_key?(resolving, name), Map.fetch(memo, name), Map.get(properties, name)} do
+        {true, _cached, _value} ->
+          {:ok, nil, 0, memo}
 
-                  {:cont, {:ok, substituted}}
+        {false, {:ok, {value, height}}, _value} ->
+          with :ok <- css_limit(:max_css_variable_depth, depth + height) do
+            {:ok, value, height, memo}
+          end
 
-                :error ->
-                  {:halt, :error}
+        {false, :error, nil} ->
+          {:ok, nil, 0, Map.put(memo, name, {nil, 0})}
+
+        {false, :error, value} ->
+          with {:ok, resolved, height, memo} <-
+                 expand_css_value(value, properties, Map.put(resolving, name, true), memo, budget) do
+            height = height + 1
+            {:ok, resolved, height, Map.put(memo, name, {resolved, height})}
+          end
+      end
+    end
+  end
+
+  defp expand_css_value(value, properties, resolving, memo, budget) do
+    with :ok <- css_limit(:max_css_variable_bytes, byte_size(value)) do
+      matches = Regex.scan(@css_variable_regex, value, return: :index)
+
+      Enum.reduce_while(matches, {:ok, [], 0, 0, 0, memo}, fn
+        [{offset, length}, {name_offset, name_length}],
+        {:ok, chunks, cursor, size, height, memo} ->
+          name = binary_part(value, name_offset, name_length)
+
+          case resolve_custom_property(name, properties, resolving, memo, budget) do
+            {:ok, nil, _height, memo} ->
+              {:halt, {:ok, nil, 0, memo}}
+
+            {:ok, replacement, dependency_height, memo} ->
+              size = size + offset - cursor + byte_size(replacement)
+
+              case css_limit(:max_css_variable_bytes, size) do
+                :ok ->
+                  prefix = binary_part(value, cursor, offset - cursor)
+
+                  {:cont,
+                   {:ok, [replacement, prefix | chunks], offset + length, size,
+                    max(height, dependency_height), memo}}
+
+                error ->
+                  {:halt, error}
               end
 
-            {_cycle_or_missing, _value} ->
-              {:halt, :error}
+            error ->
+              {:halt, error}
           end
-        end)
+      end)
+      |> case do
+        {:ok, chunks, cursor, size, height, memo} ->
+          size = size + byte_size(value) - cursor
+
+          with :ok <- css_limit(:max_css_variable_bytes, size),
+               :ok <- css_limit(:max_css_variable_total_bytes, :atomics.add_get(budget, 1, size)) do
+            suffix = binary_part(value, cursor, byte_size(value) - cursor)
+            {:ok, IO.iodata_to_binary(Enum.reverse([suffix | chunks])), height, memo}
+          end
+
+        result ->
+          result
+      end
+    end
+  end
+
+  defp css_limit(key, amount) do
+    limit = Limits.get(key)
+
+    if amount <= limit do
+      :ok
+    else
+      Diagnostics.error(
+        :limits,
+        :resource_limit_exceeded,
+        "CSS custom-property expansion exceeds #{key}=#{limit}; reduce variable values, references, or dependency depth"
+      )
     end
   end
 
