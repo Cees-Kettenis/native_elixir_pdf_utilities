@@ -7,15 +7,6 @@ more efficient document generation, and a stable public API.
 The versions below describe planned scope, which may change as the work develops.
 See [CHANGELOG.md](CHANGELOG.md) for published releases.
 
-## 0.18.0: Forms and attachments
-
-Create PDF forms from supported HTML controls, inspect and fill existing fields,
-and flatten selected fields into document content. Static rendering will remain
-available when interactive fields are not needed.
-
-This release also introduces embedding and listing attachments, with documented
-file-type handling, size limits, and supported document structures.
-
 ## 0.19.0: Image support, SVG safety, and resource limits
 
 Use a wider range of image assets and get clearer failures when documents exceed

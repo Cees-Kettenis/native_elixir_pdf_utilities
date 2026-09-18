@@ -1,5 +1,83 @@
 # Changelog
 
+## 0.18.0 - 2026-09-18
+
+### Breaking changes
+
+- Supported HTML text inputs, textareas, checkboxes, radio buttons, and
+  single-selection controls now generate interactive AcroForm fields by
+  default. Pass `forms: :static` to `HtmlToPdf.render/2` or `render_file/3` to
+  retain the pre-0.18 static artwork behavior.
+- New configurable limits can reject rendering, PDF reading, font loading,
+  form, attachment, appearance, and incremental-update workloads that were
+  previously accepted without aggregate bounds. Document-selected local assets
+  also reject existing symlink components beneath `base_url`.
+
+### Added
+
+- Added `NativeElixirPdfUtilities.Forms` with `fields/1`, `fill/3`, and
+  `flatten/2` for inspecting, filling, and flattening supported AcroForm text,
+  button, and choice fields. Filling supports fully qualified names, repeated
+  widgets, field alignment, read-only checks, and optional selective
+  flattening.
+- Added interactive form generation to HTML-to-PDF output. Supported controls
+  retain their rendered styling, explicit HTML names become field names, and
+  unnamed controls receive page-local generated names after pagination.
+- Added `NativeElixirPdfUtilities.Attachments` with `embed/3` and `list/1` for
+  incrementally embedding caller-approved bytes and reading attachment metadata
+  without extracting files. Existing attachments and unrelated catalog name
+  trees are preserved.
+- Added bounded MIME detection for common image, document, archive, audio, and
+  video signatures. ZIP and OLE inspection distinguishes supported legacy and
+  Open XML Office formats and rejects conflicting type evidence.
+- Added resource limits for HTML and CSS sources and work, layout and output,
+  CSS variables, fonts and caches, PDF reader expansion, forms, attachments,
+  appearances, and font kerning.
+- Added manual testing endpoints and OpenAPI entries for form inspection,
+  filling, flattening, and attachment workflows.
+
+### Changed
+
+- Bounded HTML parsing, CSS matching and variable expansion, layout, pagination,
+  page furniture, PDF serialization, PDF tokenization and value expansion, font
+  discovery and parsing, and process-wide font caches. Nested stages share one
+  operation budget and report actionable resource diagnostics.
+- Local HTML, CSS, image, font, and text-extraction inputs now use portable,
+  bounded regular-file reads. Font and system-font caches evict by retained
+  bytes as well as entry count.
+- Tightened browser-parity coverage so every fixture permits at most 3% changed
+  pixels with the installed default fonts, while retaining page-count and
+  average-channel-delta checks.
+
+### Fixed
+
+- Resolved indirect form values, preserved hidden and `NoView` widget behavior,
+  retained decimal appearance transforms during flattening, and rejected form
+  actions, signatures, XFA, malformed field trees, and unsupported field
+  semantics with diagnostics.
+- Accounted for attachment payloads, metadata, object headers, cross-reference
+  data, trailers, existing stored attachments, and the original PDF when
+  enforcing incremental output limits.
+- Validated PNG chunk checksums, ordering, uniqueness, and critical chunk types
+  before decoding.
+- Preserved grayscale, RGB, YCbCr, ordinary CMYK, Adobe CMYK, and Adobe YCCK
+  JPEG conventions through validation and PDF serialization, including the
+  required color transforms and sample polarity.
+- Validated embedded font models before PDF serialization, bounded kerning and
+  glyph-width work, and preserved shaped text advances and default widths for
+  high glyph indexes.
+- Improved browser-compatible layout for mixed inline baselines, word and
+  nonbreaking hyphens, inline flex and grid containers, margin collapsing,
+  automatic table columns, collapsed borders, text line bounds, CSS pixel
+  snapping, and image edge placement.
+- Kept table headers with the first body row, honored `break-inside: avoid` on
+  semantic body groups when they fit, split oversized groups between rows, and
+  closed collapsed table borders correctly at automatic and explicit page
+  breaks.
+- Serialized very small and large finite PDF numbers as valid round-trippable
+  decimal values instead of losing nonzero transforms or emitting invalid
+  notation.
+
 ## 0.17.0 - 2026-09-10
 
 ### Breaking changes
