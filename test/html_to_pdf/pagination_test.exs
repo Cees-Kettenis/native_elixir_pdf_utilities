@@ -7,6 +7,124 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
+  test "collapsed table fragments close at automatic and early group page breaks" do
+    rows = Enum.map_join(1..8, fn n -> "<tr><td>Oversized #{n}</td><td>Value</td></tr>" end)
+
+    html = """
+    <style>
+      body { margin: 0; font-size: 10pt; line-height: 12pt; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border: 1px solid #336699; padding: 2pt; }
+      tbody { break-inside: avoid; }
+      tbody tr { height: 30pt; }
+    </style>
+    <table>
+      <thead><tr><th>Item</th><th>Value</th></tr></thead>
+      <tbody><tr><td>First</td><td>Value</td></tr><tr><td colspan="2">Subtotal</td></tr></tbody>
+      <tbody><tr><td>Next</td><td>Value</td></tr><tr><td colspan="2">Subtotal</td></tr></tbody>
+      <tbody>#{rows}</tbody>
+    </table>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {240, 140}, margin: 10)
+    assert {:ok, pages} = Pagination.paginate(layout)
+    assert length(pages) >= 4
+
+    for page <- pages do
+      borders = Enum.filter(page.boxes, &(Map.get(&1, :role) == :table_border))
+      bottom = borders |> Enum.map(& &1.y) |> Enum.min()
+      closing = Enum.filter(borders, &(&1.y == bottom))
+      assert Enum.all?(closing, &(&1.border_widths.bottom == 0.75))
+      assert Enum.all?(closing, &(&1.border_colors.bottom == {0.2, 0.4, 0.6}))
+      assert Enum.all?(closing, &(&1.border_styles.bottom == :solid))
+      assert Enum.any?(borders, &(&1.y > bottom and &1.border_widths.bottom == 0.0))
+    end
+
+    first_borders = Enum.filter(hd(pages).boxes, &(Map.get(&1, :role) == :table_border))
+    assert Enum.min(Enum.map(first_borders, & &1.y)) > 30
+  end
+
+  test "fragment closure respects explicitly absent bottom borders" do
+    html = """
+    <style>
+      table { border-collapse: collapse; }
+      td { border: 1pt solid black; border-bottom: none; padding: 2pt; height: 50pt; }
+    </style>
+    <table><tbody><tr><td>One</td></tr><tr><td>Two</td></tr></tbody></table>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 100}, margin: 10)
+    assert {:ok, [first, _last]} = Pagination.paginate(layout)
+
+    assert Enum.all?(
+             Enum.filter(first.boxes, &(Map.get(&1, :role) == :table_border)),
+             &(&1.border_widths.bottom == 0)
+           )
+  end
+
+  test "a header-only table remains visible in an empty report" do
+    html = """
+    <table><thead><tr><th>Empty report</th></tr></thead></table>
+    <p>No records</p>
+    <table><thead><tr><th>Final heading</th></tr></thead></table>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: :a4)
+    assert {:ok, [page]} = Pagination.paginate(layout)
+
+    assert for(%{type: :text, text: text} <- page.boxes, do: text) ==
+             ["Empty report", "No records", "Final heading"]
+  end
+
+  test "semantic body groups move together and oversized groups split with their headings" do
+    for count <- [2, 8] do
+      rows = Enum.map_join(1..count, fn n -> "<tr><td>Item #{n}</td></tr>" end)
+
+      html = """
+      <style>
+        body { margin: 0; font-size: 10pt; line-height: 12pt; }
+        table { border-collapse: collapse; width: 100%; }
+        td, th { padding: 0; }
+        tbody { break-inside: avoid; }
+        tbody tr { height: 30pt; }
+      </style>
+      <div style="height: 70pt; background: #eee">Lead</div>
+      <table><thead><tr><th>Context</th></tr></thead><tbody>#{rows}</tbody></table>
+      """
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {200, 140}, margin: 10)
+      assert Enum.any?(layout.boxes, &Map.get(&1, :row_group_avoid, false))
+      assert {:ok, pages} = Pagination.paginate(layout)
+      text = fn page -> for %{type: :text, text: text} <- page.boxes, do: text end
+
+      if count == 2 do
+        assert Enum.map(pages, text) == [["Lead"], ["Context", "Item 1", "Item 2"]]
+      else
+        assert length(pages) > 2
+
+        for page <- pages, Enum.any?(text.(page), &String.starts_with?(&1, "Item")) do
+          assert "Context" in text.(page)
+        end
+
+        assert pages |> Enum.flat_map(text) |> Enum.filter(&String.starts_with?(&1, "Item")) ==
+                 Enum.map(1..count, &"Item #{&1}")
+      end
+
+      for page <- pages, box <- page.boxes do
+        {_top, bottom} = NativeElixirPdfUtilities.HtmlToPdf.PageGeometry.box_vertical_bounds(box)
+        assert bottom >= 9.99
+      end
+    end
+  end
+
   test "paginate keeps a fitting layout tree on one page" do
     layout_tree = %{
       type: :layout,

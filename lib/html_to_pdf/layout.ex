@@ -3498,6 +3498,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
            row: %{style: %{display: :table_row} = style},
            section: section,
            group_style: group_style,
+           row_group: row_group,
            cells: cells,
            consumed_columns: consumed_columns
          },
@@ -3518,6 +3519,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       table_id
       |> table_row_metadata(section, index)
       |> Map.merge(break_metadata(style))
+      |> Map.put(:row_group, {table_id, row_group})
+      |> Map.put(:row_group_avoid, Map.get(group_style || %{}, :break_inside) == :avoid)
 
     group_background_boxes =
       case group_style do
@@ -3835,6 +3838,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 stroke_color: Map.get(style, :border_color, {0, 0, 0}),
                 stroke_width: stroke_width,
                 border_widths: collapsed_widths,
+                fragment_bottom_border_width: border_widths.bottom,
                 border_colors: border_colors,
                 border_styles: border_styles,
                 border_radius: 0.0

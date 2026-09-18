@@ -68,10 +68,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
     pages =
       groups
+      |> keep_table_groups(headers, content_height)
       |> groups_to_pages(headers, page_size, margins)
+      |> close_table_fragments()
       |> restore_root_positioned_boxes(root_positioned_boxes, pagination_order)
 
     {:ok, pages}
+  end
+
+  # Interior collapsed borders normally belong to the following row. At a
+  # physical page boundary that row is absent, so finish the visible fragment
+  # with the bottom border requested by its final cells.
+  defp close_table_fragments(pages) do
+    Enum.map(pages, fn page ->
+      bottoms =
+        page.boxes
+        |> Enum.filter(&Map.has_key?(&1, :fragment_bottom_border_width))
+        |> Enum.reduce(%{}, fn box, acc ->
+          Map.update(acc, box.table_id, box.y, &min(&1, box.y))
+        end)
+
+      boxes =
+        Enum.map(page.boxes, fn box ->
+          case box do
+            %{fragment_bottom_border_width: width, border_widths: borders} when width > 0 ->
+              if box.y == Map.fetch!(bottoms, box.table_id) and borders.bottom == 0 do
+                %{
+                  box
+                  | border_widths: %{borders | bottom: width},
+                    stroke_width: max(box.stroke_width, width)
+                }
+              else
+                box
+              end
+
+            _ ->
+              box
+          end
+        end)
+
+      %{page | boxes: boxes}
+    end)
   end
 
   defp restore_root_positioned_boxes([first_page | remaining_pages], boxes, pagination_order) do
@@ -131,7 +168,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       end
 
     target_top = target_group_top(state, group)
-    group_bottom = target_top - group.height
+    group_bottom = target_top - Map.get(group, :placement_height, group.height)
 
     state =
       case state.current_boxes != [] and group.height > 0 and group_bottom < margins.bottom do
@@ -285,7 +322,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       break_inside: Map.get(first, :break_inside, :auto),
       table_id: Map.get(first, :table_id),
       table_section: Map.get(first, :table_section),
-      repeat_table_header: Map.get(first, :repeat_table_header, false)
+      repeat_table_header: Map.get(first, :repeat_table_header, false),
+      row_group: Map.get(first, :row_group),
+      row_group_avoid: Map.get(first, :row_group_avoid, false)
     }
   end
 
@@ -302,6 +341,58 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       false ->
         [group]
     end
+  end
+
+  # Reserve a fitting semantic row group before placing its first row. Oversized
+  # groups remain individual rows, leaving repeated headings room on each page.
+  defp keep_table_groups(groups, headers, content_height) do
+    groups =
+      groups
+      |> Enum.chunk_by(fn group ->
+        if group.row_group_avoid, do: group.row_group, else: make_ref()
+      end)
+      |> Enum.flat_map(fn [first | rest] = rows ->
+        height = first.top - List.last(rows).bottom
+        header_height = Map.get(headers, first.table_id, %{height: 0}).height
+
+        if first.row_group_avoid and height + header_height <= content_height do
+          [Map.put(first, :placement_height, height) | rest]
+        else
+          rows
+        end
+      end)
+
+    # A table heading must travel with at least its first body row. Looking
+    # ahead also preserves a fitting first row group when starting a table.
+    groups
+    |> Enum.with_index()
+    |> Enum.map(fn {group, index} ->
+      if group.table_section == :head do
+        following = Enum.drop(groups, index + 1)
+
+        {headings, body} =
+          Enum.split_while(
+            following,
+            &(&1.table_id == group.table_id and &1.table_section == :head)
+          )
+
+        case body do
+          [row | _] when row.table_id == group.table_id ->
+            heading_height = group.top - List.last([group | headings]).bottom
+            required = heading_height + Map.get(row, :placement_height, row.height)
+
+            required =
+              if required <= content_height, do: required, else: heading_height + row.height
+
+            Map.put(group, :placement_height, required)
+
+          _ ->
+            group
+        end
+      else
+        group
+      end
+    end)
   end
 
   defp page_break_box?(box) do

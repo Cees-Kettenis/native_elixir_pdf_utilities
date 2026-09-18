@@ -24,6 +24,7 @@
       }
       tr { height: 88pt; }
       thead tr:first-child { height: 36pt; }
+      tbody { break-inside: avoid; }
       .forced { page-break-before: always; }
     </style>
   </head>
@@ -35,7 +36,9 @@
       </thead>
       <tbody>
         <tr><td>Row 1</td><td>First page body</td></tr>
-        <tr><td>Row 2</td><td>First page body</td></tr>
+        <tr><td colspan="2">Subtotal before a group moves to the next page</td></tr>
+      </tbody>
+      <tbody>
         <tr><td>Row 3</td><td>Overflow body</td></tr>
         <tr><td>Row 4</td><td>Overflow body</td></tr>
         <tr class="forced"><td>Row 5</td><td>Forced new page around table row</td></tr>

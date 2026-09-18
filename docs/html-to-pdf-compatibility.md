@@ -93,11 +93,27 @@ Explicit `:page_size` and `:margin` options override `@page`.
 | Column sizing | Automatic sizing or `table-layout: fixed` |
 | Spanning cells | `colspan` and `rowspan`; a `rowspan` ends at its row-group boundary |
 | Nested tables | Supported inside cells |
-| Borders | Separate or collapsed borders |
-| Headers across pages | Table headers repeat on subsequent pages |
-| Keeping content together | `break-inside: avoid` is best effort; content taller than a page can split |
+| Borders | Separate or collapsed borders; collapsed tables retain the requested bottom border at page breaks |
+| Headers across pages | Rows in `<thead>` repeat when the table continues on another page |
+| Keeping row groups together | Set `break-inside: avoid` on each `<tbody>` that should stay together; groups too tall for a page split between rows |
 
-See the [table example](html-to-pdf-examples.md#add-a-styled-table).
+### Table page breaks
+
+Page breaks use measured content height. The printable area is the page height minus its top and bottom margins.
+
+- `<thead>` repeats when a table continues onto another page and
+  stays with the first body row when both fit. Body rows do not repeat.
+- Set `break-inside: avoid` on each `<tbody>` to keep its rows
+  together. A group that fits on a fresh page with its heading moves there if
+  needed. Larger groups split between rows. Without this CSS, groups can split even when they would fit on a fresh page.
+- With `border-collapse: collapse`, each page's final cells retain
+  their configured bottom border. `border-bottom: none` remains absent.
+
+A single row that cannot fit on a fresh page with its heading may overflow;
+this behavior does not split individual rows. Divide its content into multiple
+rows or reduce its height before rendering.
+
+See the [grouped table example](html-to-pdf-examples.md#paginate-a-table-with-row-groups).
 
 ## Images and backgrounds
 

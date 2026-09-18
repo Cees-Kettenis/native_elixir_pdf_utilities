@@ -35,6 +35,54 @@ html = """
 {:ok, pdf} = HtmlToPdf.render(html, margin: "18mm")
 ```
 
+### Paginate a table with row groups
+
+Use one `<thead>` for repeating column headings and one `<tbody>` for each
+group of related rows. Apply `break-inside: avoid` to the row groups, then render
+the entire table in one call. Do not split the rows into page-sized batches.
+
+This runnable example has a small Printing group and a Delivery group with
+60 rows. The Delivery group is deliberately too tall for one A4 page.
+
+```elixir
+alias NativeElixirPdfUtilities.HtmlToPdf
+
+delivery_rows =
+  Enum.map_join(1..60, "", fn number ->
+    "<tr><td>Delivery</td><td>Package #{number}</td><td>1</td></tr>"
+  end)
+
+html = """
+<style>
+  table { width: 100%; border-collapse: collapse; font-size: 10pt; }
+  th, td { border: 1pt solid #cccccc; padding: 6pt; text-align: left; }
+  tbody { break-inside: avoid; }
+</style>
+<table>
+  <thead>
+    <tr><th>Group</th><th>Item</th><th>Quantity</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Printing</td><td>Brochures</td><td>200</td></tr>
+    <tr><td>Printing</td><td>Posters</td><td>20</td></tr>
+  </tbody>
+  <tbody>
+    #{delivery_rows}
+  </tbody>
+</table>
+"""
+
+{:ok, pdf} = HtmlToPdf.render(html, page_size: :a4, margin: "18mm")
+File.write!("/tmp/grouped-table.pdf", pdf)
+```
+
+The Printing rows stay together. The Delivery group spans multiple pages,
+with Group, Item, and Quantity repeated above its rows and a bottom border
+on each page. Package numbers remain in order from 1 to 60.
+
+See [table page breaks](html-to-pdf-compatibility.md#table-page-breaks) for
+sizing rules and limitations.
+
 ## Render a file
 
 `render_file/3` reads the HTML and writes the PDF:
