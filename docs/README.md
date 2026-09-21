@@ -15,6 +15,7 @@ Choose the task you want to perform.
 | Add or read bookmarks | [Outlines](pdf-outlines.md) |
 | Add a watermark, stamp, letterhead, or page numbers | [Stamping](pdf-stamping.md) |
 | Check whether a PDF can be read | [PDF validation](pdf-validation.md) |
+| Use PNG/SVG assets and handle image failures | [Image processing](image-processing.md) |
 | Handle an error | [Diagnostics](diagnostics.md) |
 | Adjust document size or processing limits | [Resource limits](resource-limits.md) |
 

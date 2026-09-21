@@ -48,9 +48,16 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_pdf_form_fields: 10_000,
     max_pdf_form_depth: 64,
     max_pdf_form_text_bytes: 1_000_000,
+    max_svg_nodes: 25_000,
+    max_svg_depth: 128,
+    max_svg_path_bytes: 1_000_000,
+    max_svg_filter_primitives: 256,
+    max_svg_references: 1_000,
+    max_svg_output_bytes: 10_000_000,
     max_svg_bytes: 5_000_000,
     max_svg_raster_dimension: 8_192,
     max_svg_raster_pixels: 16_777_216,
+    max_png_working_bytes: 160_000_000,
     max_image_count: 1_000,
     max_image_source_bytes: 10_000_000,
     max_aggregate_image_source_bytes: 50_000_000,
@@ -151,9 +158,16 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_pdf_form_fields
           | :max_pdf_form_depth
           | :max_pdf_form_text_bytes
+          | :max_svg_nodes
+          | :max_svg_depth
+          | :max_svg_path_bytes
+          | :max_svg_filter_primitives
+          | :max_svg_references
+          | :max_svg_output_bytes
           | :max_svg_bytes
           | :max_svg_raster_dimension
           | :max_svg_raster_pixels
+          | :max_png_working_bytes
           | :max_image_count
           | :max_image_source_bytes
           | :max_aggregate_image_source_bytes

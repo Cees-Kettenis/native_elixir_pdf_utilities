@@ -120,8 +120,8 @@ See the [grouped table example](html-to-pdf-examples.md#paginate-a-table-with-ro
 | Format | Supported content |
 | --- | --- |
 | JPEG | Grayscale, RGB, and CMYK |
-| PNG | 8-bit, non-interlaced RGB/RGBA; transparency is supported. Chunk CRCs, required order, uniqueness, and critical chunk support are validated. |
-| SVG | Self-contained SVG that does not load other images or external resources |
+| PNG | Greyscale, RGB, indexed palettes, greyscale with alpha, and RGBA at all legal static PNG sample depths, including Adam7 interlacing. Color and alpha retain 16-bit precision. Chunk CRCs, ordering, palettes, transparency, and scanlines are validated. |
+| SVG | Self-contained SVG through Resvg, with bounded source size, raster dimensions, nodes, nesting, path data, filters, and references. DTD/entity declarations, image elements, external references, and escaped CSS resource syntax are rejected. |
 
 | Image styling | Supported values or behavior |
 | --- | --- |
@@ -197,7 +197,7 @@ For PDF viewer bookmarks, see [outlines from headings](html-to-pdf-examples.md#c
 | Floats, fixed positioning, transforms, animations | Block, flex, grid, relative, or absolute layout |
 | Named pages and CSS page-margin boxes | Page options and header/footer templates |
 | CSS `counter(page)` or `counter(pages)` | `{{page}}` and `{{pages}}` in header/footer templates |
-| Indexed, grayscale, 16-bit, or interlaced PNG | RGB/RGBA PNG or JPEG |
+| Animated PNG playback | The PNG default image is rendered; animation frames are not played. |
 | WOFF/WOFF2, variable fonts, CFF OpenType | Static TrueType fonts that permit embedding |
 | Complex shaping or bidirectional text | A renderer with shaping support for Arabic, Indic scripts, Thai, and complex emoji sequences |
 
@@ -220,3 +220,5 @@ marker, so browser decoding alone is not an oracle for ordinary CMYK polarity.
 
 The mapping follows the Adobe PDF reference, section 3.3, DCTDecode filter
 parameters: https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf
+
+See [PNG and SVG images](image-processing.md) for output behavior and image errors.

@@ -3803,10 +3803,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
         </svg>
         """)
 
-    assert {:ok, doctype_svg_style} = image_style(doctype_svg_src, [])
-    assert doctype_svg_style.image.format == :png
-    assert doctype_svg_style.image.width_px == 3
-    assert doctype_svg_style.image.height_px == 2
+    assert {:error, :invalid_document} = image_style(doctype_svg_src, [])
 
     sized_svg_src =
       "data:image/svg+xml;base64," <>

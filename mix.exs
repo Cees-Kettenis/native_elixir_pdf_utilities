@@ -29,7 +29,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger],
+      extra_applications: [:logger, :xmerl],
       mod: {NativeElixirPdfUtilities.Application, []}
     ]
   end
@@ -63,6 +63,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
         "docs/licenses.md",
         "docs/diagnostics.md",
         "docs/resource-limits.md",
+        "docs/image-processing.md",
         "docs/pdf-tokenizer.md",
         "docs/pdf-reader.md",
         "docs/pdf-information.md",
@@ -81,7 +82,8 @@ defmodule NativeElixirPdfUtilities.MixProject do
       groups_for_extras: [
         "Reference Guides": [
           "docs/diagnostics.md",
-          "docs/resource-limits.md"
+          "docs/resource-limits.md",
+          "docs/image-processing.md"
         ],
         "PDF Guides": [
           "docs/pdf-tokenizer.md",

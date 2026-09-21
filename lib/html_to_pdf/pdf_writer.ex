@@ -1338,7 +1338,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp image_mask_object(image) do
     data = :zlib.compress(Map.fetch!(image, :alpha_data))
 
-    "<< /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length #{byte_size(data)} >>\nstream\n" <>
+    "<< /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace /DeviceGray /BitsPerComponent #{image.bits_per_component} /Filter /FlateDecode /Length #{byte_size(data)} >>\nstream\n" <>
       data <> "\nendstream"
   end
 
@@ -1387,7 +1387,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   defp image_key(image) do
     :crypto.hash(:sha256, [
-      Atom.to_string(image.format),
+      :erlang.term_to_binary(
+        {image.format, image.width_px, image.height_px, image.color_space,
+         image.bits_per_component, Map.get(image, :color_transform),
+         Map.get(image, :inverted_cmyk, false)}
+      ),
       image.data,
       Map.get(image, :alpha_data, "")
     ])

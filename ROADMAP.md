@@ -16,18 +16,25 @@ Planned improvements:
 
 - Broader PNG decoding, including greyscale, indexed palettes, greyscale with
   alpha, low-bit-depth and 16-bit images, and Adam7 interlacing.
-- Transparency handling across the additional PNG formats.
-- Isolated SVG rasterization with limits on input size, image dimensions,
-  rendering complexity, memory, processing time, concurrency, and output size.
-  Worker requirements and deployment support will be documented.
+- Full PNG sample precision preserved through decoding, transparency handling,
+  and PDF output, including 16-bit color and alpha samples.
+- A dedicated PNG decoder shared by supplied PNG images and SVG conversion
+  output, with format and semantic checks kept in the PNG validator.
+- SVG input size and raster dimension limits reviewed before conversion using
+  the existing Resvg library. Use configurable converter limits where supported
+  and return conversion failures through the shared diagnostics contract.
 - Resource-limit defaults reviewed for server workloads, with guidance on
-  configuration, timeouts, cancellation, and cleanup.
+  configuration and application responsibilities for concurrency, timeouts,
+  cancellation, and cleanup.
 - More complete error and recovery documentation, plus clearer guidance on
   application-facing APIs and advanced building blocks.
 
-SVG file size is only one part of the planned protection: a small SVG can still
-require expensive rendering. Limits before rasterization and isolation during
-rendering will address different parts of that risk.
+SVG conversion will continue in process, with successful output passed through
+the shared PNG validator and decoder. Input checks and the converter's own
+safeguards mitigate excessive resource use, but do not guarantee a hard memory
+ceiling or processing deadline. Native resource exhaustion may terminate the
+application before a diagnostic can be returned. Isolated workers are outside
+this milestone's scope.
 
 General color-profile support remains outside the planned pre-1.0 scope.
 

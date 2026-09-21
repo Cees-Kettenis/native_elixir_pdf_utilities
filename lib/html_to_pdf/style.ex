@@ -12,6 +12,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
   alias NativeElixirPdfUtilities.HtmlToPdf.AssetLoader
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.HtmlToPdf.PngDecoder
+  alias NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Diagnostics
@@ -857,15 +859,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp finalize_image_style(style, image_budget) do
     case {Map.get(style, :display), Map.get(style, :image), Map.get(style, :svg_image)} do
       {:image, nil, svg} when is_binary(svg) ->
-        with {:ok, png} <- rasterize_svg(svg, svg_raster_options(style), image_budget),
-             {:ok, image} <- decode_image(png, image_budget, false) do
+        with {:ok, png} <- SvgRasterizer.rasterize(svg, svg_raster_options(style), image_budget),
+             {:ok, image} <-
+               PngDecoder.decode(png, image_budget, false) do
           {:ok,
            style
            |> Map.put(:image, image)
            |> Map.delete(:svg_image)}
-        else
-          {:error, {_reason, _diagnostic}} = error -> error
-          _ -> {:error, :invalid_document}
         end
 
       _ ->
@@ -893,8 +893,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
              |> Map.delete(:background_image_source)}
 
           {:ok, %{svg_image: svg}} ->
-            with {:ok, png} <- rasterize_svg(svg, [], image_budget),
-                 {:ok, image} <- decode_image(png, image_budget, false) do
+            with {:ok, png} <- SvgRasterizer.rasterize(svg, [], image_budget),
+                 {:ok, image} <-
+                   PngDecoder.decode(png, image_budget, false) do
               {:ok,
                style
                |> Map.put(:background_image, image)
@@ -4140,31 +4141,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp rasterize_svg(svg, raster_options, image_budget) do
-    case String.valid?(svg) do
-      true ->
-        with {:ok, validated_raster_options} <-
-               HtmlValidator.validate_svg_raster(svg, raster_options, image_budget) do
-          case Resvg.svg_string_to_png_buffer(
-                 svg,
-                 [
-                   resources_dir: System.tmp_dir!(),
-                   shape_rendering: :optimize_speed,
-                   text_rendering: :optimize_speed,
-                   image_rendering: :optimize_speed,
-                   skip_system_fonts: true
-                 ] ++ validated_raster_options
-               ) do
-            {:ok, png} -> {:ok, IO.iodata_to_binary(png)}
-            {:error, _reason} -> :error
-          end
-        end
-
-      false ->
-        :error
-    end
-  end
-
   defp svg_raster_options(style) do
     case Map.get(style, :object_fit, :fill) do
       fit when fit in [:contain, :cover] ->
@@ -4230,10 +4206,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp decode_image(data, image_budget, reserve_decoded? \\ true) do
+  defp decode_image(data, image_budget) do
     cond do
       String.starts_with?(data, <<137, 80, 78, 71, 13, 10, 26, 10>>) ->
-        decode_png(data, image_budget, reserve_decoded?)
+        PngDecoder.decode(data, image_budget, true)
 
       String.starts_with?(data, <<255, 216>>) ->
         decode_jpeg(data)
@@ -4241,255 +4217,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       true ->
         :error
     end
-  end
-
-  defp decode_png(
-         <<137, 80, 78, 71, 13, 10, 26, 10, chunks::binary>>,
-         image_budget,
-         reserve_decoded?
-       ) do
-    with {:ok, parsed} <- NativeElixirPdfUtilities.Validators.PngValidator.prepare(chunks),
-         %{
-           width_px: width,
-           height_px: height,
-           color_type: color_type,
-           idat: idat,
-           transparency: transparent_color
-         } <- parsed,
-         bytes_per_pixel = if(color_type == 2, do: 3, else: 4),
-         decoded_size = height * (width * bytes_per_pixel + 1),
-         :ok <-
-           (case reserve_decoded? do
-              true ->
-                HtmlValidator.reserve_decoded_image(
-                  image_budget,
-                  width,
-                  height,
-                  if(is_nil(transparent_color), do: bytes_per_pixel, else: 4)
-                )
-
-              false ->
-                :ok
-            end),
-         {:ok, inflated} <-
-           png_inflate(idat |> Enum.reverse() |> IO.iodata_to_binary(), decoded_size),
-         {:ok, rgb_data, alpha_data} <- png_image_data(inflated, width, height, color_type) do
-      alpha_data =
-        case transparent_color do
-          nil ->
-            alpha_data
-
-          color ->
-            for <<red, green, blue <- rgb_data>>, into: <<>> do
-              if {red, green, blue} == color, do: <<0>>, else: <<255>>
-            end
-        end
-
-      image = %{
-        format: :png,
-        data: rgb_data,
-        width_px: width,
-        height_px: height,
-        width: width * 0.75,
-        height: height * 0.75,
-        color_space: :device_rgb,
-        bits_per_component: 8
-      }
-
-      {:ok,
-       case alpha_data do
-         nil -> image
-         alpha_data -> Map.put(image, :alpha_data, alpha_data)
-       end}
-    else
-      {:error, {_reason, _diagnostic}} = error -> error
-      _ -> :error
-    end
-  end
-
-  defp png_inflate(data, expected_size) do
-    zlib = :zlib.open()
-
-    try do
-      :ok = :zlib.inflateInit(zlib)
-      png_inflate_chunks(zlib, data, expected_size, 0, [])
-    rescue
-      ErlangError -> :error
-    after
-      :zlib.close(zlib)
-    end
-  end
-
-  defp png_inflate_chunks(zlib, data, expected_size, inflated_size, inflated) do
-    {status, output} = :zlib.safeInflate(zlib, data)
-    inflated_size = inflated_size + IO.iodata_length(output)
-
-    cond do
-      inflated_size > expected_size ->
-        :error
-
-      status == :finished and inflated_size == expected_size ->
-        :ok = :zlib.inflateEnd(zlib)
-        {:ok, [output | inflated] |> Enum.reverse() |> IO.iodata_to_binary()}
-
-      status == :finished ->
-        :error
-
-      true ->
-        png_inflate_chunks(zlib, <<>>, expected_size, inflated_size, [output | inflated])
-    end
-  end
-
-  defp png_image_data(data, width, height, color_type) do
-    bytes_per_pixel =
-      case color_type do
-        2 -> 3
-        6 -> 4
-      end
-
-    row_size = width * bytes_per_pixel
-
-    case png_rows(data, height, bytes_per_pixel, row_size, 0, [], "") do
-      {:ok, rows} ->
-        {rgb, alpha} = split_png_rows(rows, color_type)
-
-        {:ok, rgb, alpha}
-
-      :error ->
-        :error
-    end
-  end
-
-  defp split_png_rows(rows, color_type) do
-    case color_type do
-      2 ->
-        {Enum.join(rows, ""), nil}
-
-      6 ->
-        {rgb_rows, alpha_rows} =
-          Enum.map(rows, &split_png_rgba/1)
-          |> Enum.unzip()
-
-        alpha = Enum.join(alpha_rows, "")
-
-        case alpha == :binary.copy(<<255>>, byte_size(alpha)) do
-          true -> {Enum.join(rgb_rows, ""), nil}
-          false -> {Enum.join(rgb_rows, ""), alpha}
-        end
-    end
-  end
-
-  defp png_rows(data, height, bytes_per_pixel, row_size, row_count, rows, previous) do
-    case row_count == height do
-      true ->
-        {:ok, Enum.reverse(rows)}
-
-      false ->
-        <<filter, row::binary-size(^row_size), rest::binary>> = data
-
-        with {:ok, decoded} <- png_unfilter_row(filter, row, previous, bytes_per_pixel) do
-          png_rows(
-            rest,
-            height,
-            bytes_per_pixel,
-            row_size,
-            row_count + 1,
-            [decoded | rows],
-            decoded
-          )
-        end
-    end
-  end
-
-  defp png_unfilter_row(filter, row, previous, bytes_per_pixel) do
-    case filter do
-      0 ->
-        {:ok, row}
-
-      filter when filter in [1, 2, 3, 4] ->
-        previous =
-          case previous do
-            "" -> :binary.copy(<<0>>, byte_size(row))
-            previous -> previous
-          end
-
-        {:ok, png_unfilter_bytes(filter, row, previous, bytes_per_pixel, 0, [], [], [])}
-
-      _ ->
-        :error
-    end
-  end
-
-  defp png_unfilter_bytes(
-         filter,
-         row,
-         previous,
-         bytes_per_pixel,
-         index,
-         left_window,
-         up_left_window,
-         acc
-       ) do
-    case {row, previous} do
-      {"", ""} ->
-        acc
-        |> Enum.reverse()
-        |> :binary.list_to_bin()
-
-      {<<byte, row_rest::binary>>, <<up, previous_rest::binary>>} ->
-        left = if index >= bytes_per_pixel, do: hd(left_window), else: 0
-        up_left = if index >= bytes_per_pixel, do: hd(up_left_window), else: 0
-
-        predictor =
-          case filter do
-            1 -> left
-            2 -> up
-            3 -> div(left + up, 2)
-            4 -> png_paeth(left, up, up_left)
-          end
-
-        decoded = rem(byte + predictor, 256)
-
-        png_unfilter_bytes(
-          filter,
-          row_rest,
-          previous_rest,
-          bytes_per_pixel,
-          index + 1,
-          png_window_push(left_window, decoded, bytes_per_pixel),
-          png_window_push(up_left_window, up, bytes_per_pixel),
-          [decoded | acc]
-        )
-    end
-  end
-
-  defp png_window_push(window, byte, bytes_per_pixel) do
-    case length(window) < bytes_per_pixel do
-      true -> window ++ [byte]
-      false -> tl(window) ++ [byte]
-    end
-  end
-
-  defp png_paeth(left, up, up_left) do
-    estimate = left + up - up_left
-    left_distance = abs(estimate - left)
-    up_distance = abs(estimate - up)
-    up_left_distance = abs(estimate - up_left)
-
-    cond do
-      left_distance <= up_distance and left_distance <= up_left_distance -> left
-      up_distance <= up_left_distance -> up
-      true -> up_left
-    end
-  end
-
-  defp split_png_rgba(row) do
-    row
-    |> :binary.bin_to_list()
-    |> Enum.chunk_every(4)
-    |> Enum.reduce({"", ""}, fn [red, green, blue, alpha], {rgb, mask} ->
-      {rgb <> <<red, green, blue>>, mask <> <<alpha>>}
-    end)
   end
 
   defp decode_jpeg(data) do

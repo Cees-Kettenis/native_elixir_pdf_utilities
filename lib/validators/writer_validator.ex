@@ -206,11 +206,11 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
         width_px: width_px,
         height_px: height_px,
         color_space: color_space,
-        bits_per_component: 8
+        bits_per_component: depth
       }
       when format in [:png, :jpeg] and is_binary(data) and is_integer(width_px) and
              is_integer(height_px) and width_px > 0 and height_px > 0 and
-             color_space in [:device_gray, :device_rgb, :device_cmyk] ->
+             color_space in [:device_gray, :device_rgb, :device_cmyk] and depth in [8, 16] ->
         inverted = Map.get(image, :inverted_cmyk, false)
 
         convention = Map.get(image, :color_transform)
@@ -225,14 +225,24 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             _ -> false
           end
 
-        valid_convention and is_boolean(inverted) and
+        valid_depth = format == :png or depth == 8
+
+        valid_samples =
+          format == :jpeg or
+            (color_space in [:device_gray, :device_rgb] and
+               byte_size(data) ==
+                 width_px * height_px * div(depth, 8) *
+                   if(color_space == :device_gray, do: 1, else: 3))
+
+        valid_depth and valid_samples and valid_convention and is_boolean(inverted) and
           (not inverted or (format == :jpeg and color_space == :device_cmyk)) and
           case Map.get(image, :alpha_data) do
             nil ->
               true
 
             alpha when is_binary(alpha) ->
-              image.format == :png and byte_size(alpha) == image.width_px * image.height_px
+              image.format == :png and
+                byte_size(alpha) == image.width_px * image.height_px * div(depth, 8)
 
             _ ->
               false

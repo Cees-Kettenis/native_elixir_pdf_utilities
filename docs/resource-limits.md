@@ -93,6 +93,13 @@ render limits return `:resource_limit_exceeded`.
 
 | Setting | Default | Applies to |
 | --- | ---: | --- |
+| `max_png_working_bytes` | 160,000,000 | Estimated PNG scanline, reconstruction, output, and row-processing buffer allowance before decompression |
+| `max_svg_nodes` | 25,000 | SVG XML elements |
+| `max_svg_depth` | 128 | SVG element nesting, including the root |
+| `max_svg_path_bytes` | 1,000,000 | Aggregate decoded `d` and `points` attribute bytes |
+| `max_svg_filter_primitives` | 256 | SVG elements whose local name starts with `fe` |
+| `max_svg_references` | 1,000 | SVG `href` attributes, including namespaced references such as `xlink:href` |
+| `max_svg_output_bytes` | 10,000,000 | Returned SVG PNG bytes, checked after native conversion |
 | `max_svg_bytes` | 5,000,000 | Encoded SVG source |
 | `max_svg_raster_dimension` | 8,192 | SVG raster width or height |
 | `max_svg_raster_pixels` | 16,777,216 | SVG raster pixel count |
@@ -114,7 +121,22 @@ each custom-property computation, and output sizes are checked before building
 expanded binaries. Cycles and missing variables retain their existing invalid-value
 behavior. A limit failure returns `:resource_limit_exceeded` at the `:limits` stage.
 
-See [render options and supported formats](html-to-pdf-compatibility.md).
+PNG decoded-image budgets count bytes per sample, including alpha when present.
+A 16-bit RGBA image reserves eight bytes per pixel before decoding. The working
+allowance also covers inflated scanlines and reconstruction buffers. It can reject
+an image below the decoded-image limit; raising one limit does not bypass another.
+The estimate reserves three times the inflated bytes, three times the final sample
+bytes, 64 times the largest packed row, and 64 bytes per pass row. These allowances
+account for retained buffers and row-processing overhead, not a hard BEAM memory cap.
+
+SVG structure limits apply before Resvg conversion. They bound input structure,
+not expanded reference work or native allocations. SVG output is checked after
+conversion and then validated and decoded through the PNG pipeline. Returned
+converter errors become diagnostics, but native resource exhaustion and all
+renderer warnings cannot be recovered through that contract.
+
+See [render options and supported formats](html-to-pdf-compatibility.md) and
+[image processing and recovery](image-processing.md).
 
 ## Fonts
 

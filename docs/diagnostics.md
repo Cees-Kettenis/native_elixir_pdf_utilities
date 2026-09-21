@@ -119,3 +119,16 @@ preparation contexts. Callers should not depend on their map layouts or invoke
 internal execution functions with unvalidated structures. Validation belongs to
 the validator for the corresponding operation; execution assumes that prepared
 context.
+
+## Image failures
+
+PNG failures identify `"PNG"` in `:source`, with an explanation such as an invalid
+palette index, chunk CRC, scanline filter, or compressed payload. SVG validation
+identifies `"SVG"` and includes an XML line number when available. Returned Resvg
+errors preserve the converter's explanation in `:message`.
+
+Treat `:invalid_document` as an input problem. Re-export the asset or remove an
+unsupported SVG construct before retrying. For `:resource_limit_exceeded`, reduce
+the image size or document complexity, or review the named configuration limit.
+Do not automatically retry the same input with higher limits. See the
+[image format requirements](image-processing.md).

@@ -31,7 +31,7 @@ defmodule NativeElixirPdfUtilities.PngValidatorTest do
       data <> header <> ending,
       header <> header <> data <> ending,
       chunk("IHDR", <<0::32, 1::32, 8, 2, 0, 0, 0>>) <> data <> ending,
-      chunk("IHDR", <<1::32, 1::32, 16, 2, 0, 0, 0>>) <> data <> ending,
+      chunk("IHDR", <<1::32, 1::32, 4, 2, 0, 0, 0>>) <> data <> ending,
       header <> ending,
       header <> data,
       header <> data <> chunk("IEND", "bad"),
