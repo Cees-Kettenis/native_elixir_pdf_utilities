@@ -33,6 +33,86 @@ defmodule NativeElixirPdfUtilities.FileReaderTest do
 
     assert {:error, {:invalid_document, %{stage: :file, source: ^root}}} =
              FileValidator.validate_info(%File.Stat{type: :directory, size: 0}, 1, root)
+
+    assert {:error, {:invalid_document, %{stage: :file, source: ^root}}} =
+             FileReader.read(root, 1)
+  end
+
+  @tag skip: match?({:win32, _}, :os.type())
+  test "FIFO inputs and symlinks return diagnostics without waiting for a writer", %{root: root} do
+    fifo = Path.join(root, "input.fifo")
+    link = Path.join(root, "input-link")
+    assert {_, 0} = System.cmd("mkfifo", [fifo])
+    File.ln_s!(fifo, link)
+
+    for path <- [fifo, link] do
+      reader = Task.async(fn -> FileReader.read(path, 1024) end)
+
+      try do
+        assert {:ok, {:error, {:invalid_document, diagnostic}}} = Task.yield(reader, 1_000)
+        assert diagnostic.stage == :file
+        assert diagnostic.reason == :invalid_document
+        assert diagnostic.source == path
+        assert diagnostic.message == "approved input must be a regular file"
+      after
+        # Release a blocked open even when testing the old implementation.
+        # Killing its task alone cannot interrupt the runtime's file syscall.
+        {:ok, writer} = :file.open(fifo, [:raw, :read, :write])
+        Task.shutdown(reader, 1_000)
+        :file.close(writer)
+      end
+    end
+  end
+
+  @tag skip: match?({:win32, _}, :os.type())
+  test "public file and asset APIs reject FIFOs before parsing", %{root: root} do
+    fifo = Path.join(root, "input.fifo")
+    assert {_, 0} = System.cmd("mkfifo", [fifo])
+
+    reader =
+      Task.async(fn ->
+        [
+          HtmlToPdf.render_file(fifo, Path.join(root, "out.pdf")),
+          Text.extract_file(fifo),
+          Text.extract_file_spans(fifo),
+          Style.load_stylesheets(%{type: :document, children: []}, stylesheets: [{:file, fifo}]),
+          AssetLoader.resolve("input.fifo", :image, base_url: root),
+          AssetLoader.resolve("input.fifo", :font, base_url: root)
+        ]
+      end)
+
+    try do
+      assert {:ok, results} = Task.yield(reader, 1_000)
+
+      for {result, operation} <-
+            Enum.zip(results, [:render_file, :extract_file, :extract_file_spans]) do
+        assert {:error, {:invalid_document, diagnostic}} = result
+        assert diagnostic.reason == :invalid_document
+        assert diagnostic.stage == :file
+        assert diagnostic.source == fifo
+        assert diagnostic.operation == operation
+        assert diagnostic.module == if(operation == :render_file, do: HtmlToPdf, else: Text)
+        assert diagnostic.message =~ "regular file"
+      end
+
+      assert {:error, {:invalid_document, %{source: ^fifo}}} = Enum.at(results, 3)
+
+      for result <- Enum.drop(results, 4) do
+        assert {:error, {:invalid_document, %{stage: :file, source: ^fifo}}} = result
+      end
+
+      assert {:ok, "approved"} =
+               AssetLoader.resolve("input.fifo", :image,
+                 base_url: root,
+                 asset_resolver: fn _ -> {:ok, "approved"} end
+               )
+
+      refute File.exists?(Path.join(root, "out.pdf"))
+    after
+      {:ok, writer} = :file.open(fifo, [:raw, :read, :write])
+      Task.shutdown(reader, 1_000)
+      :file.close(writer)
+    end
   end
 
   test "base_url image and font reads require no external executable", %{root: root} do
@@ -57,7 +137,7 @@ defmodule NativeElixirPdfUtilities.FileReaderTest do
   end
 
   test "unreadable local assets use the resolver or return a diagnostic", %{root: root} do
-    assert {:error, {:invalid_document, %{stage: :asset, source: "."}}} =
+    assert {:error, {:invalid_document, %{stage: :file, source: ^root}}} =
              AssetLoader.resolve(".", :image, base_url: root)
 
     assert {:ok, "approved"} =

@@ -294,9 +294,16 @@ and the remaining aggregate allowance. Metadata and reads use the same opened
 handle, and reads stop at the allowance plus one sentinel byte even if a file
 grows after its metadata is checked.
 
+The reader also checks file type and size before opening the path, so an
+existing FIFO is rejected without waiting for a writer. The opened-handle
+checks remain necessary because a file can change after the pathname check.
+
 Local asset reads use the same portable reader on Windows, macOS, and Linux.
 No Python installation is required. `:base_url` rejects traversal and existing
 symlinks beneath the base directory before opening a file. These pathname
 checks cannot prevent concurrent filesystem changes. Keep file paths and asset
 directories under trusted control, or supply approved bytes through `:assets`
-or `:asset_resolver`. Byte limits do not impose an I/O timeout.
+or `:asset_resolver`. In particular, replacing a regular file with a FIFO between
+the pathname check and opening can still block. The portable Erlang file API
+does not provide a nonblocking-open option. Byte limits do not impose an I/O
+timeout.

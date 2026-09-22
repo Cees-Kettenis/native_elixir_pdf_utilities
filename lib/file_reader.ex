@@ -9,6 +9,8 @@ defmodule NativeElixirPdfUtilities.FileReader do
           {:ok, binary()} | {:error, File.posix() | {atom(), Diagnostics.diagnostic()}}
   def read(path, maximum_bytes) do
     with :ok <- FileValidator.validate_read(path, maximum_bytes),
+         {:ok, info} <- File.stat(path),
+         :ok <- FileValidator.validate_info(info, maximum_bytes, path),
          {:ok, file} <- :file.open(path, [:raw, :binary, :read]) do
       try do
         with {:ok, info} <- :file.read_file_info(file),
