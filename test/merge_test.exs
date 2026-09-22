@@ -168,6 +168,62 @@ defmodule NativeElixirPdfUtilities.MergeTest do
              )
   end
 
+  test "preserves preparation-stage outline limits and identifies the failing input" do
+    source =
+      merge_pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>"}
+      ])
+
+    assert {:ok, outlined} =
+             NativeElixirPdfUtilities.Outlines.put(source, [
+               %{title: "Parent", page: 1, children: [{"Child", 1}]},
+               {"Other", 1}
+             ])
+
+    original = Limits.effective()
+
+    for {limit, value, message} <- [
+          {:max_pdf_outline_items, 1, "outline item count exceeds the limit"},
+          {:max_pdf_outline_depth, 1, "outline nesting depth exceeds the limit"},
+          {:max_pdf_outline_title_bytes, 5, "outline title exceeds the byte limit"},
+          {:max_pdf_outline_total_title_bytes, 6,
+           "aggregate outline title bytes exceed the limit"}
+        ] do
+      Limits.install(Map.put(original, limit, value))
+      assert {:ok, context} = Reader.read_validated(outlined)
+
+      assert {:error, {:resource_limit_exceeded, original_diagnostic}} =
+               MergeValidator.prepare(context)
+
+      assert original_diagnostic.stage == :limits
+      assert original_diagnostic.message == message
+
+      for inputs <- [[outlined], [source, outlined]] do
+        assert {:error, {:resource_limit_exceeded, diagnostic}} = Merge.merge(inputs)
+
+        assert diagnostic ==
+                 Map.merge(original_diagnostic, %{
+                   operation: :merge,
+                   module: Merge,
+                   source: "merge input #{length(inputs)}"
+                 })
+
+        assert diagnostic.reason == :resource_limit_exceeded
+      end
+    end
+  end
+
+  test "adds input context to reader failures without replacing their diagnostic fields" do
+    source = File.read!(Path.join(@fixture_directory, "classic-xref.pdf"))
+    assert {:error, {reason, original}} = Reader.read_validated("not a PDF")
+    assert {:error, {^reason, diagnostic}} = Merge.merge([source, "not a PDF"])
+
+    assert diagnostic ==
+             Map.merge(original, %{operation: :merge, module: Merge, source: "merge input 2"})
+  end
+
   test "renumbers pages and injects inherited page attributes" do
     content = """
     BT
@@ -413,7 +469,7 @@ defmodule NativeElixirPdfUtilities.MergeTest do
       ])
 
     assert {:error, {:invalid_pdf_input, diagnostic}} = Merge.merge([pdf])
-    assert diagnostic.stage == :merge
+    assert diagnostic.stage == :page_tree
     assert diagnostic.reason == :invalid_pdf_input
     assert diagnostic.source == "page 3"
     assert diagnostic.message =~ "page 3 has a malformed effective MediaBox"
@@ -596,7 +652,7 @@ defmodule NativeElixirPdfUtilities.MergeTest do
         )
 
       assert {:error, {:invalid_pdf_input, diagnostic}} = Merge.merge([pdf])
-      assert diagnostic.stage == :merge
+      assert diagnostic.stage == :page_tree
       assert diagnostic.source == "page 3"
       assert diagnostic.message =~ "page 3 has malformed effective Resources"
     end
@@ -621,7 +677,7 @@ defmodule NativeElixirPdfUtilities.MergeTest do
         ])
 
       assert {:error, {:invalid_pdf_input, diagnostic}} = Merge.merge([pdf])
-      assert diagnostic.stage == :merge
+      assert diagnostic.stage == :page_tree
       assert diagnostic.source == "page 3"
       assert diagnostic.message =~ message
     end

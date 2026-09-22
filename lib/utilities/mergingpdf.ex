@@ -31,53 +31,32 @@ defmodule NativeElixirPdfUtilities.Merge do
          {:ok, remapped} <- MergeValidator.prepare_remapping(prepared, 3) do
       AssemblyWriter.write(remapped)
     else
-      {:reader_error, {reason, diagnostic}} ->
-        {:error,
-         {reason,
-          diagnostic
-          |> Map.put(:operation, :merge)
-          |> Map.put(:module, __MODULE__)}}
-
       {:error, {reason, diagnostic}} ->
         {:error,
          {reason,
           diagnostic
           |> Map.put(:operation, :merge)
           |> Map.put(:module, __MODULE__)}}
-
-      {:preparation_error, {reason, diagnostic}} ->
-        Diagnostics.error(
-          :merge,
-          :invalid_pdf_input,
-          "merge/1 received an invalid PDF (#{reason} at #{diagnostic.stage}): #{diagnostic.message}",
-          operation: :merge,
-          module: __MODULE__,
-          source: Map.get(diagnostic, :source)
-        )
     end
   end
 
   defp prepare_inputs(inputs) do
     inputs
-    |> Enum.reduce_while({:ok, []}, fn input, {:ok, prepared} ->
-      with {:ok, context} <- reader_context(input),
+    |> Enum.with_index(1)
+    |> Enum.reduce_while({:ok, []}, fn {input, index}, {:ok, prepared} ->
+      with {:ok, context} <- Reader.read_validated(input),
            {:ok, assembly_input} <- MergeValidator.prepare(context) do
         {:cont, {:ok, [assembly_input | prepared]}}
       else
-        {:reader_error, _error} = reader_error -> {:halt, reader_error}
-        {:error, error} -> {:halt, {:preparation_error, error}}
+        {:error, {reason, diagnostic}} ->
+          {:halt,
+           {:error,
+            {reason, Diagnostics.with_context(diagnostic, source: "merge input #{index}")}}}
       end
     end)
     |> case do
       {:ok, prepared} -> {:ok, Enum.reverse(prepared)}
       error -> error
-    end
-  end
-
-  defp reader_context(input) do
-    case Reader.read_validated(input) do
-      {:ok, context} -> {:ok, context}
-      {:error, error} -> {:reader_error, error}
     end
   end
 end
