@@ -220,6 +220,29 @@ defmodule ManualWeb.Page do
           </form>
         </section>
 
+        <section id="svg-to-png">
+          <h2>SVG to PNG</h2>
+          <p>Try an SVG with the PDF renderer's image checks. Open the converted PNG or see the exact validation error.</p>
+          <form action="/svg-to-png" method="post" enctype="multipart/form-data" target="_blank">
+            <label>SVG file <input type="file" name="svg_file" accept="image/svg+xml,.svg"></label>
+            <label>Or paste SVG <textarea name="svg" rows="8" spellcheck="false" placeholder="&lt;svg xmlns=&quot;http://www.w3.org/2000/svg&quot; viewBox=&quot;0 0 100 100&quot;&gt;...&lt;/svg&gt;"></textarea></label>
+            <p>If both are supplied, the uploaded file is used.</p>
+            <div class="fields">
+              <label>Width in pixels <input type="number" name="width" min="1" step="1" placeholder="Automatic"></label>
+              <label>Height in pixels <input type="number" name="height" min="1" step="1" placeholder="Automatic"></label>
+              <label>Response
+                <select name="disposition">
+                  <option value="inline">Open in browser</option>
+                  <option value="attachment">Download PNG</option>
+                </select>
+              </label>
+            </div>
+            <p>Leave both dimensions blank to use the SVG's size. Set one to scale proportionally, or both to fit within that size.</p>
+            <button type="submit">Convert SVG to PNG</button>
+          </form>
+          <p>Compare the PNG with your original. Conversion can succeed even when an unsupported SVG feature is omitted.</p>
+        </section>
+
         <section>
           <h2>HTML to PDF</h2>
           <p>Paste HTML or choose a file. Keep CSS inline and embed images or fonts as data URIs.</p>
@@ -525,10 +548,10 @@ defmodule ManualWeb.Page do
       form { display: grid; gap: 15px; margin-top: 22px; }
       label { display: grid; gap: 7px; color: #c3d0e1; font-size: .84rem; font-weight: 680; }
       input, textarea, select, button { font: inherit; }
-      input[type="text"], input[type="file"], textarea, select { width: 100%; border: 1px solid #284665; border-radius: 9px; outline: none; background: #071425; padding: 11px 12px; color: #e7eef9; box-shadow: inset 0 1px 0 rgb(255 255 255 / 3%); }
-      input[type="text"]::placeholder, textarea::placeholder { color: #617791; }
+      input[type="text"], input[type="number"], input[type="file"], textarea, select { width: 100%; border: 1px solid #284665; border-radius: 9px; outline: none; background: #071425; padding: 11px 12px; color: #e7eef9; box-shadow: inset 0 1px 0 rgb(255 255 255 / 3%); }
+      input[type="text"]::placeholder, input[type="number"]::placeholder, textarea::placeholder { color: #617791; }
       input[type="file"]::file-selector-button { margin: -7px 12px -7px -8px; border: 0; border-right: 1px solid #284665; background: #112945; padding: 8px 12px; color: #cfe0f7; font-weight: 700; cursor: pointer; }
-      input[type="text"]:focus, input[type="file"]:focus, textarea:focus, select:focus { border-color: #5794ee; box-shadow: 0 0 0 3px rgb(59 130 246 / 16%); }
+      input[type="text"]:focus, input[type="number"]:focus, input[type="file"]:focus, textarea:focus, select:focus { border-color: #5794ee; box-shadow: 0 0 0 3px rgb(59 130 246 / 16%); }
       textarea { resize: vertical; font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; line-height: 1.5; }
       button { justify-self: start; border: 1px solid #5794ee; border-radius: 9px; background: linear-gradient(180deg, #377fe4, #2563c2); padding: 11px 17px; color: white; font-weight: 760; cursor: pointer; box-shadow: 0 8px 22px rgb(37 99 235 / 24%); }
       button:hover { background: linear-gradient(180deg, #4b91ef, #2f70d2); }

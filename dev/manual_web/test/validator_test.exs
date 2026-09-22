@@ -24,6 +24,39 @@ defmodule ManualWeb.ValidatorTest do
     assert Validator.read_token_source(nil, "/Pasted 2") == {:ok, "/Pasted 2"}
   end
 
+  test "reads bounded SVG uploads and preserves pasted input" do
+    svg = "  <svg/>\n"
+    file = upload(svg, "sample.svg", "image/svg+xml")
+    assert Validator.read_svg(file, "ignored") == {:ok, svg}
+    assert Validator.read_svg(nil, svg) == {:ok, svg}
+    assert {:error, {:invalid_input, %{operation: :svg_to_png}}} = Validator.read_svg(nil, " ")
+
+    File.rm!(file.path)
+    assert {:error, {:invalid_input, %{operation: :svg_to_png}}} = Validator.read_svg(file, svg)
+
+    oversized =
+      upload(
+        :binary.copy("x", NativeElixirPdfUtilities.Limits.get(:max_svg_bytes) + 1),
+        "large.svg",
+        "image/svg+xml"
+      )
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :file}}} =
+             Validator.read_svg(oversized, svg)
+  end
+
+  test "parses optional SVG dimensions without duplicating library bounds" do
+    assert Validator.svg_options(%{}) == {:ok, []}
+    assert Validator.svg_options(%{"width" => "", "height" => ""}) == {:ok, []}
+    assert Validator.svg_options(%{"width" => "42"}) == {:ok, [width: 42]}
+    assert Validator.svg_options(%{"height" => "0"}) == {:ok, [height: 0]}
+
+    for value <- ["no", "1.5", %{"bad" => "value"}] do
+      assert {:error, {:invalid_input, %{operation: :svg_to_png}}} =
+               Validator.svg_options(%{"height" => value})
+    end
+  end
+
   test "normalizes HTML options and rejects unsupported choices" do
     assert {:ok,
             [

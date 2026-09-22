@@ -128,6 +128,40 @@ defmodule ManualWeb.Validator do
     end
   end
 
+  @doc "Reads an SVG upload within the library source limit, or selects pasted SVG."
+  @spec read_svg(term(), term()) :: {:ok, binary()} | {:error, detailed_error()}
+  def read_svg(upload, pasted_svg) do
+    case upload do
+      %Plug.Upload{} ->
+        read_upload(
+          upload,
+          "SVG",
+          :svg_to_png,
+          NativeElixirPdfUtilities.Limits.get(:max_svg_bytes)
+        )
+
+      _ ->
+        required_text(pasted_svg, "upload an SVG file or paste SVG", :svg_to_png)
+    end
+  end
+
+  @doc "Parses optional raster dimensions; SVG dimension rules belong to the library validator."
+  @spec svg_options(map()) :: {:ok, keyword()} | {:error, detailed_error()}
+  def svg_options(params) do
+    Enum.reduce_while([:width, :height], {:ok, []}, fn key, {:ok, options} ->
+      case params[Atom.to_string(key)] do
+        value when value in [nil, ""] ->
+          {:cont, {:ok, options}}
+
+        value ->
+          case integer(value, :svg_to_png, "enter an integer pixel #{key} or leave it blank") do
+            {:ok, dimension} -> {:cont, {:ok, Keyword.put(options, key, dimension)}}
+            {:error, _} = failure -> {:halt, failure}
+          end
+      end
+    end)
+  end
+
   @doc "Selects an uploaded tokenizer source when present, otherwise validates pasted bytes."
   @spec read_token_source(term(), term()) :: {:ok, binary()} | {:error, detailed_error()}
   def read_token_source(upload, pasted_source) do
@@ -368,11 +402,17 @@ defmodule ManualWeb.Validator do
     end
   end
 
-  defp read_upload(upload, label, operation) do
+  defp read_upload(upload, label, operation, maximum_bytes \\ nil) do
     case upload do
       %Plug.Upload{path: path} when is_binary(path) ->
-        case File.read(path) do
+        result =
+          if maximum_bytes,
+            do: NativeElixirPdfUtilities.FileReader.read(path, maximum_bytes),
+            else: File.read(path)
+
+        case result do
           {:ok, bytes} -> {:ok, bytes}
+          {:error, {_reason, _diagnostic}} = failure -> failure
           {:error, reason} -> error(operation, "could not read #{label} upload: #{reason}")
         end
 

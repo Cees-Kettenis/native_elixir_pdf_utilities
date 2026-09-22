@@ -56,6 +56,8 @@ defmodule ManualWeb.RouterTest do
     assert response.resp_body =~ "Transform pages"
     assert response.resp_body =~ "Split PDFs"
     assert response.resp_body =~ "HTML to PDF"
+    assert response.resp_body =~ "SVG to PNG"
+    assert response.resp_body =~ "action=\"/svg-to-png\""
     assert response.resp_body =~ "PDF outlines and bookmarks"
     assert response.resp_body =~ "Extract text"
     assert response.resp_body =~ "Inspect PDF information"
@@ -74,6 +76,7 @@ defmodule ManualWeb.RouterTest do
                "/brand-banner.svg",
                "/favicon.ico",
                "/html-to-pdf",
+               "/svg-to-png",
                "/info",
                "/info/update",
                "/merge",
@@ -100,6 +103,75 @@ defmodule ManualWeb.RouterTest do
                "/transform/pick",
                "/transform/rotate"
              ])
+
+    svg = document["paths"]["/svg-to-png"]["post"]
+    assert svg["responses"]["200"]["content"]["image/png"]
+    assert svg["responses"]["422"]["content"]["text/html"]
+    schema = svg["requestBody"]["content"]["multipart/form-data"]["schema"]
+    assert schema["anyOf"] == [%{"required" => ["svg_file"]}, %{"required" => ["svg"]}]
+  end
+
+  test "converts uploaded and pasted SVGs to PNG with optional dimensions" do
+    svg =
+      ~s(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10" fill="red"/></svg>)
+
+    for {params, width, height, disposition} <- [
+          {%{"svg" => svg}, 20, 10, "inline"},
+          {%{"svg" => svg, "width" => "40", "height" => ""}, 40, 20, "inline"},
+          {%{"svg" => svg, "height" => "30"}, 60, 30, "inline"},
+          {%{
+             "svg_file" => upload(svg, "sample.svg"),
+             "svg" => "ignored because upload takes precedence",
+             "width" => "12",
+             "height" => "8",
+             "disposition" => "attachment"
+           }, 12, 6, "attachment"}
+        ] do
+      response = post("/svg-to-png", params)
+      assert response.status == 200
+      assert get_resp_header(response, "content-type") == ["image/png"]
+
+      assert get_resp_header(response, "content-disposition") == [
+               "#{disposition}; filename=\"converted.png\""
+             ]
+
+      assert <<137, "PNG\r\n", 26, 10, 13::32, "IHDR", ^width::32, ^height::32, _::binary>> =
+               response.resp_body
+    end
+  end
+
+  test "SVG conversion exposes form and library validation failures" do
+    valid = ~s(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"/>)
+
+    for {params, reason, message} <- [
+          {%{}, ":invalid_input", "upload an SVG file or paste SVG"},
+          {%{"svg" => valid, "width" => "oops"}, ":invalid_input", "integer pixel width"},
+          {%{"svg" => valid, "height" => "0"}, ":invalid_document", "positive integers"},
+          {%{"svg" => valid, "disposition" => "bad"}, ":invalid_input", "disposition"},
+          {%{"svg" => "<svg>"}, ":invalid_document", "malformed"},
+          {%{"svg" => "<!DOCTYPE svg>" <> valid}, ":invalid_document", "DTD/entity"},
+          {%{
+             "svg" =>
+               ~s(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><image href="https://example.com/image.png"/></svg>)
+           }, ":invalid_document", "not authorized"},
+          {%{"svg_file" => upload(<<255>>, "invalid.svg")}, ":invalid_document", "UTF-8"},
+          {%{
+             "svg" => valid,
+             "width" =>
+               to_string(NativeElixirPdfUtilities.Limits.get(:max_svg_raster_dimension) + 1)
+           }, ":resource_limit_exceeded", "limit"}
+        ] do
+      response = post("/svg-to-png", params)
+      assert response.status == 422
+      assert response.resp_body =~ "Operation failed"
+      assert response.resp_body =~ reason
+      assert response.resp_body =~ message
+
+      if reason != ":invalid_input" do
+        assert response.resp_body =~ "operation: :svg_to_png"
+        assert response.resp_body =~ "stage: :"
+      end
+    end
   end
 
   test "serves the README banner and generated favicon" do
@@ -376,7 +448,13 @@ defmodule ManualWeb.RouterTest do
     assert spans_response.status == 200
     assert spans_response.resp_body =~ "Positioned text spans"
     assert spans_response.resp_body =~ "&quot;page_count&quot;"
-    assert spans_response.resp_body =~ "Manual extraction"
+
+    texts =
+      Regex.scan(~r/&quot;text&quot;:\s*&quot;([^&]*)&quot;/, spans_response.resp_body,
+        capture: :all_but_first
+      )
+
+    assert texts |> List.flatten() |> Enum.join() == "Manual extraction"
   end
 
   test "inspects and updates PDF information" do

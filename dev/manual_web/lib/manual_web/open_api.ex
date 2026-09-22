@@ -211,6 +211,41 @@ defmodule ManualWeb.OpenApi do
               "application/zip"
             )
         },
+        "/svg-to-png" => %{
+          "post" =>
+            upload_operation(
+              "Validate and convert uploaded or pasted SVG to PNG; uploaded SVG takes precedence",
+              %{
+                "svg_file" => %{"type" => "string", "format" => "binary"},
+                "svg" => %{
+                  "type" => "string",
+                  "description" => "SVG XML when no file is uploaded"
+                },
+                "width" => %{
+                  "type" => "integer",
+                  "minimum" => 1,
+                  "description" =>
+                    "Optional pixel width; fits within both dimensions when both are supplied"
+                },
+                "height" => %{
+                  "type" => "integer",
+                  "minimum" => 1,
+                  "description" => "Optional pixel height; aspect ratio is preserved"
+                },
+                "disposition" => disposition_schema()
+              },
+              [],
+              "image/png"
+            )
+            |> put_in(["responses", "422"], %{
+              "description" => "Form, SVG validation, conversion, or PNG decoding diagnostic",
+              "content" => %{"text/html" => %{"schema" => %{"type" => "string"}}}
+            })
+            |> put_in(
+              ["requestBody", "content", "multipart/form-data", "schema", "anyOf"],
+              [%{"required" => ["svg_file"]}, %{"required" => ["svg"]}]
+            )
+        },
         "/html-to-pdf" => %{
           "post" =>
             upload_operation(

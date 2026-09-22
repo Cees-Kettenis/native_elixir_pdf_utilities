@@ -251,6 +251,37 @@ defmodule ManualWeb.Router do
     end
   end
 
+  post "/svg-to-png" do
+    budget = NativeElixirPdfUtilities.Validators.HtmlValidator.new_image_budget()
+
+    with {:ok, svg} <- Validator.read_svg(conn.params["svg_file"], conn.params["svg"]),
+         {:ok, options} <- Validator.svg_options(conn.params),
+         {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),
+         :ok <-
+           NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_image_source(
+             budget,
+             byte_size(svg)
+           ),
+         {:ok, png} <-
+           NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer.rasterize(svg, options, budget),
+         {:ok, _image} <-
+           NativeElixirPdfUtilities.HtmlToPdf.PngDecoder.decode(png, budget, false) do
+      conn
+      |> security_headers()
+      |> put_resp_header("content-type", "image/png")
+      |> put_resp_header("content-disposition", "#{disposition}; filename=\"converted.png\"")
+      |> send_resp(200, png)
+    else
+      {:error, {reason, diagnostic}} ->
+        send_error(
+          conn,
+          {:error,
+           {reason,
+            Diagnostics.with_context(diagnostic, operation: :svg_to_png, module: __MODULE__)}}
+        )
+    end
+  end
+
   post "/outlines" do
     with {:ok, pdf} <- Validator.read_pdf(conn.params["pdf"], :get_outlines),
          {:ok, outlines} <- Outlines.get(pdf) do
