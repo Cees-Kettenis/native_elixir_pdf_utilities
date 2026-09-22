@@ -318,7 +318,8 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
         do_render_tokens(rest, id_map, [Integer.to_string(integer) | separator(rendered)])
 
       [{:real, real} | rest] ->
-        do_render_tokens(rest, id_map, [format_real(real) | separator(rendered)])
+        {:ok, encoded} = InfoCodec.serialize_value(real)
+        do_render_tokens(rest, id_map, [encoded | separator(rendered)])
 
       [true | rest] ->
         do_render_tokens(rest, id_map, ["true" | separator(rendered)])
@@ -346,7 +347,8 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
         Integer.to_string(value)
 
       value when is_float(value) ->
-        format_real(value)
+        {:ok, encoded} = InfoCodec.serialize_value(value)
+        encoded
 
       {:name, name} ->
         ["/", InfoCodec.encode_name(name)]
@@ -400,21 +402,6 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
     case rendered do
       [] -> []
       _ -> [" " | rendered]
-    end
-  end
-
-  defp format_real(real) do
-    integer = trunc(real)
-
-    case abs(real - integer) < 1.0e-9 do
-      true ->
-        Integer.to_string(integer)
-
-      false ->
-        real
-        |> :erlang.float_to_binary(decimals: 10)
-        |> String.trim_trailing("0")
-        |> String.trim_trailing(".")
     end
   end
 

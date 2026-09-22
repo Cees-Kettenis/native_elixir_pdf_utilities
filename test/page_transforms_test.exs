@@ -19,6 +19,81 @@ defmodule NativeElixirPdfUtilities.PageTransformsTest do
     :ok
   end
 
+  test "rebuilding preserves real values in rewritten pages and retained objects" do
+    numbers = "[0.0000000005 -0.0000000005 1.0000000005 1.23456789012345]"
+    expected = [5.0e-10, -5.0e-10, 1.0000000005, 1.23456789012345]
+
+    source =
+      three_page_pdf("/PrecisionValues #{numbers} /PrecisionObject 16 0 R", [{16, numbers}])
+
+    assert {:ok, [split]} = Split.by_ranges(source, [1..3])
+
+    for result <- [
+          Merge.merge([source]),
+          Transform.pick_pages(source, [1]),
+          Transform.rotate_pages(source, 90),
+          {:ok, split}
+        ] do
+      assert {:ok, rebuilt} = result
+      assert {:ok, %{pages: [page | _]} = document} = Reader.read(rebuilt)
+      assert {:ok, dictionary} = Reader.resolve(document, {:ref, page.ref})
+      assert dictionary["PrecisionValues"] === expected
+      assert {:ok, ^expected} = Reader.resolve(document, dictionary["PrecisionObject"])
+    end
+  end
+
+  test "rebuilding preserves text geometry through small Form matrix coefficients" do
+    source = small_matrix_pdf()
+
+    assert {:ok, %{pages: [%{spans: [original]}]}} = Text.extract_spans(source)
+    assert original.text == "Hello"
+    assert_in_delta original.x, 100.0, 1.0e-10
+    assert_in_delta original.end_x, 125.0, 1.0e-10
+
+    for result <- [Merge.merge([source]), Transform.pick_pages(source, [1])] do
+      assert {:ok, rebuilt} = result
+      assert {:ok, %{pages: [%{spans: [actual]}]}} = Text.extract_spans(rebuilt)
+      assert actual == original
+    end
+  end
+
+  @tag :browser_parity
+  test "rebuilding keeps text visible through small Form matrix coefficients" do
+    source = small_matrix_pdf()
+
+    directory =
+      Path.join(System.tmp_dir!(), "rebuild-precision-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(directory)
+    on_exit(fn -> File.rm_rf!(directory) end)
+    rasterizer = System.find_executable("pdftoppm") || flunk("pdftoppm is required")
+
+    rasters =
+      for {result, name} <- [
+            {{:ok, source}, "original"},
+            {Merge.merge([source]), "merged"},
+            {Transform.pick_pages(source, [1]), "picked"}
+          ] do
+        assert {:ok, document} = result
+        prefix = Path.join(directory, name)
+        File.write!(prefix <> ".pdf", document)
+
+        assert {_output, 0} =
+                 System.cmd(rasterizer, ["-singlefile", "-r", "72", prefix <> ".pdf", prefix],
+                   stderr_to_stdout: true
+                 )
+
+        assert <<"P6\n600 800\n255\n", pixels::binary>> = File.read!(prefix <> ".ppm")
+        assert byte_size(pixels) == 600 * 800 * 3
+        assert Enum.any?(:binary.bin_to_list(pixels), &(&1 < 255))
+        pixels
+      end
+
+    assert [original, merged, picked] = rasters
+    assert merged == original
+    assert picked == original
+  end
+
   test "picks and reorders pages while rebuilding a readable PDF" do
     source = three_page_pdf()
 
@@ -465,6 +540,21 @@ defmodule NativeElixirPdfUtilities.PageTransformsTest do
           []
       end
     end)
+  end
+
+  defp small_matrix_pdf() do
+    form_content = "1000000000 0 0 1000000000 0 0 cm BT /F1 0.02 Tf 0.1 0.1 Td (Hello) Tj ET"
+
+    pdf([
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+      {3,
+       "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /XObject << /Fm 5 0 R >> >> /Contents 4 0 R >>"},
+      {4, stream("1000 0 0 1000 50 50 cm /Fm Do")},
+      {5,
+       "<< /Type /XObject /Subtype /Form /BBox [0 0 1000000000 1000000000] /Matrix [0.0000000005 0 0 0.0000000005 0 0] /Resources << /Font << /F1 6 0 R >> >> /Length #{byte_size(form_content)} >>\nstream\n#{form_content}\nendstream"},
+      {6, "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>"}
+    ])
   end
 
   defp three_page_pdf(page_one_extra \\ "", extra_objects \\ [], catalog_extra \\ "") do
