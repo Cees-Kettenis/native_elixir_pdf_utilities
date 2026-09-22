@@ -3,6 +3,23 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidatorTest do
 
   alias NativeElixirPdfUtilities.Validators.TextValidator
 
+  test "matrix composition validates representability without reapplying the input limit" do
+    identity = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    large = [1.0e300, 0.0, 0.0, 1.0e300, 0.0, 0.0]
+    assert {:ok, ^large} = TextValidator.compose_matrix(identity, large, 2, "cm")
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             TextValidator.compose_matrix(large, large, 2, "cm")
+
+    assert diagnostic.stage == :content
+    assert diagnostic.reason == :invalid_pdf_input
+    assert diagnostic.module == TextValidator
+    assert diagnostic.operation == :extract
+    assert diagnostic.message =~ "cm"
+    assert diagnostic.message =~ "supported numeric range"
+    assert diagnostic.message =~ "page 2"
+  end
+
   test "numeric tokens must fit the shared PDF magnitude limit" do
     assert {:ok, 1_000_000_000} = TextValidator.number({:int, 1_000_000_000})
 

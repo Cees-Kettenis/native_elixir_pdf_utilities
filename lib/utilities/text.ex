@@ -343,10 +343,9 @@ defmodule NativeElixirPdfUtilities.Text do
         {:ok, restored_state, spans}
 
       {"cm", matrix} ->
-        {:ok,
-         state
-         |> Map.put(:ctm, multiply(matrix, state.ctm))
-         |> break_text_join(), spans}
+        with {:ok, ctm} <- TextValidator.compose_matrix(matrix, state.ctm, page, "cm") do
+          {:ok, state |> Map.put(:ctm, ctm) |> break_text_join(), spans}
+        end
 
       {"BT", []} ->
         {:ok,
@@ -377,24 +376,26 @@ defmodule NativeElixirPdfUtilities.Text do
         {:ok, %{state | text_matrix: matrix, line_matrix: matrix, join_next_span?: false}, spans}
 
       {operator, [tx, ty]} when operator in ["Td", "TD"] ->
-        line_matrix = translate(state.line_matrix, tx, ty)
+        with {:ok, line_matrix} <-
+               TextValidator.translate_matrix(state.line_matrix, tx, ty, page, operator) do
+          state = %{
+            state
+            | line_matrix: line_matrix,
+              text_matrix: line_matrix,
+              leading: if(operator == "TD", do: -ty, else: state.leading),
+              join_next_span?: false
+          }
 
-        state = %{
-          state
-          | line_matrix: line_matrix,
-            text_matrix: line_matrix,
-            leading: if(operator == "TD", do: -ty, else: state.leading),
-            join_next_span?: false
-        }
-
-        {:ok, state, spans}
+          {:ok, state, spans}
+        end
 
       {"T*", []} ->
-        line_matrix = translate(state.line_matrix, 0.0, -state.leading)
-
-        {:ok,
-         %{state | line_matrix: line_matrix, text_matrix: line_matrix, join_next_span?: false},
-         spans}
+        with {:ok, line_matrix} <-
+               TextValidator.translate_matrix(state.line_matrix, 0.0, -state.leading, page, "T*") do
+          {:ok,
+           %{state | line_matrix: line_matrix, text_matrix: line_matrix, join_next_span?: false},
+           spans}
+        end
 
       {"TL", [leading]} ->
         {:ok, %{state | leading: leading}, spans}
@@ -461,11 +462,13 @@ defmodule NativeElixirPdfUtilities.Text do
       fn value, {:ok, state, spans, joins_previous?} ->
         case value do
           {:adjustment, value} ->
-            adjustment = -value / 1000.0 * state.font_size * state.horizontal_scale / 100.0
+            case TextValidator.adjust_text_matrix(state, value, page) do
+              {:ok, matrix} ->
+                {:cont, {:ok, %{state | text_matrix: matrix}, spans, joins_previous?}}
 
-            {:cont,
-             {:ok, %{state | text_matrix: translate(state.text_matrix, adjustment, 0.0)}, spans,
-              joins_previous?}}
+              {:error, _} = geometry_error ->
+                {:halt, geometry_error}
+            end
 
           {:text, decoded} ->
             case add_span(state, spans, decoded, page, joins_previous?) do
@@ -493,64 +496,33 @@ defmodule NativeElixirPdfUtilities.Text do
         error(:limits, :resource_limit_exceeded, "text span count exceeds the limit", page: page)
 
       true ->
-        next_state = advance_text(state, decoded)
+        with {:ok, geometry} <- TextValidator.span_geometry(state, decoded, page) do
+          span = %{
+            text: decoded.text,
+            source_index: state.next_source_index,
+            x: geometry.x,
+            y: geometry.y,
+            end_x: geometry.end_x,
+            end_y: geometry.end_y,
+            font_resource: state.font.name,
+            font_size: state.font_size,
+            text_matrix: state.text_matrix,
+            ctm: state.ctm,
+            render_mode: state.render_mode,
+            paints_text?: state.render_mode not in [3, 7],
+            adds_to_clip_path?: state.render_mode in 4..7,
+            joins_previous?: join_previous?
+          }
 
-        [_, _, _, _, x, y] =
-          state.text_matrix |> translate(0.0, state.rise) |> multiply(state.ctm)
-
-        [_, _, _, _, end_x, end_y] =
-          next_state.text_matrix |> translate(0.0, state.rise) |> multiply(state.ctm)
-
-        {x, y} = display_position(x, y, state.page)
-        {end_x, end_y} = display_position(end_x, end_y, state.page)
-
-        span = %{
-          text: decoded.text,
-          source_index: state.next_source_index,
-          x: x,
-          y: y,
-          end_x: end_x,
-          end_y: end_y,
-          font_resource: state.font.name,
-          font_size: state.font_size,
-          text_matrix: state.text_matrix,
-          ctm: state.ctm,
-          render_mode: state.render_mode,
-          paints_text?: state.render_mode not in [3, 7],
-          adds_to_clip_path?: state.render_mode in 4..7,
-          joins_previous?: join_previous?
-        }
-
-        {:ok,
-         %{
-           next_state
-           | next_source_index: state.next_source_index + 1,
-             join_next_span?: true
-         }, [span | spans]}
+          {:ok,
+           %{
+             state
+             | text_matrix: geometry.next_text_matrix,
+               next_source_index: state.next_source_index + 1,
+               join_next_span?: true
+           }, [span | spans]}
+        end
     end
-  end
-
-  defp advance_text(state, decoded) do
-    width_codes = Map.get(decoded, :width_codes, decoded.codes)
-    glyph_width = Enum.reduce(width_codes, 0, &(font_width(state.font, &1) + &2))
-    glyph_count = length(decoded.codes)
-
-    spaces =
-      case Map.fetch(decoded, :source_codes) do
-        {:ok, source_codes} -> Enum.count(source_codes, &(&1 == <<32>>))
-        :error -> Enum.count(decoded.codes, &(&1 == 32))
-      end
-
-    width =
-      (glyph_width / 1000.0 * state.font_size + state.char_spacing * glyph_count +
-         state.word_spacing * spaces) *
-        state.horizontal_scale / 100.0
-
-    %{state | text_matrix: translate(state.text_matrix, width, 0.0)}
-  end
-
-  defp font_width(font, code) do
-    Map.get(font.widths, code, font.default_width)
   end
 
   defp execute_form(form, state, spans, page) do
@@ -559,17 +531,20 @@ defmodule NativeElixirPdfUtilities.Text do
         {:ok, state, spans}
 
       form ->
-        child_state = %{
-          state
-          | ctm: multiply(form.matrix, state.ctm),
-            stack: [],
-            in_text?: false,
-            join_next_span?: false
-        }
+        with {:ok, ctm} <-
+               TextValidator.compose_matrix(form.matrix, state.ctm, page, "Do Form Matrix") do
+          child_state = %{
+            state
+            | ctm: ctm,
+              stack: [],
+              in_text?: false,
+              join_next_span?: false
+          }
 
-        with {:ok, child_state, child_spans} <- interpret(form.instructions, child_state, page) do
-          {:ok, %{state | next_source_index: child_state.next_source_index},
-           Enum.reverse(child_spans, spans)}
+          with {:ok, child_state, child_spans} <- interpret(form.instructions, child_state, page) do
+            {:ok, %{state | next_source_index: child_state.next_source_index},
+             Enum.reverse(child_spans, spans)}
+          end
         end
     end
   end
@@ -689,30 +664,7 @@ defmodule NativeElixirPdfUtilities.Text do
     }
   end
 
-  defp display_position(x, y, page) do
-    [left, bottom, right, top] = page.media_box
-
-    case page.rotation do
-      0 -> {x - left, top - y}
-      90 -> {y - bottom, x - left}
-      180 -> {right - x, y - bottom}
-      270 -> {top - y, right - x}
-    end
-  end
-
   defp identity, do: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-
-  defp translate(matrix, x, y), do: multiply([1.0, 0.0, 0.0, 1.0, x, y], matrix)
-
-  defp multiply([a, b, c, d, e, f], [a2, b2, c2, d2, e2, f2]),
-    do: [
-      a * a2 + b * c2,
-      a * b2 + b * d2,
-      c * a2 + d * c2,
-      c * b2 + d * d2,
-      e * a2 + f * c2 + e2,
-      e * b2 + f * d2 + f2
-    ]
 
   defp text_error({:error, {reason, diagnostic}}, operation) do
     {:error,

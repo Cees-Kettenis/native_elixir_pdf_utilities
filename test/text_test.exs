@@ -6,6 +6,129 @@ defmodule NativeElixirPdfUtilities.TextTest do
   alias NativeElixirPdfUtilities.Text
   alias NativeElixirPdfUtilities.Validators.TextValidator
 
+  test "composed graphics transforms return diagnostics instead of overflowing" do
+    scale = "1000000000 0 0 1000000000 0 0 cm "
+
+    for content <- [String.duplicate(scale, 35), "q " <> String.duplicate(scale, 35) <> "Q"],
+        {operation, extract} <- [extract: &Text.extract/1, extract_spans: &Text.extract_spans/1] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = extract.(page_pdf(content))
+      assert diagnostic.reason == :invalid_pdf_input
+      assert diagnostic.stage == :content
+      assert diagnostic.module == Text
+      assert diagnostic.operation == operation
+      assert diagnostic.message =~ "cm"
+      assert diagnostic.message =~ "supported numeric range"
+      assert diagnostic.message =~ "reduce the composed transforms"
+      assert diagnostic.message =~ "page 1"
+    end
+  end
+
+  test "composed transforms persist across page content streams" do
+    scale = "1000000000 0 0 1000000000 0 0 cm "
+
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] >>"},
+        {4, stream_object("", String.duplicate(scale, 20))},
+        {5, stream_object("", String.duplicate(scale, 15))}
+      ])
+
+    assert {:error, {:invalid_pdf_input, %{stage: :content, message: message}}} =
+             Text.extract_spans(source)
+
+    assert message =~ "cm"
+    assert message =~ "page 1"
+  end
+
+  test "graphics restoration and Form return preserve representable accumulated transforms" do
+    scale = "1000000000 0 0 1000000000 0 0 cm "
+    twenty_scales = String.duplicate(scale, 20)
+    text = "BT /F1 12 Tf (A) Tj ET"
+
+    assert {:ok, %{pages: [%{spans: [expected]}]}} =
+             Text.extract_spans(page_pdf(scale <> twenty_scales <> text))
+
+    for source <- [
+          page_pdf(scale <> "q " <> twenty_scales <> "Q " <> twenty_scales <> text),
+          form_transform_pdf(
+            scale <> "/Form Do " <> twenty_scales <> text,
+            twenty_scales,
+            "1 0 0 1 0 0"
+          )
+        ] do
+      assert {:ok, %{pages: [%{spans: [actual]}]}} = Text.extract_spans(source)
+      assert actual.ctm == expected.ctm
+      assert actual.end_x == expected.end_x
+      assert {:ok, "A"} = Text.extract(source)
+    end
+  end
+
+  test "Form matrices and nested content compose with the inherited graphics state" do
+    scale = "1000000000 0 0 1000000000 0 0 cm "
+    matrix = "1000000000 0 0 1000000000 0 0"
+
+    for {page_content, form_content, expected_operator} <- [
+          {String.duplicate(scale, 34) <> "/Form Do", "", "Do Form Matrix"},
+          {String.duplicate(scale, 33) <> "/Form Do", "/Inner Do", "Do Form Matrix"},
+          {String.duplicate(scale, 33) <> "/Form Do", scale, "cm"}
+        ],
+        {operation, extract} <- [extract: &Text.extract/1, extract_spans: &Text.extract_spans/1] do
+      source = form_transform_pdf(page_content, form_content, matrix)
+      assert {:error, {:invalid_pdf_input, diagnostic}} = extract.(source)
+      assert diagnostic.stage == :content
+      assert diagnostic.reason == :invalid_pdf_input
+      assert diagnostic.module == Text
+      assert diagnostic.operation == operation
+      assert diagnostic.message =~ expected_operator
+      assert diagnostic.message =~ "supported numeric range"
+      assert diagnostic.message =~ "page 1"
+    end
+  end
+
+  test "text baseline composition rejects overflow from a representable graphics matrix" do
+    content =
+      String.duplicate("1000000000 0 0 1000000000 0 0 cm ", 34) <>
+        "BT /F1 1000000000 Tf (A) Tj ET"
+
+    for {operation, extract} <- [extract: &Text.extract/1, extract_spans: &Text.extract_spans/1] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = extract.(page_pdf(content))
+      assert diagnostic.stage == :content
+      assert diagnostic.module == Text
+      assert diagnostic.operation == operation
+      assert diagnostic.message =~ "text positioning"
+      assert diagnostic.message =~ "supported numeric range"
+      assert diagnostic.message =~ "page 1"
+    end
+  end
+
+  test "text positioning remains checked when the configured input magnitude increases" do
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+    large = Integer.pow(10, 160)
+    Limits.install(%{original_limits | max_pdf_numeric_magnitude: large})
+
+    for {operators, expected_operator} <- [
+          {"#{large} 0 0 1 0 0 Tm #{large} 0 Td", "Td"},
+          {"#{large} 0 0 1 0 0 Tm #{large} 0 TD", "TD"},
+          {"1 0 0 #{large} 0 0 Tm #{large} TL T*", "T*"},
+          {"/F1 #{large} Tf [#{large}] TJ", "TJ"},
+          {"/F1 #{large} Tf #{large} Tz (A) Tj", "text positioning"}
+        ] do
+      source = page_pdf("BT /F1 12 Tf #{operators} ET")
+
+      for {operation, extract} <- [extract: &Text.extract/1, extract_spans: &Text.extract_spans/1] do
+        assert {:error, {:invalid_pdf_input, diagnostic}} = extract.(source)
+        assert diagnostic.stage == :content
+        assert diagnostic.operation == operation
+        assert diagnostic.module == Text
+        assert diagnostic.message =~ expected_operator
+        assert diagnostic.message =~ "supported numeric range"
+      end
+    end
+  end
+
   test "oversized text operands return diagnostics before floating-point conversion" do
     for number <- [
           String.duplicate("9", 400),
@@ -1942,6 +2065,23 @@ defmodule NativeElixirPdfUtilities.TextTest do
       |> List.replace_at(7, {9, "[1 0 0 1 2]"})
 
     assert_error(Text.extract(pdf(malformed_indirect_matrix)), :invalid_pdf_input, :validation)
+  end
+
+  defp form_transform_pdf(page_content, form_content, matrix) do
+    pdf([
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents 6 0 R >>"},
+      {4, "<< /Font << /F1 5 0 R >> /XObject << /Form 7 0 R /Inner 8 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", page_content)},
+      {7, stream_object("/Type /XObject /Subtype /Form /Matrix [#{matrix}]", form_content)},
+      {8,
+       stream_object(
+         "/Type /XObject /Subtype /Form /Matrix [1000000000 0 0 1000000000 0 0]",
+         ""
+       )}
+    ])
   end
 
   defp page_pdf(content, options \\ []) do

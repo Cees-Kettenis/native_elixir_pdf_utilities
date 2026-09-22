@@ -484,6 +484,121 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     end
   end
 
+  @doc """
+  Composes validated matrices using the current execution state and returns a
+  diagnostic if the result cannot be represented by floating-point arithmetic.
+
+  This checks representability, not the configurable limit on input operands.
+  Callers consume the returned matrix without repeating the arithmetic.
+  """
+  @spec compose_matrix([float()], [float()], pos_integer(), String.t()) ::
+          {:ok, [float()]} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def compose_matrix(matrix, current, page, operator) do
+    geometry_result(fn -> multiply(matrix, current) end, page, operator)
+  end
+
+  @doc false
+  @spec translate_matrix([float()], number(), number(), pos_integer(), String.t()) ::
+          {:ok, [float()]} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def translate_matrix(matrix, x, y, page, operator) do
+    compose_matrix([1.0, 0.0, 0.0, 1.0, x, y], matrix, page, operator)
+  end
+
+  @doc false
+  @spec adjust_text_matrix(map(), number(), pos_integer()) ::
+          {:ok, [float()]} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def adjust_text_matrix(state, value, page) do
+    geometry_result(
+      fn ->
+        adjustment = -value / 1000.0 * state.font_size * state.horizontal_scale / 100.0
+        translate(state.text_matrix, adjustment, 0.0)
+      end,
+      page,
+      "TJ"
+    )
+  end
+
+  @doc false
+  @spec span_geometry(map(), map(), pos_integer()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def span_geometry(state, decoded, page) do
+    geometry_result(
+      fn ->
+        next_state = advance_text(state, decoded)
+
+        [_, _, _, _, x, y] =
+          state.text_matrix |> translate(0.0, state.rise) |> multiply(state.ctm)
+
+        [_, _, _, _, end_x, end_y] =
+          next_state.text_matrix |> translate(0.0, state.rise) |> multiply(state.ctm)
+
+        {x, y} = display_position(x, y, state.page)
+        {end_x, end_y} = display_position(end_x, end_y, state.page)
+
+        %{x: x, y: y, end_x: end_x, end_y: end_y, next_text_matrix: next_state.text_matrix}
+      end,
+      page,
+      "text positioning"
+    )
+  end
+
+  defp geometry_result(calculate, page, operator) do
+    {:ok, calculate.()}
+  rescue
+    ArithmeticError ->
+      content_error(
+        "#{operator} produces text geometry outside the supported numeric range; " <>
+          "reduce the composed transforms or text positioning values",
+        page
+      )
+  end
+
+  defp advance_text(state, decoded) do
+    width_codes = Map.get(decoded, :width_codes, decoded.codes)
+    glyph_width = Enum.reduce(width_codes, 0, &(font_width(state.font, &1) + &2))
+    glyph_count = length(decoded.codes)
+
+    spaces =
+      case Map.fetch(decoded, :source_codes) do
+        {:ok, source_codes} -> Enum.count(source_codes, &(&1 == <<32>>))
+        :error -> Enum.count(decoded.codes, &(&1 == 32))
+      end
+
+    width =
+      (glyph_width / 1000.0 * state.font_size + state.char_spacing * glyph_count +
+         state.word_spacing * spaces) *
+        state.horizontal_scale / 100.0
+
+    %{state | text_matrix: translate(state.text_matrix, width, 0.0)}
+  end
+
+  defp font_width(font, code) do
+    Map.get(font.widths, code, font.default_width)
+  end
+
+  defp display_position(x, y, page) do
+    [left, bottom, right, top] = page.media_box
+
+    case page.rotation do
+      0 -> {x - left, top - y}
+      90 -> {y - bottom, x - left}
+      180 -> {right - x, y - bottom}
+      270 -> {top - y, right - x}
+    end
+  end
+
+  defp translate(matrix, x, y), do: multiply([1.0, 0.0, 0.0, 1.0, x, y], matrix)
+
+  defp multiply([a, b, c, d, e, f], [a2, b2, c2, d2, e2, f2]),
+    do: [
+      a * a2 + b * c2,
+      a * b2 + b * d2,
+      c * a2 + d * c2,
+      c * b2 + d * d2,
+      e * a2 + f * c2 + e2,
+      e * b2 + f * d2 + f2
+    ]
+
   defp prepare_instruction(operator, operands, page_number) do
     normalized =
       case {operator, operands} do
