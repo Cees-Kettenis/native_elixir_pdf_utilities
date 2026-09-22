@@ -55,6 +55,10 @@ field names in existing PDFs.
 Generated names can change when pagination changes. Supply `name` for keys
 used by application code. Controls cannot span pages or repeat with the same
 control identity in page furniture. HTML `disabled` makes a field read-only.
+All members of a radio group must be enabled or all disabled. Interactive
+rendering rejects mixed groups with `:unsupported_form` because PDF read-only
+status applies to the whole field. Use `forms: :static` to render mixed groups
+as artwork without interactive fields.
 The HTML parser still supports its documented subset; HTML listboxes and
 multiple-selection selects are not implemented.
 

@@ -151,6 +151,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                      "duplicate HTML name #{inspect(name)}; only radio groups may share a name"
                    )}
 
+                field.type == :radio and
+                    Enum.any?(fields, &(&1.name == name and &1.flags != field.flags)) ->
+                  {:halt,
+                   error(
+                     :unsupported_form,
+                     "radio group #{inspect(name)} mixes enabled and disabled controls; " <>
+                       "make all members enabled or all disabled, or use forms: :static",
+                     source: name
+                   )}
+
                 field.type == :radio and field.export in ["", "Off"] ->
                   {:halt, error(:invalid_form, "radio export values cannot be empty or Off")}
 
@@ -209,5 +219,5 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     end
   end
 
-  defp error(reason, message), do: Diagnostics.error(:forms, reason, message)
+  defp error(reason, message, opts \\ []), do: Diagnostics.error(:forms, reason, message, opts)
 end

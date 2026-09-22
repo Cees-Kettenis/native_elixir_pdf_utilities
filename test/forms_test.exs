@@ -114,6 +114,61 @@ defmodule NativeElixirPdfUtilities.FormsTest do
     assert text =~ "Netherlands"
   end
 
+  test "mixed disabled radio groups fail consistently across order, intervening fields and pages" do
+    enabled = ~s(<input type="radio" name="contact" value="email">)
+    disabled = ~s(<input type="radio" name="contact" value="phone" disabled>)
+
+    for [first, second] <- [[enabled, disabled], [disabled, enabled]],
+        separator <- ["", ~s(<input name="other">), ~s(</div><div style="break-before: page">)] do
+      html = "<div>#{first}#{separator}#{second}</div>"
+
+      assert {:error, {:unsupported_form, diagnostic}} = HtmlToPdf.render(html)
+      assert diagnostic.stage == :forms
+      assert diagnostic.reason == :unsupported_form
+      assert diagnostic.module == HtmlToPdf
+      assert diagnostic.operation == :render
+      assert diagnostic.source == "contact"
+      assert diagnostic.message =~ "mixes enabled and disabled"
+      assert diagnostic.message =~ "all members enabled or all disabled"
+      assert diagnostic.message =~ "forms: :static"
+
+      assert {:ok, static} = HtmlToPdf.render(html, forms: :static)
+      assert {:ok, []} = Forms.fields(static)
+    end
+  end
+
+  test "uniformly enabled and disabled radio groups keep their flags and selection in either order" do
+    for disabled? <- [false, true], order <- [["email", "phone"], ["phone", "email"]] do
+      controls =
+        Enum.map_join(order, fn value ->
+          disabled = if disabled?, do: "disabled", else: ""
+          checked = if value == "email", do: "checked", else: ""
+          ~s(<input type="radio" name="contact" value="#{value}" #{disabled} #{checked}>)
+        end)
+
+      assert {:ok, pdf} = HtmlToPdf.render("<div>#{controls}</div>")
+      assert {:ok, [field]} = Forms.fields(pdf)
+      assert field.name == "contact"
+      assert field.type == :radio
+      assert field.value == "email"
+      assert field.read_only == disabled?
+      assert Enum.sort(field.export_values) == ["email", "phone"]
+      assert length(field.widgets) == 2
+
+      if disabled? do
+        assert {:error, {:read_only_form_field, diagnostic}} =
+                 Forms.fill(pdf, %{"contact" => "phone"})
+
+        assert diagnostic.stage == :forms
+        assert diagnostic.module == Forms
+        assert diagnostic.operation == :fill
+      else
+        assert {:ok, filled} = Forms.fill(pdf, %{"contact" => "phone"})
+        assert {:ok, [%{value: "phone", read_only: false}]} = Forms.fields(filled)
+      end
+    end
+  end
+
   test "static rendering and names after pagination" do
     html =
       "<div><input name=\"TEXT_1_2\"><input></div><div style=\"break-before: page\"><input><input type=\"checkbox\"></div>"
