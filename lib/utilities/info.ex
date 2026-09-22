@@ -46,7 +46,8 @@ defmodule NativeElixirPdfUtilities.Info do
 
   Omitted fields remain unchanged and `nil` removes a field. Text values must
   be valid UTF-8. Dates accept `Date`, `NaiveDateTime`, `DateTime`, ISO 8601
-  strings, and valid PDF date strings.
+  strings, and valid PDF date strings. Dates must be representable with a
+  four-digit year from 0000 to 9999; negative years return a diagnostic.
   """
   @spec put(binary(), map() | keyword()) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}

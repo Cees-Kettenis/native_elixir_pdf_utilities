@@ -40,7 +40,9 @@ File.write!("updated.pdf", updated_pdf)
 Pass a map or keyword list using the fields above. Omitted fields stay
 unchanged; `nil` removes a field. Keywords accept a string or a list of strings.
 Text must be valid UTF-8. Dates accept `Date`, `NaiveDateTime`, `DateTime`,
-ISO 8601 strings, or valid PDF date strings.
+ISO 8601 strings, or valid PDF date strings. Dates must fit the supported PDF
+representation with a four-digit year from 0000 to 9999. Negative years return
+a diagnostic before any metadata is written.
 
 The update preserves page content and unrelated information. It appends a
 revision, so old metadata remains in the file's earlier bytes. This is not

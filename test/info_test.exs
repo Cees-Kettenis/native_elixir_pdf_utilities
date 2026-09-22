@@ -243,6 +243,66 @@ defmodule NativeElixirPdfUtilities.InfoTest do
     assert {:ok, %{modification_date: ~N[2026-12-01 00:00:00]}} = Info.get(with_pdf_date)
   end
 
+  test "rejects negative-year calendar dates before updating metadata" do
+    original = pdf(base_objects())
+
+    for value <- [~D[-0001-01-01], ~N[-0001-01-01 12:34:56], ~U[-0001-01-01 12:34:56Z]],
+        field <- [:creation_date, :modification_date] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Info.put(original, [{field, value}])
+      assert diagnostic.reason == :invalid_pdf_input
+      assert diagnostic.stage == :info
+      assert diagnostic.operation == :put_info
+      assert diagnostic.module == Info
+      assert diagnostic.message =~ Atom.to_string(field)
+      assert diagnostic.message =~ "0000 to 9999"
+    end
+  end
+
+  test "rejects negative-year ISO date strings before updating metadata" do
+    original = pdf(base_objects())
+
+    for value <- [
+          "-0001-01-01",
+          "-0001-01-01T12:34:56",
+          "-0001-01-01T12:34:56Z",
+          "-0001-01-01T12:34:56+08:30"
+        ],
+        field <- [:creation_date, :modification_date] do
+      assert {:error,
+              {:invalid_pdf_input,
+               %{stage: :info, operation: :put_info, module: Info, message: message}}} =
+               Info.put(original, %{field => value})
+
+      assert message =~ Atom.to_string(field)
+      assert message =~ "0000 to 9999"
+    end
+  end
+
+  test "supported calendar and string dates round trip at year boundaries" do
+    original = pdf(base_objects())
+
+    for {value, expected} <- [
+          {~D[0000-01-01], ~N[0000-01-01 00:00:00]},
+          {~D[9999-12-31], ~N[9999-12-31 00:00:00]},
+          {~D[2024-02-29], ~N[2024-02-29 00:00:00]},
+          {~N[0000-01-01 00:00:00], ~N[0000-01-01 00:00:00]},
+          {~N[9999-12-31 23:59:59], ~N[9999-12-31 23:59:59]},
+          {~U[0000-01-01 00:00:00Z], ~N[0000-01-01 00:00:00]},
+          {~U[9999-12-31 23:59:59Z], ~N[9999-12-31 23:59:59]},
+          {"0000-01-01", ~N[0000-01-01 00:00:00]},
+          {"9999-12-31T23:59:59", ~N[9999-12-31 23:59:59]},
+          {"0000-01-01T00:00:00+08:30", ~N[0000-01-01 00:00:00]},
+          {"9999-12-31T12:34:56-04:00", ~N[9999-12-31 12:34:56]},
+          {"D:0000", ~N[0000-01-01 00:00:00]},
+          {"D:99991231235959Z", ~N[9999-12-31 23:59:59]}
+        ] do
+      assert {:ok, updated} = Info.put(original, creation_date: value, modification_date: value)
+      assert {:ok, info} = Info.get(updated)
+      assert info.creation_date == expected
+      assert info.modification_date == expected
+    end
+  end
+
   test "appends information updates to supported xref and object-stream inputs" do
     for fixture <- [
           "classic-xref.pdf",

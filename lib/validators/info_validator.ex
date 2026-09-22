@@ -346,7 +346,13 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
               end
 
             :error ->
-              {:halt, error(:info, "PDF information field #{field} has an invalid value")}
+              message =
+                if field in @date_fields,
+                  do:
+                    "PDF information field #{field} requires a valid date with a year from 0000 to 9999",
+                  else: "PDF information field #{field} has an invalid value"
+
+              {:halt, error(:info, message)}
           end
         end)
         |> case do
@@ -396,9 +402,9 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   end
 
   defp normalized_date_value(value) do
-    case InfoCodec.normalize_date(value) do
-      {:ok, value} -> {:ok, InfoCodec.encode_text(value), byte_size(value)}
-      :error -> :error
+    with {:ok, value} <- InfoCodec.normalize_date(value),
+         {:ok, _date_time, _components} <- InfoCodec.parse_date(value) do
+      {:ok, InfoCodec.encode_text(value), byte_size(value)}
     end
   end
 
