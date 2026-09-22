@@ -168,8 +168,20 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
       end
     end)
     |> case do
-      {:ok, placements} -> {:ok, Enum.reverse(placements)}
-      failure -> failure
+      {:ok, placements} ->
+        ordered =
+          placements
+          |> Enum.group_by(& &1.widget.page)
+          |> Enum.sort_by(&elem(&1, 0))
+          |> Enum.flat_map(fn {_page, placements} ->
+            order = hd(placements).annots |> Enum.with_index() |> Map.new()
+            Enum.sort_by(placements, &Map.fetch!(order, &1.widget.ref))
+          end)
+
+        {:ok, ordered}
+
+      failure ->
+        failure
     end
   end
 

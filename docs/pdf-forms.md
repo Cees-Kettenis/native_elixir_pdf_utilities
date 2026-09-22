@@ -119,6 +119,8 @@ not depend on a viewer regenerating them.
 `Forms.flatten(pdf)` flattens all supported fields. `fields: []` selects none.
 Flattening paints current appearances into page content, removes selected
 widgets and prunes their field tree. Remaining fields stay interactive.
+Selected widgets are painted in each page's annotation order, preserving their
+stacking relative to one another even when the field tree has a different order.
 Appearance transforms, page rotation and existing resource names are preserved.
 Flattening preserves screen visibility. Widgets marked Hidden or NoView are
 removed without painting their appearances, including fields whose widgets

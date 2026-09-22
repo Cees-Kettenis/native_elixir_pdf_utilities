@@ -570,6 +570,172 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
     end
   end
 
+  test "flatten follows each page's annotation order across nested fields and repeated widgets" do
+    pdf = overlapping_widgets_pdf(false)
+    {:ok, context} = Reader.read_validated(pdf)
+    {:ok, form} = FormValidator.inspect_document(context)
+
+    for selected <- [:all, ["group.blue", "group.red"], ["group.red"], ["group.blue"]] do
+      fields = Enum.filter(form.fields, &(selected == :all or &1.name in selected))
+      widgets = fields |> Enum.flat_map(& &1.widgets) |> Map.new(&{&1.ref, &1})
+
+      assert {:ok, placements} = FormValidator.prepare_flatten(context, fields)
+
+      expected =
+        Enum.flat_map(context.pages, fn page ->
+          {:ok, annots} = Reader.resolve(context.document, page.dictionary["Annots"])
+          Enum.filter(annots, &Map.has_key?(widgets, &1))
+        end)
+
+      assert Enum.map(placements, & &1.widget.ref) == expected
+      assert {:ok, flat} = Forms.flatten(pdf, fields: selected)
+      {:ok, flattened} = Reader.read_validated(flat)
+
+      for {page, original} <- Enum.zip(flattened.pages, context.pages) do
+        {:ok, annots} = Reader.resolve(context.document, original.dictionary["Annots"])
+        assert page.dictionary["Annots"] == Enum.reject(annots, &Map.has_key?(widgets, &1))
+        {:ok, resources} = Reader.dictionary(flattened.document, page.resources)
+        {:ok, xobjects} = Reader.dictionary(flattened.document, resources["XObject"])
+
+        {:ok, contents} =
+          NativeElixirPdfUtilities.Validators.PdfValidator.content_references(
+            flattened.document,
+            page.dictionary
+          )
+
+        {:ok, commands} = Reader.decoded_stream(flattened.document, List.last(contents))
+
+        painted =
+          Regex.scan(~r/\/(NEPUForm\d+) Do/, commands, capture: :all_but_first)
+          |> Enum.map(fn [name] -> Map.fetch!(xobjects, name) end)
+
+        expected =
+          annots
+          |> Enum.filter(&Map.has_key?(widgets, &1))
+          |> Enum.map(&widgets[&1].ap["N"])
+
+        assert painted == expected
+      end
+    end
+  end
+
+  @tag :browser_parity
+  test "flattening preserves pixels when overlapping widgets disagree with field-tree order" do
+    alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
+
+    for hidden <- [false, true] do
+      source = overlapping_widgets_pdf(hidden)
+      assert {:ok, flat} = Forms.flatten(source)
+
+      stats =
+        PdfVisualCompare.pdf_visual_stats!(source, flat,
+          artifact_dir: "tmp/forms_visual/annotation-order-#{hidden}"
+        )
+
+      assert length(stats) == 2
+      assert Enum.all?(stats, &(&1.changed_pixels == 0))
+    end
+
+    source = overlapping_widgets_pdf(false)
+    values = %{"group.red" => "RED", "group.blue" => "BLUE"}
+    assert {:ok, filled} = Forms.fill(source, values)
+    assert {:ok, flat} = Forms.fill(source, values, flatten: true)
+
+    for stats <-
+          PdfVisualCompare.pdf_visual_stats!(filled, flat,
+            artifact_dir: "tmp/forms_visual/annotation-order-filled"
+          ) do
+      assert stats.changed_pixels == 0
+    end
+  end
+
+  defp overlapping_widgets_pdf(hidden) do
+    {:ok, pdf} = PdfWriter.render(List.duplicate(%{size: {100.0, 100.0}, boxes: []}, 2))
+    {:ok, context} = Reader.read_validated(pdf)
+    next = context.document.trailer["Size"]
+    ref = fn offset -> {:ref, {next + offset, 0}} end
+    {catalog_id, catalog_gen} = context.catalog_ref
+
+    fields = [
+      {next, 0, {:value, %{"T" => {:string, "group"}, "Kids" => [ref.(1), ref.(2)]}}},
+      {next + 1, 0,
+       {:value,
+        %{
+          "Parent" => ref.(0),
+          "FT" => {:name, "Tx"},
+          "T" => {:string, "red"},
+          "Kids" => [ref.(3), ref.(4)]
+        }}},
+      {next + 2, 0,
+       {:value,
+        %{
+          "Parent" => ref.(0),
+          "FT" => {:name, "Tx"},
+          "T" => {:string, "blue"},
+          "Kids" => [ref.(5), ref.(6)]
+        }}}
+    ]
+
+    widgets =
+      for {offset, parent, appearance} <- [{3, 1, 7}, {4, 1, 7}, {5, 2, 8}, {6, 2, 8}] do
+        {next + offset, 0,
+         {:value,
+          %{
+            "Type" => {:name, "Annot"},
+            "Subtype" => {:name, "Widget"},
+            "Parent" => ref.(parent),
+            "Rect" => [10, 10, 60, 60],
+            "F" => if(hidden and offset == 3, do: 2, else: 4),
+            "AP" => %{"N" => ref.(appearance)}
+          }}}
+      end
+
+    appearances =
+      for {offset, color} <- [{7, "1 0 0"}, {8, "0 0 1"}] do
+        {next + offset, 0,
+         {:stream,
+          %{
+            "Type" => {:name, "XObject"},
+            "Subtype" => {:name, "Form"},
+            "BBox" => [0, 0, 50, 50],
+            "Resources" => %{}
+          }, "#{color} rg 0 0 50 50 re f"}}
+      end
+
+    # The first page reverses field order and interleaves an unrelated annotation.
+    # The second page uses an indirect Annots array in the opposite order.
+    pages =
+      Enum.zip(context.pages, [[ref.(5), ref.(9), ref.(3)], ref.(10)])
+      |> Enum.map(fn {page, annots} ->
+        {id, gen} = page.ref
+        {id, gen, {:value, Map.put(page.dictionary, "Annots", annots)}}
+      end)
+
+    {:ok, pdf} =
+      IncrementalWriter.write(
+        context,
+        fields ++
+          widgets ++
+          appearances ++
+          pages ++
+          [
+            {next + 9, 0,
+             {:value,
+              %{
+                "Type" => {:name, "Annot"},
+                "Subtype" => {:name, "Text"},
+                "Rect" => [80, 80, 90, 90],
+                "Contents" => {:string, "Keep me"}
+              }}},
+            {next + 10, 0, {:value, [ref.(4), ref.(6)]}},
+            {catalog_id, catalog_gen,
+             {:value, Map.put(context.catalog, "AcroForm", %{"Fields" => [ref.(0)]})}}
+          ]
+      )
+
+    pdf
+  end
+
   defp external_pdf(field \\ %{}, widget \\ %{}, form \\ %{}) do
     {:ok, pdf} = PdfWriter.render([%{size: {200.0, 200.0}, boxes: []}])
     {:ok, context} = Reader.read_validated(pdf)
