@@ -2,6 +2,159 @@ defmodule NativeElixirPdfUtilities.JpegValidatorTest do
   use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.Validators.JpegValidator
   alias NativeElixirPdfUtilities.HtmlToPdf
+  alias NativeElixirPdfUtilities.TestSupport.JpegFixture
+  import NativeElixirPdfUtilities.TestSupport.JpegFixture, only: [segment: 2]
+
+  test "rejects missing, malformed and empty scans through the rendering API" do
+    [tables, _scan] = :binary.split(scan([1]), <<255, 218>>)
+    header = segment(218, <<1, 1, 0, 0, 63, 0>>)
+    prefix = <<255, 216>> <> frame([1]) <> tables
+
+    malformed = [
+      jpeg(frame([1])),
+      jpeg(header <> <<63>>),
+      prefix <> header,
+      prefix <> header <> <<63>>,
+      prefix <> header <> <<63, 255>>,
+      prefix <> header <> <<255, 217>>,
+      prefix <> header <> <<255, 255, 217>>,
+      prefix <> <<255, 218, 0, 1>>,
+      prefix <> <<255, 218, 0, 20, 1, 1, 0, 0, 63, 0, 63, 255, 217>>,
+      jpeg(frame([1]) <> tables <> segment(218, <<0, 0, 63, 0>>) <> <<63>>),
+      jpeg(frame([1]) <> tables <> segment(218, <<1, 1, 0, 0, 63>>) <> <<63>>),
+      jpeg(frame([1]) <> tables <> segment(218, <<1, 9, 0, 0, 63, 0>>) <> <<63>>),
+      jpeg(frame([1]) <> tables <> segment(218, <<2, 1, 0, 1, 0, 0, 63, 0>>) <> <<63>>),
+      jpeg(frame([1]) <> tables <> segment(218, <<1, 1, 64, 0, 63, 0>>) <> <<63>>),
+      jpeg(frame([1]) <> tables <> segment(218, <<1, 1, 1, 0, 63, 0>>) <> <<63>>),
+      jpeg(frame([1]) <> tables <> segment(218, <<1, 1, 0, 1, 63, 0>>) <> <<63>>),
+      jpeg(frame([1]) <> tables <> segment(218, <<1, 1, 0, 0, 63, 1>>) <> <<63>>),
+      jpeg(frame([1]) <> header <> <<63>>),
+      jpeg(frame([1, 2, 3]) <> tables <> header <> <<63>>),
+      jpeg(frame([1]) <> tables <> header <> <<63>> <> header <> <<63>>),
+      jpeg(<<255, 216>> <> frame([1]) <> scan([1])),
+      jpeg(<<255, 208>> <> frame([1]) <> scan([1]))
+    ]
+
+    for data <- malformed do
+      assert :error = JpegValidator.metadata(data)
+
+      assert {:error, {:invalid_document, diagnostic}} =
+               HtmlToPdf.render("<img src='broken.jpg'>",
+                 assets: %{"broken.jpg" => {:bytes, data}}
+               )
+
+      assert diagnostic.reason == :invalid_document
+      assert diagnostic.stage == :style
+      assert diagnostic.module == HtmlToPdf
+      assert diagnostic.operation == :render
+      assert diagnostic.message =~ "image"
+    end
+  end
+
+  test "requires a complete marker stream for baseline and progressive JPEGs" do
+    for data <- [
+          JpegFixture.baseline(2, 1),
+          fixture("progressive_rgb.jpg"),
+          fixture("restart_rgb.jpg")
+        ] do
+      assert {:ok, _} = JpegValidator.metadata(data)
+      assert {:ok, _} = HtmlToPdf.render("<img src='x'>", assets: %{"x" => {:bytes, data}})
+
+      for size <- 0..(byte_size(data) - 1) do
+        assert :error = JpegValidator.metadata(binary_part(data, 0, size)),
+               "accepted a JPEG truncated to #{size} of #{byte_size(data)} bytes"
+      end
+    end
+  end
+
+  test "validates table lengths, identifiers and Huffman code space" do
+    [tables, _] = :binary.split(scan([1]), <<255, 218>>)
+    [quantization, huffman] = :binary.split(tables, <<255, 196>>)
+    huffman = <<255, 196>> <> huffman
+    scan = segment(218, <<1, 1, 0, 0, 63, 0>>) <> <<63>>
+
+    for invalid_table <- [
+          segment(219, ""),
+          segment(219, <<0, 1>>),
+          segment(219, <<32>> <> :binary.copy(<<1>>, 64)),
+          segment(219, <<4>> <> :binary.copy(<<1>>, 64)),
+          segment(219, <<0>> <> :binary.copy(<<0>>, 64)),
+          segment(196, ""),
+          segment(196, <<0, 1>>),
+          segment(196, <<32, 1, 0::120, 0>>),
+          segment(196, <<4, 1, 0::120, 0>>),
+          segment(196, <<0, 0::128>>),
+          segment(196, <<0, 2, 0::120, 0, 1>>),
+          segment(196, <<0, 1, 0::120>>),
+          segment(196, <<0, 1, 0::120, 12>>),
+          segment(196, <<16, 1, 0::120, 11>>),
+          segment(221, <<1>>)
+        ] do
+      assert :error = JpegValidator.metadata(jpeg(frame([1]) <> tables <> invalid_table <> scan))
+    end
+
+    for incomplete_tables <- [quantization, huffman] do
+      assert :error = JpegValidator.metadata(jpeg(frame([1]) <> incomplete_tables <> scan))
+    end
+
+    wide_quantization = segment(219, <<16>> <> :binary.copy(<<1::16>>, 64))
+
+    assert :error =
+             JpegValidator.metadata(jpeg(frame([1]) <> wide_quantization <> huffman <> scan))
+
+    progressive = segment(194, <<8, 1::16, 1::16, 1, 1, 17, 0>>)
+    dc_scan = segment(218, <<1, 1, 0, 0, 0, 0>>) <> <<127>>
+
+    assert {:ok, _} =
+             JpegValidator.metadata(jpeg(progressive <> wide_quantization <> huffman <> dc_scan))
+  end
+
+  test "progressive scan parameters and refinements must agree with earlier scans" do
+    [tables, _] = :binary.split(scan([1]), <<255, 218>>)
+    frame = segment(194, <<8, 1::16, 1::16, 1, 1, 17, 0>>)
+    initial = segment(218, <<1, 1, 0, 0, 0, 1>>) <> <<127>>
+    refinement = segment(218, <<1, 1, 0, 0, 0, 16>>) <> <<127>>
+    ac = segment(218, <<1, 1, 0, 1, 63, 0>>) <> <<127>>
+    assert {:ok, _} = JpegValidator.metadata(jpeg(frame <> tables <> initial <> refinement <> ac))
+
+    for scans <- [
+          refinement,
+          ac,
+          initial <> initial,
+          initial <> segment(218, <<1, 1, 0, 1, 63, 16>>) <> <<127>>,
+          segment(218, <<1, 1, 0, 0, 1, 0>>) <> <<127>>,
+          segment(218, <<1, 1, 0, 0, 0, 14>>) <> <<127>>,
+          segment(218, <<1, 1, 0, 0, 0, 32>>) <> <<127>>,
+          initial <> segment(218, <<1, 1, 0, 64, 64, 0>>) <> <<127>>,
+          initial <> segment(218, <<1, 1, 0, 2, 1, 0>>) <> <<127>>
+        ] do
+      assert :error = JpegValidator.metadata(jpeg(frame <> tables <> scans))
+    end
+  end
+
+  test "scan data handles byte stuffing, marker fill and ordered restart markers" do
+    [prefix, _] = :binary.split(JpegFixture.baseline(16, 8, 1), <<255, 218>>)
+    scan = segment(218, <<1, 1, 0, 0, 63, 0>>)
+    restart = segment(221, <<1::16>>)
+
+    for entropy <- [<<255, 0>>, <<63, 255, 255>>, <<63>>] do
+      assert {:ok, _} = JpegValidator.metadata(prefix <> scan <> entropy <> <<255, 217>>)
+    end
+
+    assert {:ok, _} =
+             JpegValidator.metadata(prefix <> restart <> scan <> <<63, 255, 208, 63, 255, 217>>)
+
+    for {interval, entropy} <- [
+          {"", <<63, 255, 208, 63>>},
+          {restart, <<63, 255, 209, 63>>},
+          {restart, <<255, 208, 63>>},
+          {restart, <<63, 255, 208>>},
+          {restart, <<63, 255, 208, 255, 209, 63>>}
+        ] do
+      assert :error =
+               JpegValidator.metadata(prefix <> interval <> scan <> entropy <> <<255, 217>>)
+    end
+  end
 
   test "preserves supported color conventions and rejects ambiguous frames" do
     for {ids, adobe, convention} <- [
@@ -16,14 +169,17 @@ defmodule NativeElixirPdfUtilities.JpegValidatorTest do
           {[1, 2, 3, 4], 0, :adobe_cmyk},
           {[1, 2, 3, 4], 2, :ycck}
         ] do
-      data = jpeg(frame(ids) <> adobe(adobe))
+      data = jpeg(frame(ids) <> adobe(adobe) <> scan(ids))
       assert {:ok, %{color_transform: ^convention}} = JpegValidator.metadata(data)
       assert {:ok, pdf} = HtmlToPdf.render("<img src='x'>", assets: %{"x" => {:bytes, data}})
       if convention in [:rgb, :cmyk, :adobe_cmyk], do: assert(pdf =~ "/ColorTransform 0")
       if convention in [:ycbcr, :ycck], do: assert(pdf =~ "/ColorTransform 1")
     end
 
-    assert {:ok, _} = JpegValidator.metadata(jpeg(frame([1, 2, 3]) <> adobe(1) <> adobe(1)))
+    assert {:ok, _} =
+             JpegValidator.metadata(
+               jpeg(frame([1, 2, 3]) <> adobe(1) <> adobe(1) <> scan([1, 2, 3]))
+             )
 
     for body <- [
           frame([1, 2, 3]) <> adobe(0) <> adobe(1),
@@ -41,7 +197,7 @@ defmodule NativeElixirPdfUtilities.JpegValidatorTest do
           frame([1, 2, 3]) <> segment(238, "Adobe"),
           segment(193, <<8, 1::16, 1::16, 3, 1, 17, 0, 2, 17, 0, 3, 17, 0>>)
         ] do
-      data = jpeg(body)
+      data = jpeg(body <> scan([1, 2, 3]))
       assert :error = JpegValidator.metadata(data)
 
       assert {:error, {:invalid_document, %{operation: :render, stage: :style}}} =
@@ -99,8 +255,15 @@ defmodule NativeElixirPdfUtilities.JpegValidatorTest do
     end
   end
 
+  defp fixture(name), do: File.read!(Path.join([__DIR__, "fixtures", "html_to_pdf", name]))
+
   defp jpeg(body), do: <<255, 216>> <> body <> <<255, 217>>
-  defp segment(marker, bytes), do: <<255, marker, byte_size(bytes) + 2::16, bytes::binary>>
+
+  defp scan(ids) do
+    data = JpegFixture.baseline(1, 1, ids)
+    offset = 2 + byte_size(frame(ids))
+    binary_part(data, offset, byte_size(data) - offset - 2)
+  end
 
   defp adobe(transform) do
     case transform do

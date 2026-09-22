@@ -958,7 +958,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
             y: 6.0,
             width: 10.0,
             height: 20.0,
-            image: image_fixture(:jpeg, jpeg_fixture(1, 1), 1, 1, :device_gray)
+            image: image_fixture(:jpeg, jpeg_fixture(1, 1, 1), 1, 1, :device_gray)
           },
           %{
             type: :image,
@@ -966,7 +966,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
             y: 30.0,
             width: 15.0,
             height: 10.0,
-            image: image_fixture(:jpeg, jpeg_fixture(2, 1), 2, 1, :device_cmyk)
+            image: image_fixture(:jpeg, jpeg_fixture(2, 1, 4), 2, 1, :device_cmyk)
           }
         ]
       }
@@ -1379,8 +1379,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     end
   end
 
-  defp jpeg_fixture(width, height) do
-    <<255, 216, 255, 224, 0, 16, "JFIF", 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 255, 192, 0, 17, 8,
-      height::16, width::16, 3, 1, 17, 0, 2, 17, 0, 3, 17, 0, 255, 217>>
-  end
+  defp jpeg_fixture(width, height, components \\ 3),
+    do: NativeElixirPdfUtilities.TestSupport.JpegFixture.baseline(width, height, components)
 end

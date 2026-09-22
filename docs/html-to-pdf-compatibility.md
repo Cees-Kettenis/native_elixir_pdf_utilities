@@ -204,6 +204,20 @@ For PDF viewer bookmarks, see [outlines from headings](html-to-pdf-examples.md#c
 See [Resource limits](resource-limits.md) for configurable size limits and
 [Browser rendering](html-to-pdf-browser-parity-coverage.md) for visual tolerances.
 
+### JPEG validation
+
+The renderer accepts 8-bit baseline and progressive JPEGs. Before embedding an
+asset, `JpegValidator` checks segment bounds, quantization and Huffman tables,
+scan component selectors and parameters, progressive scan order, restart marker
+order, and end-of-image termination. Every scan must contain entropy-coded
+bytes, and every frame component must have an initial scan. Header-only images,
+empty scans, and truncated marker streams return an `:invalid_document`
+diagnostic at the `:style` stage through `HtmlToPdf.render/2`.
+
+These checks validate the encoded structure without decoding the Huffman-coded
+pixels. They do not prove that the entropy data supplies every declared pixel.
+PDF readers decode the original JPEG bytes through the DCTDecode filter.
+
 ### JPEG color conventions
 
 JPEG metadata preserves grayscale, RGB, YCbCr, ordinary CMYK, Adobe CMYK, and

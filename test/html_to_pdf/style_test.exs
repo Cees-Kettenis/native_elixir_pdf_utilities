@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
   use ExUnit.Case
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
+  alias NativeElixirPdfUtilities.TestSupport.JpegFixture
 
   test "oversized CSS numbers return diagnostics in every numeric value family" do
     alias NativeElixirPdfUtilities.HtmlToPdf
@@ -49,9 +50,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     frame = <<255, 192, 0, 20, 8, 1::16, 1::16, 4, 1, 17, 0, 2, 17, 0, 3, 17, 0, 4, 17, 0>>
     adobe = <<255, 238, 0, 14, "Adobe", 100::16, 0::16, 0::16, 0>>
 
+    <<255, 216, ^frame::binary, tail::binary>> = JpegFixture.baseline(1, 1, 4)
+
     for body <- [adobe <> frame, frame <> adobe, <<255>> <> adobe <> frame] do
       assert {:ok, %{inverted_cmyk: true}} =
-               HtmlValidator.jpeg_metadata(<<255, 216>> <> body <> <<255, 217>>)
+               HtmlValidator.jpeg_metadata(<<255, 216>> <> body <> tail)
     end
 
     assert HtmlValidator.jpeg_metadata("") == :error
@@ -4215,19 +4218,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       png_chunk("IEND", "")
   end
 
-  defp jpeg_fixture(width, height) do
-    jpeg_fixture(width, height, 3)
-  end
-
-  defp jpeg_fixture(width, height, components) do
-    descriptors = for id <- 1..components, into: <<>>, do: <<id, 17, 0>>
-
-    <<255, 216, 255, 192, 8 + components * 3::16, 8, height::16, width::16, components,
-      descriptors::binary, 255, 217>>
-  end
+  defp jpeg_fixture(width, height, components \\ 3),
+    do: JpegFixture.baseline(width, height, components)
 
   defp restart_jpeg_fixture do
-    <<255, 216, 255, 208, 255, 192, 0, 17, 8, 1::16, 1::16, 3, 1, 17, 0, 2, 17, 0, 3, 17, 0, 255,
-      217>>
+    data = JpegFixture.baseline(16, 8, 1)
+    [header, _scan] = :binary.split(data, <<255, 218>>)
+    scan = JpegFixture.segment(218, <<1, 1, 0, 0, 63, 0>>)
+    header <> JpegFixture.segment(221, <<1::16>>) <> scan <> <<63, 255, 208, 63, 255, 217>>
   end
 end
