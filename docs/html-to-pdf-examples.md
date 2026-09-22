@@ -127,7 +127,7 @@ margin for them:
 
 Use `:first`, `:odd`, `:even`, and `:default` variants when pages need
 different headers or footers. A `false` or `nil` variant disables that template on the
-matching page. To number an existing PDF, use [Stamp.page_numbers/2](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-stamping.md#page-numbers).
+matching page. To number an existing PDF, use [Stamp.page_numbers/2](pdf-stamping.md#page-numbers).
 
 ## Load local images
 
@@ -254,7 +254,8 @@ automatic detection in existing PDFs, and preservation behavior.
 
 ## Render static form values
 
-Form controls become visible, non-editable PDF content:
+Pass `forms: :static` to make form controls visible, non-editable PDF content.
+The default creates interactive fields; see [PDF forms](pdf-forms.md).
 
 ```elixir
 html = """
@@ -267,7 +268,7 @@ html = """
 </div>
 """
 
-{:ok, pdf} = HtmlToPdf.render(html)
+{:ok, pdf} = HtmlToPdf.render(html, forms: :static)
 ```
 
 ## Handle an error

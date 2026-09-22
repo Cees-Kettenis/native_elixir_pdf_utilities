@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.19.0 - 2026-09-22
+
+### Breaking changes
+
+- SVG validation now rejects DTD/entity declarations, embedded image elements,
+  external references, and escaped CSS resource syntax before conversion.
+  Remove `DOCTYPE` declarations from exported SVGs and use self-contained
+  assets. New SVG structure/output and PNG working-buffer limits can reject
+  workloads accepted by earlier releases.
+- Merge preparation failures retain their original reason, stage, and message
+  instead of being rewritten as `:invalid_pdf_input`. Callers matching that
+  catch-all reason should also handle the underlying reasons, including
+  `:resource_limit_exceeded`.
+
+### Added
+
+- Support for every legal static PNG color type and sample depth, including
+  packed grayscale and palette samples, 16-bit color and alpha, and Adam7
+  interlacing. PDF images preserve 16-bit sample precision. Animated PNGs use
+  their default image only.
+- SVG validation before Resvg conversion, with XML location diagnostics and
+  configurable limits for nodes, nesting, path data, filter primitives,
+  references, and converted output bytes. Converter failures retain their
+  explanation in the shared diagnostic contract.
+- A configurable PNG working-buffer allowance checked before decompression,
+  alongside sample-depth-aware decoded-image budgets.
+- An SVG-to-PNG form and OpenAPI endpoint in the development testing website,
+  with file upload, pasted SVG XML, optional dimensions, and PNG download.
+- PNG format browser-parity coverage, image fixture generation, and an image
+  benchmark script.
+
+### Fixed
+
+- Preserved small and high-precision decimal values when merging, selecting,
+  rotating, and splitting PDFs instead of rounding them during rebuilding.
+- Returned text-extraction diagnostics for arithmetic overflow in composed
+  transforms and text positioning instead of raising exceptions.
+- Rejected HTML radio groups mixing enabled and disabled controls in
+  interactive mode, since PDF read-only status applies to the whole field.
+  Static rendering remains available for these groups.
+- Rejected malformed JPEG tables, scan selectors and parameters, progressive
+  scan sequences, restart marker order, missing component scans, empty scans,
+  and truncated image termination before embedding.
+- Rejected existing FIFOs before opening file inputs, while retaining checks
+  on the opened handle. Local paths must still be trusted; concurrent FIFO
+  substitution cannot be prevented by the portable file API.
+- Preserved page annotation order when flattening overlapping form widgets,
+  even when the field-tree order differs.
+- Rejected metadata dates that cannot be represented with a four-digit PDF
+  year, including negative-year date structs and ISO strings.
+- Preserved merge reader and preparation diagnostics and identified the
+  failing input when the diagnostic had no source.
+
 ## 0.18.0 - 2026-09-18
 
 ### Breaking changes

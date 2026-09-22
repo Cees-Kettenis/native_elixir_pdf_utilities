@@ -30,10 +30,9 @@ available:
 
 Browser comparisons require matching installed fonts. Native system-font
 selection follows Fontconfig on Linux, while Chromium has separate default
-family preferences. The matrix image installs Liberation faces and configures
-`sans-serif`, `serif`, and `monospace` to use Liberation Sans, Serif, and Mono.
-Its build checks those aliases with `fc-match`. Local parity runs should use
-the same aliases, or inspect both PDFs' embedded fonts when a comparison fails.
+family preferences. The matrix image installs DejaVu and Liberation fonts
+without overriding Fontconfig aliases. Use `fc-match` to inspect local aliases
+and compare both PDFs' embedded fonts when a comparison fails.
 
 Before a maintainer considers a change PR-ready, run the complete supported
 Elixir matrix:
@@ -88,7 +87,8 @@ The local app under `dev/manual_web` provides browser forms for rendering HTML,
 merging, transforming and splitting PDFs, adding stamps, watermarks, page
 numbers and PDF overlays, inspecting and updating outlines, extracting text,
 inspecting and updating document information, filling and flattening forms,
-embedding and listing attachments, and tokenizing PDF syntax. It
+embedding and listing attachments, converting uploaded or pasted SVG to PNG,
+and tokenizing PDF syntax. It
 also publishes its OpenAPI document at
 `http://127.0.0.1:4001/openapi.json`.
 

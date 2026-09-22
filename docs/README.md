@@ -14,6 +14,8 @@ Choose the task you want to perform.
 | Select, reorder, delete, rotate, or split pages | [Page transforms](pdf-page-transforms.md) |
 | Add or read bookmarks | [Outlines](pdf-outlines.md) |
 | Add a watermark, stamp, letterhead, or page numbers | [Stamping](pdf-stamping.md) |
+| Inspect, fill, or flatten form fields | [PDF forms](pdf-forms.md) |
+| Embed files or list attachments | [PDF attachments](pdf-attachments.md) |
 | Check whether a PDF can be read | [PDF validation](pdf-validation.md) |
 | Use PNG/SVG assets and handle image failures | [Image processing](image-processing.md) |
 | Handle an error | [Diagnostics](diagnostics.md) |

@@ -174,7 +174,7 @@ See [metadata updates](pdf-information.md#updating-information) and [bookmarks](
 The text limit counts one text/watermark input or all generated page-number
 strings. Overlay bytes count each content-stream occurrence and joining
 newline across distinct source pages; reusing an overlay page does not charge
-its content again. See [Stamping](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-stamping.md).
+its content again. See [Stamping](pdf-stamping.md).
 
 ## Merging and splitting
 

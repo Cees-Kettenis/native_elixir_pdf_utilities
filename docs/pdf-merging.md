@@ -29,13 +29,16 @@ copied annotations and may not work. See [bookmark behavior](pdf-outlines.md#mer
 
 Merging creates a new PDF 1.7 document. It can retain unused source objects,
 so it is not a way to remove confidential content. Use
-[stamping](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-stamping.md) to add content while preserving a target document's
+[stamping](pdf-stamping.md) to add content while preserving a target document's
 metadata and form configuration.
 
 ## Errors and limits
 
 An empty list returns `:empty_pdf_list`. Encrypted, malformed, or unsupported
-inputs return a [diagnostic](diagnostics.md). No partial merged PDF is returned.
+inputs return a [diagnostic](diagnostics.md). Reader and preparation failures
+retain their original reason, stage, and message, with `:operation` set to
+`:merge`. If the failure has no source, `:source` identifies the one-based input,
+such as `"merge input 2"`. No partial merged PDF is returned.
 
 See [supported PDF inputs](pdf-reader.md#supported-inputs) and
 [merge limits](resource-limits.md#merging-and-splitting).

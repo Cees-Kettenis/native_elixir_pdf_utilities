@@ -9,7 +9,7 @@ restrictions.
 
 | Area                                                                         | What you can use                                                                                              |
 | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| [HTML and text](html-to-pdf-compatibility.md#html-support)                    | Headings, paragraphs, inline emphasis, lists, links, character references, and static form controls           |
+| [HTML and text](html-to-pdf-compatibility.md#html-support)                    | Headings, paragraphs, inline emphasis, lists, links, character references, and supported form controls           |
 | [CSS](html-to-pdf-compatibility.md#css-support)                               | Supported selectors, the cascade, custom properties, generated content, colors, borders, and spacing          |
 | [Sizing and layout](html-to-pdf-compatibility.md#css-support)                 | Block and inline layout, flexbox, grid, size constraints, text wrapping, and relative or absolute positioning |
 | [Tables](html-to-pdf-compatibility.md#tables)                                 | Column sizing, spanning cells, nested tables, repeated headers, and separate or collapsed borders             |
@@ -17,8 +17,9 @@ restrictions.
 | [Pages](html-to-pdf-compatibility.md#pagination)                              | Page sizes and margins, automatic and explicit breaks, running headers and footers, and page numbers          |
 | [Fonts](html-to-pdf-compatibility.md#fonts-and-text)                          | Bundled DejaVu Sans, registered TrueType fonts, optional system-font discovery, and glyph fallback            |
 
-This subset does not include JavaScript, interactive PDF form fields, or full
-browser layout and typography. See [Known limits](html-to-pdf-compatibility.md#known-limits)
+Supported controls create interactive AcroForm fields by default; use
+`forms: :static` for artwork only. See [PDF forms](pdf-forms.md).
+This subset does not include JavaScript or full browser layout and typography. See [Known limits](html-to-pdf-compatibility.md#known-limits)
 before adapting a browser template. The renderer reports unsupported HTML and
 CSS through the [diagnostic contract](diagnostics.md).
 
@@ -29,13 +30,18 @@ a ceiling of **3% differing pixels** or less. A pixel differs when at least one
 RGB channel differs by more than 12 out of 255. Each fixture also checks the
 page count and its existing average channel-delta limit.
 
-The comparison uses the installed fonts without forced font aliases. Results
-vary with the operating system, installed fonts, and browser version; the
+The comparison uses the installed fonts without forced font aliases. The
+quality-matrix image installs DejaVu and Liberation fonts. Results vary with
+the operating system, installed fonts, and browser version; the
 threshold applies to the tested fixtures, not every document or environment.
 
 These percentages describe visual comparisons, not a percentage of browser
 features supported. Start with the [rendering examples](html-to-pdf-examples.md)
 for working templates.
+
+The current suite also covers all supported PNG color types and sample depths,
+including Adam7 interlacing, in the `png_formats` fixture. The historical table
+below is not an exhaustive list of current fixtures.
 
 ## Measured comparisons
 

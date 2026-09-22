@@ -71,7 +71,7 @@ Each size entry contains:
 | `:media_box` | `%{left: ..., bottom: ..., right: ..., top: ...}` before UserUnit scaling |
 
 Dimensions use the MediaBox, not the visible CropBox. For placing stamps, see
-[stamp coordinates](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-stamping.md#coordinates-and-page-geometry).
+[stamp coordinates](pdf-stamping.md#coordinates-and-page-geometry).
 
 ## Encryption status
 

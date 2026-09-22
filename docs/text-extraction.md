@@ -62,7 +62,7 @@ Y increases down. They use PDF default user-space units, normally 1/72 inch.
 CropBox offsets and UserUnit scaling are not applied. Baselines are not glyph
 bounding boxes, and endpoints can be approximate when font widths are absent.
 
-These coordinates differ from [stamp coordinates](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-stamping.md#coordinates-and-page-geometry).
+These coordinates differ from [stamp coordinates](pdf-stamping.md#coordinates-and-page-geometry).
 Use [Info.page_sizes/1](pdf-information.md#page-count-and-geometry) for physical
 page dimensions.
 
@@ -93,4 +93,7 @@ Failures use the [diagnostic tuple](diagnostics.md).
 
 [Extraction limits](resource-limits.md#text-extraction) cap content, work, spans,
 and reconstructed spacing. Oversized numeric operands or font metrics return
-`:invalid_pdf_input` before execution. No partial text is returned on failure.
+`:invalid_pdf_input` before execution. Overflow in composed transforms or text
+positioning also returns `:invalid_pdf_input`, with the page and failing
+operator or positioning step in the diagnostic. No partial text is returned
+on failure.

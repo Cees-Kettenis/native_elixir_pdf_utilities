@@ -42,11 +42,11 @@ function names, such as `:stamp_text` or a file action named `:read`.
 | Reason                                                       | What to check                                                            |
 | ------------------------------------------------------------ | ------------------------------------------------------------------------ |
 | `:invalid_options`                                         | Option names, types, and accepted values in the task guide               |
-| `:invalid_html`, `:unsupported_html`, `:invalid_css`   | The source location and[supported HTML/CSS](html-to-pdf-compatibility.md) |
+| `:invalid_html`, `:unsupported_html`, `:invalid_css`   | The source location and [supported HTML/CSS](html-to-pdf-compatibility.md) |
 | `:invalid_pdf_input`                                       | Whether the input is a complete, readable PDF                            |
 | `:encrypted_pdf`                                           | Supply an unencrypted PDF; decryption is not supported                   |
 | `:unsupported_pdf_feature`, `:unsupported_text_encoding` | The relevant operation's supported inputs                                |
-| `:resource_limit_exceeded`                                 | Document size/complexity and your[configured limits](resource-limits.md)  |
+| `:resource_limit_exceeded`                                 | Document size/complexity and your [configured limits](resource-limits.md)  |
 
 ## Forms and attachments
 
