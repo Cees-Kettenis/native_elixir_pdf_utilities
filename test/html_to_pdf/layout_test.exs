@@ -2541,11 +2541,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
         background_repeat: :repeat
       })
 
-    assert Layout.layout(
-             document([%{type: :element, style: style, children: []}]),
-             page_size: {100, 100},
-             margin: 0
-           ) == {:error, :invalid_layout}
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Layout.layout(
+               document([%{type: :element, style: style, children: []}]),
+               page_size: {100, 100},
+               margin: 0
+             )
+
+    assert diagnostic.stage == :limits
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message == "background image tile count exceeds the 1-tile limit"
+
+    assert {:error, :invalid_layout} =
+             Layout.layout(
+               document([
+                 %{type: :element, style: %{style | background_repeat: :invalid}, children: []}
+               ]),
+               page_size: {100, 100},
+               margin: 0
+             )
   end
 
   test "layout positions grid items with explicit placement gaps and alignment" do

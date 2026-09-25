@@ -5,6 +5,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Text
 
+  test "background tile limits preserve their actionable public diagnostic" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(%{limits | max_background_image_tiles: 4})
+    source = "data:image/png;base64,#{Base.encode64(png_fixture(1, 1))}"
+
+    for tile_size <- ["1pt", "0.1pt"], tag <- ["div", "body"] do
+      html =
+        ~s|<#{tag} style="width: 4pt; height: 4pt; background-image: url('#{source}'); background-size: #{tile_size} #{tile_size}"></#{tag}>|
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.stage == :limits
+      assert diagnostic.operation == :render
+      assert diagnostic.module == HtmlToPdf
+      assert diagnostic.message == "background image tile count exceeds the 4-tile limit"
+    end
+  end
+
   test "oversized numeric page options return diagnostics before normalization arithmetic" do
     for value <- [Integer.pow(10, 400), 1.0e308],
         options <- [

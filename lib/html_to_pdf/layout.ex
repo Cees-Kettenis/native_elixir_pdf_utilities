@@ -5889,6 +5889,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       false ->
         []
 
+      {:error, {_reason, _diagnostic}} = error ->
+        throw({:render_resource_limit, error})
+
       _error ->
         [%{type: :layout_error, reason: :background_image_tile_limit}]
     end
