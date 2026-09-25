@@ -5,6 +5,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Text
 
+  test "render diagnoses unrepresentable aspect-ratio dimensions" do
+    for ratio <- ["1e-310", "1e-320", "1e-20"],
+        width <- ["", "width: 120pt;"],
+        sizing <- ["content-box", "border-box"] do
+      html = ~s(<div style="#{width} box-sizing: #{sizing}; aspect-ratio: #{ratio}">test</div>)
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
+      assert diagnostic.stage == :layout
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.operation == :render
+      assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlValidator
+      assert diagnostic.message =~ ~r/aspect-ratio|max_css_numeric_magnitude/
+    end
+
+    for ratio <- ["1 / 1e-320", "1e9 / 1e-10"] do
+      assert {:error, {:resource_limit_exceeded, %{stage: :css, operation: :render}}} =
+               HtmlToPdf.render(~s(<div style="aspect-ratio: #{ratio}">test</div>))
+    end
+
+    for ratio <- ["0", "-1", "invalid", "1e-320 / 1e9"] do
+      assert {:error, {:invalid_css, %{operation: :render}}} =
+               HtmlToPdf.render(~s(<div style="aspect-ratio: #{ratio}">test</div>))
+    end
+
+    assert {:ok, _pdf} =
+             HtmlToPdf.render(~s(<div style="height: 20pt; aspect-ratio: 1e-320">test</div>))
+  end
+
+  test "render checks derived image aspect-ratio dimensions before layout or rasterization" do
+    png = "data:image/png;base64,#{Base.encode64(png_fixture(1, 1))}"
+
+    svg =
+      ~s(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"><rect width="2" height="1"/></svg>)
+
+    svg = "data:image/svg+xml;base64,#{Base.encode64(svg)}"
+
+    for {source, stage} <- [{png, :layout}, {svg, :css}],
+        style <- ["width: 20pt; aspect-ratio: 1e-320", "height: 20pt; aspect-ratio: 1e9"] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlToPdf.render(~s(<img src="#{source}" style="#{style}">))
+
+      assert diagnostic.stage == stage
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.operation == :render
+      assert diagnostic.message =~ ~r/aspect-ratio|max_css_numeric_magnitude/
+    end
+  end
+
   test "render quantizes CSS viewport width and margin origins without changing the PDF page" do
     assert {:ok, pdf} =
              HtmlToPdf.render("<div style='height:10pt;background:red'></div>",

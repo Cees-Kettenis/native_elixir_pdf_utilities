@@ -383,7 +383,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
-  @spec check_render_resource(Limits.key(), non_neg_integer(), atom()) :: :ok
+  @spec check_render_resource(Limits.key(), number(), atom()) :: :ok
   def check_render_resource(limit, amount, stage) do
     case amount <= Limits.get(limit) do
       true ->
@@ -1003,6 +1003,54 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       _ ->
         invalid_styled_document("font fallback requires prepared font candidates")
+    end
+  end
+
+  @doc false
+  @spec aspect_ratio_dimension(number(), number(), :width | :height, atom()) :: number()
+  def aspect_ratio_dimension(size, ratio, axis, stage) do
+    try do
+      dimension = if axis == :height, do: size / ratio, else: size * ratio
+      check_render_resource(:max_css_numeric_magnitude, abs(dimension), stage)
+      dimension
+    rescue
+      ArithmeticError ->
+        throw(
+          {:render_resource_limit,
+           Diagnostics.error(
+             stage,
+             :resource_limit_exceeded,
+             "aspect-ratio produces an unrepresentable #{axis}; reduce the dimensions or use a less extreme ratio",
+             source: "aspect-ratio",
+             module: __MODULE__
+           )}
+        )
+    end
+  end
+
+  @doc false
+  @spec parse_aspect_ratio(String.t()) :: {:ok, float()} | :error
+  def parse_aspect_ratio(value) do
+    tokens = value |> String.trim() |> String.split("/", trim: true) |> Enum.map(&String.trim/1)
+
+    case tokens do
+      [ratio] ->
+        case parse_css_number(ratio) do
+          {number, ""} when number > 0 -> {:ok, number}
+          _ -> :error
+        end
+
+      [width, height] ->
+        with {width, ""} when width > 0 <- parse_css_number(width),
+             {height, ""} when height > 0 <- parse_css_number(height) do
+          ratio = aspect_ratio_dimension(width, height, :height, :css)
+          if ratio > 0, do: {:ok, ratio}, else: :error
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
     end
   end
 

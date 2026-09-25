@@ -2276,7 +2276,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         put_overflow(style, value)
 
       "aspect-ratio" ->
-        with {:ok, aspect_ratio} <- parse_aspect_ratio(value),
+        with {:ok, aspect_ratio} <- HtmlValidator.parse_aspect_ratio(value),
              do: {:ok, Map.put(style, :aspect_ratio, aspect_ratio)}
 
       "border-collapse" ->
@@ -3830,29 +3830,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp parse_aspect_ratio(value) do
-    tokens =
-      value
-      |> String.trim()
-      |> String.downcase()
-      |> String.split("/", trim: true)
-      |> Enum.map(&String.trim/1)
-
-    case tokens do
-      [ratio] ->
-        with {:ok, number} <- parse_positive_number(ratio), do: {:ok, number}
-
-      [width, height] ->
-        with {:ok, width} <- parse_positive_number(width),
-             {:ok, height} <- parse_positive_number(height) do
-          {:ok, width / height}
-        end
-
-      _ ->
-        :error
-    end
-  end
-
   defp parse_line_height(value) do
     normalized = value |> String.trim() |> String.downcase()
 
@@ -3867,13 +3844,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         with {:ok, multiplier} <- parse_nonnegative_number(normalized) do
           {:ok, {:multiplier, multiplier}}
         end
-    end
-  end
-
-  defp parse_positive_number(value) do
-    case HtmlValidator.parse_css_number(String.trim(value)) do
-      {number, ""} when number > 0 -> {:ok, number}
-      _ -> :error
     end
   end
 
@@ -4188,7 +4158,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         width
 
       {_width, height, ratio} when is_number(height) and is_number(ratio) ->
-        height * ratio
+        HtmlValidator.aspect_ratio_dimension(height, ratio, :width, :css)
 
       _ ->
         nil
@@ -4201,7 +4171,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         height
 
       {_height, width, ratio} when is_number(width) and is_number(ratio) ->
-        width / ratio
+        HtmlValidator.aspect_ratio_dimension(width, ratio, :height, :css)
 
       _ ->
         nil

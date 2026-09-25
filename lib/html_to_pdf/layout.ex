@@ -377,8 +377,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                   {height, ratio} when height in [nil, :auto] and is_number(ratio) ->
                     ratio_height =
                       case Map.get(style, :box_sizing, :content_box) do
-                        :border_box -> max(box_width / ratio - vertical_box_size(style), 0.0)
-                        _ -> content_width / ratio
+                        :border_box ->
+                          max(
+                            HtmlValidator.aspect_ratio_dimension(
+                              box_width,
+                              ratio,
+                              :height,
+                              :layout
+                            ) - vertical_box_size(style),
+                            0.0
+                          )
+
+                        _ ->
+                          HtmlValidator.aspect_ratio_dimension(
+                            content_width,
+                            ratio,
+                            :height,
+                            :layout
+                          )
                       end
 
                     max(content_height, ratio_height)
@@ -1026,10 +1042,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {width, height}
 
         {width, _height} when is_number(width) ->
-          {width, width / ratio}
+          {width, HtmlValidator.aspect_ratio_dimension(width, ratio, :height, :layout)}
 
         {_width, height} when is_number(height) ->
-          {height * ratio, height}
+          {HtmlValidator.aspect_ratio_dimension(height, ratio, :width, :layout), height}
 
         _ ->
           {natural_width, natural_height}
@@ -2992,7 +3008,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       |> Enum.min(fn -> 1.0 end)
       |> min(1.0)
 
-    {width * scale, width * scale / ratio}
+    {width * scale, HtmlValidator.aspect_ratio_dimension(width * scale, ratio, :height, :layout)}
   end
 
   defp scale_image_up_to_min({width, height}, style, ratio, available_width, available_height) do
@@ -3005,7 +3021,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       |> Enum.max(fn -> 1.0 end)
       |> max(1.0)
 
-    {width * scale, width * scale / ratio}
+    {width * scale, HtmlValidator.aspect_ratio_dimension(width * scale, ratio, :height, :layout)}
   end
 
   defp max_image_scale(size, constraint) do
