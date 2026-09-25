@@ -5,6 +5,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Text
 
+  test "oversized numeric page options return diagnostics before normalization arithmetic" do
+    for value <- [Integer.pow(10, 400), 1.0e308],
+        options <- [
+          [margin: value],
+          [margin: %{left: value}],
+          [page_size: {value, 100}],
+          [page_size: {100, value}]
+        ] do
+      assert {:error, {reason, diagnostic}} = HtmlToPdf.render("<p>Test</p>", options)
+      assert reason in [:invalid_margin, :invalid_page_size]
+      assert diagnostic.reason == reason
+      assert diagnostic.operation == :render
+      assert diagnostic.stage == :layout
+      assert is_binary(diagnostic.message)
+    end
+  end
+
   test "render diagnoses unrepresentable aspect-ratio dimensions" do
     for ratio <- ["1e-310", "1e-320", "1e-20"],
         width <- ["", "width: 120pt;"],

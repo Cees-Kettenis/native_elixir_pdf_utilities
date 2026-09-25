@@ -63,9 +63,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
         oriented_page_size(page_size, orientation)
 
       {width, height} when is_number(width) and is_number(height) and width > 0 and height > 0 ->
-        case width <= 20 and height <= 20 do
-          true -> {:ok, {width * 72.0, height * 72.0}}
-          false -> {:ok, {width * 1.0, height * 1.0}}
+        with {:ok, width} <- HtmlValidator.normalize_geometry_number(width),
+             {:ok, height} <- HtmlValidator.normalize_geometry_number(height) do
+          case width <= 20 and height <= 20 do
+            true -> {:ok, {width * 72.0, height * 72.0}}
+            false -> {:ok, {width, height}}
+          end
+        else
+          :error -> {:error, :invalid_page_size}
         end
 
       page_size when is_binary(page_size) ->
@@ -83,8 +88,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
   def normalize_margins(margin) do
     case margin do
       margin when is_number(margin) and margin >= 0 ->
-        value = margin * 1.0
-        {:ok, %{top: value, right: value, bottom: value, left: value}}
+        case HtmlValidator.normalize_geometry_number(margin) do
+          {:ok, value} -> {:ok, %{top: value, right: value, bottom: value, left: value}}
+          :error -> {:error, :invalid_margin}
+        end
 
       margin when is_binary(margin) ->
         margin
@@ -385,7 +392,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
   defp normalize_margin_length(value) do
     case value do
       value when is_number(value) and value >= 0 ->
-        {:ok, value * 1.0}
+        HtmlValidator.normalize_geometry_number(value)
 
       value when is_binary(value) ->
         normalized = value |> String.trim() |> String.downcase()

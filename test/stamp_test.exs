@@ -19,6 +19,50 @@ defmodule NativeElixirPdfUtilities.StampTest do
     :ok
   end
 
+  test "unrepresentable numeric options return actionable diagnostics" do
+    pdf = one_page_pdf("Original", {200, 100})
+    huge = Integer.pow(10, 400)
+
+    for value <- [huge, 1.0e308],
+        options <- [
+          [size: value],
+          [margin: value],
+          [rotation: value],
+          [position: {value, 10}],
+          [position: {10, value}]
+        ] do
+      assert {:error, {:invalid_options, diagnostic}} = Stamp.text(pdf, "Test", options)
+      assert diagnostic.stage == :options
+      assert diagnostic.reason == :invalid_options
+      assert diagnostic.operation == :stamp_text
+      assert diagnostic.message =~ "representable number"
+    end
+
+    Limits.install(%{Limits.effective() | max_pdf_numeric_magnitude: huge})
+    assert {:error, {:invalid_options, %{stage: :options}}} = Stamp.text(pdf, "Test", size: huge)
+  end
+
+  test "tiny and excessive page scales return stamp geometry diagnostics" do
+    pdf = one_page_pdf("Original", {200, 100})
+    assert {:ok, context} = Reader.read_validated(pdf)
+    page = hd(context.pages)
+    {id, generation} = page.ref
+
+    for unit <- [1.0e-200, 1.0e-100, 1.0e9] do
+      assert {:ok, scaled} =
+               IncrementalWriter.write(context, [
+                 {id, generation, {:value, Map.put(page.dictionary, "UserUnit", unit)}}
+               ])
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Stamp.text(scaled, "Test")
+      assert diagnostic.stage == :geometry
+      assert diagnostic.reason == :invalid_pdf_input
+      assert diagnostic.operation == :stamp_text
+      assert diagnostic.message =~ "page 1"
+      assert diagnostic.message =~ "stamping geometry"
+    end
+  end
+
   test "adds text while preserving the original revision, metadata, and outlines" do
     pdf = document_pdf()
 
@@ -476,6 +520,10 @@ defmodule NativeElixirPdfUtilities.StampTest do
       %{target_page | crop_box: [0, 0, 0, 200]},
       %{target_page | rotate: 45},
       %{target_page | dictionary: Map.put(target_page.dictionary, "UserUnit", 0)},
+      %{
+        target_page
+        | dictionary: Map.put(target_page.dictionary, "UserUnit", {:ref, {999_999, 0}})
+      },
       %{target_page | resources: 3},
       %{target_page | resources: %{"XObject" => 3}},
       %{target_page | dictionary: Map.put(target_page.dictionary, "Contents", [3])},

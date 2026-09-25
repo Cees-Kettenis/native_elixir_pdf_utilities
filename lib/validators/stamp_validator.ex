@@ -217,17 +217,35 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
 
   defp position(value) do
     case value do
-      value when value in @positions -> {:ok, value}
-      {x, y} when is_number(x) and is_number(y) -> {:ok, {x * 1.0, y * 1.0}}
-      _ -> error(:options, :invalid_options, "position must be a supported anchor or {x, y}")
+      value when value in @positions ->
+        {:ok, value}
+
+      {x, y} ->
+        with {:ok, x} <- number(x, "position x"),
+             {:ok, y} <- number(y, "position y"),
+             do: {:ok, {x, y}}
+
+      _ ->
+        error(:options, :invalid_options, "position must be a supported anchor or {x, y}")
     end
   end
 
   defp font_size(value) do
     case value do
-      :auto -> {:ok, :auto}
-      value when is_number(value) and value > 0 -> {:ok, value * 1.0}
-      _ -> error(:options, :invalid_options, "font size must be :auto or a positive number")
+      :auto ->
+        {:ok, :auto}
+
+      value ->
+        with {:ok, size} <- number(value, "font size"),
+             true <- size > 0 do
+          {:ok, size}
+        else
+          false ->
+            error(:options, :invalid_options, "font size must be :auto or a positive number")
+
+          error ->
+            error
+        end
     end
   end
 
@@ -256,16 +274,25 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
   end
 
   defp number(value, label) do
-    case is_number(value) do
-      true -> {:ok, value * 1.0}
-      false -> error(:options, :invalid_options, "#{label} must be a number")
+    case PdfValidator.float_number(value) do
+      {:ok, value} ->
+        {:ok, value}
+
+      :error ->
+        error(
+          :options,
+          :invalid_options,
+          "#{label} must be a representable number within max_pdf_numeric_magnitude"
+        )
     end
   end
 
   defp nonnegative_number(value, label) do
-    case is_number(value) and value >= 0 do
-      true -> {:ok, value * 1.0}
+    with {:ok, value} <- number(value, label), true <- value >= 0 do
+      {:ok, value}
+    else
       false -> error(:options, :invalid_options, "#{label} must be a non-negative number")
+      error -> error
     end
   end
 
@@ -363,23 +390,32 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
 
       normalization = normalization_matrix(crop_box, rotation, user_unit)
 
-      {:ok,
-       %{
-         page_number: page_number,
-         ref: page.ref,
-         dictionary: page.dictionary,
-         resources: resources,
-         contents: contents,
-         crop_box: crop_box,
-         width: width * 1.0,
-         height: height * 1.0,
-         normalization: normalization,
-         inverse_normalization: inverse_matrix(normalization)
-       }}
+      inverse = inverse_matrix(normalization)
+
+      if width > 0 and height > 0 and
+           Enum.all?([width, height] ++ normalization ++ inverse, &PdfValidator.valid_number?/1) do
+        {:ok,
+         %{
+           page_number: page_number,
+           ref: page.ref,
+           dictionary: page.dictionary,
+           resources: resources,
+           contents: contents,
+           crop_box: crop_box,
+           width: width * 1.0,
+           height: height * 1.0,
+           normalization: normalization,
+           inverse_normalization: inverse
+         }}
+      else
+        page_error(page_number, "has stamping geometry outside max_pdf_numeric_magnitude")
+      end
     else
       false -> page_error(page_number, "has an invalid effective page box")
       _error -> page_error(page_number, "has malformed stamping geometry or resources")
     end
+  rescue
+    ArithmeticError -> page_error(page_number, "has unrepresentable stamping geometry")
   end
 
   defp resolved_rotation(document, value) do
@@ -394,8 +430,15 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
 
   defp resolved_user_unit(document, dictionary) do
     case PdfValidator.resolve(document, Map.get(dictionary, "UserUnit", 1)) do
-      {:ok, value} when is_number(value) and value > 0 -> {:ok, value * 1.0}
-      _ -> :error
+      {:ok, value} ->
+        with {:ok, value} <- PdfValidator.float_number(value), true <- value > 0 do
+          {:ok, value}
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
     end
   end
 

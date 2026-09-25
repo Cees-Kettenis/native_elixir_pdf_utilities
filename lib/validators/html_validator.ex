@@ -1055,6 +1055,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec normalize_geometry_number(term()) :: {:ok, float()} | :error
+  def normalize_geometry_number(value) do
+    case is_number(value) && parse_css_number(to_string(value)) do
+      {number, ""} -> {:ok, number}
+      _ -> :error
+    end
+  end
+
+  @doc false
   @spec parse_css_number(term(), number()) :: {float(), binary()} | :error
   def parse_css_number(value, scale \\ 1.0) do
     limit = Limits.get(:max_css_numeric_magnitude)

@@ -613,6 +613,20 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     is_number(value) and abs(value) <= Limits.get(:max_pdf_numeric_magnitude)
   end
 
+  @doc false
+  @spec float_number(term()) :: {:ok, float()} | :error
+  def float_number(value) do
+    if valid_number?(value) do
+      try do
+        {:ok, value * 1.0}
+      rescue
+        ArithmeticError -> :error
+      end
+    else
+      :error
+    end
+  end
+
   @doc """
   Resolves a fixed-length array whose elements must all be numbers.
 
