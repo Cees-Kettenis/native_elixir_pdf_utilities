@@ -384,7 +384,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       case Map.get(font_resource, :font_face) do
         %{type: :embedded} = font ->
           size = box.font_size
-          shaped_text = Font.shape_ligatures(box.text, font)
+          shaped_text = Font.shape_ligatures(box.text, font, Map.get(box, :letter_spacing, 0))
 
           shaped_size =
             if Map.get(box, :snap_to_css_pixel_grid, false),
@@ -1149,7 +1149,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       key = font_key(box)
 
       Map.update(acc, key, font_entry(key, box), fn entry ->
-        update_in(entry.texts, &(&1 ++ [box.text]))
+        update_in(entry.texts, &(&1 ++ [{box.text, Map.get(box, :letter_spacing, 0)}]))
       end)
     end)
     |> Map.values()
@@ -1186,7 +1186,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         font_face -> font_face
       end
 
-    %{key: key, font_face: font_face, texts: [box.text]}
+    %{key: key, font_face: font_face, texts: [{box.text, Map.get(box, :letter_spacing, 0)}]}
   end
 
   defp font_resource(entry, object_id, index) do

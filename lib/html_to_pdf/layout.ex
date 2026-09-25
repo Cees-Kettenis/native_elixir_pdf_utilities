@@ -5957,7 +5957,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     HtmlValidator.reserve_render_resource(:max_layout_text_work, byte_size(text), :layout)
 
     text
-    |> Font.text_width(text_font_face(style), Map.fetch!(style, :font_size))
+    |> Font.text_width(
+      text_font_face(style),
+      Map.fetch!(style, :font_size),
+      Map.get(style, :letter_spacing, 0)
+    )
     |> Kernel.+(letter_spacing_width(text, style))
   end
 

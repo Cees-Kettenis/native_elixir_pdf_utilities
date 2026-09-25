@@ -1054,6 +1054,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert {:ok, "AB😀"} = Text.extract(pdf, layout: false)
   end
 
+  test "spaced and unspaced text share a font without changing their glyph sequences" do
+    assert {:ok, registry} = Font.load_registry([])
+    assert {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    for kerning <- [font.kerning, %{}] do
+      font = %{font | kerning: kerning}
+
+      box = %{
+        type: :text,
+        text: "ffi",
+        x: 10.0,
+        y: 80.0,
+        font: Font.pdf_name(font),
+        font_face: font,
+        font_size: 20.0,
+        color: {0, 0, 0},
+        letter_spacing: 4.0
+      }
+
+      plain = %{box | y: 40.0, letter_spacing: 0.0}
+      assert {:ok, pdf} = PdfWriter.render([%{size: {200, 100}, boxes: [box, plain]}], [])
+      assert pdf =~ "4 Tc"
+      assert pdf =~ ~r/<[0-9A-F]{4}> <0066>/
+      assert pdf =~ ~r/<[0-9A-F]{4}> <0069>/
+      assert pdf =~ ~r/<[0-9A-F]{4}> <006600660069>/
+      assert {:ok, "ffi ffi"} = Text.extract(pdf, layout: false)
+    end
+  end
+
   test "ligature glyphs retain the original spelling in extracted PDF text" do
     assert {:ok, registry} = Font.load_registry([])
     assert {:ok, _, font} = Font.resolve("DejaVu Sans", 700, :normal, registry)

@@ -374,6 +374,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert Font.encode_embedded_text("AB", encoding) == "00010002"
   end
 
+  test "nonzero letter spacing preserves individual glyphs in measurement and encoding" do
+    assert {:ok, registry} = Font.load_registry([])
+    assert {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    without_ligatures = %{
+      font
+      | cmap: Map.drop(font.cmap, [0xFB00, 0xFB01, 0xFB02, 0xFB03, 0xFB04])
+    }
+
+    for spacing <- [4, -1] do
+      assert Font.shape_ligatures("ffi file", font, spacing) == "ffi file"
+
+      assert Font.text_width("ffi file", font, 20, spacing) ==
+               Font.text_width("ffi file", without_ligatures, 20)
+
+      encoding = Font.pdf_encoding([{"ffi", spacing}], font)
+      assert Map.has_key?(encoding.codepoint_to_cid, ?f)
+      assert Map.has_key?(encoding.codepoint_to_cid, ?i)
+      refute Map.has_key?(encoding.codepoint_to_cid, 0xFB03)
+    end
+
+    mixed = Font.pdf_encoding([{"ffi", 4}, "ffi"], font)
+    assert Map.has_key?(mixed.codepoint_to_cid, ?f)
+    assert Map.has_key?(mixed.codepoint_to_cid, 0xFB03)
+  end
+
   test "embedded fonts shape Latin ligatures before measuring and encoding" do
     assert {:ok, registry} = Font.load_registry([])
     assert {:ok, _, font} = Font.resolve("DejaVu Sans", 700, :normal, registry)

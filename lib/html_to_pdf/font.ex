@@ -215,15 +215,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   end
 
   @doc """
-  Measures text in PDF points for the selected font and size.
+  Measures glyph advances in PDF points for the selected font and size.
+  Nonzero letter spacing disables optional ligatures; callers add spacing separately.
   """
-  @spec text_width(String.t(), map(), number()) :: number()
-  def text_width(text, font, font_size) do
+  @spec text_width(String.t(), map(), number(), number()) :: number()
+  def text_width(text, font, font_size, letter_spacing \\ 0) do
     case font do
       %{type: :embedded, units_per_em: units_per_em} ->
         {glyphs, maximum_glyph} =
           text
-          |> shape_ligatures(font)
+          |> shape_ligatures(font, letter_spacing)
           |> String.to_charlist()
           |> Enum.map_reduce(-1, fn codepoint, maximum ->
             glyph = Map.get(font.cmap, codepoint, 0)
@@ -259,29 +260,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     end
   end
 
-  @doc "Shapes common Latin ligatures when the embedded font provides their glyphs."
-  @spec shape_ligatures(String.t(), embedded_font()) :: String.t()
-  def shape_ligatures(text, font) do
-    [{"ffi", "ﬃ"}, {"ffl", "ﬄ"}, {"ff", "ﬀ"}, {"fi", "ﬁ"}, {"fl", "ﬂ"}]
-    |> Enum.reduce(text, fn {letters, ligature}, shaped ->
-      case Map.get(font.cmap, hd(String.to_charlist(ligature)), 0) do
-        0 -> shaped
-        _glyph -> String.replace(shaped, letters, ligature)
-      end
-    end)
+  @doc "Shapes common Latin ligatures when the font provides them and letter spacing is zero."
+  @spec shape_ligatures(String.t(), embedded_font(), number()) :: String.t()
+  def shape_ligatures(text, font, letter_spacing \\ 0) do
+    if letter_spacing == 0 do
+      [{"ffi", "ﬃ"}, {"ffl", "ﬄ"}, {"ff", "ﬀ"}, {"fi", "ﬁ"}, {"fl", "ﬂ"}]
+      |> Enum.reduce(text, fn {letters, ligature}, shaped ->
+        case Map.get(font.cmap, hd(String.to_charlist(ligature)), 0) do
+          0 -> shaped
+          _glyph -> String.replace(shaped, letters, ligature)
+        end
+      end)
+    else
+      text
+    end
   end
 
   @doc """
   Builds a document-scoped CID encoding for text shown with an embedded font.
+  Entries may be strings or `{text, letter_spacing}` pairs for spaced glyph runs.
   """
-  @spec pdf_encoding([String.t()], embedded_font()) :: pdf_encoding()
+  @spec pdf_encoding([String.t() | {String.t(), number()}], embedded_font()) :: pdf_encoding()
   def pdf_encoding(texts, font) do
     encoding = %{codepoint_to_cid: %{}, cid_to_gid: %{}, cid_to_unicode: %{}}
 
     {encoding, _next_cid} =
-      Enum.reduce(texts, {encoding, 1}, fn text, {encoding, next_cid} ->
+      Enum.reduce(texts, {encoding, 1}, fn entry, {encoding, next_cid} ->
+        {text, spacing} =
+          case entry do
+            {text, spacing} -> {text, spacing}
+            text -> {text, 0}
+          end
+
         text
-        |> shape_ligatures(font)
+        |> shape_ligatures(font, spacing)
         |> String.to_charlist()
         |> Enum.reduce({encoding, next_cid}, fn codepoint, {encoding, next_cid} ->
           case Map.has_key?(encoding.codepoint_to_cid, codepoint) do
