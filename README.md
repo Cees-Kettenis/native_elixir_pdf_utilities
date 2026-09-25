@@ -8,10 +8,17 @@
 
 # Native Elixir PDF Utilities
 
-Native Elixir PDF Utilities renders HTML/CSS to PDF, reads and updates metadata
-and bookmarks, extracts embedded text, and merges, transforms, splits, and
-stamps PDFs, fills forms, and embeds attachments. It runs inside Elixir
-applications without external PDF command-line tools.
+Native Elixir PDF Utilities brings HTML-to-PDF rendering and PDF editing directly
+into your Elixir application, without a browser or external PDF command-line
+tools. It can replace Chromium-based rendering for templates using the
+[supported HTML/CSS features](docs/html-to-pdf-compatibility.md). With matched
+fonts and page settings, the current development build achieves **less than 1%
+changed pixels on every compared page** across 67 Chromium parity fixtures and
+80 pages, including invoices, forms, purchase orders, labels, and multi-page reports.
+
+Beyond rendering, it merges, transforms, splits, and stamps PDFs, fills forms,
+embeds attachments, extracts embedded text, and reads and updates metadata and
+bookmarks.
 
 ## Package and docs
 
