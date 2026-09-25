@@ -3119,7 +3119,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       with {:ok, caption_boxes, table_top} <-
              layout_table_caption(children, box_x, box_top, box_width, table_id),
            rows_top = table_top - padding.top - insets.top,
-           {:ok, row_boxes, content_bottom} <-
+           {:ok, row_boxes, content_bottom, row_fragments} <-
              layout_table_rows(
                rows,
                table_columns(children),
@@ -3152,19 +3152,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             {:ok, table_boxes.before ++ caption_boxes ++ row_boxes, bottom - margin.bottom}
 
           outer_border_boxes ->
-            # A collapsed cell border can win over the table outline at a
-            # shared edge, so paint it after the outline.
-            {cell_border_boxes, other_row_boxes} =
-              Enum.split_with(row_boxes, fn box ->
-                Map.get(box, :role) == :table_border and Map.get(box, :table_id) == table_id
+            # Keep decorations in their row's flow group until pagination has
+            # placed every row. Pagination joins the outline pieces per page.
+            last_row = length(row_fragments) - 1
+
+            fragments =
+              row_fragments
+              |> Enum.with_index()
+              |> Enum.flat_map(fn {row, index} ->
+                top = if index == 0, do: table_top, else: row.top
+                bottom = if index == last_row, do: bottom, else: row.bottom
+
+                outlines =
+                  Enum.map(outer_border_boxes, fn outline ->
+                    outline
+                    |> Map.merge(row.metadata)
+                    |> Map.put(:type, HtmlValidator.reserve_layout_box(:rect))
+                    |> Map.put(:y, bottom)
+                    |> Map.put(:height, top - bottom)
+                  end)
+
+                {borders, content} =
+                  Enum.split_with(row.boxes, fn box ->
+                    Map.get(box, :role) == :table_border and Map.get(box, :table_id) == table_id
+                  end)
+
+                content ++ outlines ++ borders
               end)
 
-            {:ok,
-             table_boxes.before ++
-               caption_boxes ++
-               other_row_boxes ++
-               outer_border_boxes ++
-               cell_border_boxes, bottom - margin.bottom}
+            fragments = if row_fragments == [], do: outer_border_boxes, else: fragments
+            {:ok, table_boxes.before ++ caption_boxes ++ fragments, bottom - margin.bottom}
         end
       end
     end
@@ -3185,7 +3202,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           |> Map.put(:background_image, nil)
           |> background_box(x, y, width, height)
           |> tag_boxes(metadata)
-          |> Enum.map(&Map.put(&1, :role, :table_outline))
+          |> Enum.map(
+            &(&1
+              |> Map.put(:role, :table_outline)
+              |> Map.put(:table_paint_id, metadata.table_id))
+          )
 
         %{before: background, after: border}
 
@@ -3364,7 +3385,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
        ) do
     case rows do
       [] ->
-        {:ok, [], y - (available_height || 0.0)}
+        {:ok, [], y - (available_height || 0.0), []}
 
       _ ->
         grid_rows = table_grid(rows)
@@ -3566,11 +3587,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                  available_height,
                  border_collapse
                ) do
-          {boxes, next_y} =
+          {boxes, next_y, fragments} =
             grid_rows
             |> Enum.with_index()
-            |> Enum.reduce({[], y - vertical_spacing}, fn {row, index}, {boxes, current_y} ->
-              {:ok, row_boxes, next_y} =
+            |> Enum.reduce({[], y - vertical_spacing, []}, fn {row, index},
+                                                              {boxes, current_y, fragments} ->
+              {:ok, row_boxes, next_y, metadata} =
                 layout_table_row(
                   row,
                   table_id,
@@ -3584,10 +3606,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                   vertical_spacing
                 )
 
-              {Enum.reverse(row_boxes, boxes), next_y - vertical_spacing}
+              fragment = %{boxes: row_boxes, top: current_y, bottom: next_y, metadata: metadata}
+              {Enum.reverse(row_boxes, boxes), next_y - vertical_spacing, [fragment | fragments]}
             end)
 
-          {:ok, Enum.reverse(boxes), next_y}
+          {:ok, Enum.reverse(boxes), next_y, Enum.reverse(fragments)}
         end
     end
   end
@@ -3699,7 +3722,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     paint_boxes =
       Enum.map(background_boxes ++ border_boxes, &Map.put(&1, :paint_ordered, true))
 
-    {:ok, group_background_boxes ++ paint_boxes ++ content_boxes, y - row_height}
+    {:ok, group_background_boxes ++ paint_boxes ++ content_boxes, y - row_height, row_metadata}
   end
 
   defp table_grid(rows) do
@@ -3863,6 +3886,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         |> Enum.map(fn box ->
           box
           |> Map.put(:role, :table_border)
+          |> Map.put(:table_paint_id, row_metadata.table_id)
         end)
 
       {:ok, cell_box ++ border_box ++ tag_atomic_boxes(content_boxes, row_metadata)}
@@ -3994,6 +4018,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         |> Enum.map(fn box ->
           box
           |> Map.put(:role, :table_border)
+          |> Map.put(:table_paint_id, row_metadata.table_id)
         end)
 
       _ ->

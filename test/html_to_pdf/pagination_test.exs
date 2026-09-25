@@ -7,6 +7,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
+  test "outer table outlines keep borders and repeated headings on each page" do
+    html =
+      File.read!("test/fixtures/html_to_pdf/browser_parity/table_outer_border_pagination.html")
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {240, 180})
+    assert {:ok, pages} = Pagination.paginate(layout)
+    assert length(pages) == 3
+
+    assert Enum.flat_map(pages, fn page ->
+             for %{type: :text, text: "Row " <> _ = text} <- page.boxes, do: text
+           end) == Enum.map(1..8, &"Row #{&1}")
+
+    for page <- pages do
+      assert [%{y: bottom, height: height}] =
+               Enum.filter(page.boxes, &(Map.get(&1, :role) == :table_outline))
+
+      borders = Enum.filter(page.boxes, &(Map.get(&1, :role) == :table_border))
+      text = for %{type: :text, text: text} <- page.boxes, do: text
+      assert "Item" in text
+      assert "Value" in text
+      assert length(borders) == length(text)
+      assert Enum.all?(borders, &(&1.y >= bottom and &1.y + &1.height <= bottom + height))
+
+      assert Enum.find_index(page.boxes, &(Map.get(&1, :role) == :table_outline)) <
+               Enum.find_index(page.boxes, &(Map.get(&1, :role) == :table_border))
+    end
+  end
+
   test "collapsed table fragments close at automatic and early group page breaks" do
     rows = Enum.map_join(1..8, fn n -> "<tr><td>Oversized #{n}</td><td>Value</td></tr>" end)
 

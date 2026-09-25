@@ -72,8 +72,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       |> groups_to_pages(headers, page_size, margins)
       |> close_table_fragments()
       |> restore_root_positioned_boxes(root_positioned_boxes, pagination_order)
+      |> paint_table_outlines()
 
     {:ok, pages}
+  end
+
+  defp paint_table_outlines(pages) do
+    Enum.map(pages, fn page ->
+      outlines =
+        page.boxes
+        |> Enum.filter(&(Map.get(&1, :role) == :table_outline))
+        |> Enum.group_by(& &1.table_paint_id)
+
+      boxes =
+        Enum.reduce(outlines, page.boxes, fn {table_id, pieces}, boxes ->
+          top = pieces |> Enum.map(&(&1.y + &1.height)) |> Enum.max()
+          bottom = pieces |> Enum.map(& &1.y) |> Enum.min()
+          outline = %{hd(pieces) | y: bottom, height: top - bottom}
+
+          {borders, boxes} =
+            Enum.split_with(boxes, fn box ->
+              Map.get(box, :table_paint_id) == table_id and Map.get(box, :role) == :table_border
+            end)
+
+          last_piece = List.last(pieces)
+
+          Enum.flat_map(boxes, fn box ->
+            cond do
+              box == last_piece ->
+                [outline | borders]
+
+              Map.get(box, :table_paint_id) == table_id and Map.get(box, :role) == :table_outline ->
+                []
+
+              true ->
+                [box]
+            end
+          end)
+        end)
+
+      %{page | boxes: boxes}
+    end)
   end
 
   # Interior collapsed borders normally belong to the following row. At a
