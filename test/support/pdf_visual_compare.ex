@@ -12,6 +12,13 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
           required(:max_changed_ratio) => float(),
           required(:max_average_delta) => float(),
           required(:max_channel_delta) => non_neg_integer(),
+          required(:pages) => [map()],
+          required(:dpi) => pos_integer(),
+          required(:pixel_channel_tolerance) => non_neg_integer(),
+          required(:chromium_version) => String.t(),
+          required(:rasterizer_version) => String.t(),
+          required(:font_sources) => [map()],
+          required(:embedded_fonts) => %{chromium: String.t(), native: String.t()},
           required(:artifact_dir) => String.t()
         }
 
@@ -81,9 +88,32 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     stats = %{
       fixture: fixture_path,
       page_count: length(page_stats),
+      pages: page_stats,
       max_changed_ratio: max_stat(page_stats, :changed_ratio),
       max_average_delta: max_stat(page_stats, :average_delta),
       max_channel_delta: max_stat(page_stats, :max_channel_delta),
+      dpi: dpi,
+      pixel_channel_tolerance: 12,
+      chromium_version: command_output!(chromium_bin, ["--version"]),
+      rasterizer_version: command_output!(pdftoppm_bin, ["-v"]) |> String.split("\n") |> hd(),
+      font_sources:
+        render_opts
+        |> Keyword.get(:fonts, [])
+        |> Enum.map(fn font ->
+          font
+          |> Map.take([:family, :path, :weight, :style])
+          |> Map.put(
+            :sha256,
+            font.path
+            |> File.read!()
+            |> then(&:crypto.hash(:sha256, &1))
+            |> Base.encode16(case: :lower)
+          )
+        end),
+      embedded_fonts: %{
+        chromium: command_output!(pdffonts_bin!(), [chromium_pdf]),
+        native: command_output!(pdffonts_bin!(), [native_pdf])
+      },
       artifact_dir: Path.expand(artifact_dir)
     }
 
@@ -95,7 +125,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     max_changed_ratio = Keyword.get(opts, :max_changed_ratio, 0.12)
     max_average_delta = Keyword.get(opts, :max_average_delta, 0.03)
 
-    assert stats.max_changed_ratio <= max_changed_ratio,
+    assert stats.max_changed_ratio < max_changed_ratio,
            """
            Browser parity changed-pixel threshold exceeded for #{fixture_path}
            changed ratio: #{Float.round(stats.max_changed_ratio, 5)}
@@ -169,21 +199,58 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       |> fixture_page_options()
       |> Keyword.put(:base_url, Path.dirname(fixture_path))
 
-    case ttf_font_path() do
-      nil ->
-        page_opts
+    font_dir = Path.expand("../../priv/fonts/dejavu", __DIR__)
 
-      path ->
-        fonts = [%{family: "DejaVu Sans", path: path, weight: 400}]
+    fonts = [
+      %{family: "DejaVu Sans", path: Path.join(font_dir, "DejaVuSans.ttf"), weight: 400},
+      %{family: "DejaVu Sans", path: Path.join(font_dir, "DejaVuSans-Bold.ttf"), weight: 700},
+      %{
+        family: "DejaVu Sans",
+        path: Path.join(font_dir, "DejaVuSans-Oblique.ttf"),
+        weight: 400,
+        style: :italic
+      },
+      %{
+        family: "DejaVu Sans",
+        path: Path.join(font_dir, "DejaVuSans-BoldOblique.ttf"),
+        weight: 700,
+        style: :italic
+      }
+    ]
 
-        fonts =
-          case ttf_bold_font_path() do
-            nil -> fonts
-            bold_path -> fonts ++ [%{family: "DejaVu Sans", path: bold_path, weight: 700}]
-          end
+    fonts =
+      case String.contains?(File.read!(fixture_path), "Liberation Sans") do
+        true ->
+          liberation_dir =
+            ["/usr/share/fonts/liberation", "/usr/share/fonts/truetype/liberation"]
+            |> Enum.find(&File.regular?(Path.join(&1, "LiberationSans-Regular.ttf")))
 
-        Keyword.put(page_opts, :fonts, fonts)
-    end
+          assert liberation_dir,
+                 "Install Liberation Sans to compare #{fixture_path} with identical font files"
+
+          fonts ++
+            [
+              %{
+                family: "Liberation Sans",
+                path: Path.join(liberation_dir, "LiberationSans-Regular.ttf"),
+                weight: 400
+              },
+              %{
+                family: "Liberation Sans",
+                path: Path.join(liberation_dir, "LiberationSans-Bold.ttf"),
+                weight: 700
+              }
+            ]
+
+        false ->
+          fonts
+      end
+
+    Enum.each(fonts, fn font ->
+      assert File.regular?(font.path), "Missing bundled browser parity font: #{font.path}"
+    end)
+
+    Keyword.put(page_opts, :fonts, fonts)
   end
 
   defp fixture_page_options(fixture_path) do
@@ -198,26 +265,6 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     fixture_path
     |> File.read!()
     |> CssParser.page_options()
-  end
-
-  defp ttf_font_path do
-    [
-      Path.expand("../../priv/fonts/dejavu/DejaVuSans.ttf", __DIR__),
-      "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-      "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-      "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
-    ]
-    |> Enum.find(&File.exists?/1)
-  end
-
-  defp ttf_bold_font_path do
-    [
-      Path.expand("../../priv/fonts/dejavu/DejaVuSans-Bold.ttf", __DIR__),
-      "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-      "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-      "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"
-    ]
-    |> Enum.find(&File.exists?/1)
   end
 
   defp chromium_bin! do
@@ -235,12 +282,27 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       flunk("Set PDFTOPPM_BIN to pdftoppm for browser parity tests")
   end
 
+  defp pdffonts_bin! do
+    System.find_executable("pdffonts") ||
+      flunk("Install pdffonts from Poppler to record the fonts used by browser parity tests")
+  end
+
+  defp command_output!(command, args) do
+    case System.cmd(command, args, stderr_to_stdout: true) do
+      {output, 0} -> String.trim(output)
+      {output, status} -> flunk("#{command} failed with status #{status}: #{output}")
+    end
+  end
+
   defp render_chromium_pdf!(chromium_bin, fixture_path, output_path) do
+    profile_dir = Path.join(Path.dirname(output_path), "chromium-profile")
+
     args = [
       "--headless",
       "--no-sandbox",
       "--disable-gpu",
       "--disable-dev-shm-usage",
+      "--user-data-dir=#{Path.expand(profile_dir)}",
       "--allow-file-access-from-files",
       "--run-all-compositor-stages-before-draw",
       "--virtual-time-budget=1000",
@@ -250,9 +312,11 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     ]
 
     case System.cmd(chromium_bin, args, stderr_to_stdout: true) do
-      {_output, 0} ->
+      {output, 0} ->
         assert File.exists?(output_path),
-               "Chromium completed but did not write #{output_path}"
+               "Chromium completed but did not write #{output_path}: #{output}"
+
+        File.rm_rf!(profile_dir)
 
       {output, status} ->
         flunk("""
@@ -471,10 +535,13 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     comparison_width = min(chromium.width, native.width)
     comparison_height = min(chromium.height, native.height)
 
-    diff_stats(
-      crop_pixels(chromium, comparison_width, comparison_height),
-      crop_pixels(native, comparison_width, comparison_height)
-    )
+    stats =
+      diff_stats(
+        crop_pixels(chromium, comparison_width, comparison_height),
+        crop_pixels(native, comparison_width, comparison_height)
+      )
+
+    Map.put(stats, :page, page_number)
   end
 
   defp visual_change_stats!(before_page, after_page, page_number, artifact_dir) do
@@ -645,6 +712,8 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
 
   defp normalize_diff_stats(stats) do
     %{
+      changed_pixels: stats.changed_pixels,
+      total_pixels: stats.total_pixels,
       changed_ratio: stats.changed_pixels / stats.total_pixels,
       average_delta: stats.total_delta / (stats.total_pixels * 3 * 255),
       max_channel_delta: stats.max_channel_delta

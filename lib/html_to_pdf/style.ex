@@ -336,7 +336,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                         {node._selector_id, :after}
                       )
 
-                    {:ok, before ++ styled_children ++ after_content, sibling_counters, counters}
+                    rendered_children = before ++ styled_children ++ after_content
+
+                    rendered =
+                      case {tag, Map.get(element_style, :margin)} do
+                        {"body", margin} when is_map(margin) ->
+                          if Enum.any?(Map.values(margin), &(&1 != 0)),
+                            do: [
+                              %{
+                                type: :element,
+                                tag: tag,
+                                style: element_style,
+                                children: rendered_children
+                              }
+                            ],
+                            else: rendered_children
+
+                        _ ->
+                          rendered_children
+                      end
+
+                    {:ok, rendered, sibling_counters, counters}
                   end
               end
             end
@@ -931,12 +951,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp normal_line_height(style) do
     font_size = Map.fetch!(style, :font_size)
 
-    %{type: :embedded, ascent: ascent, descent: descent, units_per_em: units_per_em} =
+    %{
+      type: :embedded,
+      ascent: ascent,
+      descent: descent,
+      line_gap: line_gap,
+      units_per_em: units_per_em
+    } =
       Map.fetch!(style, :font_face)
 
     ascent_pixels = round(ascent / units_per_em * font_size / 0.75)
     descent_pixels = round(-descent / units_per_em * font_size / 0.75)
-    max((ascent_pixels + descent_pixels) * 0.75, font_size)
+    line_gap_pixels = round(max(line_gap, 0) / units_per_em * font_size / 0.75)
+    max((ascent_pixels + descent_pixels + line_gap_pixels) * 0.75, font_size)
   end
 
   defp text_style(style) do

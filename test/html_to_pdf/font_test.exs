@@ -374,6 +374,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert Font.encode_embedded_text("AB", encoding) == "00010002"
   end
 
+  test "embedded fonts shape Latin ligatures before measuring and encoding" do
+    assert {:ok, registry} = Font.load_registry([])
+    assert {:ok, _, font} = Font.resolve("DejaVu Sans", 700, :normal, registry)
+
+    assert Font.shape_ligatures("Office file flow", font) == "Oﬃce ﬁle ﬂow"
+    assert Font.text_width("Officer", font, 9) == Font.text_width("Oﬃcer", font, 9)
+
+    encoding = Font.pdf_encoding(["Officer"], font)
+    assert Map.has_key?(encoding.codepoint_to_cid, 0xFB03)
+    refute Map.has_key?(encoding.codepoint_to_cid, ?f)
+
+    without_ligatures = %{
+      font
+      | cmap: Map.drop(font.cmap, [0xFB00, 0xFB01, 0xFB02, 0xFB03, 0xFB04])
+    }
+
+    assert Font.shape_ligatures("Office file", without_ligatures) == "Office file"
+  end
+
   test "load_registry skips an empty preferred cmap subtable" do
     empty_format4 = cmap_format4_table(0xFFFF, 0xFFFF, 1, 0)
     populated_format4 = cmap_format4_table(?A, ?A, 1, 0)

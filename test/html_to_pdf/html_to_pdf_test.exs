@@ -229,7 +229,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
     assert pdf =~ "0.9333 0.9333 0.9333 rg"
-    assert pdf =~ "1 0 0 RG 0.75 w"
+    assert pdf =~ "0.75 0 0 0.75 0 0 cm 1 0 0 RG 1 w"
     assert_pdf_text(pdf, "Boxed")
   end
 
@@ -249,11 +249,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, css_pdf} = HtmlToPdf.render(html)
     assert css_pdf =~ "/MediaBox [0 0 841.89 595.28]"
-    assert css_pdf =~ "19.875 564.905 801.75 10.5 re S"
+    assert_stroked_rectangle(css_pdf, {19.875, 564.905, 801.75, 10.5})
 
     assert {:ok, override_pdf} = HtmlToPdf.render(html, page_size: {200, 100}, margin: 0)
     assert override_pdf =~ "/MediaBox [0 0 200 100]"
-    assert override_pdf =~ "0.375 89.125 199.5 10.5 re S"
+    assert_stroked_rectangle(override_pdf, {0.375, 89.125, 199.5, 10.5})
   end
 
   test "render applies complete page geometry and explicit option precedence" do
@@ -270,7 +270,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, css_pdf} = HtmlToPdf.render(html)
     assert css_pdf =~ "/MediaBox [0 0 595.28 419.53]"
-    assert css_pdf =~ "50.625 398.905 525 10.5 re S"
+    assert_stroked_rectangle(css_pdf, {50.625, 398.905, 525, 10.5})
 
     assert {:ok, override_pdf} =
              HtmlToPdf.render(html,
@@ -279,7 +279,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              )
 
     assert override_pdf =~ "/MediaBox [0 0 200 100]"
-    assert override_pdf =~ "4.125 88.375 193.5 10.5 re S"
+    assert_stroked_rectangle(override_pdf, {4.125, 88.375, 193.5, 10.5})
   end
 
   test "render uses page CSS defaults from configured stylesheets" do
@@ -319,7 +319,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                stylesheets: [{:css, "@page { margin: 10pt 20pt; }"}]
              )
 
-    assert pdf =~ "40.125 79.375 139.5 10.5 re S"
+    assert_stroked_rectangle(pdf, {40.125, 79.375, 139.5, 10.5})
   end
 
   test "render returns detailed diagnostics for invalid page declarations" do
@@ -724,7 +724,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert_pdf_text(pdf, ["Summary", "Name", "Docs", "Alpha", "Link"])
     assert pdf =~ "/BaseFont /DejaVuSans"
     assert pdf =~ "0.9333 0.9333 0.9333 rg"
-    assert pdf =~ "0 0 0 RG 0.75 w"
+    assert pdf =~ "0.75 0 0 0.75 0 0 cm 0 0 0 RG 1 w"
     assert pdf =~ "/Subtype /Link"
     assert pdf =~ "/URI (https://example.com)"
   end
@@ -1450,6 +1450,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   defp assert_pdf_text(pdf, expected) do
     assert {:ok, extracted} = Text.extract(pdf, layout: false)
     Enum.each(List.wrap(expected), &assert(extracted =~ &1))
+  end
+
+  defp assert_stroked_rectangle(pdf, expected) do
+    assert pdf =~ "0.75 0 0 0.75 0 0 cm"
+
+    assert [_, x, y, width, height] =
+             Regex.run(
+               ~r/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?) re S/,
+               pdf
+             )
+
+    actual = Enum.map([x, y, width, height], &(&1 |> Float.parse() |> elem(0) |> Kernel.*(0.75)))
+
+    Enum.zip(actual, Tuple.to_list(expected))
+    |> Enum.each(fn {value, target} -> assert_in_delta value, target, 0.01 end)
   end
 
   defp refute_pdf_text(pdf, expected) do

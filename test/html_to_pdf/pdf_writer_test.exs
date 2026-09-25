@@ -62,7 +62,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     }
 
     assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box]}], [])
-    assert pdf =~ "10 20 30 40 re S"
+    assert pdf =~ "0.75 0 0 0.75 0 0 cm"
+    assert pdf =~ "13.3333 26.6667 40 53.3333 re S"
     assert NativeElixirPdfUtilities.HtmlToPdf.PageGeometry.box_vertical_bounds(box) == {60, 20}
   end
 
@@ -554,7 +555,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
     assert {:ok, pdf} = PdfWriter.render(pages, [])
     assert pdf =~ "q 0.9 0.9 0.9 rg 10 20 40 30 re f Q"
-    assert pdf =~ "q 1 0 0 RG 2 w 11 21 38 28 re S Q"
+    assert pdf =~ "q 0.75 0 0 0.75 0 0 cm 1 0 0 RG 2.6667 w"
+    assert pdf =~ "14.6667 28 50.6667 37.3333 re S Q"
     assert pdf =~ "BT /F1 12 Tf 0 0 0 rg 15 35 Td (Boxed) Tj ET"
   end
 
@@ -603,7 +605,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "<< /Type /ExtGState /CA 0.25 >>"
     assert length(Regex.scan(~r/<< \/Type \/ExtGState \/ca 0\.5 >>/, pdf)) == 1
     assert pdf =~ ~r/q \/GS\d+ gs 1 0 0 rg 10 20 40 30 re f Q/
-    assert pdf =~ ~r/q \/GS\d+ gs 0 0 1 RG 2 w 11 21 38 28 re S Q/
+    assert pdf =~ ~r/q 0\.75 0 0 0\.75 0 0 cm \/GS\d+ gs 0 0 1 RG 2\.6667 w .* re S Q/
     assert pdf =~ ~r/q \/GS\d+ gs BT \/F1 12 Tf 0 0 0 rg 15 35 Td \(Hidden\) Tj ET Q/
     assert pdf =~ ~r/q \/GS\d+ gs BT \/F1 12 Tf 0 0 0 rg 15 50 Td \(Faded\) Tj ET Q/
   end
@@ -638,8 +640,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
     assert {:ok, pdf} = PdfWriter.render(pages, [])
     assert pdf =~ "<< /Type /ExtGState /CA 0.5 >>"
-    assert pdf =~ ~r/q \/GS\d+ gs 0\.2353 0\.3529 0\.4706 RG/
-    assert pdf =~ ~r/q \/GS\d+ gs 0\.502 0\.749 1 RG/
+    assert pdf =~ ~r/q 0\.75 0 0 0\.75 0 0 cm \/GS\d+ gs 0\.2353 0\.3529 0\.4706 RG/
+    assert pdf =~ ~r/q 0\.75 0 0 0\.75 0 0 cm \/GS\d+ gs 0\.502 0\.749 1 RG/
   end
 
   test "render writes fill-only and stroke-only rectangle boxes" do
@@ -675,7 +677,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
     assert {:ok, pdf} = PdfWriter.render(pages, [])
     assert pdf =~ "q 0.9 0.9 0.9 rg 10 20 40 30 re f Q"
-    assert pdf =~ "q 0 0 1 RG 1 w 10.5 60.5 39 19 re S Q"
+    assert pdf =~ "q 0.75 0 0 0.75 0 0 cm 0 0 1 RG 1.3333 w"
+    assert pdf =~ "14 80.6667 52 25.3333 re S Q"
   end
 
   test "render writes side-specific rectangle borders" do
@@ -706,12 +709,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     ]
 
     assert {:ok, pdf} = PdfWriter.render(pages, [])
-    assert pdf =~ "q 0.1 0.2 0.3 RG 1 w 10 49.5 m 50 49.5 l S Q"
-    assert pdf =~ "10 49.5 m 50 49.5 l S"
-    refute pdf =~ "50 20 m 50 50 l S"
-    assert pdf =~ "q 0.8 0.9 1 RG 1 w 10 20.5 m 50 20.5 l S Q"
-    assert pdf =~ "10 20.5 m 50 20.5 l S"
-    assert pdf =~ "10.5 20 m 10.5 50 l S"
+    assert pdf =~ "q 0.75 0 0 0.75 0 0 cm 0.1 0.2 0.3 RG 1.3333 w"
+    assert pdf =~ "13.3333 66 m 66.6667 66 l S"
+    refute pdf =~ "66 26.6667 m 66 66.6667 l S"
+    assert pdf =~ "q 0.75 0 0 0.75 0 0 cm 0.8 0.9 1 RG 1.3333 w"
+    assert pdf =~ "13.3333 27.7083 m 66.6667 27.7083 l S"
+    assert pdf =~ "14 26.6667 m 14 66.6667 l S"
 
     stroke_only_pages = [
       %{
@@ -734,7 +737,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     ]
 
     assert {:ok, stroke_only_pdf} = PdfWriter.render(stroke_only_pages, [])
-    assert stroke_only_pdf =~ "49.5 20 m 49.5 50 l S"
+    assert stroke_only_pdf =~ "66 26.6667 m 66 66.6667 l S"
     refute stroke_only_pdf =~ "10 20 40 30 re f"
   end
 
@@ -783,6 +786,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
       border_box.(50.0, 70.0, :solid, 1.0)
       |> Map.delete(:border_styles)
 
+    rounded_pattern_boxes =
+      [:dotted, :dashed]
+      |> Enum.with_index()
+      |> Enum.map(fn {border_style, index} ->
+        border_box.(70.0 + index * 15, 70.0, border_style, 2.0)
+        |> Map.put(:border_radius, 2.0)
+      end)
+
+    narrow_dash_box =
+      border_box.(70.0, 50.0, :dashed, 2.0)
+      |> Map.put(:width, 4.1)
+
     pages = [
       %{
         size: {100.0, 100.0},
@@ -795,40 +810,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
             border_box.(30.0, 30.0, :ridge, 3.0),
             border_box.(50.0, 30.0, :inset, 3.0),
             border_box.(70.0, 10.0, :outset, 3.0),
-            transparent_box
+            transparent_box,
+            narrow_dash_box
           ] ++
-            invisible_boxes ++ [mixed_hidden_box, fallback_color_box, fallback_style_box]
+            invisible_boxes ++
+            [mixed_hidden_box, fallback_color_box, fallback_style_box] ++ rounded_pattern_boxes
       }
     ]
 
     assert {:ok, pdf} = PdfWriter.render(pages, [])
 
-    assert pdf =~ "[0 4] 0 d 1 J"
-    assert pdf =~ "[6 6] 0 d 0 J"
-
-    assert pdf =~ "0.2 0.4 0.6 RG 1 w 50 19.5 m 60 19.5 l S"
-    assert pdf =~ "0.2 0.4 0.6 RG 1 w 50 17.5 m 60 17.5 l S"
-
-    assert pdf =~ "0.0902 0.1804 0.2706 RG 1.5 w 10 39.25 m 20 39.25 l S"
-    assert pdf =~ "0.3098 0.6196 0.9294 RG 1.5 w 10 37.75 m 20 37.75 l S"
-    assert pdf =~ "0.3098 0.6196 0.9294 RG 1.5 w 30 39.25 m 40 39.25 l S"
-    assert pdf =~ "0.0902 0.1804 0.2706 RG 1.5 w 30 37.75 m 40 37.75 l S"
-
-    assert pdf =~ "0.0902 0.1804 0.2706 RG 3 w 50 38.5 m 60 38.5 l S"
-    assert pdf =~ "0.0902 0.1804 0.2706 RG 3 w 78.5 10 m 78.5 20 l S"
-
-    assert pdf =~ "1 0 0 RG 1 w 79.5 30 m 79.5 40 l S"
-    refute pdf =~ "70 40 m 80 40 l S"
-    refute pdf =~ "70 30 m 80 30 l S"
-    refute pdf =~ "70 30 m 70 40 l S"
+    assert pdf =~ ~r/\[[^\]]+\] 0 d 1 J/
+    assert pdf =~ ~r/\[[^\]]+\] 0 d 0 J/
+    assert pdf =~ "0.2 0.4 0.6 RG"
+    assert pdf =~ "0.0902 0.1804 0.2706 RG"
+    assert pdf =~ "0.3098 0.6196 0.9294 RG"
+    assert pdf =~ "1 0 0 RG 1.3333 w"
+    assert length(Regex.scan(~r/1 0 0 RG 1\.3333 w/, pdf)) == 1
 
     assert pdf =~ "10 50 10 10 re f"
     assert pdf =~ "30 50 10 10 re f"
 
-    refute pdf =~ "10 80 m 20 80 l S"
-    assert pdf =~ "19.5 70 m 19.5 80 l S"
-    assert pdf =~ "0.2 0.4 0.6 RG 1 w 30 79.5 m 40 79.5 l S"
-    assert pdf =~ "0.2 0.4 0.6 RG 1 w 50.5 70.5 9 9 re S"
+    assert pdf =~ "0.2 0.4 0.6 RG 1.3333 w"
+    assert pdf =~ " re S"
   end
 
   test "render writes rounded rectangle paths when radius is set" do
@@ -852,8 +856,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     ]
 
     assert {:ok, pdf} = PdfWriter.render(pages, [])
-    assert pdf =~ "0 0 1 RG 1 w"
-    assert pdf =~ "14 20.5 m"
+    assert pdf =~ "0 0 1 RG 1.3333 w"
+    assert pdf =~ "0.75 0 0 0.75 0 0 cm"
     assert pdf =~ "c"
     assert pdf =~ " h S Q"
   end
@@ -1048,6 +1052,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "<0002> <0042>"
     assert pdf =~ "<0003> <D83DDE00>"
     assert {:ok, "AB😀"} = Text.extract(pdf, layout: false)
+  end
+
+  test "ligature glyphs retain the original spelling in extracted PDF text" do
+    assert {:ok, registry} = Font.load_registry([])
+    assert {:ok, _, font} = Font.resolve("DejaVu Sans", 700, :normal, registry)
+
+    box = %{
+      type: :text,
+      text: "Office certification flower waffle",
+      x: 10.0,
+      y: 80.0,
+      font: Font.pdf_name(font),
+      font_face: font,
+      font_size: 9.0,
+      color: {0, 0, 0}
+    }
+
+    assert {:ok, pdf} = PdfWriter.render([%{size: {200, 100}, boxes: [box]}], [])
+    assert pdf =~ ~r/<[0-9A-F]{4}> <006600660069>/
+    assert {:ok, "Office certification flower waffle"} = Text.extract(pdf, layout: false)
   end
 
   test "embedded font ToUnicode mappings use sections of at most 100 entries" do

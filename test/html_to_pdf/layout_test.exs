@@ -55,6 +55,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert width > 0
   end
 
+  test "block aspect ratio sets auto height using the selected box sizing" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <div style="width:120pt;aspect-ratio:2/1;border:2pt solid #ff0000;background:#0000ff"></div>
+             <div style="width:120pt;aspect-ratio:2/1;box-sizing:border-box;border:2pt solid #ff0000;background:#00ff00"></div>
+             """)
+
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 200}, margin: 0)
+
+    blue = Enum.find(layout.boxes, &(&1.type == :rect and &1.fill_color == {0, 0, 1}))
+    green = Enum.find(layout.boxes, &(&1.type == :rect and &1.fill_color == {0, 1, 0}))
+
+    assert {blue.width, blue.height} == {123.0, 63.0}
+    assert {green.width, green.height} == {120.0, 60.0}
+  end
+
+  test "an explicit body margin positions its document content" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <html><head><style>body { margin: 36pt }</style></head>
+             <body><p>Inset text</p></body></html>
+             """)
+
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 200}, margin: 0)
+    assert [%{x: 36.0, text: "Inset text"}] = Enum.filter(layout.boxes, &(&1.type == :text))
+  end
+
   test "mixed inline sizes share a baseline and retain the parent descent" do
     assert {:ok, dom} =
              HtmlParser.parse(
@@ -1485,6 +1514,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert_in_delta first_border.height, 49.625, 0.0001
     assert_in_delta second_border.height, 49.625, 0.0001
+  end
+
+  test "collapsed table borders paint the stronger shared cell edge" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <table style="width:160pt;border-collapse:collapse">
+               <tr><td style="border:1pt solid black;border-right:4pt solid red;border-bottom:3pt solid red">A</td><td style="border:1pt solid black;border-left:2pt solid blue">B</td></tr>
+               <tr><td style="border:1pt solid black;border-top:2pt solid blue">C</td><td style="border:1pt solid black">D</td></tr>
+             </table>
+             """)
+
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {180, 120}, margin: 0)
+
+    [upper_left, upper_right, lower_left, _lower_right] =
+      Enum.filter(layout.boxes, &(Map.get(&1, :role) == :table_border))
+
+    assert upper_left.border_widths.right == 3.75
+    assert upper_right.border_widths.left == 0.0
+    assert upper_left.border_widths.bottom == 3.0
+    assert lower_left.border_widths.top == 0.0
   end
 
   test "empty automatic table columns divide available width without intrinsic content" do
@@ -3614,6 +3664,72 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert Enum.join(rendered_text, " ") =~ "Direct Flex A"
     assert Enum.join(rendered_text, " ") =~ "Direct Flex B"
     assert "Neighbor" in rendered_text
+
+    neighbor = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "Neighbor"))
+    assert neighbor.x > 150
+  end
+
+  test "growing flex text uses its final width for row height" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <div style="display:flex;width:200pt;align-items:flex-start;line-height:12pt">
+               <div style="flex:1 1 20pt;background:red">growth fits</div>
+               <div style="flex:1 1 20pt;background:blue">peer</div>
+             </div>
+             """)
+
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {220, 100}, margin: 0)
+
+    red = Enum.find(layout.boxes, &(&1.type == :rect and &1.fill_color == {1, 0, 0}))
+    blue = Enum.find(layout.boxes, &(&1.type == :rect and &1.fill_color == {0, 0, 1}))
+
+    assert red.height == 12.0
+    assert blue.height == 12.0
+  end
+
+  test "automatic flex row height preserves fractional child height" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <div style="display:flex;width:100pt;align-items:flex-start">
+               <div style="height:24pt;padding:4pt;border:1pt solid red;background:red">A</div>
+               <div style="height:24pt;padding:4pt;border:1pt solid blue;background:blue">B</div>
+             </div>
+             <div style="height:10pt;background:green">after</div>
+             """)
+
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 200}, margin: 0)
+
+    first = Enum.find(layout.boxes, &(&1.type == :rect and &1.fill_color == {1, 0, 0}))
+
+    following =
+      Enum.find(layout.boxes, &(&1.type == :rect and &1.fill_color == {0, 0.5019607843, 0}))
+
+    assert first.height == 33.5
+    assert following.y + following.height == 200 - first.height
+  end
+
+  test "automatic table columns measure a column-direction flex cell" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <table style="width:200pt">
+               <tr>
+                 <td><div style="display:flex;flex-direction:column;width:100pt"><span>First</span><span>Second</span></div></td>
+                 <td>Peer</td>
+               </tr>
+             </table>
+             """)
+
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {220, 120}, margin: 0)
+
+    first = Enum.find(layout.boxes, &(&1.type == :text and &1.text == "First"))
+    second = Enum.find(layout.boxes, &(&1.type == :text and &1.text == "Second"))
+    peer = Enum.find(layout.boxes, &(&1.type == :text and &1.text == "Peer"))
+
+    assert first.y > second.y
+    assert peer.x > 100
   end
 
   test "layout rejects invalid nested structures through containers" do
@@ -5335,6 +5451,52 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     text_boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
 
     assert Enum.all?(text_boxes, &(not String.starts_with?(&1.text, " ")))
+  end
+
+  test "line fitting excludes the trailing space that disappears at a wrap" do
+    html = """
+    <p style="width: 55pt; margin: 0; font-family: 'DejaVu Sans'; font-size: 10pt; line-height: 12pt">Alpha Beta Gamma</p>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom)
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {100, 100}, margin: 0)
+
+    lines =
+      layout_tree.boxes
+      |> Enum.filter(&(&1.type == :text))
+      |> Enum.chunk_by(& &1.y)
+      |> Enum.map(fn line -> Enum.map_join(line, "", & &1.text) end)
+
+    assert lines == ["Alpha Beta", "Gamma"]
+  end
+
+  test "multiline bordered backgrounds cover the complete CSS pixel at their top edge" do
+    html = """
+    <div style="width: 100pt; padding: 8pt; border: 1px solid #64748b; background: #f8fafc; font-family: 'DejaVu Sans'; font-size: 9pt; line-height: 12pt">First line<br>Second line</div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom)
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 200}, margin: 0)
+
+    assert [%{type: :rect, y: 158.5, height: 42.0} | text_boxes] = layout_tree.boxes
+    assert Enum.map(text_boxes, & &1.text) == ["First line", "Second line"]
+  end
+
+  test "a collapsed table paints cell borders after its outer outline" do
+    html = """
+    <table style="border-collapse: collapse; border: 1px solid #ccc"><tr><td style="border-top: 4px solid #22334a">A</td></tr></table>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom)
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 200}, margin: 0)
+
+    borders = Enum.filter(layout_tree.boxes, &(&1.type == :rect and &1.stroke_width > 0))
+    assert [%{role: :table_outline} = outline, %{role: :table_border} = cell_border] = borders
+    assert outline.table_id == cell_border.table_id
+    assert outline.stroke_width < cell_border.stroke_width
   end
 
   test "layout collapses template whitespace but keeps explicit line breaks" do

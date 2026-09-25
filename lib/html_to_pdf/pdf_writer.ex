@@ -384,6 +384,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       case Map.get(font_resource, :font_face) do
         %{type: :embedded} = font ->
           size = box.font_size
+          shaped_text = Font.shape_ligatures(box.text, font)
 
           shaped_size =
             if Map.get(box, :snap_to_css_pixel_grid, false),
@@ -396,7 +397,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                  (shaped_size != painted_size or map_size(Map.get(font, :kerning, %{})) > 0) do
             true ->
               glyphs =
-                box.text
+                shaped_text
                 |> String.to_charlist()
                 |> Enum.chunk_every(2, 1, [nil])
                 |> Enum.map(fn [codepoint, next] ->
@@ -445,7 +446,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
               end
 
             false ->
-              " <" <> Font.encode_embedded_text(box.text, font_resource.encoding) <> "> Tj"
+              " <" <> Font.encode_embedded_text(shaped_text, font_resource.encoding) <> "> Tj"
           end
 
         _ ->
@@ -497,13 +498,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           box
       end
 
-    case side_specific_border?(box) do
+    border_style = uniform_border_style(box)
+
+    case side_specific_border?(box) or
+           (border_style in [:dotted, :dashed] and box.border_radius == 0) or
+           (Map.get(box, :role) in [:table_border, :table_outline] and
+              Map.has_key?(box, :border_widths) and box.border_radius == 0) do
       true ->
+        box =
+          if Map.get(box, :role) == :table_outline,
+            do: Map.put(box, :role, :table_border),
+            else: box
+
+        box = Map.put(box, :raster_page_height, page_height)
         side_specific_rect_stream(box, graphics_state_resources)
 
       false ->
-        border_style = uniform_border_style(box)
-
         fill_stream =
           case box.fill_color do
             nil ->
@@ -520,11 +530,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           case WriterValidator.visible_border?(box) and border_style not in [:none, :hidden] do
             true ->
               stroke_box = inset_stroke_box(box)
+              scale = @css_pixel_points
 
-              ["q"]
+              stroke_box = %{
+                stroke_box
+                | x: stroke_box.x / scale,
+                  y: stroke_box.y / scale,
+                  width: stroke_box.width / scale,
+                  height: stroke_box.height / scale,
+                  border_radius: stroke_box.border_radius / scale
+              }
+
+              ["q", "#{format_number(scale)} 0 0 #{format_number(scale)} 0 0 cm"]
               |> put_opacity(box.stroke_color, :stroke, graphics_state_resources)
-              |> put_stroke_color(box.stroke_color, box.stroke_width)
-              |> put_stroke_pattern(border_style, box.stroke_width)
+              |> put_stroke_color(box.stroke_color, box.stroke_width / scale)
+              |> put_stroke_pattern(border_style, box.stroke_width / scale, nil)
               |> Kernel.++([rect_path(stroke_box), "S", "Q"])
 
             false ->
@@ -658,14 +678,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp put_stroke_pattern(parts, border_style, stroke_width) do
+  defp put_stroke_pattern(parts, border_style, stroke_width, side_length) do
     case {border_style, stroke_width > 0} do
       {:dotted, true} ->
-        parts ++ ["[0 #{format_number(stroke_width * 2)}] 0 d", "1 J"]
+        spacing =
+          case side_length do
+            length when is_number(length) and length > stroke_width ->
+              intervals = max(round((length - stroke_width) / (stroke_width * 2)), 1)
+              (length - stroke_width) / intervals
+
+            _ ->
+              stroke_width * 2
+          end
+
+        parts ++ ["[0 #{format_number(spacing)}] 0 d", "1 J"]
 
       {:dashed, true} ->
-        dash_length = stroke_width * 3
-        parts ++ ["[#{format_number(dash_length)} #{format_number(dash_length)}] 0 d", "0 J"]
+        dash_length = stroke_width * 2
+
+        gap =
+          case side_length do
+            length when is_number(length) and length > dash_length ->
+              count = max(round((length + stroke_width) / (dash_length + stroke_width)), 1)
+
+              case count > 1 do
+                true -> max((length - count * dash_length) / (count - 1), 0.0)
+                false -> stroke_width
+              end
+
+            _ ->
+              stroke_width
+          end
+
+        parts ++ ["[#{format_number(dash_length)} #{format_number(gap)}] 0 d", "0 J"]
 
       _ ->
         parts
@@ -866,11 +911,55 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
          inset,
          graphics_state_resources
        ) do
-    ["q"]
+    scale = @css_pixel_points
+
+    box = %{
+      box
+      | x: box.x / scale,
+        y: box.y / scale,
+        width: box.width / scale,
+        height: box.height / scale
+    }
+
+    stroke_width = stroke_width / scale
+    inset = inset / scale
+    side_length = if side in [:top, :bottom], do: box.width, else: box.height
+
+    painted_inset =
+      case {Map.get(box, :role), border_style, side, Map.get(box, :raster_page_height)} do
+        {:table_border, :solid, side, page_height}
+        when side in [:top, :bottom] and is_number(page_height) ->
+          painted_edge =
+            if side == :top,
+              do: box.y + box.height - inset,
+              else: box.y + inset + stroke_width
+
+          top_down = page_height / scale - painted_edge
+          fractional_pixel = top_down - Float.floor(top_down)
+          # Chromium snaps solid table edges on the CSS pixel grid. Bottom
+          # edges occupy the preceding pixel except at an exact half pixel.
+          grid_edge =
+            if side == :bottom and stroke_width <= 1.0 and
+                 abs(fractional_pixel - 0.5) > 0.0001,
+               do: Float.floor(top_down),
+               else: Float.floor(top_down + 0.5)
+
+          adjustment = top_down - grid_edge
+          inset + stroke_width / 2 + if(side == :top, do: -adjustment, else: adjustment)
+
+        _ ->
+          inset + stroke_width / 2
+      end
+
+    ["q", "#{format_number(scale)} 0 0 #{format_number(scale)} 0 0 cm"]
     |> put_opacity(color, :stroke, graphics_state_resources)
     |> put_stroke_color(color, stroke_width)
-    |> put_stroke_pattern(border_style, stroke_width)
-    |> Kernel.++([border_side_path(box, side, inset + stroke_width / 2), "S", "Q"])
+    |> put_stroke_pattern(border_style, stroke_width, side_length)
+    |> Kernel.++([
+      border_side_path(box, side, painted_inset, border_style),
+      "S",
+      "Q"
+    ])
   end
 
   defp relief_pair(color, side, border_style) do
@@ -918,32 +1007,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp border_side_path(box, side, inset) do
+  defp border_side_path(box, side, inset, border_style) do
     left = box.x
     right = box.x + box.width
     bottom = box.y
     top = box.y + box.height
 
+    {start_inset, end_inset} =
+      case border_style do
+        :dotted -> {inset, inset}
+        _ -> {0.0, 0.0}
+      end
+
     case side do
       :top ->
         y = top - inset
 
-        "#{format_number(left)} #{format_number(y)} m #{format_number(right)} #{format_number(y)} l"
+        "#{format_number(left + start_inset)} #{format_number(y)} m #{format_number(right - end_inset)} #{format_number(y)} l"
 
       :right ->
         x = right - inset
 
-        "#{format_number(x)} #{format_number(bottom)} m #{format_number(x)} #{format_number(top)} l"
+        "#{format_number(x)} #{format_number(bottom + start_inset)} m #{format_number(x)} #{format_number(top - end_inset)} l"
 
       :bottom ->
-        y = bottom + inset
+        pixel_alignment =
+          case Map.get(box, :role) do
+            :table_border -> 0.0
+            _ -> @css_pixel_points / 2
+          end
 
-        "#{format_number(left)} #{format_number(y)} m #{format_number(right)} #{format_number(y)} l"
+        y = bottom + inset + pixel_alignment
+
+        "#{format_number(left + start_inset)} #{format_number(y)} m #{format_number(right - end_inset)} #{format_number(y)} l"
 
       :left ->
-        x = left + inset
+        pixel_alignment =
+          case Map.get(box, :role) do
+            :table_border -> @css_pixel_points / 6
+            _ -> 0.0
+          end
 
-        "#{format_number(x)} #{format_number(bottom)} m #{format_number(x)} #{format_number(top)} l"
+        x = left + inset - pixel_alignment
+
+        "#{format_number(x)} #{format_number(bottom + start_inset)} m #{format_number(x)} #{format_number(top - end_inset)} l"
     end
   end
 
@@ -1152,7 +1259,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         [
           "#{length(section)} beginbfchar",
           Enum.map_join(section, "\n", fn {cid, unicode} ->
-            encoded = :unicode.characters_to_binary([unicode], :unicode, {:utf16, :big})
+            extracted =
+              case unicode do
+                0xFB00 -> ~c"ff"
+                0xFB01 -> ~c"fi"
+                0xFB02 -> ~c"fl"
+                0xFB03 -> ~c"ffi"
+                0xFB04 -> ~c"ffl"
+                _ -> [unicode]
+              end
+
+            encoded = :unicode.characters_to_binary(extracted, :unicode, {:utf16, :big})
             "<#{hex16(cid)}> <#{Base.encode16(encoded)}>"
           end),
           "endbfchar"

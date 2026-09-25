@@ -1063,6 +1063,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert_in_delta paragraph.style.line_height, expected_line_height, 0.0001
   end
 
+  test "normal line-height includes a font's positive line gap at larger sizes" do
+    font_path =
+      [
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+      ]
+      |> Enum.find(&File.regular?/1)
+
+    assert font_path
+
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               "<p style=\"font-family:'Fixture Sans';font-size:14pt;line-height:normal\">Line gap</p>"
+             )
+
+    assert {:ok, styled} =
+             Style.compute(dom, fonts: [%{family: "Fixture Sans", path: font_path}])
+
+    [paragraph] = styled.children
+    assert paragraph.style.font_face.line_gap > 0
+    assert paragraph.style.line_height == 16.5
+  end
+
   test "compute accepts normal line-break declarations" do
     dom = %{
       type: :document,

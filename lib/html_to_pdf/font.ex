@@ -33,6 +33,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
           kerning: %{optional({non_neg_integer(), non_neg_integer()}) => integer()},
           ascent: integer(),
           descent: integer(),
+          line_gap: integer(),
           bbox: {integer(), integer(), integer(), integer()},
           embedding_flags: non_neg_integer(),
           variable_font?: boolean(),
@@ -222,6 +223,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       %{type: :embedded, units_per_em: units_per_em} ->
         {glyphs, maximum_glyph} =
           text
+          |> shape_ligatures(font)
           |> String.to_charlist()
           |> Enum.map_reduce(-1, fn codepoint, maximum ->
             glyph = Map.get(font.cmap, codepoint, 0)
@@ -257,6 +259,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     end
   end
 
+  @doc "Shapes common Latin ligatures when the embedded font provides their glyphs."
+  @spec shape_ligatures(String.t(), embedded_font()) :: String.t()
+  def shape_ligatures(text, font) do
+    [{"ffi", "ﬃ"}, {"ffl", "ﬄ"}, {"ff", "ﬀ"}, {"fi", "ﬁ"}, {"fl", "ﬂ"}]
+    |> Enum.reduce(text, fn {letters, ligature}, shaped ->
+      case Map.get(font.cmap, hd(String.to_charlist(ligature)), 0) do
+        0 -> shaped
+        _glyph -> String.replace(shaped, letters, ligature)
+      end
+    end)
+  end
+
   @doc """
   Builds a document-scoped CID encoding for text shown with an embedded font.
   """
@@ -267,6 +281,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     {encoding, _next_cid} =
       Enum.reduce(texts, {encoding, 1}, fn text, {encoding, next_cid} ->
         text
+        |> shape_ligatures(font)
         |> String.to_charlist()
         |> Enum.reduce({encoding, next_cid}, fn codepoint, {encoding, next_cid} ->
           case Map.has_key?(encoding.codepoint_to_cid, codepoint) do
@@ -657,7 +672,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
          {:ok, hmtx} <- table(data, tables, "hmtx"),
          {:ok, cmap} <- table(data, tables, "cmap"),
          {:ok, units_per_em, bbox} <- parse_head(head),
-         {:ok, ascent, descent, hmetric_count} <- parse_hhea(hhea),
+         {:ok, ascent, descent, line_gap, hmetric_count} <- parse_hhea(hhea),
          {:ok, glyph_count} <- read_u16(maxp, 4),
          {:ok, widths} <- parse_hmtx(hmtx, glyph_count, hmetric_count),
          {:ok, cmap} <- parse_cmap(cmap),
@@ -679,6 +694,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
          kerning: kerning,
          ascent: ascent,
          descent: descent,
+         line_gap: line_gap,
          bbox: bbox,
          embedding_flags: embedding_flags,
          variable_font?: Map.has_key?(tables, "fvar")
@@ -740,9 +756,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   defp parse_hhea(hhea) do
     with {:ok, ascent} <- read_i16(hhea, 4),
          {:ok, descent} <- read_i16(hhea, 6),
+         {:ok, line_gap} <- read_i16(hhea, 8),
          {:ok, hmetric_count} <- read_u16(hhea, 34),
          true <- hmetric_count > 0 do
-      {:ok, ascent, descent, hmetric_count}
+      {:ok, ascent, descent, line_gap, hmetric_count}
     else
       _ -> :error
     end
