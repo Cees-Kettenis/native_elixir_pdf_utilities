@@ -56,6 +56,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       |> Enum.with_index()
       |> Enum.map(fn {box, index} -> Map.put(box, pagination_order, index) end)
 
+    {canvas_boxes, boxes} = Enum.split_with(boxes, &(Map.get(&1, :position_anchor) == :canvas))
+
     {root_positioned_boxes, flow_boxes} =
       Enum.split_with(boxes, &(Map.get(&1, :position_anchor) == :root))
 
@@ -73,6 +75,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       |> close_table_fragments()
       |> restore_root_positioned_boxes(root_positioned_boxes, pagination_order)
       |> paint_table_outlines()
+      |> Enum.map(fn page ->
+        background = Enum.map(canvas_boxes, &Map.delete(&1, pagination_order))
+        HtmlValidator.reserve_render_resource(:max_layout_boxes, length(background), :pagination)
+        %{page | boxes: background ++ page.boxes}
+      end)
 
     {:ok, pages}
   end

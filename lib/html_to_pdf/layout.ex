@@ -70,7 +70,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 {page_size, margins}
             end
 
-          children = styled_tree.children
+          {children, canvas_boxes} =
+            Enum.map_reduce(styled_tree.children, [], fn node, canvas_boxes ->
+              case node do
+                %{tag: "body", style: style} ->
+                  canvas_style =
+                    Map.take(style, [
+                      :background_color,
+                      :background_image,
+                      :background_position,
+                      :background_repeat,
+                      :background_size
+                    ])
+
+                  canvas_boxes =
+                    background_box(canvas_style, 0, 0, elem(page_size, 0), elem(page_size, 1))
+                    |> Enum.map(&Map.put(&1, :position_anchor, :canvas))
+
+                  style =
+                    style |> Map.put(:background_color, nil) |> Map.put(:background_image, nil)
+
+                  {%{node | style: style}, canvas_boxes}
+
+                _ ->
+                  {node, canvas_boxes}
+              end
+            end)
+
           positioned_children = Map.get(styled_tree, :positioned_children, [])
 
           with {:ok, boxes} <- layout_blocks(children, layout_page_size, margins),
@@ -95,7 +121,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                page_size: page_size,
                margin: PageGeometry.compact_margins(margins),
                margins: margins,
-               boxes: boxes,
+               boxes: canvas_boxes ++ boxes,
                content_width: page_width - margins.left - margins.right,
                content_height: page_height - margins.top - margins.bottom
              }}

@@ -339,18 +339,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                     rendered_children = before ++ styled_children ++ after_content
 
                     rendered =
-                      case {tag, Map.get(element_style, :margin)} do
-                        {"body", margin} when is_map(margin) ->
-                          if Enum.any?(Map.values(margin), &(&1 != 0)),
-                            do: [
-                              %{
-                                type: :element,
-                                tag: tag,
-                                style: element_style,
-                                children: rendered_children
-                              }
-                            ],
-                            else: rendered_children
+                      case tag do
+                        "body" ->
+                          [
+                            %{
+                              type: :element,
+                              tag: tag,
+                              style: element_style,
+                              children: rendered_children
+                            }
+                          ]
 
                         _ ->
                           rendered_children

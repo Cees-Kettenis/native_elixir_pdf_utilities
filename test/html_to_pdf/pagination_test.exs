@@ -7,6 +7,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
+  test "body backgrounds cover every page while zero-margin padding positions content" do
+    html = """
+    <html><head><style>
+      body { margin: 0; padding: 30pt; background: #ddffdd; }
+      p { margin: 0; }
+    </style></head><body><p>First</p><p style="break-before: page">Second</p></body></html>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {240, 180})
+    assert {:ok, pages} = Pagination.paginate(layout)
+    assert length(pages) == 2
+
+    for page <- pages do
+      assert [
+               %{
+                 type: :rect,
+                 position_anchor: :canvas,
+                 x: 0,
+                 y: 0,
+                 width: 240.0,
+                 height: 180.0,
+                 fill_color: color
+               }
+               | _
+             ] = page.boxes
+
+      assert color == {221 / 255, 1.0, 221 / 255}
+      assert [%{x: 30.0}] = Enum.filter(page.boxes, &(&1.type == :text))
+    end
+  end
+
   test "outer table outlines keep borders and repeated headings on each page" do
     html =
       File.read!("test/fixtures/html_to_pdf/browser_parity/table_outer_border_pagination.html")

@@ -4,6 +4,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
   alias NativeElixirPdfUtilities.TestSupport.JpegFixture
 
+  test "zero-margin bodies retain padding, backgrounds, and layout containers" do
+    for {fixture, display, padding} <- [
+          {"body_padding_background.html", :block, 30.0},
+          {"body_grid.html", :grid, 12.0}
+        ] do
+      html = File.read!("test/fixtures/html_to_pdf/browser_parity/" <> fixture)
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, %{children: [%{tag: "body", style: style}]}} = Style.compute_detailed(dom)
+      assert style.display == display
+      assert style.margin == edges(0.0)
+      assert style.padding == edges(padding)
+      assert style.background_color != nil
+    end
+  end
+
   test "oversized CSS numbers return diagnostics in every numeric value family" do
     alias NativeElixirPdfUtilities.HtmlToPdf
     number = String.duplicate("9", 400)
@@ -804,7 +819,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     }
 
     assert {:ok, styled_tree} = Style.compute(dom)
-    [element, root_relative_line_height] = styled_tree.children
+    assert [%{tag: "body"} = body] = styled_tree.children
+    [element, root_relative_line_height] = body.children
 
     assert element.style.width == 24.0
     assert element.style.height == 48.0
@@ -1756,7 +1772,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     }
 
     assert {:ok, styled_tree} = Style.compute(dom, [])
-    [paragraph] = styled_tree.children
+    assert [%{tag: "body"} = body] = styled_tree.children
+    [paragraph] = body.children
     [span] = paragraph.children
     [text] = span.children
 
@@ -2043,7 +2060,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     }
 
     assert {:ok, styled_tree} = Style.compute(dom, [])
-    [first_heading, second_heading, figure] = styled_tree.children
+    assert [%{tag: "body"} = body] = styled_tree.children
+    [first_heading, second_heading, figure] = body.children
     [first_number | _children] = first_heading.children
     [second_number | _children] = second_heading.children
     [figure_number | _children] = figure.children
@@ -2251,8 +2269,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     }
 
     assert {:ok, styled_tree} = Style.compute(dom, [])
-    hidden = Enum.find(styled_tree.children, &match?(%{tag: "div"}, &1))
-    table = Enum.find(styled_tree.children, &match?(%{tag: "table"}, &1))
+    assert [%{tag: "body"} = body] = styled_tree.children
+    hidden = Enum.find(body.children, &match?(%{tag: "div"}, &1))
+    table = Enum.find(body.children, &match?(%{tag: "table"}, &1))
     [row] = table.children
     [cell] = row.children
 
@@ -2304,7 +2323,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     }
 
     assert {:ok, styled_tree} = Style.compute(dom, [])
-    [section] = styled_tree.children
+    assert [%{tag: "body"} = body] = styled_tree.children
+    [section] = body.children
 
     assert section.style.padding == %{top: 6.0, right: 6.0, bottom: 6.0, left: 6.0}
     assert section.style.border_widths.left == 3.0
@@ -3054,9 +3074,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     }
 
     assert {:ok, styled_tree} = Style.compute(dom)
-    headings = Enum.take(styled_tree.children, 5)
-    paragraph = Enum.at(styled_tree.children, 5)
-    table = Enum.at(styled_tree.children, 6)
+    assert [%{tag: "body"} = body] = styled_tree.children
+    headings = Enum.take(body.children, 5)
+    paragraph = Enum.at(body.children, 5)
+    table = Enum.at(body.children, 6)
 
     assert Enum.map(headings, & &1.style.font_size) == [
              18.0,
@@ -3146,7 +3167,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     }
 
     assert {:ok, styled_tree} = Style.compute(dom)
-    [paragraph, h2, h4, table] = styled_tree.children
+    assert [%{tag: "body"} = body] = styled_tree.children
+    [paragraph, h2, h4, table] = body.children
     [row] = table.children
     [cell] = row.children
 
