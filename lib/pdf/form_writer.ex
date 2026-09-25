@@ -240,9 +240,11 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
                 InfoCodec.encode_text(field.new_value)
 
               :choice ->
-                if is_list(field.new_value),
-                  do: Enum.map(field.new_value, &InfoCodec.encode_text/1),
-                  else: InfoCodec.encode_text(field.new_value)
+                case field.new_value do
+                  nil -> nil
+                  values when is_list(values) -> Enum.map(values, &InfoCodec.encode_text/1)
+                  value -> InfoCodec.encode_text(value)
+                end
 
               :radio ->
                 {:name, field.new_value}

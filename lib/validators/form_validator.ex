@@ -659,7 +659,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
 
         cond do
           value == nil ->
-            {:ok, if((field.flags &&& 2_097_152) != 0, do: [], else: "")}
+            {:ok, if((field.flags &&& 2_097_152) != 0, do: [], else: nil)}
 
           is_list(value) and (field.flags &&& 2_097_152) == 0 ->
             error(:invalid_form_value, "choice permits only one selection")
@@ -751,6 +751,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
               boxes =
                 lines
                 |> Enum.with_index()
+                |> Enum.reject(fn {line, _index} -> line == "" end)
                 |> Enum.map(fn {line, index} ->
                   %{
                     type: :text,

@@ -9,6 +9,46 @@ defmodule NativeElixirPdfUtilities.FormsTest do
     :ok
   end
 
+  test "clearing a single choice remains distinct from selecting its empty export value" do
+    html = """
+    <div><select name="choice"><option value="">Empty option</option><option value="B" selected>Bee</option></select></div>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert {:ok, context} = Reader.read_validated(pdf)
+
+    assert {:ok, form} =
+             NativeElixirPdfUtilities.Validators.FormValidator.inspect_document(context)
+
+    [field] = form.fields
+    {:ref, {id, generation}} = field.ref
+
+    assert {:ok, pdf} =
+             IncrementalWriter.write(context, [
+               {id, generation, {:value, Map.put(field.dictionary, "I", [1])}}
+             ])
+
+    assert {:ok, cleared} = Forms.fill(pdf, %{"choice" => nil})
+    assert {:ok, [%{value: nil}]} = Forms.fields(cleared)
+    assert {:ok, context} = Reader.read_validated(cleared)
+
+    assert {:ok, form} =
+             NativeElixirPdfUtilities.Validators.FormValidator.inspect_document(context)
+
+    [cleared_field] = form.fields
+    assert cleared_field.dictionary["V"] == nil
+    refute Map.has_key?(cleared_field.dictionary, "I")
+    assert {:ok, flattened} = Forms.flatten(cleared)
+    assert {:error, {:no_extractable_text, _}} = Text.extract(flattened)
+    assert {:ok, direct_flattened} = Forms.fill(pdf, %{"choice" => nil}, flatten: true)
+    assert {:error, {:no_extractable_text, _}} = Text.extract(direct_flattened)
+
+    assert {:ok, selected} = Forms.fill(cleared, %{"choice" => ""})
+    assert {:ok, [%{value: ""}]} = Forms.fields(selected)
+    assert {:ok, flattened} = Forms.flatten(selected)
+    assert {:ok, "Empty option"} = Text.extract(flattened)
+  end
+
   test "generates, fills and flattens named text and unnamed checkbox fields" do
     {:ok, pdf} =
       HtmlToPdf.render(
