@@ -86,11 +86,13 @@ in place.
 | Multiline text | UTF-8 string with explicit line breaks, or `nil` to clear |
 | Checkbox | `true` or `false` |
 | Radio group | One declared export-value string |
-| Single choice | One declared value, or `nil` to clear |
+| Single choice | One declared value, including `""` if offered, or `nil` to clear |
 | Multiple choice | A list of distinct declared values, or `nil` to clear |
 
 Multiple choice is supported for existing PDFs with the appropriate field flag.
-Inspection includes declared choices and export values. Unknown names,
+Clearing a choice with `nil` removes its value; selecting an option with an empty
+export value (`""`) keeps that option selected. Inspection includes declared
+choices and export values. Unknown names,
 read-only fields, invalid selections and field `MaxLen` violations return
 [diagnostics](diagnostics.md).
 

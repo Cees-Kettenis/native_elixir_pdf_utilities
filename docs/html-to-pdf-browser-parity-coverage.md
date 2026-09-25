@@ -55,9 +55,9 @@ current fixture, including invoices, statements, forms, and labels.
 
 The following run used Chromium 151.0.7922.173 and Poppler 25.03.0 at 72 DPI.
 Values are fractions rounded to six decimal places. For multipage documents,
-"Changed" and "Average" show the maximum page value. All 63 fixtures met the
-strict `<0.01` changed-pixel gate; the largest value was `0.009673` for the
-government application form. Each comparison writes its measurements to
+"Changed" and "Average" show the maximum page value. All 67 fixtures across
+80 pages met the strict `<0.01` changed-pixel gate. The government application
+form had the largest value at `0.009673`. Each comparison writes measurements to
 `tmp/browser_parity/<fixture>/stats.exs`.
 
 | Fixture | Changed | Average | Pages |
@@ -65,6 +65,8 @@ government application form. Each comparison writes its measurements to
 | `absolute_positioning` | 0.000000 | 0.000000 | 1 |
 | `background_images` | 0.005026 | 0.000923 | 1 |
 | `block_box_model` | 0.001999 | 0.000473 | 1 |
+| `body_grid` | 0.001690 | 0.000240 | 1 |
+| `body_padding_background` | 0.001944 | 0.000289 | 1 |
 | `border_style_variants` | 0.009581 | 0.002911 | 1 |
 | `box_sizing_and_margins` | 0.001316 | 0.000219 | 1 |
 | `break_variants` | 0.000640 | 0.000348 | 4 |
@@ -92,6 +94,7 @@ government application form. Each comparison writes its measurements to
 | `inline_text_flow` | 0.006012 | 0.002430 | 1 |
 | `invoice_012` | 0.004505 | 0.000971 | 1 |
 | `layout_compositions_remaining` | 0.002315 | 0.000925 | 1 |
+| `ligature_letter_spacing` | 0.006227 | 0.001041 | 1 |
 | `links_entities_and_protocols` | 0.000988 | 0.000380 | 1 |
 | `material_requisition` | 0.005162 | 0.001862 | 2 |
 | `multi_page_report_012` | 0.007759 | 0.002245 | 2 |
@@ -104,7 +107,7 @@ government application form. Each comparison writes its measurements to
 | `paragraph_pagination` | 0.000000 | 0.000000 | 2 |
 | `png_formats` | 0.007718 | 0.002293 | 1 |
 | `png_transparent_color` | 0.000000 | 0.000000 | 1 |
-| `purchase_order` | 0.004020 | 0.001019 | 1 |
+| `purchase_order` | 0.004020 | 0.001018 | 1 |
 | `quoted_at_rules` | 0.000710 | 0.000135 | 1 |
 | `quoted_variables` | 0.000000 | 0.000000 | 1 |
 | `root_absolute_pagination` | 0.000000 | 0.000000 | 2 |
@@ -115,6 +118,7 @@ government application form. Each comparison writes its measurements to
 | `table_collapsed_borders` | 0.009329 | 0.003444 | 1 |
 | `table_column_layout` | 0.002494 | 0.000774 | 1 |
 | `table_header_near_page_row` | 0.001481 | 0.000260 | 2 |
+| `table_outer_border_pagination` | 0.006273 | 0.003928 | 3 |
 | `table_pagination_headers` | 0.002727 | 0.001988 | 2 |
 | `table_rowspan_tfoot` | 0.007336 | 0.002667 | 1 |
 | `table_separate_borders` | 0.000475 | 0.000244 | 1 |

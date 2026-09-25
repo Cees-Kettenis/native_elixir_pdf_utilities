@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.20.0 - 2026-09-25
+
+### Changed
+
+- Brought all 67 Chromium comparison fixtures, covering 80 pages, below the
+  strict 1% changed-pixel threshold at 72 DPI with matched bundled fonts.
+  Comparisons retain page-count and average channel-delta checks, and record
+  browser, rasterizer, and font details with each result.
+
+### Fixed
+
+- Improved text placement, line wrapping, table sizing, borders, images, and
+  font handling to meet the browser-parity threshold on supported layouts.
+- Preserved collapsed table outer borders across page breaks, letter spacing
+  through text shaping, and original characters in ligature text mappings.
+- Kept body padding, backgrounds, and grid layout when page margins are zero.
+- Rejected unsafe numeric render options, derived aspect-ratio dimensions,
+  and invalid stamp geometry with diagnostics instead of allowing overflow.
+- Preserved resource-limit diagnostics for repeated background tiles.
+- Distinguished clearing a single-choice form field from selecting an option
+  whose export value is an empty string.
+
 ## 0.19.0 - 2026-09-22
 
 ### Breaking changes

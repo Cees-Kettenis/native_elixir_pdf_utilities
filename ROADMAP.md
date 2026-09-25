@@ -7,51 +7,6 @@ more efficient document generation, and a stable public API.
 The versions below describe planned scope, which may change as the work develops.
 See [CHANGELOG.md](CHANGELOG.md) for published releases.
 
-## 0.19.0: Image support, SVG safety, and resource limits
-
-Use a wider range of image assets and get clearer failures when documents exceed
-supported formats or resource limits.
-
-Planned improvements:
-
-- Broader PNG decoding, including greyscale, indexed palettes, greyscale with
-  alpha, low-bit-depth and 16-bit images, and Adam7 interlacing.
-- Full PNG sample precision preserved through decoding, transparency handling,
-  and PDF output, including 16-bit color and alpha samples.
-- A dedicated PNG decoder shared by supplied PNG images and SVG conversion
-  output, with format and semantic checks kept in the PNG validator.
-- SVG input size and raster dimension limits reviewed before conversion using
-  the existing Resvg library. Use configurable converter limits where supported
-  and return conversion failures through the shared diagnostics contract.
-- Resource-limit defaults reviewed for server workloads, with guidance on
-  configuration and application responsibilities for concurrency, timeouts,
-  cancellation, and cleanup.
-- More complete error and recovery documentation, plus clearer guidance on
-  application-facing APIs and advanced building blocks.
-
-SVG conversion will continue in process, with successful output passed through
-the shared PNG validator and decoder. Input checks and the converter's own
-safeguards mitigate excessive resource use, but do not guarantee a hard memory
-ceiling or processing deadline. Native resource exhaustion may terminate the
-application before a diagnostic can be returned. Isolated workers are outside
-this milestone's scope.
-
-General color-profile support remains outside the planned pre-1.0 scope.
-
-## 0.20.0: Browser parity below 1%
-
-Bring native PDF output closer to Chromium for supported document layouts,
-including text placement, wrapping, tables, borders, and images.
-
-The target is **less than 1% differing pixels** on every reference fixture's
-worst page. Feasibility will be assessed when work on this release begins; the
-target may need further discussion based on the remaining rendering differences.
-
-Comparisons will retain the existing fixtures, page-count and color-difference
-checks, and 72 DPI rasterization. Results will identify the browser, fonts, and
-rasterizer used, so the measurements have a clear scope. This target does not
-imply support for every browser feature or identical output with arbitrary fonts.
-
 ## 0.21.0: Performance and archival output
 
 Generate larger documents with less repeated processing and smaller output files,
