@@ -446,7 +446,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
               end
 
             false ->
-              " <" <> Font.encode_embedded_text(shaped_text, font_resource.encoding) <> "> Tj"
+              " <" <>
+                Font.encode_embedded_text(
+                  shaped_text,
+                  font_resource.encoding,
+                  Map.get(box, :letter_spacing, 0)
+                ) <> "> Tj"
           end
 
         _ ->

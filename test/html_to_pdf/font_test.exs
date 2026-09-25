@@ -400,6 +400,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert Map.has_key?(mixed.codepoint_to_cid, 0xFB03)
   end
 
+  test "encoding accepts original ligature text with either a font or a prepared encoding" do
+    assert {:ok, registry} = Font.load_registry([])
+    assert {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    for text <- ["ffi", "office file", "fluff afflict", "ﬃ"], spacing <- [0, 4] do
+      encoding = Font.pdf_encoding([{text, spacing}], font)
+
+      expected =
+        text
+        |> Font.shape_ligatures(font, spacing)
+        |> String.to_charlist()
+        |> Enum.map_join(fn codepoint ->
+          Base.encode16(<<Map.fetch!(encoding.codepoint_to_cid, codepoint)::16>>)
+        end)
+
+      assert Font.encode_embedded_text(text, font, spacing) == expected
+      assert Font.encode_embedded_text(text, encoding, spacing) == expected
+    end
+
+    encoding = Font.pdf_encoding(["ffi"], font)
+    assert Font.encode_embedded_text("ffi", font) == "0001"
+    assert Font.encode_embedded_text("ffi", encoding) == "0001"
+
+    mixed = Font.pdf_encoding(["ffi", {"ffi", 4}], font)
+    assert Font.encode_embedded_text("ffi", mixed, 4) == "000200020003"
+  end
+
   test "embedded fonts shape Latin ligatures before measuring and encoding" do
     assert {:ok, registry} = Font.load_registry([])
     assert {:ok, _, font} = Font.resolve("DejaVu Sans", 700, :normal, registry)

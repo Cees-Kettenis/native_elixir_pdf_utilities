@@ -261,7 +261,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   end
 
   @doc "Shapes common Latin ligatures when the font provides them and letter spacing is zero."
-  @spec shape_ligatures(String.t(), embedded_font(), number()) :: String.t()
+  @spec shape_ligatures(String.t(), map(), number()) :: String.t()
   def shape_ligatures(text, font, letter_spacing \\ 0) do
     if letter_spacing == 0 do
       [{"ffi", "ﬃ"}, {"ffl", "ﬄ"}, {"ff", "ﬀ"}, {"fi", "ﬁ"}, {"fl", "ﬂ"}]
@@ -322,20 +322,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   end
 
   @doc """
-  Encodes text for an embedded Type0 font content stream.
+  Encodes original text for an embedded Type0 font content stream.
+  Applies the encoding's available ligatures unless letter spacing is nonzero.
   """
-  @spec encode_embedded_text(String.t(), pdf_encoding() | embedded_font()) :: String.t()
-  def encode_embedded_text(text, encoding_or_font) do
+  @spec encode_embedded_text(String.t(), pdf_encoding() | embedded_font(), number()) :: String.t()
+  def encode_embedded_text(text, encoding_or_font, letter_spacing \\ 0) do
     encoding =
       case encoding_or_font do
         %{codepoint_to_cid: mappings} = encoding when is_map(mappings) ->
           encoding
 
         %{type: :embedded} = font ->
-          pdf_encoding([text], font)
+          pdf_encoding([{text, letter_spacing}], font)
       end
 
     text
+    |> shape_ligatures(%{cmap: encoding.codepoint_to_cid}, letter_spacing)
     |> String.to_charlist()
     |> Enum.map_join("", fn codepoint ->
       cid = Map.fetch!(encoding.codepoint_to_cid, codepoint)
