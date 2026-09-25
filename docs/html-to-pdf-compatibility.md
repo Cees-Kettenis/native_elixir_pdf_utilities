@@ -2,8 +2,9 @@
 
 Use the renderer for reports, invoices, statements, forms, and labels. Start
 with [a working example](html-to-pdf-examples.md#render-html), then choose the
-features you need below. Unsupported HTML or CSS returns an
-[error](diagnostics.md) rather than being silently ignored.
+features you need below. Unsupported HTML tags and CSS properties return an
+[error](diagnostics.md). Some accepted `@page` declarations have no rendering
+effect; see [page declarations without an effect](#page-declarations-without-an-effect).
 
 ## HTML support
 
@@ -85,6 +86,33 @@ Prefer size strings with explicit units for custom dimensions.
 
 Page-size and margin strings accept `pt`, `px`, `mm`, `cm`, `in`, `q`, and `pc`.
 Explicit `:page_size` and `:margin` options override `@page`.
+
+### Page declarations without an effect
+
+Only `size` and page-margin declarations that can be normalized to the formats
+above change the output. The parser also accepts these page-context declarations
+without applying them:
+
+| Accepted declaration | What is not applied |
+| --- | --- |
+| `page-orientation`, `marks`, `bleed` | Page rotation, printer marks, and bleed settings |
+| Other accepted page-context properties, such as backgrounds, borders, fonts, counters, padding, and width/height | Page decoration, typography, counters, and box layout specified inside `@page` |
+| Page margins using percentages, relative units such as `em` or `vw`, negative lengths, or `auto` | Margin values that cannot become nonnegative absolute point lengths |
+| `size: auto`, a single-length `size`, relative page sizes, CSS-wide keywords, and functions such as `calc()` or `var()` in page size/margins | Values that cannot be normalized to a supported page size or margin |
+
+These declarations leave earlier applicable page settings, explicit render
+options, or library defaults in effect. For example, this rule is accepted but
+does not rotate the page or apply a percentage margin:
+
+```css
+@page { page-orientation: rotate-left; margin: 10%; }
+```
+
+Use `size: A4 landscape` to change page orientation and an absolute margin such
+as `12mm`, or pass explicit `:page_size` and `:margin` options. Successful
+rendering alone does not confirm that every `@page` declaration was applied.
+Malformed declarations, unknown page properties, and named or selector-based
+page rules still return errors.
 
 ## Tables
 

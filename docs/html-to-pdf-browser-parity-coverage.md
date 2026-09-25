@@ -20,8 +20,12 @@ restrictions.
 Supported controls create interactive AcroForm fields by default; use
 `forms: :static` for artwork only. See [PDF forms](pdf-forms.md).
 This subset does not include JavaScript or full browser layout and typography. See [Known limits](html-to-pdf-compatibility.md#known-limits)
-before adapting a browser template. The renderer reports unsupported HTML and
-CSS through the [diagnostic contract](diagnostics.md).
+before adapting a browser template. Unsupported HTML tags and CSS properties
+are reported through the [diagnostic contract](diagnostics.md). Some accepted
+`@page` declarations are ignored, including `page-orientation`, `marks`, `bleed`,
+and margins that cannot be normalized. See
+[page declarations without an effect](html-to-pdf-compatibility.md#page-declarations-without-an-effect)
+before relying on successful rendering as evidence that page settings were applied.
 
 ## Visual parity
 
