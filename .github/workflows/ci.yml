@@ -89,6 +89,9 @@ jobs:
       - name: Run tests and enforce 100% coverage
         run: mix test --cover --warnings-as-errors
 
+      - name: Check performance against recorded baselines
+        run: mix test.performance
+
       - name: Run Dialyzer
         run: mix dialyzer --no-compile
 

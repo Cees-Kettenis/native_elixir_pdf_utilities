@@ -260,7 +260,7 @@ The default creates interactive fields; see [PDF forms](pdf-forms.md).
 ```elixir
 html = """
 <div>
-  <input type="text" value="Amira Tan">
+  <input type="text" value="Lincoln Stark">
   <input type="checkbox" checked>
   <select><option selected>Approved</option></select>
   <textarea>Documents verified</textarea>

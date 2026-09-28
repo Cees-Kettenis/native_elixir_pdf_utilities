@@ -21,6 +21,7 @@ For quick feedback on the installed Elixir version, run:
 
 - `mix format --check-formatted`
 - `mix test --cover --warnings-as-errors`
+- `mix test.performance`
 - `MIX_ENV=test mix dialyzer`
 
 For HTML-to-PDF rendering changes, also run browser parity when Chromium is
@@ -72,8 +73,24 @@ GitHub Actions reads the same runtime definitions.
   is checked only on the canonical Elixir runtime because formatter output can
   differ between releases.
 
-The matrix compiles with warnings as errors, enforces 100% test coverage, runs
-Dialyzer, and runs Chromium browser parity for every configured Elixir runtime.
+The matrix compiles with warnings as errors, enforces 100% test coverage, checks
+the performance regression limits, runs Dialyzer, and runs Chromium browser parity
+for every configured Elixir runtime.
+
+`mix test.performance` measures eight synthetic document fixtures and six focused
+workloads. It warms each scenario twice and checks the median of five runs against
+the recorded reductions baseline. A result above 105% fails the stage. Generated
+PDFs also have a 5% output-size limit. Wall-clock limits catch severe stalls but
+are deliberately looser because shared CI runner load affects timing.
+
+A pull request that exceeds a performance regression limit is not ready to merge.
+Do not raise a limit only to make the check pass. Find and optimize an unintended
+slowdown before calling the pull request complete. Change a recorded baseline only
+when the workload intentionally changed or a performance tradeoff is unavoidable,
+and document the measurements and reason in the pull request.
+The document fixtures use Faker-generated names and addresses written into static
+HTML files. Faker is not needed to run tests or build the library.
+
 The support policy becomes a rolling three-minor window when the Elixir 1.21
 container is available. The currently tested window is Elixir 1.19 and 1.20;
 adding 1.21 to `ci/runtime-matrix.json` will add the third local and CI lane.

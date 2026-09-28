@@ -13,7 +13,7 @@ run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 log_root="${repository_root}/.quality/logs/${run_id}"
 user_id="$(id -u)"
 group_id="$(id -g)"
-stages=(setup runtime dependencies dependency_compile compile format coverage dialyzer parity)
+stages=(setup runtime dependencies dependency_compile compile format coverage performance dialyzer parity)
 
 declare -a runtime_entries=()
 declare -a runtime_versions=()
@@ -198,6 +198,12 @@ for entry in "${runtime_entries[@]}"; do
     continue
   fi
 
+  if ! run_logged "${version}" performance "${docker_command[@]}" \
+    mix test.performance; then
+    mark_remaining_skipped "${version}" performance
+    continue
+  fi
+
   if ! run_logged "${version}" dialyzer "${docker_command[@]}" mix dialyzer --no-compile; then
     mark_remaining_skipped "${version}" dialyzer
     continue
@@ -218,7 +224,7 @@ results_file="${log_root}/results.tsv"
 overall_exit=0
 
 {
-  printf 'Elixir\tSetup\tVerify\tDeps\tDep compile\tCompile\tFormat\tCoverage\tDialyzer\tParity\tOverall\n'
+  printf 'Elixir\tSetup\tVerify\tDeps\tDep compile\tCompile\tFormat\tCoverage\tPerformance\tDialyzer\tParity\tOverall\n'
 
   for version in "${runtime_versions[@]}"; do
     overall="PASS"
@@ -239,7 +245,7 @@ overall_exit=0
 
     results["${version}:overall"]="${overall}"
 
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "${version}" \
       "${results["${version}:setup"]:-SKIP}" \
       "${results["${version}:runtime"]:-SKIP}" \
@@ -248,6 +254,7 @@ overall_exit=0
       "${results["${version}:compile"]:-SKIP}" \
       "${results["${version}:format"]:-SKIP}" \
       "${results["${version}:coverage"]:-SKIP}" \
+      "${results["${version}:performance"]:-SKIP}" \
       "${results["${version}:dialyzer"]:-SKIP}" \
       "${results["${version}:parity"]:-SKIP}" \
       "${overall}"
@@ -255,13 +262,13 @@ overall_exit=0
 } >"${results_file}"
 
 {
-  printf '\n%-6s | %-5s | %-6s | %-4s | %-11s | %-7s | %-6s | %-8s | %-8s | %-6s | %-7s\n' \
-    Elixir Setup Verify Deps "Dep compile" Compile Format Coverage Dialyzer Parity Overall
+  printf '\n%-6s | %-5s | %-6s | %-4s | %-11s | %-7s | %-6s | %-8s | %-11s | %-8s | %-6s | %-7s\n' \
+    Elixir Setup Verify Deps "Dep compile" Compile Format Coverage Performance Dialyzer Parity Overall
   printf '%s\n' \
-    '-------+-------+--------+------+-------------+---------+--------+----------+----------+--------+--------'
+    '-------+-------+--------+------+-------------+---------+--------+----------+-------------+----------+--------+--------'
 
   for version in "${runtime_versions[@]}"; do
-    printf '%-6s | %-5s | %-6s | %-4s | %-11s | %-7s | %-6s | %-8s | %-8s | %-6s | %-7s\n' \
+    printf '%-6s | %-5s | %-6s | %-4s | %-11s | %-7s | %-6s | %-8s | %-11s | %-8s | %-6s | %-7s\n' \
       "${version}" \
       "${results["${version}:setup"]:-SKIP}" \
       "${results["${version}:runtime"]:-SKIP}" \
@@ -270,6 +277,7 @@ overall_exit=0
       "${results["${version}:compile"]:-SKIP}" \
       "${results["${version}:format"]:-SKIP}" \
       "${results["${version}:coverage"]:-SKIP}" \
+      "${results["${version}:performance"]:-SKIP}" \
       "${results["${version}:dialyzer"]:-SKIP}" \
       "${results["${version}:parity"]:-SKIP}" \
       "${results["${version}:overall"]:-FAIL}"

@@ -9,7 +9,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
   @fixtures_dir Path.expand("../fixtures/html_to_pdf", __DIR__)
   @long_trim_description "SP27-ACG-#3 CE REVERSE COIL ZIPPER-AUTOLOCKING WITH PULLER FOR ATTACHMENT-DABCR7-MATTE ENAMEL FINISH; ZIPPER; CLOSED END; APPROVED; TRIM-COIL ZIPPERS; ADDTL RISKS; PASSES METAL DETECTION; TRUE; VENDOR #: CFC-36 DABCR7 EFJ BA12 GREEN-F KENSIN N-ANTI P-TB REVERSE; CARE: WASH IN NET, WASH INSIDE OUT, TUMBLE DRY INSIDE OUT; PRIMARY SM: YES; 49% ZINC, 42% POLYESTER, 9% POLYESTER (MECHANICALLY RECYCLED); # OF COLORS: 1; APPLICATION TECHNIQUE: SEW ON SLIDER/PULL; PULL CODE: DABCR7; SLIDER QTY: 1; LOCKING: AUTO-LOCK TAPE; KNIT; W (MM): 12.00 TEETH; COIL; STANDARD; SIZE: 3; REVERSE; FINISH: COATING: ENAMELED STOP; PLASTIC TOP STOP, PLASTIC BOTTOM STOP; COLOR EFFECT: 1ST COLOR; NIKE SOLID COLOR; 2ND COLOR; NIKE SOLID COLOR; 3RD COLOR; NIKE SOLID COLOR; 4TH COLOR; NIKE SOLID COLOR; 5TH COLOR; 91B"
 
-  test "renders scrubbed purchase order fixture" do
+  test "renders synthetic purchase order fixture" do
     html = fixture_html("purchase_order.html")
 
     assert {:ok, pdf} = HtmlToPdf.render(html, page_size: :a4)
@@ -20,10 +20,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
     assert {:ok, layout_tree} = layout_fixture(html, page_size: :a4)
 
     assert_layout_text(layout_tree, "PURCHASE ORDER")
-    assert_layout_text(layout_tree, "PO-X-0726-00421")
+    assert_layout_text(layout_tree, "PO-TEST-000421")
     assert_layout_text(layout_tree, "Supplier Address")
-    assert_layout_text(layout_tree, "GGPHJ5376SU27")
-    assert_layout_text(layout_tree, "Total: 40Y - POLAR")
+    assert_layout_text(layout_tree, "JOB-TEST-5376")
+    assert_layout_text(layout_tree, "Total: 40Y - SAMPLE BLUE")
 
     title = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "PURCHASE ORDER"))
     assert title.font_face.type == :embedded
@@ -31,7 +31,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
     assert_in_delta title.x + title.annotation_width, 587.78, 0.01
   end
 
-  test "renders scrubbed stock sticker fixture at custom label size" do
+  test "renders synthetic stock sticker fixture at custom label size" do
     html = fixture_html("stock_sticker.html")
 
     assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {4.92126, 1.49606}, margin: 0)
@@ -47,12 +47,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
     assert_in_delta image.height, 53.149608, 0.0001
     assert image.y >= 0.0
 
-    assert_layout_text(layout_tree, "Product Item: 001764")
+    assert_layout_text(layout_tree, "Product Item: ITEM-TEST-1764")
     assert_layout_text(layout_tree, "Transaction Date: 08/07/2026 07:25")
-    assert_layout_text(layout_tree, "PO Number: PO-X-0726-00421")
+    assert_layout_text(layout_tree, "PO Number: PO-TEST-000421")
   end
 
-  test "renders scrubbed material requisition fixture with page break" do
+  test "renders synthetic material requisition fixture with page break" do
     html = fixture_html("material_requisition.html")
 
     assert {:ok, pdf} = HtmlToPdf.render(html, page_size: :a4)
@@ -66,14 +66,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
     assert_layout_text(layout_tree, "REQUISITION")
     assert_layout_text(layout_tree, "Item Number")
     assert_layout_text(layout_tree, "Colour Code")
-    assert_layout_text(layout_tree, "MR-A-0726-0001")
-    assert_layout_text(layout_tree, "AGS-NB0100")
+    assert_layout_text(layout_tree, "MR-TEST-0001")
+    assert_layout_text(layout_tree, "IT-0100")
     assert_layout_text(layout_tree, "Requested By:")
     assert_layout_text(layout_tree, "Issued By:")
     assert_layout_text(layout_tree, "Received By:")
   end
 
-  test "renders scrubbed trim card fixture with separated wrapped header rows" do
+  test "renders synthetic trim card fixture with separated wrapped header rows" do
     html = fixture_html("trim_card.html")
 
     assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {841.89, 595.28}, margin: 0)
@@ -83,7 +83,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
     assert {:ok, layout_tree} = layout_fixture(html, page_size: {841.89, 595.28}, margin: 0)
 
     assert_layout_text(layout_tree, "Master Trimcard")
-    assert_layout_text(layout_tree, "JOB-TRIM-001")
+    assert_layout_text(layout_tree, "JOB-TEST-0001")
     assert_layout_text(layout_tree, "ORDER QTY")
     assert_layout_text(layout_tree, "SEASON")
     assert_layout_text(layout_tree, "FABRIC (1000001)")
@@ -169,7 +169,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
 
     assert {:ok, layout_tree} = layout_fixture(html, page_size: :a4)
     assert_layout_text(layout_tree, "Public Works Permit Application")
-    assert_layout_text(layout_tree, "Amira Tan")
+    assert_layout_text(layout_tree, "Lincoln Stark")
     assert_layout_text(layout_tree, "Drainage inspection")
     assert_layout_text(layout_tree, "Identity documents verified.")
     assert_layout_text(layout_tree, "Record application")
@@ -178,7 +178,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
 
   test "renders realistic positioned invoice statement and multi-page report fixtures" do
     for {name, expected_text, minimum_pages} <- [
-          {"invoice_012.html", "INVOICE INV-012-0042", 1},
+          {"invoice_012.html", "INVOICE INV-TEST-0042", 1},
           {"statement_012.html", "ACCOUNT STATEMENT", 1},
           {"multi_page_report_012.html", "OPERATIONS REPORT", 2}
         ] do

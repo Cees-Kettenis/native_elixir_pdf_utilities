@@ -21,7 +21,8 @@ defmodule NativeElixirPdfUtilities.MixProject do
   def cli do
     [
       preferred_envs: [
-        "test.browser_parity": :test
+        "test.browser_parity": :test,
+        "test.performance": :test
       ]
     ]
   end
@@ -153,7 +154,8 @@ defmodule NativeElixirPdfUtilities.MixProject do
 
   defp aliases do
     [
-      "test.browser_parity": "test --only browser_parity"
+      "test.browser_parity": "test --only browser_parity",
+      "test.performance": "run scripts/performance-regression.exs"
     ]
   end
 end
