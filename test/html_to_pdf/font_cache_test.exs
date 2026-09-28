@@ -38,6 +38,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCacheTest do
     File.rm(temporary_path("invalidation"))
   end
 
+  test "bundled fetch keeps the installed snapshot while configured fetch sees edits" do
+    path = temporary_path("bundled")
+    File.write!(path, "first")
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    loader = fn data ->
+      Agent.update(calls, &(&1 + 1))
+      {:ok, data}
+    end
+
+    assert FontCache.fetch_bundled(path, loader) == {:ok, "first"}
+    File.write!(path, "second")
+    assert FontCache.fetch_bundled(path, loader) == {:ok, "first"}
+    assert Agent.get(calls, & &1) == 1
+
+    assert FontCache.fetch(path, loader) == {:ok, "second"}
+    assert Agent.get(calls, & &1) == 2
+  after
+    File.rm(temporary_path("bundled"))
+  end
+
   test "fetch detects same-size overwrites with unchanged metadata" do
     path = temporary_path("same-size")
     timestamp = 1_700_000_000
@@ -173,6 +194,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCacheTest do
 
     try do
       assert FontCache.fetch(path, fn data ->
+               {:ok, data}
+             end) == {:ok, "font"}
+
+      assert FontCache.fetch_bundled(path, fn data ->
                {:ok, data}
              end) == {:ok, "font"}
     after

@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
+  alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Text
 
   test "CSS rectangle edges snap relative to the page top" do
@@ -45,6 +46,97 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "] TJ"
     assert pdf =~ "1 [#{Float.round(700 * 1000 / font.units_per_em, 4)}]"
     assert {:ok, "A"} = Text.extract(pdf, layout: false)
+  end
+
+  test "stream compression is enabled by default and keeps content readable" do
+    text = String.duplicate("ABCD", 325)
+
+    box = %{
+      type: :text,
+      text: text,
+      x: 0,
+      y: 20,
+      font: "Helvetica",
+      font_size: 10,
+      color: {0, 0, 0}
+    }
+
+    pages = [%{size: {100, 100}, boxes: [box]}]
+    assert {:ok, plain} = PdfWriter.render(pages, compress_streams: false)
+    assert {:ok, compressed} = PdfWriter.render(pages)
+    refute plain =~ "/Filter /FlateDecode"
+    assert compressed =~ "/Filter /FlateDecode"
+    assert byte_size(compressed) < byte_size(plain)
+    assert {:ok, ^text} = Text.extract(compressed, layout: false)
+
+    assert {:ok, short} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [%{box | text: "Short"}]}],
+               compress_streams: true
+             )
+
+    refute short =~ "/Filter /FlateDecode"
+
+    assert {:ok, built_in_subset} = PdfWriter.render(pages, subset_fonts: true)
+    assert {:ok, ^text} = Text.extract(built_in_subset, layout: false)
+
+    # The reader's decompression-ratio limit is also respected by the writer.
+    assert {:ok, extreme} =
+             PdfWriter.render(
+               [%{size: {100, 100}, boxes: [%{box | text: String.duplicate("A", 20_000)}]}],
+               compress_streams: true
+             )
+
+    refute extreme =~ "/Filter /FlateDecode"
+    assert {:ok, _text} = Text.extract(extreme, layout: false)
+  end
+
+  test "writer rejects conflicting embedded faces with the same ID" do
+    assert {:ok, registry} = Font.load_registry(fonts: [{"Fixture Sans", ttf_font_path!()}])
+    assert {:ok, _, font} = Font.resolve("Fixture Sans", 400, :normal, registry)
+
+    box = %{
+      type: :text,
+      text: "A",
+      x: 0,
+      y: 20,
+      font: Font.pdf_name(font),
+      font_face: font,
+      font_size: 10,
+      color: {0, 0, 0}
+    }
+
+    conflicting = %{box | x: 20, font_face: %{font | ascent: font.ascent - 1}}
+
+    assert {:error,
+            {:invalid_pdf_input, %{stage: :pdf, reason: :invalid_pdf_input, message: message}}} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [box, conflicting]}])
+
+    assert message =~ "conflicting face data"
+
+    metadata_only = %{box | x: 20, font_face: %{font | source: :configured}}
+    assert {:ok, _pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box, metadata_only]}])
+  end
+
+  test "subset failures retain an actionable font diagnostic" do
+    assert {:ok, registry} = Font.load_registry(fonts: [{"Fixture Sans", ttf_font_path!()}])
+    assert {:ok, _, font} = Font.resolve("Fixture Sans", 400, :normal, registry)
+
+    box = %{
+      type: :text,
+      text: "A",
+      x: 0,
+      y: 20,
+      font: Font.pdf_name(font),
+      font_face: %{font | data: "invalid sfnt"},
+      font_size: 10,
+      color: {0, 0, 0}
+    }
+
+    assert {:error,
+            {:invalid_document, %{stage: :font, reason: :invalid_document, message: message}}} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [box]}], subset_fonts: true)
+
+    assert message =~ "TrueType"
   end
 
   test "collapsed table borders paint around grid edges without changing layout bounds" do
@@ -819,20 +911,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     ]
 
     assert {:ok, pdf} = PdfWriter.render(pages, [])
+    streams = decoded_pdf_streams(pdf)
 
-    assert pdf =~ ~r/\[[^\]]+\] 0 d 1 J/
-    assert pdf =~ ~r/\[[^\]]+\] 0 d 0 J/
-    assert pdf =~ "0.2 0.4 0.6 RG"
-    assert pdf =~ "0.0902 0.1804 0.2706 RG"
-    assert pdf =~ "0.3098 0.6196 0.9294 RG"
-    assert pdf =~ "1 0 0 RG 1.3333 w"
-    assert length(Regex.scan(~r/1 0 0 RG 1\.3333 w/, pdf)) == 1
+    assert streams =~ ~r/\[[^\]]+\] 0 d 1 J/
+    assert streams =~ ~r/\[[^\]]+\] 0 d 0 J/
+    assert streams =~ "0.2 0.4 0.6 RG"
+    assert streams =~ "0.0902 0.1804 0.2706 RG"
+    assert streams =~ "0.3098 0.6196 0.9294 RG"
+    assert streams =~ "1 0 0 RG 1.3333 w"
+    assert length(Regex.scan(~r/1 0 0 RG 1\.3333 w/, streams)) == 1
 
-    assert pdf =~ "10 50 10 10 re f"
-    assert pdf =~ "30 50 10 10 re f"
+    assert streams =~ "10 50 10 10 re f"
+    assert streams =~ "30 50 10 10 re f"
 
-    assert pdf =~ "0.2 0.4 0.6 RG 1.3333 w"
-    assert pdf =~ " re S"
+    assert streams =~ "0.2 0.4 0.6 RG 1.3333 w"
+    assert streams =~ " re S"
   end
 
   test "render writes rounded rectangle paths when radius is set" do
@@ -1137,10 +1230,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
     assert {:ok, pdf} = PdfWriter.render(pages, [])
 
-    assert Regex.scan(~r/(\d+) beginbfchar/, pdf, capture: :all_but_first) == [
-             ["100"],
-             ["20"]
-           ]
+    assert Regex.scan(~r/(\d+) beginbfchar/, decoded_pdf_streams(pdf), capture: :all_but_first) ==
+             [
+               ["100"],
+               ["20"]
+             ]
 
     assert {:ok, ^text} = Text.extract(pdf, layout: false)
   end
@@ -1403,6 +1497,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
                operation: :write_pdf,
                module: NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
              }}} = result
+  end
+
+  defp decoded_pdf_streams(pdf) do
+    assert {:ok, document} = Reader.read(pdf)
+
+    document.objects
+    |> Enum.flat_map(fn {ref, object} ->
+      case object.stream do
+        stream when is_binary(stream) ->
+          assert {:ok, decoded} = Reader.decoded_stream(document, {:ref, ref})
+          [decoded]
+
+        _ ->
+          []
+      end
+    end)
+    |> Enum.join("\n")
   end
 
   defp image_fixture(format, data, width, height, color_space) do

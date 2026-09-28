@@ -8,6 +8,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.FontCache
   alias NativeElixirPdfUtilities.HtmlToPdf.SystemFontCache
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
@@ -48,6 +49,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   @type font_face :: built_in_font() | embedded_font()
 
   @bundled_font_family "DejaVu Sans"
+  @measurement_cache_key {__MODULE__, :measurement_cache}
+
+  @doc false
+  @spec with_measurement_cache((-> result)) :: result when result: term()
+  def with_measurement_cache(fun) do
+    case Process.get(@measurement_cache_key) do
+      nil ->
+        table = :ets.new(:font_measurements, [:set, :private])
+        Process.put(@measurement_cache_key, {table, 0})
+
+        try do
+          fun.()
+        after
+          Process.delete(@measurement_cache_key)
+          :ets.delete(table)
+        end
+
+      _cache ->
+        fun.()
+    end
+  end
 
   @doc false
   @spec normalize_options(term()) ::
@@ -222,35 +244,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   def text_width(text, font, font_size, letter_spacing \\ 0) do
     case font do
       %{type: :embedded, units_per_em: units_per_em} ->
-        {glyphs, maximum_glyph} =
-          text
-          |> shape_ligatures(font, letter_spacing)
-          |> String.to_charlist()
-          |> Enum.map_reduce(-1, fn codepoint, maximum ->
-            glyph = Map.get(font.cmap, codepoint, 0)
-            {glyph, max(glyph, maximum)}
-          end)
+        {width, work} =
+          case Process.get(@measurement_cache_key) do
+            {table, _bytes} ->
+              cache_key = {Map.get(font, :id) || font, font_size, letter_spacing, text}
 
-        NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_render_resource(
-          :max_layout_text_work,
-          maximum_glyph + 1,
-          :layout
-        )
+              case :ets.lookup(table, cache_key) do
+                [{^cache_key, width, work}] ->
+                  {width, work}
 
-        widths = font.widths |> Enum.take(maximum_glyph + 1) |> List.to_tuple()
+                [] ->
+                  measured =
+                    embedded_text_width(text, font, units_per_em, font_size, letter_spacing)
 
-        glyphs
-        |> Enum.reduce({0, nil}, fn glyph_id, {acc, previous} ->
-          adjustment = Map.get(Map.get(font, :kerning, %{}), {previous, glyph_id}, 0)
+                  {^table, bytes} = Process.get(@measurement_cache_key)
 
-          width =
-            if glyph_id < tuple_size(widths), do: elem(widths, glyph_id), else: font.default_width
+                  if :ets.info(table, :size) < Limits.get(:max_layout_measurement_cache_entries) and
+                       bytes + byte_size(text) <= Limits.get(:max_layout_measurement_cache_bytes) do
+                    :ets.insert(table, {cache_key, elem(measured, 0), elem(measured, 1)})
+                    Process.put(@measurement_cache_key, {table, bytes + byte_size(text)})
+                  end
 
-          {acc + width + adjustment, glyph_id}
-        end)
-        |> elem(0)
-        |> Kernel./(units_per_em)
-        |> Kernel.*(font_size)
+                  measured
+              end
+
+            nil ->
+              embedded_text_width(text, font, units_per_em, font_size, letter_spacing)
+          end
+
+        HtmlValidator.reserve_render_resource(:max_layout_text_work, work, :layout)
+        width
 
       _ ->
         text
@@ -258,6 +281,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
         |> Kernel.*(font_size)
         |> Kernel.*(0.6)
     end
+  end
+
+  defp embedded_text_width(text, font, units_per_em, font_size, letter_spacing) do
+    {glyphs, maximum_glyph} =
+      text
+      |> shape_ligatures(font, letter_spacing)
+      |> String.to_charlist()
+      |> Enum.map_reduce(-1, fn codepoint, maximum ->
+        glyph = Map.get(font.cmap, codepoint, 0)
+        {glyph, max(glyph, maximum)}
+      end)
+
+    widths = font.widths |> Enum.take(maximum_glyph + 1) |> List.to_tuple()
+
+    width =
+      glyphs
+      |> Enum.reduce({0, nil}, fn glyph_id, {acc, previous} ->
+        adjustment = Map.get(Map.get(font, :kerning, %{}), {previous, glyph_id}, 0)
+
+        width =
+          if glyph_id < tuple_size(widths), do: elem(widths, glyph_id), else: font.default_width
+
+        {acc + width + adjustment, glyph_id}
+      end)
+      |> elem(0)
+      |> Kernel./(units_per_em)
+      |> Kernel.*(font_size)
+
+    {width, maximum_glyph + 1}
   end
 
   @doc "Shapes common Latin ligatures when the font provides them and letter spacing is zero."
@@ -522,7 +574,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     result =
       case font do
         %{path: paths} ->
-          load_first_supported_font(paths)
+          load_first_supported_font(paths, Map.get(font, :source) == :bundled)
 
         %{data: candidates} ->
           load_first_supported_data(candidates)
@@ -560,10 +612,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     end
   end
 
-  defp load_first_supported_font(paths) do
+  defp load_first_supported_font(paths, bundled?) do
     Enum.reduce_while(paths, :error, fn path, :error ->
+      fetch = if bundled?, do: &FontCache.fetch_bundled/2, else: &FontCache.fetch/2
+
       result =
-        FontCache.fetch(path, fn data ->
+        fetch.(path, fn data ->
           with {:ok, parsed} <- parse_ttf(data) do
             {:ok, {data, parsed}}
           else

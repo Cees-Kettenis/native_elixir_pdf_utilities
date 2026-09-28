@@ -39,12 +39,25 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     "Times-Italic",
     "Times-BoldItalic"
   ]
+  @writer_font_fields [
+    :data,
+    :pdf_name,
+    :units_per_em,
+    :widths,
+    :default_width,
+    :cmap,
+    :ascent,
+    :descent,
+    :bbox
+  ]
 
   @typedoc "Validated input consumed by the PDF byte writer."
   @type context :: %{
           required(:pages) => [map()],
           required(:metadata) => map(),
-          required(:outlines) => [OutlineValidator.item()]
+          required(:outlines) => [OutlineValidator.item()],
+          required(:compress_streams) => boolean(),
+          required(:subset_fonts) => boolean()
         }
 
   @doc """
@@ -57,7 +70,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       {pages, opts} when is_list(pages) and is_list(opts) ->
         case Keyword.keyword?(opts) do
           true ->
-            with {:ok, metadata} <-
+            with :ok <- HtmlValidator.validate_pdf_output_options(opts),
+                 {:ok, metadata} <-
                    InfoValidator.normalize_new_metadata(Keyword.get(opts, :metadata, [])) do
               case OutlineValidator.normalize(
                      normalized_outline_input(Keyword.get(opts, :outlines)),
@@ -66,7 +80,23 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                 {:ok, outlines} ->
                   case pages != [] and Enum.all?(pages, &valid_page?/1) do
                     true ->
-                      {:ok, %{pages: pages, metadata: metadata, outlines: outlines}}
+                      case validate_embedded_fonts(pages) do
+                        :ok ->
+                          {:ok,
+                           %{
+                             pages: pages,
+                             metadata: metadata,
+                             outlines: outlines,
+                             compress_streams: Keyword.get(opts, :compress_streams, true),
+                             subset_fonts: Keyword.get(opts, :subset_fonts, true)
+                           }}
+
+                        {:error, message} ->
+                          Diagnostics.error(:pdf, :invalid_pdf_input, message,
+                            operation: :write_pdf,
+                            module: __MODULE__
+                          )
+                      end
 
                     false ->
                       Diagnostics.error(
@@ -82,6 +112,9 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                   outline_error
               end
             else
+              {:error, {:invalid_options, _diagnostic}} = error ->
+                error
+
               {:error, _reason} ->
                 Diagnostics.error(
                   :pdf,
@@ -343,33 +376,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
 
   defp valid_font_box?(box) do
     case Map.get(box, :font_face) do
-      %{
-        type: :embedded,
-        id: id,
-        data: data,
-        pdf_name: pdf_name,
-        units_per_em: units_per_em,
-        widths: widths,
-        default_width: default_width,
-        cmap: cmap,
-        ascent: ascent,
-        descent: descent,
-        bbox: {x_min, y_min, x_max, y_max}
-      }
-      when is_binary(id) and is_binary(data) and is_binary(pdf_name) and
-             is_integer(units_per_em) and units_per_em > 0 and is_list(widths) and
-             is_integer(default_width) and default_width >= 0 and is_map(cmap) and
-             is_integer(ascent) and is_integer(descent) and is_integer(x_min) and
-             is_integer(y_min) and is_integer(x_max) and is_integer(y_max) ->
-        valid_kerning?(Map.get(box.font_face, :kerning, %{}), length(widths)) and
-          box.font == Font.pdf_name(box.font_face) and
-          Regex.match?(~r/\A[A-Za-z0-9_.+-]+\z/, pdf_name) and
-          units_per_em <= 65_535 and default_width <= 65_535 and
-          Enum.all?([ascent, descent, x_min, y_min, x_max, y_max], &(&1 in -32_768..32_767)) and
-          length(widths) <= 65_535 and
-          Enum.all?(widths, &(is_integer(&1) and &1 in 0..65_535)) and
-          map_size(cmap) <= 65_535 and
-          String.valid?(box.text) and
+      %{type: :embedded, id: id, cmap: cmap} when is_binary(id) and is_map(cmap) ->
+        box.font == Font.pdf_name(box.font_face) and String.valid?(box.text) and
           Enum.all?(String.to_charlist(box.text), fn codepoint ->
             glyph = Map.get(cmap, codepoint, 0)
             # PDF CIDToGIDMap entries are fixed unsigned 16-bit glyph indexes.
@@ -384,6 +392,72 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       nil ->
         box.font in @built_in_fonts and
           Font.supports_text?(%{type: :built_in, family: box.font, pdf_name: box.font}, box.text)
+
+      _ ->
+        false
+    end
+  end
+
+  defp validate_embedded_fonts(pages) do
+    pages
+    |> Enum.flat_map(& &1.boxes)
+    |> Enum.reduce_while({:ok, %{}}, fn box, {:ok, faces} ->
+      case Map.get(box, :font_face) do
+        %{type: :embedded, id: id} = face ->
+          writer_data =
+            face
+            |> Map.take(@writer_font_fields)
+            |> Map.put(:kerning, Map.get(face, :kerning, %{}))
+
+          case Map.fetch(faces, id) do
+            {:ok, ^writer_data} ->
+              {:cont, {:ok, faces}}
+
+            {:ok, _different_face} ->
+              {:halt, {:error, "PDF writer font ID #{inspect(id)} has conflicting face data"}}
+
+            :error ->
+              case valid_embedded_font_face?(face) do
+                true -> {:cont, {:ok, Map.put(faces, id, writer_data)}}
+                false -> {:halt, {:error, "PDF writer requires valid embedded font data"}}
+              end
+          end
+
+        _ ->
+          {:cont, {:ok, faces}}
+      end
+    end)
+    |> case do
+      {:ok, _faces} -> :ok
+      {:error, _message} = error -> error
+    end
+  end
+
+  defp valid_embedded_font_face?(face) do
+    case face do
+      %{
+        data: data,
+        pdf_name: pdf_name,
+        units_per_em: units_per_em,
+        widths: widths,
+        default_width: default_width,
+        cmap: cmap,
+        ascent: ascent,
+        descent: descent,
+        bbox: {x_min, y_min, x_max, y_max}
+      }
+      when is_binary(data) and is_binary(pdf_name) and is_integer(units_per_em) and
+             units_per_em > 0 and is_list(widths) and is_integer(default_width) and
+             default_width >= 0 and is_map(cmap) and is_integer(ascent) and
+             is_integer(descent) and is_integer(x_min) and is_integer(y_min) and
+             is_integer(x_max) and is_integer(y_max) ->
+        valid_kerning?(Map.get(face, :kerning, %{}), length(widths)) and
+          Regex.match?(~r/\A[A-Za-z0-9_.+-]+\z/, pdf_name) and
+          units_per_em <= 65_535 and default_width <= 65_535 and
+          Enum.all?([ascent, descent, x_min, y_min, x_max, y_max], &(&1 in -32_768..32_767)) and
+          length(widths) <= 65_535 and
+          Enum.all?(widths, &(is_integer(&1) and &1 in 0..65_535)) and
+          map_size(cmap) <= 65_535
 
       _ ->
         false

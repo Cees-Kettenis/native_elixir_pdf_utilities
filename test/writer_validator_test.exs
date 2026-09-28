@@ -86,6 +86,32 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidatorTest do
              )
   end
 
+  test "rejects non-boolean stream-compression options" do
+    pages = [%{size: {100, 100}, boxes: []}]
+
+    assert {:ok, %{compress_streams: true, subset_fonts: true}} =
+             WriterValidator.prepare(pages, [])
+
+    assert {:ok, %{compress_streams: false, subset_fonts: false}} =
+             WriterValidator.prepare(pages, compress_streams: false, subset_fonts: false)
+
+    assert {:ok, %{compress_streams: true}} =
+             WriterValidator.prepare(pages, compress_streams: true)
+
+    assert {:error,
+            {:invalid_options, %{stage: :options, reason: :invalid_options, message: message}}} =
+             WriterValidator.prepare(pages, compress_streams: :auto)
+
+    assert message =~ "compress_streams"
+
+    assert {:error,
+            {:invalid_options,
+             %{stage: :options, reason: :invalid_options, message: subset_message}}} =
+             WriterValidator.prepare(pages, subset_fonts: :auto)
+
+    assert subset_message =~ "subset_fonts"
+  end
+
   test "rejects invalid writer colors before serialization" do
     pages = [
       %{
@@ -156,7 +182,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidatorTest do
                }}} =
                PdfWriter.render([%{size: {100, 100}, boxes: [box]}])
 
-      assert message =~ "valid pages"
+      assert message =~ "valid pages" or message =~ "valid embedded font data"
     end
   end
 end

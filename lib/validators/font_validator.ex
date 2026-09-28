@@ -100,8 +100,13 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   @doc false
   @spec reserve_source(binary()) :: :ok
   def reserve_source(data) do
-    check(:max_font_source_bytes, byte_size(data))
-    identity = :crypto.hash(:sha256, data)
+    reserve_source_fingerprint(:crypto.hash(:sha256, data), byte_size(data))
+  end
+
+  @doc false
+  @spec reserve_source_fingerprint(binary(), non_neg_integer()) :: :ok
+  def reserve_source_fingerprint(identity, source_bytes) do
+    check(:max_font_source_bytes, source_bytes)
     key = {__MODULE__, :budget}
     budget = Process.get(key)
 
@@ -110,7 +115,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
         :ok
 
       false ->
-        reserve(:max_aggregate_font_source_bytes, byte_size(data))
+        reserve(:max_aggregate_font_source_bytes, source_bytes)
         Process.put(key, %{Process.get(key) | sources: MapSet.put(budget.sources, identity)})
         :ok
     end

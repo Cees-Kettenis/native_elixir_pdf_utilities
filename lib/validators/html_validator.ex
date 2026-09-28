@@ -19,7 +19,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     :metadata,
     :outlines,
     :page_furniture,
-    :unsupported_glyphs
+    :unsupported_glyphs,
+    :compress_streams,
+    :subset_fonts
   ]
   @variant_keys [:default, :first, :odd, :even]
   @type image_budget :: :atomics.atomics_ref()
@@ -345,6 +347,22 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     with {:ok, _html} <- validate_html_source(html),
          :ok <- validate_render_options(opts, font_options_result) do
       :ok
+    end
+  end
+
+  @doc false
+  @spec validate_pdf_output_options(keyword()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_pdf_output_options(opts) do
+    case {Keyword.get(opts, :compress_streams, true), Keyword.get(opts, :subset_fonts, true)} do
+      {compress?, subset?} when is_boolean(compress?) and is_boolean(subset?) ->
+        :ok
+
+      {compress?, _subset?} when not is_boolean(compress?) ->
+        Diagnostics.error(:options, :invalid_options, "compress_streams must be a boolean")
+
+      _ ->
+        Diagnostics.error(:options, :invalid_options, "subset_fonts must be a boolean")
     end
   end
 
@@ -1245,6 +1263,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              :ok <-
                validate_system_font_discovery(Keyword.get(opts, :system_font_discovery, true)),
              :ok <- validate_unsupported_glyphs(Keyword.get(opts, :unsupported_glyphs, :replace)),
+             :ok <- validate_pdf_output_options(opts),
              :ok <- validate_outline_option(Keyword.get(opts, :outlines)),
              :ok <- validate_font_options_result(font_options_result) do
           :ok

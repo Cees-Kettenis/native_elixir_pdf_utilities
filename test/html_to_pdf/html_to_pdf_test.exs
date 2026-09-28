@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Split
   alias NativeElixirPdfUtilities.Text
 
   test "background tile limits preserve their actionable public diagnostic" do
@@ -110,6 +111,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "xref"
     assert pdf =~ "trailer"
     assert String.ends_with?(pdf, "%%EOF\n")
+  end
+
+  test "stream compression reduces file bytes without changing extracted text" do
+    html = "<h1>Report</h1><p>" <> String.duplicate("Repeated synthetic detail. ", 30) <> "</p>"
+
+    assert {:ok, plain} = HtmlToPdf.render(html, compress_streams: false, subset_fonts: false)
+    assert {:ok, compressed} = HtmlToPdf.render(html, subset_fonts: false)
+    assert byte_size(compressed) < byte_size(plain)
+    assert compressed =~ "/Filter /FlateDecode"
+    assert Text.extract(compressed, layout: false) == Text.extract(plain, layout: false)
+  end
+
+  test "font subsetting keeps extraction and can combine with stream compression" do
+    html =
+      "<h1>Subset report</h1><p>" <> String.duplicate("Synthetic café α notes. ", 20) <> "</p>"
+
+    assert {:ok, plain} = HtmlToPdf.render(html, subset_fonts: false, compress_streams: false)
+    assert {:ok, subset} = HtmlToPdf.render(html, compress_streams: false)
+    assert {:ok, compact} = HtmlToPdf.render(html)
+
+    assert byte_size(subset) < byte_size(plain) * 0.5
+    assert byte_size(compact) < byte_size(subset)
+    assert subset =~ ~r|/BaseFont /[A-Z]{6}\+|
+    assert Text.extract(subset, layout: false) == Text.extract(plain, layout: false)
+    assert Text.extract(compact, layout: false) == Text.extract(plain, layout: false)
+  end
+
+  test "compact output supports interactive forms and page splitting" do
+    html =
+      "<html><body><div><input type='text' name='reference' value='Synthetic value'></div><div style='break-after:page'>First page</div><p>Second page</p></body></html>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, subset_fonts: true, compress_streams: true)
+    assert pdf =~ "/AcroForm"
+    assert {:ok, pages} = Split.by_page(pdf)
+    assert length(pages) == 2
+    assert Enum.all?(pages, fn page -> match?({:ok, _text}, Text.extract(page)) end)
   end
 
   test "render writes form controls as static PDF content" do
@@ -278,7 +315,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
     assert_pdf_text(pdf, ["Title", "Hello", "bold", "italic"])
-    assert pdf =~ "/BaseFont /DejaVuSans"
+    assert pdf =~ ~r|/BaseFont /[A-Z]{6}\+DejaVuSans|
     assert pdf =~ "0.2 0.4 0.6 rg"
     assert pdf =~ "0 0 1 rg"
   end
@@ -548,7 +585,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, pdf} = HtmlToPdf.render(html, stylesheets: [{:css, "p { color: red; }"}])
     assert_pdf_text(pdf, "Styled")
-    assert pdf =~ "/BaseFont /DejaVuSans"
+    assert pdf =~ ~r|/BaseFont /[A-Z]{6}\+DejaVuSans|
     assert pdf =~ "0.2 0.4 0.6 rg"
   end
 
@@ -760,6 +797,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              }}} = HtmlToPdf.render("<p>Hello</p>", margni: 10)
 
     assert {:error,
+            {:invalid_options,
+             %{
+               stage: :options,
+               reason: :invalid_options,
+               operation: :render,
+               message: "compress_streams must be a boolean"
+             }}} = HtmlToPdf.render("<p>Hello</p>", compress_streams: :auto)
+
+    assert {:error,
+            {:invalid_options,
+             %{
+               stage: :options,
+               reason: :invalid_options,
+               operation: :render,
+               message: "subset_fonts must be a boolean"
+             }}} = HtmlToPdf.render("<p>Hello</p>", subset_fonts: :auto)
+
+    assert {:error,
             {:invalid_path,
              %{
                stage: :file,
@@ -806,7 +861,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
     assert_pdf_text(pdf, ["Summary", "Name", "Docs", "Alpha", "Link"])
-    assert pdf =~ "/BaseFont /DejaVuSans"
+    assert pdf =~ ~r|/BaseFont /[A-Z]{6}\+DejaVuSans|
     assert pdf =~ "0.9333 0.9333 0.9333 rg"
     assert pdf =~ "0.75 0 0 0.75 0 0 cm 0 0 0 RG 1 w"
     assert pdf =~ "/Subtype /Link"
@@ -966,6 +1021,66 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                  header: ~s(<img src="#{image}" style="width: 1pt; height: 1pt">)
                ]
              )
+  end
+
+  test "cached PNG placements still consume aggregate decoded-image budget" do
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+    image = "data:image/png;base64,#{Base.encode64(png_fixture(1, 1))}"
+    html = ~s(<img src="#{image}"><img src="#{image}">)
+
+    Limits.install(%{
+      original_limits
+      | max_decoded_image_bytes: 3,
+        max_aggregate_decoded_image_bytes: 6
+    })
+
+    assert {:ok, _pdf} = HtmlToPdf.render(html)
+
+    Limits.install(%{
+      original_limits
+      | max_decoded_image_bytes: 3,
+        max_aggregate_decoded_image_bytes: 5
+    })
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{stage: :limits, reason: :resource_limit_exceeded, message: message}}} =
+             HtmlToPdf.render(html)
+
+    assert message =~ "aggregate decoded image bytes"
+  end
+
+  test "repeated SVG placements keep raster dimensions and aggregate limits" do
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+
+    svg =
+      ~s(<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="red"/></svg>)
+
+    source = "data:image/svg+xml;base64,#{Base.encode64(svg)}"
+    repeated = ~s(<img src="#{source}"><img src="#{source}">)
+
+    Limits.install(%{
+      original_limits
+      | max_decoded_image_bytes: 4,
+        max_aggregate_decoded_image_bytes: 8
+    })
+
+    assert {:ok, _pdf} = HtmlToPdf.render(repeated)
+
+    Limits.install(%{
+      original_limits
+      | max_decoded_image_bytes: 4,
+        max_aggregate_decoded_image_bytes: 7
+    })
+
+    assert {:error,
+            {:resource_limit_exceeded,
+             %{stage: :limits, reason: :resource_limit_exceeded, message: message}}} =
+             HtmlToPdf.render(repeated)
+
+    assert message =~ "aggregate decoded image bytes"
   end
 
   test "render reports invalid page furniture through the shared diagnostics contract" do

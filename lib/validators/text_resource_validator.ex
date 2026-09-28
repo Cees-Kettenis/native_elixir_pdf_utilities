@@ -228,7 +228,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
          {:ok, fonts} <- Reader.dictionary(document, Map.get(resources, "Font")),
          {:ok, font_ref} <- required_value(fonts, font_name, "font", page),
          {:ok, font} <- Reader.dictionary(document, font_ref) do
-      prepare_font(document, font, font_name, page, preparation_context)
+      prepare_font(document, font_ref, font, font_name, page, preparation_context)
     else
       {:error, {reason, diagnostic}} ->
         {:error, {reason, with_debug_details(diagnostic, page: page, font: font_name)}}
@@ -255,6 +255,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
                    {:ok, font, preparation_context} <-
                      prepare_font(
                        document,
+                       font_ref,
                        font_dictionary,
                        name,
                        page,
@@ -295,7 +296,43 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
     end
   end
 
-  defp prepare_font(document, font, font_name, page, preparation_context) do
+  defp prepare_font(document, font_ref, font, font_name, page, preparation_context) do
+    case font_ref do
+      {:ref, ref} ->
+        case Map.fetch(preparation_context.prepared_fonts, ref) do
+          {:ok, {prepared_font, stream_uses}} ->
+            case TextValidator.charge_stream_uses(preparation_context, stream_uses, page) do
+              {:ok, preparation_context} ->
+                {:ok, Map.put(prepared_font, :name, font_name), preparation_context}
+
+              {:error, {reason, diagnostic}} ->
+                {:error, {reason, with_debug_details(diagnostic, page: page, font: font_name)}}
+            end
+
+          :error ->
+            original_stream_uses = preparation_context.stream_uses
+
+            with {:ok, prepared_font, preparation_context} <-
+                   parse_font(document, font, font_name, page, preparation_context) do
+              cached =
+                {Map.delete(prepared_font, :name),
+                 preparation_context.stream_uses - original_stream_uses}
+
+              preparation_context = %{
+                preparation_context
+                | prepared_fonts: Map.put(preparation_context.prepared_fonts, ref, cached)
+              }
+
+              {:ok, prepared_font, preparation_context}
+            end
+        end
+
+      _ ->
+        parse_font(document, font, font_name, page, preparation_context)
+    end
+  end
+
+  defp parse_font(document, font, font_name, page, preparation_context) do
     cmap =
       case Map.get(font, "ToUnicode") do
         nil ->

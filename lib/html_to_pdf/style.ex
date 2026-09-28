@@ -19,6 +19,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.SvgValidator
 
   @border_styles [
     :none,
@@ -125,6 +126,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               result =
                 RenderCache.run(fn cache ->
                   context = %{rules: compile_selector_rules(rules), cache: cache}
+                  style_opts = Keyword.put(style_opts, :__render_cache__, cache)
 
                   case fragment_root_style(children, base_style, context, style_opts) do
                     {:ok, nil} ->
@@ -850,7 +852,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, style}
 
       {"img", {:ok, style}} ->
-        with {:ok, style} <- finalize_image_style(Map.put(style, :display, :image), image_budget) do
+        with {:ok, style} <-
+               finalize_image_style(Map.put(style, :display, :image), image_budget, opts) do
           finalize_background_image_style(style, opts, image_budget)
         end
 
@@ -874,12 +877,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp finalize_image_style(style, image_budget) do
+  defp finalize_image_style(style, image_budget, opts) do
     case {Map.get(style, :display), Map.get(style, :image), Map.get(style, :svg_image)} do
       {:image, nil, svg} when is_binary(svg) ->
-        with {:ok, png} <- SvgRasterizer.rasterize(svg, svg_raster_options(style), image_budget),
-             {:ok, image} <-
-               PngDecoder.decode(png, image_budget, false) do
+        with {:ok, image} <-
+               rasterize_svg_image(svg, svg_raster_options(style), image_budget, opts) do
           {:ok,
            style
            |> Map.put(:image, image)
@@ -911,9 +913,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
              |> Map.delete(:background_image_source)}
 
           {:ok, %{svg_image: svg}} ->
-            with {:ok, png} <- SvgRasterizer.rasterize(svg, [], image_budget),
-                 {:ok, image} <-
-                   PngDecoder.decode(png, image_budget, false) do
+            with {:ok, image} <- rasterize_svg_image(svg, [], image_budget, opts) do
               {:ok,
                style
                |> Map.put(:background_image, image)
@@ -4099,7 +4099,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, %{svg_image: svg}}
 
       {:ok, data, expected_format} ->
-        with {:ok, image} <- decode_image(data, image_budget) do
+        decoded =
+          RenderCache.fetch(
+            Keyword.fetch!(opts, :__render_cache__),
+            {:decoded_image, data},
+            fn -> decode_image(data, image_budget) end,
+            fn
+              {:ok, %{format: :png} = image} ->
+                HtmlValidator.reserve_decoded_image(
+                  image_budget,
+                  image.width_px,
+                  image.height_px,
+                  image.decoded_stride
+                )
+
+              _ ->
+                :ok
+            end
+          )
+
+        with {:ok, image} <- decoded do
           case is_nil(expected_format) or image.format == expected_format do
             true -> {:ok, %{image: image}}
             false -> :error
@@ -4112,6 +4131,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       _ ->
         :error
     end
+  end
+
+  defp rasterize_svg_image(svg, raster_options, image_budget, opts) do
+    loader = fn ->
+      with {:ok, png} <- SvgRasterizer.rasterize(svg, raster_options, image_budget) do
+        PngDecoder.decode(png, image_budget, false)
+      end
+    end
+
+    RenderCache.fetch(
+      Keyword.fetch!(opts, :__render_cache__),
+      {:rasterized_svg, svg, raster_options},
+      loader,
+      fn _image ->
+        case SvgValidator.validate(svg, raster_options, image_budget) do
+          {:ok, _dimensions} -> :ok
+          {:error, _reason} = error -> error
+        end
+      end
+    )
   end
 
   defp data_uri_image_source(src, image_budget) do

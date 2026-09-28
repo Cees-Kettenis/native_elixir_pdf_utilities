@@ -40,6 +40,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
           required(:instructions) => %{
             optional(instruction_cache_key()) => [instruction()]
           },
+          required(:prepared_fonts) => map(),
           required(:decoded_bytes) => non_neg_integer(),
           required(:parsed_instructions) => non_neg_integer(),
           required(:stream_uses) => non_neg_integer(),
@@ -259,6 +260,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
       stream_refs: %{},
       decoded_streams: %{},
       instructions: %{},
+      prepared_fonts: %{},
       decoded_bytes: 0,
       parsed_instructions: 0,
       stream_uses: 0,
@@ -303,6 +305,21 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     with {:ok, _stream_ref, content, preparation_context} <-
            cached_stream(document, value, page_number, preparation_context) do
       {:ok, content, preparation_context}
+    end
+  end
+
+  @doc false
+  @spec charge_stream_uses(preparation_context(), non_neg_integer(), pos_integer()) ::
+          {:ok, preparation_context()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def charge_stream_uses(preparation_context, count, page_number) do
+    stream_uses = preparation_context.stream_uses + count
+
+    case stream_uses <= Limits.get(:max_text_stream_uses) do
+      true ->
+        {:ok, %{preparation_context | stream_uses: stream_uses}}
+
+      false ->
+        resource_limit_error("content stream reference count exceeds the limit", page_number)
     end
   end
 
@@ -796,7 +813,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   end
 
   defp cached_stream(document, value, page_number, preparation_context) do
-    with {:ok, preparation_context} <- charge_stream_use(preparation_context, page_number) do
+    with {:ok, preparation_context} <- charge_stream_uses(preparation_context, 1, page_number) do
       case Map.fetch(preparation_context.stream_refs, value) do
         {:ok, stream_ref} ->
           {:ok, stream_ref, Map.fetch!(preparation_context.decoded_streams, stream_ref),
@@ -871,18 +888,6 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
 
       false ->
         resource_limit_error("parsed content instruction count exceeds the limit", page_number)
-    end
-  end
-
-  defp charge_stream_use(preparation_context, page_number) do
-    stream_uses = preparation_context.stream_uses + 1
-
-    case stream_uses <= Limits.get(:max_text_stream_uses) do
-      true ->
-        {:ok, %{preparation_context | stream_uses: stream_uses}}
-
-      false ->
-        resource_limit_error("content stream reference count exceeds the limit", page_number)
     end
   end
 

@@ -70,6 +70,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
     end)
   end
 
+  @doc """
+  Reuses an installed, immutable font asset without reading it again.
+
+  Caller-configured paths must use `fetch/2` so edits to those files remain visible.
+  """
+  @spec fetch_bundled(String.t(), loader()) :: load_result()
+  def fetch_bundled(path, loader) do
+    FontValidator.with_budget(fn ->
+      absolute_path = Path.expand(path)
+
+      FontValidator.memo({:bundled_file, absolute_path}, fn ->
+        case :ets.whereis(@table) do
+          :undefined ->
+            fetch(absolute_path, loader)
+
+          _table ->
+            case :ets.lookup(@table, absolute_path) do
+              [{^absolute_path, fingerprint, data, result, _sequence}] ->
+                FontValidator.reserve(:max_font_candidates, 1)
+                FontValidator.reserve_source_fingerprint(fingerprint, byte_size(data))
+                result
+
+              _ ->
+                fetch(absolute_path, loader)
+            end
+        end
+      end)
+    end)
+  end
+
   @impl GenServer
   def init(options) do
     table =
@@ -98,7 +128,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
             case result do
               {:ok, _value} ->
                 sequence = state.sequence + 1
-                :ets.insert(state.table, {path, fingerprint, result, sequence})
+                :ets.insert(state.table, {path, fingerprint, data, result, sequence})
 
                 state.table
                 |> :ets.tab2list()
@@ -121,7 +151,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
 
       _table ->
         case :ets.lookup(@table, path) do
-          [{^path, ^fingerprint, result, _sequence}] -> {:hit, result}
+          [{^path, ^fingerprint, _data, result, _sequence}] -> {:hit, result}
           _entry -> :miss
         end
     end

@@ -1,10 +1,12 @@
 alias NativeElixirPdfUtilities.HtmlToPdf
+alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
 alias NativeElixirPdfUtilities.Text
 
 Code.require_file("../test/support/png_fixture.ex", __DIR__)
 alias NativeElixirPdfUtilities.TestSupport.PngFixture
 
 maximum_reduction_regression_percent = 5
+runtime_version = System.version() |> String.split(".") |> Enum.take(2) |> Enum.join(".")
 
 measure = fn name, operation, limits ->
   Enum.each(1..2, fn _ ->
@@ -46,7 +48,10 @@ measure = fn name, operation, limits ->
     |> Enum.sort()
     |> Enum.at(2)
 
-  baseline_reductions = Keyword.fetch!(limits, :baseline_reductions)
+  baseline_reductions =
+    limits
+    |> Keyword.fetch!(:baseline_reductions)
+    |> Map.fetch!(runtime_version)
 
   maximum_reductions =
     div(baseline_reductions * (100 + maximum_reduction_regression_percent), 100)
@@ -103,14 +108,20 @@ end
 fixture_directory = Path.expand("../test/fixtures/html_to_pdf", __DIR__)
 
 fixtures = [
-  {"invoice_012.html", [page_size: :a4], 3_930_000, 1_482_140},
-  {"statement_012.html", [page_size: :a4], 3_950_000, 1_480_565},
-  {"multi_page_report_012.html", [page_size: :a4], 4_650_000, 1_484_879},
-  {"purchase_order.html", [page_size: :a4], 6_300_000, 851_598},
-  {"material_requisition.html", [page_size: :a4], 8_350_000, 856_939},
-  {"government_application_form.html", [page_size: :a4], 6_230_000, 2_257_618},
-  {"stock_sticker.html", [page_size: {4.92126, 1.49606}, margin: 0], 2_530_000, 415_886},
-  {"trim_card.html", [page_size: {11.6929, 8.2677}, margin: 0], 7_540_000, 1_486_342}
+  {"invoice_012.html", [page_size: :a4], %{"1.19" => 2_470_000, "1.20" => 2_400_000}, 162_436},
+  {"statement_012.html", [page_size: :a4], %{"1.19" => 2_350_000, "1.20" => 2_290_000},
+   161_282},
+  {"multi_page_report_012.html", [page_size: :a4], %{"1.19" => 2_700_000, "1.20" => 2_600_000},
+   162_795},
+  {"purchase_order.html", [page_size: :a4], %{"1.19" => 3_640_000, "1.20" => 3_500_000}, 124_904},
+  {"material_requisition.html", [page_size: :a4], %{"1.19" => 4_630_000, "1.20" => 4_450_000},
+   126_232},
+  {"government_application_form.html", [page_size: :a4],
+   %{"1.19" => 3_850_000, "1.20" => 3_680_000}, 256_688},
+  {"stock_sticker.html", [page_size: {4.92126, 1.49606}, margin: 0],
+   %{"1.19" => 1_410_000, "1.20" => 1_400_000}, 59_392},
+  {"trim_card.html", [page_size: {11.6929, 8.2677}, margin: 0],
+   %{"1.19" => 3_810_000, "1.20" => 3_720_000}, 163_606}
 ]
 
 Enum.each(fixtures, fn {file, opts, baseline_reductions, baseline_bytes} ->
@@ -154,22 +165,30 @@ synthetic_pdf =
   measure.(
     "100-row HTML render",
     fn -> HtmlToPdf.render(synthetic_html) end,
-    baseline_reductions: 53_200_000,
+    baseline_reductions: %{"1.19" => 13_270_000, "1.20" => 11_840_000},
     maximum_microseconds: 2_000_000,
-    maximum_result_bytes: div(1_632_177 * 105, 100)
+    maximum_result_bytes: div(166_852 * 105, 100)
   )
+
+measure.(
+  "100-row uncompressed full-font render",
+  fn -> HtmlToPdf.render(synthetic_html, subset_fonts: false, compress_streams: false) end,
+  baseline_reductions: %{"1.19" => 12_710_000, "1.20" => 11_270_000},
+  maximum_microseconds: 3_000_000,
+  maximum_result_bytes: div(1_632_177 * 105, 100)
+)
 
 measure.(
   "100-row PDF text extraction",
   fn -> Text.extract(synthetic_pdf, layout: false) end,
-  baseline_reductions: 9_830_000,
+  baseline_reductions: %{"1.19" => 5_090_000, "1.20" => 4_600_000},
   maximum_microseconds: 2_000_000
 )
 
 measure.(
   "100-row PDF visual text extraction",
   fn -> Text.extract(synthetic_pdf, layout: true) end,
-  baseline_reductions: 10_380_000,
+  baseline_reductions: %{"1.19" => 5_420_000, "1.20" => 4_920_000},
   maximum_microseconds: 2_000_000
 )
 
@@ -181,9 +200,9 @@ repeated_text =
 measure.(
   "repeated text layout",
   fn -> HtmlToPdf.render("<html><body>#{repeated_text}</body></html>") end,
-  baseline_reductions: 8_840_000,
+  baseline_reductions: %{"1.19" => 3_290_000, "1.20" => 3_250_000},
   maximum_microseconds: 2_000_000,
-  maximum_result_bytes: div(796_174 * 105, 100)
+  maximum_result_bytes: div(82_140 * 105, 100)
 )
 
 long_paragraph =
@@ -195,9 +214,9 @@ long_paragraph =
 measure.(
   "long paragraph layout",
   fn -> HtmlToPdf.render("<html><body><p>#{long_paragraph}</p></body></html>") end,
-  baseline_reductions: 15_850_000,
+  baseline_reductions: %{"1.19" => 6_350_000, "1.20" => 6_250_000},
   maximum_microseconds: 2_000_000,
-  maximum_result_bytes: div(832_420 * 105, 100)
+  maximum_result_bytes: div(85_076 * 105, 100)
 )
 
 png =
@@ -212,9 +231,83 @@ measure.(
   fn ->
     HtmlToPdf.render("<html><body>#{images}</body></html>", assets: %{"sample" => {:bytes, png}})
   end,
-  baseline_reductions: 6_850_000,
+  baseline_reductions: %{"1.19" => 1_860_000, "1.20" => 1_860_000},
   maximum_microseconds: 3_000_000,
   maximum_result_bytes: div(37_811 * 105, 100)
+)
+
+large_png =
+  PngFixture.build(
+    512,
+    512,
+    6,
+    16,
+    1,
+    fn x, y ->
+      [x * 127, y * 127, 32_768, 40_000]
+    end,
+    filters: true
+  )
+
+large_images = String.duplicate("<img src=\"large\">", 10)
+
+measure.(
+  "ten repeated 512px PNG images",
+  fn ->
+    HtmlToPdf.render("<html><body>#{large_images}</body></html>",
+      assets: %{"large" => {:bytes, large_png}}
+    )
+  end,
+  baseline_reductions: %{"1.19" => 26_180_000, "1.20" => 26_150_000},
+  maximum_microseconds: 3_000_000,
+  maximum_result_bytes: div(634_859 * 105, 100)
+)
+
+adversarial_paragraph =
+  1..800
+  |> Enum.map_join(" ", fn index -> "synthetic#{rem(index, 11)}" end)
+  |> then(&"<p style='width:180pt'>#{&1}</p>")
+
+measure.(
+  "800-word inline paragraph",
+  fn -> HtmlToPdf.render(adversarial_paragraph) end,
+  baseline_reductions: %{"1.19" => 4_140_000, "1.20" => 4_090_000},
+  maximum_microseconds: 2_000_000,
+  maximum_result_bytes: div(84_761 * 105, 100)
+)
+
+many_table_headers =
+  Enum.map_join(1..160, fn index ->
+    "<table><thead><tr><th>Section #{index}</th></tr></thead><tbody><tr><td>Value</td></tr></tbody></table>"
+  end)
+
+measure.(
+  "160 table headings",
+  fn -> HtmlToPdf.render(many_table_headers) end,
+  baseline_reductions: %{"1.19" => 5_890_000, "1.20" => 5_700_000},
+  maximum_microseconds: 2_000_000,
+  maximum_result_bytes: div(155_020 * 105, 100)
+)
+
+many_boxes =
+  Enum.map(1..4_000, fn index ->
+    %{
+      type: :text,
+      text: "B#{index}",
+      x: 0,
+      y: index / 10,
+      font: "Helvetica",
+      font_size: 10,
+      color: {0, 0, 0}
+    }
+  end)
+
+measure.(
+  "4,000 boxes on one page",
+  fn -> PdfWriter.render([%{size: {500, 500}, boxes: many_boxes}]) end,
+  baseline_reductions: %{"1.19" => 1_970_000, "1.20" => 1_370_000},
+  maximum_microseconds: 2_000_000,
+  maximum_result_bytes: div(21_226 * 105, 100)
 )
 
 IO.puts("PERFORMANCE_REGRESSION status=PASS")

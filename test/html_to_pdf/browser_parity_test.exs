@@ -235,6 +235,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     end
   end
 
+  test "subset font output retains Chromium parity for print typography" do
+    fixture_path = Path.join(@fixtures_dir, "fonts_and_print_media.html")
+
+    assert %{page_count: 1} =
+             PdfVisualCompare.assert_browser_match!(fixture_path,
+               artifact_dir: "tmp/browser_parity/fonts_and_print_media_subset",
+               max_changed_ratio: 0.01,
+               max_average_delta: 0.035
+             )
+  end
+
   for {fixture_name, thresholds} <- @real_document_fixture_thresholds do
     @fixture_name fixture_name
     @thresholds thresholds

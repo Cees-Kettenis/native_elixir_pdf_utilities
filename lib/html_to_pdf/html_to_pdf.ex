@@ -106,6 +106,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | {:outlines, outlines()}
           | {:page_furniture, page_furniture() | false | nil}
           | {:unsupported_glyphs, unsupported_glyphs()}
+          | {:compress_streams, boolean()}
+          | {:subset_fonts, boolean()}
   @type error_reason ::
           :invalid_document
           | :invalid_css
@@ -137,7 +139,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   Supported options include `:page_size`, `:margin`, `:base_url`,
   `:stylesheets`, `:default_font`, explicit local `:fonts`,
   `:system_font_discovery`, PDF `:metadata`, opt-in `:page_furniture` headers
-  and footers, PDF `:outlines`, and `:unsupported_glyphs`.
+  and footers, PDF `:outlines`, `:unsupported_glyphs`, `:compress_streams`, and
+  `:subset_fonts`.
+  Stream compression and TrueType font subsetting are enabled by default to keep
+  PDFs small. Set `compress_streams: false` or `subset_fonts: false` to opt out.
+  Subsetting retains the original glyph IDs for PDF character mapping and keeps
+  the full font when its license forbids subsetting.
   Metadata supports title, author, subject, keywords, producer, creation date,
   and modification date. An HTML `<title>` supplies the PDF title when
   `metadata[:title]` is not set.
@@ -268,7 +275,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
                  styled_tree,
                  Keyword.get(effective_opts, :unsupported_glyphs, :replace)
                ),
-             {:ok, layout_tree} <- layout_document(styled_tree, effective_opts),
+             {:ok, layout_tree} <-
+               Font.with_measurement_cache(fn -> layout_document(styled_tree, effective_opts) end),
              {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
              effective_opts <- prepared_outline_options(pages, effective_opts),
              {:ok, pages} <-

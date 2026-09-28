@@ -3815,6 +3815,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert {:ok, data_jpeg_style} = image_style(data_jpeg_src, [])
     assert data_jpeg_style.image.format == :jpeg
 
+    repeated_jpeg_dom = %{
+      type: :document,
+      children:
+        Enum.map(1..2, fn _ ->
+          %{
+            type: :element,
+            tag: "img",
+            attributes: %{"src" => data_jpeg_src},
+            children: []
+          }
+        end)
+    }
+
+    assert {:ok, %{children: repeated_jpegs}} = Style.compute(repeated_jpeg_dom, [])
+    assert Enum.map(repeated_jpegs, & &1.style.image.format) == [:jpeg, :jpeg]
+
     restart_jpeg_src = "data:image/jpeg;base64,#{Base.encode64(restart_jpeg_fixture())}"
     assert {:ok, restart_jpeg_style} = image_style(restart_jpeg_src, [])
     assert restart_jpeg_style.image.format == :jpeg

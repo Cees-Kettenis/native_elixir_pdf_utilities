@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Text
+  alias NativeElixirPdfUtilities.Validators.TextResourceValidator
   alias NativeElixirPdfUtilities.Validators.TextValidator
 
   test "composed graphics transforms return diagnostics instead of overflowing" do
@@ -348,6 +349,79 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
     assert {:ok, text} = Text.extract(pdf, layout: false)
     assert length(String.split(text, "\n")) == 250
+  end
+
+  test "caches a referenced font across aliases while charging each stream use" do
+    cmap =
+      "begincmap\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfchar\n<41> <0041>\nendbfchar\nendcmap"
+
+    source =
+      page_pdf("BT /F1 12 Tf <41> Tj /Alias 12 Tf <41> Tj ET",
+        font: "<< /Type /Font /Subtype /TrueType /ToUnicode 7 0 R >>",
+        cmap: cmap
+      )
+
+    assert {:ok, pdf_context} = Reader.read_validated(source)
+
+    assert {:ok, instructions} =
+             TextValidator.instructions("BT /F1 12 Tf <41> Tj /Alias 12 Tf <41> Tj ET", 1)
+
+    resources = %{"Font" => %{"F1" => {:ref, {5, 0}}, "Alias" => {:ref, {5, 0}}}}
+
+    assert {:ok, [prepared], context} =
+             TextResourceValidator.prepare_contents(
+               pdf_context.document,
+               resources,
+               [instructions],
+               1,
+               TextValidator.new_preparation_context()
+             )
+
+    assert context.stream_uses == 2
+    assert map_size(context.prepared_fonts) == 1
+
+    assert prepared |> Enum.filter(&(&1.operator == "Tf")) |> Enum.map(& &1.font.name) ==
+             ["F1", "Alias"]
+
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+    Limits.install(%{original_limits | max_text_stream_uses: 1})
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: message}}} =
+             TextResourceValidator.prepare_contents(
+               pdf_context.document,
+               resources,
+               [instructions],
+               1,
+               TextValidator.new_preparation_context()
+             )
+
+    assert message =~ "page 1"
+    assert message =~ "Alias"
+
+    direct_resources = %{
+      "Font" => %{
+        "Direct" => %{
+          "Type" => {:name, "Font"},
+          "Subtype" => {:name, "TrueType"},
+          "Encoding" => {:name, "WinAnsiEncoding"}
+        }
+      }
+    }
+
+    assert {:ok, direct_instructions} =
+             TextValidator.instructions("BT /Direct 12 Tf (A) Tj ET", 1)
+
+    assert {:ok, [_prepared], direct_context} =
+             TextResourceValidator.prepare_contents(
+               pdf_context.document,
+               direct_resources,
+               [direct_instructions],
+               1,
+               TextValidator.new_preparation_context()
+             )
+
+    assert direct_context.prepared_fonts == %{}
   end
 
   test "reuses raw Form instructions while charging every expansion" do

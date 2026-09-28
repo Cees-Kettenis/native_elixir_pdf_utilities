@@ -27,4 +27,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderCache do
         result
     end
   end
+
+  @doc false
+  @spec fetch(reference(), term(), (-> result), (result -> :ok | {:error, term()})) ::
+          result | {:error, term()}
+        when result: term()
+  def fetch(cache, key, loader, on_hit) do
+    case Map.fetch(Process.get(cache), key) do
+      {:ok, result} ->
+        case on_hit.(result) do
+          :ok -> result
+          {:error, _reason} = error -> error
+        end
+
+      :error ->
+        result = loader.()
+        Process.put(cache, Map.put(Process.get(cache), key, result))
+        result
+    end
+  end
 end

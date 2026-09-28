@@ -5,6 +5,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.FontValidator
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   setup do
     limits = Limits.effective()
@@ -56,6 +57,45 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert diagnostic.stage == :layout
     assert diagnostic.message =~ "max_layout_text_work"
     assert Font.text_width("", font, 10) == 0.0
+  end
+
+  test "measurement cache reuses widths but still charges layout work on hits" do
+    font = %{
+      type: :embedded,
+      id: "measurement-fixture",
+      units_per_em: 1000,
+      cmap: %{?A => 1, ?B => 2},
+      widths: [0, 600, 700],
+      default_width: 600
+    }
+
+    Limits.install(%{Limits.effective() | max_layout_text_work: 3})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               Font.with_measurement_cache(fn ->
+                 assert Font.text_width("A", font, 10) == 6.0
+                 assert Font.text_width("A", font, 10) == 6.0
+               end)
+             end)
+
+    assert diagnostic.stage == :layout
+    assert diagnostic.message =~ "max_layout_text_work"
+
+    Limits.install(%{
+      Limits.effective()
+      | max_layout_text_work: 20,
+        max_layout_measurement_cache_bytes: 1,
+        max_layout_measurement_cache_entries: 1
+    })
+
+    assert Font.with_measurement_cache(fn ->
+             Font.with_measurement_cache(fn ->
+               assert Font.text_width("A", font, 10) == 6.0
+               assert Font.text_width("B", font, 10) == 7.0
+               assert Font.text_width("B", font, 10) == 7.0
+             end)
+           end)
   end
 
   test "validates bounded horizontal kerning and measures pair advances" do

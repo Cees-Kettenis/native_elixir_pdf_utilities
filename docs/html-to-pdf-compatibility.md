@@ -58,6 +58,8 @@ Pass options to `HtmlToPdf.render(html, options)` or `render_file/3`.
 | `:default_font` | Choose text fonts | `"DejaVu Sans"` | Family name string or a list of family names in fallback order |
 | `:fonts` | Register TrueType fonts | `[]` | List of font definitions with `:family` and `:path` or `:data`. See [font registration](html-to-pdf-examples.md#register-a-font). |
 | `:system_font_discovery` | Look up installed fonts | `true` | `true` or `false` |
+| `:compress_streams` | Compress eligible PDF streams when smaller | `true` | Boolean; set `false` to favor render speed over file size |
+| `:subset_fonts` | Omit unused TrueType outlines | `true` | Boolean; set `false` to embed full fonts |
 | `:unsupported_glyphs` | Handle missing characters | `:replace` | `:replace` or `:error` |
 | `:forms` | Create AcroForm fields | `:interactive` | `:interactive` or `:static`; see [PDF forms](pdf-forms.md). |
 | `:metadata` | Set document information | HTML title when present | Metadata fields such as `:title` and `:author`. See [metadata options](html-to-pdf-examples.md#set-pdf-metadata). |
@@ -205,6 +207,12 @@ See [Register a font](html-to-pdf-examples.md#register-a-font).
 
 Missing characters use available fallback fonts, then U+FFFD replacement.
 Set `unsupported_glyphs: :error` to fail instead of replacing them.
+
+The renderer subsets TrueType fonts and compresses eligible PDF streams by default.
+Subsetting keeps glyph IDs unchanged and includes the outlines needed by composite
+glyphs. Fonts whose license forbids subsetting remain fully embedded. Set
+`subset_fonts: false` or `compress_streams: false` when render time matters more
+than output size.
 
 ## Pagination
 

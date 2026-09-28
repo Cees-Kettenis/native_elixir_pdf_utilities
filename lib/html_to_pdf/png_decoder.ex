@@ -45,7 +45,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PngDecoder do
         width: parsed.width_px * 0.75,
         height: parsed.height_px * 0.75,
         color_space: if(parsed.colors == 1, do: :device_gray, else: :device_rgb),
-        bits_per_component: parsed.output_depth
+        bits_per_component: parsed.output_depth,
+        decoded_stride: parsed.stride
       }
 
       {:ok, if(is_nil(alpha), do: image, else: Map.put(image, :alpha_data, alpha))}

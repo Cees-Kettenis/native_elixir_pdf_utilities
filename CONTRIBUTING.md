@@ -77,11 +77,14 @@ The matrix compiles with warnings as errors, enforces 100% test coverage, checks
 the performance regression limits, runs Dialyzer, and runs Chromium browser parity
 for every configured Elixir runtime.
 
-`mix test.performance` measures eight synthetic document fixtures and six focused
+`mix test.performance` measures eight synthetic document fixtures and eleven focused
 workloads. It warms each scenario twice and checks the median of five runs against
-the recorded reductions baseline. A result above 105% fails the stage. Generated
+the recorded baseline for that Elixir minor version. A result above 105% fails the
+stage. Add a measured baseline when adding a new supported Elixir version. Generated
 PDFs also have a 5% output-size limit. Wall-clock limits catch severe stalls but
 are deliberately looser because shared CI runner load affects timing.
+The 100-row workload checks both the compact default and the explicit uncompressed,
+full-font opt-out, so changes to either path are visible during review.
 
 A pull request that exceeds a performance regression limit is not ready to merge.
 Do not raise a limit only to make the check pass. Find and optimize an unintended

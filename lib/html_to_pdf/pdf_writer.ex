@@ -9,9 +9,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubset
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
   alias NativeElixirPdfUtilities.Pdf.OutlineBuilder
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.WriterValidator
 
@@ -22,7 +24,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   @type page :: NativeElixirPdfUtilities.HtmlToPdf.Pagination.page()
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
-  @type error_reason :: :invalid_pdf_input | :resource_limit_exceeded
+  @type error_reason ::
+          :invalid_document | :invalid_pdf_input | :invalid_options | :resource_limit_exceeded
 
   @doc """
   Renders paginated drawing instructions to a PDF binary.
@@ -46,8 +49,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                  NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare(
                    context.pages,
                    opts
-                 ) do
-            pdf = pages_to_pdf(pages, context.metadata, context.outlines)
+                 ),
+               {font_resources, next_object_id} <- font_resources(pages, 3),
+               {:ok, font_resources} <-
+                 subset_font_resources(font_resources, context.subset_fonts) do
+            pdf =
+              pages_to_pdf(
+                pages,
+                context.metadata,
+                context.outlines,
+                context.compress_streams,
+                font_resources,
+                next_object_id
+              )
 
             case controls do
               [] ->
@@ -66,8 +80,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end)
   end
 
-  defp pages_to_pdf(pages, metadata, outlines) do
-    {font_resources, next_object_id} = font_resources(pages, 3)
+  defp pages_to_pdf(
+         pages,
+         metadata,
+         outlines,
+         compress_streams?,
+         font_resources,
+         next_object_id
+       ) do
     image_resources = image_resources(pages, next_object_id)
     graphics_state_object_id = next_object_id + image_object_count(image_resources)
     graphics_state_resources = graphics_state_resources(pages, graphics_state_object_id)
@@ -113,7 +133,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
              entry.page,
              font_resources,
              image_resources,
-             graphics_state_resources
+             graphics_state_resources,
+             compress_streams?
            )}
         ] ++ annotation_objects(entry.annotation_objects)
       end)
@@ -123,7 +144,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         {1, catalog_object(pages_object_id, outline_objects.root_ref)},
         {pages_object_id, pages_object(page_object_ids)}
       ] ++
-        font_objects(font_resources) ++
+        font_objects(font_resources, compress_streams?) ++
         image_objects(image_resources) ++
         graphics_state_objects(graphics_state_resources) ++
         page_objects ++ serialized_outline_objects(outline_objects.objects)
@@ -253,7 +274,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp content_object(page, font_resources, image_resources, graphics_state_resources) do
+  defp content_object(page, font_resources, image_resources, graphics_state_resources, compress?) do
     content =
       content_stream(
         page.boxes,
@@ -263,15 +284,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         graphics_state_resources
       )
 
-    length = byte_size(content)
+    case compress? do
+      true ->
+        stream_object(content, true)
 
-    """
-    << /Length #{length} >>
-    stream
-    #{content}
-    endstream
-    """
-    |> String.trim()
+      false ->
+        length = byte_size(content)
+
+        """
+        << /Length #{length} >>
+        stream
+        #{content}
+        endstream
+        """
+        |> String.trim()
+    end
   end
 
   defp content_stream(
@@ -1154,7 +1181,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       key = font_key(box)
 
       Map.update(acc, key, font_entry(key, box), fn entry ->
-        update_in(entry.texts, &(&1 ++ [{box.text, Map.get(box, :letter_spacing, 0)}]))
+        update_in(entry.texts, &[{box.text, Map.get(box, :letter_spacing, 0)} | &1])
       end)
     end)
     |> Map.values()
@@ -1167,13 +1194,52 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp font_objects(font_resources) do
+  defp subset_font_resources(resources, subset?) do
+    case subset? do
+      false ->
+        {:ok, resources}
+
+      true ->
+        Enum.reduce_while(resources, {:ok, %{}}, fn {key, resource}, {:ok, prepared} ->
+          case Map.get(resource, :font_face) do
+            %{type: :embedded} = font ->
+              glyph_ids =
+                resource.encoding.cid_to_gid |> Map.values() |> Enum.uniq() |> Enum.sort()
+
+              case TrueTypeSubset.subset(font, glyph_ids) do
+                {:ok, data} when data == font.data ->
+                  {:cont, {:ok, Map.put(prepared, key, resource)}}
+
+                {:ok, data} ->
+                  digest = :crypto.hash(:sha256, :erlang.term_to_binary({font.id, glyph_ids}))
+
+                  prefix =
+                    for <<byte <- binary_part(digest, 0, 6)>>,
+                      into: "",
+                      do: <<?A + rem(byte, 26)>>
+
+                  resource = %{resource | pdf_name: prefix <> "+" <> resource.pdf_name}
+
+                  {:cont, {:ok, Map.put(prepared, key, Map.put(resource, :font_file_data, data))}}
+
+                {:error, _reason} = error ->
+                  {:halt, error}
+              end
+
+            _ ->
+              {:cont, {:ok, Map.put(prepared, key, resource)}}
+          end
+        end)
+    end
+  end
+
+  defp font_objects(font_resources, compress?) do
     font_resources
     |> Enum.sort_by(fn {_font, resource} -> resource.object_id end)
     |> Enum.flat_map(fn {_font, resource} ->
       case Map.get(resource, :font_face) do
         %{type: :embedded} = font ->
-          embedded_font_objects(resource, font)
+          embedded_font_objects(resource, font, compress?)
 
         _ ->
           [
@@ -1197,7 +1263,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp font_resource(entry, object_id, index) do
     case entry.font_face do
       %{type: :embedded} = font ->
-        encoding = Font.pdf_encoding(entry.texts, font)
+        encoding = Font.pdf_encoding(Enum.reverse(entry.texts), font)
 
         %{
           name: "F#{index}",
@@ -1225,23 +1291,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp embedded_font_objects(resource, font) do
+  defp embedded_font_objects(resource, font, compress?) do
     [
-      {resource.object_id, embedded_type0_font_object(resource, font)},
+      {resource.object_id, embedded_type0_font_object(resource)},
       {resource.descendant_object_id, embedded_cid_font_object(resource, font)},
       {resource.descriptor_object_id, embedded_descriptor_object(resource, font)},
-      {resource.font_file_object_id, stream_object(font.data)},
-      {resource.cid_to_gid_object_id, cid_to_gid_object(resource)},
-      {resource.to_unicode_object_id, to_unicode_object(resource)}
+      {resource.font_file_object_id,
+       stream_object(Map.get(resource, :font_file_data, font.data), compress?)},
+      {resource.cid_to_gid_object_id, cid_to_gid_object(resource, compress?)},
+      {resource.to_unicode_object_id, to_unicode_object(resource, compress?)}
     ]
   end
 
-  defp embedded_type0_font_object(resource, font) do
-    "<< /Type /Font /Subtype /Type0 /BaseFont /#{font.pdf_name} /Encoding /Identity-H /DescendantFonts [#{resource.descendant_object_id} 0 R] /ToUnicode #{resource.to_unicode_object_id} 0 R >>"
+  defp embedded_type0_font_object(resource) do
+    "<< /Type /Font /Subtype /Type0 /BaseFont /#{resource.pdf_name} /Encoding /Identity-H /DescendantFonts [#{resource.descendant_object_id} 0 R] /ToUnicode #{resource.to_unicode_object_id} 0 R >>"
   end
 
   defp embedded_cid_font_object(resource, font) do
-    "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /#{font.pdf_name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor #{resource.descriptor_object_id} 0 R /W #{cid_widths(resource, font)} /CIDToGIDMap #{resource.cid_to_gid_object_id} 0 R >>"
+    "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /#{resource.pdf_name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor #{resource.descriptor_object_id} 0 R /W #{cid_widths(resource, font)} /CIDToGIDMap #{resource.cid_to_gid_object_id} 0 R >>"
   end
 
   defp embedded_descriptor_object(resource, font) do
@@ -1249,10 +1316,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     ascent = scale_metric(font.ascent, font.units_per_em)
     descent = scale_metric(font.descent, font.units_per_em)
 
-    "<< /Type /FontDescriptor /FontName /#{font.pdf_name} /Flags 4 /FontBBox [#{x_min} #{y_min} #{x_max} #{y_max}] /ItalicAngle 0 /Ascent #{ascent} /Descent #{descent} /CapHeight #{ascent} /StemV 80 /FontFile2 #{resource.font_file_object_id} 0 R >>"
+    "<< /Type /FontDescriptor /FontName /#{resource.pdf_name} /Flags 4 /FontBBox [#{x_min} #{y_min} #{x_max} #{y_max}] /ItalicAngle 0 /Ascent #{ascent} /Descent #{descent} /CapHeight #{ascent} /StemV 80 /FontFile2 #{resource.font_file_object_id} 0 R >>"
   end
 
-  defp to_unicode_object(resource) do
+  defp to_unicode_object(resource, compress?) do
     mappings =
       resource.encoding.cid_to_unicode
       |> Enum.sort_by(fn {cid, _unicode} -> cid end)
@@ -1301,14 +1368,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       ]
       |> Enum.join("\n")
 
-    stream_object(stream)
+    stream_object(stream, compress?)
   end
 
-  defp stream_object(data) do
-    "<< /Length #{byte_size(data)} >>\nstream\n" <> data <> "\nendstream"
+  defp stream_object(data, compress?) do
+    compressed = if compress? and byte_size(data) >= 1_024, do: :zlib.compress(data), else: <<>>
+
+    if compress? and byte_size(data) >= 1_024 and
+         byte_size(compressed) + byte_size(" /Filter /FlateDecode") < byte_size(data) and
+         byte_size(data) <= byte_size(compressed) * Limits.get(:max_pdf_decompression_ratio) do
+      "<< /Length #{byte_size(compressed)} /Filter /FlateDecode >>\nstream\n" <>
+        compressed <> "\nendstream"
+    else
+      "<< /Length #{byte_size(data)} >>\nstream\n" <> data <> "\nendstream"
+    end
   end
 
-  defp cid_to_gid_object(resource) do
+  defp cid_to_gid_object(resource, compress?) do
     max_cid = Enum.reduce(Map.keys(resource.encoding.cid_to_gid), 0, &max/2)
 
     data =
@@ -1316,7 +1392,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         <<Map.get(resource.encoding.cid_to_gid, cid, 0)::16>>
       end
 
-    stream_object(data)
+    stream_object(data, compress?)
   end
 
   defp cid_widths(resource, font) do
