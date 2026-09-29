@@ -109,6 +109,10 @@ filled. Existing external text-field decorations inside an old appearance are
 not reconstructed. All filled fields have self-contained appearances and do
 not depend on a viewer regenerating them.
 
+Partial fills preserve the existing form-wide `NeedAppearances` request because
+untouched appearances may be missing or stale. Filling every field clears the
+request after preparing appearances for all fields.
+
 ## Flatten selected fields
 
 ```elixir
@@ -154,7 +158,3 @@ must apply their own policy to uploaded PDFs before distributing them.
 See [resource limits](resource-limits.md#forms-and-attachments) for field,
 appearance-object and byte budgets, and [attachments](pdf-attachments.md) for
 embedding supporting files.
-
-Partial fills preserve the existing form-wide `NeedAppearances` request because
-untouched appearances may be missing or stale. Filling every field clears the
-request after preparing appearances for all fields.

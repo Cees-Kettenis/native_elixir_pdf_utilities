@@ -47,85 +47,15 @@ These percentages describe visual comparisons, not a percentage of browser
 features supported. Start with the [rendering examples](html-to-pdf-examples.md)
 for working templates.
 
-The suite covers all supported PNG color types and sample depths, including
-Adam7 interlacing, in the `png_formats` fixture. The table below includes every
-current fixture, including invoices, statements, forms, and labels.
+## Regression coverage
 
-## Measured comparisons
+The suite includes invoices, statements, forms, labels, and focused fixtures for
+supported layout behavior. Recent cases cover `white-space: nowrap`, leading
+decimal lengths, letter spacing and ligatures, collapsed table borders across
+pages, and body padding, backgrounds, and grid layout.
+PNG coverage includes all legal static color types and sample depths, including
+Adam7 interlacing. Font checks include subsetting and signed TrueType glyph deltas.
 
-The following run used Chromium 151.0.7922.173 and Poppler 25.03.0 at 72 DPI.
-Values are fractions rounded to six decimal places. For multipage documents,
-"Changed" and "Average" show the maximum page value. All 67 fixtures across
-80 pages met the strict `<0.01` changed-pixel gate. The government application
-form had the largest value at `0.009673`. Each comparison writes measurements to
-`tmp/browser_parity/<fixture>/stats.exs`.
-
-| Fixture | Changed | Average | Pages |
-| --- | ---: | ---: | ---: |
-| `absolute_positioning` | 0.000000 | 0.000000 | 1 |
-| `background_images` | 0.005026 | 0.000923 | 1 |
-| `block_box_model` | 0.001999 | 0.000473 | 1 |
-| `body_grid` | 0.001690 | 0.000240 | 1 |
-| `body_padding_background` | 0.001944 | 0.000289 | 1 |
-| `border_style_variants` | 0.009581 | 0.002911 | 1 |
-| `box_sizing_and_margins` | 0.001316 | 0.000219 | 1 |
-| `break_variants` | 0.000640 | 0.000348 | 4 |
-| `cmyk_jpeg_colors` | 0.000000 | 0.000000 | 1 |
-| `computed_custom_properties` | 0.000000 | 0.000000 | 1 |
-| `css_cascade_selectors` | 0.007879 | 0.002018 | 1 |
-| `css_remaining_supported_values` | 0.001587 | 0.000795 | 1 |
-| `display_lists_and_inline_block` | 0.006266 | 0.002542 | 1 |
-| `distributed_gaps` | 0.001389 | 0.000926 | 1 |
-| `empty_flex_height` | 0.000000 | 0.000000 | 1 |
-| `flex_direction_and_justification` | 0.001673 | 0.000690 | 1 |
-| `flex_grid_alignment` | 0.001112 | 0.000384 | 1 |
-| `fonts_and_print_media` | 0.000287 | 0.000037 | 1 |
-| `generated_content_counters` | 0.007572 | 0.002173 | 1 |
-| `government_application_form` | 0.009673 | 0.003022 | 1 |
-| `grid_explicit_sizes` | 0.000000 | 0.000000 | 1 |
-| `grid_span_end` | 0.000000 | 0.000000 | 1 |
-| `grid_sparse_placement` | 0.000000 | 0.000000 | 1 |
-| `grid_tracks_and_placement` | 0.001919 | 0.000439 | 1 |
-| `hidden_tables` | 0.000000 | 0.000000 | 1 |
-| `html_semantics_typography` | 0.004044 | 0.002309 | 1 |
-| `image_object_fitting` | 0.002047 | 0.000531 | 1 |
-| `images_data_uris` | 0.004778 | 0.002689 | 1 |
-| `inline_positioning` | 0.000157 | 0.000036 | 1 |
-| `inline_text_flow` | 0.006012 | 0.002430 | 1 |
-| `invoice_012` | 0.004505 | 0.000971 | 1 |
-| `layout_compositions_remaining` | 0.002315 | 0.000925 | 1 |
-| `ligature_letter_spacing` | 0.006227 | 0.001041 | 1 |
-| `links_entities_and_protocols` | 0.000988 | 0.000380 | 1 |
-| `material_requisition` | 0.005162 | 0.001862 | 2 |
-| `multi_page_report_012` | 0.007759 | 0.002245 | 2 |
-| `nested_table_collapsed_borders` | 0.008050 | 0.003232 | 1 |
-| `nested_table_grid_flex` | 0.006274 | 0.002049 | 1 |
-| `page_furniture` | 0.003336 | 0.001532 | 2 |
-| `page_geometry_asymmetric` | 0.000680 | 0.000343 | 1 |
-| `page_rules_landscape` | 0.000928 | 0.000168 | 1 |
-| `pagination_breaks` | 0.000120 | 0.000019 | 2 |
-| `paragraph_pagination` | 0.000000 | 0.000000 | 2 |
-| `png_formats` | 0.007718 | 0.002293 | 1 |
-| `png_transparent_color` | 0.000000 | 0.000000 | 1 |
-| `purchase_order` | 0.004020 | 0.001018 | 1 |
-| `quoted_at_rules` | 0.000710 | 0.000135 | 1 |
-| `quoted_variables` | 0.000000 | 0.000000 | 1 |
-| `root_absolute_pagination` | 0.000000 | 0.000000 | 2 |
-| `statement_012` | 0.005791 | 0.001390 | 1 |
-| `static_form_controls` | 0.005775 | 0.001791 | 1 |
-| `stock_sticker` | 0.002616 | 0.000380 | 1 |
-| `system_font_inheritance` | 0.002356 | 0.000702 | 1 |
-| `table_collapsed_borders` | 0.009329 | 0.003444 | 1 |
-| `table_column_layout` | 0.002494 | 0.000774 | 1 |
-| `table_header_near_page_row` | 0.001481 | 0.000260 | 2 |
-| `table_outer_border_pagination` | 0.006273 | 0.003928 | 3 |
-| `table_pagination_headers` | 0.002727 | 0.001988 | 2 |
-| `table_rowspan_tfoot` | 0.007336 | 0.002667 | 1 |
-| `table_separate_borders` | 0.000475 | 0.000244 | 1 |
-| `text_style_variants` | 0.006913 | 0.001900 | 1 |
-| `trim_card` | 0.008870 | 0.001629 | 1 |
-| `units_and_sizing` | 0.003377 | 0.001431 | 1 |
-| `unsupported_glyph_replacement` | 0.001875 | 0.000860 | 1 |
-| `weight_inheritance` | 0.000000 | 0.000000 | 1 |
-| `whitespace_pre_line` | 0.000559 | 0.000102 | 1 |
-| `zero_font_size` | 0.000000 | 0.000000 | 1 |
+See the [parity tests](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/test/html_to_pdf/browser_parity_test.exs) for the
+current fixtures and thresholds. Each comparison writes its measurements and
+tool versions to `tmp/browser_parity/<fixture>/stats.exs`.

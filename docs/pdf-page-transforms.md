@@ -57,9 +57,9 @@ each output is independent. `by_page/1` returns `{:ok, []}` for a zero-page PDF.
 | External URI links and internal links to retained pages | Links to removed pages and unresolved named links |
 | Bookmarks with retained destinations or children | Bookmarks whose destinations and children were all removed |
 
-Outputs are rebuilt PDFs. A retained page may share resources with removed
-pages, so deletion is not secure redaction. Interactive form behavior is not
-guaranteed. See [bookmark preservation](pdf-outlines.md#merge-and-transform-behavior).
+Outputs omit unselected pages and resources used only by those pages.
+Retained pages can still share resources with removed pages, so deletion is
+not secure redaction. Interactive form behavior is not guaranteed. See [bookmark preservation](pdf-outlines.md#merge-and-transform-behavior).
 
 Failures return [diagnostics](diagnostics.md). Invalid selections, unsupported
 page dependencies, and [split limits](resource-limits.md#merging-and-splitting)

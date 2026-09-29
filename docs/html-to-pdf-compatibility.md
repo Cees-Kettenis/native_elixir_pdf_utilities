@@ -34,14 +34,18 @@ relevant image, link, table-span, and form-value attributes.
 | Reuse styles | The cascade, `!important`, inherited text styles, custom properties, `var()`, `currentColor` |
 | Arrange content | Block, inline, inline-block, flex, and grid layouts; relative and absolute positioning; `z-index` |
 | Set sizes and spacing | Width/height, min/max sizes, `min()`, aspect ratio, box sizing, margins, padding, gaps |
-| Style text | Font family/size/weight/style, line height, alignment, text transform, letter spacing, line and word breaking, `white-space: normal` or `pre-line` |
+| Style text | Font family/size/weight/style, line height, alignment, text transform, letter spacing, line and word breaking, `white-space: normal`, `pre-line`, or `nowrap` |
 | Decorate boxes | Colors, borders, rounded corners, background images, sizing, positioning, and repetition |
 | Generate text | `::before`, `::after`, quoted `content`, `attr()`, `counter()`, counter reset and increment |
 | Control pages | Bare `@page` size/margins, print media rules, page breaks, and best-effort `break-inside: avoid` |
 
 Body lengths support `pt`, `px`, `mm`, `cm`, `in`, `rem`, supported percentages,
-and unitless `0`. Letter spacing also accepts `em`. Flex and grid support gaps,
-alignment, ordering, and track/item sizing, but not every browser layout rule.
+and unitless `0`. Leading decimals such as `.5mm` are accepted. Letter spacing
+also accepts `em`. Flex and grid support gaps, alignment, ordering, and
+track/item sizing, but not every browser layout rule.
+
+`white-space: nowrap` collapses whitespace and prevents automatic wrapping.
+Explicit `<br>` breaks still apply; long lines can overflow their container.
 
 ## Render options
 

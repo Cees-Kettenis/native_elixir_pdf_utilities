@@ -260,6 +260,10 @@ flattening it. Output must fit both `max_pdf_input_bytes` and
 `max_rendered_pdf_bytes`, so an edit cannot return a document already too large
 for the reader under the current byte limit. Other reader limits still apply.
 
+Incremental updates reserve space in `max_pdf_xref_revisions` before writing.
+A form fill with `flatten: true` reserves two revisions. Empty updates that
+return the original PDF do not consume another revision.
+
 ## Font sources and caches
 
 | Setting | Default | Applies to |
@@ -314,7 +318,3 @@ or `:asset_resolver`. In particular, replacing a regular file with a FIFO betwee
 the pathname check and opening can still block. The portable Erlang file API
 does not provide a nonblocking-open option. Byte limits do not impose an I/O
 timeout.
-
-Incremental updates reserve space in `max_pdf_xref_revisions` before writing.
-A form fill with `flatten: true` reserves two revisions. Empty updates that
-return the original PDF do not consume another revision.
