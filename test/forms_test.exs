@@ -49,6 +49,50 @@ defmodule NativeElixirPdfUtilities.FormsTest do
     assert {:ok, "Empty option"} = Text.extract(flattened)
   end
 
+  test "partial fills preserve the appearance request for untouched fields" do
+    validator = NativeElixirPdfUtilities.Validators.FormValidator
+
+    assert {:ok, original} =
+             HtmlToPdf.render("""
+             <div><input name="a" value="First"><input name="b" value="Second"></div>
+             """)
+
+    assert {:ok, context} = Reader.read_validated(original)
+    assert {:ok, form} = validator.inspect_document(context)
+    b = Enum.find(form.fields, &(&1.name == "b"))
+    [widget] = b.widgets
+    {:ref, {widget_id, widget_generation}} = widget.ref
+    {:ref, {form_id, form_generation}} = context.catalog["AcroForm"]
+
+    for missing? <- [true, false], request <- [true, false] do
+      dictionary = if missing?, do: Map.delete(widget.dictionary, "AP"), else: widget.dictionary
+
+      assert {:ok, imported} =
+               IncrementalWriter.write(context, [
+                 {widget_id, widget_generation, {:value, dictionary}},
+                 {form_id, form_generation,
+                  {:value, Map.put(form.form, "NeedAppearances", request)}}
+               ])
+
+      assert {:ok, partial} = Forms.fill(imported, %{"a" => "Updated"})
+      assert {:ok, partial_context} = Reader.read_validated(partial)
+      assert {:ok, partial_form} = validator.inspect_document(partial_context)
+      assert partial_form.form["NeedAppearances"] == request
+      untouched = Enum.find(partial_form.fields, &(&1.name == "b"))
+      assert untouched.value == "Second"
+      assert hd(untouched.widgets).dictionary["AP"] == dictionary["AP"]
+
+      assert {:ok, complete} = Forms.fill(imported, %{"a" => "Updated", "b" => "Also updated"})
+      assert {:ok, complete_context} = Reader.read_validated(complete)
+      assert {:ok, complete_form} = validator.inspect_document(complete_context)
+      assert complete_form.form["NeedAppearances"] == false
+
+      assert Enum.all?(complete_form.fields, fn field ->
+               Enum.all?(field.widgets, &Map.has_key?(&1.ap, "N"))
+             end)
+    end
+  end
+
   test "generates, fills and flattens named text and unnamed checkbox fields" do
     {:ok, pdf} =
       HtmlToPdf.render(

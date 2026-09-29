@@ -303,7 +303,7 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
           {patches, remaining}
         end)
 
-      form_dictionary = Map.put(form.form, "NeedAppearances", false)
+      form_dictionary = FormValidator.prepare_filled_form(form, fields)
       {catalog_id, catalog_gen} = context.catalog_ref
       catalog = Map.put(context.catalog, "AcroForm", {:ref, {next, 0}})
       entries = Enum.map(patches, fn {{:ref, {id, gen}}, dict} -> {id, gen, {:value, dict}} end)

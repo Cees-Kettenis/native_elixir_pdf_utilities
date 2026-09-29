@@ -133,6 +133,20 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   end
 
   @doc false
+  @spec prepare_filled_form(map(), [map()]) :: map()
+  def prepare_filled_form(form, fields) do
+    updated = MapSet.new(fields, & &1.ref)
+
+    # Untouched appearances can be missing or stale. Only a complete fill
+    # proves that every field now has an appearance consistent with its value.
+    if Enum.all?(form.fields, &MapSet.member?(updated, &1.ref)) do
+      Map.put(form.form, "NeedAppearances", false)
+    else
+      form.form
+    end
+  end
+
+  @doc false
   @spec capacity(map(), non_neg_integer()) :: :ok | {:error, {atom(), map()}}
   def capacity(context, count) do
     if context.document.trailer["Size"] + count <= Limits.get(:max_pdf_objects),
