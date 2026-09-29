@@ -11,6 +11,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
 
   @max_cid 65_535
   @unicode_mapping_section ~r/(\d+)\s+begin(bfchar|bfrange)\s*.*?\s*end\2/s
+  @codespace_section ~r/(\d+)\s+begincodespacerange\s*(.*?)\s*endcodespacerange/s
   @cid_mapping_section ~r/(\d+)\s+begin(cidchar|cidrange|notdefchar|notdefrange)\s*.*?\s*end\2/s
 
   @doc """
@@ -353,6 +354,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
                    page,
                    preparation_context
                  ),
+               {:ok, preparation_context} <-
+                 reserve_cmap_work(stream, preparation_context, page, font_name, "ToUnicode"),
                {:ok, cmap, cmap_bytes} <-
                  parse_cmap(stream, page, font_name, preparation_context.cmap_bytes) do
             {:ok, cmap, %{preparation_context | cmap_bytes: cmap_bytes}}
@@ -416,7 +419,15 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
                    ) do
               case {Map.get(dictionary, "UseCMap"), Map.get(dictionary, "WMode", 0)} do
                 {nil, 0} ->
-                  with {:ok, cmap} <- parse_cid_cmap(stream, page, font_name) do
+                  with {:ok, preparation_context} <-
+                         reserve_cmap_work(
+                           stream,
+                           preparation_context,
+                           page,
+                           font_name,
+                           "Type0 Encoding"
+                         ),
+                       {:ok, cmap} <- parse_cid_cmap(stream, page, font_name) do
                     {:ok, cmap, preparation_context}
                   end
 
@@ -579,7 +590,16 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   defp decode_string(string, font, page, preparation) do
     remaining = Limits.get(:max_extracted_text_bytes) - preparation.extracted_bytes
 
-    with {:ok, decoded} <- decode_string_bytes(string, font, page, remaining) do
+    {_kind, bytes} = string
+
+    work =
+      case font do
+        %{cmap: %{lookup_work: work, min_width: width}} -> div(byte_size(bytes), width) * work
+        _ -> 0
+      end
+
+    with {:ok, preparation} <- charge_cmap_work(preparation, work, page, font && font.name),
+         {:ok, decoded} <- decode_string_bytes(string, font, page, remaining) do
       {:ok, decoded,
        %{preparation | extracted_bytes: preparation.extracted_bytes + byte_size(decoded.text)}}
     end
@@ -794,119 +814,192 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   end
 
   defp parse_cmap(stream, page, font, cmap_bytes) do
-    cond do
-      byte_size(stream) > Limits.get(:max_cmap_bytes) ->
-        error(:cmap, :resource_limit_exceeded, "ToUnicode CMap exceeds the byte limit",
+    stream = strip_cmap_comments(stream)
+
+    case Regex.match?(~r/\/\S+\s+usecmap\b/, stream) do
+      true ->
+        error(
+          :cmap,
+          :unsupported_text_encoding,
+          "ToUnicode usecmap inheritance is unsupported",
           page: page,
           font: font
         )
 
-      true ->
-        stream = strip_cmap_comments(stream)
+      false ->
+        with {:ok, codespaces} <- parse_codespaces(stream, "ToUnicode"),
+             {:ok, mappings, remaining} <-
+               parse_unicode_mappings(
+                 stream,
+                 Limits.get(:max_cmap_expanded_bytes) - cmap_bytes
+               ),
+             true <- map_size(mappings) > 0 do
+          sizes =
+            codespaces
+            |> Enum.map(fn {first, _last} -> byte_size(first) end)
+            |> Enum.uniq()
+            |> Enum.sort(:desc)
 
-        case Regex.match?(~r/\/\S+\s+usecmap\b/, stream) do
-          true ->
+          {:ok,
+           %{
+             codespaces: codespaces,
+             mappings: mappings,
+             sizes: sizes,
+             min_width: List.last(sizes),
+             lookup_work: length(sizes) * (length(codespaces) + 1)
+           }, Limits.get(:max_cmap_expanded_bytes) - remaining}
+        else
+          false ->
             error(
               :cmap,
               :unsupported_text_encoding,
-              "ToUnicode usecmap inheritance is unsupported",
+              "ToUnicode CMap has no usable Unicode mappings",
               page: page,
               font: font
             )
 
-          false ->
-            with {:ok, codespaces} <- parse_codespaces(stream, "ToUnicode"),
-                 {:ok, mappings, remaining} <-
-                   parse_unicode_mappings(
-                     stream,
-                     Limits.get(:max_cmap_expanded_bytes) - cmap_bytes
-                   ),
-                 true <- map_size(mappings) > 0 do
-              {:ok, %{codespaces: codespaces, mappings: mappings},
-               Limits.get(:max_cmap_expanded_bytes) - remaining}
-            else
-              false ->
-                error(
-                  :cmap,
-                  :unsupported_text_encoding,
-                  "ToUnicode CMap has no usable Unicode mappings",
-                  page: page,
-                  font: font
-                )
-
-              {:error, _} = error ->
-                error
-            end
+          {:error, _} = error ->
+            error
         end
     end
   end
 
   defp parse_cid_cmap(stream, page, font) do
+    stream = strip_cmap_comments(stream)
+
     cond do
-      byte_size(stream) > Limits.get(:max_cmap_bytes) ->
-        error(:cmap, :resource_limit_exceeded, "Type0 Encoding CMap exceeds the byte limit",
+      Regex.match?(~r/\/\S+\s+usecmap\b/, stream) ->
+        error(
+          :cmap,
+          :unsupported_text_encoding,
+          "Type0 Encoding usecmap inheritance is unsupported",
+          page: page,
+          font: font
+        )
+
+      Regex.match?(~r/\/WMode\s+1\s+def\b/, stream) ->
+        error(
+          :cmap,
+          :unsupported_text_encoding,
+          "vertical Type0 Encoding CMaps are unsupported",
           page: page,
           font: font
         )
 
       true ->
-        stream = strip_cmap_comments(stream)
-
-        cond do
-          Regex.match?(~r/\/\S+\s+usecmap\b/, stream) ->
+        with {:ok, codespaces} <- parse_codespaces(stream, "Type0 Encoding"),
+             {:ok, mappings} <-
+               parse_cid_mappings(stream, ["cidchar", "cidrange"], 0),
+             {:ok, notdef} <-
+               parse_cid_mappings(
+                 stream,
+                 ["notdefchar", "notdefrange"],
+                 map_size(mappings)
+               ) do
+          {:ok, %{codespaces: codespaces, mappings: mappings, notdef: notdef}}
+        else
+          :limit ->
             error(
               :cmap,
-              :unsupported_text_encoding,
-              "Type0 Encoding usecmap inheritance is unsupported",
+              :resource_limit_exceeded,
+              "Type0 Encoding CMap entry count exceeds the limit",
               page: page,
               font: font
             )
 
-          Regex.match?(~r/\/WMode\s+1\s+def\b/, stream) ->
-            error(
-              :cmap,
-              :unsupported_text_encoding,
-              "vertical Type0 Encoding CMaps are unsupported",
+          :error ->
+            error(:cmap, :invalid_pdf_input, "Type0 Encoding CMap mappings are malformed",
               page: page,
               font: font
             )
 
-          true ->
-            with {:ok, codespaces} <- parse_codespaces(stream, "Type0 Encoding"),
-                 {:ok, mappings} <-
-                   parse_cid_mappings(stream, ["cidchar", "cidrange"], 0),
-                 {:ok, notdef} <-
-                   parse_cid_mappings(
-                     stream,
-                     ["notdefchar", "notdefrange"],
-                     map_size(mappings)
-                   ) do
-              {:ok, %{codespaces: codespaces, mappings: mappings, notdef: notdef}}
-            else
-              :limit ->
-                error(
-                  :cmap,
-                  :resource_limit_exceeded,
-                  "Type0 Encoding CMap entry count exceeds the limit",
-                  page: page,
-                  font: font
-                )
-
-              :error ->
-                error(:cmap, :invalid_pdf_input, "Type0 Encoding CMap mappings are malformed",
-                  page: page,
-                  font: font
-                )
-
-              {:error, _} = cmap_error ->
-                cmap_error
-            end
+          {:error, _} = cmap_error ->
+            cmap_error
         end
     end
   end
 
   defp strip_cmap_comments(stream) do
     Regex.replace(~r/%[^\r\n]*/, stream, "")
+  end
+
+  # Reserve expansion and lookup work independently of retained map cardinality.
+  # The normal parsers below remain responsible for syntax and mapping validity.
+  defp reserve_cmap_work(stream, preparation, page, font, label) do
+    if byte_size(stream) > Limits.get(:max_cmap_bytes) do
+      error(:cmap, :resource_limit_exceeded, "#{label} CMap exceeds the byte limit",
+        page: page,
+        font: font
+      )
+    else
+      reserve_cmap_sections(stream, preparation, page, font, label)
+    end
+  end
+
+  defp reserve_cmap_sections(stream, preparation, page, font, label) do
+    uncommented = strip_cmap_comments(stream)
+
+    mapping_pattern =
+      if label == "ToUnicode", do: @unicode_mapping_section, else: @cid_mapping_section
+
+    sections =
+      Regex.scan(mapping_pattern, uncommented) ++
+        Enum.map(Regex.scan(@codespace_section, uncommented), fn [section, count, _body] ->
+          [section, count, "codespacerange"]
+        end)
+
+    with {:ok, preparation} <- charge_cmap_work(preparation, byte_size(stream), page, font) do
+      Enum.reduce_while(sections, {:ok, preparation}, fn [section, _count, operator],
+                                                         {:ok, preparation} ->
+        entries =
+          case operator do
+            range when range in ["bfrange", "cidrange", "notdefrange"] ->
+              Regex.scan(
+                ~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(?:\[[^\]]*\]|<[0-9A-Fa-f]+>|\d+)/,
+                section
+              )
+
+            _ ->
+              Regex.scan(~r/<[0-9A-Fa-f]+>\s*(?:<[0-9A-Fa-f]+>|\d+)/, section)
+          end
+
+        Enum.reduce_while(entries, {:ok, preparation}, fn entry, {:ok, preparation} ->
+          count =
+            case entry do
+              [_, first, last] ->
+                max(String.to_integer(last, 16) - String.to_integer(first, 16) + 1, 0)
+
+              [_] ->
+                1
+            end
+
+          case charge_cmap_work(preparation, count, page, font) do
+            {:ok, preparation} -> {:cont, {:ok, preparation}}
+            error -> {:halt, error}
+          end
+        end)
+        |> case do
+          {:ok, preparation} -> {:cont, {:ok, preparation}}
+          error -> {:halt, error}
+        end
+      end)
+    end
+  end
+
+  defp charge_cmap_work(preparation, work, page, font) do
+    used = preparation.cmap_work + work
+
+    if used <= Limits.get(:max_cmap_work) do
+      {:ok, %{preparation | cmap_work: used}}
+    else
+      error(
+        :limits,
+        :resource_limit_exceeded,
+        "aggregate CMap processing work exceeds max_cmap_work",
+        page: page,
+        font: font
+      )
+    end
   end
 
   defp parse_unicode_mappings(stream, remaining) do
@@ -974,7 +1067,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   end
 
   defp parse_codespaces(stream, label) do
-    sections = Regex.scan(~r/(\d+)\s+begincodespacerange\s*(.*?)\s*endcodespacerange/s, stream)
+    sections = Regex.scan(@codespace_section, stream)
 
     sections
     |> Enum.reduce_while({:ok, []}, fn [_, count, section], {:ok, values} ->
@@ -991,7 +1084,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
         if Enum.all?(parsed, fn {first, last} ->
              is_binary(first) and byte_size(first) == byte_size(last) and first <= last
            end) do
-          {:cont, {:ok, values ++ parsed}}
+          {:cont, {:ok, Enum.reverse(parsed, values)}}
         else
           {:halt, error(:cmap, :invalid_pdf_input, "#{label} codespace range is malformed")}
         end
@@ -1001,6 +1094,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
     end)
     |> case do
       {:ok, []} -> error(:cmap, :invalid_pdf_input, "#{label} codespace range is missing")
+      {:ok, values} -> {:ok, Enum.reverse(values)}
       result -> result
     end
   end
@@ -1260,10 +1354,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
 
       bytes ->
         candidate =
-          cmap.codespaces
-          |> Enum.map(fn {first, _last} -> byte_size(first) end)
-          |> Enum.uniq()
-          |> Enum.sort(:desc)
+          cmap.sizes
           |> Enum.find(fn size ->
             byte_size(bytes) >= size and
               (cmap.codespaces == [] or

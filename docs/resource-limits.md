@@ -208,6 +208,7 @@ limits apply across all returned PDFs. See [Merging](pdf-merging.md) and
 | `max_text_form_expansions` | 10,000 | Form XObject executions |
 | `max_text_spans` | 25,000 | Extracted spans per page |
 | `max_text_layout_whitespace_bytes` | 1,000,000 | Coordinate-based padding spaces reconstructed across one text extraction |
+| `max_cmap_work` | 1,000,000 | Aggregate CMap source bytes, expanded declarations, and conservative codespace lookup work across extraction |
 | `max_cmap_bytes` | 1,000,000 | One CMap stream |
 | `max_cmap_entries` | 100,000 | Mappings in one CMap |
 | `max_cid_width_entries` | 65,536 | CID width entries |

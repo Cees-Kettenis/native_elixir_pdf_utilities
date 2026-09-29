@@ -1786,6 +1786,162 @@ defmodule NativeElixirPdfUtilities.TextTest do
              )
   end
 
+  test "CMap work counts overwritten ranges before their expansion" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_cmap_work: 20_000})
+    prefix = "1 begincodespacerange <0000> <FFFF> endcodespacerange "
+
+    for operator <- ["bfrange", "cidrange", "notdefrange"] do
+      target = if operator == "bfrange", do: "<0041>", else: "1"
+      section = "1 begin#{operator} <0000> <2710> #{target} end#{operator} "
+      cmap = prefix <> section
+      to_unicode = prefix <> "1 beginbfchar <0000> <0041> endbfchar"
+
+      build = fn mappings ->
+        if operator == "bfrange" do
+          page_pdf("BT /F1 10 Tf <0000> Tj ET",
+            font: "<< /Type /Font /ToUnicode 7 0 R >>",
+            cmap: mappings
+          )
+        else
+          page_pdf("BT /F1 10 Tf <0000> Tj ET",
+            font:
+              "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>",
+            cmap: to_unicode,
+            extra_objects: [{9, stream_object("", mappings)}]
+          )
+        end
+      end
+
+      assert {:ok, "A"} = Text.extract(build.(cmap), layout: false)
+
+      for extract <- [&Text.extract/1, &Text.extract_spans/1] do
+        assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                 extract.(build.(cmap <> section))
+
+        assert diagnostic.stage == :limits
+        assert diagnostic.module == Text
+        assert diagnostic.reason == :resource_limit_exceeded
+        assert diagnostic.message =~ "max_cmap_work"
+        assert diagnostic.message =~ "page 1"
+        assert diagnostic.message =~ "F1"
+      end
+    end
+  end
+
+  test "ignored section wrappers cannot hide expansions from CMap work accounting" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_cmap_work: 1_000})
+    prefix = "1 begincodespacerange <0000> <FFFF> endcodespacerange "
+
+    for wrapper <- ["cidchar", "codespacerange"] do
+      cmap =
+        prefix <> "1 begin#{wrapper} 1 beginbfrange <0000> <2710> <0041> endbfrange end#{wrapper}"
+
+      source =
+        page_pdf("BT /F1 10 Tf <0000> Tj ET",
+          font: "<< /Type /Font /ToUnicode 7 0 R >>",
+          cmap: cmap
+        )
+
+      assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} = Text.extract(source)
+    end
+
+    cmap = prefix <> "1 beginbfchar <0000> <0041> endbfchar"
+    encoding = prefix <> "1 beginbfchar 1 begincidrange <0000> <2710> 0 endcidrange endbfchar"
+
+    source =
+      page_pdf("BT /F1 10 Tf <0000> Tj ET",
+        font:
+          "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>",
+        cmap: cmap,
+        extra_objects: [{9, stream_object("", encoding)}]
+      )
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} = Text.extract(source)
+  end
+
+  test "CMap work charges duplicate char declarations and array destinations" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    prefix = "1 begincodespacerange <00> <FF> endcodespacerange "
+
+    for section <- [
+          "2 beginbfchar <41> <0041> <41> <0042> endbfchar",
+          "1 beginbfrange <41> <42> [<0041> <0042>] endbfrange"
+        ] do
+      cmap = prefix <> section
+
+      source =
+        page_pdf("BT /F1 10 Tf (A) Tj ET", font: "<< /Type /Font /ToUnicode 7 0 R >>", cmap: cmap)
+
+      # Source bytes, three declarations, and two conservative lookup probes.
+      Limits.install(%{original | max_cmap_work: byte_size(cmap) + 5})
+      assert {:ok, _} = Text.extract(source)
+      Limits.install(%{original | max_cmap_work: byte_size(cmap) + 4})
+      assert {:error, {:resource_limit_exceeded, _}} = Text.extract(source)
+    end
+
+    for operator <- ["cidchar", "notdefchar"] do
+      encoding = prefix <> "2 begin#{operator} <41> 1 <41> 2 end#{operator}"
+      cmap = prefix <> "1 beginbfchar <41> <0041> endbfchar"
+
+      source =
+        page_pdf("BT /F1 10 Tf (A) Tj ET",
+          font:
+            "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>",
+          cmap: cmap,
+          extra_objects: [{9, stream_object("", encoding)}]
+        )
+
+      Limits.install(%{original | max_cmap_work: byte_size(cmap) + byte_size(encoding) + 7})
+      assert {:ok, "A"} = Text.extract(source, layout: false)
+      Limits.install(%{original | max_cmap_work: byte_size(cmap) + byte_size(encoding) + 4})
+      assert {:error, {:resource_limit_exceeded, _}} = Text.extract(source)
+    end
+  end
+
+  test "CMap work shares font preparation and charges each codespace lookup" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
+    cmap =
+      "2 begincodespacerange <00> <FF> <0000> <FFFF> endcodespacerange 2 beginbfchar <41> <0041> <4141> <0042> endbfchar"
+
+    source =
+      page_pdf("BT /F1 10 Tf (AA) Tj ET", font: "<< /Type /Font /ToUnicode 7 0 R >>", cmap: cmap)
+
+    assert {:ok, "B"} = Text.extract(source, layout: false)
+    Limits.install(%{original | max_cmap_work: byte_size(cmap) + 15})
+    assert {:error, {:resource_limit_exceeded, _}} = Text.extract(source)
+
+    Limits.install(original)
+    assert {:ok, context} = Reader.read_validated(source)
+    assert {:ok, instructions} = TextValidator.instructions("BT /F1 10 Tf /Alias 10 Tf ET", 1)
+    resources = %{"Font" => %{"F1" => {:ref, {5, 0}}, "Alias" => {:ref, {5, 0}}}}
+    Limits.install(%{original | max_cmap_work: byte_size(cmap) + 4})
+
+    assert {:ok, _} =
+             TextResourceValidator.prepare_contents(
+               context.document,
+               resources,
+               [instructions],
+               1
+             )
+
+    resources = put_in(resources, ["Font", "Alias"], %{"ToUnicode" => {:ref, {7, 0}}})
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             TextResourceValidator.prepare_contents(
+               context.document,
+               resources,
+               [instructions],
+               1
+             )
+  end
+
   test "ignores comments and preserves mapping order in ToUnicode CMaps" do
     cmap =
       "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
