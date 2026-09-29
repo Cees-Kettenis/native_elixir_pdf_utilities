@@ -235,6 +235,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     end
   end
 
+  test "signed format-4 deltas retain Chromium parity" do
+    fixture_path = Path.expand("../fixtures/fonts/wrapped-glyph.html", __DIR__)
+    font_path = Path.expand("../fixtures/fonts/wrapped-glyph.ttf", __DIR__)
+
+    assert %{page_count: 1} =
+             PdfVisualCompare.assert_browser_match!(fixture_path,
+               render_opts: [
+                 fonts: [%{family: "Wrapped Glyph Fixture", path: font_path}],
+                 system_font_discovery: false
+               ],
+               max_changed_ratio: 0.01,
+               max_average_delta: 0.035
+             )
+  end
+
   test "subset font output retains Chromium parity for print typography" do
     fixture_path = Path.join(@fixtures_dir, "fonts_and_print_media.html")
 

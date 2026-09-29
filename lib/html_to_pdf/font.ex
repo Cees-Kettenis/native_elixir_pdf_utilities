@@ -863,12 +863,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
               glyph_id =
                 case glyphs do
                   nil ->
-                    rem(codepoint + delta, 65_536)
+                    Integer.mod(codepoint + delta, 65_536)
 
                   glyphs ->
                     case :binary.decode_unsigned(binary_part(glyphs, 2 * (codepoint - first), 2)) do
                       0 -> 0
-                      glyph_id -> rem(glyph_id + delta, 65_536)
+                      glyph_id -> Integer.mod(glyph_id + delta, 65_536)
                     end
                 end
 

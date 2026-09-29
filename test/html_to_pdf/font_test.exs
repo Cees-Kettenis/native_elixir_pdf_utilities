@@ -595,6 +595,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     end
   end
 
+  test "format-4 signed deltas wrap modulo 65536 in direct and glyph-array mappings" do
+    direct = cmap_format4_table(?A, ?A, -25601, 0)
+
+    array =
+      <<4::16, 26::16, 0::16, 2::16, 0::16, 0::16, 0::16, 65::16, 0::16, 65::16,
+        -25601::signed-16, 2::16, 65::16>>
+
+    for format4 <- [direct, array] do
+      cmap = <<0::16, 1::16, 3::16, 1::16, 12::32, format4::binary>>
+
+      data =
+        valid_tables()
+        |> Map.put("cmap", cmap)
+        |> Map.put("maxp", <<0::32, 40001::16>>)
+        |> ttf_fixture()
+
+      assert {:ok, registry} = Font.load_registry(fonts: [%{family: "Wrapped", data: data}])
+      assert {:ok, _, font} = Font.resolve("Wrapped", 400, :normal, registry)
+      assert font.cmap == %{?A => 40000}
+      assert Font.text_width("A", font, 10) == 6.0
+    end
+  end
+
   test "uses validated glyph-array slices and preserves missing glyph entries" do
     format4 =
       <<4::16, 30::16, 0::16, 2::16, 0::16, 0::16, 0::16, 67::16, 0::16, 65::16, -1::signed-16,
