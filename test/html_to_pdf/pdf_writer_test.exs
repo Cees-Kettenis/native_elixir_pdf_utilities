@@ -984,6 +984,63 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "/A << /S /URI /URI (https://example.com) >>"
   end
 
+  test "pages reference only their own fonts, images and opacity states" do
+    pages =
+      for {font, rgb, alpha} <- [
+            {"Helvetica", <<255, 0, 0>>, 0.25},
+            {"Courier", <<0, 255, 0>>, 0.5}
+          ] do
+        %{
+          size: {100.0, 100.0},
+          boxes: [
+            %{
+              type: :text,
+              text: "Page",
+              x: 10.0,
+              y: 70.0,
+              font: font,
+              font_size: 10.0,
+              color: {0, 0, 0, alpha}
+            },
+            %{
+              type: :image,
+              x: 10.0,
+              y: 10.0,
+              width: 10.0,
+              height: 10.0,
+              image: image_fixture(:png, rgb, 1, 1, :device_rgb)
+            }
+          ]
+        }
+      end
+
+    assert {:ok, pdf} = PdfWriter.render(pages ++ [%{size: {100, 100}, boxes: []}])
+    assert {:ok, context} = Reader.read_validated(pdf)
+
+    for page <- Enum.take(context.pages, 2) do
+      assert {:ok, resources} = Reader.dictionary(context.document, page.resources)
+      assert map_size(resources["Font"]) == 1
+      assert map_size(resources["XObject"]) == 1
+      assert map_size(resources["ExtGState"]) == 1
+    end
+
+    assert {:ok, %{"Font" => fonts} = empty} =
+             Reader.dictionary(context.document, List.last(context.pages).resources)
+
+    assert fonts == %{}
+    refute Map.has_key?(empty, "XObject")
+    refute Map.has_key?(empty, "ExtGState")
+    assert {:ok, outputs} = NativeElixirPdfUtilities.Split.by_page(pdf)
+
+    for {output, expected} <- Enum.zip(outputs, [1, 1, 0]) do
+      assert {:ok, document} = Reader.read(output)
+
+      assert Enum.count(document.objects, fn {_ref, object} ->
+               is_map(object.value) and object.value["Subtype"] == {:name, "Image"}
+             end) == expected
+    end
+  end
+
   test "render writes PNG and JPEG image XObjects" do
     pages = [
       %{

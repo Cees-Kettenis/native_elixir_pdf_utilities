@@ -88,6 +88,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
          font_resources,
          next_object_id
        ) do
+    pages =
+      Enum.map(pages, fn page ->
+        boxes =
+          Enum.map(page.boxes, fn box ->
+            case box.type do
+              :image -> Map.put(box, :image_resource_key, image_key(box.image))
+              _ -> box
+            end
+          end)
+
+        %{page | boxes: boxes}
+      end)
+
     image_resources = image_resources(pages, next_object_id)
     graphics_state_object_id = next_object_id + image_object_count(image_resources)
     graphics_state_resources = graphics_state_resources(pages, graphics_state_object_id)
@@ -122,18 +135,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
            page_object(
              entry.page,
              pages_object_id,
-             font_resources,
-             image_resources,
-             graphics_state_resources,
+             entry.font_resources,
+             entry.image_resources,
+             entry.graphics_state_resources,
              entry.content_object_id,
              Enum.map(entry.annotation_objects, fn {object_id, _annotation} -> object_id end)
            )},
           {entry.content_object_id,
            content_object(
              entry.page,
-             font_resources,
-             image_resources,
-             graphics_state_resources,
+             entry.font_resources,
+             entry.image_resources,
+             entry.graphics_state_resources,
              compress_streams?
            )}
         ] ++ annotation_objects(entry.annotation_objects)
@@ -216,6 +229,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
          graphics_state_resources,
          first_page_object_id
        ) do
+    multiple_pages? = length(pages) > 1
+
     {entries, next_object_id} =
       Enum.reduce(pages, {[], first_page_object_id}, fn page, {entries, next_object_id} ->
         annotations = link_annotations(page)
@@ -225,14 +240,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           |> Enum.with_index(next_object_id + 2)
           |> Enum.map(fn {annotation, object_id} -> {object_id, annotation} end)
 
+        {page_fonts, page_images, page_states} =
+          if multiple_pages? do
+            {font_keys, image_keys, state_keys} =
+              Enum.reduce(page.boxes, {[], [], []}, fn box, {fonts, images, states} ->
+                {fonts, images} =
+                  case box.type do
+                    :text -> {[font_key(box) | fonts], images}
+                    :image -> {fonts, [box.image_resource_key | images]}
+                    :rect -> {fonts, images}
+                  end
+
+                {fonts, images, box_graphics_state_keys(box) ++ states}
+              end)
+
+            {Map.take(font_resources, font_keys), Map.take(image_resources, image_keys),
+             Map.take(graphics_state_resources, state_keys)}
+          else
+            {font_resources, image_resources, graphics_state_resources}
+          end
+
         entry = %{
           page: page,
           page_object_id: next_object_id,
           content_object_id: next_object_id + 1,
           pages_object_id: pages_object_id,
-          font_resources: font_resources,
-          image_resources: image_resources,
-          graphics_state_resources: graphics_state_resources,
+          font_resources: page_fonts,
+          image_resources: page_images,
+          graphics_state_resources: page_states,
           annotation_objects: annotation_objects
         }
 
@@ -638,7 +673,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           box
       end
 
-    image_resource = Map.fetch!(image_resources, image_key(box.image))
+    image_resource = Map.fetch!(image_resources, box.image_resource_key)
 
     clip =
       case Map.get(box, :clip) do
@@ -1089,27 +1124,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp graphics_state_resources(pages, first_object_id) do
     pages
     |> Enum.flat_map(& &1.boxes)
-    |> Enum.flat_map(fn box ->
-      case box.type do
-        :text ->
-          opacity_resource_keys(box.color, :fill)
-
-        :rect ->
-          border_colors =
-            case Map.get(box, :border_colors) do
-              colors when is_map(colors) -> Map.values(colors)
-              _ -> []
-            end
-
-          opacity_resource_keys(box.fill_color, :fill) ++
-            Enum.flat_map([box.stroke_color | border_colors], fn color ->
-              opacity_resource_keys(color, :stroke)
-            end)
-
-        :image ->
-          []
-      end
-    end)
+    |> Enum.flat_map(&box_graphics_state_keys/1)
     |> Enum.uniq()
     |> Enum.sort()
     |> Enum.with_index()
@@ -1122,6 +1137,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
          alpha: alpha
        }}
     end)
+  end
+
+  defp box_graphics_state_keys(box) do
+    case box.type do
+      :text ->
+        opacity_resource_keys(box.color, :fill)
+
+      :rect ->
+        border_colors =
+          case Map.get(box, :border_colors) do
+            colors when is_map(colors) -> Map.values(colors)
+            _ -> []
+          end
+
+        opacity_resource_keys(box.fill_color, :fill) ++
+          Enum.flat_map([box.stroke_color | border_colors], fn color ->
+            opacity_resource_keys(color, :stroke)
+          end)
+
+      :image ->
+        []
+    end
   end
 
   defp opacity_resource_keys(color, kind) do
@@ -1424,10 +1461,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     pages
     |> Enum.flat_map(& &1.boxes)
     |> Enum.filter(&(&1.type == :image))
-    |> Enum.map(& &1.image)
-    |> Enum.uniq_by(&image_key/1)
-    |> Enum.reduce({%{}, first_object_id, 1}, fn image, {resources, object_id, index} ->
-      key = image_key(image)
+    |> Enum.uniq_by(& &1.image_resource_key)
+    |> Enum.reduce({%{}, first_object_id, 1}, fn %{image: image, image_resource_key: key},
+                                                 {resources, object_id, index} ->
       mask_object_id = if Map.has_key?(image, :alpha_data), do: object_id + 1
       base_object_count = if is_nil(mask_object_id), do: 1, else: 2
       tint_object_id = if image.color_space == :device_cmyk, do: object_id + base_object_count
