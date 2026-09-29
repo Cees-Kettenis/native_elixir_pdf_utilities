@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.21.0 - 2026-09-29
+
+### Performance
+
+Up to **10× faster** in the measured rendering workloads. The ten-image
+workload reuses the same 512px PNG ten times. The 100-row document used
+**77% fewer BEAM reductions** and produced a **90% smaller PDF**,
+shrinking from 1,632,177 to 166,852 bytes.
+
+| Workload | v0.20.0 | v0.21.0 | Speedup |
+| --- | ---: | ---: | ---: |
+| 100-row HTML render | 353.0 ms | 159.2 ms | 2.2× |
+| 100-row PDF text extraction | 256.9 ms | 67.2 ms | 3.8× |
+| repeated text layout | 52.2 ms | 28.2 ms | 1.8× |
+| ten repeated 512px PNG images | 4462.4 ms | 447.6 ms | 10.0× |
+
+Median of five warm runs on Ryzen 5 7600, Elixir 1.20.4 / OTP 29.1,
+using identical workloads and each version's defaults. Small documents can
+render more slowly with compression and font subsetting enabled.
+
+- Reduced repeated text measurements, font loading, stylesheet parsing, and
+  PDF tokenization. Split outputs share document preparation, and wide outline
+  trees now build in linear time.
+
+### Changed
+
+- Enabled TrueType font subsetting and eligible PDF stream compression by
+  default. Set `subset_fonts: false` and `compress_streams: false` to retain
+  full fonts and uncompressed streams. Subsets preserve glyph IDs and composite
+  glyph dependencies; fonts whose license forbids subsetting stay fully embedded.
+- Scoped page font, image, and graphics-state resources to the pages that use
+  them, so selecting or splitting pages does not retain unrelated resources.
+- Shared prepared stylesheets now count once toward CSS processing budgets;
+  separate stylesheet entries still count separately.
+
+### Added
+
+- Configurable limits for text-measurement caches, font-subsetting work,
+  assembled PDF output, extracted UTF-8 text, expanded ToUnicode mappings, and
+  cumulative CMap processing. These limits can reject workloads accepted by
+  earlier releases with `:resource_limit_exceeded` diagnostics.
+- Performance regression checks for eight document fixtures and eleven focused
+  workloads, covering rendering, extraction, repeated images, and PDF writing.
+  Local and CI quality checks enforce runtime-specific reduction baselines and
+  output-size limits.
+- Browser-parity coverage for `white-space: nowrap`, leading-decimal CSS
+  lengths, and TrueType fonts with signed glyph deltas.
+
+### Fixed
+
+- Preserved `white-space: nowrap` through layout, including inline content and
+  table cells, while retaining explicit `<br>` breaks.
+- Accepted leading-decimal CSS lengths such as `.5mm` consistently in supported
+  body, page, and border declarations.
+- Applied signed TrueType character-map glyph deltas with the required 16-bit
+  wrapping, preserving glyph selection and text extraction.
+- Preserved existing form appearance requests on partial fills. Only a complete
+  fill clears `NeedAppearances` after preparing all field appearances.
+- Reserved cross-reference revision capacity before incremental edits, including
+  both revisions needed for filling and flattening forms. No-op updates do not
+  consume a revision.
+- Checked assembled merge, transform, and split output sizes before allocating
+  the final binary, also keeping each output within the reader's byte limit.
+- Bounded expanded extraction text and cumulative CMap work, including repeated
+  Form execution, overwritten mappings, and codespace lookups.
+
 ## 0.20.0 - 2026-09-25
 
 ### Changed

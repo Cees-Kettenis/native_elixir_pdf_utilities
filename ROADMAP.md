@@ -7,23 +7,6 @@ more efficient document generation, and a stable public API.
 The versions below describe planned scope, which may change as the work develops.
 See [CHANGELOG.md](CHANGELOG.md) for published releases.
 
-## 0.21.0: Performance and archival output
-
-Generate larger documents with less repeated processing and smaller output files,
-while preserving layout and rendering quality.
-
-Planned improvements:
-
-- More efficient text layout, repeated measurements, table sizing, and font and
-  document-resource handling.
-- Compression of remaining uncompressed PDF streams, safe removal of unused
-  objects, and optional font subsetting to reduce file size.
-- Best-effort archival output with embedded fonts, metadata, and documented
-  handling of transparency and unsupported features.
-
-The archival mode will not claim PDF/A conformance. Full PDF/A validation remains
-an objective for a future version 2.
-
 ## 0.22.0: Guides and examples
 
 A final documentation review before 1.0 will make the supported workflows,
