@@ -27,7 +27,10 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineBuilder do
         root_id = first_id
         {allocated, next_id} = allocate_items(items, first_id + 1, [])
         root_ref = {root_id, 0}
-        item_objects = build_siblings(allocated, root_ref, page_resolver, [])
+
+        item_objects =
+          build_siblings(allocated, root_ref, page_resolver, [], nil) |> Enum.reverse()
+
         first_ref = allocated |> List.first() |> item_ref()
         last_ref = allocated |> List.last() |> item_ref()
 
@@ -50,35 +53,47 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineBuilder do
     items
     |> Enum.reduce({allocated, next_id}, fn item, {allocated, next_id} ->
       {children, child_next_id} = allocate_items(item.children, next_id + 1, [])
-      allocated_item = %{item: item, id: next_id, children: children}
+      visible_count = 1 + if(item.open, do: visible_item_count(children), else: 0)
+
+      allocated_item = %{
+        item: item,
+        id: next_id,
+        children: children,
+        visible_count: visible_count
+      }
+
       {[allocated_item | allocated], child_next_id}
     end)
     |> then(fn {allocated, next_id} -> {Enum.reverse(allocated), next_id} end)
   end
 
-  defp build_siblings(items, parent_ref, page_resolver, objects) do
-    items
-    |> Enum.with_index()
-    |> Enum.reduce(objects, fn {allocated, index}, objects ->
-      previous = if index == 0, do: nil, else: Enum.at(items, index - 1)
-      following = if index == length(items) - 1, do: nil, else: Enum.at(items, index + 1)
-      children = allocated.children
+  defp build_siblings(items, parent_ref, page_resolver, objects, previous) do
+    case items do
+      [] ->
+        objects
 
-      dictionary =
-        %{
-          "Title" => InfoCodec.encode_text(allocated.item.title),
-          "Parent" => {:ref, parent_ref}
-        }
-        |> maybe_put_reference("Prev", previous)
-        |> maybe_put_reference("Next", following)
-        |> maybe_put_children(children, allocated.item.open)
-        |> maybe_put_destination(allocated.item, page_resolver)
+      [allocated | rest] ->
+        dictionary =
+          %{
+            "Title" => InfoCodec.encode_text(allocated.item.title),
+            "Parent" => {:ref, parent_ref}
+          }
+          |> maybe_put_reference("Prev", previous)
+          |> maybe_put_reference("Next", List.first(rest))
+          |> maybe_put_children(allocated.children, allocated.item.open)
+          |> maybe_put_destination(allocated.item, page_resolver)
 
-      child_objects =
-        build_siblings(children, {allocated.id, 0}, page_resolver, [])
+        objects =
+          build_siblings(
+            allocated.children,
+            {allocated.id, 0},
+            page_resolver,
+            [{allocated.id, 0, dictionary} | objects],
+            nil
+          )
 
-      objects ++ [{allocated.id, 0, dictionary} | child_objects]
-    end)
+        build_siblings(rest, parent_ref, page_resolver, objects, allocated)
+    end
   end
 
   defp maybe_put_reference(dictionary, key, allocated) do
@@ -142,15 +157,7 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineBuilder do
   end
 
   defp visible_item_count(items) do
-    Enum.reduce(items, 0, fn allocated, count ->
-      child_count =
-        case allocated.item.open do
-          true -> visible_item_count(allocated.children)
-          false -> 0
-        end
-
-      count + 1 + child_count
-    end)
+    Enum.reduce(items, 0, fn allocated, count -> count + allocated.visible_count end)
   end
 
   defp item_ref(allocated) do

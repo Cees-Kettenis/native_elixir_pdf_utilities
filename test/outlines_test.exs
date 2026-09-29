@@ -702,6 +702,42 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
              MergeValidator.prepare_remapping([input], 3)
   end
 
+  test "wide outline trees retain ordered sibling links with linear work" do
+    build = fn count ->
+      items =
+        for index <- 1..count do
+          %{title: "Item #{index}", page: index, view: :fit, open: true, children: []}
+        end
+
+      :erlang.garbage_collect()
+      {:reductions, before_work} = Process.info(self(), :reductions)
+      built = OutlineBuilder.build(items, fn page -> {page + 10_000, 0} end, 1)
+      {:reductions, after_work} = Process.info(self(), :reductions)
+      {built, after_work - before_work}
+    end
+
+    build.(10)
+    {small, small_work} = build.(2_000)
+    {large, large_work} = build.(4_000)
+    assert large_work < small_work * 2.7
+
+    for {built, count} <- [{small, 2_000}, {large, 4_000}] do
+      assert built.next_id == count + 2
+      [{1, 0, root} | objects] = built.objects
+      assert root["Count"] == count
+      assert root["First"] == {:ref, {2, 0}}
+      assert root["Last"] == {:ref, {count + 1, 0}}
+
+      for {{id, 0, dictionary}, index} <- Enum.with_index(objects, 1) do
+        assert id == index + 1
+        assert dictionary["Parent"] == {:ref, {1, 0}}
+        assert dictionary["Dest"] == [{:ref, {index + 10_000, 0}}, {:name, "Fit"}]
+        assert dictionary["Prev"] == if(index == 1, do: nil, else: {:ref, {id - 1, 0}})
+        assert dictionary["Next"] == if(index == count, do: nil, else: {:ref, {id + 1, 0}})
+      end
+    end
+  end
+
   test "internal outline components reject malformed prepared data" do
     assert {:error, {:invalid_pdf_input, %{stage: :incremental_write}}} =
              OutlineWriter.write(%{}, [])

@@ -25,11 +25,12 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
       |> Enum.max(fn -> catalog_object_id end)
 
     outlines = merged_outlines(inputs)
+    page_refs = List.to_tuple(page_ids)
 
     outline_objects =
       OutlineBuilder.build(
         outlines,
-        fn page -> Enum.fetch!(page_ids, page - 1) end,
+        fn page -> elem(page_refs, page - 1) end,
         maximum_copied_id + 1
       )
 

@@ -118,11 +118,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       )
 
     page_object_ids = Enum.map(page_entries, & &1.page_object_id)
+    page_refs = List.to_tuple(page_object_ids)
 
     outline_objects =
       OutlineBuilder.build(
         outlines,
-        fn page -> {Enum.fetch!(page_object_ids, page - 1), 0} end,
+        fn page -> {elem(page_refs, page - 1), 0} end,
         next_object_id
       )
 
