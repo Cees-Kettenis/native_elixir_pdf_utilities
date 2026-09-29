@@ -101,6 +101,55 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
              large.line_baseline_depth + small.line_height - next.line_baseline_depth
   end
 
+  test "nowrap overflows narrow containers, inherits across runs, and preserves explicit breaks" do
+    for extra <- ["", "overflow-wrap: anywhere", "word-break: break-word"] do
+      assert {:ok, dom} =
+               HtmlParser.parse("""
+               <div style="width: 25pt; font-family: Helvetica; font-size: 10pt; white-space: nowrap; #{extra}">
+               one <strong>two</strong> three four<br>next line
+               </div>
+               """)
+
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {200, 150}, margin: 0)
+      texts = Enum.filter(layout.boxes, &(&1.type == :text))
+      assert texts |> Enum.map(& &1.y) |> Enum.uniq() |> length() == 2
+      assert Enum.map_join(texts, "", & &1.text) == "one two three fournext line"
+      assert Enum.any?(texts, &(&1.x + &1.annotation_width > 25))
+    end
+  end
+
+  test "nowrap retains inline blocks on the same overflowing line" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <div style="width: 25pt; white-space: nowrap"><span style="display:inline-block;width:20pt">A</span><span style="display:inline-block;width:20pt">B</span><span style="display:inline-block;width:20pt">C</span></div>
+             """)
+
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 150}, margin: 0)
+    texts = Enum.filter(layout.boxes, &(&1.type == :text))
+    assert length(Enum.uniq_by(texts, & &1.y)) == 1
+    assert Enum.map(texts, & &1.x) == [0.0, 20.0, 40.0]
+  end
+
+  test "normal text can wrap before a nested nowrap phrase" do
+    for content <- [
+          "first word <span style='white-space: nowrap'>second third</span>",
+          "first word<span style='white-space: nowrap'> second third</span>"
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse(
+                 "<div style='width: 60pt; font-family: Helvetica; font-size: 10pt'>#{content}</div>"
+               )
+
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {200, 150}, margin: 0)
+      texts = Enum.filter(layout.boxes, &(&1.type == :text))
+      assert Enum.map(texts, & &1.text) == ["first word", "second third"]
+      assert length(Enum.uniq_by(texts, & &1.y)) == 2
+    end
+  end
+
   test "normal wrapping breaks after word hyphens but preserves nonbreaking hyphens" do
     for {text, expected} <- [
           {"water-repellent", ["water-", "repellent"]},

@@ -5375,7 +5375,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp append_inline_atomic(lines, run, width) do
     current_line = List.last(lines) || []
 
-    case current_line != [] and
+    case Map.get(run.style, :white_space) != :nowrap and current_line != [] and
            inline_line_width(current_line, width) + inline_run_width(run, width) >
              width do
       true -> lines ++ [[run]]
@@ -5404,8 +5404,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp inline_wrap_tokens(text, style) do
-    case Map.get(style, :line_break, :normal) do
-      :anywhere ->
+    case {Map.get(style, :white_space), Map.get(style, :line_break, :normal)} do
+      {:nowrap, _} ->
+        [text]
+
+      {_, :anywhere} ->
         String.graphemes(text)
 
       _ ->
@@ -5418,18 +5421,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp append_inline_token(lines, run, width) do
     current_line = List.last(lines) || []
+    nowrap? = Map.get(run.style, :white_space) == :nowrap
+
+    run =
+      if nowrap? and current_line == [],
+        do: %{run | text: trim_leading_inline_whitespace(run.text)},
+        else: run
+
     token_width = text_width(String.replace(run.text, ~r/[ \t\f\r]+$/u, ""), run.style)
+
+    wrap_before? =
+      not nowrap? or
+        case List.last(current_line) do
+          %{style: previous_style, text: previous_text} ->
+            Map.get(previous_style, :white_space) != :nowrap and
+              (Regex.match?(~r/[ \t\f\r]$/u, previous_text) or
+                 Regex.match?(~r/^[ \t\f\r]/u, run.text))
+
+          _ ->
+            false
+        end
 
     cond do
       trim_inline_whitespace(run.text) == "" and current_line == [] ->
         lines
 
       # An indivisible grapheme must overflow; splitting it again cannot make progress.
-      token_width > width and Map.get(run.style, :line_break) == :break_word and
+      not nowrap? and token_width > width and Map.get(run.style, :line_break) == :break_word and
           length(String.graphemes(run.text)) > 1 ->
         append_break_word_token(lines, run, width)
 
-      current_line != [] and
+      wrap_before? and current_line != [] and
           inline_line_width(current_line, width) + token_width > width + @line_wrap_tolerance ->
         lines ++ [[%{run | text: trim_leading_inline_whitespace(run.text)}]]
 

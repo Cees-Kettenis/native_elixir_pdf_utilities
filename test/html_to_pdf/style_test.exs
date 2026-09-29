@@ -655,7 +655,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert style_for!("div", "letter-spacing: 0").letter_spacing == 0.0
     assert style_for!("div", "letter-spacing: 2px").letter_spacing == 1.5
     assert style_for!("div", "font-size: 10pt; letter-spacing: 0.05em").letter_spacing == 0.5
-    assert style_for!("div", "white-space: nowrap").line_break == :normal
+    assert style_for!("div", "white-space: nowrap").white_space == :nowrap
     assert style_for!("div", "word-wrap: normal").line_break == :normal
     assert style_for!("div", "overflow-wrap: anywhere").line_break == :anywhere
     assert style_for!("div", "break-inside: avoid").break_inside == :avoid

@@ -2865,7 +2865,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, Map.put(style, :white_space, :pre_line)}
 
       {"white-space", "nowrap"} ->
-        {:ok, style |> Map.put(:white_space, :normal) |> Map.put(:line_break, :normal)}
+        {:ok, Map.put(style, :white_space, :nowrap)}
 
       {property, "break-word"} when property in ["word-break", "word-wrap", "overflow-wrap"] ->
         {:ok, Map.put(style, :line_break, :break_word)}
