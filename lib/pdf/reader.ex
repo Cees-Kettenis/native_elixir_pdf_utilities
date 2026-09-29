@@ -89,7 +89,8 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
                  objects: objects,
                  trailer: trailer,
                  xref: xref,
-                 xref_offset: probe.xref_offset
+                 xref_offset: probe.xref_offset,
+                 xref_revisions: probe.xref_revisions
                },
                operation: :read,
                module: __MODULE__
@@ -108,7 +109,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     PdfValidator.with_reader_budget(fn ->
       with :ok <- PdfValidator.validate_input(pdf, operation: :read, module: __MODULE__),
            {:ok, xref_offset} <- final_xref_offset(pdf),
-           {:ok, xref, trailer} <- parse_xref_chain(pdf, xref_offset, %{}, 0),
+           {:ok, xref, trailer, revisions} <- parse_xref_chain(pdf, xref_offset, %{}, 0),
            :ok <-
              PdfValidator.validate_xref_structure(xref, trailer, pdf,
                operation: :read,
@@ -118,6 +119,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
          %{
            binary: pdf,
            xref_offset: xref_offset,
+           xref_revisions: revisions,
            xref: xref,
            trailer: trailer,
            encrypted?: not is_nil(Map.get(trailer, "Encrypt"))
@@ -222,14 +224,15 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
       true ->
         with {:ok, entries, trailer} <- parse_xref_revision(pdf, offset),
-             {:ok, previous_entries, previous_trailer} <-
+             {:ok, previous_entries, previous_trailer, revisions} <-
                previous_xref_revision(
                  pdf,
                  Map.get(trailer, "Prev"),
                  Map.put(seen, offset, true),
                  depth
                ) do
-          {:ok, Map.merge(previous_entries, entries), Map.merge(previous_trailer, trailer)}
+          {:ok, Map.merge(previous_entries, entries), Map.merge(previous_trailer, trailer),
+           revisions}
         end
     end
   end
@@ -237,7 +240,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   defp previous_xref_revision(pdf, offset, seen, depth) do
     case offset do
       nil ->
-        {:ok, %{}, %{}}
+        {:ok, %{}, %{}, depth + 1}
 
       offset when is_integer(offset) and offset >= 0 ->
         parse_xref_chain(pdf, offset, seen, depth + 1)

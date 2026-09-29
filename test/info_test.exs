@@ -474,7 +474,8 @@ defmodule NativeElixirPdfUtilities.InfoTest do
         binary: "",
         trailer: %{"Size" => 1, "Root" => {:ref, {1, 0}}},
         xref: %{},
-        xref_offset: 0
+        xref_offset: 0,
+        xref_revisions: 1
       }
     }
 

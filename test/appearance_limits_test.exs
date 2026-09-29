@@ -9,6 +9,63 @@ defmodule NativeElixirPdfUtilities.AppearanceLimitsTest do
     %{limits: original}
   end
 
+  test "incremental writes reserve xref revisions before returning output", %{limits: limits} do
+    assert {:ok, pdf} = HtmlToPdf.render("<p>Original</p>")
+    assert {:ok, context} = Reader.read_validated(pdf)
+    assert context.document.xref_revisions == 1
+    Limits.install(%{limits | max_pdf_xref_revisions: 1})
+    assert {:ok, ^pdf} = Info.put(pdf, [])
+
+    for {module, operation, result} <- [
+          {Info, :put_info, Info.put(pdf, title: "New")},
+          {Stamp, :stamp_text, Stamp.text(pdf, "New")}
+        ] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = result
+      assert diagnostic.stage == :incremental_write
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.module == module
+      assert diagnostic.operation == operation
+      assert diagnostic.message =~ "max_pdf_xref_revisions"
+    end
+
+    Limits.install(%{limits | max_pdf_xref_revisions: 2})
+    assert {:ok, updated} = Info.put(pdf, title: "New")
+    assert {:ok, %{title: "New"}} = Info.get(updated)
+    assert {:ok, updated_context} = Reader.read_validated(updated)
+    assert updated_context.document.xref_revisions == 2
+    assert {:error, {:resource_limit_exceeded, _}} = Info.put(updated, title: "Again")
+    malformed = update_in(context.document, &Map.delete(&1, :xref_revisions))
+
+    assert {:error, {:invalid_pdf_input, %{stage: :incremental_write}}} =
+             IncrementalWriter.write(malformed, [])
+  end
+
+  test "fill and flatten reserves both revisions while empty updates remain no-ops", %{
+    limits: limits
+  } do
+    assert {:ok, pdf} = HtmlToPdf.render("<div><input name='a' value='Old'></div>")
+    assert {:ok, context} = Reader.read_validated(pdf)
+    count = context.document.xref_revisions
+    Limits.install(%{limits | max_pdf_xref_revisions: count})
+    assert {:ok, ^pdf} = Forms.fill(pdf, %{}, flatten: true)
+    assert {:ok, ^pdf} = Forms.flatten(pdf, fields: [])
+    Limits.install(%{limits | max_pdf_xref_revisions: count + 1})
+    assert {:ok, updated} = Forms.fill(pdf, %{"a" => "New"})
+    assert {:ok, _} = Reader.read(updated)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Forms.fill(pdf, %{"a" => "New"}, flatten: true)
+
+    assert diagnostic.operation == :fill
+    assert diagnostic.module == Forms
+    assert diagnostic.message =~ "xref revisions"
+    Limits.install(%{limits | max_pdf_xref_revisions: count + 2})
+    assert {:ok, flattened} = Forms.fill(pdf, %{"a" => "New"}, flatten: true)
+    assert {:ok, []} = Forms.fields(flattened)
+    assert {:ok, final} = Reader.read_validated(flattened)
+    assert final.document.xref_revisions == count + 2
+  end
+
   test "charges repeated stamp text before generating appearances", %{limits: limits} do
     {:ok, pdf} = HtmlToPdf.render("<p>one</p><p style='break-before:page'>two</p>")
     Limits.install(%{limits | max_appearance_text_bytes: 10})

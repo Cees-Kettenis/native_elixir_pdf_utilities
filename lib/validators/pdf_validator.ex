@@ -135,6 +135,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @type probe_context :: %{
           required(:binary) => binary(),
           required(:xref_offset) => non_neg_integer(),
+          required(:xref_revisions) => pos_integer(),
           required(:xref) => %{optional(integer()) => xref_entry()},
           required(:trailer) => map(),
           required(:encrypted?) => boolean()

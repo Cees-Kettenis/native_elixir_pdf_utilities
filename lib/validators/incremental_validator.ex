@@ -6,6 +6,29 @@ defmodule NativeElixirPdfUtilities.Validators.IncrementalValidator do
   alias NativeElixirPdfUtilities.Validators.PdfValidator
 
   @doc false
+  @spec validate_revision_capacity(PdfValidator.context(), pos_integer()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_revision_capacity(context, additional \\ 1) do
+    case context do
+      %{document: %{xref_revisions: count}}
+      when is_integer(count) and count > 0 and is_integer(additional) and additional > 0 ->
+        if count + additional <= Limits.get(:max_pdf_xref_revisions) do
+          :ok
+        else
+          Diagnostics.error(
+            :incremental_write,
+            :resource_limit_exceeded,
+            "incremental PDF output requires #{count + additional} xref revisions, exceeding max_pdf_xref_revisions (#{Limits.get(:max_pdf_xref_revisions)})",
+            module: __MODULE__
+          )
+        end
+
+      _ ->
+        error("prepared incremental context is missing a validated xref revision count")
+    end
+  end
+
+  @doc false
   @spec validate_output_size(non_neg_integer()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_output_size(bytes) do

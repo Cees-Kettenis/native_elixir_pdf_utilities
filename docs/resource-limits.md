@@ -314,3 +314,7 @@ or `:asset_resolver`. In particular, replacing a regular file with a FIFO betwee
 the pathname check and opening can still block. The portable Erlang file API
 does not provide a nonblocking-open option. Byte limits do not impose an I/O
 timeout.
+
+Incremental updates reserve space in `max_pdf_xref_revisions` before writing.
+A form fill with `flatten: true` reserves two revisions. Empty updates that
+return the original PDF do not consume another revision.

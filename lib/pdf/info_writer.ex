@@ -22,7 +22,9 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoWriter do
       }
       when is_binary(pdf) and is_map(trailer) and is_map(xref) and
              is_integer(previous_xref_offset) and is_map(dictionary) ->
-        write_increment(pdf, trailer, xref, previous_xref_offset, dictionary)
+        with :ok <- IncrementalValidator.validate_revision_capacity(context) do
+          write_increment(pdf, trailer, xref, previous_xref_offset, dictionary)
+        end
 
       _ ->
         error("prepared information write context is malformed")

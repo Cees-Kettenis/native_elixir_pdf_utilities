@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
+  alias NativeElixirPdfUtilities.Validators.IncrementalValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
 
   @inherited ~w(FT Ff V DV DA Q Opt MaxLen)
@@ -106,27 +107,36 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
           )
 
         true ->
-          Enum.filter(form.fields, &(&1.name in selected))
-          |> Enum.reduce_while({:ok, [], 0, 0}, fn field, {:ok, acc, count, bytes} ->
-            value = Map.get(values, field.name, field.value)
+          additional = if operation == :fill and Map.get(opts, :flatten, false), do: 2, else: 1
 
-            with :ok <- writable(field, operation),
-                 {:ok, value} <-
-                   if(operation == :flatten, do: {:ok, value}, else: field_value(field, value)),
-                 {:ok, count, bytes} <- reserve_appearances(field, value, operation, count, bytes),
-                 {:ok, appearances} <- prepare_appearances(field, value, operation),
-                 :ok <- button_appearances(context.document, field) do
-              {:cont,
-               {:ok, [Map.merge(field, %{new_value: value, appearances: appearances}) | acc],
-                count, bytes}}
-            else
-              {:error, {reason, diagnostic}} ->
-                {:halt, {:error, {reason, Map.put(diagnostic, :source, field.name)}}}
+          with :ok <-
+                 if(selected == [],
+                   do: :ok,
+                   else: IncrementalValidator.validate_revision_capacity(context, additional)
+                 ) do
+            Enum.filter(form.fields, &(&1.name in selected))
+            |> Enum.reduce_while({:ok, [], 0, 0}, fn field, {:ok, acc, count, bytes} ->
+              value = Map.get(values, field.name, field.value)
+
+              with :ok <- writable(field, operation),
+                   {:ok, value} <-
+                     if(operation == :flatten, do: {:ok, value}, else: field_value(field, value)),
+                   {:ok, count, bytes} <-
+                     reserve_appearances(field, value, operation, count, bytes),
+                   {:ok, appearances} <- prepare_appearances(field, value, operation),
+                   :ok <- button_appearances(context.document, field) do
+                {:cont,
+                 {:ok, [Map.merge(field, %{new_value: value, appearances: appearances}) | acc],
+                  count, bytes}}
+              else
+                {:error, {reason, diagnostic}} ->
+                  {:halt, {:error, {reason, Map.put(diagnostic, :source, field.name)}}}
+              end
+            end)
+            |> case do
+              {:ok, fields, _count, _bytes} -> {:ok, Enum.reverse(fields)}
+              failure -> failure
             end
-          end)
-          |> case do
-            {:ok, fields, _count, _bytes} -> {:ok, Enum.reverse(fields)}
-            failure -> failure
           end
       end
     end
