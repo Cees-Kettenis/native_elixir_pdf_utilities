@@ -854,9 +854,8 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
                 _ -> error(:object, :invalid_pdf_input, "indirect object boundary is malformed")
               end
 
-            :none ->
-              with {:ok, [{:int, ^object}, {:int, ^generation}, :obj | body]} <-
-                     tokenize_indirect_object(slice),
+            {:tokens, tokens} ->
+              with [{:int, ^object}, {:int, ^generation}, :obj | body] <- tokens,
                    true <- generation in 0..65_535,
                    {:ok, value, value_rest} <- parse_value(body),
                    {:ok, stream, []} <- parse_optional_stream(value_rest) do
@@ -875,12 +874,6 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp tokenize_indirect_object(slice) do
-    slice
-    |> Tokenizer.new()
-    |> take_indirect_object_tokens([])
-  end
-
   defp take_indirect_object_tokens(tokenizer, tokens) do
     case Tokenizer.next(tokenizer) do
       {:error, _} = error -> tokenizer_error(error, :object)
@@ -897,7 +890,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp find_indirect_stream(tokenizer, tokens, offset, limit) do
-    with {{token, _span}, %Tokenizer{} = tokenizer} <- Tokenizer.next_with_span(tokenizer) do
+    with {token, %Tokenizer{} = tokenizer} <- Tokenizer.next(tokenizer) do
       case token do
         :stream ->
           case Tokenizer.pending_stream_length(tokenizer) do
@@ -908,14 +901,23 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
                %{from: offset + span.from, limit: limit, length_ref: length_ref}}
 
             _ ->
-              :none
+              case take_indirect_object_tokens(tokenizer, [:stream | tokens]) do
+                {:ok, tokens} ->
+                  {:tokens, tokens}
+
+                {:error, _} = error ->
+                  error
+
+                :error ->
+                  error(:object, :invalid_pdf_input, "indirect object boundary is malformed")
+              end
           end
 
         :endobj ->
-          :none
+          {:tokens, Enum.reverse(tokens)}
 
         {:eof, nil} ->
-          :none
+          error(:object, :invalid_pdf_input, "indirect object boundary is malformed")
 
         _ ->
           find_indirect_stream(tokenizer, [token | tokens], offset, limit)

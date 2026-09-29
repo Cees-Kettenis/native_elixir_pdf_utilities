@@ -78,6 +78,32 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderBudgetTest do
     end
   end
 
+  test "ordinary objects and direct stream prefixes consume one token pass" do
+    limits = Limits.effective()
+    array = "[" <> String.duplicate("7 ", 1_000) <> "]"
+    stream = "literal endobj and endstream bytes"
+
+    for value <- [
+          array,
+          "<< /Values #{array} /Length #{byte_size(stream)} >>\nstream\n#{stream}\nendstream"
+        ] do
+      input = classic_pdf(value)
+      Limits.install(%{limits | max_pdf_reader_tokens: 1_100})
+      assert {:ok, document} = Reader.read(input)
+
+      case document.objects[{3, 0}] do
+        %{value: values, stream: nil} ->
+          assert values == List.duplicate(7, 1_000)
+
+        %{value: %{"Values" => values}, stream: ^stream} ->
+          assert values == List.duplicate(7, 1_000)
+      end
+
+      Limits.install(%{limits | max_pdf_reader_tokens: 1_000})
+      assert_limit(Reader.read(input))
+    end
+  end
+
   test "container entries count repeated dictionary keys as work" do
     limits = Limits.effective()
     Limits.install(%{limits | max_pdf_container_entries: 4})

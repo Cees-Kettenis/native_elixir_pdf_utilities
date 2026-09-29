@@ -54,6 +54,20 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
     assert diagnostic.message =~ "indirect object boundary is malformed"
   end
 
+  test "direct streams still require an object terminator after their data" do
+    input =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [] /Count 0 >>"},
+        {3, stream_object("", "abc", true)}
+      ])
+      |> String.replace("endstream\nendobj", "endstream\n      ")
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} = Reader.read(input)
+    assert diagnostic.stage == :object
+    assert diagnostic.message =~ "indirect object boundary is malformed"
+  end
+
   test "preserves tokenizer diagnostics in xrefs, objects, and stream boundaries" do
     base = [{1, "<< /Type /Catalog /Pages 2 0 R >>"}, {2, "<< /Type /Pages /Kids [] /Count 0 >>"}]
 
