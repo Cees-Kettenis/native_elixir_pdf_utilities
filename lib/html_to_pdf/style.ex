@@ -2846,7 +2846,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, Map.put(style, :letter_spacing, 0.0)}
 
       value ->
-        with {:ok, length} <- parse_letter_spacing(value, Map.fetch!(style, :font_size)) do
+        with {:ok, length} <-
+               HtmlValidator.parse_css_length(value, :margin, Map.fetch!(style, :font_size)) do
           {:ok, Map.put(style, :letter_spacing, length)}
         else
           :error -> {:error, :invalid_document}
@@ -3785,47 +3786,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp parse_length(value, length_context) do
-    normalized = String.trim(value)
-
-    case Regex.run(~r/^(?:(0)|(-?\d+(?:\.\d+)?)(pt|px|mm|cm|in|rem))$/u, normalized) do
-      [_, "0"] ->
-        {:ok, 0.0}
-
-      [_, "", value, unit] ->
-        scale = if unit == "rem", do: 1.0, else: points_per_unit(unit)
-
-        with {number, ""} <- HtmlValidator.parse_css_number(value, scale) do
-          case length_context == :margin or number >= 0 do
-            true -> if unit == "rem", do: {:ok, {:rem, number}}, else: {:ok, number}
-            false -> :error
-          end
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp parse_letter_spacing(value, font_size) do
-    normalized = String.trim(value)
-
-    case Regex.run(~r/^(?:(0)|(-?\d+(?:\.\d+)?)(pt|px|mm|cm|in|rem|em))$/u, normalized) do
-      [_, "0"] ->
-        {:ok, 0.0}
-
-      [_, "", value, "em"] ->
-        with {number, ""} <- HtmlValidator.parse_css_number(value, font_size), do: {:ok, number}
-
-      [_, "", value, "rem"] ->
-        with {number, ""} <- HtmlValidator.parse_css_number(value), do: {:ok, {:rem, number}}
-
-      [_, "", value, unit] ->
-        with {number, ""} <- HtmlValidator.parse_css_number(value, points_per_unit(unit)),
-             do: {:ok, number}
-
-      _ ->
-        :error
-    end
+    HtmlValidator.parse_css_length(value, length_context)
   end
 
   defp parse_line_height(value) do
@@ -4281,15 +4242,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp hex_to_pdf_color(hex) do
     {integer, ""} = Integer.parse(hex, 16)
     integer / 255
-  end
-
-  defp points_per_unit(unit) do
-    case unit do
-      "pt" -> 1.0
-      "px" -> 0.75
-      "mm" -> 72.0 / 25.4
-      "cm" -> 72.0 / 2.54
-      "in" -> 72.0
-    end
   end
 end

@@ -27,6 +27,38 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     end
   end
 
+  test "CSS leading decimals share length, sign, and magnitude validation" do
+    for {source, expected, rest} <- [
+          {".5px", 0.5, "px"},
+          {"-.5pt", -0.5, "pt"},
+          {"+.5em", 0.5, "em"},
+          {".5e2%", 50.0, "%"}
+        ] do
+      assert {^expected, ^rest} = HtmlValidator.parse_css_number(source)
+    end
+
+    for {unit, expected} <- [
+          {"px", 0.375},
+          {"pt", 0.5},
+          {"mm", 36 / 25.4},
+          {"cm", 36 / 2.54},
+          {"in", 36.0}
+        ] do
+      assert {:ok, ^expected} = HtmlValidator.parse_css_length(".5" <> unit, :nonnegative)
+    end
+
+    assert {:ok, {:rem, 0.5}} = HtmlValidator.parse_css_length(".5rem", :nonnegative)
+    assert {:ok, -0.5} = HtmlValidator.parse_css_length("-.5pt", :margin)
+    assert {:ok, 5.0} = HtmlValidator.parse_css_length(".5em", :margin, 10)
+    assert HtmlValidator.parse_css_length("-0", :nonnegative) == {:ok, 0.0}
+
+    for value <- [".px", "-.pt", ".5", "1.", ".5unknown", "-.5pt", ".5em", "1000000000in", nil] do
+      assert :error = HtmlValidator.parse_css_length(value, :nonnegative)
+    end
+
+    assert :error = HtmlValidator.parse_css_length(".5em", :margin, 1_000_000_001)
+  end
+
   test "SVG authorization permits literal fragments and rejects entity declarations" do
     svg =
       ~s(<svg width="1" height="1"><defs><rect id="pixel" width="1" height="1"/></defs><use href="#pixel"/></svg>)

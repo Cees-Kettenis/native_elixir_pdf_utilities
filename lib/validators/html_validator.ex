@@ -1088,8 +1088,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
     case is_binary(value) and is_number(scale) do
       true ->
-        case Regex.run(~r/\A([+-]?\d+)(\.\d+)?([eE][+-]?\d+)?(.*)\z/s, value) do
+        case Regex.run(~r/\A([+-]?(?:\d+|(?=\.\d)))(\.\d+)?([eE][+-]?\d+)?(.*)\z/s, value) do
           [_, integer, fraction, exponent, rest] ->
+            integer = if integer in ["", "+", "-"], do: integer <> "0", else: integer
             fraction = if fraction == "", do: ".0", else: fraction
 
             try do
@@ -1112,6 +1113,40 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       false ->
         :error
+    end
+  end
+
+  @doc false
+  @spec parse_css_length(term(), :nonnegative | :margin, number() | nil) ::
+          {:ok, float() | {:rem, float()}} | :error
+  def parse_css_length(value, context, em_scale \\ nil) do
+    with true <- is_binary(value) and context in [:nonnegative, :margin],
+         {number, unit} <- parse_css_number(String.trim(value)) do
+      scale =
+        case unit do
+          "" -> if number == 0, do: 1.0
+          "pt" -> 1.0
+          "px" -> 0.75
+          "mm" -> 72.0 / 25.4
+          "cm" -> 72.0 / 2.54
+          "in" -> 72.0
+          "rem" -> 1.0
+          "em" -> em_scale
+          _ -> nil
+        end
+
+      limit = Limits.get(:max_css_numeric_magnitude)
+
+      with true <- is_number(scale) and abs(scale) <= limit,
+           true <- context == :margin or number >= 0,
+           scaled = number * scale,
+           true <- abs(scaled) <= limit do
+        {:ok, if(unit == "rem", do: {:rem, scaled}, else: scaled)}
+      else
+        _ -> :error
+      end
+    else
+      _ -> :error
     end
   end
 

@@ -648,6 +648,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert {:ok, %{children: []}} = Style.compute(hidden_body_dom, [])
   end
 
+  test "leading decimal lengths apply to borders, spacing and sizes" do
+    style =
+      style_for!(
+        "div",
+        "font-size: 10pt; border: .5px solid black; padding: .5pt; margin: -.5pt; width: .5in; letter-spacing: .05em"
+      )
+
+    assert style.border_widths == edges(0.75)
+    assert style.padding == edges(0.5)
+    assert style.margin == edges(-0.5)
+    assert style.width == 36.0
+    assert style.letter_spacing == 0.5
+  end
+
   test "compute covers print CSS alternate values and invalid branches" do
     assert style_for!("div", "background: none").background_color == nil
     assert style_for!("div", "display: grid; justify-self: center").justify_self == :center
