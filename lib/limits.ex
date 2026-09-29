@@ -102,6 +102,7 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_stamp_text_bytes: 1_000_000,
     max_stamp_decoded_content_bytes: 50_000_000,
     max_merge_inputs: 100,
+    max_assembled_pdf_bytes: 50_000_000,
     max_aggregate_merge_input_bytes: 100_000_000,
     max_merged_objects: 100_000,
     max_merged_pages: 10_000,
@@ -218,6 +219,7 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_stamp_text_bytes
           | :max_stamp_decoded_content_bytes
           | :max_merge_inputs
+          | :max_assembled_pdf_bytes
           | :max_aggregate_merge_input_bytes
           | :max_merged_objects
           | :max_merged_pages

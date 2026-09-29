@@ -184,6 +184,7 @@ its content again. See [Stamping](pdf-stamping.md).
 | Setting | Default | Applies to |
 | --- | ---: | --- |
 | `max_merge_inputs` | 100 | PDFs in one merge |
+| `max_assembled_pdf_bytes` | 50,000,000 | Each merged, transformed, or split output, also bounded by `max_pdf_input_bytes` |
 | `max_aggregate_merge_input_bytes` | 100,000,000 | PDF bytes in one merge |
 | `max_merged_objects` | 100,000 | Objects in merged output |
 | `max_merged_pages` | 10,000 | Pages in merged output |

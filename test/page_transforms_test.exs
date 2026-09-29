@@ -19,6 +19,44 @@ defmodule NativeElixirPdfUtilities.PageTransformsTest do
     :ok
   end
 
+  test "assembled outputs enforce byte limits including the xref and trailer" do
+    original = Limits.effective()
+    source = three_page_pdf()
+
+    operations = [
+      {Merge, :merge, fn -> Merge.merge([source]) end},
+      {Transform, :pick_pages, fn -> Transform.pick_pages(source, [1]) end},
+      {Transform, :delete_pages, fn -> Transform.delete_pages(source, [3]) end},
+      {Transform, :rotate_pages, fn -> Transform.rotate_pages(source, 90) end},
+      {Split, :split_by_ranges, fn -> Split.by_ranges(source, [1..3]) end}
+    ]
+
+    for {module, operation, run} <- operations do
+      Limits.install(original)
+      assert {:ok, result} = run.()
+      output = if is_list(result), do: hd(result), else: result
+      Limits.install(%{original | max_assembled_pdf_bytes: byte_size(output)})
+      assert {:ok, ^result} = run.()
+      Limits.install(%{original | max_assembled_pdf_bytes: byte_size(output) - 1})
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = run.()
+      assert diagnostic.stage == :assembly_write
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.module == module
+      assert diagnostic.operation == operation
+      assert diagnostic.message =~ "max_assembled_pdf_bytes"
+    end
+
+    Limits.install(%{original | max_assembled_pdf_bytes: 1})
+    assert {:error, {:resource_limit_exceeded, %{stage: :assembly_write}}} = Merge.merge([source])
+    Limits.install(original)
+    assert {:ok, merged} = Merge.merge([source, source])
+    assert byte_size(merged) > byte_size(source)
+    Limits.install(%{original | max_pdf_input_bytes: byte_size(merged) - 1})
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :assembly_write}}} =
+             Merge.merge([source, source])
+  end
+
   test "splitting shared-resource pages scales without repeated document preparation" do
     measurements =
       for count <- [200, 400] do

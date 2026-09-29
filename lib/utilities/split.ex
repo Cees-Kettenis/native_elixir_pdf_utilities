@@ -87,6 +87,9 @@ defmodule NativeElixirPdfUtilities.Split do
             :ok -> {:cont, {:ok, [output | outputs], bytes + byte_size(output)}}
             {:error, _error} = limit_error -> {:halt, limit_error}
           end
+
+        {:error, _} = error ->
+          {:halt, error}
       end
     end)
     |> case do

@@ -41,8 +41,9 @@ defmodule NativeElixirPdfUtilities.Transform do
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def pick_pages(pdf, selection) do
     with {:ok, context} <- Reader.read_validated(pdf),
-         {:ok, input} <- TransformValidator.prepare_pick(context, selection) do
-      AssemblyWriter.write([input])
+         {:ok, input} <- TransformValidator.prepare_pick(context, selection),
+         {:ok, output} <- AssemblyWriter.write([input]) do
+      {:ok, output}
     else
       {:error, error} -> owned_error(error, :pick_pages)
     end
@@ -60,8 +61,9 @@ defmodule NativeElixirPdfUtilities.Transform do
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def delete_pages(pdf, selection) do
     with {:ok, context} <- Reader.read_validated(pdf),
-         {:ok, input} <- TransformValidator.prepare_delete(context, selection) do
-      AssemblyWriter.write([input])
+         {:ok, input} <- TransformValidator.prepare_delete(context, selection),
+         {:ok, output} <- AssemblyWriter.write([input]) do
+      {:ok, output}
     else
       {:error, error} -> owned_error(error, :delete_pages)
     end
@@ -79,8 +81,9 @@ defmodule NativeElixirPdfUtilities.Transform do
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def rotate_pages(pdf, degrees, options \\ []) do
     with {:ok, context} <- Reader.read_validated(pdf),
-         {:ok, input} <- TransformValidator.prepare_rotation(context, degrees, options) do
-      AssemblyWriter.write([input])
+         {:ok, input} <- TransformValidator.prepare_rotation(context, degrees, options),
+         {:ok, output} <- AssemblyWriter.write([input]) do
+      {:ok, output}
     else
       {:error, error} -> owned_error(error, :rotate_pages)
     end

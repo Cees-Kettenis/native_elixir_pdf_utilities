@@ -28,8 +28,9 @@ defmodule NativeElixirPdfUtilities.Merge do
   def merge(inputs) do
     with {:ok, inputs} <- MergeValidator.validate_inputs(inputs),
          {:ok, prepared} <- prepare_inputs(inputs),
-         {:ok, remapped} <- MergeValidator.prepare_remapping(prepared, 3) do
-      AssemblyWriter.write(remapped)
+         {:ok, remapped} <- MergeValidator.prepare_remapping(prepared, 3),
+         {:ok, output} <- AssemblyWriter.write(remapped) do
+      {:ok, output}
     else
       {:error, {reason, diagnostic}} ->
         {:error,

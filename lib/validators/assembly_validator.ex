@@ -1,10 +1,30 @@
 defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
   @moduledoc false
 
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.MergeValidator
   alias NativeElixirPdfUtilities.Validators.OutlineValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
+
+  @doc false
+  @spec validate_output_size(non_neg_integer()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_output_size(bytes) do
+    limit = min(Limits.get(:max_assembled_pdf_bytes), Limits.get(:max_pdf_input_bytes))
+
+    if bytes <= limit do
+      :ok
+    else
+      Diagnostics.error(
+        :assembly_write,
+        :resource_limit_exceeded,
+        "assembled PDF output requires #{bytes} bytes, exceeding min(max_assembled_pdf_bytes, max_pdf_input_bytes) (#{limit})",
+        operation: :assemble,
+        module: __MODULE__
+      )
+    end
+  end
 
   @doc false
   @spec prepare(PdfValidator.context(), [pos_integer()], %{optional(pos_integer()) => integer()}) ::

@@ -3,10 +3,11 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
 
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
   alias NativeElixirPdfUtilities.Pdf.OutlineBuilder
+  alias NativeElixirPdfUtilities.Validators.AssemblyValidator
   alias NativeElixirPdfUtilities.Validators.MergeValidator
 
   @doc false
-  @spec write([map()]) :: {:ok, binary()}
+  @spec write([map()]) :: {:ok, binary()} | {:error, {atom(), map()}}
   def write(inputs) do
     page_ids =
       Enum.flat_map(inputs, fn %{pages: pages, map: id_map} ->
@@ -76,7 +77,10 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
     xref =
       xref_and_trailer(offsets, position, maximum_object_id, catalog_object_id)
 
-    {:ok, IO.iodata_to_binary([Enum.reverse(pieces), xref])}
+    {pieces, _offsets, _position} = add_piece(pieces, xref, offsets, position)
+    {:ok, IO.iodata_to_binary(Enum.reverse(pieces))}
+  catch
+    {:assembly_output_limit, error} -> error
   end
 
   defp page_context(object, %{inherited: inheritances}, parent_id) do
@@ -91,7 +95,12 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
   end
 
   defp add_piece(pieces, piece, offsets, position) do
-    {[piece | pieces], offsets, position + :erlang.iolist_size(piece)}
+    next_position = position + :erlang.iolist_size(piece)
+
+    case AssemblyValidator.validate_output_size(next_position) do
+      :ok -> {[piece | pieces], offsets, next_position}
+      {:error, _} = error -> throw({:assembly_output_limit, error})
+    end
   end
 
   defp add_object(pieces, offsets, position, id, generation, body) do
@@ -104,11 +113,7 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
       "\nendobj\n"
     ]
 
-    {
-      [piece | pieces],
-      Map.put(offsets, id, {position, generation}),
-      position + :erlang.iolist_size(piece)
-    }
+    add_piece(pieces, piece, Map.put(offsets, id, {position, generation}), position)
   end
 
   defp render_pages_object(page_ids) do
