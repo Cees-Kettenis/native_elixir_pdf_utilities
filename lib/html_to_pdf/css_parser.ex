@@ -13,6 +13,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   renderer's supported property set.
   """
 
+  alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
@@ -183,6 +184,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   @spec parse_detailed(String.t()) ::
           {:ok, stylesheet()} | {:error, {:invalid_css | :resource_limit_exceeded, map()}}
   def parse_detailed(css) do
+    with {:ok, prepared} <- prepare_stylesheet(css), do: {:ok, prepared.rules}
+  end
+
+  @typedoc false
+  @type prepared_stylesheet :: %{
+          rules: stylesheet(),
+          font_faces: [font_face()],
+          page_options: [page_option()]
+        }
+
+  @doc false
+  @spec prepare_stylesheet(String.t()) ::
+          {:ok, prepared_stylesheet()}
+          | {:error, {:invalid_css | :resource_limit_exceeded, map()}}
+  def prepare_stylesheet(css) do
     HtmlValidator.with_render_budget(fn ->
       case HtmlValidator.validate_css_source(css) do
         {:ok, css} ->
@@ -192,25 +208,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
             :css
           )
 
-          with {:ok, active_css} <- css |> strip_comments() |> active_media_rules(),
-               {:ok, _font_faces} <- parse_font_faces(active_css, css),
-               {:ok, _page_options} <- parse_page_rules(active_css, css) do
-            parsed_css = active_css |> strip_font_face_rules() |> strip_page_rules()
+          RenderCache.fetch_stylesheet(
+            {:parsed, css},
+            fn ->
+              with {:ok, active_css} <- css |> strip_comments() |> active_media_rules(),
+                   {:ok, font_faces} <- parse_font_faces(active_css, css),
+                   {:ok, page_options} <- parse_page_rules(active_css, css) do
+                parsed_css = active_css |> strip_font_face_rules() |> strip_page_rules()
 
-            case parse_rules(parsed_css) do
-              {:ok, stylesheet} ->
-                {:ok, stylesheet}
+                case parse_rules(parsed_css) do
+                  {:ok, rules} ->
+                    {:ok, %{rules: rules, font_faces: font_faces, page_options: page_options}}
 
-              {:error, :invalid_css} ->
-                {:error, {:invalid_css, css_error_detail(css, parsed_css)}}
+                  {:error, :invalid_css} ->
+                    {:error, {:invalid_css, css_error_detail(css, parsed_css)}}
+                end
+              else
+                {:error, {:invalid_css, detail}} ->
+                  {:error, {:invalid_css, detail}}
+
+                {:error, :invalid_css} ->
+                  {:error, {:invalid_css, css_error_detail(css, css)}}
+              end
+            end,
+            fn result ->
+              case result do
+                {:ok, prepared} ->
+                  HtmlValidator.reserve_render_resource(
+                    :max_css_rules,
+                    length(prepared.rules),
+                    :css
+                  )
+
+                {:error, _} ->
+                  :ok
+              end
             end
-          else
-            {:error, {:invalid_css, detail}} ->
-              {:error, {:invalid_css, detail}}
-
-            {:error, :invalid_css} ->
-              {:error, {:invalid_css, css_error_detail(css, css)}}
-          end
+          )
 
         {:error, {:invalid_css, diagnostic}} ->
           {:error, {:invalid_css, diagnostic}}

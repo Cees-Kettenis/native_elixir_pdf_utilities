@@ -70,10 +70,10 @@ or elapsed time. Configure a caller-owned timeout and concurrency ceiling too.
 | `max_html_source_bytes` | 2,000,000 | One HTML source or advanced tree text node |
 | `max_aggregate_html_source_bytes` | 10,000,000 | Body and all expanded furniture sources |
 | `max_css_source_bytes` | 1,000,000 | One stylesheet or inline declaration source |
-| `max_aggregate_css_source_bytes` | 20,000,000 | CSS bytes processed, including repeated parsing passes and furniture |
+| `max_aggregate_css_source_bytes` | 20,000,000 | CSS source bytes prepared or parsed; shared prepared stylesheets are charged once, separate entries still count |
 | `max_html_nodes` | 25,000 | HTML token processing steps across a render, and nodes in an advanced input tree |
 | `max_html_depth` | 128 | Nested HTML elements or advanced input tree depth |
-| `max_css_rules` | 10,000 | Parsed stylesheet rules across a render |
+| `max_css_rules` | 10,000 | Stylesheet rules prepared across a render, including separate repeated entries |
 | `max_css_work` | 5,000,000 | CSS scanned bytes, selector parsing work, and selector comparisons |
 | `max_layout_boxes` | 100,000 | Drawing-box construction attempts, including measurements and furniture |
 | `max_rendered_text_bytes` | 10,000,000 | Text production bytes, including generated-content parts before joining and transformations |

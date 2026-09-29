@@ -3,6 +3,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
 
+  test "prepared stylesheets retain page options, font faces and ordered rules" do
+    css = """
+    @page { size: letter; margin: 12pt }
+    @font-face { font-family: Custom; src: url(font.ttf) }
+    @media print { p { color:red } }
+    p { color:blue }
+    """
+
+    assert {:ok, prepared} = CssParser.prepare_stylesheet(css)
+    assert {:ok, prepared.rules} == CssParser.parse(css)
+    assert {:ok, prepared.font_faces} == CssParser.font_faces(css)
+    assert {:ok, prepared.page_options} == CssParser.page_options(css)
+    assert Enum.map(prepared.rules, & &1.order) == [0, 1]
+
+    NativeElixirPdfUtilities.HtmlToPdf.RenderCache.with_stylesheets(fn ->
+      for _ <- 1..2 do
+        assert {:error, {:invalid_css, diagnostic}} = CssParser.prepare_stylesheet("p { nope }")
+        assert diagnostic.stage == :css
+        assert diagnostic.line == 1
+      end
+    end)
+  end
+
   test "at-rule preprocessing preserves quoted strings and braces" do
     for literal <- [
           ~S|"@media print {BOGUS}"|,

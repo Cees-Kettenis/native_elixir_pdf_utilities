@@ -426,6 +426,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     File.rm(Path.join(System.tmp_dir!(), "native-elixir-pdf-configured-page-options.css"))
   end
 
+  @tag :tmp_dir
+  test "furniture keeps the render stylesheet snapshot when a file changes", %{tmp_dir: directory} do
+    path = Path.join(directory, "snapshot.css")
+    css = "@page {size:200pt 200pt;margin:36pt} .accent {color:red}"
+    File.write!(path, css)
+    png = png_fixture(1, 1)
+
+    resolver = fn %{kind: :image} ->
+      File.write!(path, String.replace(css, "red", "blue"))
+      {:ok, png}
+    end
+
+    opts = [
+      stylesheets: [{:file, path}],
+      asset_resolver: resolver,
+      compress_streams: false,
+      page_furniture: [header: "<span class='accent'>Header {{page}}</span>"]
+    ]
+
+    html =
+      "<img src='https://example.com/snapshot.png'><p>Body</p><p style='break-before:page'>Next</p>"
+
+    assert {:ok, first} = HtmlToPdf.render(html, opts)
+    assert first =~ "1 0 0 rg"
+    refute first =~ "0 0 1 rg"
+    assert {:ok, text} = Text.extract(first)
+    assert text =~ "Header 1"
+    assert text =~ "Header 2"
+
+    assert {:ok, second} = HtmlToPdf.render(html, opts)
+    assert second =~ "0 0 1 rg"
+    refute second =~ "1 0 0 rg"
+  end
+
   test "render cascades page-margin longhands across configured and embedded stylesheets" do
     html = """
     <style>

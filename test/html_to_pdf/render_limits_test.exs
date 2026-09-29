@@ -65,12 +65,49 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsTest do
   end
 
   test "aggregate CSS source budgets include separate stylesheet entries" do
-    Limits.install(%{Limits.effective() | max_aggregate_css_source_bytes: 5})
+    Limits.install(%{Limits.effective() | max_aggregate_css_source_bytes: 26})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render("<p>x</p>", stylesheets: [{:css, "p {}"}, {:css, "p {}"}])
+             HtmlToPdf.render("<p>x</p>",
+               stylesheets: [{:css, "p {color:red}"}, {:css, "p {color:red}"}]
+             )
 
     assert diagnostic.message =~ "max_aggregate_css_source_bytes"
+  end
+
+  test "page options, document styles and furniture share prepared CSS budgets" do
+    Limits.install(%{Limits.effective() | max_css_rules: 1, max_aggregate_css_source_bytes: 22})
+
+    assert {:ok, _pdf} =
+             HtmlToPdf.render("<p>Body</p>",
+               margin: 36,
+               stylesheets: [{:css, "p {color:red}"}],
+               page_furniture: [header: "<p>Header</p>", footer: "<p>Footer</p>"]
+             )
+
+    assert {:ok, [_, _]} =
+             NativeElixirPdfUtilities.HtmlToPdf.PageFurniture.decorate(
+               List.duplicate(%{size: {200.0, 200.0}, boxes: []}, 2),
+               %{
+                 type: :layout,
+                 page_size: {200.0, 200.0},
+                 margin: 36.0,
+                 boxes: [],
+                 content_width: 128.0,
+                 content_height: 128.0
+               },
+               stylesheets: [{:css, "p {color:red}"}],
+               page_furniture: [header: "<p>Header</p>"]
+             )
+
+    Limits.install(%{Limits.effective() | max_aggregate_css_source_bytes: 100})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render("<p>Body</p>",
+               stylesheets: [{:css, "p {color:red}"}, {:css, "p {color:red}"}]
+             )
+
+    assert diagnostic.message =~ "max_css_rules"
   end
 
   test "generated attr content is bounded before concatenation and font expansion" do

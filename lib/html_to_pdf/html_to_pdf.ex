@@ -23,7 +23,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   current element, CSS, layout, image, and font support.
   """
 
-  alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
+  alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
@@ -192,7 +192,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           {:ok, binary()} | {:error, detailed_error_reason()}
   def render(html, opts \\ []) do
     case HtmlValidator.with_render_budget(fn ->
-           FontValidator.with_budget(fn -> do_render(html, opts) end)
+           RenderCache.with_stylesheets(fn ->
+             FontValidator.with_budget(fn -> do_render(html, opts) end)
+           end)
          end) do
       {:ok, pdf_binary} ->
         {:ok, pdf_binary}
@@ -313,8 +315,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   end
 
   defp effective_render_options_detailed(dom, opts) do
-    with {:ok, stylesheet_entries} <- Style.load_stylesheets(dom, opts),
-         {:ok, page_options} <- page_options_from_stylesheets(stylesheet_entries) do
+    with {:ok, stylesheet_entries} <- Style.prepare_stylesheets(dom, opts) do
+      page_options =
+        Enum.reduce(stylesheet_entries, [], fn entry, acc ->
+          PageGeometry.merge_page_options(acc, entry.prepared.page_options)
+        end)
+
       effective_opts = Keyword.merge(page_options, opts)
       {:ok, metadata_options(dom, effective_opts)}
     else
@@ -328,19 +334,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
       {:error, {_reason, _diagnostic}} = error ->
         error
     end
-  end
-
-  defp page_options_from_stylesheets(entries) do
-    Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, acc} ->
-      case CssParser.page_options(entry.css) do
-        {:ok, page_options} ->
-          {:cont, {:ok, PageGeometry.merge_page_options(acc, page_options)}}
-
-        {:error, :invalid_css} ->
-          {:error, error} = CssParser.parse_detailed(entry.css)
-          {:halt, {:error, error}}
-      end
-    end)
   end
 
   defp metadata_options(dom, opts) do
