@@ -80,17 +80,17 @@ defmodule NativeElixirPdfUtilities.Split do
 
   defp write_outputs(inputs) do
     inputs
-    |> Enum.reduce_while({:ok, []}, fn input, {:ok, outputs} ->
+    |> Enum.reduce_while({:ok, [], 0}, fn input, {:ok, outputs, bytes} ->
       case AssemblyWriter.write([input]) do
         {:ok, output} ->
-          case SplitValidator.validate_aggregate_output_bytes([output | outputs]) do
-            :ok -> {:cont, {:ok, [output | outputs]}}
+          case SplitValidator.validate_aggregate_output_bytes(bytes + byte_size(output)) do
+            :ok -> {:cont, {:ok, [output | outputs], bytes + byte_size(output)}}
             {:error, _error} = limit_error -> {:halt, limit_error}
           end
       end
     end)
     |> case do
-      {:ok, outputs} -> {:ok, Enum.reverse(outputs)}
+      {:ok, outputs, _bytes} -> {:ok, Enum.reverse(outputs)}
       {:error, _error} = limit_error -> limit_error
     end
   end

@@ -3,6 +3,8 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.AssemblyValidator
+  alias NativeElixirPdfUtilities.Validators.MergeValidator
   alias NativeElixirPdfUtilities.Validators.OutlineValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.TransformValidator
@@ -41,11 +43,9 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
   end
 
   @doc false
-  @spec validate_aggregate_output_bytes([binary()]) ::
+  @spec validate_aggregate_output_bytes(non_neg_integer()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
-  def validate_aggregate_output_bytes(outputs) do
-    bytes = Enum.reduce(outputs, 0, &(byte_size(&1) + &2))
-
+  def validate_aggregate_output_bytes(bytes) do
     case bytes <= Limits.get(:max_aggregate_split_output_bytes) do
       true -> :ok
       false -> limit_error("aggregate split output bytes exceed the limit")
@@ -121,52 +121,52 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
   end
 
   defp prepare_groups(context, groups) do
-    groups
-    |> Enum.reduce_while({:ok, [], 0}, fn group, {:ok, prepared, object_writes} ->
-      case prepare_group(context, group, object_writes) do
-        {:ok, input, object_writes} ->
-          {:cont, {:ok, [input | prepared], object_writes}}
+    case groups do
+      [] ->
+        {:ok, []}
 
-        {:error, _error} = preparation_error ->
-          {:halt, preparation_error}
-      end
-    end)
-    |> case do
-      {:ok, prepared, _object_writes} -> {:ok, Enum.reverse(prepared)}
-      {:error, _error} = preparation_error -> preparation_error
+      _ ->
+        with {:ok, source} <- AssemblyValidator.prepare_source(context) do
+          groups
+          |> Enum.reduce_while({:ok, [], 0}, fn group, {:ok, prepared, object_writes} ->
+            case prepare_group(source, group, object_writes) do
+              {:ok, input, object_writes} -> {:cont, {:ok, [input | prepared], object_writes}}
+              {:error, _} = error -> {:halt, error}
+            end
+          end)
+          |> case do
+            {:ok, prepared, _object_writes} -> {:ok, Enum.reverse(prepared)}
+            {:error, _} = error -> error
+          end
+        end
     end
   end
 
   defp prepare_range_groups(context, ranges, page_count) do
     ranges
-    |> Enum.reduce_while({:ok, [], 0}, fn range, {:ok, prepared, object_writes} ->
-      with {:ok, group} <- validate_range(range, page_count),
-           {:ok, input, object_writes} <- prepare_group(context, group, object_writes) do
-        {:cont, {:ok, [input | prepared], object_writes}}
-      else
-        {:error, _error} = preparation_error -> {:halt, preparation_error}
+    |> Enum.reduce_while({:ok, []}, fn range, {:ok, groups} ->
+      case validate_range(range, page_count) do
+        {:ok, group} -> {:cont, {:ok, [group | groups]}}
+        {:error, _} = error -> {:halt, error}
       end
     end)
     |> case do
-      {:ok, prepared, _object_writes} -> {:ok, Enum.reverse(prepared)}
-      {:error, _error} = preparation_error -> preparation_error
+      {:ok, groups} -> prepare_groups(context, Enum.reverse(groups))
+      {:error, _} = error -> error
     end
   end
 
-  defp prepare_group(context, group, object_writes) do
-    case TransformValidator.prepare_output(context, group) do
-      {:ok, input} ->
-        outline_items = OutlineValidator.count_items(input.outlines)
-        outline_objects = if outline_items == 0, do: 0, else: outline_items + 1
-        object_writes = object_writes + length(input.objects) + outline_objects + 2
+  defp prepare_group(source, group, object_writes) do
+    with {:ok, input} <- AssemblyValidator.prepare_selection(source, group),
+         {:ok, [input]} <- MergeValidator.prepare_remapping([input], 3) do
+      outline_items = OutlineValidator.count_items(input.outlines)
+      outline_objects = if outline_items == 0, do: 0, else: outline_items + 1
+      object_writes = object_writes + length(input.objects) + outline_objects + 2
 
-        case object_writes <= Limits.get(:max_split_object_writes) do
-          true -> {:ok, input, object_writes}
-          false -> limit_error("split object writes exceed the limit")
-        end
-
-      {:error, _error} = preparation_error ->
-        preparation_error
+      case object_writes <= Limits.get(:max_split_object_writes) do
+        true -> {:ok, input, object_writes}
+        false -> limit_error("split object writes exceed the limit")
+      end
     end
   end
 

@@ -11,49 +11,86 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
           {:ok, MergeValidator.input_context()}
           | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare(context, page_numbers, rotations) do
-    with {:ok, input} <- MergeValidator.prepare(context),
-         selected_pages = selected_pages(context.pages, page_numbers),
-         object_values =
-           Map.new(input.objects, fn object ->
-             {{object.obj, object.gen}, Map.get(object, :value_override, object.value)}
-           end),
-         document = %{
-           context.document
-           | objects:
-               Map.new(context.document.objects, fn {ref, object} ->
-                 {ref, %{object | value: Map.get(object_values, ref, object.value)}}
-               end)
-         },
-         {:ok, overrides} <-
-           page_overrides(
-             document,
-             object_values,
-             selected_pages,
-             input.inherited,
-             rotations
-           ),
-         {:ok, objects} <- reachable_objects(input.objects, overrides, selected_pages) do
-      selected_refs = Enum.map(selected_pages, & &1.ref)
+    with {:ok, source} <- prepare_source(context) do
+      prepare_selection(source, page_numbers, rotations)
+    end
+  end
+
+  @doc false
+  @spec prepare_source(PdfValidator.context()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_source(context) do
+    with {:ok, input} <- MergeValidator.prepare(context) do
+      object_values =
+        Map.new(input.objects, fn object ->
+          {{object.obj, object.gen}, Map.get(object, :value_override, object.value)}
+        end)
+
+      document = %{
+        context.document
+        | objects:
+            Map.new(context.document.objects, fn {ref, object} ->
+              {ref, %{object | value: Map.get(object_values, ref, object.value)}}
+            end)
+      }
 
       {:ok,
        %{
-         input
-         | objects: objects,
-           pages: selected_refs,
-           inherited: Map.take(input.inherited, selected_refs),
-           outlines: OutlineValidator.remap_for_selection(input.outlines, page_numbers)
+         input: input,
+         document: document,
+         object_values: object_values,
+         objects: Map.new(input.objects, &{{&1.obj, &1.gen}, &1}),
+         object_order:
+           input.objects
+           |> Enum.with_index()
+           |> Map.new(fn {object, index} -> {{object.obj, object.gen}, index} end),
+         pages:
+           context.pages |> Enum.with_index(1) |> Map.new(fn {page, number} -> {number, page} end),
+         page_tree_refs: Map.new(document.pages, &{&1.ref, true}),
+         all_page_refs:
+           input.objects |> Enum.filter(&page_object?/1) |> Map.new(&{{&1.obj, &1.gen}, true})
        }}
     end
   end
 
-  defp selected_pages(pages, page_numbers) do
-    indexed = pages |> Enum.with_index(1) |> Map.new(fn {page, number} -> {number, page} end)
-    Enum.map(page_numbers, &Map.fetch!(indexed, &1))
+  @doc false
+  @spec prepare_selection(map(), [pos_integer()], map()) ::
+          {:ok, MergeValidator.input_context()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_selection(source, page_numbers, rotations \\ %{}) do
+    selected_pages = Enum.map(page_numbers, &Map.fetch!(source.pages, &1))
+
+    with {:ok, overrides} <-
+           page_overrides(
+             source.document,
+             source.object_values,
+             selected_pages,
+             source.input.inherited,
+             rotations,
+             source.page_tree_refs
+           ),
+         {:ok, objects} <- reachable_objects(source, overrides, selected_pages) do
+      selected_refs = Enum.map(selected_pages, & &1.ref)
+
+      {:ok,
+       %{
+         source.input
+         | objects: objects,
+           pages: selected_refs,
+           inherited: Map.take(source.input.inherited, selected_refs),
+           outlines: OutlineValidator.remap_for_selection(source.input.outlines, page_numbers)
+       }}
+    end
   end
 
-  defp page_overrides(document, object_values, selected_pages, inheritances, rotations) do
+  defp page_overrides(
+         document,
+         object_values,
+         selected_pages,
+         inheritances,
+         rotations,
+         all_page_refs
+       ) do
     selected_refs = Map.new(selected_pages, &{&1.ref, true})
-    all_page_refs = Map.new(document.pages, &{&1.ref, true})
 
     selected_pages
     |> Enum.with_index(1)
@@ -226,27 +263,23 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
     end
   end
 
-  defp reachable_objects(objects, overrides, selected_pages) do
-    object_by_ref = Map.new(objects, &{{&1.obj, &1.gen}, &1})
+  defp reachable_objects(source, overrides, selected_pages) do
     selected_refs = Map.new(selected_pages, &{&1.ref, true})
-
-    all_page_refs =
-      objects
-      |> Enum.filter(&page_object?/1)
-      |> Map.new(&{{&1.obj, &1.gen}, true})
 
     with {:ok, reachable} <-
            walk_references(
              Enum.map(selected_pages, & &1.ref),
              %{},
-             object_by_ref,
+             source.objects,
              overrides,
              selected_refs,
-             all_page_refs
+             source.all_page_refs
            ) do
       prepared =
-        objects
-        |> Enum.filter(&Map.has_key?(reachable, {&1.obj, &1.gen}))
+        reachable
+        |> Map.keys()
+        |> Enum.sort_by(&Map.fetch!(source.object_order, &1))
+        |> Enum.map(&Map.fetch!(source.objects, &1))
         |> Enum.map(fn object ->
           case Map.fetch(overrides, {object.obj, object.gen}) do
             {:ok, value} -> Map.put(object, :value_override, value)

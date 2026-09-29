@@ -19,6 +19,43 @@ defmodule NativeElixirPdfUtilities.PageTransformsTest do
     :ok
   end
 
+  test "splitting shared-resource pages scales without repeated document preparation" do
+    measurements =
+      for count <- [200, 400] do
+        ids = Enum.to_list(3..(count + 2))
+        font_id = count + 3
+        content_id = count + 4
+
+        objects =
+          [
+            {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+            {2,
+             "<< /Type /Pages /Kids [#{Enum.map_join(ids, " ", &"#{&1} 0 R")}] /Count #{count} /MediaBox [0 0 100 100] /Resources << /Font << /F1 #{font_id} 0 R >> >> >>"}
+          ] ++
+            Enum.map(ids, &{&1, "<< /Type /Page /Parent 2 0 R /Contents #{content_id} 0 R >>"}) ++
+            [
+              {font_id, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"},
+              {content_id, stream("BT /F1 10 Tf 10 50 Td (Shared) Tj ET")}
+            ]
+
+        source = pdf(objects)
+        {:reductions, before_work} = Process.info(self(), :reductions)
+        assert {:ok, outputs} = Split.by_page(source)
+        {:reductions, after_work} = Process.info(self(), :reductions)
+        assert length(outputs) == count
+
+        for output <- [hd(outputs), List.last(outputs)] do
+          assert {:ok, "Shared"} = Text.extract(output, layout: false)
+          assert {:ok, %{pages: [_]}} = Reader.read(output)
+        end
+
+        after_work - before_work
+      end
+
+    [small, large] = measurements
+    assert large < small * 2.8
+  end
+
   test "rebuilding preserves real values in rewritten pages and retained objects" do
     numbers = "[0.0000000005 -0.0000000005 1.0000000005 1.23456789012345]"
     expected = [5.0e-10, -5.0e-10, 1.0000000005, 1.23456789012345]
