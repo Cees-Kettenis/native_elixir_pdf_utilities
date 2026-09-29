@@ -1639,6 +1639,153 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert {rest.text, rest.x, rest.end_x} == {"BCDEFG", 30.0, 61.0}
   end
 
+  test "bounds expanded Unicode text across all text-showing operators" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_extracted_text_bytes: 6})
+
+    cmap =
+      "1 begincodespacerange <00> <FF> endcodespacerange " <>
+        "1 beginbfchar <41> <006600660069> endbfchar"
+
+    font = "<< /Type /Font /ToUnicode 7 0 R >>"
+
+    for content <- ["(AA) Tj", "[(A) 0 (A)] TJ", "(A) Tj (A) '", "(A) Tj 0 0 (A) \""] do
+      source = page_pdf("BT /F1 10 Tf #{content} ET", font: font, cmap: cmap)
+      assert {:ok, _} = Text.extract(source, layout: false)
+      Limits.install(%{original | max_extracted_text_bytes: 5})
+
+      for extract <- [&Text.extract/1, &Text.extract_spans/1] do
+        assert {:error, {:resource_limit_exceeded, diagnostic}} = extract.(source)
+        assert diagnostic.stage == :limits
+        assert diagnostic.reason == :resource_limit_exceeded
+        assert diagnostic.module == Text
+        assert diagnostic.message =~ "extracted text bytes"
+        assert diagnostic.message =~ "page 1"
+        assert diagnostic.message =~ "F1"
+      end
+
+      Limits.install(%{original | max_extracted_text_bytes: 6})
+    end
+  end
+
+  test "bounds simple-font text across pages and repeated Forms" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_extracted_text_bytes: 7})
+    assert {:ok, _} = Text.extract(shared_content_pages_pdf(1, "BT /F1 12 Tf (Form) Tj ET"))
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             Text.extract(shared_content_pages_pdf(2, "BT /F1 12 Tf (Form) Tj ET"))
+
+    assert message =~ "page 2"
+
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents 6 0 R >>"},
+        {4, "<< /Font << /F1 5 0 R >> /XObject << /form 7 0 R >> >>"},
+        {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+        {6, stream_object("", "/form Do /form Do")},
+        {7,
+         stream_object(
+           "/Type /XObject /Subtype /Form /Resources 4 0 R",
+           "BT /F1 12 Tf (Form) Tj ET"
+         )}
+      ])
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: message}}} =
+             Text.extract(source)
+
+    assert message =~ "extracted text bytes"
+  end
+
+  test "bounds mapping allocations for individual, array, sequential and overwritten destinations" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    prefix = "1 begincodespacerange <00> <FF> endcodespacerange "
+    font = "<< /Type /Font /ToUnicode 7 0 R >>"
+
+    for mappings <- [
+          "2 beginbfchar <41> <00660066> <42> <00660067> endbfchar",
+          "1 beginbfrange <41> <42> [<00660066> <00660067>] endbfrange",
+          "1 beginbfrange <41> <42> <00660066> endbfrange",
+          "1 beginbfchar <41> <00660066> endbfchar 1 beginbfchar <41> <00660067> endbfchar"
+        ] do
+      source = page_pdf("BT /F1 10 Tf (A) Tj ET", font: font, cmap: prefix <> mappings)
+      Limits.install(%{original | max_cmap_expanded_bytes: 6})
+      assert {:ok, _} = Text.extract(source)
+      Limits.install(%{original | max_cmap_expanded_bytes: 5})
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(source)
+      assert diagnostic.stage == :limits
+      assert diagnostic.module == Text
+      assert diagnostic.operation == :extract
+      assert diagnostic.message =~ "expanded CMap bytes"
+      assert diagnostic.message =~ "page 1"
+    end
+  end
+
+  test "expanded budgets measure UTF-8 bytes rather than Unicode characters" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
+    source =
+      page_pdf("BT /F1 10 Tf (A) Tj ET",
+        font: "<< /Type /Font /ToUnicode 7 0 R >>",
+        cmap:
+          "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <D83DDE00> endbfchar"
+      )
+
+    Limits.install(%{original | max_extracted_text_bytes: 4, max_cmap_expanded_bytes: 5})
+    assert {:ok, "😀"} = Text.extract(source, layout: false)
+    Limits.install(%{original | max_extracted_text_bytes: 3})
+    assert {:error, {:resource_limit_exceeded, _}} = Text.extract(source)
+    Limits.install(%{original | max_cmap_expanded_bytes: 4})
+    assert {:error, {:resource_limit_exceeded, _}} = Text.extract(source)
+  end
+
+  test "mapping allocation budget spans fonts but cached aliases reuse it" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_cmap_expanded_bytes: 2})
+
+    source =
+      page_pdf("BT /F1 10 Tf (A) Tj ET",
+        font: "<< /Type /Font /ToUnicode 7 0 R >>",
+        cmap:
+          "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0041> endbfchar"
+      )
+
+    assert {:ok, context} = Reader.read_validated(source)
+
+    assert {:ok, instructions} =
+             TextValidator.instructions("BT /F1 10 Tf (A) Tj /Alias 10 Tf (A) Tj ET", 1)
+
+    resources = %{"Font" => %{"F1" => {:ref, {5, 0}}, "Alias" => {:ref, {5, 0}}}}
+
+    assert {:ok, _, preparation} =
+             TextResourceValidator.prepare_contents(
+               context.document,
+               resources,
+               [instructions],
+               1,
+               TextValidator.new_preparation_context()
+             )
+
+    assert preparation.cmap_bytes == 2
+    assert preparation.extracted_bytes == 2
+    resources = put_in(resources, ["Font", "Alias"], %{"ToUnicode" => {:ref, {7, 0}}})
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             TextResourceValidator.prepare_contents(
+               context.document,
+               resources,
+               [instructions],
+               1
+             )
+  end
+
   test "ignores comments and preserves mapping order in ToUnicode CMaps" do
     cmap =
       "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>

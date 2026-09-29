@@ -199,6 +199,8 @@ limits apply across all returned PDFs. See [Merging](pdf-merging.md) and
 
 | Setting | Default | Applies to |
 | --- | ---: | --- |
+| `max_extracted_text_bytes` | 50,000,000 | Aggregate UTF-8 text prepared across all pages and Form executions |
+| `max_cmap_expanded_bytes` | 10,000,000 | Aggregate expanded ToUnicode mapping keys and UTF-8 destinations, including overwritten entries |
 | `max_text_decoded_content_bytes` | 50,000,000 | Decoded content used by extraction |
 | `max_text_parsed_instructions` | 100,000 | Unique parsed content instructions |
 | `max_text_stream_uses` | 100,000 | Content stream references traversed |

@@ -41,6 +41,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
             optional(instruction_cache_key()) => [instruction()]
           },
           required(:prepared_fonts) => map(),
+          required(:extracted_bytes) => non_neg_integer(),
+          required(:cmap_bytes) => non_neg_integer(),
           required(:decoded_bytes) => non_neg_integer(),
           required(:parsed_instructions) => non_neg_integer(),
           required(:stream_uses) => non_neg_integer(),
@@ -261,6 +263,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
       decoded_streams: %{},
       instructions: %{},
       prepared_fonts: %{},
+      extracted_bytes: 0,
+      cmap_bytes: 0,
       decoded_bytes: 0,
       parsed_instructions: 0,
       stream_uses: 0,
