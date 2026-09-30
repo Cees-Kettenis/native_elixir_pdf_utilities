@@ -1,50 +1,69 @@
 # Roadmap
 
 Native Elixir PDF Utilities renders application documents and edits existing
-PDFs. Upcoming releases focus on broader image support, closer browser rendering,
-more efficient document generation, and a stable public API.
+PDFs. The next milestone prepares the existing functionality and public API for
+the first stable release.
 
 The versions below describe planned scope, which may change as the work develops.
 See [CHANGELOG.md](CHANGELOG.md) for published releases.
 
-## 0.22.0: Guides and examples
+## 1.0.0-rc.1: Documentation, API freeze, and release validation
 
-A final documentation review before 1.0 will make the supported workflows,
-examples, and limitations consistent with the library's behavior.
+This combines the previously planned 0.22.0 documentation review and 0.23.0
+release-candidate work into one milestone. It prepares the supported workflows
+for 1.0 without adding another feature milestone.
 
-The review will cover rendering, forms, attachments, inspection, extraction,
-metadata, page transforms, stamping, and error handling. It will also address
-outdated examples, unclear unsupported-feature guidance, and navigation between
-the README and HexDocs.
+Before publishing the candidate:
 
-## 0.23.0: Release candidate and API freeze
+- [ ] Review guides and examples for rendering, forms, attachments, inspection,
+  extraction, metadata, page transforms, stamping, and error handling. Fix
+  outdated examples and navigation between the README and HexDocs.
+- [ ] Review and freeze public module names, functions, options, return values,
+  and diagnostic shapes. Document which advanced interfaces are covered by the
+  stability promise.
+- [ ] Document supported HTML/CSS and PDF workflow boundaries, known limitations,
+  and any migration steps from 0.21.0.
+- [ ] Include the flex image sizing correction and its regression fixtures.
+  Retain Chromium comparison in development and CI.
+- [ ] Update release automation to accept candidate tags such as
+  `v1.0.0-rc.1` and mark their GitHub releases as prereleases without marking them
+  as the latest stable release.
+- [ ] Pass the full quality matrix, review generated documentation, and inspect
+  the package before publishing it to Hex.
 
-A release candidate for validating the library with real documents and downstream
-applications before 1.0.
+After publishing the candidate:
 
-Public module names, functions, options, return values, and error shapes will be
-reviewed and frozen except for bug fixes. Migration notes and remaining guides
-will explain how to adopt the candidate and which advanced interfaces may still
-change.
-
-This stage will also address release-candidate regressions and settle whether
-additional typography support is required for 1.0.
+- [ ] Test the published package in SigPortal with its real document templates
+  and Chromium fallback disabled. Verify page sizes, pagination, images, text,
+  and printed/scanned QR codes where applicable.
+- [ ] Fix candidate regressions and publish `1.0.0-rc.2` or later candidates if
+  needed, repeating the affected checks and full quality matrix.
 
 ## 1.0.0: Stable release
 
 A stable public API with compatibility guides, application examples, and documented
-HTML/CSS and PDF workflow boundaries.
+HTML/CSS and PDF workflow boundaries. Publish this once the candidate checklist
+is complete and no known regression blocks the supported workflows. Existing
+production use contributes to that decision; a fixed waiting period is not
+required.
+
+Version 1.0 establishes the documented compatibility promise. It does not require
+support for every browser feature or the absence of all future rendering bugs.
+Applications can remove Chromium from production after validating their own
+templates. Chromium remains the rendering reference for the library's parity
+tests.
 
 After 1.0, releases will follow SemVer: minor versions add compatible features,
 patch versions fix bugs, and major versions introduce intentional breaking changes.
 
-## Beyond the planned releases
+## After 1.0
 
 Broader Unicode line breaking, soft hyphens, and optional hyphenation dictionaries
-remain under consideration for the pre-1.0 scope.
+are deferred to later releases unless candidate testing identifies a concrete
+requirement for an already supported workflow.
 
 Right-to-left layout, bidirectional text, complex-script shaping, and emoji
-sequences are likely post-1.0 work. Automatic PDF field detection and
+sequences remain future work. Automatic PDF field detection and
 coordinate-based form conversion also remain deferred.
 
 Remote asset fetching will remain the application's responsibility. The renderer

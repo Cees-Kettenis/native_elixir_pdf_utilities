@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Material approval</title>
+<style>
+html, body { margin: 0; padding: 0; }
+body { font-family: "DejaVu Sans"; font-size: 10pt; line-height: 15pt; }
+h1 { font-size: 22pt; line-height: 26pt; margin: 0 0 12pt; }
+h2 { font-size: 12pt; line-height: 16pt; margin: 0 0 6pt; }
+p { margin: 0 0 4pt; }
+.field { margin-bottom: 12pt; }
+.text { display: block; width: 240pt; height: 24pt; padding: 4pt; box-sizing: border-box; }
+.notes { display: block; width: 300pt; height: 54pt; padding: 4pt; box-sizing: border-box; }
+.approval { display: flex; align-items: center; gap: 8pt; margin-bottom: 12pt; }
+.check { width: 12pt; height: 12pt; }
+</style>
+</head>
+<body>
+<h1>Material approval</h1>
+<div class="field"><p>Inspector</p><input class="text" name="inspector"></div>
+<div class="approval"><input class="check" type="checkbox" name="approved"><div>Approved for production</div></div>
+<div class="field"><p>Notes</p><textarea class="notes" name="notes"></textarea></div>
+</body>
+</html>

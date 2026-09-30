@@ -57,7 +57,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
   defp docs do
     [
       main: "readme",
-      assets: %{"assets" => "assets"},
+      assets: %{"assets" => "assets", "docs/assets" => "assets"},
       extras: [
         "README.md",
         "CHANGELOG.md",

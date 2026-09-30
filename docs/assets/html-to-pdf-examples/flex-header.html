@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Flex header</title>
+<style>
+html, body { margin: 0; padding: 0; }
+body { font-family: "DejaVu Sans"; font-size: 9pt; line-height: 13pt; }
+h1 { font-size: 18pt; line-height: 22pt; margin: 0; color: #1f4b7a; }
+h2 { font-size: 11pt; line-height: 16pt; margin: 0; margin-bottom: 6pt; }
+p { margin: 0; }
+.header { display: flex; align-items: flex-start; gap: 16pt; }
+.company { display: flex; flex: 1 1 0; gap: 10pt; align-items: center; }
+.company img { flex: 0 0 36pt; width: 36pt; height: 36pt; }
+.company-text { flex: 1 1 0; }
+.document { flex: 0 0 145pt; text-align: right; }
+.addresses { display: flex; gap: 14pt; margin-top: 24pt; }
+.address { flex: 1 1 0; border: 1pt solid #cbd5e1; padding: 10pt; }
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="company">
+    <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiBmaWxsPSIjMWY0YjdhIi8+CiAgPHBhdGggZD0iTTE2IDQ0IEwzMiAxNiBMNDggNDQgWiIgZmlsbD0iI2ZmZmZmZiIvPgo8L3N2Zz4K" alt="Example company logo">
+    <div class="company-text">
+      <h2>Example Manufacturing</h2>
+      <p>81 Industrial Avenue<br>Example City<br>receiving@example.com</p>
+    </div>
+  </div>
+  <div class="document">
+    <h1>PURCHASE ORDER</h1>
+    <p>PO-2026-0042<br>30 September 2026</p>
+  </div>
+</div>
+<div class="addresses">
+  <div class="address"><h2>Bill to</h2><p>Finance department<br>81 Industrial Avenue</p></div>
+  <div class="address"><h2>Deliver to</h2><p>Receiving warehouse<br>Building B, Loading Bay 4<br>22 Logistics Road</p></div>
+</div>
+</body>
+</html>

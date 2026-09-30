@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Grid summary</title>
+<style>
+html, body { margin: 0; padding: 0; }
+body { font-family: "DejaVu Sans"; font-size: 10pt; line-height: 14pt; }
+h1 { font-size: 22pt; line-height: 26pt; margin: 0 0 12pt; }
+h2 { font-size: 12pt; line-height: 16pt; margin: 0 0 6pt; }
+p { margin: 0 0 8pt; }
+.details {
+  display: grid;
+  grid-template-columns: 100pt 1fr 100pt 1fr;
+  gap: 8pt;
+  border: 1pt solid #cbd5e1;
+  padding: 12pt;
+}
+.label { font-weight: bold; color: #1f4b7a; }
+.note { grid-column: 1 / span 4; padding: 10pt; background: #eff6ff; }
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12pt; margin-top: 18pt; }
+.card { padding: 12pt; border: 1pt solid #cbd5e1; }
+.value { font-size: 18pt; font-weight: bold; margin-top: 6pt; }
+</style>
+</head>
+<body>
+<h1>Order overview</h1>
+<div class="details">
+  <div class="label">Order</div><div>PO-2026-0042</div>
+  <div class="label">Delivery</div><div>15 October 2026</div>
+  <div class="label">Supplier</div><div>Example Textile and Accessories Supply Company</div>
+  <div class="label">Payment</div><div>30 days from receipt of the complete shipment</div>
+  <div class="note">Deliver each production lot separately. Attach the inspection report and packing list to the first carton of each lot.</div>
+</div>
+<div class="cards">
+  <div class="card">Ordered units<div class="value">1,400</div></div>
+  <div class="card">Product groups<div class="value">2</div></div>
+  <div class="card">Delivery lots<div class="value">4</div></div>
+</div>
+</body>
+</html>

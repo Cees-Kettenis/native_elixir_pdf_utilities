@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Stock labels</title>
+<style>
+html, body { margin: 0; padding: 0; }
+body { font-family: "DejaVu Sans"; font-size: 6pt; line-height: 7pt; }
+h1 { font-size: 22pt; line-height: 26pt; margin: 0 0 12pt; }
+h2 { font-size: 12pt; line-height: 16pt; margin: 0 0 6pt; }
+p { margin: 0 0 8pt; }
+.label { width: 50mm; height: 30mm; box-sizing: border-box; padding: 1mm; break-after: page; }
+.label:last-child { break-after: auto; }
+.primary { display: flex; height: 17mm; gap: 1mm; }
+.primary img { flex: 0 0 14.5mm; width: 14.5mm; height: 14.5mm; }
+.details { flex: 1 1 0; }
+.secondary { margin-top: 1mm; }
+</style>
+</head>
+<body>
+<div class="label">
+  <div class="primary">
+    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHQAAAB0CAIAAADb+IFwAAAC60lEQVR4nO2RQY5dMRAC//0vnUjZvSjMUM+NbWVgaTU0Xf78qmL6nC7wP6twgyrcoAo3qMINqnCDKtygCjeowg2qcIMq3KAKN6jCDapwgyrcoDDcT0DOLuf9VE/ZARs2llYz1JvuKTtgw8bSaoZ60z1lB2zYWFrNUG+6p+yADQvLaM4U3HRP6d25jOYU7ksV7vAymlO4/3hXWik9NZ/u+fBiQ+HaKtzCLdzx0k7ODT1lB2zYWNrJuaGn7IANG0s7OTf0lB2wYWNpJ+eGnrIDNmws7WTS/ERP2R8bNpZ2Mml+oqfsjw0bSzuZND/RU/bHho2lnUyan+gp+2PDwjInxzn4hp6Wd+cyJ6dwC9fz7lzm5BTusFaOdN539nx0wIZDpdW8876z56MDNhwqread9509Hx2w4VBpNe+87+z56EANOzV15CldXbRwgyrcoH4cXOdINbPiVTPOB5z6mMINqnCDKtygIsvokfT4qc9Lf0bhFu5avpop3IF8NXM1XKdoYp56V/qsgC7cwi3cwv07nxrwAliOHul8wErm27v/5KyYrQWFm1PhBlW4B0ShOLBUPt3r5Fg3UsOUCjeowg2qcA9o6Rj4AWkVblCFG1ThBjV2wIqmdinvVCZmhQ0BTe1S3qlMzAobAprapbxTmZgVNgQ0tUt5pzIxK2yYWrwAJd2zcIM9CzfYs3CDPa+D+zFED6Azzl6a43hlJjYUrq3C/SbH8cpMbChcW9fBXYG1spfmOCrclzmOCvdljqPCfZnj6Dq4U5krM7Sn9GIDLO3MO7umwDkztKf0YgMs7cw7u6bAOTO0p/RiAyztzDu7psA5M7Sn9GLDwjKakwA01d9R4QZVuEEVblBLcKek8p13OkNvoXwe+dgQkMp33ukMvYXyeeRjQ0Aq33mnM/QWyueRjw0BqXznnc7QWyifR/6KufpahRtU4QZVuEEVblCFG1ThBlW4QRVuUIUbVOEGVbhBFW5QhRtU4QZVuEH9BqL3gOyQhpEsAAAAAElFTkSuQmCC" alt="Batch QR code">
+    <div class="details">Item: MAT-001<br>Batch: BATCH101<br>Quantity: 100 M<br>Location: A-01</div>
+  </div>
+  <div class="secondary">PO-2026-0042 / Received 30 September 2026</div>
+</div>
+<div class="label">
+  <div class="primary">
+    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHQAAAB0CAIAAADb+IFwAAAC60lEQVR4nO2RQY5dMRAC//0vnUjZvSjMUM+NbWVgaTU0Xf78qmL6nC7wP6twgyrcoAo3qMINqnCDKtygCjeowg2qcIMq3KAKN6jCDapwgyrcoDDcT0DOLuf9VE/ZARs2llYz1JvuKTtgw8bSaoZ60z1lB2zYWFrNUG+6p+yADQvLaM4U3HRP6d25jOYU7ksV7vAymlO4/3hXWik9NZ/u+fBiQ+HaKtzCLdzx0k7ODT1lB2zYWNrJuaGn7IANG0s7OTf0lB2wYWNpJ+eGnrIDNmws7WTS/ERP2R8bNpZ2Mml+oqfsjw0bSzuZND/RU/bHho2lnUyan+gp+2PDwjInxzn4hp6Wd+cyJ6dwC9fz7lzm5BTusFaOdN539nx0wIZDpdW8876z56MDNhwqread9509Hx2w4VBpNe+87+z56EANOzV15CldXbRwgyrcoH4cXOdINbPiVTPOB5z6mMINqnCDKtygIsvokfT4qc9Lf0bhFu5avpop3IF8NXM1XKdoYp56V/qsgC7cwi3cwv07nxrwAliOHul8wErm27v/5KyYrQWFm1PhBlW4B0ShOLBUPt3r5Fg3UsOUCjeowg2qcA9o6Rj4AWkVblCFG1ThBjV2wIqmdinvVCZmhQ0BTe1S3qlMzAobAprapbxTmZgVNgQ0tUt5pzIxK2yYWrwAJd2zcIM9CzfYs3CDPa+D+zFED6Azzl6a43hlJjYUrq3C/SbH8cpMbChcW9fBXYG1spfmOCrclzmOCvdljqPCfZnj6Dq4U5krM7Sn9GIDLO3MO7umwDkztKf0YgMs7cw7u6bAOTO0p/RiAyztzDu7psA5M7Sn9GLDwjKakwA01d9R4QZVuEEVblBLcKek8p13OkNvoXwe+dgQkMp33ukMvYXyeeRjQ0Aq33mnM/QWyueRjw0BqXznnc7QWyifR/6KufpahRtU4QZVuEEVblCFG1ThBlW4QRVuUIUbVOEGVbhBFW5QhRtU4QZVuEH9BqL3gOyQhpEsAAAAAElFTkSuQmCC" alt="Batch QR code">
+    <div class="details">Item: MAT-002<br>Batch: BATCH101<br>Quantity: 100 M<br>Location: A-01</div>
+  </div>
+  <div class="secondary">PO-2026-0042 / Received 30 September 2026</div>
+</div>
+</body>
+</html>

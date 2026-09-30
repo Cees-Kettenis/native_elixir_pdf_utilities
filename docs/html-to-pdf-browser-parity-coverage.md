@@ -53,6 +53,9 @@ The suite includes invoices, statements, forms, labels, and focused fixtures for
 supported layout behavior. Recent cases cover `white-space: nowrap`, leading
 decimal lengths, letter spacing and ligatures, collapsed table borders across
 pages, and body padding, backgrounds, and grid layout.
+Flex alignment checks preserve explicit image and block dimensions while still
+stretching automatic dimensions. A two-page compact stock-sticker fixture uses
+synthetic item data and square QR images on 5 cm by 3 cm labels.
 PNG coverage includes all legal static color types and sample depths, including
 Adam7 interlacing. Font checks include subsetting and signed TrueType glyph deltas.
 

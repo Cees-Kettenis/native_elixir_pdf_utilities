@@ -1,118 +1,128 @@
 # Contributing
 
-Thanks for contributing to Native Elixir PDF Utilities.
+Use this guide to set up the project, make a change, and open a GitHub pull request.
+For using the library in an application, see the [user guide](docs/README.md).
 
-## Development Setup
+## Start locally
 
-1. Install Elixir 1.19 or newer using `mise` or a platform-appropriate Elixir
-   installation method.
-2. When using `mise`, install the configured toolchain:
-   - `mise install`
-3. Fetch dependencies:
-   - `mix deps.get`
+Develop on the latest stable Elixir release series with a compatible Erlang/OTP
+version. Any patch version within that series is fine. Use your preferred
+installation tools.
 
-## Build and Test
+Fork the repository on GitHub, clone your fork, and create a branch. Replace
+`YOUR_USERNAME` with your GitHub username:
 
-Local validation is required before a change is considered ready for a pull
-request. GitHub Actions confirms the local work; it is not a substitute for
-running the applicable checks before submission.
+```bash
+git clone https://github.com/YOUR_USERNAME/native_elixir_pdf_utilities.git
+cd native_elixir_pdf_utilities
+git switch -c my-change
+mix deps.get
+```
 
-For quick feedback on the installed Elixir version, run:
+## Check your changes
 
-- `mix format --check-formatted`
-- `mix test --cover --warnings-as-errors`
-- `mix test.performance`
-- `MIX_ENV=test mix dialyzer`
+Run focused tests while working. Before your pull request is ready to merge,
+run the full quality matrix:
 
-For HTML-to-PDF rendering changes, also run browser parity when Chromium is
-available:
+```bash
+./scripts/quality-matrix
+```
 
-- `CHROMIUM_BIN=/path/to/chromium mix test.browser_parity --warnings-as-errors`
+It checks compilation, formatting, unused dependencies, 100% test coverage,
+performance, Dialyzer, and Chromium rendering parity. Local validation and
+required CI checks must pass. If you cannot run the matrix, report which checks
+you ran; a maintainer must run it locally before marking the change ready.
 
-Browser comparisons require matching installed fonts. Native system-font
-selection follows Fontconfig on Linux, while Chromium has separate default
-family preferences. The matrix image installs DejaVu and Liberation fonts
-without overriding Fontconfig aliases. Use `fc-match` to inspect local aliases
-and compare both PDFs' embedded fonts when a comparison fails.
+### Matrix setup
 
-Before a maintainer considers a change PR-ready, run the complete supported
-Elixir matrix:
+The helper needs Docker, `jq`, and Bash 4 or newer. Docker must be running.
 
-- `./scripts/quality-matrix`
-
-If a contributor cannot run the complete matrix on their host, they should run
-the installed-version checks and say so clearly. A maintainer must then run the
-complete matrix locally before marking the change ready; passing remote CI
-alone does not replace that local validation.
-
-### Local Matrix Platform Support
-
-The matrix helper requires Docker, `jq`, and Bash 4 or newer.
-
-| Platform | Support and requirements |
+| Platform | Setup |
 | --- | --- |
-| Linux | Supported directly with Docker, `jq`, and Bash 4+. |
-| macOS | Supported with Docker Desktop, `jq`, and Bash 4+. The Bash 3 version bundled with macOS is not sufficient; install a current Bash version first. |
-| Windows | Supported through WSL2 with Docker Desktop integration. Run the helper inside WSL. Native PowerShell and Command Prompt are not currently supported by the helper. |
+| Linux | Docker, `jq`, and Bash 4+ |
+| macOS | Docker Desktop, `jq`, and Bash 4+ |
+| Windows | WSL2 with Docker Desktop integration; run the helper inside WSL |
 
-The helper uses the runtime definitions in `ci/runtime-matrix.json`, retains
-full stage logs under `.quality/logs/`, and prints a final summary table.
-GitHub Actions reads the same runtime definitions.
+Native PowerShell and Command Prompt are not supported by the helper.
 
-### Matrix Results
+[ci/runtime-matrix.json](ci/runtime-matrix.json) defines the local and CI
+runtimes. It currently tests Elixir 1.19 and 1.20. The support policy moves to a
+rolling three-minor window when the Elixir 1.21 container is available. Add
+measured performance baselines when adding a runtime.
 
-- `FAIL` means the change is not ready. Open the referenced stage log and fix
-  the failure.
-- `WARN` in the project `compile`, `coverage`, `dialyzer`, or `parity` stages
-  must be investigated and resolved when it originates in this library.
-- `WARN` in `dependency_compile` originates while compiling third-party code.
-  Identify the dependency and warning explicitly, then decide whether an
-  upgrade or upstream fix is available. The matrix may still exit successfully
-  so an unavoidable dependency warning does not block unrelated work.
-- `N/A` means a release-dependent check intentionally ran elsewhere. Formatting
-  is checked only on the canonical Elixir runtime because formatter output can
-  differ between releases.
+### Read the results
 
-The matrix compiles with warnings as errors, enforces 100% test coverage, checks
-the performance regression limits, runs Dialyzer, and runs Chromium browser parity
-for every configured Elixir runtime.
+Each stage prints a log path under `.quality/logs/`.
 
-`mix test.performance` measures eight synthetic document fixtures and eleven focused
-workloads. It warms each scenario twice and checks the median of five runs against
-the recorded baseline for that Elixir minor version. A result above 105% fails the
-stage. Add a measured baseline when adding a new supported Elixir version. Generated
-PDFs also have a 5% output-size limit. Wall-clock limits catch severe stalls but
-are deliberately looser because shared CI runner load affects timing.
-The 100-row workload checks both the compact default and the explicit uncompressed,
-full-font opt-out, so changes to either path are visible during review.
+| Result | Action |
+| --- | --- |
+| `PASS` | The stage passed. |
+| `FAIL` | Read the stage log and fix the failure. |
+| `WARN` | Fix library warnings. Identify third-party warnings and any available upgrade or upstream fix in the PR. |
+| `SKIP` | Fix the earlier failure that prevented this stage from running. |
+| `N/A` | Expected for formatting outside the canonical runtime. |
 
-A pull request that exceeds a performance regression limit is not ready to merge.
-Do not raise a limit only to make the check pass. Find and optimize an unintended
-slowdown before calling the pull request complete. Change a recorded baseline only
-when the workload intentionally changed or a performance tradeoff is unavoidable,
-and document the measurements and reason in the pull request.
-The document fixtures use Faker-generated names and addresses written into static
-HTML files. Faker is not needed to run tests or build the library.
+A successful exit can still include dependency warnings. Review them before
+handing over the change. Formatting runs only on the canonical runtime because
+formatter output can differ between Elixir versions.
 
-The support policy becomes a rolling three-minor window when the Elixir 1.21
-container is available. The currently tested window is Elixir 1.19 and 1.20;
-adding 1.21 to `ci/runtime-matrix.json` will add the third local and CI lane.
+Performance baselines live in
+[scripts/performance-regression.exs](scripts/performance-regression.exs). Checks
+allow up to 5% growth in median reductions and measured PDF size, with separate
+timing limits. Fix unintended slowdowns. Change a baseline only for an intentional
+workload change or a justified tradeoff, and include measurements and the reason
+in the PR.
 
-- Generate documentation locally:
-  - `mise exec -- mix docs`
+### Quick checks
 
-## Manual testing app
+These give feedback on your installed runtime while you work:
 
-The local app under `dev/manual_web` provides browser forms for rendering HTML,
-merging, transforming and splitting PDFs, adding stamps, watermarks, page
-numbers and PDF overlays, inspecting and updating outlines, extracting text,
-inspecting and updating document information, filling and flattening forms,
-embedding and listing attachments, converting uploaded or pasted SVG to PNG,
-and tokenizing PDF syntax. It
-also publishes its OpenAPI document at
-`http://127.0.0.1:4001/openapi.json`.
+| Task | Command |
+| --- | --- |
+| Test one area | `mix test test/html_to_pdf/layout_test.exs` |
+| Check formatting | `mix format --check-formatted` |
+| Check coverage | `mix test --cover --warnings-as-errors` |
+| Check performance | `mix test.performance` |
+| Run Dialyzer | `MIX_ENV=test mix dialyzer` |
+| Build documentation | `mix docs` |
 
-Run it from its own Mix project:
+For visible rendering changes, add a Chromium parity fixture and run:
+
+```bash
+CHROMIUM_BIN=/usr/bin/chromium mix test.browser_parity --warnings-as-errors
+```
+
+Adjust the Chromium path for your host. Local comparisons need Chromium,
+Poppler, and matching fonts. The matrix supplies these tools, DejaVu, and
+Liberation. If a comparison differs, check the fonts embedded in both PDFs.
+On Linux, `fc-match` shows the native Fontconfig aliases.
+
+## Make a change
+
+Keep the change focused. Add regression tests for behavior changes and update
+the relevant user guide. Use synthetic data in document fixtures.
+
+Follow the [project conventions](AGENTS.md):
+
+- Give public functions `@doc` and `@spec`; document public web endpoints in OpenAPI.
+- Keep input, option, and document validation in the appropriate validator.
+  Consumers should use its validated result rather than repeat the checks.
+- Return recoverable failures through shared [diagnostics](docs/diagnostics.md).
+  Build errors with `Diagnostics` and test their actionable fields.
+- Put tunable resource limits in `NativeElixirPdfUtilities.Limits`.
+- Reuse existing helpers. Extract private functions when they remove duplication
+  or clarify complex behavior, and prefer explicit `case`, `cond`, or `with`
+  branching.
+
+Renderer changes need focused parser, style, layout, pagination, or PDF writer
+coverage. Add browser parity fixtures when the change affects visible output.
+Review and understand everything you submit, including code produced with AI tools.
+
+## Try the manual app
+
+[dev/manual_web](dev/manual_web) provides browser helpers for the main rendering
+and PDF editing workflows, SVG conversion, and tokenizer inspection. Run it from
+its own Mix project:
 
 ```bash
 cd dev/manual_web
@@ -120,114 +130,28 @@ mix deps.get
 mix run --no-halt
 ```
 
-Open `http://127.0.0.1:4001` after the server starts. This app is development
-tooling and is not included in the Hex package.
+Open [the app](http://127.0.0.1:4001) or its
+[OpenAPI document](http://127.0.0.1:4001/openapi.json). Use synthetic files from
+[test/fixtures](test/fixtures) to try operations.
 
-## Pull Request Guidelines
+The helpers expose common options. Use IEx or focused tests for low-level PDF
+object inspection and renderer options such as custom fonts, asset callbacks,
+and page headers or footers. The app is development tooling and is not included
+in the Hex package.
 
-- Keep PRs focused and small where possible.
-- Include a clear description of what changed and why.
-- Add or update tests for behavior changes.
-- For new HTML-to-PDF renderer features, include focused coverage in the
-  relevant parser/style/layout/pagination/PDF tests and add or update browser
-  parity fixtures when the feature affects visible rendering.
-- Update `README.md` when public behavior, options, or examples change.
-- Complete the applicable local checks before opening a PR, and complete the
-  full local matrix before the change is marked ready. All required GitHub
-  Actions jobs must also pass before the PR can be accepted.
+## Open a pull request
 
-## Versioning Guidelines
+Commit the change on your branch and push it to your fork. Open a pull request
+against this repository's `main` branch.
 
-This project uses SemVer-style versioning to describe the public API promise:
+Explain the problem, resulting behavior, and checks you ran. Link any related
+issue and report known warnings or checks you could not run. Address review
+feedback and rerun the affected checks after changes.
 
-- `1.0.0` is the first stable release. It means the public API is defined and
-  should not be broken casually.
-- `1.1.0` is a backwards-compatible minor release. Use this for new features,
-  new options, new modules, or behavior improvements that do not break existing
-  callers.
-- `1.1.1` is a patch release. Use this for bug fixes, documentation fixes, and
-  small internal corrections that preserve public behavior.
-- `2.0.0` is a major release. After `1.0.0`, use this when changing, removing,
-  renaming, or moving public API in a way that can break existing users.
+The maintainer decides when to create a release.
 
-While the package is still `0.x`, breaking public API changes should bump the
-minor version, such as `0.4.0` to `0.5.0`, and must be documented clearly in the
-changelog.
+## Report an issue
 
-Examples of breaking public API changes include:
-
-- renaming a public function or module
-- changing return values, such as `{:ok, pdf_binary}` to
-  `{:ok, %{pdf: pdf_binary, diagnostics: diagnostics}}`
-- changing option names or option shapes
-- removing a public function
-- changing documented behavior in a way that can break caller code
-
-Before proposing `1.0.0`, make sure the main modules, function names, return
-values, options, diagnostics, supported HTML/CSS behavior, and documented
-examples are stable enough to support as the public API.
-
-## Coding Guidelines
-
-- Follow existing Elixir patterns in `lib/` and tests in `test/`.
-- Public-facing functions must include `@doc` and `@spec`.
-- Prefer `case`, `cond`, `with`, or clearly named private helpers over hidden branching through guarded function heads.
-- Only extract a `defp` when it reduces real duplication, simplifies genuinely complex code, or names a non-obvious rule.
-- Prefer inline code when a private function is used only once and does not make the caller easier to understand.
-- Do not duplicate shared helpers for common concerns already handled elsewhere.
-- Define every tunable resource or complexity limit in
-  `NativeElixirPdfUtilities.Limits`. Keep format- or protocol-mandated bounds
-  fixed and clearly identify them as non-configurable invariants when they
-  could be mistaken for resource limits, such as the maximum PDF CID value of
-  65,535.
-
-## Diagnostic Error Guidelines
-
-Public APIs should return recoverable failures as `{:error, {reason, diagnostic}}`
-when the library knows why an operation cannot continue. Use
-`NativeElixirPdfUtilities.Diagnostics` to build these diagnostics.
-
-Diagnostic maps must include:
-
-- `:stage` - the pipeline or utility stage that failed
-- `:reason` - the machine-readable reason atom
-- `:message` - a human-readable explanation suitable for developer debugging
-
-Include these fields when available:
-
-- `:operation` - the public operation or file operation being performed
-- `:module` - the public module returning the error
-- `:source` - the relevant path, source snippet, or caller-provided input label
-- `:line` and `:column` - source location details for parser-style failures
-
-Do not raise for ordinary invalid caller input, missing files, unsupported
-documents, unsupported HTML/CSS, or empty extraction results. Prefer diagnostic
-error tuples and add focused tests that assert the important fields.
-
-Example:
-
-```elixir
-{:error,
- {:invalid_path,
-  %{
-    stage: :file,
-    reason: :invalid_path,
-    message: "path must be a string",
-    operation: :extract_file,
-    module: NativeElixirPdfUtilities.Text
-  }}}
-```
-
-## AI-Assisted Development
-
-AI tools such as OpenAI Codex may be used to assist with development, testing, documentation, and debugging.
-
-Contributors are responsible for understanding, reviewing, and validating any AI-assisted code before submitting it.
-
-## Reporting Issues
-
-Use GitHub Issues for bugs and feature requests:
-
-- https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/issues
-
-For security issues, see [SECURITY.md](SECURITY.md).
+Open a [GitHub issue](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/issues)
+with the library version, a small reproduction using synthetic data, expected
+behavior, and any diagnostics. See [SECURITY.md](SECURITY.md) for security reports.
