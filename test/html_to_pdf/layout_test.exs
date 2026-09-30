@@ -315,6 +315,79 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     end
   end
 
+  test "flex stretch preserves explicit image dimensions in rows and columns" do
+    image = "data:image/png;base64,#{Base.encode64(png_fixture())}"
+
+    for direction <- ["row", "row-reverse", "column", "column-reverse"] do
+      html = """
+      <div style="display:flex;flex-direction:#{direction};width:100pt;height:80pt;align-items:stretch">
+        <img src="#{image}" style="flex:0 0 auto;width:20pt;height:10pt;margin:3pt">
+      </div>
+      """
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, margin: 0)
+      [image_box] = Enum.filter(layout.boxes, &(&1.type == :image))
+
+      assert_in_delta image_box.width, 20, 0.001
+      assert_in_delta image_box.height, 10, 0.001
+    end
+  end
+
+  test "flex stretch preserves explicit dimensions for text and nested blocks" do
+    for direction <- ["row", "column"],
+        content <- ["Fixed", "<div>Nested</div>"],
+        {sizing, expected_width, expected_height} <- [
+          {"width:20pt;height:10pt", 20, 10},
+          {"width:20pt;height:10pt;padding:2pt;box-sizing:border-box", 20, 10},
+          {"width:20pt;height:10pt;min-width:30pt;min-height:15pt", 30, 15}
+        ] do
+      html = """
+      <div style="display:flex;flex-direction:#{direction};width:100pt;height:80pt;align-items:stretch">
+        <div style="flex:0 0 auto;background:red;#{sizing}">#{content}</div>
+      </div>
+      """
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, margin: 0)
+      [box] = Enum.filter(layout.boxes, &(&1.type == :rect))
+
+      assert_in_delta box.width, expected_width, 0.001
+      assert_in_delta box.height, expected_height, 0.001
+    end
+  end
+
+  test "flex stretch still expands images with automatic cross dimensions" do
+    image = "data:image/png;base64,#{Base.encode64(png_fixture())}"
+
+    for {direction, main_size, expected_width, expected_height} <- [
+          {"row", "width:20pt", 20, 80},
+          {"column", "height:10pt", 100, 10}
+        ],
+        margin <- [0, 3] do
+      html = """
+      <div style="display:flex;flex-direction:#{direction};width:100pt;height:80pt;align-items:stretch">
+        <img src="#{image}" style="flex:0 0 auto;#{main_size};margin:#{margin}pt">
+      </div>
+      """
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, margin: 0)
+      [image_box] = Enum.filter(layout.boxes, &(&1.type == :image))
+
+      assert_in_delta image_box.width,
+                      expected_width - if(direction == "column", do: 2 * margin, else: 0),
+                      0.001
+
+      assert_in_delta image_box.height,
+                      expected_height - if(direction == "row", do: 2 * margin, else: 0),
+                      0.001
+    end
+  end
+
   test "empty flex containers retain specified and constrained height" do
     for child <- ["", "<span style='display:none'>Hidden</span>"],
         {sizing, expected} <- [

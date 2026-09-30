@@ -52,6 +52,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
     assert_layout_text(layout_tree, "PO Number: PO-TEST-000421")
   end
 
+  test "renders compact stock stickers with square QR images on separate pages" do
+    html = fixture_html("stock_sticker_compact.html")
+    opts = [page_size: {5 / 2.54, 3 / 2.54}, margin: 0]
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, opts)
+    assert_valid_pdf(pdf)
+    assert pdf_page_count(pdf) == 2
+
+    assert {:ok, layout} = layout_fixture(html, opts)
+    images = Enum.filter(layout.boxes, &(&1.type == :image))
+    assert length(images) == 2
+
+    for image <- images do
+      assert_in_delta image.width, 14.5 * 72 / 25.4, 0.0001
+      assert_in_delta image.height, 14.5 * 72 / 25.4, 0.0001
+    end
+
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+    [first, second] = String.split(text, "\f")
+    assert first =~ "MAT-001"
+    assert first =~ "BATCH101"
+    assert second =~ "MAT-002"
+    assert second =~ "BATCH101"
+  end
+
   test "renders synthetic material requisition fixture with page break" do
     html = fixture_html("material_requisition.html")
 

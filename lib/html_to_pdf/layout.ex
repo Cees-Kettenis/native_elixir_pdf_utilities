@@ -2763,17 +2763,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp flex_aligned_cross_box(item, align, line_cross, main_axis) do
-    case {align, main_axis} do
-      {:stretch, :row} ->
-        max(line_cross - item.margin.top - item.margin.bottom, 0.0)
+    cross_property =
+      case main_axis do
+        :row -> :height
+        :column -> :width
+      end
 
-      {:stretch, :column} ->
-        max(line_cross - item.margin.left - item.margin.right, 0.0)
+    # Flex stretch applies only when the computed cross size is auto.
+    case {align, Map.get(item.style, cross_property)} do
+      {:stretch, auto} when auto in [nil, :auto] ->
+        max(line_cross - flex_cross_margin_size(item.margin, main_axis), 0.0)
 
-      {_align, :row} ->
-        item.cross_box
-
-      {_align, :column} ->
+      _ ->
         item.cross_box
     end
   end

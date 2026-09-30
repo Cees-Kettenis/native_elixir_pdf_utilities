@@ -23,6 +23,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   """
 
   @fixture_thresholds [
+    {"flex_explicit_cross_sizes.html", max_changed_ratio: 0.01, max_average_delta: 0.03},
     {"leading_decimal_lengths.html", max_changed_ratio: 0.01, max_average_delta: 0.035},
     {"whitespace_nowrap.html", max_changed_ratio: 0.01, max_average_delta: 0.035},
     {"body_padding_background.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
@@ -119,6 +120,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   ]
 
   @real_document_fixture_thresholds [
+    {"stock_sticker_compact.html",
+     render_opts: [page_size: {5 / 2.54, 3 / 2.54}, margin: 0],
+     chromium_page_size: {5 / 2.54, 3 / 2.54},
+     max_changed_ratio: 0.01,
+     max_average_delta: 0.05},
     {"government_application_form.html",
      render_opts: [page_size: :a4],
      chromium_page_size: :a4,
@@ -196,6 +202,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
              "purchase_order.html",
              "statement_012.html",
              "stock_sticker.html",
+             "stock_sticker_compact.html",
              "trim_card.html"
            ]
   end
