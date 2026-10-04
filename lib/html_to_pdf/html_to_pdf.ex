@@ -55,7 +55,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
             }
   @type page_furniture_template :: String.t() | false | nil
   @type page_furniture_variants ::
-          String.t()
+          page_furniture_template()
           | [
               default: page_furniture_template(),
               first: page_furniture_template(),
@@ -112,15 +112,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           :invalid_document
           | :invalid_css
           | :invalid_encoding
+          | :invalid_form
           | :invalid_html
           | :invalid_layout
           | :invalid_margin
           | :invalid_options
+          | :invalid_outlines
           | :invalid_page_size
           | :invalid_path
           | :invalid_pdf_input
           | :not_implemented
           | :resource_limit_exceeded
+          | :unsupported_form
           | :unsupported_glyph
           | :unsupported_html
           | File.posix()

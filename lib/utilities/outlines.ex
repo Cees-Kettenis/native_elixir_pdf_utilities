@@ -37,6 +37,7 @@ defmodule NativeElixirPdfUtilities.Outlines do
           | :no_outline_source
           | :resource_limit_exceeded
           | :unsupported_pdf_feature
+          | :unsupported_text_encoding
 
   @doc """
   Returns the active PDF outline as a normalized nested list.

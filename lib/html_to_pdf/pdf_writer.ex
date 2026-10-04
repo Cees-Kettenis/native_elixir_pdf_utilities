@@ -25,7 +25,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   @type page :: NativeElixirPdfUtilities.HtmlToPdf.Pagination.page()
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
   @type error_reason ::
-          :invalid_document | :invalid_pdf_input | :invalid_options | :resource_limit_exceeded
+          :invalid_document
+          | :invalid_form
+          | :invalid_options
+          | :invalid_outlines
+          | :invalid_pdf_input
+          | :resource_limit_exceeded
+          | :unsupported_form
 
   @doc """
   Renders paginated drawing instructions to a PDF binary.
