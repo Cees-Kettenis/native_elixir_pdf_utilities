@@ -12,7 +12,7 @@ Native Elixir PDF Utilities brings HTML-to-PDF rendering and PDF editing directl
 into your Elixir application, without a browser or external PDF command-line
 tools. It can replace Chromium-based rendering for templates using the
 [supported HTML/CSS features](docs/html-to-pdf-compatibility.md). With matched
-fonts and page settings, the current development build achieves **less than 1%
+fonts and page settings, version 1.0.0 achieves **less than 1%
 changed pixels on every compared page** across 71 Chromium parity fixtures and
 85 pages, including invoices, forms, purchase orders, labels, and multi-page reports.
 
@@ -46,7 +46,7 @@ See the [documentation](https://github.com/Cees-Kettenis/native_elixir_pdf_utili
 ```elixir
 def deps do
   [
-    {:native_elixir_pdf_utilities, "~> 0.21.0"}
+    {:native_elixir_pdf_utilities, "~> 1.0"}
   ]
 end
 ```

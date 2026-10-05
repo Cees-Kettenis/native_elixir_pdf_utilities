@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.0.0 - 2026-10-05
+
+First stable release. The documented public API and supported workflows are
+covered by the version 1.x compatibility promise, including documented rendering
+pipeline interfaces and intermediate fields used in the examples. Intentional
+breaking changes require a new major version.
+
+This release introduces no breaking API changes from v0.21.0.
+
+### Fixed
+
+- Preserved explicit heights in flex rows and explicit widths in flex columns
+  when alignment is `stretch`. Images and other explicitly sized items now
+  retain their dimensions, matching Chromium. Items with automatic dimensions
+  continue to stretch. Added layout regression tests and Chromium comparisons,
+  including compact stock labels with square QR images.
+- Corrected public typespecs to include existing form, outline, and text-encoding
+  errors, and `false` or `nil` header/footer templates. Runtime return values
+  and accepted options are unchanged.
+
+### Documentation
+
+- Expanded the HTML-to-PDF guide with complete, runnable examples for simple
+  documents, tables, flex and grid layouts, multiple pages, labels, images,
+  fonts, metadata, bookmarks, and forms. Examples include downloadable HTML,
+  generated PDFs, and previews, with a script to regenerate the outputs.
+- Added a purchase-order example with a measured repeating header, automatic
+  row heights, and page breaks.
+- Simplified the contribution guide around local development and GitHub pull
+  requests, and replaced the release-candidate roadmap with planned 1.x milestones.
+- Clarified the compatibility promise for documented rendering pipeline interfaces
+  and updated browser parity coverage documentation.
+
 ## 0.21.0 - 2026-09-29
 
 ### Performance
