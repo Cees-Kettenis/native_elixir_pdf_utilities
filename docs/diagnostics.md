@@ -89,9 +89,10 @@ edit or inspection does not certify a document as sanitized for a PDF viewer.
 
 `Pdf.Reader` exposes validated PDF objects and reference resolution. The HTML
 parser, CSS parser, style, layout, pagination, font and PDF-writer modules expose
-pipeline stages. Their intermediate maps are advanced interfaces and may change
-before the public API is frozen. Prefer values returned by the preceding stage
-over constructing those maps yourself.
+pipeline stages. These documented interfaces, including the intermediate fields
+used in the examples, are covered by the version 1.x compatibility promise.
+Breaking changes require a new major version. Prefer values returned by the
+preceding stage over constructing those maps yourself.
 
 `PdfWriter.render/2` validates its page and drawing models, including every font
 field it consumes. Embedded font metrics must fit the TrueType integer fields,
