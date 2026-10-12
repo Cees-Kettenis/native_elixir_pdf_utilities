@@ -126,3 +126,23 @@ returns a resource diagnostic instead of raising an arithmetic exception.
 Single-glyph validation matches one UTF-8 scalar directly, so rejecting long
 multi-scalar input does not allocate a full character list. Existing font tests
 cover both cases; these checks do not complete equation composition.
+
+## Bounded radical composition
+
+`msqrt` and `mroot` now prepare selected-font constants, measure radicands and
+degrees, select surd glyphs and place the overbar through the shared native math
+layout. Validators own measured transport, numeric bounds and font work limits.
+Native text and links retain their original ownership.
+
+The four pure radical trees in the fixed fixture use a reviewed source-derived
+CSS artwork comparison. The original direct Chromium comparison failed and is
+retained separately. The linked root stays an unchanged MathML tree. The generator
+and independent verifier are retained in `test/fixtures/mathml_radical_reference`
+with the pinned font derivative, source records and complete license. Independent
+agreement does not settle the dated indexed-root line/baseline and degree-offset
+ambiguities or assembly endpoint wording. This is bounded implementation evidence,
+not full Core conformance, direct interior parity or accessibility output.
+
+Scripts, limits, accents, remaining schemata and broader combined contexts remain
+required. Source-preview traversal leaves MathML font contexts unresolved rather
+than loading a font or inventing selected MATH metrics.

@@ -4,6 +4,14 @@ Prepared on 2026-10-12 from the previous agent's handoff and seven independent a
 
 Work began from verified batch55, preserving the previous agent's unfinished batch56. Seven combined waves have passed their required gates and are copied into the original checkout. The latest verified integration is `e9074a1d71ca4b67d162934c9d6eaeb24094b72e`. Both supported runtimes passed 1,862 unit tests at 100% every-module and total coverage and 173 parity tests; performance, Dialyzer and exact host parity also passed. The latest wave includes bounded inline SVG, iframe scrollbar and media geometry, measured HTML-child composition, MathML fractions, and parser prerequisites. Subsequent lane checkpoints remain queued. The full milestone and final cumulative idle timing audit are unfinished.
 
+The eighth source batch combines validated CSS declaration/cascade ownership,
+limited original source-context traversal and bounded MathML radicals. It keeps
+all source-policy, resource, template replacement and dated-Core limitations
+explicit. The select/listbox and authored CSS provenance checkpoints are queued
+for a subsequent integration. New producer work is not imported while a combined
+candidate is frozen. Each source batch needs both supported matrices, exact host
+parity and source/performance hash checks before publication.
+
 ## Checkpoint estimate
 
 The initial estimate is **47 remaining checkpoints: 45 feature batches and two final audits**. These are proposed scopes, not a promise that every large batch fits one agent turn. Split a batch when its changes cannot be reviewed or validated together. Merge related scopes when that improves implementation and verification. Assign accepted batch numbers centrally after integration; lane labels below avoid numbering collisions.

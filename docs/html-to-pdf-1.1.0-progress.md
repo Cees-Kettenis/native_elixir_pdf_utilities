@@ -11,6 +11,36 @@ waves now pass the required gates. The latest copied integration is
 acceptance evidence and remaining scope. Later lane work is still being combined;
 the milestone remains unfinished.
 
+## Combined integration checkpoint 8 source
+
+This source batch moves declaration and contextual cascade policy into
+`CssValueValidator`. Style consumes the validated result and selects fonts at its
+existing execution points. Custom properties, root font size, current color and
+font-relative fieldset defaults use the same authority. Existing gauge appearance,
+accent colors, length-based vertical alignment, SVG presentation and MathML style
+rules are retained.
+
+The internal source-context traversal visits original head, hidden and disclosure
+nodes without reading fonts, images or files. It reports detached template scopes
+and MathML contexts requiring selected font metrics as unresolved. It retains
+original CSS and explicit source/runtime obligations. This produces neither a
+complete stylesheet certificate nor permission to remove source. Template
+replacement remains unsupported.
+
+Actual `msqrt` and `mroot` layout now uses selected MATH constants and glyphs,
+radicand and degree metrics, clearances and overbars. The fixed four-tree radical
+comparison uses a reviewed source-derived CSS reference; its original direct
+Chromium disagreement remains a failure. The linked root keeps its original
+MathML tree. Independent generation and verification use the pinned original
+font and dated Core source, with complete font licensing retained. The dated
+indexed-root equations and assembly wording still have unresolved ambiguities.
+This does not establish direct interior parity or full MathML conformance.
+
+Both supported-runtime matrices, exact host parity, committed source hashes and
+unchanged performance guardrails are required before this source batch is
+published. The coordinator retains the immutable gate and copy manifests.
+The full milestone and cumulative fixed-baseline idle timing audit remain open.
+
 ## Combined integration checkpoint 7
 
 This checkpoint adds native PDF Form artwork for the supported inline SVG shape
