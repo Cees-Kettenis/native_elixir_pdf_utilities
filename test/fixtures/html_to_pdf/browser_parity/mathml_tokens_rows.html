@@ -1,0 +1,20 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page {size:360pt 240pt;margin:0}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:12pt;line-height:18pt}
+body {padding:12pt}
+p {margin:0 0 8pt}
+math {font-family:"STIX Two Math"}
+</style></head><body>
+<!-- Core 2025-06-24 uses MATH italic correction for scalar slanted tokens.
+Chromium 152 omits it after math-auto; the test's browser-only reference adds
+source-derived margins to marked mi elements. All content still uses MathML.
+The reference checks row transitions before adding each margin.
+The unmodified direct comparison is preserved in lane evidence. -->
+<p>Small <math style="font-size:12pt"><mi data-core-reference="x">x</mi><mn>123</mn><mspace width="0.5em"/><mtext>units</mtext><mi/></math> end.</p>
+<p>Medium <math style="font-size:20pt"><mrow><mi data-core-reference="y">y</mi><mn>42</mn><ms mathbackground="yellow">word</ms><mtext>&nbsp;OK</mtext></mrow></math> end.</p>
+<p>Large <math style="font-size:30pt"><mi data-core-reference="z">z</mi><mi>α</mi><mi>exp</mi><mn>8</mn></math> end.</p>
+<math display="block" style="font-size:20pt"><mrow><mi mathvariant="normal">a</mi><mspace width="1em" height="3pt" depth="2pt"/><mn>19</mn><ms lquote="[" rquote="]">plain</ms></mrow></math>
+<p>Styled <math mathcolor="blue" style="font-size:16pt"><mtext> a <span style="color:red">b</span> c </mtext><mrow><mi style="text-transform:none">q</mi></mrow></math> end.</p>
+<p>After equations.</p>
+</body></html>

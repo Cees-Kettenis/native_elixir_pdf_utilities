@@ -1,0 +1,24 @@
+<!doctype html><html><head><style>
+@page {size:300pt 330pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt;}
+body {padding:12pt;}
+details {margin:0 0 6pt;}
+p {margin:0;}
+summary {color:#174c70;}
+details[open]>summary {color:#963b20;}
+.plain>summary {list-style:none;}
+.square>summary {list-style:inside square;}
+.block>summary {display:block;}
+</style></head><body>
+<details><summary>Closed legend</summary><p>Hidden closed prose</p></details>
+<details open=false><summary>Open by boolean presence</summary><p>Visible open prose</p></details>
+<details></details>
+<details open><p>Fallback body</p></details>
+<details open><summary>Outer legend</summary><details><summary>Inner closed legend</summary>Hidden nested prose</details><details open><summary>Inner open legend</summary><p>Nested visible prose</p></details></details>
+<details name=group><summary>Grouped closed legend</summary>Hidden grouped prose</details>
+<details name=group open><summary>Grouped open legend</summary><p>Grouped visible prose</p></details>
+<details class=plain><summary>No marker legend</summary>Hidden plain prose</details>
+<details class=square open><summary>Square marker legend</summary><p>Square body</p></details>
+<details class=block><summary>Block legend</summary>Hidden block prose</details>
+<p>After disclosures</p>
+</body></html>

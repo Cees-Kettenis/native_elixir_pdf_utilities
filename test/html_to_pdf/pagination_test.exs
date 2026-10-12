@@ -7,6 +7,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
+  test "empty inline lines retain their height at automatic page boundaries" do
+    for {content, height} <- [
+          {"<br>", 12},
+          {"<br><br>", 24},
+          {"<wbr><wbr>", 12},
+          {"<span style='white-space:pre'>\n</span>", 12},
+          {"", 0}
+        ] do
+      html =
+        "<div style='font-size:10pt;line-height:12pt'>" <>
+          "<div style='height:96pt'>First</div><p style='margin:0'>" <>
+          content <> "</p><p style='margin:0'>After</p></div>"
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, tree} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(tree, page_size: {200, 96}, margin: 0)
+      assert {:ok, [first, second]} = Pagination.paginate(layout)
+      assert Enum.map_join(first.boxes, &Map.get(&1, :text, "")) == "First"
+      assert Enum.map_join(second.boxes, &Map.get(&1, :text, "")) == "After"
+      after_line = Enum.find(second.boxes, &(Map.get(&1, :text) == "After"))
+      assert_in_delta after_line.y + after_line.line_baseline_depth, 96 - height, 0.01
+      markers = Enum.filter(second.boxes, &(&1.type == :flow_marker))
+      assert Enum.map(markers, & &1.y) |> Enum.uniq() |> length() == div(height, 12)
+      assert Enum.all?(markers, &(&1.width == 0 and &1.height == 12))
+    end
+  end
+
+  test "forced page starts preserve child heading margins after a zero-height break marker" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout}
+
+    html =
+      "<div>First</div><div style='break-before:page'><hgroup><h2>Second</h2><p>Subtitle</p></hgroup></div>"
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled} = Style.compute(dom, system_font_discovery: false)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 200}, margin: 0)
+    assert {:ok, [_, page]} = Pagination.paginate(layout, [])
+    heading = Enum.find(page.boxes, &(Map.get(&1, :text) == "Second"))
+    assert_in_delta 200 - (heading.y + heading.line_baseline_depth), 18 * 0.83, 0.01
+  end
+
   test "body backgrounds cover every page while zero-margin padding positions content" do
     html = """
     <html><head><style>

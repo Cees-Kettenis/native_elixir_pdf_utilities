@@ -4,6 +4,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallbackTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback
 
+  test "list markers receive font coverage and fallback without changing content" do
+    style = text_style()
+    marker = %{type: :text, text: "◦", style: style}
+
+    tree = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "li",
+          style: Map.put(style, :_list_marker, [marker]),
+          children: [%{type: :text, text: "Item", style: style}]
+        }
+      ]
+    }
+
+    assert {:ok, %{children: [item]}} = FontFallback.resolve(tree, :error)
+    assert [%{text: "◦", style: %{font_family: "DejaVu Sans"}}] = item.style._list_marker
+    assert [%{text: "Item", style: %{font_family: "Helvetica"}}] = item.children
+    invalid = put_in(tree, [:children, Access.at(0), :style, :_list_marker], :invalid)
+
+    assert {:error, {:invalid_document, %{stage: :font, message: message}}} =
+             FontFallback.resolve(invalid)
+
+    assert message =~ "list markers"
+  end
+
   test "candidate reuse respects selected faces, registry changes and nested text" do
     assert {:ok, first_registry} =
              Font.load_registry(fonts: [%{family: "First Provided", path: bundled_font_path()}])

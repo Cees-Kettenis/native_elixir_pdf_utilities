@@ -1,0 +1,20 @@
+<!doctype html>
+<html><head><style>
+@page {size: 264pt 300pt; margin:12pt}
+html,body {margin:0;padding:0}
+body {font-family:"DejaVu Sans";font-size:10pt;line-height:14pt;color:#8b1a1a}
+p {margin:0 0 8pt}
+.narrow {width:120pt}
+.override a {color:#006400;text-decoration:none}
+</style></head><body>
+<p><a>Placeholder inherits</a> Ordinary</p>
+<p><a href="https://example.com">Unvisited HTTPS <strong>Bold</strong></a></p>
+<p><a href="http://example.com">Unvisited HTTP</a></p>
+<p><a href="mailto:test@example.com">Unvisited mail</a></p>
+<p class="narrow"><a href="https://example.com/wrapped">Wrapped anchor keeps underline through several lines</a></p>
+<p><a inert href="https://example.com/held">Inert link visible</a></p>
+<p><a href="https://example.com/split">Active <span inert>held</span> active</a></p>
+<p class="override"><a href="https://example.com/custom">Authored appearance</a></p>
+<p hidden><a href="https://example.com/hidden">Hidden link</a></p>
+<p><a></a>Empty placeholder preserves spacing</p>
+</body></html>

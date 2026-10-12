@@ -1,0 +1,42 @@
+<!doctype html><html><head><style>
+@page{size:264pt 300pt;margin:12pt}html,body{margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:12pt}
+p{width:40pt;border:.75pt solid #777;margin:0 0 6pt}.label{display:block} .nowrap{white-space:nowrap} .sibling > strong:nth-child(2){color:#8b1a1a}
+.pseudo::before{content:"Before"}.pseudo::after{content:"After"}.result::before{content:counter(item)}
+.row{display:flex;gap:6pt;margin:6pt 0}.grid{display:grid;grid-template-columns:40pt 40pt;gap:6pt;margin:6pt 0}.row span,.grid span{background:#ddd;width:40pt}
+.soft-table{width:120pt;border-collapse:collapse;margin:6pt 0}.soft-table td{padding:0;border:.75pt solid #777}.soft-table td:last-child{width:75%}
+</style></head><body>
+<div class=label>Empty</div><p><wbr></p>
+<div class=label>Consecutive</div><p><wbr><wbr></p>
+<div class=label>Large empty</div><p><wbr style='font-size:30pt;line-height:36pt;background:red;padding:5pt;border:2pt solid blue'></p>
+<div class=label>Leading</div><p><wbr>ABCDEFGHI</p>
+<div class=label>Trailing</div><p>ABCDEFGHI<wbr></p>
+<div class=label>Ordinary</div><p>ABC<wbr>DEF<wbr>GHI</p>
+<div class=label>No wrap ancestor</div><p class=nowrap>ABC<wbr>DEF<wbr>GHI</p>
+<div class=label>No wrap marker</div><p>ABC<wbr style='white-space:nowrap'>DEF<wbr>GHI</p>
+<div class=label>Legacy no wrap</div><p><nobr>ABC<wbr>DEF<wbr>GHI</nobr></p>
+<div class=label>Legacy text</div><p><nobr>ABC DEF GHI</nobr></p>
+<div class=label>Block marker</div><p>ABC<wbr style='display:block;width:20pt;height:24pt;background:red'>DEF<wbr>GHI</p>
+<div class=label>Atomic marker</div><p>ABC<wbr style='display:inline-block;width:20pt;height:24pt;background:red'>DEF<wbr>GHI</p>
+<div class=label>Hidden marker</div><p>ABC<wbr hidden>DEF<wbr style='display:none'>GHI</p>
+<div class=label>Absolute marker</div><p>ABC<wbr style='position:absolute;left:100pt'>DEF<wbr>GHI</p>
+<div class=label>Pre marker</div><p style='white-space:pre'>ABC<wbr>DEF<wbr>GHI</p><div class=label>Forced normal marker</div><p style='white-space:nowrap'>ABC<wbr style='white-space:normal'>DEF GHI</p><div class=label>Inherited metrics</div><p><span style='font-size:24pt;line-height:30pt'><wbr></span></p>
+<div class=label>Decorated link</div><p><a href='https://example.com'>ABC<wbr><strong>DEF</strong><wbr>GHI</a></p>
+<div class=label>Inert artwork</div><p><a inert href='https://example.com/held'>ABC<wbr><strong>DEF</strong><wbr>GHI</a></p>
+<div class=label>Real sibling</div><p class=sibling>ABC<wbr><strong>DEF</strong><wbr>GHI</p>
+<div class=label>Pseudo content</div><p>A<wbr class=pseudo>B</p>
+<div class=label>Flex item</div><div class=row><span>First</span><wbr><span>Second</span></div>
+<div class=label>Grid item</div><div class=grid><span>First</span><wbr><span>Second</span></div>
+<div class=label>Counter</div><div style='counter-reset:item'><wbr style='counter-increment:item'><span class=result>Counter</span></div>
+<div class=label>Styled table</div><table class=soft-table><tr><td>ABC<span style='color:red'>DEF</span>GHIJKLMNO</td><td>Other</td></tr></table>
+<div class=label>Soft table</div><table class=soft-table><tr><td>ABC<wbr><span style='color:red'>DEF</span><wbr>GHIJKLMNO</td><td>Other</td></tr></table>
+<div class=label>Hyphen minima</div><table style='width:100pt;font-size:12pt;line-height:14.25pt'><tr><td style='width:80pt;padding:0;background:white'>UNBREAKABLE-COLUMN-ONE</td><td style='width:80pt;padding:0;background:white'>UNBREAKABLE-COLUMN-TWO</td></tr></table>
+<div class=label>Atomic minimum</div><table style='width:100pt;font-size:12pt;line-height:14.25pt'><caption style='background:#eee'>Expanded caption</caption><tr><td style='width:50%;padding:0;background:white'>Fixed</td><td style='padding:0;background:white'><span style='display:inline-block;width:200pt'>Auto</span></td></tr></table>
+<div class=label>Absolute preferences</div><table style='width:100pt;font-size:12pt;line-height:14.25pt;background:#ddd'><tr><td style='width:120pt;padding:0;border:none'>A</td><td style='width:80pt;padding:0;border:none'>B</td><td style='padding:0;border:none'>C</td></tr></table>
+<div class=label>Shared column constraint</div><table style='width:100pt;font-size:12pt;line-height:14.25pt'><tr><td style='width:30pt;padding:0;border:none'>D</td><td style='padding:0;border:none'>E</td></tr><tr><td style='width:50pt;padding:0;border:none'>F</td><td style='padding:0;border:none'>G</td></tr></table>
+<div class=label>Styled nowrap table</div><table class=soft-table style='width:100pt'><tr><td><nobr>ABC<span style='color:red'> DEF</span> GHI</nobr></td><td>Other</td></tr></table>
+<div class=label>Last</div>
+<div style='break-before:page;height:276pt'>Optional boundary</div>
+<p style='border:none;margin:0;width:auto'><wbr><wbr></p><div>After optional boundary</div>
+<div style='break-before:page;height:276pt'>Forced boundary</div>
+<p style='border:none;margin:0;width:auto'><br></p><div>After forced boundary</div>
+</body></html>

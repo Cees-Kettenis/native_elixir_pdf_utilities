@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head>
+<base target="_blank">
+<template><base href="https://inert.example/"></template>
+<base href="https://example.test/docs/">
+<base href="https://ignored.example/">
+<style>
+@page {size:264pt 240pt;margin:12pt}
+html,body {margin:0;padding:0}
+body {font-family:"DejaVu Sans";font-size:10pt;line-height:12pt;color:#111827}
+p {margin:0 0 6pt}
+.narrow {width:120pt}
+a[href="chapter.html"] {color:#006400}
+</style></head><body>
+<p>Base URL and relative anchors</p>
+<p><a href="chapter.html" rel="next" target="_self" hreflang="en" download="chapter">Chapter link</a></p>
+<p><a href="../index.html">Parent link</a></p>
+<p><a href="#target">Remote fragment link</a></p>
+<p><a href="//cdn.example.test/manual">Protocol relative link</a></p>
+<p class="narrow"><a href="wrapped.html">Wrapped relative anchor preserves every visible word across lines</a></p>
+<p style="break-before:page" id="target">Second page target content</p>
+<p><a href="?view=print">Query link</a></p>
+<p><a inert href="held.html">Inert anchor content</a></p>
+<p><a>No destination content</a></p>
+<p>End of base URL fixture</p>
+</body></html>

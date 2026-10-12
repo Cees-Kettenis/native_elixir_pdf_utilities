@@ -3,6 +3,94 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.MathFontValidator
+
+  @doc false
+  @spec prepare_x_height(term()) :: {:ok, number()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_x_height(font) do
+    with_budget(fn ->
+      case font do
+        %{type: :embedded, cmap: cmap, units_per_em: units}
+        when is_map(cmap) and is_integer(units) and units > 0 ->
+          with {:ok, bounds} <- prepare_glyph_bounds(font) do
+            glyph = Map.get(cmap, ?x, 0)
+
+            if is_integer(glyph) and glyph > 0 and glyph < tuple_size(bounds) do
+              {:ok, elem(elem(bounds, glyph), 3) / units}
+            else
+              Diagnostics.error(
+                :font,
+                :unsupported_glyph,
+                "selected font has no usable x-height glyph for ex units",
+                operation: :measure_math,
+                module: __MODULE__,
+                source: "x"
+              )
+            end
+          end
+
+        _ ->
+          MathFontValidator.failure(
+            "ex units need a selected embedded font and usable units",
+            "font metrics"
+          )
+      end
+    end)
+  end
+
+  @doc false
+  @spec prepare_math_kerning(map(), [{non_neg_integer(), non_neg_integer()}], String.t()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_math_kerning(font, pairs, script) do
+    with_budget(fn ->
+      case font do
+        %{type: :embedded, id: id, data: data, widths: widths}
+        when is_binary(data) and is_list(widths) ->
+          with :ok <- MathFontValidator.validate_pair_request(length(widths), pairs, script) do
+            reserve(:max_font_math_work, length(pairs))
+
+            fingerprint = :crypto.hash(:sha256, data)
+            reserve_source_fingerprint(fingerprint, byte_size(data))
+
+            result =
+              memo({:math_kerning, id, fingerprint, pairs, script}, fn ->
+                reserve_source(data)
+
+                result =
+                  with {:ok, tables} <- table_directory(data) do
+                    case Map.fetch(tables, "GPOS") do
+                      :error ->
+                        {:ok, Map.take(Map.get(font, :kerning, %{}), pairs)}
+
+                      {:ok, _} ->
+                        with {:ok, table} <- table(data, tables, "GPOS"),
+                             do:
+                               MathFontValidator.prepare_pair_adjustments(
+                                 table,
+                                 length(widths),
+                                 pairs,
+                                 script
+                               )
+                    end
+                  end
+
+                result
+              end)
+
+            case result do
+              :error ->
+                MathFontValidator.failure("invalid table directory or GPOS bounds", "GPOS")
+
+              result ->
+                result
+            end
+          end
+
+        _ ->
+          MathFontValidator.failure("pair adjustment requires a selected embedded font", "GPOS")
+      end
+    end)
+  end
 
   @doc false
   @spec with_budget((-> result)) :: result | {:error, {atom(), Diagnostics.diagnostic()}}
@@ -100,6 +188,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   @doc false
   @spec reserve_source(binary()) :: :ok
   def reserve_source(data) do
+    check(:max_font_source_bytes, byte_size(data))
     reserve_source_fingerprint(:crypto.hash(:sha256, data), byte_size(data))
   end
 
@@ -193,7 +282,9 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     evicted
   end
 
-  @type segment :: {non_neg_integer(), non_neg_integer(), integer(), binary() | nil}
+  @type segment ::
+          {non_neg_integer(), non_neg_integer(), integer(),
+           binary() | nil | {:sequential, non_neg_integer()}}
 
   @doc false
   @spec prepare_cmap(term()) ::
@@ -201,45 +292,62 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
           | :error
           | {:error, {:resource_limit_exceeded, Diagnostics.diagnostic()}}
   def prepare_cmap(cmap) do
+    # Glyph IDs are unsigned 16-bit values. This is a fixed OpenType bound.
+    prepare_cmap(cmap, 65_536)
+  end
+
+  @doc false
+  @spec prepare_cmap(term(), term()) ::
+          {:ok, [[segment()]]}
+          | :error
+          | {:error, {:resource_limit_exceeded, Diagnostics.diagnostic()}}
+  def prepare_cmap(cmap, glyph_count) do
     limit = Limits.get(:max_font_cmap_work)
 
-    case cmap do
-      <<_version::16, count::16, records::binary-size(count * 8), _rest::binary>>
-      when count > 0 and count <= limit ->
-        offsets =
-          for <<platform::16, encoding::16, offset::32 <- records>> do
-            priority =
-              cond do
-                platform == 3 and encoding == 10 -> 0
-                platform == 3 and encoding == 1 -> 1
-                platform == 0 -> 2
-                true -> 3
-              end
-
-            {priority, offset}
-          end
-          |> Enum.sort_by(&elem(&1, 0))
-          |> Enum.map(&elem(&1, 1))
-          |> Enum.uniq()
-
-        offsets
-        |> Enum.reduce_while({:ok, [], count}, fn offset, {:ok, subtables, work} ->
-          case prepare_subtable(cmap, offset, work, limit) do
-            {:ok, segments, work} -> {:cont, {:ok, [segments | subtables], work}}
-            {:skip, work} -> {:cont, {:ok, subtables, work}}
-            :limit -> {:halt, limit_error()}
-          end
-        end)
-        |> case do
-          {:ok, subtables, _work} -> {:ok, Enum.reverse(subtables)}
-          error -> error
-        end
-
-      <<_version::16, count::16, _rest::binary>> when count > limit ->
-        limit_error()
-
-      _ ->
+    case is_integer(glyph_count) and glyph_count > 0 and glyph_count <= 65_536 do
+      false ->
         :error
+
+      true ->
+        case cmap do
+          <<_version::16, count::16, records::binary-size(count * 8), _rest::binary>>
+          when count > 0 and count <= limit ->
+            offsets =
+              for <<platform::16, encoding::16, offset::32 <- records>> do
+                priority =
+                  cond do
+                    platform == 3 and encoding == 10 -> 0
+                    platform == 0 and encoding in [4, 6] -> 0
+                    platform == 3 and encoding == 1 -> 1
+                    platform == 0 -> 2
+                    true -> 3
+                  end
+
+                {priority, offset}
+              end
+              |> Enum.sort_by(&elem(&1, 0))
+              |> Enum.map(&elem(&1, 1))
+              |> Enum.uniq()
+
+            offsets
+            |> Enum.reduce_while({:ok, [], count}, fn offset, {:ok, subtables, work} ->
+              case prepare_subtable(cmap, offset, work, limit, glyph_count) do
+                {:ok, segments, work} -> {:cont, {:ok, [segments | subtables], work}}
+                {:skip, work} -> {:cont, {:ok, subtables, work}}
+                :limit -> {:halt, limit_error()}
+              end
+            end)
+            |> case do
+              {:ok, subtables, _work} -> {:ok, Enum.reverse(subtables)}
+              error -> error
+            end
+
+          <<_version::16, count::16, _rest::binary>> when count > limit ->
+            limit_error()
+
+          _ ->
+            :error
+        end
     end
   end
 
@@ -351,7 +459,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     )
   end
 
-  defp prepare_subtable(cmap, offset, work, limit) do
+  defp prepare_subtable(cmap, offset, work, limit, glyph_count) do
     case cmap do
       <<_prefix::binary-size(^offset), 4::16, length::16, _language::16, count_x2::16,
         _rest::binary>>
@@ -380,6 +488,40 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
 
           false ->
             :limit
+        end
+
+      <<_prefix::binary-size(^offset), 12::16, 0::16, length::32, 0::32, count::32,
+        _rest::binary>>
+      when length == 16 + count * 12 and offset + length <= byte_size(cmap) ->
+        work = work + count
+
+        if work > limit do
+          :limit
+        else
+          groups = binary_part(cmap, offset + 16, count * 12)
+
+          for(<<first::32, last::32, glyph::32 <- groups>>, do: {first, last, glyph})
+          |> Enum.reduce_while({:ok, [], -1, work}, fn {first, last, glyph},
+                                                       {:ok, prepared, previous_end, work} ->
+            work = work + max(last - first + 1, 0)
+
+            cond do
+              work > limit ->
+                {:halt, :limit}
+
+              first > last or first <= previous_end or last > 0x10FFFF or
+                (first <= 0xDFFF and last >= 0xD800) or
+                  glyph + last - first >= glyph_count ->
+                {:halt, {:skip, work}}
+
+              true ->
+                {:cont, {:ok, [{first, last, 0, {:sequential, glyph}} | prepared], last, work}}
+            end
+          end)
+          |> case do
+            {:ok, segments, _last, work} -> {:ok, Enum.reverse(segments), work}
+            result -> result
+          end
         end
 
       _ ->
@@ -421,6 +563,356 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     |> case do
       {:ok, prepared, _last, work} -> {:ok, Enum.reverse(prepared), work}
       failure -> failure
+    end
+  end
+
+  @doc false
+  @spec prepare_text_metrics(term()) :: {:ok, map()} | :error
+  def prepare_text_metrics(font) do
+    case font do
+      %{type: :embedded, id: id, data: data} when is_binary(data) ->
+        with_budget(fn ->
+          {cached_data, result} =
+            memo({:text_metrics, id}, fn -> {data, parse_text_metrics(data)} end)
+
+          if cached_data == data, do: result, else: parse_text_metrics(data)
+        end)
+
+      _ ->
+        :error
+    end
+  end
+
+  defp parse_text_metrics(data) do
+    with {:ok, tables} <- table_directory(data),
+         {:ok, head} <- table(data, tables, "head"),
+         {:ok, units, _bbox} <- parse_head(head) do
+      underline =
+        case table(data, tables, "post") do
+          {:ok, post} ->
+            with {:ok, position} <- read_i16(post, 8),
+                 {:ok, thickness} <- read_i16(post, 10),
+                 true <- thickness >= 0 do
+              %{position: position, thickness: thickness}
+            else
+              _ -> nil
+            end
+
+          :error ->
+            nil
+        end
+
+      strike =
+        case table(data, tables, "OS/2") do
+          {:ok, os2} ->
+            with {:ok, thickness} <- read_i16(os2, 26),
+                 {:ok, position} <- read_i16(os2, 28),
+                 true <- thickness >= 0 do
+              %{position: position, thickness: thickness}
+            else
+              _ -> nil
+            end
+
+          :error ->
+            nil
+        end
+
+      {:ok, %{units_per_em: units, underline: underline, strike: strike}}
+    end
+  end
+
+  @doc false
+  @spec prepare_glyph_bounds(term()) ::
+          {:ok, tuple()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_glyph_bounds(font) do
+    result =
+      with_budget(fn ->
+        case font do
+          %{type: :embedded, id: id, data: data} when is_binary(data) ->
+            loader = fn ->
+              reserve_source(data)
+
+              NativeElixirPdfUtilities.Validators.TrueTypeSubsetValidator.prepare_glyph_bounds(
+                data
+              )
+            end
+
+            {cached_data, result} = memo({:glyph_bounds, id}, fn -> {data, loader.()} end)
+            result = if cached_data == data, do: result, else: loader.()
+
+            result
+
+          _ ->
+            Diagnostics.error(
+              :font,
+              :invalid_document,
+              "glyph bounds require an embedded TrueType font",
+              module: __MODULE__,
+              operation: :glyph_bounds
+            )
+        end
+      end)
+
+    case result do
+      {:error, {reason, diagnostic}} ->
+        Diagnostics.error(diagnostic.stage, reason, diagnostic.message,
+          operation: :glyph_bounds,
+          module: diagnostic.module,
+          source:
+            if(is_map(font),
+              do: Map.get(font, :family, "selected font outlines"),
+              else: "selected font outlines"
+            )
+        )
+
+      result ->
+        result
+    end
+  end
+
+  @doc false
+  @spec prepare_math_metrics(term()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_math_metrics(font) do
+    with_budget(fn ->
+      case font do
+        %{type: :embedded, id: id, data: data} when is_binary(data) ->
+          {cached_data, result} =
+            memo({:math_metrics, id}, fn ->
+              reserve_source(data)
+              {data, parse_math_metrics(data)}
+            end)
+
+          if cached_data == data do
+            result
+          else
+            reserve_source(data)
+            parse_math_metrics(data)
+          end
+
+        _ ->
+          MathFontValidator.failure("select an embedded TrueType font with a MATH table")
+      end
+    end)
+  end
+
+  defp parse_math_metrics(data) do
+    with {:ok, tables} <- table_directory(data),
+         {:ok, head} <- table(data, tables, "head"),
+         {:ok, units, _bbox} <- parse_head(head),
+         {:ok, maxp} <- table(data, tables, "maxp"),
+         {:ok, glyph_count} <- read_u16(maxp, 4),
+         {:ok, math} <- table(data, tables, "MATH"),
+         {:ok, metrics} <- MathFontValidator.prepare(math, glyph_count),
+         {:ok, features} <-
+           (case table(data, tables, "GSUB") do
+              {:ok, gsub} -> MathFontValidator.prepare_substitution_features(gsub, glyph_count)
+              :error -> {:ok, %{substitutions: %{}, substitution_kinds: %{}}}
+            end) do
+      {:ok, metrics |> Map.merge(features) |> Map.put(:units_per_em, units)}
+    else
+      {:error, {_reason, _diagnostic}} = error ->
+        error
+
+      _ ->
+        MathFontValidator.failure("selected font has missing or invalid head, maxp, or MATH data")
+    end
+  end
+
+  @doc false
+  @spec prepare_ttf(term()) ::
+          {:ok, map()} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_ttf(data) do
+    case data do
+      data when is_binary(data) ->
+        with {:ok, tables} <- table_directory(data),
+             {:ok, head} <- table(data, tables, "head"),
+             {:ok, hhea} <- table(data, tables, "hhea"),
+             {:ok, maxp} <- table(data, tables, "maxp"),
+             {:ok, hmtx} <- table(data, tables, "hmtx"),
+             {:ok, cmap} <- table(data, tables, "cmap"),
+             {:ok, units_per_em, bbox} <- parse_head(head),
+             {:ok, ascent, descent, line_gap, hmetric_count} <- parse_hhea(hhea),
+             {:ok, glyph_count} <- read_u16(maxp, 4),
+             {:ok, widths} <- parse_hmtx(hmtx, glyph_count, hmetric_count),
+             {:ok, cmap} <- parse_cmap(cmap, glyph_count),
+             {:ok, kerning} <-
+               prepare_kerning(
+                 case table(data, tables, "kern") do
+                   {:ok, kern} -> kern
+                   :error -> <<>>
+                 end,
+                 glyph_count
+               ),
+             {:ok, embedding_flags} <- font_embedding_flags(data, tables) do
+          {:ok,
+           %{
+             units_per_em: units_per_em,
+             widths: widths,
+             default_width: List.last(widths) || 600,
+             cmap: cmap,
+             kerning: kerning,
+             ascent: ascent,
+             descent: descent,
+             line_gap: line_gap,
+             bbox: bbox,
+             embedding_flags: embedding_flags,
+             variable_font?: Map.has_key?(tables, "fvar")
+           }}
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp font_embedding_flags(data, tables) do
+    case table(data, tables, "OS/2") do
+      {:ok, os2} -> read_u16(os2, 8)
+      :error -> {:ok, 0}
+    end
+  end
+
+  defp table_directory(data) do
+    with {:ok, scaler_type} <- read_u32(data, 0),
+         true <- scaler_type in [0x0001_0000, 0x7472_7565],
+         {:ok, table_count} <- read_u16(data, 4),
+         true <- table_count > 0,
+         true <- byte_size(data) >= 12 + table_count * 16 do
+      records =
+        0..(table_count - 1)
+        |> Enum.reduce(%{}, fn index, acc ->
+          offset = 12 + index * 16
+          tag = binary_part(data, offset, 4)
+          <<_checksum::32, table_offset::32, length::32>> = binary_part(data, offset + 4, 12)
+          Map.put(acc, tag, {table_offset, length})
+        end)
+
+      {:ok, records}
+    else
+      _ -> :error
+    end
+  end
+
+  defp table(data, tables, tag) do
+    case Map.get(tables, tag) do
+      {offset, length} when offset >= 0 and length >= 0 and byte_size(data) >= offset + length ->
+        {:ok, binary_part(data, offset, length)}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp parse_head(head) do
+    with {:ok, units_per_em} <- read_u16(head, 18),
+         {:ok, x_min} <- read_i16(head, 36),
+         {:ok, y_min} <- read_i16(head, 38),
+         {:ok, x_max} <- read_i16(head, 40),
+         {:ok, y_max} <- read_i16(head, 42),
+         true <- units_per_em > 0 do
+      {:ok, units_per_em, {x_min, y_min, x_max, y_max}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp parse_hhea(hhea) do
+    with {:ok, ascent} <- read_i16(hhea, 4),
+         {:ok, descent} <- read_i16(hhea, 6),
+         {:ok, line_gap} <- read_i16(hhea, 8),
+         {:ok, hmetric_count} <- read_u16(hhea, 34),
+         true <- hmetric_count > 0 do
+      {:ok, ascent, descent, line_gap, hmetric_count}
+    else
+      _ -> :error
+    end
+  end
+
+  defp parse_hmtx(hmtx, glyph_count, hmetric_count) do
+    cond do
+      glyph_count <= 0 or hmetric_count <= 0 or byte_size(hmtx) < hmetric_count * 4 ->
+        :error
+
+      true ->
+        metric_widths =
+          0..(hmetric_count - 1)
+          |> Enum.map(fn index ->
+            {:ok, width} = read_u16(hmtx, index * 4)
+            width
+          end)
+
+        last_width = List.last(metric_widths)
+        extra_count = max(glyph_count - hmetric_count, 0)
+        {:ok, metric_widths ++ List.duplicate(last_width, extra_count)}
+    end
+  end
+
+  defp parse_cmap(cmap, glyph_count) do
+    with {:ok, subtables} <- prepare_cmap(cmap, glyph_count) do
+      Enum.find_value(subtables, :error, fn segments ->
+        mappings =
+          Enum.reduce(segments, %{}, fn {first, last, delta, glyphs}, mappings ->
+            first..last
+            |> Enum.reject(&(&1 == 0xFFFF and not is_tuple(glyphs)))
+            |> Enum.reduce(mappings, fn codepoint, mappings ->
+              glyph_id =
+                case glyphs do
+                  nil ->
+                    Integer.mod(codepoint + delta, 65_536)
+
+                  {:sequential, glyph} ->
+                    glyph + codepoint - first
+
+                  glyphs ->
+                    case :binary.decode_unsigned(binary_part(glyphs, 2 * (codepoint - first), 2)) do
+                      0 -> 0
+                      glyph_id -> Integer.mod(glyph_id + delta, 65_536)
+                    end
+                end
+
+              case glyph_id > 0 do
+                true -> Map.put(mappings, codepoint, glyph_id)
+                false -> mappings
+              end
+            end)
+          end)
+
+        if map_size(mappings) > 0, do: {:ok, mappings}
+      end)
+    end
+  end
+
+  defp read_u16(data, offset) do
+    case byte_size(data) >= offset + 2 do
+      true ->
+        <<value::16>> = binary_part(data, offset, 2)
+        {:ok, value}
+
+      false ->
+        :error
+    end
+  end
+
+  defp read_i16(data, offset) do
+    case byte_size(data) >= offset + 2 do
+      true ->
+        <<value::signed-16>> = binary_part(data, offset, 2)
+        {:ok, value}
+
+      false ->
+        :error
+    end
+  end
+
+  defp read_u32(data, offset) do
+    case byte_size(data) >= offset + 4 do
+      true ->
+        <<value::32>> = binary_part(data, offset, 4)
+        {:ok, value}
+
+      false ->
+        :error
     end
   end
 end

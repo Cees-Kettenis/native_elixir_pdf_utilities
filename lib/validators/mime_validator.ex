@@ -47,6 +47,17 @@ defmodule NativeElixirPdfUtilities.Validators.MimeValidator do
   @ole_types ["application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint"]
   @zip_types Enum.map([".docx", ".xlsx", ".pptx"], &Map.fetch!(@extensions, &1))
 
+  # Fixed HTML/MIME Sniffing vocabulary. Parameters are not essence matches.
+  @javascript_essences ~w(application/ecmascript application/javascript application/x-ecmascript application/x-javascript text/ecmascript text/javascript text/javascript1.0 text/javascript1.1 text/javascript1.2 text/javascript1.3 text/javascript1.4 text/javascript1.5 text/jscript text/livescript text/x-ecmascript text/x-javascript)
+  @javascript_essence_bytes Enum.max(Enum.map(@javascript_essences, &byte_size/1))
+
+  @doc false
+  @spec javascript_essence_match?(String.t()) :: boolean()
+  def javascript_essence_match?(value) do
+    byte_size(value) <= @javascript_essence_bytes and
+      String.downcase(value, :ascii) in @javascript_essences
+  end
+
   @doc false
   @spec validate(term()) :: {:ok, String.t()} | {:error, {atom(), map()}}
   def validate(value) do

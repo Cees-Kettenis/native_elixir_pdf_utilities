@@ -12,6 +12,94 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderBudgetTest do
     :ok
   end
 
+  test "resource object bodies retain streams, references and complete syntax" do
+    bytes = <<0, 255, "endstream and endobj">>
+
+    body =
+      "<< /Length #{byte_size(bytes)} /Values [true false null 1.25 /Name (Text) <00FF> 2 0 R] >>\nstream\n" <>
+        bytes <> "\nendstream"
+
+    assert {:ok, [{1, 0, {:stream, dictionary, ^bytes}}, {2, 0, {:value, %{}}}]} =
+             Reader.parse_object_bodies([{1, body}, {2, "<< >>"}])
+
+    refute Map.has_key?(dictionary, "Length")
+
+    assert dictionary["Values"] == [
+             true,
+             false,
+             nil,
+             1.25,
+             {:name, "Name"},
+             {:string, "Text"},
+             {:hex, <<0, 255>>},
+             {:ref, {2, 0}}
+           ]
+
+    assert {:ok, []} = Reader.parse_object_bodies([])
+
+    for body <- [
+          "",
+          "1",
+          "<< /A >>",
+          "<< >> << >>",
+          "<< >> @",
+          "<< /A -1 0 R >>",
+          "<< /A [1 65536 R] >>",
+          "<< /Length 2 >>\nstream\nabc\nendstream",
+          "<< >>\nstream\nabc\nendstream"
+        ] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Reader.parse_object_bodies([{1, body}])
+      assert diagnostic.stage == :object and diagnostic.reason == :invalid_pdf_input
+      assert diagnostic.operation == :read and diagnostic.module == Reader
+      assert diagnostic.source == "object 1 0" and diagnostic.message != ""
+    end
+
+    for objects <- [nil, %{}, [{0, "<< >>"}], [{1, :invalid}], [{1, "<< >>"}, {1, "<< >>"}]] do
+      assert {:error, {:invalid_pdf_input, %{stage: :object, operation: :read, module: Reader}}} =
+               Reader.parse_object_bodies(objects)
+    end
+
+    for {value, stream} <- [
+          {1, nil},
+          {%{}, :invalid},
+          {%{"Length" => 2}, "abc"},
+          {%{"A" => {:ref, :bad}}, nil},
+          {%{wrong_key: 1}, nil}
+        ] do
+      assert {:error, {:invalid_pdf_input, %{stage: :object}}} =
+               PdfValidator.validate_object_body(value, stream, [])
+    end
+  end
+
+  test "resource object parsing shares byte, object and nested reader budgets" do
+    limits = Limits.effective()
+    body = "<< /A 1 >>"
+    objects = [{1, body}, {2, body}]
+    Limits.install(%{limits | max_pdf_input_bytes: 2 * byte_size(body), max_pdf_objects: 2})
+    assert {:ok, _} = Reader.parse_object_bodies(objects)
+    assert_limit(Reader.parse_object_bodies(objects ++ [{3, body}]))
+    assert_limit(Reader.parse_object_bodies([{3, body}]))
+    Limits.install(%{limits | max_pdf_input_bytes: 2 * byte_size(body) - 1})
+    assert_limit(Reader.parse_object_bodies(objects))
+
+    for key <- [:max_pdf_reader_tokens, :max_pdf_reader_values, :max_pdf_reader_work] do
+      Limits.install(Map.put(limits, key, 1))
+      assert_limit(Reader.parse_object_bodies(objects))
+    end
+
+    Limits.install(%{limits | max_pdf_reader_values: 4})
+    assert {:ok, _} = Reader.parse_object_bodies(objects)
+
+    assert_limit(
+      PdfValidator.with_reader_budget(fn ->
+        PdfValidator.charge_reader_budget(:max_pdf_reader_values, 1)
+        Reader.parse_object_bodies(objects)
+      end)
+    )
+
+    assert {:ok, _} = Reader.parse_object_bodies(objects)
+  end
+
   test "aggregate object stream expansion includes xref bytes at and above the boundary" do
     {pdf, decoded_bytes} = object_stream_pdf(8)
     limits = Limits.effective()

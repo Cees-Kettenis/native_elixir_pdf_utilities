@@ -9,7 +9,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
   @type page :: %{size: {float(), float()}, boxes: [term()]}
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
-  @type error_reason :: :invalid_layout | :resource_limit_exceeded
+  @type error_reason :: :invalid_layout | :unsupported_html | :resource_limit_exceeded
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
@@ -36,7 +36,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       case HtmlValidator.validate_pagination_input(layout_tree, opts, margins) do
         :ok ->
           {:ok, margins} = margins
-          paginate_boxes(layout_tree.page_size, layout_tree.boxes, margins)
+
+          paginate_boxes(
+            layout_tree.page_size,
+            layout_tree.boxes,
+            margins,
+            Map.get(layout_tree, :link_scope),
+            Map.get(layout_tree, :link_expected_targets, []),
+            Map.get(layout_tree, :link_document_targets, [])
+          )
 
         {:error, {reason, diagnostic}} ->
           {:error,
@@ -46,7 +54,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     end)
   end
 
-  defp paginate_boxes(page_size, boxes, margins) do
+  defp paginate_boxes(page_size, boxes, margins, link_scope, expected_targets, document_targets) do
     {_page_width, page_height} = page_size
     content_height = page_height - margins.top - margins.bottom
     pagination_order = make_ref()
@@ -81,7 +89,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         %{page | boxes: background ++ page.boxes}
       end)
 
-    {:ok, pages}
+    NativeElixirPdfUtilities.Validators.HtmlLinkValidator.resolve_pages(
+      pages,
+      link_scope,
+      expected_targets,
+      document_targets
+    )
   end
 
   defp paint_table_outlines(pages) do
@@ -237,7 +250,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     state =
       case shifted_boxes do
         [] ->
-          state
+          %{state | position_delta: target_top - group.top}
 
         _ ->
           HtmlValidator.check_render_resource(
@@ -274,7 +287,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
               true ->
                 shifted_boxes =
                   header.boxes
-                  |> Enum.map(&Map.delete(&1, :outline_anchor))
+                  |> Enum.map(&Map.drop(&1, [:outline_anchor, :html_targets]))
                   |> shift_boxes(state.current_y - header.top)
 
                 %{
@@ -472,13 +485,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
     Enum.map(boxes, fn box ->
       box =
+        case box do
+          %{type: :glyph_group, boxes: children} ->
+            %{box | boxes: shift_boxes(children, delta_y)}
+
+          %{type: :drawing_group, transform: {a, b, c, d, e, f}} ->
+            %{box | transform: {a, b, c, d, e, f + delta_y}}
+
+          _ ->
+            box
+        end
+
+      box =
         case Map.get(box, :y) do
           y when is_number(y) -> Map.put(box, :y, y + delta_y)
           _ -> box
         end
 
-      case Map.get(box, :clip) do
-        %{y: clip_y} = clip -> Map.put(box, :clip, %{clip | y: clip_y + delta_y})
+      box =
+        case Map.get(box, :clip) do
+          %{y: clip_y} = clip when box.type != :drawing_group ->
+            Map.put(box, :clip, %{clip | y: clip_y + delta_y})
+
+          _ ->
+            box
+        end
+
+      case Map.get(box, :link_rect) do
+        %{y: region_y} = region -> Map.put(box, :link_rect, %{region | y: region_y + delta_y})
         _ -> box
       end
     end)

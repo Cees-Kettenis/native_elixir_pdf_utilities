@@ -1,0 +1,22 @@
+<!doctype html><html><head><style>
+@page {size:264pt 210pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt;}
+body {padding:12pt;}
+p {margin:0 0 6pt;}
+.siblings {margin-bottom:6pt;}
+.siblings>span:nth-child(2) {color:#9a3412;}
+input:not([hidden]) {display:block;width:180pt;box-sizing:border-box;border:1px solid #777;background:white;padding:1.5pt 3pt;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt;margin-bottom:6pt;}
+script.revealed {display:block;margin-bottom:6pt;}
+</style></head><body>
+<style hidden>.override{color:#164e63}</style>
+<p>Before hidden elements</p>
+<p hidden>Unused hidden text</p><p hidden=false>Unused invalid keyword</p>
+<x-box hidden><img src=denied.png><p>Unused custom content</p></x-box>
+<p class=override hidden style="display:block">Author display override</p>
+<div class=siblings><span hidden>Unused sibling</span><span>Actual second sibling</span></div>
+<input hidden name=active value=Unused><input name=active value="Active initial field">
+<p hidden=" until-found ">Unused spaced keyword</p>
+<script hidden class=revealed type=application/json>Visible data fallback</script>
+<template hidden style="display:block;height:8pt;border:1px solid #777"><p>Unused template content</p></template>
+<p>After hidden elements</p>
+</body></html>

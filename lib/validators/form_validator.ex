@@ -11,6 +11,25 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   @typep walk_state :: %{fields: [map()], nodes: map(), seen: map(), widgets: map()}
 
   @doc false
+  @spec password_display_text(String.t(), :style | :forms) ::
+          {:ok, String.t()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def password_display_text(value, stage \\ :forms) do
+    count = String.length(value)
+    # Bound the rendered bytes before allocating the grapheme masks. Form writes
+    # also reserve aggregate appearance bytes before reaching this helper.
+    if count * byte_size("•") <= Limits.get(:max_rendered_text_bytes) do
+      {:ok, String.duplicate("•", count)}
+    else
+      Diagnostics.error(
+        stage,
+        :resource_limit_exceeded,
+        "password display exceeds max_rendered_text_bytes; reduce the value",
+        module: __MODULE__
+      )
+    end
+  end
+
+  @doc false
   @spec inspect_document(PdfValidator.context()) :: {:ok, map()} | {:error, {atom(), map()}}
   def inspect_document(context) do
     with {:ok, form} <-
@@ -593,8 +612,8 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
       operation == :fill and field.read_only ->
         error(:read_only_form_field, "read-only fields cannot be filled")
 
-      field.type == :text and (field.flags &&& (8192 ||| 16_777_216 ||| 33_554_432)) != 0 ->
-        error(:unsupported_form, "password, comb and rich-text fields are unsupported")
+      field.type == :text and (field.flags &&& (16_777_216 ||| 33_554_432)) != 0 ->
+        error(:unsupported_form, "comb and rich-text fields are unsupported")
 
       field.type == :choice and (field.flags &&& 262_144) != 0 ->
         error(:unsupported_form, "editable combo boxes are unsupported")
@@ -703,7 +722,9 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
     text_bytes =
       case {operation, field.type} do
         {:fill, :text} ->
-          byte_size(value)
+          if (field.flags &&& 8192) != 0,
+            do: String.length(value) * byte_size("•"),
+            else: byte_size(value)
 
         {:fill, :choice} ->
           Enum.reduce(field.choices, 0, fn choice, total ->
@@ -743,58 +764,68 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
           text =
             case field.type do
               :text ->
-                value
+                if (field.flags &&& 8192) != 0,
+                  do: password_display_text(value),
+                  else: {:ok, value}
 
               :choice ->
                 field.choices
                 |> Enum.filter(&(&1.value in List.wrap(value)))
                 |> Enum.map_join("\n", & &1.label)
+                |> then(&{:ok, &1})
             end
 
-          lines = String.split(String.replace(text, "\r\n", "\n"), "\n")
-          max_width = Enum.map(lines, &Font.text_width(&1, font, 1.0)) |> Enum.max(fn -> 0 end)
+          with {:ok, text} <- text do
+            lines = String.split(String.replace(text, "\r\n", "\n"), "\n")
+            max_width = Enum.map(lines, &Font.text_width(&1, font, 1.0)) |> Enum.max(fn -> 0 end)
 
-          size =
-            min(
-              12.0,
-              min((height - 4) / max(length(lines) * 1.2, 1), (width - 4) / max(max_width, 0.001))
-            )
+            size =
+              min(
+                12.0,
+                min(
+                  (height - 4) / max(length(lines) * 1.2, 1),
+                  (width - 4) / max(max_width, 0.001)
+                )
+              )
 
-          cond do
-            size <= 0 ->
-              {:halt, error(:unsupported_form, "widget is too small to draw an appearance")}
+            cond do
+              size <= 0 ->
+                {:halt, error(:unsupported_form, "widget is too small to draw an appearance")}
 
-            not Enum.all?(lines, &Font.supports_text?(font, &1)) ->
-              {:halt,
-               error(
-                 :unsupported_form,
-                 "value contains glyphs unsupported by the bundled appearance font"
-               )}
+              not Enum.all?(lines, &Font.supports_text?(font, &1)) ->
+                {:halt,
+                 error(
+                   :unsupported_form,
+                   "value contains glyphs unsupported by the bundled appearance font"
+                 )}
 
-            true ->
-              boxes =
-                lines
-                |> Enum.with_index()
-                |> Enum.reject(fn {line, _index} -> line == "" end)
-                |> Enum.map(fn {line, index} ->
-                  %{
-                    type: :text,
-                    text: line,
-                    x:
-                      case Map.get(field.effective, "Q", 0) do
-                        0 -> 2.0
-                        1 -> (width - Font.text_width(line, font, size)) / 2
-                        2 -> width - 2.0 - Font.text_width(line, font, size)
-                      end,
-                    y: height - 2 - size - index * size * 1.2,
-                    font_size: size,
-                    font: Font.pdf_name(font),
-                    font_face: font,
-                    color: {0, 0, 0}
-                  }
-                end)
+              true ->
+                boxes =
+                  lines
+                  |> Enum.with_index()
+                  |> Enum.reject(fn {line, _index} -> line == "" end)
+                  |> Enum.map(fn {line, index} ->
+                    %{
+                      type: :text,
+                      text: line,
+                      x:
+                        case Map.get(field.effective, "Q", 0) do
+                          0 -> 2.0
+                          1 -> (width - Font.text_width(line, font, size)) / 2
+                          2 -> width - 2.0 - Font.text_width(line, font, size)
+                        end,
+                      y: height - 2 - size - index * size * 1.2,
+                      font_size: size,
+                      font: Font.pdf_name(font),
+                      font_face: font,
+                      color: {0, 0, 0}
+                    }
+                  end)
 
-              {:cont, {:ok, [%{size: {width, height}, boxes: boxes} | pages]}}
+                {:cont, {:ok, [%{size: {width, height}, boxes: boxes} | pages]}}
+            end
+          else
+            {:error, _} = error -> {:halt, error}
           end
         end)
         |> case do

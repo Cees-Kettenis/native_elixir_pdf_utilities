@@ -3,6 +3,327 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
 
+  test "editability selectors decode escapes and preserve compound negation specificity" do
+    for {token, state} <- [
+          {":read-only", :read_only},
+          {":READ-WRITE", :read_write},
+          {~S|:\72 ead-only|, :read_only},
+          {~S|:read\2d write|, :read_write}
+        ] do
+      assert {:ok, [rule]} = CssParser.parse("input#{token}{color:red}")
+      assert [%{parts: [%{pseudo_classes: [^state]}], specificity: {0, 1, 1}}] = rule.selectors
+    end
+
+    assert {:ok, [rule]} =
+             CssParser.parse("p:read-write:not(.locked:read-only):nth-child(2n){color:red}")
+
+    assert [
+             %{
+               parts: [
+                 %{
+                   pseudo_classes: [:read_write, {:nth_child, {2, 0}}],
+                   negations: [%{classes: ["locked"], pseudo_classes: [:read_only]}]
+                 }
+               ],
+               specificity: {0, 4, 1}
+             }
+           ] = rule.selectors
+
+    for selector <- [":read-only()", ":read-write(1)", ":read-onlyness", ":read-wrıte"] do
+      assert {:error, :invalid_css} = CssParser.parse("p#{selector}{color:red}")
+    end
+  end
+
+  test "requirement selectors retain escaped names negations and specificity" do
+    for {source, state} <- [
+          {":required", :required},
+          {":OPTIONAL", :optional},
+          {~S|:\72 equired|, :required},
+          {~S|:\6f ptional|, :optional}
+        ] do
+      assert {:ok, [rule]} = CssParser.parse("input#{source}{color:red}")
+      assert [%{parts: [%{pseudo_classes: [^state]}], specificity: {0, 1, 1}}] = rule.selectors
+    end
+
+    assert {:ok, [rule]} =
+             CssParser.parse("input:required:not(:optional):nth-child(2n){color:red}")
+
+    assert [
+             %{
+               parts: [
+                 %{
+                   pseudo_classes: [:required, {:nth_child, {2, 0}}],
+                   negations: [%{pseudo_classes: [:optional]}]
+                 }
+               ],
+               specificity: {0, 3, 1}
+             }
+           ] = rule.selectors
+  end
+
+  test "initial popover selectors share CSS identifier decoding and negation" do
+    for token <- [":popover-open", ":POPOVER-OPEN", ~S|:\70 opover-open|] do
+      assert {:ok, [rule]} = CssParser.parse("[popover]#{token}{color:red}")
+      [selector] = rule.selectors
+      [part] = selector.parts
+      assert part.pseudo_classes == [:popover_open]
+      assert selector.specificity == {0, 2, 0}
+    end
+
+    assert {:ok, _} = CssParser.parse("[popover]:not(:popover-open){color:blue}")
+  end
+
+  test "checked selectors share identifier decoding, negation and specificity" do
+    for selector <- ["input:checked", "input:CHECKED", ~S|input:\63 hecked|] do
+      assert {:ok, [rule]} = CssParser.parse(selector <> "{color:red}")
+      assert [%{parts: [%{pseudo_classes: [:checked]}], specificity: {0, 1, 1}}] = rule.selectors
+    end
+
+    assert {:ok, [rule]} = CssParser.parse("input:not(:checked){color:blue}")
+    assert [%{parts: [input]}] = rule.selectors
+    assert [%{pseudo_classes: [:checked]}] = input.negations
+    assert {:error, :invalid_css} = CssParser.parse("input:checked(){color:red}")
+  end
+
+  test "language ranges preserve CSS strings, escapes and negated function boundaries" do
+    for {source, expected} <- [
+          {":lang(en, 'de-DE', \"\")", [["en"], ["de", "de"], [""]]},
+          {~S|:l\61ng(\65 n, "*-Latn", "a,b(c)")|, [["en"], ["*", "latn"], ["a,b(c)"]]},
+          {":lang(\"a\\\nb\")", [["ab"]]},
+          {":lang(iw, cmn-Hans)", [["he"], ["zh", "cmn", "hans"]]}
+        ] do
+      assert {:ok, [rule]} = CssParser.parse("p" <> source <> "{color:red}"), source
+
+      assert [%{parts: [%{pseudo_classes: [{:lang, ^expected}]}], specificity: {0, 1, 1}}] =
+               rule.selectors
+    end
+
+    assert {:ok, [rule]} = CssParser.parse(~S|p:not(:lang("a(b),c", en)):lang("*-US"){color:red}|)
+
+    assert [%{parts: [%{negations: [%{pseudo_classes: [{:lang, [["a(b),c"], ["en"]]}]}]}]}] =
+             rule.selectors
+
+    for source <- [
+          ":not",
+          ~S|:not("unfinished)|,
+          ":lang()",
+          ":lang(,en)",
+          ":lang(en,)",
+          ":lang(en,,de)",
+          ":lang(*)",
+          ":lang(en de)",
+          ":lang(\"en\nUS\")",
+          ":lang(en",
+          ":not(:lang(en)"
+        ] do
+      assert {:error, :invalid_css} = CssParser.parse("p" <> source <> "{color:red}")
+    end
+  end
+
+  test "Unicode and escaped identifiers retain decoded selector names and specificity" do
+    for {source, expected} <- [
+          {".café", "café"},
+          {".e\u0301", "e\u0301"},
+          {".\u00A0", "\u00A0"},
+          {~S|.\63 afé|, "café"},
+          {~S|.\000063afé|, "café"},
+          {~S|.\31 item|, "1item"},
+          {~S|.\-1|, "-1"},
+          {~S|.a\,b|, "a,b"},
+          {~S|.a\>b|, "a>b"},
+          {~S|.a\{b|, "a{b"},
+          {~S|.a\@media|, "a@media"},
+          {~S|.a\@page|, "a@page"},
+          {~S|.a\@font-face|, "a@font-face"},
+          {~S|.a\"b|, ~S|a"b|},
+          {~S|.a\'b|, "a'b"},
+          {~S|.a\:\:before|, "a::before"},
+          {~S|.a\ b|, "a b"},
+          {".a\\ ", "a "},
+          {".--1", "--1"},
+          {~S|.\0|, "\uFFFD"},
+          {~S|.\d800|, "\uFFFD"},
+          {~S|.\110000|, "\uFFFD"},
+          {~S|.\1f600|, "😀"}
+        ] do
+      assert {:ok, [rule]} = CssParser.parse(source <> " {color:red}")
+      assert [%{parts: [%{classes: [^expected]}], specificity: {0, 1, 0}}] = rule.selectors
+    end
+
+    assert {:ok, [rule]} = CssParser.parse(~S|\70  .\63 afé#\31 23 {color:red}|)
+
+    assert [%{parts: [%{tag: "p"}, %{id: "123", classes: ["café"]}], specificity: {1, 1, 1}}] =
+             rule.selectors
+
+    assert {:ok, [rule]} = CssParser.parse("X-Élément {color:red}")
+    assert [%{parts: [%{tag: "x-Élément"}]}] = rule.selectors
+  end
+
+  test "attribute selectors share identifier and string escape decoding" do
+    for {source, expected} <- [
+          {~S|[data-\6b ind=\41 ctive]|, {:equals, "data-kind", "Active"}},
+          {~S|[data-kind="\41 ctive"]|, {:equals, "data-kind", "Active"}},
+          {~S|[data-kind='a\,b\"c']|, {:equals, "data-kind", "a,b\"c"}},
+          {~S|[data-kind="\0"]|, {:equals, "data-kind", "\uFFFD"}},
+          {"[data-kind=\"a\\\n@media print {literal}\"]",
+           {:equals, "data-kind", "a@media print {literal}"}},
+          {"[data-kind=\"a\\\nb\"]", {:equals, "data-kind", "ab"}},
+          {~S|[data-\6b ind]|, {:present, "data-kind"}},
+          {~S|[data-kind=\41 ctive i]|, {:equals, "data-kind", "Active", :insensitive}},
+          {~S|[data-kind=\41 ctive \69]|, {:equals, "data-kind", "Active", :insensitive}},
+          {~S|[data-kind=\41 ctive \53]|, {:equals, "data-kind", "Active", :sensitive}}
+        ] do
+      assert {:ok, [rule]} = CssParser.parse(source <> " {color:red}")
+      assert [%{parts: [%{attributes: [^expected]}]}] = rule.selectors
+    end
+  end
+
+  test "escaped supported pseudo names and negated punctuation preserve semantics" do
+    assert {:ok, [rule]} =
+             CssParser.parse(
+               ~S|p:\66 irst-child:n\74 h-child(2n+1):n\6f t(.a\(b)::\62 efore {content:'Prefix'}|
+             )
+
+    assert [%{parts: [part], specificity: {0, 3, 2}}] = rule.selectors
+    assert part.pseudo_classes == [:first_child, {:nth_child, {2, 1}}]
+
+    assert part.negations == [
+             %{
+               tag: nil,
+               id: nil,
+               classes: ["a(b"],
+               attributes: [],
+               pseudo_classes: [],
+               negations: [],
+               pseudo_element: nil,
+               combinator: nil
+             }
+           ]
+
+    assert part.pseudo_element == :before
+    assert {:ok, [_]} = CssParser.parse("p::BEFORE {content:'Prefix'}")
+  end
+
+  test "invalid identifier starts and malformed escapes return detailed CSS failures" do
+    for source <- [
+          ".1item",
+          ".-1",
+          ".-",
+          ".",
+          "#",
+          ".a\\\nb",
+          "[data-kind=1item]",
+          "[data-kind=Active other]",
+          ".a::missing",
+          "p:not(.a\\)",
+          "p::before.extra"
+        ] do
+      assert {:error, {:invalid_css, diagnostic}} =
+               CssParser.parse_detailed(source <> " {color:red}")
+
+      assert diagnostic.stage == :css
+      assert diagnostic.reason == :invalid_css
+      assert is_binary(diagnostic.source)
+      assert diagnostic.line == 1
+      assert diagnostic.column >= 1
+      assert diagnostic.message =~ "invalid"
+    end
+  end
+
+  test "positional selectors parse integer An+B arguments and retain specificity" do
+    for {expression, expected} <- [
+          {"odd", :odd},
+          {"EVEN", :even},
+          {"2", 2},
+          {"+6", 6},
+          {"0", 0},
+          {"-3", -3},
+          {"n", {1, 0}},
+          {"N", {1, 0}},
+          {"+n", {1, 0}},
+          {"-n", {-1, 0}},
+          {"2n", {2, 0}},
+          {"2n+1", {2, 1}},
+          {"-n + 3", {-1, 3}},
+          {"3n - 6", {3, -6}},
+          {"0n+5", {0, 5}},
+          {"0n", {0, 0}},
+          {"\t+3N -\n2\f", {3, -2}},
+          {"n- 2", {1, -2}}
+        ],
+        {name, kind} <- [
+          {"nth-child", :nth_child},
+          {"nth-last-child", :nth_last_child},
+          {"nth-of-type", :nth_of_type},
+          {"nth-last-of-type", :nth_last_of_type}
+        ] do
+      assert {:ok, [rule]} =
+               CssParser.parse(
+                 "p:" <> String.upcase(name) <> "(" <> expression <> ").selected {color:red}"
+               )
+
+      assert [selector] = rule.selectors
+      assert selector.specificity == {0, 2, 1}
+      assert [part] = selector.parts
+      assert part.pseudo_classes == [{kind, expected}]
+      assert part.classes == ["selected"]
+    end
+
+    assert {:ok, [rule]} = CssParser.parse("p:not(:nth-of-type(-n+3)) {color:red}")
+    assert [selector] = rule.selectors
+    assert selector.specificity == {0, 1, 1}
+    assert {:ok, [_]} = CssParser.parse("p:only-child, p:only-of-type {color:red}")
+  end
+
+  test "positional selector arguments diagnose invalid grammar and excessive integers" do
+    for expression <- [
+          "",
+          "3 n",
+          "+ 2n",
+          "+ 2",
+          "+ n",
+          "3n + -6",
+          "1.0n",
+          "1e2",
+          "٢n",
+          "2n of p",
+          "n 2",
+          "odd+1",
+          "\u00A02n",
+          "n+1\u00A0"
+        ] do
+      assert {:error, {:invalid_css, diagnostic}} =
+               CssParser.parse_detailed("p:nth-child(" <> expression <> "){color:red}")
+
+      assert diagnostic.stage == :css
+      assert diagnostic.reason == :invalid_css
+      assert is_binary(diagnostic.message)
+    end
+
+    for expression <- ["1000000001n", "-1000000001", "n+1000000001"] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               CssParser.parse_detailed("p:nth-of-type(" <> expression <> "){color:red}")
+
+      assert diagnostic.stage == :css
+      assert diagnostic.message =~ "max_css_numeric_magnitude"
+      assert diagnostic.source == expression
+      assert diagnostic.operation == :parse
+    end
+
+    alias NativeElixirPdfUtilities.Limits
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(%{limits | max_html_numeric_token_bytes: 3})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             CssParser.parse_detailed("p:nth-last-child(1234){color:red}")
+
+    assert diagnostic.stage == :css
+    assert diagnostic.message =~ "max_html_numeric_token_bytes"
+    assert diagnostic.source == "1234"
+    assert diagnostic.operation == :parse
+  end
+
   test "prepared stylesheets retain page options, font faces and ordered rules" do
     css = """
     @page { size: letter; margin: 12pt }
@@ -153,13 +474,72 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert hd(fallback_selector.parts).classes == ["fallback"]
   end
 
+  test "parse accepts all attribute operators and explicit ASCII case flags" do
+    operators = [
+      {"=", :equals},
+      {"~=", :includes},
+      {"|=", :dash_match},
+      {"^=", :prefix},
+      {"$=", :suffix},
+      {"*=", :substring}
+    ]
+
+    for {token, operator} <- operators,
+        {flag, mode} <- [
+          {"i", :insensitive},
+          {"I", :insensitive},
+          {"s", :sensitive},
+          {"S", :sensitive}
+        ] do
+      assert {:ok, [rule]} =
+               CssParser.parse(
+                 ~s|p[DATA-KIND #{token} "AbC" #{flag}]:not([title='Skip' i]) { color:red; }|
+               )
+
+      [selector] = rule.selectors
+      [part] = selector.parts
+      assert part.attributes == [{operator, "data-kind", "AbC", mode}]
+      assert hd(part.negations).attributes == [{:equals, "title", "Skip", :insensitive}]
+      assert selector.specificity == {0, 2, 1}
+
+      assert {:ok, [rule]} = CssParser.parse("[data-kind#{token}note] { color:blue; }")
+      assert hd(hd(rule.selectors).parts).attributes == [{operator, "data-kind", "note"}]
+    end
+
+    assert {:ok, [rule]} = CssParser.parse(~s([lang="" s][title=αβ I] { color:red; }))
+
+    assert hd(hd(rule.selectors).parts).attributes == [
+             {:equals, "lang", "", :sensitive},
+             {:equals, "title", "αβ", :insensitive}
+           ]
+  end
+
+  test "parse rejects malformed attribute operators, values and flags" do
+    for selector <- [
+          "[title i]",
+          "[title=abc q]",
+          "[title=abc is]",
+          "[title=abc i s]",
+          "[title=\"abc\"i]",
+          "[title!=abc]",
+          "[title==abc]",
+          "[title^abc]",
+          "[title=]",
+          "[title=42]",
+          "[title=a/b]",
+          "[title='a\nb']",
+          "[title=abc\vI]"
+        ] do
+      assert CssParser.parse(selector <> " { color:red; }") == {:error, :invalid_css}
+    end
+  end
+
   test "parse keeps unsupported selector diagnostics strict" do
     for css <- [
           "p:not(div span) { color: red; }",
           "p:not() { color: red; }",
           "p::before span { color: red; }",
-          "p:nth-child(2n) { color: red; }",
-          "p[data-kind^=note] { color: red; }",
+          "p:nth-child(2n of .selected) { color: red; }",
           "p::marker { color: red; }"
         ] do
       assert CssParser.parse(css) == {:error, :invalid_css}
@@ -619,6 +999,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
   end
 
   test "parse_declarations normalizes inline declaration blocks" do
+    assert {:ok, [{"color", "\u00a0red\u00a0"}]} =
+             CssParser.parse_declarations("color: \u00a0red\u00a0 ")
+
+    assert {:ok, [{"color", "red\u00a0", :important}]} =
+             CssParser.parse_declarations("color:red\u00a0!important")
+
+    assert {:ok, [{"--Accent", "red\\!important"}]} =
+             CssParser.parse_declarations(~S|--Accent:red\!important|)
+
+    assert {:ok, [{"content", ~S|"!important"|}]} =
+             CssParser.parse_declarations(~S|content:"!important"|)
+
+    for marker <- ["!important", "! ImPoRtAnT", "!\tIMPORTANT", ~S|!\69mportant|] do
+      assert {:ok, [{"color", "red", :important}]} =
+               CssParser.parse_declarations(" \tCoLoR : red #{marker}\r\n")
+    end
+
+    for source <- ["\u00a0color:red", "color\u00a0:red", "color:"] do
+      assert {:error, {:invalid_css, diagnostic}} = CssParser.parse_declarations_detailed(source)
+      assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
+      assert is_binary(diagnostic.source) and is_binary(diagnostic.message)
+    end
+
     assert CssParser.parse_declarations(
              " COLOR : var(--Accent) ; --Accent: #336699; --accent: #663399 "
            ) ==
@@ -704,5 +1107,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
                reason: :invalid_css,
                message: "CSS declaration input must be a string"
              }}} = CssParser.parse_declarations_detailed(:not_css)
+  end
+
+  test "enabled and disabled selectors compose with negation and existing selectors" do
+    for selector <- [
+          "input:enabled",
+          "input:DISABLED",
+          "input:enabled:not([readonly])",
+          "button:not(:disabled)",
+          "div > input:disabled[type=submit]",
+          "input:disabled::before",
+          ":First-Child",
+          "p:LAST-OF-TYPE"
+        ] do
+      assert {:ok, [_]} = CssParser.parse(selector <> " { color:blue; }")
+    end
+
+    for selector <- [
+          "input:enabledness",
+          "input:disabled()",
+          "input:diſabled",
+          "input:enabled(x)",
+          "input:unknown"
+        ] do
+      assert {:error, :invalid_css} = CssParser.parse(selector <> " { color:blue; }")
+    end
+
+    assert {:ok, [rule]} = CssParser.parse("input:enabled { color:blue; }")
+    assert hd(rule.selectors).specificity == {0, 1, 1}
+    assert hd(hd(rule.selectors).parts).pseudo_classes == [:enabled]
   end
 end

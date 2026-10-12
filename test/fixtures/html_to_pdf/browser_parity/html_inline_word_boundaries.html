@@ -1,0 +1,24 @@
+<!doctype html><html><head><style>
+@page {size:264pt 300pt;margin:12pt}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:12pt}
+p {margin:0 0 8pt;padding:0;border:0.75pt solid #777;width:78pt}
+.narrow {width:40pt}
+.nowrap {white-space:nowrap}
+.pre {white-space:pre-wrap}
+.anywhere {overflow-wrap:anywhere}
+.relative {position:relative;left:1.5pt}
+</style></head><body>
+<p class=narrow>go ABC<strong>DEF</strong>GHI</p>
+<p>prefix ABC<strong>DEF</strong>GHI end</p>
+<p class=narrow><span>ABC</span><strong>DEF</strong><span>GHI</span></p>
+<p>space <span>ABC </span><strong>DEF</strong> end</p>
+<p class=narrow>go ABC-<strong>DEF</strong>-GHI</p>
+<p class=narrow>go ABC<span class=relative></span><strong>DEF</strong>GHI</p>
+<p>prefix <span class=nowrap>ABC<strong>DEF</strong>GHI</span> end</p>
+<p class=pre>prefix ABC<strong>DEF</strong>GHI end</p>
+<p class=anywhere>prefix ABC<strong>DEF</strong>GHIJKLMNO end</p>
+<p>prefix <mark>ABC<strong>DEF</strong>GHI</mark> end</p>
+<p style='width:5pt;overflow-wrap:anywhere'><span>e</span><strong>&#x301;</strong><span>e</span><strong>&#x301;</strong></p>
+<p style='width:5pt;line-break:anywhere'><span>e</span><strong>&#x301;</strong><span>e</span><strong>&#x301;</strong></p>
+<p class=narrow style='white-space:break-spaces;line-break:anywhere'>ABCDEFGHI</p>
+</body></html>

@@ -18,11 +18,108 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
     :ok
   end
 
+  test "HTML protocol span bounds remain fixed when resource limits are raised" do
+    Limits.install(Map.put(Limits.effective(), :max_layout_cardinality, 70_000))
+
+    assert {:ok, 65_534} =
+             HtmlValidator.validate_table_span_attribute(%{"rowspan" => "99999"}, "rowspan")
+
+    assert {:ok, 1_000} =
+             HtmlValidator.validate_table_span_attribute(%{"colspan" => "99999"}, "colspan")
+
+    assert {:ok, 1_000} =
+             HtmlValidator.validate_table_span_attribute(%{"span" => "99999"}, "span")
+
+    Limits.install(Map.put(Limits.effective(), :max_layout_cardinality, 2))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.validate_table_span_attribute(%{"rowspan" => "3"}, "rowspan")
+
+    assert diagnostic.message =~ "2-item limit"
+
+    assert {:error, {:resource_limit_exceeded, column_diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(
+               "<table><colgroup span=3></colgroup><tr><td>Column limit</td></tr></table>"
+             )
+
+    assert column_diagnostic.stage == :limits and
+             column_diagnostic.reason == :resource_limit_exceeded
+
+    assert column_diagnostic.operation == :render and column_diagnostic.message =~ "2-item limit"
+    alias NativeElixirPdfUtilities.Validators.HtmlTableValidator
+    cell = %{tag: "td", style: %{display: :table_cell, colspan: 3}, children: []}
+    row = %{tag: "tr", style: %{display: :table_row}, children: [cell]}
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlTableValidator.form([row])
+    assert diagnostic.source == "td"
+    Limits.install(Map.put(Limits.effective(), :max_table_grid_work, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render("<table><tr><td>Work</td></tr></table>")
+
+    assert diagnostic.message =~ "max_table_grid_work"
+  end
+
+  test "chosen image budget failures preserve the selected resource diagnostic" do
+    png =
+      Base.decode64!(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNg+A8AAQIBAM9Vq9EAAAAASUVORK5CYII="
+      )
+
+    Limits.install(Map.put(Limits.effective(), :max_image_source_bytes, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render("<img srcset='chosen 2x'>",
+               assets: %{"chosen" => {:bytes, png}}
+             )
+
+    assert diagnostic.source == "chosen" and diagnostic.message =~ "image"
+  end
+
+  test "responsive candidate and print predicate complexity use centralized limits" do
+    alias NativeElixirPdfUtilities.HtmlToPdf
+    original = Limits.effective()
+    Limits.install(Map.put(original, :max_responsive_image_candidates, 2))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render("<img srcset='a 1x, b 2x, c 3x'>")
+
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_responsive_image_candidates"
+    Limits.install(Map.put(original, :max_media_query_depth, 2))
+
+    html =
+      "<picture style='display:block'><source media='((((width:20px))))' srcset=a><img src=b></picture>"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
+    assert diagnostic.stage == :style and diagnostic.message =~ "max_media_query_depth"
+    Limits.install(Map.put(original, :max_html_numeric_token_bytes, 3))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render("<img srcset='a 1234w'>")
+
+    assert diagnostic.message =~ "max_html_numeric_token_bytes"
+  end
+
+  test "gauge numeric work and artwork use existing centralized resource budgets" do
+    Limits.install(Map.put(Limits.effective(), :max_html_numeric_token_bytes, 3))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render("<meter value='1234'></meter>")
+
+    assert diagnostic.stage == :html and diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "max_html_numeric_token_bytes"
+    Limits.install(Map.put(Limits.defaults(), :max_layout_boxes, 2))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render("<progress value=.5></progress>")
+
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_layout_boxes"
+  end
+
   test "uses every built-in default when no overrides are configured" do
     assert {:ok, defaults} = LimitsValidator.validate([])
     assert defaults == Limits.defaults()
     assert Limits.effective() == Limits.defaults()
-    assert map_size(defaults) == 111
+    assert map_size(defaults) == 135
   end
 
   test "accepts a partial override for every configurable resource limit" do
@@ -37,6 +134,35 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
       assert limits[key] == configured
       assert map_size(limits) == map_size(Limits.defaults())
     end)
+  end
+
+  test "HTML integer parsing uses ASCII prefixes and bounds numeric work" do
+    for {source, expected} <- [
+          {"  +12 trailing", 12},
+          {"\t-02.5", -2},
+          {"0", 0},
+          {"2147483648", 2_147_483_648}
+        ] do
+      assert HtmlValidator.parse_html_integer(source) == {:ok, expected}
+    end
+
+    for source <- [nil, "", "-", " + 2", "\u00A02", "٢"] do
+      assert HtmlValidator.parse_html_integer(source) == :error
+    end
+
+    Limits.install(Map.put(Limits.effective(), :max_html_numeric_token_bytes, 3))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render("<ol start='1234'><li>A</li></ol>")
+
+    assert diagnostic.stage == :html
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "max_html_numeric_token_bytes"
+    assert diagnostic.source == "1234"
+    assert diagnostic.operation == :render
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render("<ol><li value='1234'>A</li></ol>")
   end
 
   test "rejects malformed, unknown, repeated, and unsafe limit configuration" do

@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Pdf.InfoCodec
   alias NativeElixirPdfUtilities.Pdf.TextEncoding
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.TextValidator
@@ -88,6 +89,13 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
 
   defp prepare_instruction(instruction, document, resources, state, page, depth) do
     case instruction do
+      %{operator: "BDC", operands: [_tag, properties]} ->
+        with {:ok, properties} <- marked_properties(document, resources, properties, page),
+             {:ok, text, preparation} <-
+               replacement_text(document, properties, page, state.preparation) do
+          {:ok, Map.put(instruction, :actual_text, text), %{state | preparation: preparation}}
+        end
+
       %{operator: "q"} ->
         {:ok, instruction, %{state | stack: [state.font | state.stack]}}
 
@@ -176,6 +184,82 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
 
       _ ->
         {:ok, instruction, state}
+    end
+  end
+
+  defp marked_properties(document, resources, properties, page) do
+    case properties do
+      {:name, name} ->
+        with {:ok, resources} <- Reader.dictionary(document, resources),
+             {:ok, properties} <- Reader.dictionary(document, Map.get(resources, "Properties")),
+             {:ok, value} <- required_value(properties, name, "marked-content property", page),
+             {:ok, dictionary} <- Reader.dictionary(document, value) do
+          {:ok, dictionary}
+        end
+
+      properties ->
+        {:ok, properties}
+    end
+  end
+
+  defp replacement_text(document, properties, page, preparation) do
+    case Map.fetch(properties, "ActualText") do
+      :error ->
+        {:ok, nil, preparation}
+
+      {:ok, value} ->
+        with {:ok, value} <- Reader.resolve(document, value) do
+          case value do
+            {kind, bytes} when kind in [:string, :hex, :hex_string] and is_binary(bytes) ->
+              remaining = Limits.get(:max_extracted_text_bytes) - preparation.extracted_bytes
+
+              minimum_decoded_bytes =
+                case bytes do
+                  <<0xFE, 0xFF, encoded::binary>> -> div(byte_size(encoded), 2)
+                  <<0xEF, 0xBB, 0xBF, encoded::binary>> -> byte_size(encoded)
+                  bytes -> byte_size(bytes)
+                end
+
+              if minimum_decoded_bytes > remaining do
+                error(
+                  :limits,
+                  :resource_limit_exceeded,
+                  "ActualText bytes exceed the extraction limit",
+                  page: page
+                )
+              else
+                case InfoCodec.decode_text(bytes) do
+                  {:ok, text} when byte_size(text) <= remaining ->
+                    {:ok, text,
+                     %{
+                       preparation
+                       | extracted_bytes: preparation.extracted_bytes + byte_size(text)
+                     }}
+
+                  {:ok, _text} ->
+                    error(
+                      :limits,
+                      :resource_limit_exceeded,
+                      "decoded ActualText bytes exceed the extraction limit",
+                      page: page
+                    )
+
+                  :error ->
+                    error(
+                      :content,
+                      :invalid_pdf_input,
+                      "ActualText must contain a valid PDF text string",
+                      page: page
+                    )
+                end
+              end
+
+            _ ->
+              error(:content, :invalid_pdf_input, "ActualText must be a PDF text string",
+                page: page
+              )
+          end
+        end
     end
   end
 

@@ -3,6 +3,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometryTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
 
+  test "nonpainting flow markers retain line height for pagination" do
+    marker = %{type: :flow_marker, x: 10, y: 20, width: 0, height: 12}
+    assert PageGeometry.box_vertical_bounds(marker) == {32, 20}
+    assert PageGeometry.box_vertical_bounds(%{marker | y: -5, height: 0}) == {-5, -5}
+  end
+
   test "text line bounds preserve measured ascent and leading through pagination" do
     box = %{
       type: :text,

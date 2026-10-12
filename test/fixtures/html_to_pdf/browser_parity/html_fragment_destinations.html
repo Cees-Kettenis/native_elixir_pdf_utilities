@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><style>
+@page {size:264pt 240pt;margin:12pt}
+html,body {margin:0;padding:0}
+body {font-family:"DejaVu Sans";font-size:10pt;line-height:12pt;color:#111827}
+p {margin:0 0 6pt}
+.narrow {width:120pt}
+</style></head><body>
+<p>Internal PDF destinations</p>
+<p><a href="#later">Later page link</a> <a href="#caf%C3%A9">Decoded link</a></p>
+<p><a href="#duplicate">First duplicate link</a> <a href="#hidden">Hidden link</a></p>
+<p><a href="#missing">Missing link</a> <a href="#">Beginning link</a> <a href="#TOP">Top link</a></p>
+<p><a href="#empty">Empty target link</a> <a href="#legacy">Legacy name link</a></p>
+<p><a href="https://example.test/docs/#remote">External fragment link</a></p>
+<p><a inert href="#later">Inert internal content</a></p>
+<template><p id="missing">Unused template target</p></template>
+<p id="hidden" hidden>Hidden target content</p>
+<div style="break-before:page"><div id="later"><p>Second page nested target</p>
+<p class="narrow"><span id="café">Decoded target preserves every visible word across wrapped lines</span><span id="empty"></span></p>
+<p id="duplicate">First duplicate target</p>
+<p id="duplicate">Second duplicate target</p>
+<p><a name="legacy">Legacy named target</a></p>
+<p>End of internal destination fixture</p>
+</div></div>
+</body></html>

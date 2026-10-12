@@ -1,0 +1,21 @@
+<!doctype html><html><head><style>
+@page {size:264pt 240pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt;}
+body {padding:12pt;}
+p {margin:0 0 6pt;}
+.panel {display:block;border:1px solid #777;padding:6pt;margin-bottom:6pt;}
+input {display:block;width:180pt;box-sizing:border-box;border:1px solid #777;background:white;padding:1.5pt 3pt;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt;margin-bottom:6pt;}
+input:enabled {color:#164e63;}
+a {color:#164e63;text-decoration:underline;}
+</style></head><body>
+<p>Before inert content</p>
+<x-box inert=false class=panel>
+<p>Visible inert custom container</p>
+<input name=active value="Inert initial value">
+<a href="https://example.com/held">Visible inactive link</a>
+</x-box>
+<p inert="anything">Visible boolean presence</p>
+<p><a href="https://example.com/active">Active <span inert>inert span</span> active</a></p>
+<input name=active value="Active initial field">
+<p>After inert content</p>
+</body></html>

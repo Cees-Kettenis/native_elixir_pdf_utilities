@@ -1,0 +1,21 @@
+<!doctype html><html><head><style>
+@page {size:300pt 240pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt;}
+body {padding:12pt;}
+p {margin:0 0 6pt;}
+:popover-open {display:block;color:red;}
+[popover]:not(:popover-open) {color:#9a3412;}
+.siblings>span:nth-child(2) {color:#164e63;}
+</style></head><body>
+<p>Initial closed popovers</p>
+<div popover><p>Unused auto content</p><input name=closed value=Unused></div>
+<div popover=AUTO>Unused keyword content</div>
+<div popover=hint>Unused hint content</div>
+<div popover=manual>Unused manual content</div>
+<x-box popover=invalid>Unused invalid content</x-box>
+<p>All initial values remain closed</p>
+<div class=siblings><span popover>Unused sibling</span><span>Actual second sibling</span></div>
+<p>Nested closed content</p>
+<div popover><div popover=hint>Unused nested content</div></div>
+<p>After popovers</p>
+</body></html>

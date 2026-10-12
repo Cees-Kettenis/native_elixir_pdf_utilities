@@ -3,6 +3,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderCacheTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
 
+  test "editing region caches isolate nested document scopes and reused selector identities" do
+    alias NativeElixirPdfUtilities.Validators.HtmlValidator
+    id = make_ref()
+    paragraph = %{tag: "p", attributes: %{}, _selector_id: id}
+    host = %{tag: "div", attributes: %{"contenteditable" => "true"}, _selector_id: make_ref()}
+
+    outer =
+      RenderCache.run(fn cache ->
+        assert HtmlValidator.editing_state_matches?(:read_write, paragraph, [host], cache)
+
+        nested =
+          RenderCache.run(fn inner ->
+            assert HtmlValidator.editing_state_matches?(:read_only, paragraph, [], inner)
+            inner
+          end)
+
+        assert Process.get(nested) == nil
+        assert HtmlValidator.editing_state_matches?(:read_write, paragraph, [host], cache)
+        cache
+      end)
+
+    assert Process.get(outer) == nil
+
+    RenderCache.run(fn cache ->
+      assert HtmlValidator.editing_state_matches?(:read_only, paragraph, [], cache)
+    end)
+  end
+
   test "stylesheet scopes share nested work and release snapshots after failure" do
     assert RenderCache.fetch_stylesheet(:css, fn -> :uncached end) == :uncached
 

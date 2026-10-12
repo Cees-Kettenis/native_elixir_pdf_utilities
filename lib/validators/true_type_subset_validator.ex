@@ -6,6 +6,7 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeSubsetValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.FontValidator
 
   @type plan :: %{
           scaler: non_neg_integer(),
@@ -65,6 +66,53 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeSubsetValidator do
       _ ->
         invalid("font subsetting requires a TrueType font and glyph IDs")
     end
+  end
+
+  @doc false
+  @spec prepare_glyph_bounds(term()) ::
+          {:ok, tuple()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_glyph_bounds(data) do
+    FontValidator.with_budget(fn ->
+      case data do
+        data when is_binary(data) ->
+          with {:ok, _scaler, tables} <- table_directory(data),
+               {:ok, head} <- required_table(tables, "head"),
+               {:ok, maxp} <- required_table(tables, "maxp"),
+               {:ok, glyf} <- required_table(tables, "glyf"),
+               {:ok, loca} <- required_table(tables, "loca"),
+               {:ok, glyph_count, location_format} <- font_header(head, maxp) do
+            offset_bytes = (glyph_count + 1) * if(location_format == 0, do: 2, else: 4)
+            # Decode one location and ten header bytes per glyph, plus its result entry.
+            FontValidator.reserve(:max_font_math_work, offset_bytes + glyph_count * 11)
+
+            with {:ok, offsets} <- glyph_offsets(loca, glyf, glyph_count, location_format) do
+              offsets
+              |> Enum.chunk_every(2, 1, :discard)
+              |> Enum.reduce_while({:ok, []}, fn [start, finish], {:ok, bounds} ->
+                case binary_part(glyf, start, finish - start) do
+                  <<>> ->
+                    {:cont, {:ok, [{0, 0, 0, 0} | bounds]}}
+
+                  <<_contours::signed-16, xmin::signed-16, ymin::signed-16, xmax::signed-16,
+                    ymax::signed-16, _rest::binary>>
+                  when xmin <= xmax and ymin <= ymax ->
+                    {:cont, {:ok, [{xmin, ymin, xmax, ymax} | bounds]}}
+
+                  _ ->
+                    {:halt, invalid("TrueType glyph has malformed ink bounds")}
+                end
+              end)
+              |> case do
+                {:ok, bounds} -> {:ok, bounds |> Enum.reverse() |> List.to_tuple()}
+                error -> error
+              end
+            end
+          end
+
+        _ ->
+          invalid("glyph metrics require a standalone TrueType font")
+      end
+    end)
   end
 
   defp table_directory(data) do

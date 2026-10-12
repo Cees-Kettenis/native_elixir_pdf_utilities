@@ -1,0 +1,5 @@
+<!doctype html><html><head><style>
+@page {size:240pt 360pt;margin:12pt;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt;}
+p {margin:0;} iframe {display:block;margin:0 0 9pt;} a {color:black;text-decoration:none;}
+</style></head><body><p>Parent local resource</p><iframe src="iframe_local_child.html" style="border:0;width:120pt;height:90pt"></iframe><p>Local siblings</p><iframe src="iframe_local_leaf.html" style="border:0;width:100pt;height:25pt"></iframe><iframe style="border:0;width:150pt;height:25pt;" src="https://example.invalid/never.html" srcdoc="&lt;style&gt;@font-face{font-family:&#x27;DejaVu Sans&#x27;;src:url(__FONT_ROOT__/DejaVuSans.ttf)}body{overflow:hidden}&lt;/style&gt;&lt;p style=&quot;margin:0;font-family:DejaVu Sans;font-size:10pt;line-height:13pt&quot;&gt;Srcdoc takes precedence&lt;/p&gt;"></iframe><iframe style="border:0;width:30pt;height:5pt" srcdoc=""></iframe><p>End local parent</p></body></html>

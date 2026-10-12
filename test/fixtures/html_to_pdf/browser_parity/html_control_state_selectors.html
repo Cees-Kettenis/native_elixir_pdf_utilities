@@ -1,0 +1,43 @@
+<!doctype html>
+<html><head><style>
+@page { size:264pt 660pt; margin:0; }
+html,body { margin:0; padding:0; }
+body { padding:12pt; font-family:'DejaVu Sans'; font-size:10.5pt; line-height:13.5pt; }
+input,button,textarea,select { display:block; width:180pt; box-sizing:border-box;
+ border:1px solid #777777; background:white; padding:1.5pt 3pt; margin:0 0 6pt;
+ font-family:'DejaVu Sans'; font-size:10.5pt; line-height:13.5pt; border-radius:0; }
+textarea { height:42pt; }
+input:enabled,textarea:enabled,button:enabled,select:enabled { color:#21517b; }
+input:DISABLED,textarea:disabled,button:disabled,select:disabled { color:#993300; background:#f7f7f7; }
+input:enabled:not([readonly]) { color:#21517b; }
+.requirement.first { margin-top:1.5pt; }
+.requirement:required { border-color:#b03020; background:#fff4dc; }
+.requirement:optional:not([type="button"]):not([type="hidden"]) { border-color:#205090; background:#eef6ff; }
+.requirement:not(:required):not(:optional) { border-color:#777777; }
+.left { text-align:left; }
+p { margin:0; }
+</style></head><body>
+<input value="Enabled text">
+<input disabled="false" value="Boolean disabled presence">
+<input readonly value="Readonly remains enabled">
+<input type="unknown" value="Text default stays enabled">
+<input type="hidden" value="Unprinted enabled">
+<input type="hidden" disabled value="Unprinted disabled">
+<input type="submit" value="Enabled button">
+<input type="reset" disabled value="Disabled button">
+<button aria-disabled="true" class="left">ARIA alone stays enabled</button>
+<button disabled class="left">Disabled button element</button>
+<textarea readonly>Readonly textarea
+Still enabled</textarea>
+<textarea disabled>Disabled textarea</textarea>
+<p role="button" aria-disabled="true">Ordinary text retains its color</p>
+<input class="requirement first" required="false" value="Required by boolean presence">
+<input class="requirement" value="Optional text">
+<input class="requirement" readonly required value="Readonly stays required">
+<input class="requirement" disabled required value="Disabled stays required">
+<textarea class="requirement" required>Required textarea</textarea>
+<select class="requirement" required><option value="">Required dropdown</option></select>
+<select class="requirement"><option>Optional dropdown</option></select>
+<input class="requirement" type="button" required value="Inapplicable button">
+<input class="requirement" type="hidden" required value="Hidden does not match either state">
+</body></html>

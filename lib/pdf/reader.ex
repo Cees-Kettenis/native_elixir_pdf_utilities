@@ -62,6 +62,60 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
+  @doc false
+  @spec parse_object_bodies(term()) ::
+          {:ok, [NativeElixirPdfUtilities.Pdf.IncrementalWriter.object_entry()]}
+          | {:error, {error_reason(), Diagnostics.diagnostic()}}
+  def parse_object_bodies(objects) do
+    PdfValidator.with_reader_budget(fn ->
+      with {:ok, objects} <-
+             PdfValidator.prepare_object_bodies(objects, operation: :read, module: __MODULE__) do
+        Enum.reduce_while(objects, {:ok, []}, fn {id, serialized}, {:ok, entries} ->
+          result =
+            with tokens when is_list(tokens) <-
+                   Tokenizer.new(serialized) |> Tokenizer.tokenize_all(),
+                 {:ok, value, rest} <- parse_value(tokens),
+                 {:ok, stream, remaining_tokens} <- parse_optional_stream(rest),
+                 :ok <-
+                   PdfValidator.validate_object_body(value, stream, remaining_tokens,
+                     operation: :read,
+                     module: __MODULE__,
+                     source: "object #{id} 0"
+                   ) do
+              body =
+                if is_binary(stream),
+                  do: {:stream, Map.delete(value, "Length"), stream},
+                  else: {:value, value}
+
+              {:ok, {id, 0, body}}
+            else
+              {:error, {_reason, _diagnostic}} = failure ->
+                tokenizer_error(failure, :object)
+
+              _ ->
+                error(
+                  :object,
+                  :invalid_pdf_input,
+                  "serialized object body has malformed or trailing data"
+                )
+            end
+
+          case result do
+            {:ok, entry} ->
+              {:cont, {:ok, [entry | entries]}}
+
+            {:error, {reason, diagnostic}} ->
+              {:halt, {:error, {reason, Map.put(diagnostic, :source, "object #{id} 0")}}}
+          end
+        end)
+        |> case do
+          {:ok, entries} -> {:ok, Enum.reverse(entries)}
+          failure -> failure
+        end
+      end
+    end)
+  end
+
   @doc """
   Parses and semantically validates a PDF into a reusable prepared context.
 

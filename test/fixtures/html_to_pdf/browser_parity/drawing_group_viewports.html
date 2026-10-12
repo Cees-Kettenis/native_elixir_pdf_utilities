@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><meta charset="UTF-8"><style>
+@page { size: 240pt 180pt; margin: 0; }
+html, body { margin: 0; padding: 0; }
+svg { display: block; width: 240pt; height: 180pt; }
+text { font-family: "DejaVu Sans"; font-size: 12px; }
+</style></head><body>
+<!-- Direct writer reference. SVG uses a flipped coordinate group to express PDF
+     bottom-left coordinates; individual text is flipped back to remain upright.
+     This fixture exercises the writer contract, not HTML SVG dispatch. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 180">
+<defs>
+<clipPath id="outer"><rect x="0" y="0" width="120" height="80"/></clipPath>
+<clipPath id="inner"><rect x="0" y="0" width="70" height="30"/></clipPath>
+<clipPath id="image"><rect x="5" y="25" width="40" height="20"/></clipPath>
+</defs>
+<g transform="translate(20.25 139.75) scale(1.5 -1.25)" clip-path="url(#outer)">
+  <rect x="-10" y="-10" width="150" height="100" fill="#eeeeee"/>
+  <a href="https://example.com/outer"><text transform="scale(1 -1)" x="8" y="-8">Ω café</text></a>
+  <g transform="translate(20 20) scale(0.5 2)" clip-path="url(#inner)">
+    <rect x="-10" y="-10" width="100" height="50" fill="#2878c8"/>
+    <image x="2" y="20" width="80" height="30" clip-path="url(#image)" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC" preserveAspectRatio="none"/>
+    <a href="https://example.com/inner"><text transform="scale(1 -1)" x="4" y="-8">Nested Ω</text></a>
+    <text transform="scale(1 -1)" x="100" y="-8">Off viewport</text>
+  </g>
+</g>
+<text x="20.25" y="159.75">Sibling survives</text>
+</svg></body></html>

@@ -9,6 +9,194 @@ defmodule NativeElixirPdfUtilities.FormsTest do
     :ok
   end
 
+  test "option labels and text-derived values follow separate initial rules" do
+    for {option, value, label} <- [
+          {"<option> \tAlpha\n Beta\r\f </option>", "Alpha Beta", "Alpha Beta"},
+          {"<option label='Shown'> Inner\n Value </option>", "Inner Value", "Shown"},
+          {"<option label='' value=''>Fallback</option>", "", "Fallback"},
+          {"<option label='Label' value=' Raw\n Value '>Unused</option>", " Raw\n Value ",
+           "Label"},
+          {"<option>&nbsp;A&nbsp;</option>", "\u00A0A\u00A0", "\u00A0A\u00A0"}
+        ] do
+      html = "<select name='choice'>#{option}</select>"
+      assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+
+      assert {:ok, [%{value: ^value, choices: [%{value: ^value, label: ^label}]}]} =
+               Forms.fields(pdf)
+
+      assert {:ok, flattened} = Forms.flatten(pdf)
+      assert {:ok, text} = Text.extract(flattened, layout: false)
+      assert String.trim(text) == String.trim(label)
+      assert {:ok, static} = HtmlToPdf.render(html, forms: :static, system_font_discovery: false)
+      assert {:ok, text} = Text.extract(static, layout: false)
+      assert String.trim(text) == String.trim(label)
+    end
+  end
+
+  test "optgroups preserve choice order and inherited disabled default selection" do
+    for {groups, expected} <- [
+          {"<optgroup label='Unavailable' disabled><option value='a'>Alpha</option></optgroup><optgroup label='Available'><option value='b' label='Bee'>Beta</option></optgroup>",
+           "b"},
+          {"<optgroup label='Unavailable' disabled><option value='a' selected>Alpha</option></optgroup><option value='b'>Beta</option>",
+           "a"},
+          {"<optgroup label='Unavailable' disabled='false'><option value='a'>Alpha</option></optgroup>",
+           nil},
+          {"<optgroup label='Empty'></optgroup>", nil}
+        ] do
+      assert {:ok, pdf} =
+               HtmlToPdf.render("<select name='choice'>#{groups}</select>",
+                 system_font_discovery: false
+               )
+
+      assert {:ok, [%{type: :choice, value: ^expected, choices: choices}]} = Forms.fields(pdf)
+
+      assert Enum.map(choices, & &1.value) ==
+               if(groups =~ "value='b'",
+                 do: ["a", "b"],
+                 else: if(groups =~ "value='a'", do: ["a"], else: [])
+               )
+
+      assert {:ok, _} = Forms.flatten(pdf)
+    end
+  end
+
+  test "single selects retain the last selection and default to the first enabled option" do
+    for {options, expected, label} <- [
+          {"<option value='a' selected>Alpha</option><option value='b' selected>Beta</option>",
+           "b", "Beta"},
+          {"<option value='a' disabled>Alpha</option><option value='b'>Beta</option>", "b",
+           "Beta"},
+          {"<option value='a' disabled selected>Alpha</option><option value='b'>Beta</option>",
+           "a", "Alpha"},
+          {"<option value=''>Empty value</option>", "", "Empty value"}
+        ] do
+      html = "<p>Selection</p><select name='choice'>#{options}</select>"
+      assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+      assert {:ok, [%{name: "choice", type: :choice, value: ^expected}]} = Forms.fields(pdf)
+      assert {:ok, text} = Text.extract(pdf, layout: false)
+      assert text =~ "Selection"
+      assert {:ok, flattened} = Forms.flatten(pdf)
+      assert {:ok, []} = Forms.fields(flattened)
+      assert {:ok, text} = Text.extract(flattened, layout: false)
+      assert text =~ label
+      assert {:ok, static} = HtmlToPdf.render(html, forms: :static, system_font_discovery: false)
+      assert {:ok, text} = Text.extract(static, layout: false)
+      assert text =~ label
+    end
+  end
+
+  test "empty and all-disabled selects have an absent value without raising" do
+    for {options, expected, choices} <- [
+          {"", nil, []},
+          {"<option value='a' disabled>Alpha</option>", nil, [%{value: "a", label: "Alpha"}]},
+          {"<option></option>", "", [%{value: "", label: ""}]}
+        ] do
+      html = "<p>Before</p><select name='choice'>#{options}</select><p>After</p>"
+      assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+      assert {:ok, [%{name: "choice", value: ^expected, choices: ^choices}]} = Forms.fields(pdf)
+      assert {:ok, filled} = Forms.fill(pdf, %{"choice" => nil})
+      assert {:ok, [%{value: nil}]} = Forms.fields(filled)
+      assert {:ok, flattened} = Forms.flatten(pdf)
+      assert {:ok, []} = Forms.fields(flattened)
+      assert {:ok, text} = Text.extract(flattened, layout: false)
+      assert text =~ "Before" and text =~ "After"
+      refute text =~ "Alpha"
+      assert {:ok, _} = HtmlToPdf.render(html, forms: :static, system_font_discovery: false)
+    end
+  end
+
+  test "last initially checked radio wins in artwork and interactive values" do
+    html =
+      "<form><label><input type='radio' name='mode' value='a' checked>Alpha</label><label><input type='radio' name='mode' value='b' checked>Beta</label></form>"
+
+    reference = String.replace(html, "value='a' checked", "value='a'")
+
+    for forms <- [:static, :interactive] do
+      opts = [forms: forms, system_font_discovery: false]
+      assert {:ok, actual} = HtmlToPdf.render(html, opts)
+      assert {:ok, expected} = HtmlToPdf.render(reference, opts)
+      assert actual == expected
+      assert {:ok, text} = Text.extract(actual, layout: false)
+      assert text =~ "Alpha" and text =~ "Beta"
+
+      if forms == :interactive do
+        assert {:ok, [%{name: "mode", type: :radio, value: "b"}]} = Forms.fields(actual)
+      else
+        assert {:ok, []} = Forms.fields(actual)
+      end
+    end
+  end
+
+  test "independent owner groups cannot silently merge into a shared PDF field name" do
+    html =
+      "<form id='one'><label><input type='radio' name='shared' value='a' checked>Alpha</label><input type='radio' name='shared' value='b'></form><form id='two'><label><input type='radio' name='shared' value='c' checked>Beta</label><input type='radio' name='shared' value='d'></form>"
+
+    assert {:error, {:unsupported_form, diagnostic}} =
+             HtmlToPdf.render(html, system_font_discovery: false)
+
+    assert diagnostic.stage == :forms and diagnostic.reason == :unsupported_form
+    assert diagnostic.source == "shared"
+    assert diagnostic.message =~ "different HTML form owners"
+    assert diagnostic.message =~ "forms: :static"
+    assert {:ok, pdf} = HtmlToPdf.render(html, forms: :static, system_font_discovery: false)
+    assert {:ok, []} = Forms.fields(pdf)
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    assert text =~ "Alpha" and text =~ "Beta"
+  end
+
+  test "native appearances support one thousand editable controls under default page limits" do
+    for count <- [1, 100, 1_000] do
+      html =
+        Enum.map_join(1..count, fn i ->
+          "<div><input name='field#{i}' value='Initial#{i}'></div>"
+        end)
+
+      assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+      assert {:ok, fields} = Forms.fields(pdf)
+
+      assert Enum.map(fields, &{&1.name, &1.value}) ==
+               Enum.map(1..count, &{"field#{&1}", "Initial#{&1}"})
+
+      assert {:ok, context} = Reader.read_validated(pdf)
+      assert length(context.pages) < Limits.get(:max_rendered_pages)
+
+      catalogs =
+        for {_ref, %{value: %{"Type" => {:name, "Catalog"}}}} <- context.document.objects,
+            do: true
+
+      assert length(catalogs) == 1
+
+      assert {:ok, form} =
+               NativeElixirPdfUtilities.Validators.FormValidator.inspect_document(context)
+
+      for field <- form.fields do
+        assert field.flags == 0 and field.type == :text
+        [widget] = field.widgets
+        normal = widget.dictionary["AP"]["N"]
+        background = widget.dictionary["NEPUBackground"]
+        assert {:ok, normal_dictionary} = Reader.dictionary(context.document, normal)
+        assert {:ok, background_dictionary} = Reader.dictionary(context.document, background)
+        assert normal_dictionary["Type"] == {:name, "XObject"}
+        assert normal_dictionary["Subtype"] == {:name, "Form"}
+        assert normal_dictionary["BBox"] == background_dictionary["BBox"]
+        assert normal != background
+      end
+
+      values = Map.new(1..count, &{"field#{&1}", "Updated#{&1}"})
+      assert {:ok, filled} = Forms.fill(pdf, values)
+      assert {:ok, fields} = Forms.fields(filled)
+
+      assert Enum.map(fields, &{&1.name, &1.value}) ==
+               Enum.map(1..count, &{"field#{&1}", "Updated#{&1}"})
+
+      assert {:ok, flat} = Forms.flatten(filled)
+      assert {:ok, []} = Forms.fields(flat)
+      assert {:ok, text} = Text.extract(flat)
+      for i <- 1..count, do: assert(String.contains?(text, "Updated#{i}"))
+      refute text =~ "Initial"
+    end
+  end
+
   test "clearing a single choice remains distinct from selecting its empty export value" do
     html = """
     <div><select name="choice"><option value="">Empty option</option><option value="B" selected>Bee</option></select></div>
@@ -268,8 +456,7 @@ defmodule NativeElixirPdfUtilities.FormsTest do
   test "rejects ambiguous HTML names and radio values" do
     for controls <- [
           "<input name=\"a\"><input name=\"a\">",
-          "<input type=\"radio\" name=\"a\"><input type=\"radio\" name=\"a\">",
-          "<input type=\"radio\" name=\"a\" value=\"a\" checked><input type=\"radio\" name=\"a\" value=\"b\" checked>"
+          "<input type=\"radio\" name=\"a\"><input type=\"radio\" name=\"a\">"
         ] do
       assert {:error, {:invalid_form, %{stage: :forms, message: _}}} =
                HtmlToPdf.render("<div>#{controls}</div>")
@@ -350,5 +537,264 @@ defmodule NativeElixirPdfUtilities.FormsTest do
     assert {:ok, _} = Forms.fill(pdf, %{"a" => "ab"})
     Limits.install(Map.put(Limits.effective(), :max_pdf_form_fields, 1))
     assert {:error, {:resource_limit_exceeded, _}} = HtmlToPdf.render("<div><input><input></div>")
+  end
+
+  test "HTML readonly controls preserve values, combined flags and fill diagnostics" do
+    for {tag, initial, expected} <- [
+          {"input", ~s(type="text" value="A&#10;B"), "AB"},
+          {"input", ~s(type="search" value="A&#13;B"), "AB"},
+          {"textarea", "", "Line1\nLine2"}
+        ],
+        attribute <- ["readonly", "READONLY", ~s(readonly="false")],
+        disabled <- ["", "disabled"] do
+      contents = if tag == "textarea", do: expected, else: ""
+      html = ~s(<#{tag} #{initial} #{attribute} #{disabled} name="locked">#{contents}</#{tag}>)
+      html = if tag == "input", do: String.replace(html, "</input>", ""), else: html
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:ok, [field]} = Forms.fields(pdf)
+      assert field.name == "locked" and field.type == :text and field.read_only
+      assert field.value == expected
+      assert {:ok, context} = Reader.read_validated(pdf)
+
+      assert {:ok, %{fields: [internal]}} =
+               NativeElixirPdfUtilities.Validators.FormValidator.inspect_document(context)
+
+      assert internal.flags == if(tag == "textarea", do: 4097, else: 1)
+
+      assert {:error, {:read_only_form_field, diagnostic}} =
+               Forms.fill(pdf, %{"locked" => "Changed"})
+
+      assert diagnostic.stage == :forms and diagnostic.reason == :read_only_form_field
+      assert diagnostic.module == Forms and diagnostic.operation == :fill
+      assert diagnostic.source == "locked"
+      assert diagnostic.message =~ "read-only"
+      assert {:ok, flattened} = Forms.flatten(pdf)
+      assert {:ok, []} = Forms.fields(flattened)
+      assert {:ok, text} = Text.extract(flattened, layout: false)
+      assert String.replace(text, ~r/\s+/u, "") == String.replace(expected, ~r/\s+/u, "")
+    end
+  end
+
+  test "telephone URL and email use text filling flattening and readonly flags" do
+    for type <- ["tel", "url", "email"],
+        attribute <- ["", "readonly", "disabled", "readonly disabled"] do
+      html = ~s(<input type="#{type}" #{attribute} name="contact" value="A&#13;B&#10;C">)
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:ok, [field]} = Forms.fields(pdf)
+      assert field.type == :text and field.value == "ABC"
+      assert field.read_only == (attribute != "")
+      assert {:ok, context} = Reader.read_validated(pdf)
+
+      assert {:ok, %{fields: [internal]}} =
+               NativeElixirPdfUtilities.Validators.FormValidator.inspect_document(context)
+
+      assert internal.flags == if(attribute == "", do: 0, else: 1)
+
+      if attribute == "" do
+        assert {:ok, filled} = Forms.fill(pdf, %{"contact" => "Updated"})
+        assert {:ok, [%{value: "Updated"}]} = Forms.fields(filled)
+      else
+        assert {:error, {:read_only_form_field, %{stage: :forms, source: "contact"}}} =
+                 Forms.fill(pdf, %{"contact" => "Updated"})
+      end
+
+      assert {:ok, flattened} = Forms.flatten(pdf)
+      assert {:ok, []} = Forms.fields(flattened)
+      assert {:ok, text} = Text.extract(flattened, layout: false)
+      assert String.trim(text) == "ABC"
+    end
+  end
+
+  test "multiple email remains a text field and preserves readonly flags" do
+    for readonly <- ["", "readonly"], multiple <- ["multiple", ~s(multiple="false")] do
+      assert {:ok, pdf} =
+               HtmlToPdf.render(
+                 ~s(<input type="EMAIL" #{multiple} #{readonly} name="contacts" value=" a@example.com ,&#10; b@example.com ">)
+               )
+
+      assert {:ok, [field]} = Forms.fields(pdf)
+      assert field.type == :text and field.value == "a@example.com,b@example.com"
+      assert field.read_only == (readonly != "")
+      assert {:ok, context} = Reader.read_validated(pdf)
+
+      assert {:ok, %{fields: [internal]}} =
+               NativeElixirPdfUtilities.Validators.FormValidator.inspect_document(context)
+
+      assert internal.flags == if(readonly == "", do: 0, else: 1)
+
+      if readonly == "" do
+        assert {:ok, filled} = Forms.fill(pdf, %{"contacts" => "Updated"})
+        assert {:ok, [%{value: "Updated"}]} = Forms.fields(filled)
+      else
+        assert {:error, {:read_only_form_field, %{stage: :forms, source: "contacts"}}} =
+                 Forms.fill(pdf, %{"contacts" => "Updated"})
+      end
+
+      assert {:ok, flattened} = Forms.flatten(pdf)
+      assert {:ok, text} = Text.extract(flattened, layout: false)
+      assert String.replace(text, ~r/\s+/, "") == "a@example.com,b@example.com"
+    end
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               ~s(<input type="email" multiple name="contacts" value=" A&#10;B , C&#13;D ">)
+             )
+
+    assert {:ok, [%{value: "A\nB,C\rD"}]} = Forms.fields(pdf)
+  end
+
+  test "defaulted input types use text names values and readonly flags" do
+    for type <- ["", "unknown", "hidden ", "checKbox"], readonly <- ["", "readonly"] do
+      assert {:ok, pdf} =
+               HtmlToPdf.render(~s(<input type="#{type}" #{readonly} value="A&#13;B&#10;C">))
+
+      assert {:ok, [field]} = Forms.fields(pdf)
+      assert field.name == "TEXT_1_1" and field.type == :text and field.value == "ABC"
+      assert field.read_only == (readonly != "")
+
+      if readonly == "" do
+        assert {:ok, filled} = Forms.fill(pdf, %{"TEXT_1_1" => "Updated"})
+        assert {:ok, [%{value: "Updated"}]} = Forms.fields(filled)
+      else
+        assert {:error, {:read_only_form_field, %{stage: :forms, source: "TEXT_1_1"}}} =
+                 Forms.fill(pdf, %{"TEXT_1_1" => "Updated"})
+      end
+
+      assert {:ok, flattened} = Forms.flatten(pdf)
+      assert {:ok, text} = Text.extract(flattened, layout: false)
+      assert String.trim(text) == "ABC"
+    end
+  end
+
+  test "button input labels stay in page content and do not consume field names or limits" do
+    Limits.install(%{Limits.effective() | max_pdf_form_fields: 3, max_appearance_widgets: 2})
+
+    buttons =
+      ~s(<input type="submit" name="TEXT_1_1"><input type="reset" name="shared"><input type="button" name="shared" value="Custom"><button value="Unprinted"></button>)
+
+    for forms <- [:static, :interactive] do
+      assert {:ok, pdf} = HtmlToPdf.render(buttons <> ~s(<input value="Editable">), forms: forms)
+
+      if forms == :interactive do
+        assert {:ok, [%{name: "TEXT_1_1", type: :text, value: "Editable"}]} = Forms.fields(pdf)
+        assert {:ok, filled} = Forms.fill(pdf, %{"TEXT_1_1" => "Updated"})
+        assert {:ok, flat} = Forms.flatten(filled)
+        assert {:ok, text} = Text.extract(flat, layout: false)
+        assert text =~ "Submit" and text =~ "Reset" and text =~ "Custom" and text =~ "Updated"
+      else
+        assert {:ok, []} = Forms.fields(pdf)
+      end
+
+      assert {:ok, text} = Text.extract(pdf, layout: false)
+      refute text =~ "Unprinted"
+    end
+
+    for type <- ["button", "reset", "submit"] do
+      assert {:ok, pdf} = HtmlToPdf.render(~s(<input type="#{type}" name="a.b" value="Visible">))
+      assert {:ok, []} = Forms.fields(pdf)
+      assert {:ok, text} = Text.extract(pdf, layout: false)
+      assert String.trim(text) == "Visible"
+    end
+  end
+
+  test "password fields preserve values and flags while initial filled and flattened artwork stays masked" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render(~s(<input type="PASSWORD" name="secret" value="A&#13;é🦊">))
+
+    assert {:ok, [%{type: :text, name: "secret", value: "Aé🦊", read_only: false}]} =
+             Forms.fields(pdf)
+
+    assert {:ok, context} = Reader.read_validated(pdf)
+
+    assert {:ok, %{fields: [%{flags: 8192}]}} =
+             NativeElixirPdfUtilities.Validators.FormValidator.inspect_document(context)
+
+    assert {:ok, initial} = Forms.flatten(pdf)
+    assert {:ok, text} = Text.extract(initial, layout: false)
+    assert String.trim(text) == "•••"
+
+    for direct <- [true, false] do
+      assert {:ok, filled} = Forms.fill(pdf, %{"secret" => "New é🦊"}, flatten: direct)
+      flat = if direct, do: filled, else: elem(Forms.flatten(filled), 1)
+      assert {:ok, []} = Forms.fields(flat)
+      assert {:ok, text} = Text.extract(flat, layout: false)
+      assert String.trim(text) == "••••••"
+      refute text =~ "New"
+
+      unless direct do
+        assert {:ok, [%{value: "New é🦊"}]} = Forms.fields(filled)
+      end
+    end
+
+    assert {:error, {:invalid_form_value, diagnostic}} = Forms.fill(pdf, %{"secret" => "A\nB"})
+
+    assert diagnostic.stage == :forms and diagnostic.operation == :fill and
+             diagnostic.source == "secret"
+
+    assert {:ok, locked} =
+             HtmlToPdf.render(
+               ~s(<input type="password" name="secret" readonly="false" value="Initial">)
+             )
+
+    assert {:ok, context} = Reader.read_validated(locked)
+
+    assert {:ok, %{fields: [%{flags: 8193}]}} =
+             NativeElixirPdfUtilities.Validators.FormValidator.inspect_document(context)
+
+    assert {:error, {:read_only_form_field, diagnostic}} =
+             Forms.fill(locked, %{"secret" => "New"})
+
+    assert diagnostic.operation == :fill and diagnostic.source == "secret"
+    assert {:ok, _} = Forms.flatten(locked)
+  end
+
+  test "password fill counts rendered mask bytes in aggregate appearance limits" do
+    assert {:ok, pdf} = HtmlToPdf.render(~s(<input type="password" name="secret">))
+    Limits.install(Map.put(Limits.effective(), :max_appearance_text_bytes, 6))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Forms.fill(pdf, %{"secret" => "ABC"})
+
+    assert diagnostic.stage == :forms and diagnostic.operation == :fill and
+             diagnostic.source == "secret"
+
+    assert diagnostic.message =~ "aggregate"
+    assert {:ok, _} = Forms.fill(pdf, %{"secret" => "AB"})
+  end
+
+  test "password display limits propagate through fill and unsupported text flags stay rejected" do
+    assert {:ok, pdf} = HtmlToPdf.render(~s(<input type="password" name="secret">))
+    Limits.install(Map.put(Limits.effective(), :max_rendered_text_bytes, 8))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Forms.fill(pdf, %{"secret" => "ABC"})
+
+    assert diagnostic.stage == :forms and diagnostic.operation == :fill and
+             diagnostic.source == "secret"
+
+    assert diagnostic.message =~ "max_rendered_text_bytes"
+    assert {:ok, _} = Forms.fill(pdf, %{"secret" => "AB"})
+
+    assert {:ok, context} = Reader.read_validated(pdf)
+
+    assert {:ok, %{fields: [field]}} =
+             NativeElixirPdfUtilities.Validators.FormValidator.inspect_document(context)
+
+    {:ref, {id, generation}} = field.ref
+
+    for flags <- [16_777_216, 33_554_432, 16_785_408, 33_562_624] do
+      assert {:ok, unsupported} =
+               IncrementalWriter.write(context, [
+                 {id, generation, {:value, Map.put(field.dictionary, "Ff", flags)}}
+               ])
+
+      assert {:error, {:unsupported_form, diagnostic}} =
+               Forms.fill(unsupported, %{"secret" => "AB"})
+
+      assert diagnostic.stage == :forms and diagnostic.operation == :fill and
+               diagnostic.source == "secret"
+
+      assert diagnostic.message =~ "comb and rich-text"
+    end
   end
 end

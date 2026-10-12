@@ -1,0 +1,32 @@
+<?document-start Invisible PI data?>
+<!doctype html>
+<html>
+<head>
+<?head name=unused.png href=javascript:run() onclick=run()>
+<style>
+@page { size: 300pt 360pt; margin: 18pt; }
+body { font-family: "DejaVu Sans"; font-size: 11pt; line-height: 15pt; margin: 0; }
+h1 { font-size: 14pt; line-height: 18pt; margin: 0 0 12pt; }
+p { margin: 0 0 8pt; }
+.rows p:first-child { color: #a02020; }
+.rows p:nth-child(2) { color: #2020a0; }
+.rows p:last-child { font-weight: bold; }
+table { margin: 8pt 0; border-collapse: collapse; }
+td { border: 1pt solid black; padding: 4pt; }
+ul { margin: 8pt 0; padding-left: 18pt; }
+pre { font-family: "DejaVu Sans Mono"; font-size: 9pt; line-height: 12pt; margin: 12pt 0; }
+</style>
+</head>
+<?between?>
+<body>
+<h1>Processing instruction markers</h1>
+<div class=rows><?marker name=First><p>First content</p><?start name=Second><p>Second content</p><?end></div>
+<table><?table><tbody><?marker><tr><?row><td>Table content<?cell></td></tr><?end></tbody></table>
+<ul><?marker><li>List content<?end></li></ul>
+<template><?marker name=unused><p>Inert template content</p><img src=unused.png></template>
+<pre>Literal &lt;?marker name=Raw?&gt;</pre>
+<?data src=unused.png style="background-image:url(unused.png)" type=script name=unused value="Invisible PI data"?>
+</body>
+<?after-body>
+</html>
+<?document-end?>

@@ -1,0 +1,21 @@
+<!doctype html><html><head><style>
+@page {size:420pt 420pt;margin:12pt;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:12pt;line-height:18pt;}
+p {margin:0;}
+</style></head><body>
+<p>Progress default <progress value=.5>Hidden fallback</progress> after</p>
+<p>Progress zero <progress value=bad></progress> after</p>
+<p>Progress maximum <progress max=2 value=9></progress> after</p>
+<p>Progress indeterminate <progress></progress> after</p>
+<p>Meter default <meter value=.5>Hidden fallback</meter> after</p>
+<p>Meter low <meter min=0 max=10 low=3 high=7 optimum=1 value=2></meter> after</p>
+<p>Meter suboptimal <meter min=0 max=10 low=3 high=7 optimum=1 value=5></meter> after</p>
+<p>Meter even less good <meter min=0 max=10 low=3 high=7 optimum=1 value=9></meter> after</p>
+<p>Collapsed range <meter min=3 max=2 value=5></meter> after</p>
+<p>Progress sized <progress value=.75 style="width:100pt;height:30pt"></progress> after</p>
+<p>Progress primitive <progress value=.5 style="appearance:none;width:100pt;height:20pt"></progress> after</p>
+<p>Meter primitive <meter value=.5 style="appearance:none;width:100pt;height:20pt"></meter> after</p>
+<p>Primitive suboptimal <meter max=10 low=3 high=7 optimum=1 value=5 style="appearance:none;width:100pt;height:20pt"></meter> after</p>
+<p>Primitive even less good <meter max=10 low=3 high=7 optimum=1 value=9 style="appearance:none;width:100pt;height:20pt"></meter> after</p>
+<p>After gauge cases</p>
+</body></html>

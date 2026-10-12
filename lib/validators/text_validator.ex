@@ -16,7 +16,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.TextResourceValidator
 
-  @validated_operators ~w(q Q cm gs BT ET Tf Tm Td TD T* TL Tc Tw Tz Tr Ts Tj TJ ' " Do)
+  @validated_operators ~w(q Q cm gs BT ET Tf Tm Td TD T* TL Tc Tw Tz Tr Ts Tj TJ ' " Do BMC BDC EMC)
   @text_showing_operators ~w(Tj TJ ' ")
   @typedoc "A validated content instruction with operands in source order."
   @type instruction :: %{required(:operator) => binary(), required(:operands) => [term()]}
@@ -417,8 +417,21 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   defp reduce_instruction_tokens(tokens, instruction_state, page_number) do
     Enum.reduce_while(tokens, instruction_state, fn token, {:ok, operations, operands} ->
       case token do
-        :lbracket ->
-          {:cont, {:ok, operations, [:array_start | operands]}}
+        token when token in [:dict_start, :lbracket] ->
+          depth = Enum.count(operands, &(&1 in [:dictionary_start, :array_start])) + 1
+          marker = if token == :dict_start, do: :dictionary_start, else: :array_start
+
+          case PdfValidator.validate_value_depth(depth, operation: :extract, module: __MODULE__) do
+            :ok -> {:cont, {:ok, operations, [marker | operands]}}
+            {:error, _} = error -> {:halt, error}
+          end
+
+        :dict_end ->
+          case close_dictionary(operands, page_number) do
+            {:ok, operands} -> {:cont, {:ok, operations, operands}}
+            :error -> {:halt, content_error("content dictionary is malformed", page_number)}
+            {:error, _} = error -> {:halt, error}
+          end
 
         :rbracket ->
           case close_array(operands) do
@@ -427,9 +440,17 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
           end
 
         {:op, operator} ->
-          case prepare_instruction(operator, Enum.reverse(operands), page_number) do
-            {:ok, operation} -> {:cont, {:ok, [operation | operations], []}}
-            {:error, _} = instruction_error -> {:halt, instruction_error}
+          if :dictionary_start in operands do
+            {:halt,
+             content_error(
+               "content dictionary contains an operator or is unbalanced",
+               page_number
+             )}
+          else
+            case prepare_instruction(operator, Enum.reverse(operands), page_number) do
+              {:ok, operation} -> {:cont, {:ok, [operation | operations], []}}
+              {:error, _} = instruction_error -> {:halt, instruction_error}
+            end
           end
 
         token ->
@@ -452,21 +473,24 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
            page_number > 0 do
       true ->
         contents
-        |> Enum.reduce_while({:ok, {0, false}}, fn instructions, {:ok, scope} ->
+        |> Enum.reduce_while({:ok, {0, false, 0}}, fn instructions, {:ok, scope} ->
           case validate_scope_instructions(instructions, scope, page_number) do
             {:ok, scope} -> {:cont, {:ok, scope}}
             {:error, _} = scope_error -> {:halt, scope_error}
           end
         end)
         |> case do
-          {:ok, {0, false}} ->
+          {:ok, {0, false, 0}} ->
             :ok
 
-          {:ok, {_graphics_depth, true}} ->
+          {:ok, {_graphics_depth, true, _marked_depth}} ->
             content_error("BT has no matching ET", page_number)
 
-          {:ok, {_graphics_depth, false}} ->
+          {:ok, {graphics_depth, false, _marked_depth}} when graphics_depth > 0 ->
             content_error("q has no matching Q", page_number)
+
+          {:ok, {0, false, _marked_depth}} ->
+            content_error("BMC or BDC has no matching EMC", page_number)
 
           {:error, _} = scope_error ->
             scope_error
@@ -625,7 +649,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   defp prepare_instruction(operator, operands, page_number) do
     normalized =
       case {operator, operands} do
-        {operator, []} when operator in ["q", "Q", "BT", "ET", "T*"] ->
+        {operator, []} when operator in ["q", "Q", "BT", "ET", "T*", "EMC"] ->
           {:ok, []}
 
         {operator, operands} when operator in ["cm", "Tm"] ->
@@ -676,6 +700,16 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
 
         {operator, [{:name, name}]} when operator in ["gs", "Do"] ->
           {:ok, [{:name, name}]}
+
+        {"BMC", [{:name, tag}]} ->
+          {:ok, [{:name, tag}]}
+
+        {"BDC", [{:name, tag}, properties]} ->
+          case properties do
+            {:name, _name} -> {:ok, [{:name, tag}, properties]}
+            properties when is_map(properties) -> {:ok, [{:name, tag}, properties]}
+            _ -> :error
+          end
 
         {operator, _operands} ->
           if operator in @validated_operators, do: :error, else: {:ok, operands}
@@ -924,32 +958,49 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   defp validate_scope_instructions(instructions, scope, page_number) do
     Enum.reduce_while(instructions, {:ok, scope}, fn instruction, {:ok, scope} ->
       case {instruction, scope} do
-        {%{operator: "q"}, {graphics_depth, in_text?}} ->
-          {:cont, {:ok, {graphics_depth + 1, in_text?}}}
+        {%{operator: operator}, {graphics_depth, in_text?, marked_depth}}
+        when operator in ["BMC", "BDC"] ->
+          case marked_depth < Limits.get(:max_text_marked_content_depth) do
+            true ->
+              {:cont, {:ok, {graphics_depth, in_text?, marked_depth + 1}}}
 
-        {%{operator: "Q"}, {graphics_depth, in_text?}} when graphics_depth > 0 ->
-          {:cont, {:ok, {graphics_depth - 1, in_text?}}}
+            false ->
+              {:halt,
+               resource_limit_error("marked-content nesting depth exceeds the limit", page_number)}
+          end
 
-        {%{operator: "Q"}, {0, _in_text?}} ->
+        {%{operator: "EMC"}, {graphics_depth, in_text?, marked_depth}} when marked_depth > 0 ->
+          {:cont, {:ok, {graphics_depth, in_text?, marked_depth - 1}}}
+
+        {%{operator: "EMC"}, {_graphics_depth, _in_text?, 0}} ->
+          {:halt, content_error("EMC has no matching BMC or BDC", page_number)}
+
+        {%{operator: "q"}, {graphics_depth, in_text?, marked_depth}} ->
+          {:cont, {:ok, {graphics_depth + 1, in_text?, marked_depth}}}
+
+        {%{operator: "Q"}, {graphics_depth, in_text?, marked_depth}} when graphics_depth > 0 ->
+          {:cont, {:ok, {graphics_depth - 1, in_text?, marked_depth}}}
+
+        {%{operator: "Q"}, {0, _in_text?, _marked_depth}} ->
           {:halt, content_error("Q has no matching q", page_number)}
 
-        {%{operator: "BT"}, {graphics_depth, false}} ->
-          {:cont, {:ok, {graphics_depth, true}}}
+        {%{operator: "BT"}, {graphics_depth, false, marked_depth}} ->
+          {:cont, {:ok, {graphics_depth, true, marked_depth}}}
 
-        {%{operator: "BT"}, {_graphics_depth, true}} ->
+        {%{operator: "BT"}, {_graphics_depth, true, _marked_depth}} ->
           {:halt, content_error("BT appears inside a text object", page_number)}
 
-        {%{operator: "ET"}, {graphics_depth, true}} ->
-          {:cont, {:ok, {graphics_depth, false}}}
+        {%{operator: "ET"}, {graphics_depth, true, marked_depth}} ->
+          {:cont, {:ok, {graphics_depth, false, marked_depth}}}
 
-        {%{operator: "ET"}, {_graphics_depth, false}} ->
+        {%{operator: "ET"}, {_graphics_depth, false, _marked_depth}} ->
           {:halt, content_error("ET has no matching BT", page_number)}
 
-        {%{operator: operator}, {graphics_depth, in_text?}}
+        {%{operator: operator}, {graphics_depth, in_text?, marked_depth}}
         when operator in @text_showing_operators and in_text? ->
-          {:cont, {:ok, {graphics_depth, in_text?}}}
+          {:cont, {:ok, {graphics_depth, in_text?, marked_depth}}}
 
-        {%{operator: operator}, {_graphics_depth, false}}
+        {%{operator: operator}, {_graphics_depth, false, _marked_depth}}
         when operator in @text_showing_operators ->
           {:halt, content_error("#{operator} appears outside a text object", page_number)}
 
@@ -968,6 +1019,45 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     case rest do
       [] -> :error
       [_array_start | rest] -> {:ok, [{:array, Enum.reverse(values)} | rest]}
+    end
+  end
+
+  defp close_dictionary(operands, page_number) do
+    {values, rest} = Enum.split_while(operands, &(&1 != :dictionary_start))
+
+    case rest do
+      [:dictionary_start | rest] ->
+        pairs = values |> Enum.reverse() |> Enum.chunk_every(2)
+
+        cond do
+          length(pairs) > Limits.get(:max_pdf_container_entries) ->
+            resource_limit_error("content dictionary entry count exceeds the limit", page_number)
+
+          Enum.all?(pairs, fn pair ->
+            case pair do
+              [{:name, _key}, value] -> content_value?(value)
+              _ -> false
+            end
+          end) ->
+            dictionary = Map.new(pairs, fn [{:name, key}, value] -> {key, value} end)
+            {:ok, [dictionary | rest]}
+
+          true ->
+            :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp content_value?(value) do
+    case value do
+      {kind, value} when kind in [:int, :real] -> is_number(value)
+      {kind, value} when kind in [:name, :string, :hex_string] -> is_binary(value)
+      {:array, values} -> Enum.all?(values, &content_value?/1)
+      value when is_map(value) -> true
+      value -> value in [true, false, :null]
     end
   end
 

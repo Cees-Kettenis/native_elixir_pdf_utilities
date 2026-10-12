@@ -214,6 +214,125 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
+  @doc false
+  @spec prepare_object_bodies(term(), [diagnostic_option()]) ::
+          {:ok, [{pos_integer(), binary()}]} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_object_bodies(objects, opts) do
+    case objects do
+      objects when is_list(objects) ->
+        with :ok <- validate_reader_size(length(objects), :max_pdf_objects) do
+          Enum.reduce_while(objects, {:ok, MapSet.new(), 0}, fn entry, {:ok, seen, bytes} ->
+            case entry do
+              {id, body} when is_integer(id) and id > 0 and is_binary(body) ->
+                cond do
+                  MapSet.member?(seen, id) ->
+                    {:halt,
+                     error(
+                       :object,
+                       :invalid_pdf_input,
+                       "serialized object IDs must be unique",
+                       opts
+                     )}
+
+                  id > Limits.get(:max_pdf_objects) ->
+                    {:halt, reader_limit_error(:max_pdf_objects)}
+
+                  true ->
+                    case validate_reader_size(bytes + byte_size(body), :max_pdf_input_bytes) do
+                      :ok -> {:cont, {:ok, MapSet.put(seen, id), bytes + byte_size(body)}}
+                      failure -> {:halt, failure}
+                    end
+                end
+
+              _ ->
+                {:halt,
+                 error(
+                   :object,
+                   :invalid_pdf_input,
+                   "serialized objects require positive IDs and binary bodies",
+                   opts
+                 )}
+            end
+          end)
+          |> case do
+            {:ok, _seen, _bytes} -> {:ok, objects}
+            failure -> failure
+          end
+        end
+
+      _ ->
+        error(:object, :invalid_pdf_input, "serialized objects must be a list", opts)
+    end
+  end
+
+  @doc false
+  @spec validate_object_body(term(), binary() | nil, term(), [diagnostic_option()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_object_body(value, stream, remaining_tokens, opts \\ []) do
+    cond do
+      remaining_tokens != [] ->
+        error(:object, :invalid_pdf_input, "serialized object body has trailing data", opts)
+
+      not is_map(value) ->
+        error(
+          :object,
+          :invalid_pdf_input,
+          "serialized resource objects must contain a dictionary",
+          opts
+        )
+
+      not (is_nil(stream) or is_binary(stream)) ->
+        error(
+          :object,
+          :invalid_pdf_input,
+          "serialized object streams must be binary or absent",
+          opts
+        )
+
+      is_binary(stream) and Map.get(value, "Length") != byte_size(stream) ->
+        error(
+          :object,
+          :invalid_pdf_input,
+          "serialized streams require their exact direct Length",
+          opts
+        )
+
+      not valid_object_value?(value) ->
+        error(
+          :object,
+          :invalid_pdf_input,
+          "serialized objects require PDF values and references with positive IDs and 16-bit generations",
+          opts
+        )
+
+      true ->
+        :ok
+    end
+  end
+
+  defp valid_object_value?(value) do
+    case value do
+      {:ref, {id, generation} = ref} ->
+        # PDF generations are fixed unsigned 16-bit values, not a tunable limit.
+        valid_ref?(ref) and id > 0 and generation <= 65_535
+
+      dictionary when is_map(dictionary) ->
+        Enum.all?(dictionary, fn {key, value} -> is_binary(key) and valid_object_value?(value) end)
+
+      values when is_list(values) ->
+        Enum.all?(values, &valid_object_value?/1)
+
+      {kind, bytes} when kind in [:name, :string, :hex] and is_binary(bytes) ->
+        true
+
+      value when is_number(value) or is_boolean(value) or is_nil(value) ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
   @doc """
   Parses and validates a PDF binary into the reusable shared context.
 

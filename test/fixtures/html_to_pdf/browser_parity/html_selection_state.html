@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Initial selection state</title>
+<style>
+html,body {margin:0;padding:0;}
+body {font-family:"DejaVu Sans";font-size:10pt;line-height:14pt;color:#172033;}
+main {width:390pt;padding:18pt;box-sizing:border-box;}
+p {margin:0 0 8pt;}
+form {margin:0;padding:0;}
+.row {display:grid;grid-template-columns:150pt 160pt;gap:8pt;align-items:center;margin-bottom:8pt;}
+select {font-family:"DejaVu Sans";font-size:10pt;line-height:14pt;width:160pt;height:22pt;box-sizing:border-box;border:0.75pt solid #878787;padding:1.5pt 2.25pt;background-color:white;color:#172033;}
+.checks {display:grid;grid-template-columns:16pt 130pt 16pt 130pt;gap:4pt;align-items:center;margin-bottom:8pt;}
+input {display:block;width:12pt;margin:0;padding:0;}
+input:checked {color:#c02020;}
+input:not(:checked) {color:#172033;}
+</style></head><body><main>
+<p>Initial selections and checked selectors</p><form>
+<div class="row"><label for="last">Last authored selection</label><select id="last" name="last"><option value="a" selected>Alpha</option><option value="b" selected>Beta</option></select></div>
+<div class="row"><label for="fallback">First enabled fallback</label><select id="fallback" name="fallback"><option value="a" disabled>Alpha</option><option value="b">Beta</option></select></div>
+<div class="row"><label for="disabled">Explicit disabled selection</label><select id="disabled" name="disabled"><option value="a" disabled selected>Alpha</option><option value="b">Beta</option></select></div>
+<div class="row"><label for="empty">Empty choices</label><select id="empty" name="empty"></select></div>
+<div class="row"><label for="none">No enabled fallback</label><select id="none" name="none"><option value="a" disabled>Unselected</option></select></div>
+<div class="row"><label for="blank">Blank option</label><select id="blank" name="blank"><option></option></select></div>
+<div class="checks"><input type="radio" name="mode" value="a" checked><label>First unchecked</label><input type="radio" name="mode" value="b" checked><label>Last checked</label></div>
+<div class="checks"><input type="checkbox" checked><label>Checked checkbox</label><input type="checkbox"><label>Unchecked checkbox</label></div>
+</form><p>End of selections</p></main></body></html>

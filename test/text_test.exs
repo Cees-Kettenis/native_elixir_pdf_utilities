@@ -7,6 +7,253 @@ defmodule NativeElixirPdfUtilities.TextTest do
   alias NativeElixirPdfUtilities.Validators.TextResourceValidator
   alias NativeElixirPdfUtilities.Validators.TextValidator
 
+  test "ActualText replaces glyph pieces once and preserves their advance" do
+    source =
+      page_pdf(
+        "BT /F1 12 Tf 1 0 0 1 10 20 Tm (A) Tj /Span << /ActualText <FEFF222B> >> BDC [(u) 0 (v)] TJ EMC (B) Tj ET"
+      )
+
+    assert {:ok, "A∫B"} = Text.extract(source, layout: false)
+    assert {:ok, "A∫B"} = Text.extract(source)
+    assert {:ok, %{pages: [%{spans: [a, integral, b]}]}} = Text.extract_spans(source)
+    assert Enum.map([a, integral, b], & &1.source_index) == [0, 1, 2]
+    assert integral.text == "∫"
+    assert integral.x == a.end_x
+    assert integral.end_x == b.x
+    assert integral.end_x - integral.x == 12.0
+    assert integral.font_resource == "F1"
+    assert integral.font_size == 12.0
+  end
+
+  test "adjacent ActualText groups join Unicode replacements without word breaks" do
+    source =
+      page_pdf(
+        "/Span << /ActualText <FEFFD835DC65> >> BDC BT /F1 12 Tf (x) Tj ET EMC /Span << /ActualText (yz) >> BDC BT /F1 12 Tf (a) Tj ET EMC"
+      )
+
+    assert {:ok, "𝑥yz"} = Text.extract(source, layout: false)
+    assert {:ok, %{pages: [%{spans: [first, second]}]}} = Text.extract_spans(source)
+    assert first.text == "𝑥"
+    refute first.joins_previous?
+    assert second.joins_previous?
+  end
+
+  test "nested replacement, transparent marked content and graphics state use one outer string" do
+    source =
+      page_pdf(
+        "BT /F1 12 Tf /Span << /ActualText (outer) >> BDC (a) Tj q /Other BMC /Span << /ActualText (inner) >> BDC 7 Tr (b) Tj EMC EMC Q 3 Tr (c) Tj EMC (d) Tj ET"
+      )
+
+    assert {:ok, %{pages: [%{spans: [outer, d]}]}} = Text.extract_spans(source)
+    assert outer.text == "outer"
+    assert outer.paints_text?
+    assert outer.adds_to_clip_path?
+    refute d.paints_text?
+    assert {:ok, "outer"} = Text.extract(source, layout: false)
+
+    assert {:ok, "AB"} =
+             Text.extract(
+               page_pdf(
+                 "BT /F1 12 Tf (A) Tj /Span << /ActualText () >> BDC (hidden) Tj EMC (B) Tj ET"
+               ),
+               layout: false
+             )
+
+    assert {:ok, "A"} =
+             Text.extract(
+               page_pdf(
+                 "/Other << /Lang (en) /MCID 1 /Unused [true false null << /Key (value) >>] >> BDC BT /F1 12 Tf (A) Tj ET EMC"
+               )
+             )
+
+    assert {:ok, %{pages: [%{spans: []}]}} =
+             Text.extract_spans(page_pdf("/Span << /ActualText () >> BDC EMC"))
+  end
+
+  test "ActualText resolves named property lists and indirect PDF text strings" do
+    for text <- ["<FEFFD835DC65>", "<EFBBBF78>", "(\\200)"] do
+      source =
+        page_pdf("/Span /Replacement BDC BT /F1 12 Tf (a) Tj ET EMC",
+          properties: "<< /Replacement 9 0 R >>",
+          extra_objects: [{9, "<< /ActualText 10 0 R >>"}, {10, text}]
+        )
+
+      assert {:ok, %{pages: [%{spans: [%{text: actual}]}]}} = Text.extract_spans(source)
+      assert actual == %{"<FEFFD835DC65>" => "𝑥", "<EFBBBF78>" => "x", "(\\200)" => "•"}[text]
+    end
+  end
+
+  test "replacement groups collect Form glyphs and keep following span indexes" do
+    source =
+      form_transform_pdf(
+        "/Span << /ActualText (operator) >> BDC /Form Do EMC BT /F1 12 Tf (after) Tj ET",
+        "/Span << /ActualText (inner) >> BDC BT /F1 12 Tf (pieces) Tj ET EMC",
+        "2 0 0 2 10 20"
+      )
+
+    assert {:ok, %{pages: [%{spans: [operator, after_span]}]}} = Text.extract_spans(source)
+    assert operator.text == "operator"
+    assert operator.ctm == [2.0, 0.0, 0.0, 2.0, 10.0, 20.0]
+    assert operator.source_index == 0
+    assert after_span.source_index == 1
+    assert {:ok, "operator after"} = Text.extract(source, layout: false)
+
+    assert {:ok, "inner after"} =
+             Text.extract(
+               form_transform_pdf(
+                 "/Form Do BT /F1 12 Tf (after) Tj ET",
+                 "/Span << /ActualText (inner) >> BDC BT /F1 12 Tf (piece) Tj ET EMC",
+                 "1 0 0 1 0 0"
+               ),
+               layout: false
+             )
+  end
+
+  test "ActualText returns actionable diagnostics for malformed scopes and properties" do
+    for content <- [
+          "EMC",
+          "/Span BMC",
+          "/Span << >> BDC",
+          "1 BMC",
+          "/Span 1 BDC",
+          "/Span << /ActualText 12 >> BDC EMC",
+          "/Span << /ActualText <FEFF00> >> BDC EMC",
+          "/Span << /ActualText <EFBBBFFF> >> BDC EMC",
+          "/Span << /ActualText >> BDC EMC",
+          "/Span << /ActualText (a) foo BDC EMC"
+        ] do
+      for {operation, extract} <- [extract: &Text.extract/1, extract_spans: &Text.extract_spans/1] do
+        assert {:error, {:invalid_pdf_input, diagnostic}} = extract.(page_pdf(content))
+        assert diagnostic.stage == :content
+        assert diagnostic.reason == :invalid_pdf_input
+        assert diagnostic.operation == operation
+        assert diagnostic.module == Text
+        assert diagnostic.message =~ "page 1"
+      end
+    end
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             Text.extract(page_pdf("/Span /Missing BDC EMC", properties: "<< >>"))
+
+    assert diagnostic.message =~ "Missing"
+    assert diagnostic.message =~ "page 1"
+    assert diagnostic.operation == :extract
+  end
+
+  test "marked-content property dictionaries enforce nesting and entry limits" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_pdf_value_depth: 2, max_pdf_container_entries: 1})
+
+    for content <- ["/Span << /A << /B << >> >> >> BDC EMC", "/Span << /A [[[]]] >> BDC EMC"] do
+      assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: message}}} =
+               TextValidator.instructions(content, 4)
+
+      assert message =~ "nesting depth"
+    end
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             TextValidator.instructions("/Span << /A () /B () >> BDC EMC", 4)
+
+    assert message =~ "entry count"
+    assert message =~ "page 4"
+
+    assert {:error, {:invalid_pdf_input, %{message: message}}} =
+             TextValidator.instructions("/Span >> BDC EMC", 4)
+
+    assert message =~ "dictionary"
+    assert message =~ "page 4"
+  end
+
+  test "replacement bytes and hidden glyph pieces retain cumulative extraction limits" do
+    assert {:ok, document} = Reader.read_validated(page_pdf(""))
+    resources = %{"Font" => %{"F1" => %{"Encoding" => {:name, "WinAnsiEncoding"}}}}
+
+    preparation = %{
+      TextValidator.new_preparation_context()
+      | extracted_bytes: Limits.get(:max_extracted_text_bytes) - 1
+    }
+
+    assert {:ok, instructions} =
+             TextValidator.instructions("/Span << /ActualText <FEFF0041> >> BDC EMC", 1)
+
+    assert {:ok, _, preparation} =
+             TextResourceValidator.prepare_contents(
+               document,
+               resources,
+               [instructions],
+               1,
+               preparation
+             )
+
+    assert preparation.extracted_bytes == Limits.get(:max_extracted_text_bytes)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             TextResourceValidator.prepare_contents(
+               document,
+               resources,
+               [instructions],
+               1,
+               preparation
+             )
+
+    assert diagnostic.message =~ "ActualText"
+
+    preparation = %{preparation | extracted_bytes: Limits.get(:max_extracted_text_bytes) - 1}
+
+    assert {:ok, instructions} =
+             TextValidator.instructions("/Span << /ActualText <80> >> BDC EMC", 1)
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             TextResourceValidator.prepare_contents(
+               document,
+               resources,
+               [instructions],
+               1,
+               preparation
+             )
+
+    assert message =~ "decoded ActualText"
+
+    preparation = %{preparation | extracted_bytes: Limits.get(:max_extracted_text_bytes) - 2}
+
+    assert {:ok, instructions} =
+             TextValidator.instructions(
+               "/Span << /ActualText (ab) >> BDC BT /F1 12 Tf (c) Tj ET EMC",
+               1
+             )
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             TextResourceValidator.prepare_contents(
+               document,
+               resources,
+               [instructions],
+               1,
+               preparation
+             )
+
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_text_spans: 2, max_text_marked_content_depth: 2})
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             Text.extract(
+               page_pdf("/Span << /ActualText (one) >> BDC BT /F1 12 Tf [(a) (b) (c)] TJ ET EMC")
+             )
+
+    assert message =~ "span count"
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             Text.extract(page_pdf("/A BMC /B BMC /C BMC EMC EMC EMC"))
+
+    assert message =~ "nesting depth"
+
+    assert {:ok, "one"} =
+             Text.extract(
+               page_pdf("/Span << /ActualText (one) >> BDC BT /F1 12 Tf [(a) (b)] TJ ET EMC")
+             )
+  end
+
   test "composed graphics transforms return diagnostics instead of overflowing" do
     scale = "1000000000 0 0 1000000000 0 0 cm "
 
@@ -2473,6 +2720,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
     cmap = Keyword.get(options, :cmap)
     content_dictionary = Keyword.get(options, :content_dictionary, "")
+    properties = Keyword.get(options, :properties, "<< >>")
 
     descendant =
       Keyword.get(options, :descendant, "<< /Type /Font /Subtype /CIDFontType2 /DW 500 >>")
@@ -2487,7 +2735,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
         {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
         {3,
          "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]#{rotate_entry} /Resources 4 0 R /Contents 6 0 R >>"},
-        {4, "<< /Font << /#{font_name} 5 0 R >> >>"},
+        {4, "<< /Font << /#{font_name} 5 0 R >> /Properties #{properties} >>"},
         {5, font},
         {6, stream_object(content_dictionary, content)},
         {8, descendant}

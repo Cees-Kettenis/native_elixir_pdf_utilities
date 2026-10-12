@@ -22,15 +22,25 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_html_source_bytes: 2_000_000,
     max_css_source_bytes: 1_000_000,
     max_html_nodes: 25_000,
+    max_responsive_image_candidates: 1_000,
+    max_media_query_depth: 32,
     max_html_depth: 128,
+    max_embedded_documents: 256,
+    max_embedded_document_depth: 16,
+    max_html_tree_work: 20_000_000,
+    max_text_decoration_layers: 128,
+    max_html_numeric_token_bytes: 1_024,
     max_css_rules: 10_000,
     max_css_work: 5_000_000,
     max_layout_boxes: 100_000,
+    max_drawing_group_depth: 128,
     max_rendered_text_bytes: 10_000_000,
     max_layout_text_work: 20_000_000,
     max_layout_measurement_cache_bytes: 2_000_000,
     max_layout_measurement_cache_entries: 10_000,
     max_table_grid_work: 1_000_000,
+    max_table_model_work: 1_000_000,
+    max_table_header_work: 1_000_000,
     max_rendered_pages: 1_000,
     max_rendered_pdf_bytes: 50_000_000,
     max_font_source_bytes: 10_000_000,
@@ -50,6 +60,16 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_pdf_form_fields: 10_000,
     max_pdf_form_depth: 64,
     max_pdf_form_text_bytes: 1_000_000,
+    max_aggregate_svg_source_bytes: 10_000_000,
+    max_aggregate_svg_nodes: 50_000,
+    max_aggregate_svg_path_bytes: 2_000_000,
+    max_aggregate_svg_filter_primitives: 512,
+    max_aggregate_svg_references: 2_000,
+    max_svg_expansion_work: 100_000,
+    max_svg_expanded_path_bytes: 10_000_000,
+    max_svg_font_work_bytes: 80_000_000,
+    max_svg_resource_bytes: 10_000_000,
+    max_aggregate_svg_resource_bytes: 50_000_000,
     max_svg_nodes: 25_000,
     max_svg_depth: 128,
     max_svg_path_bytes: 1_000_000,
@@ -59,6 +79,8 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_svg_bytes: 5_000_000,
     max_svg_raster_dimension: 8_192,
     max_svg_raster_pixels: 16_777_216,
+    max_aggregate_svg_raster_pixels: 33_554_432,
+    max_aggregate_svg_surface_pixels: 134_217_728,
     max_png_working_bytes: 160_000_000,
     max_image_count: 1_000,
     max_image_source_bytes: 10_000_000,
@@ -117,6 +139,7 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_text_instruction_uses: 1_000_000,
     max_text_form_expansions: 10_000,
     max_text_spans: 25_000,
+    max_text_marked_content_depth: 128,
     max_text_layout_whitespace_bytes: 1_000_000,
     max_cmap_work: 1_000_000,
     max_cmap_bytes: 1_000_000,
@@ -125,6 +148,7 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_form_xobject_depth: 20,
     max_font_kerning_pairs: 100_000,
     max_font_cmap_work: 1_000_000,
+    max_font_math_work: 1_000_000,
     max_font_subset_work: 100_000,
     max_font_cache_entries: 64,
     max_system_font_cache_entries: 64
@@ -139,16 +163,26 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_aggregate_css_source_bytes
           | :max_html_source_bytes
           | :max_css_source_bytes
+          | :max_responsive_image_candidates
+          | :max_media_query_depth
           | :max_html_nodes
           | :max_html_depth
+          | :max_embedded_documents
+          | :max_embedded_document_depth
+          | :max_html_tree_work
+          | :max_text_decoration_layers
+          | :max_html_numeric_token_bytes
           | :max_css_rules
           | :max_css_work
           | :max_layout_boxes
+          | :max_drawing_group_depth
           | :max_rendered_text_bytes
           | :max_layout_text_work
           | :max_layout_measurement_cache_bytes
           | :max_layout_measurement_cache_entries
           | :max_table_grid_work
+          | :max_table_model_work
+          | :max_table_header_work
           | :max_rendered_pages
           | :max_rendered_pdf_bytes
           | :max_font_source_bytes
@@ -167,6 +201,16 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_pdf_form_fields
           | :max_pdf_form_depth
           | :max_pdf_form_text_bytes
+          | :max_aggregate_svg_source_bytes
+          | :max_aggregate_svg_nodes
+          | :max_aggregate_svg_path_bytes
+          | :max_aggregate_svg_filter_primitives
+          | :max_aggregate_svg_references
+          | :max_svg_expansion_work
+          | :max_svg_expanded_path_bytes
+          | :max_svg_font_work_bytes
+          | :max_svg_resource_bytes
+          | :max_aggregate_svg_resource_bytes
           | :max_svg_nodes
           | :max_svg_depth
           | :max_svg_path_bytes
@@ -175,6 +219,8 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_svg_output_bytes
           | :max_svg_bytes
           | :max_svg_raster_dimension
+          | :max_aggregate_svg_raster_pixels
+          | :max_aggregate_svg_surface_pixels
           | :max_svg_raster_pixels
           | :max_png_working_bytes
           | :max_image_count
@@ -234,6 +280,7 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_text_instruction_uses
           | :max_text_form_expansions
           | :max_text_spans
+          | :max_text_marked_content_depth
           | :max_text_layout_whitespace_bytes
           | :max_cmap_work
           | :max_cmap_bytes
@@ -242,6 +289,7 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_form_xobject_depth
           | :max_font_kerning_pairs
           | :max_font_cmap_work
+          | :max_font_math_work
           | :max_font_subset_work
           | :max_font_cache_entries
           | :max_system_font_cache_entries

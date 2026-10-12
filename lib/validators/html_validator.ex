@@ -2,11 +2,61 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.HtmlToPdf.HtmlEntities
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.HtmlToPdf.CounterStyle
+  alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
+  alias NativeElixirPdfUtilities.Validators.MimeValidator
+  alias NativeElixirPdfUtilities.Validators.FontValidator
+  alias NativeElixirPdfUtilities.Validators.LanguageValidator
+  alias NativeElixirPdfUtilities.Validators.HtmlMetadataValidator
+  alias NativeElixirPdfUtilities.Validators.HtmlUrlValidator
   alias NativeElixirPdfUtilities.Limits
+
+  @structural_tags ~w(html head body base style title meta script template)
+  @flow_container_tags ~w(form article aside div footer header main nav section address blockquote figure figcaption hgroup search center li dt dd details)
+  @block_tags @flow_container_tags ++
+                ~w(p h1 h2 h3 h4 h5 h6 ul ol dl dt pre listing xmp plaintext table img picture hr summary)
+  @text_inline_tags ~w(iframe label noscript noembed u s strong b em i span a br wbr nobr abbr cite dfn data time code samp kbd tt var big small mark ins del strike)
+  @form_control_tags ~w(input select textarea button)
+  @text_input_types ~w(text search tel url email password)
+  @button_input_types ~w(button reset submit)
+  @input_types @text_input_types ++ @button_input_types ++ ~w(checkbox radio hidden)
+  # Fixed HTML enumerated keywords, including recognized states still unsupported.
+  @input_type_keywords Map.new(
+                         ~w(hidden text search tel url email password date month week time datetime-local number range color checkbox radio file submit image reset button),
+                         &{&1, &1}
+                       )
+  # Longer values cannot name a fixed keyword and select Text without folding.
+  # This is vocabulary recognition, not a configurable resource ceiling.
+  @input_type_keyword_bytes Enum.max(Enum.map(Map.keys(@input_type_keywords), &byte_size/1))
+  # This fixed list is defined by HTML's selector matching rules, not a resource limit.
+  @case_insensitive_html_attributes ~w(accept accept-charset align alink axis bgcolor charset checked clear codetype color compact declare defer dir direction disabled enctype face frame hreflang http-equiv lang language link media method multiple nohref noresize noshade nowrap readonly rel rev rules scope scrolling selected shape target text type valign valuetype vlink)
+  @inline_tags @text_inline_tags ++ @form_control_tags ++ ~w(progress meter)
+  @list_tags ~w(ul ol)
+  @table_content_tags ~w(caption th td)
+  @void_tags ~w(base meta br wbr img source col input hr)
+  @supported_tags Map.new(
+                    @structural_tags ++
+                      @block_tags ++
+                      @inline_tags ++
+                      ~w(source caption colgroup col thead tbody tfoot tr th td option optgroup),
+                    &{&1, true}
+                  )
+  # HTML reserves these eight names; they are not configurable resource limits.
+  @reserved_custom_names ~w(annotation-xml color-profile font-face font-face-src font-face-uri font-face-format font-face-name missing-glyph)
+
+  @optional_end_tags ~w(html head body p li dt dd option optgroup caption colgroup thead tbody tfoot tr td th)
+  @paragraph_following_tags ~w(address article aside blockquote details dialog div dl fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 header hgroup hr main menu nav ol p pre xmp plaintext search section table ul)
+
+  @paragraph_following_starts Enum.map(@paragraph_following_tags, &{:start, &1})
+  @head_starts Enum.map(~w(base style meta title script template noscript), &{:start, &1})
+  @table_starts Enum.map(~w(colgroup thead tbody tfoot tr), &{:start, &1})
 
   @render_option_keys [
     :forms,
+    :print_viewport,
+    :image_selection_density,
     :page_size,
     :margin,
     :base_url,
@@ -26,7 +76,668 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @variant_keys [:default, :first, :odd, :even]
   @type image_budget :: :atomics.atomics_ref()
 
+  @script_attributes ~w(type src language charset async defer nomodule crossorigin integrity referrerpolicy blocking fetchpriority)
+  @script_data_boundaries ~r/<!--|-->|<\/?[sS][cC][rR][iI][pP][tT](?=[ \t\n\f\r\/>])/
+
   @css_variable_regex ~r/"(?:\\.|[^"\\])*"(*SKIP)(*F)|'(?:\\.|[^'\\])*'(*SKIP)(*F)|var\(\s*(--[a-zA-Z_][a-zA-Z0-9_-]*)\s*\)/u
+
+  # Six hexadecimal digits are a fixed CSS escape grammar rule, not a resource ceiling.
+  @css_escape_pattern ~S"\\(?:[0-9a-fA-F]{1,6}(?:\r\n|[ \t\n\r\f])?|[^\n\r\f0-9a-fA-F])"
+  @css_identifier_pattern "(?:--|-?(?:[a-zA-Z_\\x{80}-\\x{10FFFF}]|#{@css_escape_pattern}))(?:[a-zA-Z0-9_\\x{80}-\\x{10FFFF}-]|#{@css_escape_pattern})*"
+  @css_identifier_regex Regex.compile!(
+                          "\\A(?<name>#{@css_identifier_pattern})(?<rest>.*)\\z",
+                          "su"
+                        )
+  @css_escape_regex ~r/\\(?:([0-9a-fA-F]{1,6})(?:\r\n|[ \t\n\r\f])?|([^\n\r\f0-9a-fA-F]))/u
+  @css_syntax_unit_regex Regex.compile!(
+                           "#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|.",
+                           "su"
+                         )
+  @css_attribute_selector_regex Regex.compile!(
+                                  "\\A\\[[ \\t\\r\\n\\f]*(?<name>#{@css_identifier_pattern})(?:[ \\t\\r\\n\\f]*(?<operator>[~|^$*]?=)[ \\t\\r\\n\\f]*(?<value>\"(?:#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^\"\\\\\\r\\n\\f])*\"|'(?:#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^'\\\\\\r\\n\\f])*'|#{@css_identifier_pattern})(?:[ \\t\\r\\n\\f]+(?<flag>#{@css_identifier_pattern}))?)?[ \\t\\r\\n\\f]*\\](?<rest>.*)\\z",
+                                  "su"
+                                )
+
+  @css_simple_pseudo_regex Regex.compile!(
+                             "\\A:(?<keyword>#{@css_identifier_pattern})(?<rest>.*)\\z",
+                             "su"
+                           )
+  @css_nth_pseudo_regex Regex.compile!(
+                          "\\A:(?<keyword>#{@css_identifier_pattern})\\((?<expression>[^()]*)\\)(?<rest>.*)\\z",
+                          "su"
+                        )
+  @css_string_pattern "(?:\"(?:#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^\"\\\\\\r\\n\\f])*\"|'(?:#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^'\\\\\\r\\n\\f])*')"
+  @css_language_range_regex Regex.compile!(
+                              "\\A[ \\t\\r\\n\\f]*(?<value>#{@css_string_pattern}|#{@css_identifier_pattern})[ \\t\\r\\n\\f]*(?<rest>.*)\\z",
+                              "su"
+                            )
+
+  @css_opaque_source "(?:#{@css_escape_pattern}|\"(?:\\\\(?:\\r\\n|[\\n\\r\\f]|.)|[^\"\\\\])*\"|'(?:\\\\(?:\\r\\n|[\\n\\r\\f]|.)|[^'\\\\])*')"
+  @css_function_unit_regex Regex.compile!("#{@css_escape_pattern}|#{@css_string_pattern}|.", "su")
+
+  @css_important_suffix_regex Regex.compile!(
+                                "(?:#{@css_string_pattern}|#{@css_escape_pattern})(*SKIP)(*F)|!(?<keyword>[ \t\r\n\f]*#{@css_identifier_pattern})[ \t\r\n\f]*\\z",
+                                "su"
+                              )
+
+  @doc false
+  @spec text_baseline_depth(map()) :: number()
+  def text_baseline_depth(style) do
+    font_size = Map.fetch!(style, :font_size)
+    line_height = Map.fetch!(style, :line_height)
+
+    case {Map.get(style, :_math_flow, false), Map.fetch!(style, :font_face)} do
+      {true, _} ->
+        0.0
+
+      {false, %{ascent: ascent, descent: descent, units_per_em: units_per_em}} ->
+        ascent_pixels = round(font_size * ascent / units_per_em / 0.75)
+        descent_pixels = round(-font_size * descent / units_per_em / 0.75)
+        leading_pixels = Float.floor((line_height / 0.75 - ascent_pixels - descent_pixels) / 2)
+        (ascent_pixels + leading_pixels) * 0.75
+
+      _ ->
+        font_size
+    end
+  end
+
+  @doc false
+  @spec css_opaque_pattern() :: String.t()
+  def css_opaque_pattern do
+    @css_opaque_source
+  end
+
+  @doc false
+  @spec css_syntax_units(String.t()) :: [String.t()]
+  def css_syntax_units(source) do
+    if String.contains?(source, "\\") do
+      @css_syntax_unit_regex |> Regex.scan(source) |> Enum.map(&hd/1)
+    else
+      String.codepoints(source)
+    end
+  end
+
+  @doc false
+  @spec trim_css_whitespace(String.t()) :: String.t()
+  def trim_css_whitespace(source) do
+    whitespace = [32, 9, 10, 13, 12]
+
+    if source != "" and
+         (:binary.first(source) in whitespace or :binary.last(source) in whitespace) do
+      if String.contains?(source, "\\") do
+        source
+        |> css_syntax_units()
+        |> Enum.drop_while(&(&1 in [" ", "\t", "\n", "\r", "\f"]))
+        |> Enum.reverse()
+        |> Enum.drop_while(&(&1 in [" ", "\t", "\n", "\r", "\f"]))
+        |> Enum.reverse()
+        |> IO.iodata_to_binary()
+      else
+        trim_ascii_whitespace(source)
+      end
+    else
+      source
+    end
+  end
+
+  @doc false
+  @spec html_class_tokens(String.t()) :: [String.t()]
+  def html_class_tokens(source) do
+    String.split(source, ~r/[ \t\n\r\f]+/, trim: true)
+  end
+
+  @doc false
+  @spec parse_css_identifier(String.t()) :: {:ok, String.t(), String.t()} | :error
+  def parse_css_identifier(source) do
+    case Regex.named_captures(@css_identifier_regex, source) do
+      %{"name" => name, "rest" => rest} -> {:ok, decode_css_escapes(name), rest}
+      nil -> :error
+    end
+  end
+
+  @doc false
+  @spec parse_css_pseudo_element(String.t()) :: {:ok, :before | :after} | :error
+  def parse_css_pseudo_element(source) do
+    case source do
+      <<"::", name::binary>> ->
+        case parse_css_identifier(name) do
+          {:ok, name, ""} ->
+            case String.downcase(name, :ascii) do
+              "before" -> {:ok, :before}
+              "after" -> {:ok, :after}
+              _ -> :error
+            end
+
+          _ ->
+            :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp decode_css_escapes(source) do
+    if String.contains?(source, "\\") do
+      Regex.replace(@css_escape_regex, source, fn _escape, hexadecimal, literal ->
+        case hexadecimal do
+          "" ->
+            literal
+
+          hexadecimal ->
+            codepoint = String.to_integer(hexadecimal, 16)
+
+            if codepoint == 0 or codepoint in 0xD800..0xDFFF or codepoint > 0x10FFFF,
+              do: "\uFFFD",
+              else: <<codepoint::utf8>>
+        end
+      end)
+    else
+      source
+    end
+  end
+
+  @doc false
+  @spec document_metadata_options(map(), keyword()) :: keyword()
+  def document_metadata_options(dom, opts) do
+    head_children =
+      case dom do
+        %{children: [%{tag: "html", children: [%{tag: "head", children: children} | _]}]} ->
+          children
+
+        _ ->
+          []
+      end
+
+    defaults = document_metadata_defaults(head_children, %{})
+
+    defaults =
+      Map.new(defaults, fn
+        {:author, authors} ->
+          {:author, authors |> Enum.reverse() |> Enum.join(", ")}
+
+        {:keywords, groups} ->
+          {:keywords, groups |> Enum.reverse() |> List.flatten() |> Enum.uniq()}
+
+        entry ->
+          entry
+      end)
+
+    defaults =
+      case document_title(dom) do
+        nil -> defaults
+        title -> Map.put(defaults, :title, title)
+      end
+
+    case {map_size(defaults), Keyword.fetch(opts, :metadata)} do
+      {0, _} ->
+        opts
+
+      {_, :error} ->
+        Keyword.put(opts, :metadata, defaults)
+
+      {_, {:ok, metadata}} when is_map(metadata) ->
+        Keyword.put(opts, :metadata, Map.merge(defaults, metadata))
+
+      {_, {:ok, metadata}} when is_list(metadata) ->
+        if Keyword.keyword?(metadata) do
+          merged =
+            Enum.reduce(defaults, metadata, fn {field, value}, acc ->
+              Keyword.put_new(acc, field, value)
+            end)
+
+          Keyword.put(opts, :metadata, merged)
+        else
+          opts
+        end
+
+      _ ->
+        opts
+    end
+  end
+
+  defp document_title(node) do
+    case node do
+      %{type: :element, tag: "title", children: children} ->
+        title =
+          children
+          |> Enum.map_join("", & &1.text)
+          |> String.replace(~r/[ \t\n\f\r]+/u, " ")
+          |> String.trim(" ")
+
+        if title == "", do: nil, else: title
+
+      %{children: children} when is_list(children) ->
+        Enum.find_value(children, &document_title/1)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp document_metadata_defaults(nodes, metadata) do
+    Enum.reduce(nodes, metadata, fn node, metadata ->
+      case node do
+        %{tag: "noscript", children: children} ->
+          document_metadata_defaults(children, metadata)
+
+        %{tag: "meta", attributes: %{"name" => name, "content" => content}} ->
+          field =
+            case String.downcase(name) do
+              "author" -> :author
+              "description" -> :subject
+              "keywords" -> :keywords
+              _ -> nil
+            end
+
+          case field do
+            :author ->
+              Map.update(metadata, :author, [content], &[content | &1])
+
+            :keywords ->
+              tokens =
+                content
+                |> String.split(",")
+                |> Enum.map(&trim_ascii_whitespace/1)
+                |> Enum.reject(&(&1 == ""))
+
+              Map.update(metadata, :keywords, [tokens], &[tokens | &1])
+
+            :subject ->
+              Map.put_new(metadata, :subject, content)
+
+            nil ->
+              metadata
+          end
+
+        _ ->
+          metadata
+      end
+    end)
+  end
+
+  @doc false
+  @spec script_type(map()) :: :classic | :module | :importmap | :speculationrules | :data
+  def script_type(attributes) do
+    type =
+      case Map.fetch(attributes, "type") do
+        {:ok, ""} ->
+          "text/javascript"
+
+        {:ok, type} ->
+          trim_ascii_whitespace(type)
+
+        :error ->
+          case Map.get(attributes, "language", "") do
+            "" -> "text/javascript"
+            language -> "text/" <> language
+          end
+      end
+
+    cond do
+      MimeValidator.javascript_essence_match?(type) ->
+        :classic
+
+      # Vocabulary recognition only, not a configurable resource ceiling.
+      byte_size(type) <= byte_size("speculationrules") ->
+        Map.get(
+          %{
+            "module" => :module,
+            "importmap" => :importmap,
+            "speculationrules" => :speculationrules
+          },
+          String.downcase(type, :ascii),
+          :data
+        )
+
+      true ->
+        :data
+    end
+  end
+
+  @doc false
+  @spec script_data_end_offset(binary()) :: non_neg_integer() | nil
+  def script_data_end_offset(html), do: scan_script_data_end(html, 0, :data)
+
+  # Script data has escaped and double-escaped states. A double-escaped end tag
+  # exits that state rather than closing the element. Scan only state boundaries.
+  defp scan_script_data_end(html, offset, state) do
+    case Regex.run(@script_data_boundaries, html, return: :index, capture: :first, offset: offset) do
+      [{index, length}] ->
+        token = binary_part(html, index, length)
+        token = String.downcase(token, :ascii)
+
+        cond do
+          token == "</script" and state != :double_escaped ->
+            index
+
+          token == "<!--" ->
+            # The opening dashes can also be the beginning of an escape end.
+            scan_script_data_end(html, index + 2, if(state == :data, do: :escaped, else: state))
+
+          token == "-->" ->
+            scan_script_data_end(html, index + length, :data)
+
+          token == "<script" and state == :escaped ->
+            scan_script_data_end(html, index + length, :double_escaped)
+
+          token == "</script" ->
+            scan_script_data_end(html, index + length, :escaped)
+
+          true ->
+            scan_script_data_end(html, index + length, state)
+        end
+
+      nil ->
+        nil
+    end
+  end
+
+  defp valid_script_attribute?(name) do
+    name in @script_attributes or
+      name in ~w(style id class title role is hidden inert popover contenteditable headingoffset headingreset lang xml:lang itemscope itemtype itemid itemprop itemref translate) or
+      String.starts_with?(name, ["data-", "aria-"])
+  end
+
+  @doc false
+  @spec construct_html_template(map()) :: map()
+  def construct_html_template(element) do
+    reserve_render_resource(:max_html_nodes, 1, :html)
+    fragment = %{type: :document_fragment, children: element.children}
+    element |> Map.put(:children, []) |> Map.put(:content, fragment)
+  end
+
+  @doc false
+  @spec html_inert?(map(), boolean()) :: boolean()
+  def html_inert?(attributes, inherited?) do
+    inherited? or Map.has_key?(attributes, "inert")
+  end
+
+  # URL parsing removes ASCII tabs/newlines and leading C0 controls/spaces.
+  # These two active scheme names are fixed protocol vocabulary.
+  @active_url_reference ~r/\A[\x00-\x20]*(?:[jJ][\t\n\r]*[aA][\t\n\r]*[vV][\t\n\r]*[aA][\t\n\r]*[sS][\t\n\r]*[cC][\t\n\r]*[rR][\t\n\r]*[iI][\t\n\r]*[pP][\t\n\r]*[tT]|[vV][\t\n\r]*[bB][\t\n\r]*[sS][\t\n\r]*[cC][\t\n\r]*[rR][\t\n\r]*[iI][\t\n\r]*[pP][\t\n\r]*[tT])[\t\n\r]*:/
+
+  # The longest popover keyword is a fixed vocabulary bound, not a resource limit.
+  @doc false
+  @spec html_popover_state(map()) :: :none | :auto | :hint | :manual
+  def html_popover_state(attributes) do
+    case attributes do
+      %{"popover" => ""} ->
+        :auto
+
+      %{"popover" => value} when byte_size(value) <= byte_size("manual") ->
+        Map.get(
+          %{"auto" => :auto, "hint" => :hint, "manual" => :manual},
+          String.downcase(value, :ascii),
+          :manual
+        )
+
+      %{"popover" => _value} ->
+        :manual
+
+      _ ->
+        :none
+    end
+  end
+
+  @doc false
+  @spec validate_initial_popover_style(atom(), map(), String.t()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_initial_popover_style(state, style, tag) do
+    if state == :none or style.display == :none do
+      :ok
+    else
+      Diagnostics.error(
+        :style,
+        :unsupported_html,
+        "Author CSS exposes a closed popover, whose native fixed positioning and intrinsic geometry are not implemented yet. Remove the display override to keep it closed, or use an ordinary element with supported authored geometry.",
+        module: __MODULE__,
+        source: tag
+      )
+    end
+  end
+
+  @doc false
+  @spec validate_static_url_attributes(map(), String.t() | nil) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_static_url_attributes(attributes, html_tag \\ nil) do
+    case attributes do
+      attributes
+      when is_map_key(attributes, "href") or is_map_key(attributes, "src") or
+             is_map_key(attributes, "xlink:href") or is_map_key(attributes, "srcset") ->
+        # Unregistered custom attributes do not create URL resources or links.
+        if is_binary(html_tag) and not Map.has_key?(@supported_tags, html_tag) do
+          :ok
+        else
+          Enum.reduce_while(["href", "src", "xlink:href", "srcset"], :ok, fn name, :ok ->
+            case Map.fetch(attributes, name) do
+              {:ok, value} ->
+                references =
+                  if name == "srcset" and html_tag in ["img", "source"] do
+                    NativeElixirPdfUtilities.Validators.ResponsiveImageValidator.parse_srcset(
+                      value
+                    )
+                    |> Enum.map(& &1.url)
+                  else
+                    if name == "srcset", do: [], else: [value]
+                  end
+
+                if Enum.any?(references, &Regex.match?(@active_url_reference, &1)) do
+                  {:halt,
+                   Diagnostics.error(
+                     :html,
+                     :unsupported_html,
+                     "Active URL schemes are outside the static rendering profile; use a non-executable reference.",
+                     module: __MODULE__,
+                     source: name
+                   )}
+                else
+                  {:cont, :ok}
+                end
+
+              :error ->
+                {:cont, :ok}
+            end
+          end)
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  @doc false
+  @spec parse_background_image_reference(String.t()) ::
+          {:ok, String.t() | nil}
+          | {:error, :invalid_document}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def parse_background_image_reference(value) do
+    normalized = String.trim(value)
+
+    if byte_size(normalized) == 4 and downcase_ascii(normalized) == "none" do
+      {:ok, nil}
+    else
+      case Regex.named_captures(
+             ~r/^url\(\s*(?:"(?<double>[^"]+)"|'(?<single>[^']+)'|(?<bare>[^\s)'\"]+))\s*\)$/iu,
+             normalized
+           ) do
+        captures when is_map(captures) ->
+          source =
+            Enum.find_value(["double", "single", "bare"], fn name ->
+              case Map.get(captures, name) do
+                value when is_binary(value) and value != "" -> value
+                _ -> nil
+              end
+            end)
+
+          source = if String.contains?(source, "\\"), do: decode_css_escapes(source), else: source
+
+          case validate_static_url_attributes(%{"src" => source}) do
+            :ok ->
+              {:ok, source}
+
+            {:error, {reason, diagnostic}} ->
+              Diagnostics.error(:css, reason, diagnostic.message,
+                module: __MODULE__,
+                source: "background-image"
+              )
+          end
+
+        _ ->
+          {:error, :invalid_document}
+      end
+    end
+  end
+
+  @doc false
+  @spec html_hidden_state(map()) :: :not_hidden | :hidden | :until_found
+  def html_hidden_state(attributes) do
+    case attributes do
+      %{"hidden" => value} ->
+        if String.downcase(value, :ascii) == "until-found", do: :until_found, else: :hidden
+
+      _ ->
+        :not_hidden
+    end
+  end
+
+  @doc false
+  @spec validate_html_element_attributes(String.t(), map()) ::
+          :ok | {:error, {:unsupported_html, Diagnostics.diagnostic()}}
+  def validate_html_element_attributes(tag, attributes) do
+    with :ok <- validate_static_url_attributes(attributes, tag) do
+      if html_hidden_state(attributes) == :until_found do
+        Diagnostics.error(
+          :html,
+          :unsupported_html,
+          "hidden=#{inspect(attributes["hidden"])} requires initial content-visibility box painting that is not implemented yet",
+          module: __MODULE__,
+          source: tag
+        )
+      else
+        case tag do
+          tag when tag in ~w(xmp plaintext noembed) ->
+            NativeElixirPdfUtilities.Validators.ForeignContentValidator.validate_static_input(
+              :html,
+              tag,
+              attributes
+            )
+
+          tag when tag in ~w(progress meter) ->
+            # Reuse the parser's attribute authority for direct DOM inputs.
+            captures =
+              Enum.map(attributes, fn {name, value} -> ["", name, "\"" <> value <> "\""] end)
+
+            case attributes_to_map(captures, tag, :html) do
+              {:ok, _} ->
+                :ok
+
+              {:error, :unsupported_html} ->
+                Diagnostics.error(
+                  :html,
+                  :unsupported_html,
+                  "#{tag} requires global attributes and its applicable gauge attributes; remove unsupported attributes",
+                  module: __MODULE__,
+                  source: tag
+                )
+            end
+
+          "template" ->
+            cond do
+              Enum.any?(
+                ~w(for shadowrootmode shadowrootdelegatesfocus shadowrootserializable shadowrootslotassignment shadowrootclonable shadowrootcustomelementregistry),
+                &Map.has_key?(attributes, &1)
+              ) ->
+                Diagnostics.error(
+                  :html,
+                  :unsupported_html,
+                  "template replacement and declarative shadow attributes require composition support that is not implemented yet",
+                  module: __MODULE__
+                )
+
+              true ->
+                :ok
+            end
+
+          "script" ->
+            cond do
+              not Enum.all?(Map.keys(attributes), &valid_script_attribute?/1) ->
+                Diagnostics.error(
+                  :html,
+                  :unsupported_html,
+                  "script data blocks require supported attributes without event handlers",
+                  module: __MODULE__
+                )
+
+              script_type(attributes) != :data ->
+                Diagnostics.error(
+                  :html,
+                  :unsupported_html,
+                  "#{script_type(attributes)} script elements are outside the static rendering profile; only non-executable data blocks are supported",
+                  module: __MODULE__
+                )
+
+              true ->
+                :ok
+            end
+
+          "base" ->
+            NativeElixirPdfUtilities.Validators.HtmlUrlValidator.validate_base_element(
+              attributes,
+              []
+            )
+
+          "meta" ->
+            directive = attributes |> Map.get("http-equiv", "") |> String.downcase()
+
+            cond do
+              directive in ~w(refresh content-security-policy content-security-policy-report-only set-cookie) ->
+                Diagnostics.error(
+                  :html,
+                  :unsupported_html,
+                  "meta http-equiv=#{inspect(directive)} requests browser navigation, security enforcement, or session state outside the static rendering profile",
+                  module: __MODULE__
+                )
+
+              Map.has_key?(attributes, "charset") and
+                  String.downcase(attributes["charset"]) != "utf-8" ->
+                Diagnostics.error(
+                  :html,
+                  :unsupported_html,
+                  "HTML input is UTF-8; meta charset must declare utf-8",
+                  module: __MODULE__
+                )
+
+              true ->
+                :ok
+            end
+
+          _ ->
+            if custom_html_tag?(tag) do
+              case Enum.find(~w(dir), &Map.has_key?(attributes, &1)) do
+                nil ->
+                  NativeElixirPdfUtilities.Validators.ForeignContentValidator.validate_static_input(
+                    :html,
+                    tag,
+                    attributes
+                  )
+
+                attribute ->
+                  Diagnostics.error(
+                    :html,
+                    :unsupported_html,
+                    "custom container #{attribute} requires direction semantics that are not implemented yet",
+                    module: __MODULE__,
+                    source: tag
+                  )
+              end
+            else
+              :ok
+            end
+        end
+      end
+    end
+  end
 
   @doc false
   @spec jpeg_metadata(binary()) :: {:ok, map()} | :error
@@ -162,6 +873,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec new_image_budget() :: image_budget()
   def new_image_budget do
     :atomics.new(3, signed: false)
+  end
+
+  @doc false
+  @spec validate_image_budget(term()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_image_budget(budget) do
+    case :atomics.info(budget) do
+      %{size: 3} -> :ok
+      _ -> Diagnostics.error(:style, :invalid_document, "image resource budget is invalid")
+    end
+  rescue
+    ArgumentError ->
+      Diagnostics.error(:style, :invalid_document, "image resource budget is invalid")
   end
 
   @doc false
@@ -354,15 +1077,39 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec validate_pdf_output_options(keyword()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_pdf_output_options(opts) do
-    case {Keyword.get(opts, :compress_streams, true), Keyword.get(opts, :subset_fonts, true)} do
-      {compress?, subset?} when is_boolean(compress?) and is_boolean(subset?) ->
-        :ok
+    private_option =
+      Enum.find(
+        [
+          :__link_context__,
+          :__document_url_context__,
+          :link_scope,
+          :link_expected_targets,
+          :link_document_targets,
+          :html_target
+        ],
+        &Keyword.has_key?(opts, &1)
+      )
 
-      {compress?, _subset?} when not is_boolean(compress?) ->
-        Diagnostics.error(:options, :invalid_options, "compress_streams must be a boolean")
+    if private_option != nil do
+      Diagnostics.error(
+        :options,
+        :invalid_options,
+        "HTML link preparation contexts and target descriptors are internal stage data; supply canonical page destinations to the PDF writer",
+        operation: :write_pdf,
+        module: __MODULE__,
+        source: Atom.to_string(private_option)
+      )
+    else
+      case {Keyword.get(opts, :compress_streams, true), Keyword.get(opts, :subset_fonts, true)} do
+        {compress?, subset?} when is_boolean(compress?) and is_boolean(subset?) ->
+          :ok
 
-      _ ->
-        Diagnostics.error(:options, :invalid_options, "subset_fonts must be a boolean")
+        {compress?, _subset?} when not is_boolean(compress?) ->
+          Diagnostics.error(:options, :invalid_options, "compress_streams must be a boolean")
+
+        _ ->
+          Diagnostics.error(:options, :invalid_options, "subset_fonts must be a boolean")
+      end
     end
   end
 
@@ -470,6 +1217,1783 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec valid_html_child?(atom() | String.t(), String.t(), list()) :: boolean()
+  def valid_html_child?(context, tag, ancestors \\ []) do
+    # An ordinary template starts an inert document fragment, not descendants
+    # of its host for active-tree content model restrictions.
+    ancestors =
+      if "template" in ancestors,
+        do: Enum.take_while(ancestors, &(&1 != "template")),
+        else: ancestors
+
+    cond do
+      tag == "base" and context not in [:document, :after_doctype, "html", "head", "template"] ->
+        false
+
+      tag in ["form", "label"] and tag in [context | ancestors] ->
+        false
+
+      tag == "noscript" and "noscript" in [context | ancestors] ->
+        false
+
+      tag in ~w(progress meter) and tag in [context | ancestors] ->
+        false
+
+      tag == "summary" and context != "details" ->
+        false
+
+      custom_html_tag?(tag) ->
+        valid_html_child?(context, "span", ancestors)
+
+      context == "noscript" ->
+        case ancestors do
+          ["head" | _] -> tag in ~w(style meta)
+          [parent | ancestors] -> valid_html_child?(parent, tag, ancestors)
+          [] -> valid_html_child?(:document, tag)
+        end
+
+      context == "template" ->
+        supported_html_tag?(tag) and tag not in ~w(html head body)
+
+      tag == "source" and context != "picture" ->
+        false
+
+      context == "picture" ->
+        tag in ~w(source img script template)
+
+      context == "table" ->
+        tag in ~w(caption colgroup col thead tbody tfoot tr script template)
+
+      context == "colgroup" ->
+        tag in ~w(col template)
+
+      context in ~w(thead tbody tfoot) ->
+        tag in ~w(tr script template)
+
+      context == "tr" ->
+        tag in ~w(th td script template)
+
+      tag == "li" and context not in @list_tags ->
+        false
+
+      tag in ~w(header footer article aside nav section h1 h2 h3 h4 h5 h6) and
+          "dt" in [context | ancestors] ->
+        false
+
+      tag in ~w(dt dd) and context != "dl" and
+          not (context == "div" and List.first(ancestors) == "dl") ->
+        false
+
+      tag == "figcaption" and context != "figure" ->
+        false
+
+      tag == "a" and "a" in [context | ancestors] ->
+        false
+
+      context in ["a", "ins", "del"] or custom_html_tag?(context) ->
+        case ancestors do
+          [parent | rest] ->
+            valid_html_child?(if(is_tuple(parent), do: "div", else: parent), tag, rest)
+
+          [] ->
+            valid_html_child?(:document, tag)
+        end
+
+      context in [:document, :after_doctype] ->
+        tag in @block_tags or tag in @inline_tags or
+          tag in ~w(html head body base style meta title script template)
+
+      context == :after_head ->
+        tag in @block_tags or tag in @inline_tags or tag in ~w(body style meta script template)
+
+      context in [:after_body, :after_html] ->
+        false
+
+      context == "html" ->
+        tag in @block_tags or tag in @inline_tags or
+          tag in ~w(head body base style meta title script template)
+
+      context == "head" ->
+        tag in ~w(base style meta title script template noscript)
+
+      context == "body" ->
+        tag in @block_tags or tag in @inline_tags or tag in ~w(style meta title script template)
+
+      context in @list_tags ->
+        tag in ~w(li script template)
+
+      context == "style" ->
+        false
+
+      context == "title" ->
+        false
+
+      context == "select" ->
+        tag in ~w(option optgroup hr script template)
+
+      context == "optgroup" ->
+        tag in ~w(option script template)
+
+      context in ["option", "textarea"] ->
+        false
+
+      context == "button" ->
+        tag in @inline_tags or tag in ~w(img progress meter script template)
+
+      context == "summary" ->
+        tag in @inline_tags or tag in ~w(img h1 h2 h3 h4 h5 h6 script template)
+
+      context in @table_content_tags ->
+        tag in @inline_tags or tag in @block_tags
+
+      context == "dl" ->
+        tag in ~w(dt dd div script template)
+
+      context in @flow_container_tags ->
+        tag in @block_tags or tag in @inline_tags or tag in ~w(style script template)
+
+      context == "li" or context in @block_tags or context in @inline_tags ->
+        tag in @inline_tags or tag in ~w(img picture script template)
+
+      true ->
+        false
+    end
+  end
+
+  @doc false
+  @spec valid_html_child_element?(term(), map(), list()) :: boolean()
+  def valid_html_child_element?(context, element, ancestors \\ []) do
+    ancestors =
+      cond do
+        context == "template" -> []
+        "template" in ancestors -> Enum.take_while(ancestors, &(&1 != "template"))
+        true -> ancestors
+      end
+
+    html? = Map.get(element, :namespace, :html) == :html
+    parent = if is_tuple(context), do: "div", else: context
+    tag = element.tag
+
+    (not html? or valid_html_child?(parent, tag, ancestors)) and
+      if Enum.any?([context | ancestors], &(&1 in ["a", "button"])) do
+        attributes = element.attributes
+
+        # Interactive content is conditional for anchors, images and inputs.
+        # Hidden controls and placeholder anchors are static phrasing content.
+        interactive? =
+          html? and
+            (tag in ~w(iframe button select textarea label details) or
+               (tag == "a" and Map.has_key?(attributes, "href")) or
+               (tag == "input" and input_type(Map.get(attributes, "type", "text")) != "hidden") or
+               (tag == "img" and Map.has_key?(attributes, "usemap")))
+
+        not interactive? and not Map.has_key?(attributes, "tabindex")
+      else
+        true
+      end
+  end
+
+  @doc false
+  @spec supported_html_tag?(term()) :: boolean()
+  def supported_html_tag?(tag) do
+    Map.has_key?(@supported_tags, tag) or custom_html_tag?(tag)
+  end
+
+  @doc false
+  @spec custom_html_tag?(term()) :: boolean()
+  def custom_html_tag?(tag) do
+    case tag do
+      tag when is_map_key(@supported_tags, tag) ->
+        false
+
+      <<first, _::binary>> when first in ?a..?z ->
+        String.contains?(tag, "-") and
+          tag not in @reserved_custom_names and String.valid?(tag) and
+          Regex.match?(~r/\A[a-z][^A-Z\x00\x09\x0a\x0c\x0d\x20\/>]*\z/u, tag)
+
+      _ ->
+        false
+    end
+  end
+
+  @doc false
+  @spec parse_html_integer(term()) :: {:ok, integer()} | :error
+  def parse_html_integer(value) do
+    case value do
+      value when is_binary(value) ->
+        case Regex.run(~r/^[ \t\n\f\r]*([+-]?[0-9]+)/, value, capture: :all_but_first) do
+          [digits] ->
+            try do
+              check_render_resource(:max_html_numeric_token_bytes, byte_size(digits), :html)
+            catch
+              {:render_resource_limit, {:error, {reason, diagnostic}}} ->
+                throw(
+                  {:render_resource_limit,
+                   {:error, {reason, Diagnostics.with_context(diagnostic, source: value)}}}
+                )
+            end
+
+            {integer, ""} = Integer.parse(digits)
+            {:ok, integer}
+
+          nil ->
+            :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  @doc false
+  @spec resolve_html_heading_context(map(), non_neg_integer()) ::
+          {non_neg_integer(), 1..9 | nil}
+  def resolve_html_heading_context(node, inherited_offset) do
+    case node do
+      %{attributes: attributes}
+      when inherited_offset == 0 and not is_map_key(attributes, "headingoffset") and
+             not is_map_key(attributes, "headingreset") ->
+        {0, nil}
+
+      _ ->
+        offset =
+          if Map.get(node, :namespace, :html) == :html do
+            attributes = node.attributes
+            namespaces = Map.get(node, :attribute_namespaces, %{})
+
+            own_offset =
+              if is_nil(Map.get(namespaces, "headingoffset")) do
+                case parse_html_integer(Map.get(attributes, "headingoffset")) do
+                  {:ok, value} when value >= 0 -> value
+                  _ -> 0
+                end
+              else
+                0
+              end
+
+            if Map.has_key?(attributes, "headingreset") and
+                 is_nil(Map.get(namespaces, "headingreset")),
+               do: own_offset,
+               else: inherited_offset + own_offset
+          else
+            inherited_offset
+          end
+
+        level =
+          case node do
+            %{tag: <<"h", base>>} when base in ?1..?6 and offset > 0 ->
+              # HTML fixes the maximum computed heading level at nine.
+              if Map.get(node, :namespace, :html) == :html,
+                do: min(base - ?0 + offset, 9),
+                else: nil
+
+            _ ->
+              nil
+          end
+
+        {offset, level}
+    end
+  catch
+    {:render_resource_limit, {:error, {reason, diagnostic}}} ->
+      throw(
+        {:render_resource_limit,
+         {:error,
+          {reason,
+           Diagnostics.diagnostic(diagnostic.stage, diagnostic.reason, diagnostic.message,
+             operation: Map.get(diagnostic, :operation),
+             module: Map.get(diagnostic, :module),
+             source: "headingoffset=" <> node.attributes["headingoffset"],
+             line: Map.get(diagnostic, :line, Map.get(node, :line)),
+             column: Map.get(diagnostic, :column, Map.get(node, :column))
+           )}}}
+      )
+  end
+
+  @doc false
+  @spec resolve_html_list_ordinals(String.t(), map(), list()) :: list()
+  def resolve_html_list_ordinals(tag, attributes, children) do
+    reversed? = tag == "ol" and Map.has_key?(attributes, "reversed")
+    step = if reversed?, do: -1, else: 1
+
+    start =
+      case parse_html_integer(Map.get(attributes, "start")) do
+        {:ok, integer} when tag == "ol" ->
+          integer
+
+        _ ->
+          if reversed?,
+            do: Enum.count(children, &match?(%{style: %{display: :list_item}}, &1)),
+            else: 1
+      end
+
+    {children, _next} =
+      Enum.map_reduce(children, start, fn child, next ->
+        case child do
+          %{style: %{display: :list_item} = style} ->
+            ordinal =
+              case Map.get(style, :_list_value) do
+                {:ok, integer} when tag == "ol" -> integer
+                _ -> next
+              end
+
+            marker = CounterStyle.marker(Map.get(style, :list_marker_type, :disc), ordinal)
+            reserve_render_resource(:max_rendered_text_bytes, byte_size(marker), :style)
+            markers = if marker == "", do: [], else: [%{type: :text, text: marker, style: style}]
+            {Map.put(child, :style, Map.put(style, :_list_marker, markers)), ordinal + step}
+
+          _ ->
+            {child, next}
+        end
+      end)
+
+    children
+  end
+
+  @doc false
+  @spec html_list_marker_type(String.t(), map()) :: atom() | nil
+  def html_list_marker_type(tag, attributes) do
+    case {tag, Map.get(attributes, "type")} do
+      {tag, "1"} when tag in ~w(ol li) -> :decimal
+      {tag, "a"} when tag in ~w(ol li) -> :lower_alpha
+      {tag, "A"} when tag in ~w(ol li) -> :upper_alpha
+      {tag, "i"} when tag in ~w(ol li) -> :lower_roman
+      {tag, "I"} when tag in ~w(ol li) -> :upper_roman
+      {tag, "disc"} when tag in ~w(ul li) -> :disc
+      {tag, "circle"} when tag in ~w(ul li) -> :circle
+      {tag, "square"} when tag in ~w(ul li) -> :square
+      _ -> nil
+    end
+  end
+
+  @doc false
+  @spec parse_css_list_style(String.t(), String.t()) :: {:ok, map()} | :error
+  def parse_css_list_style(property, value) do
+    tokens = value |> String.trim() |> String.downcase() |> String.split(~r/[ \t\n\f\r]+/)
+
+    Enum.reduce_while(tokens, {:ok, %{}}, fn token, {:ok, parsed} ->
+      result =
+        cond do
+          token in ~w(inside outside) and property != "list-style-type" ->
+            {:ok, :list_style_position, if(token == "inside", do: :inside, else: :outside)}
+
+          property != "list-style-position" ->
+            case token do
+              "none" ->
+                {:ok, :list_marker_type, :none}
+
+              "disc" ->
+                {:ok, :list_marker_type, :disc}
+
+              "circle" ->
+                {:ok, :list_marker_type, :circle}
+
+              "square" ->
+                {:ok, :list_marker_type, :square}
+
+              "disclosure-open" ->
+                {:ok, :list_marker_type, :disclosure_open}
+
+              "disclosure-closed" ->
+                {:ok, :list_marker_type, :disclosure_closed}
+
+              "decimal" ->
+                {:ok, :list_marker_type, :decimal}
+
+              "decimal-leading-zero" ->
+                {:ok, :list_marker_type, :decimal_leading_zero}
+
+              value when value in ~w(lower-alpha lower-latin) ->
+                {:ok, :list_marker_type, :lower_alpha}
+
+              value when value in ~w(upper-alpha upper-latin) ->
+                {:ok, :list_marker_type, :upper_alpha}
+
+              "lower-roman" ->
+                {:ok, :list_marker_type, :lower_roman}
+
+              "upper-roman" ->
+                {:ok, :list_marker_type, :upper_roman}
+
+              _ ->
+                :error
+            end
+
+          true ->
+            :error
+        end
+
+      case result do
+        {:ok, key, value} ->
+          if Map.has_key?(parsed, key),
+            do: {:halt, :error},
+            else: {:cont, {:ok, Map.put(parsed, key, value)}}
+
+        :error ->
+          {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, parsed} when property == "list-style" ->
+        {:ok, Map.merge(%{list_marker_type: :disc, list_style_position: :outside}, parsed)}
+
+      result ->
+        result
+    end
+  end
+
+  @doc false
+  @spec normalize_html_element_children(String.t(), list(), String.t() | nil) :: list()
+  def normalize_html_element_children(tag, children, first_token) do
+    case {tag, children} do
+      {tag, [%{type: :text, text: text} = first | rest]} when tag in ~w(pre listing textarea) ->
+        text =
+          if is_binary(first_token) and not String.starts_with?(first_token, "<!--") do
+            String.replace(text, ~r/^\r?\n|^\r/u, "", global: false)
+          else
+            text
+          end
+
+        [%{first | text: text} | rest]
+
+      _ ->
+        children
+    end
+  end
+
+  @doc false
+  @spec parse_css_text_decoration(String.t(), String.t(), number(), term()) ::
+          {:ok, map()} | :error
+  def parse_css_text_decoration(property, value, font_size, color) do
+    normalized = value |> trim_ascii_whitespace() |> downcase_ascii()
+
+    case property do
+      "text-decoration-line" ->
+        lines = split_css_tokens(normalized)
+
+        cond do
+          lines == ["none"] ->
+            {:ok, %{text_decoration_line: []}}
+
+          lines != [] and length(lines) == length(Enum.uniq(lines)) and
+              Enum.all?(lines, &(&1 in ~w(underline overline line-through))) ->
+            {:ok,
+             %{
+               text_decoration_line:
+                 Enum.map(lines, fn line ->
+                   case line do
+                     "underline" -> :underline
+                     "overline" -> :overline
+                     "line-through" -> :line_through
+                   end
+                 end)
+             }}
+
+          true ->
+            :error
+        end
+
+      "text-decoration-style" ->
+        if normalized == "solid", do: {:ok, %{text_decoration_style: :solid}}, else: :error
+
+      "text-decoration-color" ->
+        case normalized do
+          "currentcolor" ->
+            {:ok, %{text_decoration_color: :current_color}}
+
+          _ ->
+            with {:ok, parsed} <- parse_css_color(normalized, color),
+                 do: {:ok, %{text_decoration_color: parsed}}
+        end
+
+      "text-decoration-thickness" ->
+        case normalized do
+          "auto" ->
+            {:ok, %{text_decoration_thickness: :auto}}
+
+          "from-font" ->
+            {:ok, %{text_decoration_thickness: :from_font}}
+
+          _ ->
+            em? = String.ends_with?(normalized, "em") and not String.ends_with?(normalized, "rem")
+
+            result =
+              case parse_css_number(normalized) do
+                {number, "%"} when number >= 0 -> {:ok, {:percent, number}}
+                _ -> parse_css_length(normalized, :nonnegative, if(em?, do: 1, else: font_size))
+              end
+
+            with {:ok, thickness} <- result do
+              {:ok, %{text_decoration_thickness: if(em?, do: {:em, thickness}, else: thickness)}}
+            end
+        end
+
+      "text-decoration" ->
+        tokens = split_css_tokens(normalized)
+
+        Enum.reduce_while(
+          tokens,
+          {:ok,
+           %{
+             text_decoration_line: [],
+             text_decoration_color: :current_color,
+             text_decoration_thickness: :auto
+           }, MapSet.new()},
+          fn token, {:ok, result, seen} ->
+            parsed =
+              cond do
+                token in ~w(none underline overline line-through) ->
+                  parse_css_text_decoration("text-decoration-line", token, font_size, color)
+
+                token == "solid" ->
+                  {:ok, %{text_decoration_style: :solid}}
+
+                match?(
+                  {:ok, _},
+                  parse_css_text_decoration("text-decoration-thickness", token, font_size, color)
+                ) ->
+                  parse_css_text_decoration("text-decoration-thickness", token, font_size, color)
+
+                true ->
+                  parse_css_text_decoration("text-decoration-color", token, font_size, color)
+              end
+
+            case parsed do
+              {:ok, %{text_decoration_line: lines}} ->
+                existing = result.text_decoration_line
+
+                if MapSet.member?(seen, token) or (MapSet.member?(seen, "none") and lines != []) or
+                     (token == "none" and existing != []) do
+                  {:halt, :error}
+                else
+                  {:cont,
+                   {:ok, %{result | text_decoration_line: existing ++ lines},
+                    MapSet.put(seen, token)}}
+                end
+
+              {:ok, properties} ->
+                key = hd(Map.keys(properties))
+
+                if MapSet.member?(seen, key),
+                  do: {:halt, :error},
+                  else: {:cont, {:ok, Map.merge(result, properties), MapSet.put(seen, key)}}
+
+              :error ->
+                {:halt, :error}
+            end
+          end
+        )
+        |> case do
+          {:ok, result, _seen} when tokens != [] -> {:ok, result}
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  @doc false
+  @spec resolve_text_decorations(map()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def resolve_text_decorations(style) do
+    style =
+      if Map.get(style, :display) in [:inline_block, :inline_flex, :inline_grid] or
+           Map.get(style, :position) == :absolute,
+         do: Map.delete(style, :_text_decorations),
+         else: style
+
+    case Map.get(style, :text_decoration_line, []) do
+      [] ->
+        {:ok, style}
+
+      lines ->
+        font = style.font_face
+
+        case FontValidator.prepare_text_metrics(font) do
+          {:ok, metrics} ->
+            size = style.font_size
+            scale = size / metrics.units_per_em
+            # CSS fixes one px at 0.75 PDF points. These UA paint rules match
+            # pinned Chromium: auto thickness is 1/10 em, whole-pixel strokes,
+            # a thickness-dependent underline gap, and ascent-based strikes.
+            configured = Map.get(style, :text_decoration_thickness, :auto)
+
+            thickness =
+              case configured do
+                :auto ->
+                  size / 10
+
+                :from_font ->
+                  if metrics.underline, do: metrics.underline.thickness * scale, else: size / 10
+
+                {:percent, percent} ->
+                  size * percent / 100
+
+                {:em, multiplier} ->
+                  size * multiplier
+
+                thickness ->
+                  thickness
+              end
+
+            thickness =
+              if configured in [:auto, :from_font],
+                do: max(0.75, Float.floor(thickness / 0.75) * 0.75),
+                else: max(0.75, round(thickness / 0.75) * 0.75)
+
+            color =
+              case Map.get(style, :text_decoration_color, :current_color) do
+                :current_color -> style.color
+                color -> color
+              end
+
+            ascent = font.ascent * scale
+
+            decoration = %{
+              lines: lines,
+              color: color,
+              thickness: thickness,
+              underline: -max(1, Float.ceil(thickness / 0.75 / 2)) * 0.75,
+              overline: round(ascent / 0.75) * 0.75,
+              strike: ascent / 3
+            }
+
+            decorations = Map.get(style, :_text_decorations, []) ++ [decoration]
+
+            if valid_text_decorations?(decorations),
+              do: {:ok, Map.put(style, :_text_decorations, decorations)},
+              else:
+                Diagnostics.error(
+                  :style,
+                  :invalid_document,
+                  "text decoration geometry or color is invalid"
+                )
+
+          :error ->
+            Diagnostics.error(
+              :font,
+              :invalid_document,
+              "text decorations require valid selected-font metrics",
+              source: Map.get(font, :family),
+              module: FontValidator
+            )
+        end
+    end
+  end
+
+  @doc false
+  @spec parse_css_attribute_selector(String.t()) :: {:ok, tuple(), String.t()} | :error
+  def parse_css_attribute_selector(source) do
+    case Regex.named_captures(@css_attribute_selector_regex, source) do
+      %{"name" => name, "operator" => operator, "value" => value, "flag" => flag, "rest" => rest} ->
+        decoded_flag = decode_css_escapes(flag)
+
+        if decoded_flag in ["", "i", "I", "s", "S"] do
+          name = name |> decode_css_escapes() |> String.downcase(:ascii)
+
+          attribute =
+            case operator do
+              "" ->
+                {:present, name}
+
+              operator ->
+                operator =
+                  case operator do
+                    "=" -> :equals
+                    "~=" -> :includes
+                    "|=" -> :dash_match
+                    "^=" -> :prefix
+                    "$=" -> :suffix
+                    "*=" -> :substring
+                  end
+
+                value = decode_css_value(value)
+
+                case decoded_flag do
+                  "" -> {operator, name, value}
+                  flag when flag in ["i", "I"] -> {operator, name, value, :insensitive}
+                  _ -> {operator, name, value, :sensitive}
+                end
+            end
+
+          {:ok, attribute, rest}
+        else
+          :error
+        end
+
+      nil ->
+        :error
+    end
+  end
+
+  @doc false
+  @spec attribute_selector_matches?(tuple(), map()) :: boolean()
+  def attribute_selector_matches?(selector, node) do
+    attributes = Map.fetch!(node, :attributes)
+
+    case selector do
+      {:present, name} ->
+        Map.has_key?(attributes, name)
+
+      selector ->
+        {operator, name, value, mode} =
+          case selector do
+            {operator, name, value} -> {operator, name, value, :default}
+            {operator, name, value, mode} -> {operator, name, value, mode}
+          end
+
+        case Map.fetch(attributes, name) do
+          {:ok, actual} when operator == :equals and actual == value ->
+            true
+
+          {:ok, _actual}
+          when operator in [:includes, :prefix, :suffix, :substring] and value == "" ->
+            false
+
+          {:ok, actual} ->
+            namespace = Map.get(node, :namespace, :html)
+            attribute_namespace = Map.get(Map.get(node, :attribute_namespaces, %{}), name)
+
+            insensitive? =
+              mode == :insensitive or
+                (mode == :default and namespace == :html and is_nil(attribute_namespace) and
+                   name in @case_insensitive_html_attributes)
+
+            if insensitive? or operator != :equals do
+              reserve_render_resource(:max_css_work, byte_size(actual) + byte_size(value), :css)
+            end
+
+            {actual, value} =
+              if insensitive?,
+                do: {String.downcase(actual, :ascii), String.downcase(value, :ascii)},
+                else: {actual, value}
+
+            case operator do
+              :equals ->
+                actual == value
+
+              :includes ->
+                not Regex.match?(~r/[\x20\t\r\n\f]/u, value) and
+                  value in String.split(actual, ~r/[\x20\t\r\n\f]+/u, trim: true)
+
+              :dash_match ->
+                actual == value or String.starts_with?(actual, value <> "-")
+
+              :prefix ->
+                String.starts_with?(actual, value)
+
+              :suffix ->
+                String.ends_with?(actual, value)
+
+              :substring ->
+                String.contains?(actual, value)
+            end
+
+          :error ->
+            false
+        end
+    end
+  end
+
+  @doc false
+  @spec parse_css_text_wrapping(String.t(), String.t()) :: {:ok, atom(), atom()} | :error
+  def parse_css_text_wrapping(property, value) do
+    case {property, value |> String.trim() |> String.downcase()} do
+      {"white-space", "normal"} ->
+        {:ok, :white_space, :normal}
+
+      {"white-space", "pre-line"} ->
+        {:ok, :white_space, :pre_line}
+
+      {"white-space", "nowrap"} ->
+        {:ok, :white_space, :nowrap}
+
+      {"white-space", "pre"} ->
+        {:ok, :white_space, :pre}
+
+      {"white-space", "pre-wrap"} ->
+        {:ok, :white_space, :pre_wrap}
+
+      {"white-space", "break-spaces"} ->
+        {:ok, :white_space, :break_spaces}
+
+      {"line-break", value} when value in ["auto", "normal"] ->
+        {:ok, :line_break, :normal}
+
+      {"line-break", "anywhere"} ->
+        {:ok, :line_break, :anywhere}
+
+      {property, "break-word"} when property in ~w(word-wrap overflow-wrap) ->
+        {:ok, :overflow_wrap, :break_word}
+
+      {property, "anywhere"} when property in ~w(word-wrap overflow-wrap) ->
+        {:ok, :overflow_wrap, :anywhere}
+
+      {property, "normal"} when property in ~w(word-wrap overflow-wrap) ->
+        {:ok, :overflow_wrap, :normal}
+
+      {"word-break", "break-word"} ->
+        {:ok, :word_break, :break_word}
+
+      {"word-break", "normal"} ->
+        {:ok, :word_break, :normal}
+
+      _ ->
+        :error
+    end
+  end
+
+  @doc false
+  @spec valid_html_element?(String.t(), map(), list()) :: boolean()
+  def valid_html_element?(tag, attributes, children) do
+    children =
+      if tag in (@void_tags ++ ~w(style script title xmp plaintext noembed)),
+        do: children,
+        else: html_content_nodes(children)
+
+    case tag do
+      "head" ->
+        Enum.all?(
+          children,
+          &match?(
+            %{tag: tag}
+            when tag in ["base", "style", "meta", "title", "script", "template", "noscript"],
+            &1
+          )
+        )
+
+      "noscript" ->
+        valid_noscript_element?(children, nil, [])
+
+      "template" ->
+        true
+
+      "a" ->
+        valid_noninteractive_children?(children, "a")
+
+      tag when tag in ~w(style script iframe xmp plaintext noembed) ->
+        Enum.all?(children, &match?(%{type: :text}, &1))
+
+      "title" ->
+        Enum.all?(children, &match?(%{type: :text}, &1))
+
+      tag when tag in @form_control_tags or tag in ["option", "optgroup"] ->
+        valid_form_element?(tag, attributes, children)
+
+      tag when tag in @void_tags ->
+        children == []
+
+      tag when tag in @list_tags ->
+        Enum.all?(children, &(match?(%{tag: "li"}, &1) or script_supporting_element?(&1)))
+
+      "dl" ->
+        case Enum.any?(children, &match?(%{tag: "div"}, &1)) do
+          true ->
+            Enum.all?(children, fn child ->
+              script_supporting_element?(child) or
+                (match?(%{tag: "div"}, child) and description_groups_valid?(child.children))
+            end)
+
+          false ->
+            description_groups_valid?(children)
+        end
+
+      "picture" ->
+        NativeElixirPdfUtilities.Validators.ResponsiveImageValidator.valid_picture_children?(
+          children
+        )
+
+      "figure" ->
+        meaningful =
+          Enum.reject(children, fn child ->
+            match?(%{type: :text}, child) and String.trim(child.text) == ""
+          end)
+
+        captions = Enum.filter(meaningful, &match?(%{tag: "figcaption"}, &1))
+
+        captions == [] or
+          (length(captions) == 1 and
+             (hd(captions) == List.first(meaningful) or hd(captions) == List.last(meaningful)))
+
+      "table" ->
+        table_children_valid?(children)
+
+      "colgroup" ->
+        span? = Map.has_key?(attributes, "span")
+
+        (not span? and Enum.all?(children, &match?(%{tag: tag} when tag in ~w(col template), &1))) or
+          (children == [] and span?)
+
+      tag when tag in ~w(thead tbody tfoot) ->
+        Enum.all?(children, &(match?(%{tag: "tr"}, &1) or script_supporting_element?(&1)))
+
+      "tr" ->
+        Enum.all?(
+          children,
+          &(match?(%{tag: tag} when tag in ["th", "td"], &1) or script_supporting_element?(&1))
+        )
+
+      _ ->
+        true
+    end
+  end
+
+  @doc false
+  @spec valid_noscript_element?(list(), term(), list()) :: boolean()
+  def valid_noscript_element?(children, context, ancestors) do
+    children = html_content_nodes(children)
+
+    Enum.all?(children, fn child ->
+      case child do
+        %{type: :text, text: text} ->
+          context != "head" or Regex.match?(~r/^[ \t\n\f\r]*$/, text)
+
+        %{type: :element, tag: tag} ->
+          if context == "head",
+            do: tag in ~w(style meta),
+            else: valid_html_child?(context || :document, tag, ancestors)
+
+        _ ->
+          false
+      end
+    end) and noscript_free_descendants?(children)
+  end
+
+  # Template fragments are separate trees, not descendants of their template.
+  defp noscript_free_descendants?(nodes) do
+    Enum.all?(nodes, fn node ->
+      case node do
+        %{type: :element, tag: "noscript"} -> false
+        %{type: :element, children: children} -> noscript_free_descendants?(children)
+        _ -> true
+      end
+    end)
+  end
+
+  defp description_groups_valid?(children) do
+    Enum.reduce_while(children, :empty, fn child, state ->
+      cond do
+        script_supporting_element?(child) -> {:cont, state}
+        match?(%{tag: "dt"}, child) -> {:cont, :term}
+        match?(%{tag: "dd"}, child) and state in [:term, :description] -> {:cont, :description}
+        true -> {:halt, :invalid}
+      end
+    end) in [:empty, :description]
+  end
+
+  defp script_supporting_element?(node) do
+    match?(%{type: :element, tag: tag} when tag in ~w(script template), node) and
+      Map.get(node, :namespace, :html) == :html
+  end
+
+  defp table_children_valid?(children) do
+    Enum.reduce_while(children, :start, fn child, state ->
+      cond do
+        script_supporting_element?(child) ->
+          {:cont, state}
+
+        match?(%{tag: "caption"}, child) and state == :start ->
+          {:cont, :caption}
+
+        match?(%{tag: tag} when tag in ~w(colgroup col), child) and
+            state in [:start, :caption, :columns] ->
+          {:cont, :columns}
+
+        match?(%{tag: "thead"}, child) and state in [:start, :caption, :columns] ->
+          {:cont, :header}
+
+        match?(%{tag: tag} when tag in ~w(tr tbody), child) and state != :footer ->
+          {:cont, :rows}
+
+        match?(%{tag: "tfoot"}, child) and state != :footer ->
+          {:cont, :footer}
+
+        true ->
+          {:halt, :invalid}
+      end
+    end) != :invalid
+  end
+
+  @doc false
+  @spec construct_html_document(map()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def construct_html_document(dom) do
+    case html_content_nodes(dom.children) do
+      [%{tag: "html"} = html] ->
+        with {:ok, children} <- document_sections(html.children) do
+          children =
+            Enum.map(dom.children, fn node ->
+              if node == html, do: %{html | children: children}, else: node
+            end)
+
+          {:ok, %{dom | children: children}}
+        end
+
+      children ->
+        case Enum.any?(children, &match?(%{tag: "html"}, &1)) do
+          true ->
+            Diagnostics.error(
+              :html,
+              :unsupported_html,
+              "a document must contain one html element enclosing its head and body; remove sibling or duplicate html elements"
+            )
+
+          false ->
+            {leading, content} =
+              Enum.split_while(dom.children, &match?(%{type: :processing_instruction}, &1))
+
+            with {:ok, children} <- document_sections(content) do
+              reserve_render_resource(:max_html_nodes, 1, :html)
+
+              html = %{
+                type: :element,
+                tag: "html",
+                attributes: %{},
+                children: children
+              }
+
+              {:ok, %{dom | children: leading ++ [html]}}
+            end
+        end
+    end
+  end
+
+  defp document_sections(children) do
+    {leading, children} =
+      Enum.split_while(children, &match?(%{type: :processing_instruction}, &1))
+
+    {head_content, body_content} =
+      Enum.split_while(children, fn child ->
+        match?(%{type: :processing_instruction}, child) or
+          match?(%{tag: tag} when tag in ~w(head base style meta title script template), child)
+      end)
+
+    {head, head_nodes} =
+      case html_content_nodes(head_content) do
+        [%{tag: "head"} = head] ->
+          {head, head_content}
+
+        _ ->
+          reserve_render_resource(:max_html_nodes, 1, :html)
+          head = %{type: :element, tag: "head", attributes: %{}, children: head_content}
+          {head, [head]}
+      end
+
+    {body, body_nodes} =
+      case html_content_nodes(body_content) do
+        [%{tag: "body"} = body] ->
+          {body, body_content}
+
+        _ ->
+          reserve_render_resource(:max_html_nodes, 1, :html)
+          body = %{type: :element, tag: "body", attributes: %{}, children: body_content}
+          {body, [body]}
+      end
+
+    valid? =
+      not Enum.any?(head.children, &match?(%{tag: tag} when tag in ~w(html head body), &1)) and
+        not Enum.any?(
+          body.children,
+          &match?(%{tag: tag} when tag in ~w(html head body title), &1)
+        )
+
+    case valid? do
+      true ->
+        {:ok, leading ++ head_nodes ++ body_nodes}
+
+      false ->
+        Diagnostics.error(
+          :html,
+          :unsupported_html,
+          "document head and body must occur once in order; place title in the head and printed content in the body"
+        )
+    end
+  end
+
+  @doc false
+  @spec html_text_action(atom() | String.t(), String.t()) :: :ignore | :text | :invalid
+  def html_text_action(context, text) do
+    case context in [
+           :document,
+           :after_doctype,
+           :after_head,
+           :after_body,
+           :after_html,
+           "html",
+           "head",
+           "body",
+           "ul",
+           "ol",
+           "dl",
+           "table",
+           "colgroup",
+           "thead",
+           "tbody",
+           "tfoot",
+           "tr",
+           "select",
+           "optgroup"
+         ] do
+      false ->
+        :text
+
+      true ->
+        case Regex.match?(~r/^[ \t\n\f\r]*$/, text) do
+          true ->
+            :ignore
+
+          false ->
+            if context in [:document, :after_doctype, :after_head, "html", "body"],
+              do: :text,
+              else: :invalid
+        end
+    end
+  end
+
+  @doc false
+  @spec html_implied_start_closure(atom() | String.t(), String.t(), list()) ::
+          atom() | tuple() | nil
+  def html_implied_start_closure(context, tag, children) do
+    cond do
+      context in [:document, :after_doctype] and tag == "head" and
+          Enum.all?(
+            html_content_nodes(children),
+            &match?(%{tag: tag} when tag in ~w(base style meta title script template), &1)
+          ) ->
+        :after_head
+
+      context in [:document, :after_doctype, :after_head] and tag == "body" and
+          not Enum.any?(children, &match?(%{tag: tag} when tag in ~w(html body), &1)) ->
+        :after_body
+
+      context in [:document, :after_doctype, :after_head, :after_body] and tag == "html" and
+          not Enum.any?(children, &match?(%{tag: "html"}, &1)) ->
+        :after_html
+
+      context == "table" and tag in ~w(tbody colgroup) ->
+        child_tag = if tag == "tbody", do: "tr", else: "col"
+
+        {group_children, previous} =
+          Enum.split_while(children, fn child ->
+            Map.get(child, :tag) == child_tag or
+              match?(%{type: :processing_instruction}, child) or
+              (script_supporting_element?(child) and
+                 (tag == "tbody" or Map.get(child, :tag) == "template"))
+          end)
+
+        if Enum.any?(group_children, &(Map.get(&1, :tag) == child_tag)),
+          do: {:group, tag, Enum.reverse(group_children), previous},
+          else: nil
+
+      true ->
+        nil
+    end
+  end
+
+  @doc false
+  @spec validate_html_doctype(String.t(), atom() | String.t(), list()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_html_doctype(token, context, children) do
+    valid? =
+      context == :document and html_content_nodes(children) == [] and
+        Regex.match?(
+          ~r/^<!doctype[ \t\n\f\r]+html(?:[ \t\n\f\r]+system[ \t\n\f\r]+(?:"about:legacy-compat"|'about:legacy-compat'))?[ \t\n\f\r]*>$/i,
+          token
+        )
+
+    if valid?,
+      do: :ok,
+      else:
+        Diagnostics.error(
+          :html,
+          :unsupported_html,
+          "use one HTML doctype before document content; legacy quirks doctypes and XML declarations are unsupported",
+          source: token
+        )
+  end
+
+  @doc false
+  @spec construct_html_group(String.t(), list()) :: map()
+  def construct_html_group(tag, children) do
+    reserve_render_resource(:max_html_nodes, 1, :html)
+    %{type: :element, tag: tag, attributes: %{}, children: children}
+  end
+
+  @doc false
+  @spec html_parent_stack(atom() | String.t(), String.t(), list()) :: list()
+  def html_parent_stack(context, tag, ancestors) do
+    cond do
+      context == "table" and tag == "tr" ->
+        ["tbody", context | ancestors]
+
+      context in [:document, :after_doctype, :after_head, "html"] and
+          tag not in ~w(html head body) ->
+        if tag in ~w(base style meta title script template),
+          do: ["head", "html", context | ancestors],
+          else: ["body", "html", context | ancestors]
+
+      context in [:document, :after_doctype, :after_head] and tag in ~w(head body) ->
+        ["html", context | ancestors]
+
+      true ->
+        [context | ancestors]
+    end
+  end
+
+  @doc false
+  @spec construct_html_table_groups(list()) :: list()
+  def construct_html_table_groups(children) do
+    {groups, _pending} =
+      Enum.reduce(children, {[], nil}, fn child, {groups, pending} ->
+        kind =
+          case Map.get(child, :type) do
+            :processing_instruction when pending in ~w(tbody colgroup) ->
+              pending
+
+            _ ->
+              case Map.get(child, :tag) do
+                "tr" -> "tbody"
+                "col" -> "colgroup"
+                "template" when pending in ~w(tbody colgroup) -> pending
+                "script" when pending == "tbody" -> pending
+                _ -> nil
+              end
+          end
+
+        case {kind, pending, groups} do
+          {nil, _, _} ->
+            {[{child, false} | groups], nil}
+
+          {kind, kind, [{group, true} | rest]} ->
+            {[{%{group | children: [child | group.children]}, true} | rest], kind}
+
+          {kind, _, _} ->
+            reserve_render_resource(:max_html_nodes, 1, :html)
+            group = %{type: :element, tag: kind, attributes: %{}, children: [child]}
+            {[{group, true} | groups], kind}
+        end
+      end)
+
+    groups
+    |> Enum.reverse()
+    |> Enum.map(fn {group, generated?} ->
+      if generated?, do: %{group | children: Enum.reverse(group.children)}, else: group
+    end)
+  end
+
+  @doc false
+  @spec validate_html_fragment_context(term()) ::
+          {:ok, String.t()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_html_fragment_context(context) do
+    normalized = if is_binary(context), do: String.downcase(context), else: nil
+
+    case supported_html_tag?(normalized) and normalized not in @void_tags and normalized != "html" do
+      true ->
+        {:ok, normalized}
+
+      false ->
+        NativeElixirPdfUtilities.Validators.ForeignContentValidator.prepare_fragment_context(
+          normalized || context
+        )
+    end
+  end
+
+  # HTML-only tokenizer modes. Foreign contexts retain their namespace's data
+  # rules, including elements whose local names happen to match these tags.
+  @doc false
+  @spec html_text_mode(term()) :: :data | :raw_text | :rcdata | :plaintext
+  def html_text_mode(context) do
+    case context do
+      tag when tag in ~w(style script iframe xmp noembed) -> :raw_text
+      tag when tag in ~w(title textarea) -> :rcdata
+      "plaintext" -> :plaintext
+      _ -> :data
+    end
+  end
+
+  @doc false
+  @spec noembed_render_style(map()) :: map()
+  def noembed_render_style(style) do
+    # The pinned UA stylesheet specifies display:none. Chromium additionally
+    # creates no noembed layout object even when author CSS overrides display.
+    # Preserve that static selection, and never load its unused background.
+    style |> Map.put(:display, :none) |> Map.delete(:background_image_source)
+  end
+
+  @doc false
+  @spec html_text_end_match(String.t(), term()) :: {non_neg_integer(), non_neg_integer()} | nil
+  def html_text_end_match(source, context) do
+    case context do
+      "script" ->
+        case script_data_end_offset(source) do
+          nil -> nil
+          offset -> {offset, 0}
+        end
+
+      tag when tag in ~w(style title textarea iframe xmp noembed) ->
+        pattern =
+          case tag do
+            "iframe" -> ~r/<\/iframe(?=[ \t\n\f\r\/>])/i
+            "style" -> ~r/<\/style(?=[ \t\n\f\r\/>])/i
+            "title" -> ~r/<\/title(?=[ \t\n\f\r\/>])/i
+            "textarea" -> ~r/<\/textarea(?=[ \t\n\f\r\/>])/i
+            "xmp" -> ~r/<\/xmp(?=[ \t\n\f\r\/>])/i
+            "noembed" -> ~r/<\/noembed(?=[ \t\n\f\r\/>])/i
+          end
+
+        case Regex.run(pattern, source, return: :index) do
+          [match] -> match
+          nil -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  @doc false
+  @spec html_text_token_action(term(), String.t()) :: :text | :end | :invalid
+  def html_text_token_action(context, token) do
+    case html_text_end_match(token, context) do
+      {0, _length} ->
+        # Appropriate end tags with attributes or a self-closing flag are parse
+        # errors. Keep the strict syntax policy rather than painting them as text.
+        if Regex.match?(~r/\A<\/[a-zA-Z]+[ \t\n\f\r]*>\z/, token),
+          do: :end,
+          else: :invalid
+
+      _ ->
+        :text
+    end
+  end
+
+  @doc false
+  @spec html_eof_end_tag_allowed?(term(), term(), list(), list()) :: boolean()
+  def html_eof_end_tag_allowed?(context, tag, children, ancestors) do
+    # A plaintext start tag makes all following source literal, including every
+    # authored ancestor end tag. EOF must therefore finish those open ancestors.
+    plaintext? =
+      context == "plaintext" or
+        children
+        |> List.last()
+        |> Stream.iterate(fn
+          %{type: :element, tag: "template", content: %{children: children}} ->
+            List.last(children)
+
+          %{type: :element, children: children} ->
+            List.last(children)
+
+          _ ->
+            nil
+        end)
+        |> Enum.take_while(&(not is_nil(&1)))
+        |> Enum.any?(
+          &match?(
+            %{type: :element, tag: "plaintext", namespace: :html},
+            Map.put_new(&1, :namespace, :html)
+          )
+        )
+
+    plaintext? or omitted_html_end_tag?(tag, :eof, ancestors)
+  end
+
+  @doc false
+  @spec html_void_tag?(String.t()) :: boolean()
+  def html_void_tag?(tag), do: tag in @void_tags
+
+  @doc false
+  @spec omitted_html_end_tag?(atom() | String.t(), term(), list()) :: boolean()
+  def omitted_html_end_tag?(tag, next, ancestors) do
+    case tag in @optional_end_tags do
+      false ->
+        false
+
+      true ->
+        matching_end? = next == {:end, tag}
+        parent = List.first(ancestors)
+
+        parent_end? =
+          next == :eof or
+            (match?({:end, _}, next) and
+               Enum.any?(
+                 ancestors,
+                 &(NativeElixirPdfUtilities.Validators.ForeignContentValidator.context_tag(&1) ==
+                     elem(next, 1))
+               )) or
+            (not matching_end? and parent in @optional_end_tags and
+               omitted_html_end_tag?(parent, next, Enum.drop(ancestors, 1)))
+
+        not matching_end? and
+          case tag do
+            "html" ->
+              next == :eof
+
+            "head" ->
+              next not in [:comment, :whitespace] and
+                next not in @head_starts
+
+            "body" ->
+              parent_end? and next != :comment
+
+            "p" ->
+              next in @paragraph_following_starts or
+                (parent_end? and parent not in ~w(a audio del ins map noscript video) and
+                   not (is_binary(parent) and String.contains?(parent, "-")))
+
+            "li" ->
+              next == {:start, "li"} or parent_end?
+
+            "dt" ->
+              next in [{:start, "dt"}, {:start, "dd"}]
+
+            "dd" ->
+              next in [{:start, "dt"}, {:start, "dd"}] or parent_end?
+
+            "option" ->
+              next in [{:start, "option"}, {:start, "optgroup"}, {:start, "hr"}] or parent_end?
+
+            "optgroup" ->
+              next in [{:start, "optgroup"}, {:start, "hr"}] or parent_end?
+
+            "caption" ->
+              next not in [:comment, :whitespace] and
+                (parent_end? or next in @table_starts)
+
+            "colgroup" ->
+              next not in [:comment, :whitespace, {:start, "col"}, {:start, "template"}]
+
+            "thead" ->
+              next in [{:start, "tbody"}, {:start, "tfoot"}]
+
+            "tbody" ->
+              next in [{:start, "tbody"}, {:start, "tfoot"}] or parent_end?
+
+            "tfoot" ->
+              parent_end?
+
+            "tr" ->
+              next == {:start, "tr"} or parent_end?
+
+            tag when tag in ["td", "th"] ->
+              next in [{:start, "td"}, {:start, "th"}] or parent_end?
+          end
+    end
+  end
+
+  # PI target vocabulary and data boundaries are fixed HTML syntax, not resource limits.
+  @processing_instruction_target ~r/\A[A-Za-z_][A-Za-z0-9_-]*\z/
+  @processing_instruction_token ~r/\A<\?(?<target>[A-Za-z_][A-Za-z0-9_-]*)(?<tail>[ \t\n\f\r][^>]*|\??)>\z/
+
+  @doc false
+  @spec validate_html_processing_instruction(term()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_html_processing_instruction(value) do
+    {node, stage, source} =
+      case value do
+        token when is_binary(token) ->
+          check_render_resource(:max_html_source_bytes, byte_size(token), :html)
+          reserve_render_resource(:max_html_tree_work, byte_size(token), :html)
+
+          node =
+            case Regex.named_captures(@processing_instruction_token, token) do
+              %{"target" => target, "tail" => tail} ->
+                data = Regex.replace(~r/\A[ \t\n\f\r]+/, tail, "")
+
+                data =
+                  if String.ends_with?(data, "?"),
+                    do: binary_part(data, 0, byte_size(data) - 1),
+                    else: data
+
+                %{type: :processing_instruction, target: target, data: data}
+
+              _ ->
+                nil
+            end
+
+          {node, :html, token}
+
+        node when is_map(node) ->
+          {node, :style, "processing_instruction"}
+
+        _ ->
+          {nil, :style, "processing_instruction"}
+      end
+
+    case valid_processing_instruction_node?(node) do
+      true ->
+        check_render_resource(
+          :max_html_source_bytes,
+          byte_size(node.target) + byte_size(node.data),
+          :html
+        )
+
+        {:ok, node}
+
+      false ->
+        Diagnostics.error(
+          stage,
+          if(stage == :html, do: :unsupported_html, else: :invalid_document),
+          "processing instructions require an ASCII letter or underscore target followed by letters, digits, hyphens or underscores, literal data and a > or ?> terminator; xml and xml-stylesheet declarations are unsupported",
+          module: __MODULE__,
+          source: source
+        )
+    end
+  end
+
+  defp valid_processing_instruction_node?(node) do
+    case node do
+      %{type: :processing_instruction, target: target, data: data}
+      when is_binary(target) and is_binary(data) ->
+        allowed_keys = [:type, :target, :data, :node_id, :source]
+
+        String.valid?(target) and String.valid?(data) and
+          Regex.match?(@processing_instruction_target, target) and
+          String.downcase(target, :ascii) not in ["xml", "xml-stylesheet"] and
+          not String.contains?(data, [">", <<0>>]) and not String.ends_with?(data, "?") and
+          Enum.all?(Map.keys(node), &(&1 in allowed_keys)) and
+          (not Map.has_key?(node, :node_id) or is_reference(node.node_id)) and
+          case Map.fetch(node, :source) do
+            :error ->
+              true
+
+            {:ok, %{text: text, line: line, column: column} = source}
+            when is_binary(text) and is_integer(line) and line > 0 and is_integer(column) and
+                   column > 0 ->
+              map_size(source) == 3 and String.valid?(text) and
+                case validate_html_processing_instruction(String.replace(text, ~r/\r\n?/, "\n")) do
+                  {:ok, parsed} -> parsed.target == target and parsed.data == data
+                  _ -> false
+                end
+
+            _ ->
+              false
+          end
+
+      _ ->
+        false
+    end
+  end
+
+  # PIs occupy authored tree positions but do not participate in element content models.
+  @doc false
+  @spec html_content_nodes([map()]) :: [map()]
+  def html_content_nodes(children),
+    do: Enum.reject(children, &match?(%{type: :processing_instruction}, &1))
+
+  @doc false
+  @spec validate_html_comment(String.t()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_html_comment(token) do
+    content_size = byte_size(token) - 7
+
+    valid? =
+      content_size >= 0 and String.ends_with?(token, "-->") and
+        then(binary_part(token, 4, content_size), fn content ->
+          not String.starts_with?(content, [">", "->"]) and
+            not String.contains?(content, ["<!--", "-->", "--!>"]) and
+            not String.ends_with?(content, "<!-")
+        end)
+
+    case valid? do
+      true ->
+        :ok
+
+      false ->
+        Diagnostics.error(
+          :html,
+          :unsupported_html,
+          "HTML comment is malformed or unterminated; use <!-- text --> without nested comment delimiters",
+          source: token
+        )
+    end
+  end
+
+  @doc false
+  @spec validate_html_attributes(String.t(), String.t(), :html | :mathml | :svg) ::
+          {:ok, map(), boolean()} | {:error, :unsupported_html}
+  def validate_html_attributes(attributes, tag, namespace \\ :html) do
+    case attributes do
+      "" ->
+        {:ok, %{}, false}
+
+      attributes ->
+        captures =
+          Regex.scan(
+            ~r/[ \t\n\f\r]+([^ \t\n\f\r\x00\/="'<>]+)(?:[ \t\n\f\r]*=[ \t\n\f\r]*("[^"]*"|'[^']*'|[^ \t\n\f\r"'`=<>]+))?/u,
+            attributes
+          )
+
+        parsed_source = Enum.map_join(captures, "", &List.first/1)
+
+        remainder =
+          binary_part(
+            attributes,
+            byte_size(parsed_source),
+            byte_size(attributes) - byte_size(parsed_source)
+          )
+
+        with true <- String.starts_with?(attributes, parsed_source),
+             true <- Regex.match?(~r/^[ \t\n\f\r]*\/?[ \t\n\f\r]*$/, remainder),
+             false <-
+               namespace == :html and tag in ~w(xmp plaintext noembed) and
+                 String.contains?(remainder, "/"),
+             {:ok, parsed} <- attributes_to_map(captures, tag, namespace) do
+          {:ok, parsed, String.contains?(remainder, "/")}
+        else
+          _ -> {:error, :unsupported_html}
+        end
+    end
+  end
+
+  defp attributes_to_map(captures, tag, namespace) do
+    custom? = namespace == :html and custom_html_tag?(tag)
+
+    Enum.reduce_while(captures, {:ok, %{}}, fn capture, {:ok, acc} ->
+      [_, name | quoted] = capture
+      source_value = List.first(quoted) || ""
+      name = String.downcase(name, :ascii)
+
+      value =
+        case source_value do
+          "" ->
+            ""
+
+          <<quote, _rest::binary>> when quote in [?", ?'] ->
+            source_value |> String.slice(1..-2//1) |> HtmlEntities.decode(:attribute)
+
+          source_value ->
+            HtmlEntities.decode(source_value, :attribute)
+        end
+
+      case {name, tag, Map.has_key?(acc, name)} do
+        {name, _, false} when namespace in [:mathml, :svg] or custom? ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"style", _, false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"id", _, false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"class", _, false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"title", _, false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"role", _, false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"is", _, false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"hidden", _, false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"inert", _, false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, _, false}
+        when name in ~w(contenteditable itemscope itemtype itemid itemprop itemref translate) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"popover", _, false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, _, false} when name in ~w(headingoffset headingreset) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, _, false}
+        when is_binary(name) and
+               (binary_part(name, 0, min(byte_size(name), 5)) == "data-" or
+                  binary_part(name, 0, min(byte_size(name), 5)) == "aria-") ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, _, false} when name in ["lang", "xml:lang"] ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "ol", false} when name in ~w(start reversed type compact) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "ul", false} when name in ~w(type compact) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "li", false} when name in ~w(value type) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, tag, false}
+        when {name, tag} in [{"value", "data"}, {"datetime", "time"}, {"cite", "blockquote"}] ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, tag, false} when name in ["cite", "datetime"] and tag in ["ins", "del"] ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "template", false}
+        when name in ~w(for shadowrootmode shadowrootdelegatesfocus shadowrootserializable shadowrootslotassignment shadowrootclonable shadowrootcustomelementregistry) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "script", false} ->
+          if valid_script_attribute?(name),
+            do: {:cont, {:ok, Map.put(acc, name, value)}},
+            else: {:halt, {:error, :unsupported_html}}
+
+        {name, "base", false} when name in ~w(href target) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "a", false}
+        when name in ~w(href target download ping rel rev hreflang type referrerpolicy name charset coords shape) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "iframe", false} when name in ~w(src srcdoc width height name) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"src", "img", false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"alt", "img", false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "img", false} when name in ~w(width height srcset sizes) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "source", false} when name in ~w(srcset sizes media type width height) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "hr", false} when name in ~w(align color height noshade size width) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "details", false} when name in ~w(open name) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "meta", false} when name in ~w(charset content http-equiv name property) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, tag, false} when tag in ~w(td th) and name in ~w(colspan rowspan headers) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"abbr", "th", false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"scope", "th", false} ->
+          # Missing and invalid keywords have the HTML Auto state.
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"span", tag, false} when tag in ~w(colgroup col) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, tag, false}
+        when tag in ~w(input select textarea button form label option optgroup progress meter) ->
+          case valid_form_attribute?(tag, name, value) do
+            true -> {:cont, {:ok, Map.put(acc, name, value)}}
+            false -> {:halt, {:error, :unsupported_html}}
+          end
+
+        _ ->
+          {:halt, {:error, :unsupported_html}}
+      end
+    end)
+  end
+
+  @doc false
   @spec validate_css_source(term(), :stylesheet | :declarations) ::
           {:ok, binary()} | {:error, {:invalid_css, Diagnostics.diagnostic()}}
   def validate_css_source(css, kind \\ :stylesheet) do
@@ -491,6 +3015,212 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       _ ->
         Diagnostics.error(:css, :invalid_css, "CSS input must be a string")
+    end
+  end
+
+  @doc false
+  @spec validate_css_declaration(term()) ::
+          {:ok, {String.t(), String.t()} | {String.t(), String.t(), :important}}
+          | {:error, :invalid_css}
+  def validate_css_declaration(declaration) do
+    case declaration do
+      declaration when is_binary(declaration) ->
+        case String.split(declaration, ":", parts: 2) do
+          [property, value] ->
+            property = trim_css_whitespace(property)
+
+            property =
+              if String.starts_with?(property, "--"), do: property, else: downcase_ascii(property)
+
+            value = trim_css_whitespace(value)
+
+            # Ordinary declarations have no priority marker. Preserve quoted and
+            # escaped exclamation marks before recognizing the final identifier.
+            important_offset =
+              if String.contains?(value, "!") do
+                case Regex.run(@css_important_suffix_regex, value, return: :index) do
+                  [{offset, _length}, {keyword_offset, keyword_length}] ->
+                    keyword = binary_part(value, keyword_offset, keyword_length)
+
+                    if keyword
+                       |> trim_ascii_whitespace()
+                       |> decode_css_escapes()
+                       |> downcase_ascii() == "important",
+                       do: offset,
+                       else: nil
+
+                  nil ->
+                    nil
+                end
+              end
+
+            value =
+              case important_offset do
+                nil -> value
+                offset -> value |> binary_part(0, offset) |> trim_css_whitespace()
+              end
+
+            valid_property =
+              Regex.match?(~r/\A[a-z][a-z-]*\z/u, property) or
+                Regex.match?(~r/\A--[a-zA-Z_][a-zA-Z0-9_-]*\z/u, property)
+
+            cond do
+              not valid_property or value == "" -> {:error, :invalid_css}
+              not is_nil(important_offset) -> {:ok, {property, value, :important}}
+              true -> {:ok, {property, value}}
+            end
+
+          _ ->
+            {:error, :invalid_css}
+        end
+
+      _ ->
+        {:error, :invalid_css}
+    end
+  end
+
+  @doc false
+  @spec horizontal_rule_hints(map()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def horizontal_rule_hints(attributes) do
+    with {:ok, hints} <- html_dimension_hints(attributes, [{"width", :width}], "hr") do
+      solid = Map.has_key?(attributes, "color") or Map.has_key?(attributes, "noshade")
+
+      hints =
+        Map.put(
+          hints,
+          :border_styles,
+          Map.new([:top, :right, :bottom, :left], &{&1, if(solid, do: :solid, else: :inset)})
+        )
+
+      hints =
+        case parse_html_legacy_color(Map.get(attributes, "color")) do
+          {:ok, color} -> Map.put(hints, :color, color)
+          :error -> hints
+        end
+
+      align = Map.get(attributes, "align", "")
+      align = if byte_size(align) <= byte_size("center"), do: String.downcase(align, :ascii)
+
+      hints =
+        case align do
+          "left" -> Map.put(hints, :margin, %{top: 0.0, right: :auto, bottom: 0.0, left: 0.0})
+          "right" -> Map.put(hints, :margin, %{top: 0.0, right: 0.0, bottom: 0.0, left: :auto})
+          _ -> hints
+        end
+
+      case parse_html_integer(Map.get(attributes, "size")) do
+        {:ok, size} when size >= 0 ->
+          case parse_css_number(Integer.to_string(size)) do
+            {number, ""} ->
+              hints =
+                cond do
+                  solid ->
+                    Map.put(
+                      hints,
+                      :border_widths,
+                      Map.new([:top, :right, :bottom, :left], &{&1, number * 0.75 / 2})
+                    )
+
+                  size == 1 ->
+                    Map.put(hints, :border_widths, %{
+                      top: 0.75,
+                      right: 0.75,
+                      bottom: 0.0,
+                      left: 0.75
+                    })
+
+                  size > 1 ->
+                    Map.put(hints, :height, (number - 2) * 0.75)
+
+                  true ->
+                    hints
+                end
+
+              {:ok, hints}
+
+            :error ->
+              Diagnostics.error(
+                :style,
+                :resource_limit_exceeded,
+                "hr size exceeds max_css_numeric_magnitude; reduce the rule size",
+                source: "size=" <> Map.fetch!(attributes, "size"),
+                module: __MODULE__
+              )
+          end
+
+        _ ->
+          {:ok, hints}
+      end
+    end
+  end
+
+  @doc false
+  @spec image_dimension_hints(map()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def image_dimension_hints(attributes) do
+    html_dimension_hints(attributes, [{"width", :width}, {"height", :height}], "image")
+  end
+
+  @doc false
+  @spec html_dimension_hints(map(), [{String.t(), atom()}], String.t()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def html_dimension_hints(attributes, properties, source_tag) do
+    if Enum.any?(properties, fn {name, _property} -> Map.has_key?(attributes, name) end) do
+      Enum.reduce_while(properties, {:ok, %{}}, fn {name, property}, {:ok, hints} ->
+        case Map.fetch(attributes, name) do
+          {:ok, value} ->
+            case Regex.named_captures(
+                   ~r/\A[ \t\n\f\r]*(?<integer>[0-9]+)(?:\.(?<fraction>[0-9]*))?(?<rest>.*)\z/s,
+                   value
+                 ) do
+              %{"integer" => integer, "fraction" => fraction, "rest" => rest} ->
+                token = if fraction == "", do: integer, else: integer <> "." <> fraction
+
+                try do
+                  check_render_resource(:max_html_numeric_token_bytes, byte_size(token), :style)
+                catch
+                  {:render_resource_limit, {:error, {reason, diagnostic}}} ->
+                    throw(
+                      {:render_resource_limit,
+                       {:error,
+                        {reason,
+                         Diagnostics.with_context(diagnostic, source: name <> "=" <> value)}}}
+                    )
+                end
+
+                case parse_css_number(token) do
+                  {number, ""} ->
+                    dimension =
+                      if String.starts_with?(rest, "%"),
+                        do: {:percent, number / 100.0},
+                        else: number * 0.75
+
+                    {:cont, {:ok, Map.put(hints, property, dimension)}}
+
+                  :error ->
+                    {:halt,
+                     Diagnostics.error(
+                       :style,
+                       :resource_limit_exceeded,
+                       source_tag <>
+                         " " <>
+                         name <> " exceeds max_css_numeric_magnitude; reduce the dimension",
+                       source: name <> "=" <> value,
+                       module: __MODULE__
+                     )}
+                end
+
+              nil ->
+                {:cont, {:ok, hints}}
+            end
+
+          :error ->
+            {:cont, {:ok, hints}}
+        end
+      end)
+    else
+      {:ok, %{}}
     end
   end
 
@@ -540,12 +3270,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec valid_link_url?(term()) :: boolean()
   def valid_link_url?(href) do
-    case href do
-      href when is_binary(href) ->
-        Regex.match?(~r/^(https?:\/\/[^\s<>]+|mailto:[^\s<>@]+@[^\s<>@]+)$/iu, href)
+    context = %{fallback_base: nil, resolution_base: nil, authored_base?: false}
 
-      _ ->
-        false
+    case NativeElixirPdfUtilities.Validators.HtmlUrlValidator.prepare_anchor(href, context) do
+      {:ok, {:uri, _url}} -> true
+      _ -> false
     end
   end
 
@@ -562,38 +3291,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec validate_local_resource_path(term(), term()) ::
           {:ok, String.t()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_local_resource_path(source, base_url) do
-    result =
-      with source when is_binary(source) and source != "" <- source,
-           false <- String.contains?(source, ["\0", "://"]),
-           {:ok, base_path} <- local_resource_base_path(base_url),
-           base_path <- Path.expand(base_path),
-           path <-
-             (case Path.type(source) do
-                :absolute -> Path.expand(source)
-                _ -> Path.expand(source, base_path)
-              end),
-           relative <- Path.relative_to(path, base_path),
-           true <-
-             relative == "." or
-               (Path.type(relative) == :relative and relative != ".." and
-                  not String.starts_with?(relative, "../")),
-           true <- symlink_free_resource_path?(base_path, relative) do
-        {:ok, path}
-      else
-        _ -> :error
-      end
-
-    case result do
-      {:ok, path} ->
-        {:ok, path}
-
-      :error ->
-        Diagnostics.error(
-          :style,
-          :invalid_document,
-          "local document resource path is not authorized by base_url"
-        )
-    end
+    NativeElixirPdfUtilities.Validators.ResourceValidator.authorize_local_path(
+      source,
+      base_url,
+      base_url,
+      :legacy
+    )
   end
 
   @doc false
@@ -667,25 +3370,27 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
   @doc false
   @spec validate_table_span_attribute(term(), term()) ::
-          {:ok, pos_integer()} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
+          {:ok, non_neg_integer()} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_table_span_attribute(attributes, name) do
     case {attributes, name} do
-      {attributes, name}
-      when is_map(attributes) and name in ["span", "colspan", "rowspan"] ->
+      {attributes, name} when is_map(attributes) and name in ["span", "colspan", "rowspan"] ->
         case Map.get(attributes, name) do
           nil ->
             {:ok, 1}
 
           value when is_binary(value) ->
-            case Integer.parse(String.trim(value)) do
-              {integer, ""} ->
-                with :ok <- validate_layout_cardinality(:table_span, integer) do
-                  {:ok, integer}
-                end
+            parsed =
+              if String.starts_with?(trim_ascii_whitespace(value), "-"),
+                do: :error,
+                else: parse_html_integer(value)
 
-              _ ->
-                :error
-            end
+            value =
+              case parsed do
+                {:ok, integer} -> integer
+                :error -> 1
+              end
+
+            normalize_table_span(name, value)
 
           _ ->
             :error
@@ -697,15 +3402,451 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec normalize_table_span(term(), term()) ::
+          {:ok, non_neg_integer()} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
+  def normalize_table_span(name, value) do
+    case {name, value} do
+      {name, value}
+      when name in ["span", "colspan", "rowspan"] and is_integer(value) and value >= 0 ->
+        # HTML mandates these bounds. They are protocol invariants, not resource limits.
+        bound = if name == "rowspan", do: 65_534, else: 1_000
+        span = if value == 0 and name != "rowspan", do: 1, else: min(value, bound)
+        result = if span == 0, do: :ok, else: validate_layout_cardinality(:table_span, span)
+        with :ok <- result, do: {:ok, span}
+
+      _ ->
+        :error
+    end
+  end
+
+  @doc false
+  @spec parse_css_simple_pseudo_class(String.t()) :: {:ok, atom(), String.t()} | nil
+  def parse_css_simple_pseudo_class(selector) do
+    case Regex.named_captures(@css_simple_pseudo_regex, selector) do
+      %{"keyword" => keyword, "rest" => rest} ->
+        keywords = %{
+          "first-child" => :first_child,
+          "last-child" => :last_child,
+          "first-of-type" => :first_of_type,
+          "last-of-type" => :last_of_type,
+          "only-child" => :only_child,
+          "only-of-type" => :only_of_type,
+          "root" => :root,
+          "enabled" => :enabled,
+          "disabled" => :disabled,
+          "checked" => :checked,
+          "indeterminate" => :indeterminate,
+          "required" => :required,
+          "optional" => :optional,
+          "read-only" => :read_only,
+          "read-write" => :read_write,
+          "popover-open" => :popover_open
+        }
+
+        case Map.get(keywords, keyword |> decode_css_escapes() |> String.downcase(:ascii)) do
+          nil -> nil
+          pseudo_class -> {:ok, pseudo_class, rest}
+        end
+
+      nil ->
+        nil
+    end
+  end
+
+  @doc false
+  @spec parse_css_language_selector(String.t()) :: {:ok, tuple(), String.t()} | :error | nil
+  def parse_css_language_selector(selector) do
+    case parse_css_function(selector, "lang") do
+      {:ok, ranges, rest} ->
+        case parse_language_ranges(ranges, []) do
+          {:ok, ranges} -> {:ok, {:lang, ranges}, rest}
+          :error -> :error
+        end
+
+      other ->
+        other
+    end
+  end
+
+  # CSS range arguments are identifiers or strings. Quoted commas, escaped
+  # whitespace and empty strings are values, while empty comma-list items fail.
+  defp parse_language_ranges(source, ranges) do
+    case Regex.named_captures(@css_language_range_regex, source) do
+      %{"value" => value, "rest" => rest} ->
+        range = value |> decode_css_value() |> LanguageValidator.canonicalize()
+
+        case rest do
+          "" -> {:ok, Enum.reverse([range | ranges])}
+          <<",", rest::binary>> -> parse_language_ranges(rest, [range | ranges])
+          _ -> :error
+        end
+
+      nil ->
+        :error
+    end
+  end
+
+  @doc false
+  @spec parse_css_negated_selector(String.t()) :: {:ok, String.t(), String.t()} | :error | nil
+  def parse_css_negated_selector(selector) do
+    parse_css_function(selector, "not")
+  end
+
+  # Escape units and complete quoted strings are opaque to function balancing.
+  # Both :lang() and :not() use this parser rather than separate quote rules.
+  defp parse_css_function(selector, expected) do
+    case Regex.named_captures(@css_simple_pseudo_regex, selector) do
+      %{"keyword" => keyword, "rest" => rest} ->
+        if keyword |> decode_css_escapes() |> String.downcase(:ascii) == expected do
+          case rest do
+            <<"(", body::binary>> ->
+              reserve_render_resource(:max_css_work, byte_size(body), :css)
+              units = Regex.scan(@css_function_unit_regex, body)
+
+              result =
+                Enum.reduce_while(units, {1, [], 0}, fn [unit], {depth, content, offset} ->
+                  cond do
+                    unit in ["\"", "'"] ->
+                      {:halt, :error}
+
+                    unit == ")" and depth == 1 ->
+                      {:halt,
+                       {:ok, content |> Enum.reverse() |> IO.iodata_to_binary(),
+                        binary_part(body, offset + 1, byte_size(body) - offset - 1)}}
+
+                    unit == ")" ->
+                      {:cont, {depth - 1, [unit | content], offset + byte_size(unit)}}
+
+                    unit == "(" ->
+                      {:cont, {depth + 1, [unit | content], offset + byte_size(unit)}}
+
+                    true ->
+                      {:cont, {depth, [unit | content], offset + byte_size(unit)}}
+                  end
+                end)
+
+              case result do
+                {:ok, _content, _rest} = parsed -> parsed
+                _ -> :error
+              end
+
+            _ ->
+              :error
+          end
+        else
+          nil
+        end
+
+      nil ->
+        nil
+    end
+  end
+
+  # Shared CSS string/identifier decoding for attribute and language selectors.
+  defp decode_css_value(value) do
+    case value do
+      <<quote, inner::binary>> when quote in [?", ?'] ->
+        inner
+        |> binary_part(0, byte_size(inner) - 1)
+        |> String.replace(~r/\\(?:\r\n|[\n\r\f])/u, "")
+        |> decode_css_escapes()
+
+      value ->
+        decode_css_escapes(value)
+    end
+  end
+
+  @doc false
+  @spec parse_css_nth_pseudo_class(String.t()) :: {:ok, tuple(), String.t()} | :error | nil
+  def parse_css_nth_pseudo_class(selector) do
+    case Regex.named_captures(@css_nth_pseudo_regex, selector) do
+      %{"keyword" => keyword, "expression" => expression, "rest" => rest} ->
+        kinds = %{
+          "nth-child" => :nth_child,
+          "nth-last-child" => :nth_last_child,
+          "nth-of-type" => :nth_of_type,
+          "nth-last-of-type" => :nth_last_of_type
+        }
+
+        case Map.get(kinds, keyword |> decode_css_escapes() |> String.downcase(:ascii)) do
+          nil ->
+            nil
+
+          kind ->
+            case parse_css_nth_expression(expression) do
+              {:ok, index} -> {:ok, {kind, index}, rest}
+              :error -> :error
+            end
+        end
+
+      nil ->
+        nil
+    end
+  end
+
+  # An+B uses integer tokens, ASCII keywords and whitespace only around the B sign.
+  defp parse_css_nth_expression(expression) do
+    expression = trim_ascii_whitespace(expression)
+
+    case String.downcase(expression, :ascii) do
+      "odd" ->
+        {:ok, :odd}
+
+      "even" ->
+        {:ok, :even}
+
+      _ ->
+        tokens =
+          cond do
+            Regex.match?(~r/\A[+-]?[0-9]+\z/, expression) ->
+              {:integer, [expression]}
+
+            captures =
+                Regex.named_captures(
+                  ~r/\A(?<a>[+-]?[0-9]*)[nN](?:[ \t\n\f\r]*(?<sign>[+-])[ \t\n\f\r]*(?<b>[0-9]+))?\z/,
+                  expression
+                ) ->
+              a =
+                case captures["a"] do
+                  "" -> "1"
+                  "+" -> "1"
+                  "-" -> "-1"
+                  a -> a
+                end
+
+              b = if captures["b"] == "", do: "0", else: captures["sign"] <> captures["b"]
+              {:series, [a, b]}
+
+            true ->
+              :error
+          end
+
+        case tokens do
+          {kind, values} ->
+            numbers =
+              Enum.map(values, fn token ->
+                check_render_resource(:max_html_numeric_token_bytes, byte_size(token), :css)
+
+                case parse_css_number(token) do
+                  {number, ""} ->
+                    trunc(number)
+
+                  :error ->
+                    throw(
+                      {:render_resource_limit,
+                       Diagnostics.error(
+                         :css,
+                         :resource_limit_exceeded,
+                         "positional selector exceeds max_css_numeric_magnitude; reduce its integer coefficients",
+                         module: __MODULE__,
+                         source: expression
+                       )}
+                    )
+                end
+              end)
+
+            case {kind, numbers} do
+              {:integer, [index]} -> {:ok, index}
+              {:series, [a, b]} -> {:ok, {a, b}}
+            end
+
+          :error ->
+            :error
+        end
+    end
+  catch
+    {:render_resource_limit, {:error, {reason, diagnostic}}} ->
+      throw(
+        {:render_resource_limit,
+         {:error,
+          {reason, Diagnostics.with_context(diagnostic, source: expression, operation: :parse)}}}
+      )
+  end
+
+  @doc false
+  @spec html_contenteditable_state(map()) :: :editable | :not_editable | :inherit
+  def html_contenteditable_state(attributes) do
+    case Map.get(attributes, "contenteditable") do
+      value when is_binary(value) and byte_size(value) <= byte_size("plaintext-only") ->
+        case String.downcase(value, :ascii) do
+          value when value in ["", "true", "plaintext-only"] -> :editable
+          "false" -> :not_editable
+          _ -> :inherit
+        end
+
+      _ ->
+        :inherit
+    end
+  end
+
+  @doc false
+  @spec editing_state_matches?(:read_only | :read_write, map(), [map()], reference() | nil) ::
+          boolean()
+  def editing_state_matches?(state, node, ancestors, cache \\ nil) do
+    html? = Map.get(node, :namespace, :html) == :html
+    attributes = Map.get(node, :attributes, %{})
+    namespaces = Map.get(node, :attribute_namespaces, %{})
+    readonly? = Map.has_key?(attributes, "readonly") and is_nil(Map.get(namespaces, "readonly"))
+
+    disabled? =
+      Map.get(
+        Map.get(node, :_initial_form_state, %{}),
+        :disabled,
+        Map.has_key?(attributes, "disabled") and is_nil(Map.get(namespaces, "disabled"))
+      )
+
+    writable? =
+      case {html?, Map.get(node, :tag)} do
+        {true, "input"} ->
+          type =
+            if is_nil(Map.get(namespaces, "type")),
+              do: Map.get(attributes, "type", "text"),
+              else: "text"
+
+          text_input_type?(input_type(type)) and not readonly? and
+            not disabled?
+
+        {true, "textarea"} ->
+          not readonly? and not disabled?
+
+        _ ->
+          editable_region?(node, ancestors, cache)
+      end
+
+    if state == :read_write, do: writable?, else: not writable?
+  end
+
+  # Editing inheritance crosses ordinary containers, but only an unqualified
+  # HTML contenteditable attribute establishes or stops an editing region.
+  # Cache the region independently of a form control's own mutability.
+  defp editable_region?(node, ancestors, cache) do
+    resolve = fn ->
+      reserve_render_resource(:max_css_work, 1, :css)
+
+      state =
+        if Map.get(node, :namespace, :html) == :html and
+             is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "contenteditable")),
+           do: html_contenteditable_state(Map.get(node, :attributes, %{})),
+           else: :inherit
+
+      eligible? =
+        Map.get(node, :namespace, :html) == :html or
+          {Map.get(node, :namespace), Map.get(node, :tag)} in [{:svg, "svg"}, {:mathml, "math"}]
+
+      case {eligible?, state} do
+        {false, _} ->
+          false
+
+        {true, :editable} ->
+          true
+
+        {true, :not_editable} ->
+          false
+
+        {true, :inherit} ->
+          case ancestors do
+            [parent | rest] -> editable_region?(parent, rest, cache)
+            [] -> false
+          end
+      end
+    end
+
+    if is_nil(cache),
+      do: resolve.(),
+      else: RenderCache.fetch(cache, {:editing_region, node._selector_id}, resolve)
+  end
+
+  @doc false
+  @spec control_state_matches?(
+          :enabled | :disabled | :checked | :required | :optional | :popover_open,
+          map()
+        ) ::
+          boolean()
+  def control_state_matches?(state, node) do
+    html? = Map.get(node, :namespace, :html) == :html
+    attributes = Map.get(node, :attributes, %{})
+
+    case state do
+      :indeterminate ->
+        html? and
+          case Map.get(node, :tag) do
+            "progress" -> not Map.fetch!(node, :_initial_gauge_state).determinate
+            "input" -> Map.get(Map.get(node, :_initial_form_state, %{}), :indeterminate, false)
+            _ -> false
+          end
+
+      :popover_open ->
+        false
+
+      state when state in [:enabled, :disabled] ->
+        applicable? = html? and valid_boolean_form_attribute?(Map.get(node, :tag), "disabled")
+
+        disabled? =
+          if Map.get(node, :tag) == "option",
+            do: Map.get(node, :_initial_option_disabled, Map.has_key?(attributes, "disabled")),
+            else: Map.has_key?(attributes, "disabled")
+
+        applicable? and if(state == :enabled, do: not disabled?, else: disabled?)
+
+      state when state in [:required, :optional] ->
+        required? = Map.has_key?(attributes, "required")
+
+        if(state == :required, do: required?, else: not required?) and html? and
+          case Map.get(node, :tag) do
+            "input" ->
+              type = input_type(Map.get(attributes, "type", "text"))
+              text_input_type?(type) or type in ["checkbox", "radio"]
+
+            tag when tag in ["select", "textarea"] ->
+              true
+
+            _ ->
+              false
+          end
+
+      :checked ->
+        if html? do
+          case Map.get(node, :tag) do
+            "input" ->
+              input_type(Map.get(attributes, "type", "text")) in ["checkbox", "radio"] and
+                Map.get(Map.get(node, :_initial_form_state, %{}), :checked, false)
+
+            "option" ->
+              Map.get(node, :_initial_selected, false)
+
+            _ ->
+              false
+          end
+        else
+          false
+        end
+    end
+  end
+
+  @doc false
   @spec valid_boolean_form_attribute?(String.t(), String.t()) :: boolean()
   def valid_boolean_form_attribute?(tag, name) do
     case {tag, name} do
-      {"input", name} when name in ["checked", "disabled"] -> true
-      {"select", "disabled"} -> true
-      {"option", name} when name in ["selected", "disabled"] -> true
-      {"textarea", "disabled"} -> true
-      {"button", "disabled"} -> true
-      _ -> false
+      {"input", name} when name in ["checked", "disabled", "readonly", "multiple", "required"] ->
+        true
+
+      {"select", name} when name in ["disabled", "required"] ->
+        true
+
+      {"option", name} when name in ["selected", "disabled"] ->
+        true
+
+      {"optgroup", "disabled"} ->
+        true
+
+      {"textarea", name} when name in ["disabled", "readonly", "required"] ->
+        true
+
+      {"button", "disabled"} ->
+        true
+
+      _ ->
+        false
     end
   end
 
@@ -713,54 +3854,230 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec valid_form_attribute?(String.t(), String.t(), String.t()) :: boolean()
   def valid_form_attribute?(tag, name, value) do
     case {tag, name, value} do
-      {"input", "type", value} -> String.downcase(value) in ["text", "checkbox", "radio"]
-      {"input", name, _value} when name in ["value", "name", "checked", "disabled"] -> true
-      {"select", name, _value} when name in ["name", "disabled"] -> true
-      {"option", name, _value} when name in ["value", "selected", "disabled"] -> true
-      {"textarea", name, _value} when name in ["value", "name", "disabled"] -> true
-      {"button", "type", value} -> String.downcase(value) in ["button", "submit", "reset"]
-      {"button", name, _value} when name in ["value", "name", "disabled"] -> true
-      _ -> false
-    end
-  end
+      {"form", name, _value}
+      when name in ~w(name action method target enctype accept-charset autocomplete rel novalidate) ->
+        true
 
-  @doc false
-  @spec valid_form_element?(String.t(), map(), [term()]) :: boolean()
-  def valid_form_element?(tag, attributes, children) do
-    case tag do
-      "input" ->
-        children == [] and
-          String.downcase(Map.get(attributes, "type", "text")) in ["text", "checkbox", "radio"] and
-          (not Map.has_key?(attributes, "checked") or
-             String.downcase(Map.get(attributes, "type", "text")) in ["checkbox", "radio"])
+      {"label", "for", _value} ->
+        true
 
-      "select" ->
-        children != [] and Enum.all?(children, &match?(%{tag: "option"}, &1)) and
-          Enum.count(children, &Map.has_key?(&1.attributes, "selected")) <= 1
+      {"progress", name, _value} when name in ~w(value max) ->
+        true
 
-      "option" ->
-        children != [] and Enum.all?(children, &match?(%{type: :text}, &1))
+      {"meter", name, _value} when name in ~w(value min max low high optimum) ->
+        true
 
-      "textarea" ->
-        Enum.all?(children, &match?(%{type: :text}, &1))
+      {tag, "form", _value} when tag in ~w(input select textarea button) ->
+        true
 
-      "button" ->
-        valid_button_children?(children)
+      {"input", "type", value} ->
+        input_type(value) in @input_types
+
+      {"input", name, _value}
+      when name in ["value", "name", "checked", "disabled", "readonly", "multiple", "required"] ->
+        true
+
+      {"select", name, _value} when name in ["name", "disabled", "required"] ->
+        true
+
+      {"option", name, _value} when name in ["value", "label", "selected", "disabled"] ->
+        true
+
+      {"optgroup", name, _value} when name in ["label", "disabled"] ->
+        true
+
+      {"textarea", name, _value}
+      when name in ["value", "name", "disabled", "readonly", "required"] ->
+        true
+
+      {"button", "type", value} ->
+        String.downcase(value) in ["button", "submit", "reset"]
+
+      {"button", name, _value} when name in ["value", "name", "disabled"] ->
+        true
 
       _ ->
         false
     end
   end
 
-  defp valid_button_children?(children) do
+  @doc false
+  @spec input_type(String.t()) :: String.t()
+  def input_type(value) do
+    if byte_size(value) > @input_type_keyword_bytes do
+      "text"
+    else
+      Map.get(@input_type_keywords, String.downcase(value, :ascii), "text")
+    end
+  end
+
+  @doc false
+  @spec text_input_type?(String.t()) :: boolean()
+  def text_input_type?(type), do: type in @text_input_types
+
+  @doc false
+  @spec button_input_type?(String.t()) :: boolean()
+  def button_input_type?(type), do: type in @button_input_types
+
+  @doc false
+  @spec prepare_input_attributes(map()) :: map()
+  def prepare_input_attributes(attributes) do
+    case {input_type(Map.get(attributes, "type", "text")), Map.fetch(attributes, "value")} do
+      {type, {:ok, value}} when type in @text_input_types ->
+        value =
+          if type == "email" and Map.has_key?(attributes, "multiple") do
+            value
+            |> String.split(",")
+            |> Enum.map(&trim_ascii_whitespace/1)
+            |> Enum.join(",")
+          else
+            value = :binary.replace(value, ["\r", "\n"], "", [:global])
+            if type in ["url", "email"], do: trim_ascii_whitespace(value), else: value
+          end
+
+        Map.put(attributes, "value", value)
+
+      {type, :error} when type in @button_input_types ->
+        # Labels are implementation-defined for submit/reset; use the English
+        # initial labels of the pinned print reference. Explicit empty values stay empty.
+        value =
+          case type do
+            "submit" -> "Submit"
+            "reset" -> "Reset"
+            "button" -> ""
+          end
+
+        Map.put(attributes, "value", value)
+
+      _ ->
+        attributes
+    end
+  end
+
+  @doc false
+  @spec trim_ascii_whitespace(String.t()) :: String.t()
+  def trim_ascii_whitespace(value) do
+    case value do
+      "" ->
+        value
+
+      <<first, _rest::binary>> ->
+        if first in [32, 9, 10, 12, 13] or :binary.last(value) in [32, 9, 10, 12, 13] do
+          String.replace(value, ~r/^[ \t\n\f\r]+|[ \t\n\f\r]+$/u, "")
+        else
+          value
+        end
+    end
+  end
+
+  @doc false
+  @spec valid_form_element?(String.t(), map(), [term()]) :: boolean()
+  def valid_form_element?(tag, attributes, children) do
+    children = if tag in ~w(input textarea), do: children, else: html_content_nodes(children)
+
+    case tag do
+      "input" ->
+        type = input_type(Map.get(attributes, "type", "text"))
+
+        children == [] and type in @input_types and
+          (not Map.has_key?(attributes, "checked") or type in ["checkbox", "radio"]) and
+          (not Map.has_key?(attributes, "readonly") or type in @text_input_types) and
+          (not Map.has_key?(attributes, "multiple") or type == "email")
+
+      "select" ->
+        Enum.all?(children, fn child ->
+          case child do
+            %{type: :element, tag: tag, attributes: attributes, children: children}
+            when tag in ["option", "optgroup"] ->
+              valid_form_element?(tag, attributes, children)
+
+            %{type: :element, tag: "hr", attributes: attributes, children: children} ->
+              valid_html_element?("hr", attributes, children)
+
+            _ ->
+              script_supporting_element?(child)
+          end
+        end)
+
+      "optgroup" ->
+        Map.has_key?(attributes, "label") and
+          Enum.all?(children, fn child ->
+            case child do
+              %{type: :element, tag: "option", attributes: attributes, children: children} ->
+                valid_form_element?("option", attributes, children)
+
+              _ ->
+                script_supporting_element?(child)
+            end
+          end)
+
+      "option" ->
+        Enum.all?(children, &match?(%{type: :text}, &1))
+
+      "textarea" ->
+        Enum.all?(children, &match?(%{type: :text}, &1))
+
+      "button" ->
+        valid_noninteractive_children?(children, "button")
+
+      _ ->
+        false
+    end
+  end
+
+  @doc false
+  @spec select_options([map()]) :: [map()]
+  def select_options(children) do
+    Enum.flat_map(children, fn child ->
+      if Map.get(child, :namespace, :html) == :html do
+        case child do
+          %{type: :element, tag: "option", attributes: attributes} ->
+            [Map.put(child, :_initial_option_disabled, Map.has_key?(attributes, "disabled"))]
+
+          %{type: :element, tag: "optgroup", attributes: attributes, children: children} ->
+            disabled? = Map.has_key?(attributes, "disabled")
+
+            Enum.map(select_options(children), fn option ->
+              Map.put(
+                option,
+                :_initial_option_disabled,
+                disabled? or option._initial_option_disabled
+              )
+            end)
+
+          _ ->
+            []
+        end
+      else
+        []
+      end
+    end)
+  end
+
+  # Anchors and buttons forbid interactive or tabindex descendants in the
+  # active tree. Template contents have their own document-fragment context.
+  defp valid_noninteractive_children?(children, context, ancestors \\ []) do
+    children = html_content_nodes(children)
+
     Enum.all?(children, fn child ->
       case child do
         %{type: :text} ->
           true
 
-        %{type: :element, tag: tag, children: nested}
-        when tag in ["strong", "b", "em", "i", "span"] and is_list(nested) ->
-          valid_button_children?(nested)
+        %{type: :element, tag: tag, attributes: attributes, children: nested}
+        when is_map(attributes) and is_list(nested) ->
+          html? = Map.get(child, :namespace, :html) == :html
+
+          valid_html_child_element?(context, child, ancestors) and
+            if(html? and tag == "template",
+              do: script_supporting_element?(child),
+              else:
+                valid_noninteractive_children?(
+                  nested,
+                  if(html?, do: tag, else: {:foreign, tag}),
+                  [context | ancestors]
+                )
+            )
 
         _ ->
           false
@@ -869,10 +4186,113 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec validate_style_input(term(), term(), term()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_style_input(dom, opts, font_options_result) do
+    case prepare_style_input(dom, opts, font_options_result) do
+      {:ok, _initial_controls?} -> :ok
+      error -> error
+    end
+  end
+
+  @doc false
+  @spec assign_render_metadata([map()]) :: [map()]
+  def assign_render_metadata(children), do: assign_selector_ids(children)
+
+  @doc false
+  @spec disclosure_children(map()) :: [map()]
+  def disclosure_children(node) do
+    {preceding, rest} =
+      Enum.split_while(node.children, fn child ->
+        not (Map.get(child, :tag) == "summary" and Map.get(child, :namespace, :html) == :html)
+      end)
+
+    {summary, body} =
+      case rest do
+        [summary | following] ->
+          {summary, preceding ++ following}
+
+        [] ->
+          [summary] =
+            assign_render_metadata([
+              %{
+                type: :element,
+                tag: "summary",
+                attributes: %{},
+                children: [%{type: :text, text: "Details"}]
+              }
+            ])
+
+          reserve_render_resource(:max_rendered_text_bytes, byte_size("Details"), :style)
+          {Map.put(summary, :_default_disclosure_summary, true), preceding}
+      end
+
+    open? = Map.has_key?(node.attributes, "open")
+    summary = Map.put(summary, :_disclosure_open, open?)
+    [summary | if(open?, do: body, else: [])]
+  end
+
+  defp assign_selector_ids(
+         nodes,
+         path \\ [],
+         parent_inert? \\ false,
+         heading_offset \\ 0,
+         parent_translation? \\ true
+       ) do
+    nodes
+    |> Enum.with_index()
+    |> Enum.map(fn {node, index} ->
+      case node do
+        %{type: :element, children: children} ->
+          node =
+            Map.drop(node, [
+              :_default_disclosure_summary,
+              :_disclosure_open,
+              :_table_model,
+              :_table_cell
+            ])
+
+          inert? = html_inert?(node.attributes, parent_inert?)
+          translation? = HtmlMetadataValidator.translation_mode(node, parent_translation?)
+
+          {heading_offset, heading_level} =
+            resolve_html_heading_context(node, heading_offset)
+
+          node =
+            if inert?, do: Map.put(node, :_html_inert, true), else: Map.delete(node, :_html_inert)
+
+          node =
+            if is_nil(heading_level),
+              do: Map.delete(node, :_heading_level),
+              else: Map.put(node, :_heading_level, heading_level)
+
+          node
+          |> Map.put(:_html_translate, translation?)
+          |> Map.put(:_selector_id, make_ref())
+          |> Map.put(:_document_order, path ++ [index])
+          |> Map.put(
+            :_selector_classes,
+            node.attributes
+            |> Map.get("class", "")
+            |> html_class_tokens()
+            |> MapSet.new()
+          )
+          |> Map.put(
+            :children,
+            assign_selector_ids(children, path ++ [index], inert?, heading_offset, translation?)
+          )
+
+        _ ->
+          node
+      end
+    end)
+  end
+
+  @doc false
+  @spec prepare_style_input(term(), term(), term()) ::
+          {:ok, boolean()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_style_input(dom, opts, font_options_result) do
     with_render_budget(fn ->
-      with :ok <- validate_dom(dom),
+      with {:ok, initial_controls?} <- validate_dom(dom),
            :ok <- validate_style_options(opts, font_options_result) do
-        :ok
+        {:ok, initial_controls?}
       else
         :invalid_document ->
           Diagnostics.error(
@@ -891,7 +4311,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec validate_layout_input(term(), term(), term(), term()) ::
           :ok
           | {:error, :invalid_layout | :invalid_margin | :invalid_page_size}
-          | {:error, {:resource_limit_exceeded, Diagnostics.diagnostic()}}
+          | {:error, {:invalid_layout | :resource_limit_exceeded, Diagnostics.diagnostic()}}
   def validate_layout_input(styled_tree, opts, page_size_result, margins_result) do
     with_render_budget(fn ->
       case {styled_tree, opts} do
@@ -902,12 +4322,23 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             true ->
               validate_render_tree(children)
 
-              with :ok <- validate_layout_nodes(children),
+              with :ok <-
+                     NativeElixirPdfUtilities.Validators.HtmlLinkValidator.validate_expected_targets(
+                       Map.get(styled_tree, :link_document_targets, []),
+                       Map.get(styled_tree, :link_scope)
+                     ),
+                   :ok <- validate_layout_nodes(children),
                    {:ok, page_size} <- page_size_result,
                    :ok <- validate_page_size(page_size),
                    {:ok, margins} <- margins_result,
                    :ok <- validate_margins(margins),
-                   :ok <- validate_printable_area(page_size, margins) do
+                   :ok <- validate_printable_area(page_size, margins),
+                   :ok <-
+                     NativeElixirPdfUtilities.Validators.MathLayoutValidator.validate_flow_geometry(
+                       children,
+                       elem(page_size, 0) - margins.left - margins.right,
+                       elem(page_size, 1) - margins.top - margins.bottom
+                     ) do
                 :ok
               else
                 :invalid_layout -> {:error, :invalid_layout}
@@ -926,7 +4357,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
   @doc false
   @spec validate_pagination_input(term(), term(), term()) ::
-          :ok | {:error, {:invalid_layout | :resource_limit_exceeded, Diagnostics.diagnostic()}}
+          :ok
+          | {:error,
+             {:invalid_layout | :unsupported_html | :resource_limit_exceeded,
+              Diagnostics.diagnostic()}}
   def validate_pagination_input(layout_tree, opts, margins_result) do
     with_render_budget(fn ->
       case {layout_tree, opts} do
@@ -939,9 +4373,26 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                {:ok, margins} <- margins_result,
                :ok <- validate_page_size(page_size),
                :ok <- validate_margins(margins),
-               :ok <- validate_printable_area(page_size, margins) do
+               :ok <- validate_printable_area(page_size, margins),
+               :ok <-
+                 NativeElixirPdfUtilities.Validators.HtmlLinkValidator.validate_boxes(
+                   boxes,
+                   Map.get(layout_tree, :link_scope)
+                 ),
+               :ok <-
+                 NativeElixirPdfUtilities.Validators.HtmlLinkValidator.validate_expected_targets(
+                   Map.get(layout_tree, :link_expected_targets, []),
+                   Map.get(layout_tree, :link_scope)
+                 ),
+               :ok <-
+                 NativeElixirPdfUtilities.Validators.HtmlLinkValidator.validate_document_targets(
+                   Map.get(layout_tree, :link_document_targets, []),
+                   Map.get(layout_tree, :link_scope),
+                   page_size
+                 ) do
             :ok
           else
+            {:error, {_reason, _diagnostic}} = error -> error
             _ -> invalid_pagination()
           end
 
@@ -1073,6 +4524,77 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec valid_html_float?(term()) :: boolean()
+  def valid_html_float?(value) do
+    is_binary(value) and
+      Regex.match?(~r/\A-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\z/, value) and
+      match?({:ok, _}, parse_html_float(value))
+  end
+
+  @doc false
+  @spec parse_html_float(term()) :: {:ok, float()} | :error
+  def parse_html_float(value) do
+    # HTML's UA grammar accepts a numeric prefix, unlike author conformance and CSS.
+    # Finite IEEE double precision is a format invariant, not a geometry ceiling.
+    case is_binary(value) &&
+           Regex.run(
+             ~r/\A[ \t\n\r\f]*([+-]?)([0-9]+(?:\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?/,
+             value
+           ) do
+      [token, sign, significand | exponent] ->
+        check_render_resource(:max_html_numeric_token_bytes, byte_size(token), :html)
+
+        significand =
+          if String.starts_with?(significand, "."), do: "0" <> significand, else: significand
+
+        significand =
+          if String.ends_with?(significand, "."), do: significand <> "0", else: significand
+
+        significand =
+          if String.contains?(significand, "."), do: significand, else: significand <> ".0"
+
+        case Float.parse(sign <> significand <> Enum.join(exponent)) do
+          {number, ""} -> {:ok, if(number == 0, do: 0.0, else: number)}
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  @doc false
+  @spec parse_css_accent_color(String.t(), term()) :: {:ok, term()} | :error
+  def parse_css_accent_color(value, current_color) do
+    case value |> trim_ascii_whitespace() |> String.downcase(:ascii) do
+      "auto" -> {:ok, :auto}
+      _ -> parse_css_color(value, current_color)
+    end
+  end
+
+  @doc false
+  @spec parse_gauge_appearance(term()) :: {:ok, :auto | :none} | :error
+  def parse_gauge_appearance(value) do
+    case value |> trim_ascii_whitespace() |> String.downcase(:ascii) do
+      value when value in ~w(auto progress-bar meter) -> {:ok, :auto}
+      "none" -> {:ok, :none}
+      _ -> :error
+    end
+  end
+
+  @doc false
+  @spec parse_vertical_align(term(), number()) :: {:ok, term()} | :error
+  def parse_vertical_align(value, font_size) do
+    case value |> trim_ascii_whitespace() |> String.downcase(:ascii) do
+      "baseline" -> {:ok, :baseline}
+      "top" -> {:ok, :top}
+      "middle" -> {:ok, :middle}
+      "bottom" -> {:ok, :bottom}
+      value -> parse_css_length(value, :margin, font_size)
+    end
+  end
+
+  @doc false
   @spec normalize_geometry_number(term()) :: {:ok, float()} | :error
   def normalize_geometry_number(value) do
     case is_number(value) && parse_css_number(to_string(value)) do
@@ -1112,6 +4634,96 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         end
 
       false ->
+        :error
+    end
+  end
+
+  @doc false
+  @spec parse_css_size(
+          String.t(),
+          :size | :width | :height | :min_width | :max_width | :min_height | :max_height
+        ) :: {:ok, term()} | :error
+  def parse_css_size(value, context \\ :size) do
+    normalized = String.trim(value)
+
+    cond do
+      context in [:width, :height] and String.downcase(normalized, :ascii) == "auto" ->
+        {:ok, :auto}
+
+      Regex.match?(~r/^\d+(?:\.\d+)?%$/u, normalized) ->
+        with {number, "%"} <- parse_css_number(normalized),
+             do: {:ok, {:percent, number / 100}}
+
+      String.starts_with?(String.downcase(normalized), "min(") ->
+        case Regex.named_captures(~r/^min\((?<sizes>.+)\)$/u, String.downcase(normalized)) do
+          %{"sizes" => sizes} ->
+            parsed_sizes = sizes |> split_css_comma() |> Enum.map(&parse_css_size/1)
+
+            case Enum.all?(parsed_sizes, &match?({:ok, _size}, &1)) do
+              true -> {:ok, {:min, Enum.map(parsed_sizes, fn {:ok, size} -> size end)}}
+              false -> :error
+            end
+
+          _ ->
+            :error
+        end
+
+      true ->
+        parse_css_length(value, :nonnegative)
+    end
+  end
+
+  @doc false
+  @spec parse_css_margin(term()) :: {:ok, float() | {:rem, float()} | :auto} | :error
+  def parse_css_margin(value) do
+    case value do
+      value when is_binary(value) ->
+        normalized = trim_ascii_whitespace(value)
+
+        if byte_size(normalized) == byte_size("auto") and
+             String.downcase(normalized, :ascii) == "auto",
+           do: {:ok, :auto},
+           else: parse_css_length(normalized, :margin)
+
+      _ ->
+        :error
+    end
+  end
+
+  @doc false
+  @spec parse_css_box_lengths(term(), :margin | :nonnegative) :: {:ok, map()} | :error
+  def parse_css_box_lengths(value, context \\ :nonnegative) do
+    case value do
+      value when is_binary(value) ->
+        parsed =
+          value
+          |> String.split(~r/[ \t\n\f\r]+/, trim: true)
+          |> Enum.map(fn token ->
+            case context do
+              :margin -> parse_css_margin(token)
+              :nonnegative -> parse_css_length(token, :nonnegative)
+              _ -> :error
+            end
+          end)
+
+        case parsed do
+          [{:ok, all}] ->
+            {:ok, %{top: all, right: all, bottom: all, left: all}}
+
+          [{:ok, vertical}, {:ok, horizontal}] ->
+            {:ok, %{top: vertical, right: horizontal, bottom: vertical, left: horizontal}}
+
+          [{:ok, top}, {:ok, horizontal}, {:ok, bottom}] ->
+            {:ok, %{top: top, right: horizontal, bottom: bottom, left: horizontal}}
+
+          [{:ok, top}, {:ok, right}, {:ok, bottom}, {:ok, left}] ->
+            {:ok, %{top: top, right: right, bottom: bottom, left: left}}
+
+          _ ->
+            :error
+        end
+
+      _ ->
         :error
     end
   end
@@ -1213,42 +4825,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end
   end
 
-  defp local_resource_base_path(base_url) do
-    case base_url do
-      base_url when is_binary(base_url) ->
-        case URI.parse(base_url) do
-          %URI{scheme: nil, host: nil, path: path, query: nil, fragment: nil}
-          when is_binary(path) and path != "" ->
-            {:ok, path}
-
-          %URI{scheme: "file", host: host, path: path, query: nil, fragment: nil}
-          when host in [nil, "", "localhost"] and is_binary(path) and path != "" ->
-            {:ok, path}
-
-          _ ->
-            :error
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp symlink_free_resource_path?(base_path, relative) do
-    relative
-    |> Path.split()
-    |> Enum.reduce_while(base_path, fn component, current_path ->
-      path = Path.join(current_path, component)
-
-      case File.lstat(path) do
-        {:ok, %File.Stat{type: :symlink}} -> {:halt, false}
-        {:ok, _stat} -> {:cont, path}
-        {:error, _reason} -> {:halt, false}
-      end
-    end)
-    |> is_binary()
-  end
-
   defp validate_render_options(opts, font_options_result) do
     case Keyword.keyword?(opts) do
       true ->
@@ -1287,7 +4863,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   defp validate_style_options(opts, font_options_result) do
     case Keyword.keyword?(opts) do
       true ->
-        with :ok <- validate_stylesheets(Keyword.get(opts, :stylesheets, [])),
+        with :ok <- NativeElixirPdfUtilities.Validators.PrintMediaValidator.validate_options(opts),
+             :ok <- validate_stylesheets(Keyword.get(opts, :stylesheets, [])),
              :ok <-
                validate_asset_options(
                  Keyword.get(opts, :assets, %{}),
@@ -1298,7 +4875,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              :ok <-
                validate_system_font_discovery(Keyword.get(opts, :system_font_discovery, true)),
              :ok <- validate_unsupported_glyphs(Keyword.get(opts, :unsupported_glyphs, :replace)),
-             :ok <- validate_pdf_output_options(opts),
+             {:ok, output_opts} <- HtmlUrlValidator.prepare_style_output_options(opts),
+             :ok <- validate_pdf_output_options(output_opts),
              :ok <- validate_outline_option(Keyword.get(opts, :outlines)),
              :ok <- validate_font_options_result(font_options_result) do
           :ok
@@ -1415,24 +4993,85 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   # Walk before recursive semantic validation, without creating a flattened tree.
-  defp validate_render_tree(nodes, depth \\ 0, count \\ 0) do
+  defp validate_render_tree(nodes, depth \\ 0, count \\ 0, groups \\ %{}, ancestor_groups \\ []) do
     check_render_resource(:max_html_depth, depth, :html)
 
-    Enum.reduce(nodes, count, fn node, count ->
+    Enum.reduce(nodes, {count, groups}, fn node, {count, groups} ->
       check_render_resource(:max_html_nodes, count + 1, :html)
 
       case node do
+        %{tag: "template", children: [], content: %{type: :document_fragment, children: children}}
+        when is_list(children) ->
+          check_render_resource(:max_html_nodes, count + 2, :html)
+          {count, _fragment_groups} = validate_render_tree(children, depth + 1, count + 2)
+          {count, groups}
+
+        %{tag: "details", attributes: attributes, children: children}
+        when is_map(attributes) and is_list(children) ->
+          if Map.get(node, :namespace, :html) == :html do
+            {groups, child_groups} =
+              validate_disclosure_group(attributes, groups, ancestor_groups)
+
+            validate_render_tree(children, depth + 1, count + 1, groups, child_groups)
+          else
+            validate_render_tree(children, depth + 1, count + 1, groups, ancestor_groups)
+          end
+
         %{children: children} when is_list(children) ->
-          validate_render_tree(children, depth + 1, count + 1)
+          validate_render_tree(children, depth + 1, count + 1, groups, ancestor_groups)
+
+        %{type: :processing_instruction, data: data} when is_binary(data) ->
+          check_render_resource(:max_html_source_bytes, byte_size(data), :html)
+          {count + 1, groups}
 
         %{text: text} when is_binary(text) ->
           check_render_resource(:max_html_source_bytes, byte_size(text), :html)
-          count + 1
+          {count + 1, groups}
 
         _ ->
-          count + 1
+          {count + 1, groups}
       end
     end)
+  end
+
+  # Named disclosure groups are a document-tree rule; template fragments have
+  # independent groups. Closed members also cannot nest in their own group.
+  defp validate_disclosure_group(attributes, groups, ancestors) do
+    case Map.fetch(attributes, "name") do
+      {:ok, name} when is_binary(name) ->
+        open? = Map.has_key?(attributes, "open")
+
+        message =
+          cond do
+            name == "" ->
+              "details name must be nonempty; omit name for an independent disclosure"
+
+            name in ancestors ->
+              "details cannot nest within another member of the same named group"
+
+            open? and Map.get(groups, name, false) ->
+              "a named details group may have only one initially open member; remove the extra open attribute"
+
+            true ->
+              nil
+          end
+
+        if message do
+          throw(
+            {:render_resource_limit,
+             Diagnostics.error(:html, :invalid_document, message,
+               operation: :compute,
+               module: __MODULE__,
+               source: "details name=" <> name
+             )}
+          )
+        end
+
+        {Map.put(groups, name, open? or Map.get(groups, name, false)), [name | ancestors]}
+
+      _ ->
+        {groups, ancestors}
+    end
   end
 
   defp validate_dom(node) do
@@ -1446,52 +5085,714 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end
   end
 
-  defp validate_dom_nodes(nodes) do
-    case Enum.all?(nodes, fn node ->
-           case node do
-             %{type: :text, text: text} ->
-               is_binary(text)
+  defp validate_dom_nodes(
+         nodes,
+         inert? \\ false,
+         parent \\ nil,
+         ancestors \\ [],
+         tree \\ nil,
+         parent_namespace \\ :html
+       ) do
+    tree = tree || nodes
 
-             %{type: :element, tag: tag, attributes: attributes, children: children} ->
-               is_binary(tag) and is_map(attributes) and is_list(children) and
-                 validate_dom_nodes(children) == :ok
+    Enum.reduce_while(nodes, {:ok, false}, fn node, {:ok, initial_controls?} ->
+      result =
+        case node do
+          %{type: :processing_instruction} ->
+            with {:ok, _node} <- validate_html_processing_instruction(node) do
+              if parent_namespace == :html and
+                   (html_text_mode(parent) != :data or parent in @void_tags) do
+                message =
+                  if parent in @void_tags,
+                    do: "#{parent} is a void element and requires empty children",
+                    else:
+                      "#{parent} requires literal text-only contents, not processing instruction nodes"
 
-             _ ->
-               false
-           end
-         end) do
-      true -> :ok
-      false -> :invalid_document
+                Diagnostics.error(
+                  :style,
+                  :invalid_document,
+                  message,
+                  module: __MODULE__,
+                  operation: :compute,
+                  source: parent
+                )
+              else
+                {:ok, false}
+              end
+            end
+
+          %{type: :text, text: text} when is_binary(text) ->
+            if String.valid?(text),
+              do: {:ok, false},
+              else:
+                Diagnostics.error(:style, :invalid_document, "HTML text requires valid UTF-8",
+                  module: __MODULE__,
+                  operation: :compute,
+                  source: "text"
+                )
+
+          %{type: :element, tag: tag, attributes: attributes, children: children}
+          when is_binary(tag) and is_map(attributes) and is_list(children) ->
+            attribute_error_message =
+              cond do
+                not is_map(Map.get(node, :attribute_namespaces, %{})) ->
+                  "attribute_namespaces must be a map"
+
+                Enum.all?(attributes, fn {name, value} ->
+                  is_binary(name) and is_binary(value) and String.valid?(name) and
+                      String.valid?(value)
+                end) ->
+                  nil
+
+                true ->
+                  "HTML attributes require valid UTF-8 string names and values"
+              end
+
+            case attribute_error_message do
+              nil ->
+                html_tag = if Map.get(node, :namespace, :html) == :html, do: tag, else: nil
+
+                with :ok <- validate_static_url_attributes(attributes, html_tag),
+                     :ok <- HtmlMetadataValidator.validate_attributes(node),
+                     :ok <- HtmlMetadataValidator.validate_item_references(node, tree),
+                     {:ok, custom?} <- validate_dom_html_element(node, parent, ancestors),
+                     :ok <-
+                       NativeElixirPdfUtilities.Validators.ForeignContentValidator.validate_render_support(
+                         node,
+                         not inert?
+                       ),
+                     :ok <-
+                       (if tag in ["base", "script", "template"] do
+                          case validate_html_element_attributes(tag, attributes) do
+                            :ok ->
+                              :ok
+
+                            {:error, {reason, diagnostic}} ->
+                              {:error,
+                               {reason,
+                                Diagnostics.with_context(diagnostic,
+                                  operation: :compute,
+                                  source: tag
+                                )}}
+                          end
+                        else
+                          :ok
+                        end),
+                     {:ok, child_controls?} <-
+                       if(tag == "template" and Map.get(node, :namespace, :html) == :html,
+                         do:
+                           case validate_template_content(node) do
+                             :ok -> {:ok, false}
+                             error -> error
+                           end,
+                         else:
+                           validate_dom_nodes(
+                             children,
+                             inert?,
+                             tag,
+                             if(is_nil(parent), do: ancestors, else: [parent | ancestors]),
+                             tree,
+                             Map.get(node, :namespace, :html)
+                           )
+                       ) do
+                  semantic_attribute =
+                    cond do
+                      Map.has_key?(attributes, "multiple") and not custom? -> "multiple"
+                      Map.has_key?(attributes, "readonly") and not custom? -> "readonly"
+                      tag == "input" -> "type"
+                      tag == "script" -> "script"
+                      tag == "select" -> "select"
+                      tag == "noscript" -> "noscript"
+                      true -> nil
+                    end
+
+                  if semantic_attribute &&
+                       not ((semantic_attribute in ["type", "script", "select", "noscript"] or
+                               valid_form_attribute?(
+                                 tag,
+                                 semantic_attribute,
+                                 attributes[semantic_attribute]
+                               )) and
+                              (case tag do
+                                 "script" ->
+                                   valid_html_element?(tag, attributes, children)
+
+                                 "noscript" ->
+                                   valid_noscript_element?(children, parent, ancestors)
+
+                                 _ ->
+                                   valid_form_element?(tag, attributes, children)
+                               end)) do
+                    message =
+                      case semantic_attribute do
+                        "type" ->
+                          "input requires a supported effective type, empty contents and applicable checked/multiple/readonly attributes"
+
+                        "script" ->
+                          "script data blocks require text-only contents"
+
+                        "noscript" ->
+                          "noscript requires scripting-disabled transparent contents without nested noscript descendants; head contents accept only supported style and meta elements"
+
+                        "select" ->
+                          "select requires supported option contents; only data scripts and ordinary templates may accompany options"
+
+                        "multiple" ->
+                          "multiple requires a valid email input"
+
+                        "readonly" ->
+                          "readonly requires a valid text/search/tel/url/email/password input or textarea"
+                      end
+
+                    Diagnostics.error(
+                      :style,
+                      :invalid_document,
+                      message,
+                      operation: :compute,
+                      module: __MODULE__,
+                      source: tag
+                    )
+                  else
+                    if child_controls? or
+                         (tag in ~w(input select textarea button form label progress meter) and
+                            Map.get(node, :namespace, :html) == :html),
+                       do: {:ok, true},
+                       else: {:ok, false}
+                  end
+                end
+
+              message ->
+                Diagnostics.error(
+                  :style,
+                  :invalid_document,
+                  message,
+                  operation: :compute,
+                  module: __MODULE__,
+                  source: tag
+                )
+            end
+
+          _ ->
+            :invalid_document
+        end
+
+      case result do
+        {:ok, true} ->
+          {:cont, {:ok, true}}
+
+        {:ok, false} ->
+          if initial_controls?, do: {:cont, {:ok, true}}, else: {:cont, {:ok, false}}
+
+        error ->
+          {:halt, error}
+      end
+    end)
+  end
+
+  # Name support and transparent custom content are validated before Style uses defaults.
+  defp validate_dom_html_element(node, parent, ancestors) do
+    if Map.get(node, :namespace, :html) == :html do
+      native? = Map.has_key?(@supported_tags, node.tag)
+      custom? = not native? and custom_html_tag?(node.tag)
+
+      cond do
+        not native? and not custom? ->
+          Diagnostics.error(
+            :style,
+            :invalid_document,
+            "HTML tag requires a supported builtin or a valid unregistered custom element name",
+            operation: :compute,
+            module: __MODULE__,
+            source: node.tag
+          )
+
+        node.tag in ~w(picture source) and
+            (not valid_html_child?(parent || :document, node.tag, ancestors) or
+               not valid_html_element?(node.tag, node.attributes, node.children)) ->
+          Diagnostics.error(
+            :style,
+            :invalid_document,
+            "picture requires sources before one img, source requires a picture parent, and images/sources are void",
+            operation: :compute,
+            module: __MODULE__,
+            source: node.tag
+          )
+
+        node.tag in ["a", "button"] and
+            not valid_html_element?(node.tag, node.attributes, node.children) ->
+          Diagnostics.error(
+            :style,
+            :invalid_document,
+            "anchors and buttons require valid static contents without interactive or tabindex descendants",
+            operation: :compute,
+            module: __MODULE__,
+            source: node.tag
+          )
+
+        node.tag in ~w(iframe xmp plaintext noembed) and
+            not valid_html_element?(node.tag, node.attributes, node.children) ->
+          Diagnostics.error(
+            :style,
+            :invalid_document,
+            "#{node.tag} requires literal text-only contents, not active HTML nodes",
+            operation: :compute,
+            module: __MODULE__,
+            source: node.tag
+          )
+
+        node.tag == "base" and
+            (not valid_html_child?(parent || :document, "base", ancestors) or
+               not valid_html_element?("base", node.attributes, node.children)) ->
+          Diagnostics.error(
+            :style,
+            :invalid_document,
+            "base requires metadata placement and empty contents",
+            operation: :compute,
+            module: __MODULE__,
+            source: "base"
+          )
+
+        node.tag == "wbr" and not valid_html_element?(node.tag, node.attributes, node.children) ->
+          Diagnostics.error(
+            :style,
+            :invalid_document,
+            "wbr is a void element and requires empty children",
+            operation: :compute,
+            module: __MODULE__,
+            source: "wbr"
+          )
+
+        (custom? or custom_html_tag?(parent) or "a" in ancestors or "button" in ancestors or
+           node.tag in [
+             "mark",
+             "ins",
+             "del",
+             "strike",
+             "wbr",
+             "nobr",
+             "form",
+             "label",
+             "details",
+             "summary",
+             "xmp",
+             "plaintext",
+             "noembed",
+             "progress",
+             "meter"
+           ] or
+           parent in [
+             "a",
+             "button",
+             "mark",
+             "ins",
+             "del",
+             "strike",
+             "wbr",
+             "nobr",
+             "form",
+             "label",
+             "details",
+             "summary",
+             "xmp",
+             "plaintext",
+             "noembed",
+             "progress",
+             "meter"
+           ]) and
+            not valid_html_child?(parent || :document, node.tag, ancestors) ->
+          Diagnostics.error(
+            :style,
+            :invalid_document,
+            "element contents must obey their parent and transparent ancestor content models",
+            operation: :compute,
+            module: __MODULE__,
+            source: node.tag
+          )
+
+        custom? or node.tag in ~w(picture source img xmp plaintext noembed progress meter) or
+            (Map.has_key?(node.attributes, "hidden") and node.tag not in ["script", "template"]) ->
+          case validate_html_element_attributes(node.tag, node.attributes) do
+            :ok ->
+              {:ok, custom?}
+
+            {:error, {reason, diagnostic}} ->
+              {:error,
+               {reason,
+                Diagnostics.with_context(diagnostic, operation: :compute, source: node.tag)}}
+          end
+
+        true ->
+          {:ok, false}
+      end
+    else
+      if Map.get(node, :namespace) in [:svg, :mathml] do
+        {:ok, false}
+      else
+        Diagnostics.error(
+          :style,
+          :invalid_document,
+          "element namespace must be :html, :svg or :mathml",
+          operation: :compute,
+          module: __MODULE__,
+          source: node.tag
+        )
+      end
     end
   end
 
-  defp validate_layout_nodes(nodes) do
-    case Enum.all?(nodes, fn node ->
-           case node do
-             %{type: :text, text: text, style: style} ->
-               is_binary(text) and String.valid?(text) and valid_layout_style?(style)
+  defp validate_template_content(node) do
+    case node do
+      %{children: [], content: %{type: :document_fragment, children: children}}
+      when is_list(children) ->
+        case validate_dom_nodes(children, true) do
+          {:ok, _initial_controls?} -> :ok
+          error -> error
+        end
 
-             %{type: :element, style: %{display: display} = style}
-             when display in [:image, :none] ->
-               valid_layout_style?(style)
+      _ ->
+        Diagnostics.error(
+          :style,
+          :invalid_document,
+          "template requires empty children and a document_fragment content map",
+          operation: :compute,
+          module: __MODULE__,
+          source: "template"
+        )
+    end
+  end
 
-             %{type: :element, style: style, children: children} ->
-               valid_layout_style?(style) and is_list(children) and
-                 validate_layout_nodes(children) == :ok
+  defp validate_layout_nodes(nodes, parent_display \\ nil) do
+    Enum.reduce_while(nodes, :ok, fn node, status ->
+      result =
+        with :ok <- validate_layout_metadata(node),
+             :ok <- validate_auto_margin_context(node, parent_display) do
+          case node do
+            %{type: :text, text: text, style: style} ->
+              if is_binary(text) and String.valid?(text) and valid_layout_style?(style),
+                do: :ok,
+                else: :invalid_layout
 
-             _ ->
-               false
-           end
-         end) do
-      true -> :ok
-      false -> :invalid_layout
+            %{
+              type: :element,
+              tag: tag,
+              style: %{display: :soft_break} = style,
+              children: children
+            } ->
+              if tag == "wbr" and children == [] and valid_layout_style?(style) do
+                :ok
+              else
+                Diagnostics.error(
+                  :layout,
+                  :invalid_layout,
+                  "soft break layout requires a wbr element with empty children and valid style",
+                  operation: :layout,
+                  module: __MODULE__,
+                  source: tag
+                )
+              end
+
+            %{type: :element, tag: tag, style: %{display: display}}
+            when tag in ~w(script template) and display != :none and
+                   parent_display in [:table, :table_column_group, :table_row_group, :table_row] ->
+              Diagnostics.error(
+                :layout,
+                :invalid_layout,
+                "visible #{tag} boxes in table structures require anonymous table formatting that is not implemented yet; use display:none or place the visible box outside the table",
+                module: __MODULE__,
+                operation: :layout,
+                source: tag
+              )
+
+            %{type: :element, style: %{display: :image} = style} ->
+              cond do
+                not valid_layout_style?(style) ->
+                  :invalid_layout
+
+                Map.get(style, :image_display, :block) not in [:inline, :block] ->
+                  Diagnostics.error(
+                    :layout,
+                    :invalid_layout,
+                    "image_display must be inline or block",
+                    operation: :layout,
+                    module: __MODULE__,
+                    source: Map.get(node, :tag, "img")
+                  )
+
+                parent_display == :inline and Map.get(style, :image_display, :block) == :block and
+                    Map.get(style, :position, :static) != :absolute ->
+                  :block_flow
+
+                true ->
+                  :ok
+              end
+
+            %{type: :element, style: %{display: display} = style}
+            when display == :none ->
+              if valid_layout_style?(style), do: :ok, else: :invalid_layout
+
+            %{type: :element, style: style, children: children} ->
+              if valid_layout_style?(style) and is_list(children) do
+                display = Map.get(style, :display)
+
+                case validate_layout_nodes(children, display) do
+                  :block_flow when display == :inline ->
+                    if valid_anonymous_inline_fragment?(node) do
+                      if parent_display == :inline, do: :block_flow, else: :ok
+                    else
+                      Diagnostics.error(
+                        :layout,
+                        :invalid_layout,
+                        "inline #{Map.get(node, :tag, "element")} with block descendants requires anonymous block formatting with decoration or positioning that is not implemented yet; use display:block or retain inline contents",
+                        module: __MODULE__,
+                        operation: :layout,
+                        source: Map.get(node, :tag, "element")
+                      )
+                    end
+
+                  :ok ->
+                    if parent_display == :inline and
+                         display not in [
+                           :inline,
+                           :inline_block,
+                           :inline_flex,
+                           :inline_grid,
+                           :line_break,
+                           :soft_break
+                         ] and
+                         Map.get(style, :position, :static) != :absolute,
+                       do: :block_flow,
+                       else: :ok
+
+                  error ->
+                    error
+                end
+              else
+                :invalid_layout
+              end
+
+            _ ->
+              :invalid_layout
+          end
+        end
+
+      case result do
+        :ok -> {:cont, status}
+        :block_flow -> {:cont, :block_flow}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp valid_anonymous_inline_fragment?(node) do
+    style = node.style
+
+    Map.get(style, :position, :static) == :static and
+      Map.get(style, :background_color) == nil and Map.get(style, :background_image) == nil and
+      Map.get(style, :overflow, :visible) == :visible and
+      Map.get(style, :vertical_align, :baseline) == :baseline and
+      Map.get(style, :link_url) == nil and Map.get(style, :link_destination) == nil and
+      Map.get(style, :_form_control) == nil and
+      Map.get(node, :positioned_children, []) == [] and
+      Enum.all?([:padding, :margin, :border_widths], fn property ->
+        case Map.get(style, property, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}) do
+          %{top: top, right: right, bottom: bottom, left: left}
+          when top == 0 and right == 0 and bottom == 0 and left == 0 ->
+            true
+
+          _ ->
+            false
+        end
+      end)
+  end
+
+  defp validate_layout_metadata(node) do
+    gauge_result =
+      case node do
+        %{style: %{_gauge: gauge} = style} ->
+          if is_boolean(Map.get(style, :_gauge_native)) and
+               NativeElixirPdfUtilities.Validators.HtmlGaugeValidator.valid_prepared?(gauge) do
+            :ok
+          else
+            Diagnostics.error(
+              :layout,
+              :invalid_layout,
+              "gauge artwork requires canonical initial gauge state and a prepared native appearance flag; compute styles before layout",
+              operation: :layout,
+              module: __MODULE__,
+              source: Map.get(node, :tag, "gauge")
+            )
+          end
+
+        _ ->
+          :ok
+      end
+
+    heading_result =
+      case node do
+        %{style: %{heading_level: level}} ->
+          case node do
+            %{type: :element, tag: <<"h", base>>}
+            when base in ?1..?6 and is_integer(level) and level >= base - ?0 and level <= 9 ->
+              :ok
+
+            _ ->
+              Diagnostics.error(
+                :layout,
+                :invalid_layout,
+                "heading_level requires an h1-h6 element and an integer between its base level and HTML's fixed maximum of nine",
+                operation: :layout,
+                module: __MODULE__,
+                source: Map.get(node, :tag, "text")
+              )
+          end
+
+        _ ->
+          :ok
+      end
+
+    with :ok <- gauge_result, :ok <- heading_result do
+      case node do
+        %{style: style}
+        when is_map(style) and not is_map_key(style, :line_break) and
+               not is_map_key(style, :overflow_wrap) and not is_map_key(style, :word_break) ->
+          :ok
+
+        %{style: style} when is_map(style) ->
+          case {Map.get(style, :line_break, :normal), Map.get(style, :overflow_wrap, :normal),
+                Map.get(style, :word_break, :normal)} do
+            {line, overflow, word}
+            when line in [:normal, :anywhere, :break_word] and
+                   overflow in [:normal, :anywhere, :break_word] and
+                   word in [:normal, :break_word] ->
+              :ok
+
+            values ->
+              Diagnostics.error(
+                :layout,
+                :invalid_layout,
+                "styled text requires line_break and overflow_wrap in [:normal, :anywhere, :break_word] and word_break in [:normal, :break_word]; received #{inspect(values)}",
+                operation: :layout,
+                module: __MODULE__,
+                source: Map.get(node, :tag, "text")
+              )
+          end
+
+        _ ->
+          :ok
+      end
+    end
+  end
+
+  defp validate_auto_margin_context(node, parent_display) do
+    case node do
+      %{style: %{margin_inline_auto: auto} = style} ->
+        case auto do
+          %{left: left, right: right}
+          when is_boolean(left) and is_boolean(right) and map_size(auto) == 2 ->
+            display = Map.get(style, :display)
+
+            if Map.get(node, :type) == :element and (left or right) and
+                 display not in [:none, :inline, :inline_block, :soft_break] and
+                 not (display == :image and
+                        parent_display not in [:flex, :inline_flex, :grid, :inline_grid] and
+                        Map.get(style, :position, :static) != :absolute) and
+                 (display != :block or
+                    parent_display in [:flex, :inline_flex, :grid, :inline_grid] or
+                    Map.get(style, :position, :static) == :absolute) do
+              Diagnostics.error(
+                :layout,
+                :invalid_layout,
+                "automatic inline margins in #{display} or positioned/flex/grid item contexts require geometry that is not implemented yet; use numeric margins or an ordinary flow block",
+                operation: :layout,
+                module: __MODULE__,
+                source: Map.get(node, :tag, "element")
+              )
+            else
+              :ok
+            end
+
+          _ ->
+            Diagnostics.error(
+              :layout,
+              :invalid_layout,
+              "margin_inline_auto requires exactly boolean left and right entries; use validated automatic-margin intent",
+              operation: :layout,
+              module: __MODULE__,
+              source: Map.get(node, :tag, "element")
+            )
+        end
+
+      _ ->
+        :ok
     end
   end
 
   defp valid_layout_style?(style) do
     # Collapsed edge metadata is created by Layout after input validation.
     # Incoming styled trees must not supply internal border calculations.
-    is_map(style) and not Map.has_key?(style, :_collapsed_borders)
+    is_map(style) and not Map.has_key?(style, :_collapsed_borders) and
+      (Map.get(style, :html_target) == nil or
+         NativeElixirPdfUtilities.Validators.HtmlLinkValidator.valid_identity?(style.html_target)) and
+      NativeElixirPdfUtilities.Validators.HtmlLinkValidator.valid_prepared_destination?(
+        Map.get(style, :link_destination)
+      ) and
+      valid_text_decorations?(Map.get(style, :_text_decorations, [])) and
+      case Map.fetch(style, :_list_marker) do
+        :error ->
+          true
+
+        {:ok, markers} when is_list(markers) ->
+          Enum.all?(markers, &match?(%{type: :text}, &1)) and
+            validate_layout_nodes(markers) == :ok
+
+        _ ->
+          false
+      end
+  end
+
+  defp valid_text_decorations?(decorations) do
+    case decorations do
+      [] ->
+        true
+
+      decorations when is_list(decorations) ->
+        check_render_resource(:max_text_decoration_layers, length(decorations), :style)
+
+        Enum.all?(decorations, fn decoration ->
+          case decoration do
+            %{
+              lines: lines,
+              color: color,
+              thickness: thickness,
+              underline: underline,
+              overline: overline,
+              strike: strike
+            } ->
+              numbers = [thickness, underline, overline, strike]
+
+              is_list(lines) and lines != [] and
+                Enum.all?(lines, &(&1 in [:underline, :overline, :line_through])) and
+                length(lines) == length(Enum.uniq(lines)) and
+                is_number(thickness) and thickness >= 0 and
+                Enum.all?(numbers, fn number ->
+                  if is_number(number) do
+                    check_render_resource(:max_css_numeric_magnitude, abs(number), :style)
+                    true
+                  else
+                    false
+                  end
+                end) and
+                (color == :transparent or
+                   NativeElixirPdfUtilities.Validators.WriterValidator.valid_color?(color))
+
+            _ ->
+              false
+          end
+        end)
+
+      _ ->
+        false
+    end
   end
 
   defp invalid_pagination do
@@ -1599,7 +5900,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           end
 
         %{type: :element, children: children} when is_list(children) ->
-          case validate_font_input_nodes(children) do
+          markers = node |> Map.get(:style, %{}) |> Map.get(:_list_marker, [])
+
+          case if(is_list(markers),
+                 do: validate_font_input_nodes(markers ++ children),
+                 else: invalid_styled_document("list markers must be styled text nodes")
+               ) do
             :ok -> {:cont, :ok}
             {:error, {_reason, _diagnostic}} = error -> {:halt, error}
           end
@@ -1629,8 +5935,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           end
 
         %{type: :element, children: children} when is_list(children) ->
+          markers = node |> Map.get(:style, %{}) |> Map.get(:_list_marker, [])
+
           case validate_font_coverage_nodes(
-                 children,
+                 markers ++ children,
                  unsupported_glyphs,
                  replacement_character
                ) do
@@ -1698,5 +6006,292 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     |> round()
     |> Kernel./(100)
     |> to_string()
+  end
+
+  @doc false
+  @spec split_css_tokens(String.t()) :: [String.t()]
+  def split_css_tokens(value) do
+    value
+    |> String.graphemes()
+    |> Enum.reduce({[], "", 0}, fn grapheme, {tokens, current, depth} ->
+      cond do
+        grapheme == "(" ->
+          {tokens, current <> grapheme, depth + 1}
+
+        grapheme == ")" ->
+          {tokens, current <> grapheme, max(depth - 1, 0)}
+
+        grapheme in [" ", "\t", "\n", "\r", "\f"] and depth == 0 ->
+          case current do
+            "" -> {tokens, "", depth}
+            current -> {tokens ++ [current], "", depth}
+          end
+
+        true ->
+          {tokens, current <> grapheme, depth}
+      end
+    end)
+    |> then(fn {tokens, current, _depth} ->
+      if current == "", do: tokens, else: tokens ++ [current]
+    end)
+  end
+
+  @doc false
+  @spec split_css_comma(String.t()) :: [String.t()]
+  def split_css_comma(value) do
+    value
+    |> String.graphemes()
+    |> Enum.reduce({[], "", 0}, fn grapheme, {tokens, current, depth} ->
+      cond do
+        grapheme == "(" ->
+          {tokens, current <> grapheme, depth + 1}
+
+        grapheme == ")" ->
+          {tokens, current <> grapheme, max(depth - 1, 0)}
+
+        grapheme == "," and depth == 0 ->
+          {tokens ++ [trim_ascii_whitespace(current)], "", depth}
+
+        true ->
+          {tokens, current <> grapheme, depth}
+      end
+    end)
+    |> then(fn {tokens, current, _depth} -> tokens ++ [trim_ascii_whitespace(current)] end)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  @doc false
+  @spec parse_html_legacy_color(term()) :: {:ok, {number(), number(), number()}} | :error
+  def parse_html_legacy_color(value) do
+    case value do
+      "" ->
+        :error
+
+      value when is_binary(value) ->
+        if String.valid?(value) do
+          input = trim_ascii_whitespace(value)
+          # The longest keyword fixes recognition cost; this is not a limit
+          # on legacy color input, whose separate format algorithm follows.
+          keyword =
+            if byte_size(input) <= byte_size("lightgoldenrodyellow"),
+              do: String.downcase(input, :ascii)
+
+          named_color =
+            if is_binary(keyword),
+              do: NativeElixirPdfUtilities.Validators.CssColorValidator.named_color(keyword)
+
+          cond do
+            keyword == "transparent" ->
+              :error
+
+            not is_nil(named_color) ->
+              {:ok, named_color}
+
+            byte_size(input) == 4 and Regex.match?(~r/\A#[0-9A-Fa-f]{3}\z/, input) ->
+              parse_css_color(input, nil)
+
+            true ->
+              # HTML fixes this truncation at 128 code points after replacing
+              # supplementary scalars with 00. It is a format invariant.
+              input = legacy_color_prefix(input, 128, [])
+
+              input =
+                if String.starts_with?(input, "#"),
+                  do: binary_part(input, 1, byte_size(input) - 1),
+                  else: input
+
+              input = Regex.replace(~r/[^0-9A-Fa-f]/u, input, "0")
+              padding = if input == "", do: 3, else: rem(3 - rem(byte_size(input), 3), 3)
+              input = input <> String.duplicate("0", padding)
+              length = div(byte_size(input), 3)
+
+              components =
+                for offset <- [0, length, length * 2], do: binary_part(input, offset, length)
+
+              length = min(length, 8)
+              components = Enum.map(components, &binary_part(&1, byte_size(&1) - length, length))
+
+              shared_zeros =
+                components
+                |> Enum.map(&(byte_size(&1) - byte_size(String.trim_leading(&1, "0"))))
+                |> Enum.min()
+
+              drop = min(shared_zeros, max(length - 2, 0))
+
+              [red, green, blue] =
+                Enum.map(components, &binary_part(&1, drop, min(length - drop, 2)))
+
+              {:ok, {hex_to_pdf_color(red), hex_to_pdf_color(green), hex_to_pdf_color(blue)}}
+          end
+        else
+          :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  # Stops at the fixed legacy-format prefix instead of constructing a complete
+  # scalar list for a long color attribute. Supplementary scalars consume two
+  # characters of the prefix because replacement precedes truncation.
+  defp legacy_color_prefix(input, remaining, reversed) do
+    case {remaining, input} do
+      {0, _} ->
+        reversed |> Enum.reverse() |> IO.iodata_to_binary()
+
+      {_, ""} ->
+        reversed |> Enum.reverse() |> IO.iodata_to_binary()
+
+      {remaining, <<scalar::utf8, rest::binary>>} ->
+        replacement = if scalar > 0xFFFF, do: "00", else: <<scalar::utf8>>
+        count = if scalar > 0xFFFF, do: min(remaining, 2), else: 1
+        replacement = if count == 1 and scalar > 0xFFFF, do: "0", else: replacement
+        legacy_color_prefix(rest, remaining - count, [replacement | reversed])
+    end
+  end
+
+  @doc false
+  @spec parse_css_background_color(String.t(), term()) :: {:ok, term()} | :error
+  def parse_css_background_color(value, current_color) do
+    normalized = trim_ascii_whitespace(value)
+
+    if byte_size(normalized) == byte_size("none") and
+         downcase_ascii(normalized) == "none" do
+      {:ok, nil}
+    else
+      parse_css_color(value, current_color)
+    end
+  end
+
+  @doc false
+  @spec parse_css_color(String.t(), term()) :: {:ok, term()} | :error
+  def parse_css_color(value, current_color) do
+    normalized = value |> trim_ascii_whitespace() |> downcase_ascii()
+    named_color = NativeElixirPdfUtilities.Validators.CssColorValidator.named_color(normalized)
+
+    cond do
+      normalized == "currentcolor" and not is_nil(current_color) ->
+        {:ok, current_color}
+
+      normalized == "transparent" ->
+        {:ok, :transparent}
+
+      not is_nil(named_color) ->
+        {:ok, named_color}
+
+      Regex.match?(~r/^#[0-9a-f]{6}$/u, normalized) ->
+        <<"#", red::binary-size(2), green::binary-size(2), blue::binary-size(2)>> = normalized
+        {:ok, {hex_to_pdf_color(red), hex_to_pdf_color(green), hex_to_pdf_color(blue)}}
+
+      Regex.match?(~r/^#[0-9a-f]{8}$/u, normalized) ->
+        <<"#", red::binary-size(2), green::binary-size(2), blue::binary-size(2),
+          alpha::binary-size(2)>> = normalized
+
+        {:ok,
+         color_with_alpha(
+           {hex_to_pdf_color(red), hex_to_pdf_color(green), hex_to_pdf_color(blue)},
+           hex_to_pdf_color(alpha)
+         )}
+
+      Regex.match?(~r/^#[0-9a-f]{3}$/u, normalized) ->
+        <<"#", red::binary-size(1), green::binary-size(1), blue::binary-size(1)>> = normalized
+
+        {:ok,
+         {hex_to_pdf_color(red <> red), hex_to_pdf_color(green <> green),
+          hex_to_pdf_color(blue <> blue)}}
+
+      String.starts_with?(normalized, "rgb(") or String.starts_with?(normalized, "rgba(") ->
+        parse_rgb_color(normalized)
+
+      true ->
+        :error
+    end
+  end
+
+  defp parse_rgb_color(value) do
+    case Regex.named_captures(~r/^rgba?\((?<channels>.+)\)$/u, value) do
+      %{"channels" => channels} ->
+        channels = split_css_comma(channels)
+
+        case channels do
+          [red, green, blue] ->
+            parse_rgb_channels(red, green, blue)
+
+          [red, green, blue, alpha] ->
+            with {:ok, color} <- parse_rgb_channels(red, green, blue),
+                 {:ok, alpha} <- parse_alpha_channel(alpha) do
+              {:ok, color_with_alpha(color, alpha)}
+            end
+
+          _ ->
+            :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp parse_rgb_channels(red, green, blue) do
+    with {:ok, red} <- parse_rgb_channel(red),
+         {:ok, green} <- parse_rgb_channel(green),
+         {:ok, blue} <- parse_rgb_channel(blue) do
+      {:ok, {red, green, blue}}
+    end
+  end
+
+  defp parse_rgb_channel(channel) do
+    normalized = trim_ascii_whitespace(channel)
+
+    cond do
+      Regex.match?(~r/^\d+(?:\.\d+)?%$/u, normalized) ->
+        with {number, "%"} <- parse_css_number(normalized) do
+          {:ok, number |> max(0.0) |> min(100.0) |> Kernel./(100.0)}
+        end
+
+      true ->
+        case parse_css_number(normalized) do
+          {number, ""} -> {:ok, number |> max(0.0) |> min(255.0) |> Kernel./(255.0)}
+          _ -> :error
+        end
+    end
+  end
+
+  defp parse_alpha_channel(channel) do
+    normalized = trim_ascii_whitespace(channel)
+
+    cond do
+      Regex.match?(~r/^\d+(?:\.\d+)?%$/u, normalized) ->
+        with {number, "%"} <- parse_css_number(normalized) do
+          {:ok, number |> max(0.0) |> min(100.0) |> Kernel./(100.0)}
+        end
+
+      true ->
+        case parse_css_number(normalized) do
+          {number, ""} -> {:ok, number |> max(0.0) |> min(1.0)}
+          _ -> :error
+        end
+    end
+  end
+
+  defp color_with_alpha(color, alpha) do
+    case {color, alpha} do
+      {{red, green, blue}, alpha} when alpha < 1.0 -> {red, green, blue, alpha}
+      {color, _alpha} -> color
+    end
+  end
+
+  # Fold only ASCII letters while leaving non-ASCII UTF-8 bytes unchanged.
+  # A binary comprehension avoids the per-byte list built by String's ASCII mode.
+  defp downcase_ascii(value) do
+    for <<character <- value>>, into: <<>> do
+      <<if(character >= ?A and character <= ?Z, do: character + 32, else: character)>>
+    end
+  end
+
+  defp hex_to_pdf_color(hex) do
+    {integer, ""} = Integer.parse(hex, 16)
+    integer / 255
   end
 end

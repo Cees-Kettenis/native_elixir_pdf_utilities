@@ -163,7 +163,6 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
           %{"FT" => {:name, "Btn"}, "Ff" => 65536},
           %{"FT" => {:name, "Sig"}, "V" => nil},
           %{"FT" => {:name, "Unknown"}},
-          %{"Ff" => 8192},
           %{"Ff" => 16_777_216},
           %{"Ff" => 33_554_432},
           %{"FT" => {:name, "Ch"}, "Ff" => 262_144},
@@ -184,6 +183,15 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
       assert {:ok, [%{type: :signature, value: ^value}]} = Forms.fields(pdf)
       assert {:error, {:unsupported_form, _}} = Forms.fill(pdf, %{})
     end
+  end
+
+  test "external password text fields fill with masked appearances" do
+    pdf = external_pdf(%{"Ff" => 8192})
+    assert {:ok, filled} = Forms.fill(pdf, %{"field" => "Aé🦊"})
+    assert {:ok, [%{value: "Aé🦊", type: :text}]} = Forms.fields(filled)
+    assert {:ok, flat} = Forms.flatten(filled)
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(flat, layout: false)
+    assert String.trim(text) == "•••"
   end
 
   test "rejects primary actions on selected fields and widgets including indirect chains" do
@@ -325,8 +333,17 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
 
   test "form limits and HTML option diagnostics" do
     pdf = external_pdf()
+    assert {:ok, source} = Reader.read_validated(pdf)
     Limits.install(Map.put(Limits.effective(), :max_pdf_objects, 20))
-    assert {:error, {:resource_limit_exceeded, _}} = Forms.fill(pdf, %{"field" => "x"})
+    assert {:ok, filled} = Forms.fill(pdf, %{"field" => "x"})
+    assert {:ok, filled_context} = Reader.read_validated(filled)
+    assert filled_context.document.trailer["Size"] <= 20
+
+    Limits.install(Map.put(Limits.defaults(), :max_pdf_objects, source.document.trailer["Size"]))
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Forms.fill(pdf, %{"field" => "x"})
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.operation == :fill and diagnostic.module == NativeElixirPdfUtilities.Forms
+    assert diagnostic.message =~ "max_pdf_objects"
     Limits.install(Map.put(Limits.defaults(), :max_pdf_form_fields, 1))
     assert {:error, _} = Forms.fields(pdf)
     Limits.install(Map.put(Limits.defaults(), :max_pdf_form_text_bytes, 1))
@@ -343,6 +360,24 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
 
     Limits.install(Map.put(Limits.defaults(), :max_font_cmap_work, 1))
     assert {:error, _} = Forms.fill(pdf, %{"field" => "x"})
+  end
+
+  test "generated forms reserve field and widget objects after appearance resources" do
+    html = "<div><input name='boundary' value='x'></div>"
+    assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+    assert {:ok, context} = Reader.read_validated(pdf)
+    required = context.document.trailer["Size"]
+    limits = Limits.effective()
+    Limits.install(%{limits | max_pdf_objects: required})
+    assert {:ok, ^pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+
+    Limits.install(%{limits | max_pdf_objects: required - 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render(html, system_font_discovery: false)
+
+    assert diagnostic.stage == :forms and diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "object count cannot accommodate form appearances"
   end
 
   test "button updates preserve artwork and reject unusable states" do
@@ -450,7 +485,15 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
       assert {:error, {:invalid_form, %{stage: :forms}}} = HtmlToPdf.render("<div>#{html}</div>")
     end
 
-    control = %{id: make_ref(), order: [0], tag: "input", attributes: %{}, children: []}
+    control = %{
+      id: make_ref(),
+      order: [0],
+      tag: "input",
+      attributes: %{},
+      children: [],
+      initial_state: %{owner: nil, checked: false}
+    }
+
     page = %{size: {200, 200}, boxes: [%{form_control: control}]}
 
     assert {:error, {:unsupported_form, %{message: message}}} =
@@ -462,6 +505,53 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
              HtmlToPdf.render("<p>No control</p><div style='break-before:page'><input></div>")
 
     assert {:ok, [%{name: "TEXT_2_1"}]} = Forms.fields(pdf)
+  end
+
+  test "low-level writer rejects missing or malformed initial HTML control state" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+
+    box = %{
+      type: :rect,
+      x: 10,
+      y: 10,
+      width: 20,
+      height: 20,
+      fill_color: nil,
+      stroke_color: {0, 0, 0},
+      stroke_width: 1,
+      border_radius: 0
+    }
+
+    control = %{id: make_ref(), order: [0], tag: "input", attributes: %{}, children: []}
+
+    for state <- [:missing, %{}, %{checked: "yes", owner: nil}, %{checked: false, owner: "form"}] do
+      control = if state == :missing, do: control, else: Map.put(control, :initial_state, state)
+      page = %{size: {200, 200}, boxes: [Map.put(box, :form_control, control)]}
+      assert {:error, {:invalid_form, diagnostic}} = PdfWriter.render([page], [])
+      assert diagnostic.stage == :forms and diagnostic.reason == :invalid_form
+      assert diagnostic.source == "initial_state"
+      assert diagnostic.operation == :write_pdf
+      assert diagnostic.message =~ "validated initial"
+    end
+
+    for selection <- [
+          :missing,
+          %{},
+          %{choices: "wrong", value: nil},
+          %{choices: [], value: 42},
+          %{choices: [%{}], value: nil},
+          %{choices: [%{value: "a", label: nil, selected: true}], value: "a"},
+          %{choices: [%{value: "a", label: "A", selected: "yes"}], value: "a"}
+        ] do
+      state = %{checked: false, owner: nil}
+      state = if selection == :missing, do: state, else: Map.put(state, :selection, selection)
+      control = %{control | tag: "select"} |> Map.put(:initial_state, state)
+      page = %{size: {200, 200}, boxes: [Map.put(box, :form_control, control)]}
+      assert {:error, {:invalid_form, diagnostic}} = PdfWriter.render([page], [])
+      assert diagnostic.stage == :forms and diagnostic.source == "initial_state"
+      assert diagnostic.operation == :write_pdf
+      assert diagnostic.message =~ "selection state"
+    end
   end
 
   test "fills repeated widgets through inherited fields and preserves unrelated annotations" do

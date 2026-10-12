@@ -112,7 +112,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
 
       %{type: :element, children: children} = element ->
         {children, cache} = Enum.map_reduce(children, cache, &prepare_candidate_node/2)
-        {%{element | children: children}, cache}
+
+        case element do
+          %{style: %{_list_marker: markers} = style} ->
+            {markers, cache} = Enum.map_reduce(markers, cache, &prepare_candidate_node/2)
+
+            {%{element | style: Map.put(style, :_list_marker, markers), children: children},
+             cache}
+
+          _ ->
+            {%{element | children: children}, cache}
+        end
     end
   end
 
@@ -156,6 +166,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
         Enum.reverse(resolved)
 
       %{type: :element, children: children} = element when is_list(children) ->
+        element =
+          case element do
+            %{style: %{_list_marker: markers} = style} ->
+              markers = resolve_prepared_nodes(markers, unsupported_glyphs)
+              %{element | style: Map.put(style, :_list_marker, markers)}
+
+            _ ->
+              element
+          end
+
         [%{element | children: resolve_prepared_nodes(children, unsupported_glyphs)}]
     end
   end

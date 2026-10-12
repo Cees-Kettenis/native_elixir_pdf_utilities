@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><style>
+@page {size:300pt 400pt; margin:12pt}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:14pt}
+p,div,ul {margin:0 0 4pt}
+ul {padding-left:24pt}
+a.flow {display:block}
+a {color:#154a70;text-decoration:none}
+button {display:block;width:260pt;box-sizing:border-box;margin:0 0 4pt;padding:3pt;
+  border:1px solid #777;background:#f0f0f0;border-radius:0;font-family:"DejaVu Sans";font-size:10pt;line-height:14pt;text-align:left}
+code {font-family:"DejaVu Sans"}
+pre {font-family:"DejaVu Sans";font-size:10pt;line-height:14pt;margin:0 0 4pt}
+.attribute::before {content:attr(data-caption);white-space:pre-line}
+input {width:120pt;font-family:"DejaVu Sans";font-size:10pt;line-height:14pt;border:1px solid #777;border-radius:0;padding:1.5pt 3pt}
+</style></head><body>
+<a class=flow href="https://example.com/mixed"><div>Anchor block <strong>Bold</strong></div><p>Nested prose <mark>Marked</mark></p><ul><li>List first<li>List second</ul></a>
+<button><code>Code</code> <mark>Marked</mark> <ins>Added</ins> <del>Removed</del><br><a>Placeholder</a><input type=hidden name=hidden><template><button>Inert caption</button><img src=denied.png></template></button>
+<pre>
+Line firstLine second</pre>
+<p class=attribute data-caption="Attribute
+newline"></p>
+<input name=active value=Initial><p>After</p>
+</body></html>

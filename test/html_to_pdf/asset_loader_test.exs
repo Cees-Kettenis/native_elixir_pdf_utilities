@@ -4,6 +4,53 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoaderTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.AssetLoader
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
+  test "font asset memoization separates authored resolution contexts" do
+    alias NativeElixirPdfUtilities.Validators.{FontValidator, HtmlUrlValidator}
+    resolver = fn request -> {:ok, request.reference} end
+
+    FontValidator.with_budget(fn ->
+      for directory <- ["one", "two"] do
+        assert {:ok, context} =
+                 HtmlUrlValidator.document_context(
+                   %{
+                     children: [
+                       %{
+                         tag: "base",
+                         attributes: %{"href" => "https://example.test/#{directory}/"}
+                       }
+                     ]
+                   },
+                   []
+                 )
+
+        opts = [asset_resolver: resolver, __document_url_context__: context]
+        assert {:ok, bytes} = AssetLoader.resolve("font.ttf", :font, opts)
+        assert bytes == "https://example.test/#{directory}/font.ttf"
+      end
+    end)
+  end
+
+  test "font memoization includes mappings keyed by the resolved URL" do
+    alias NativeElixirPdfUtilities.Validators.{FontValidator, HtmlUrlValidator}
+
+    assert {:ok, context} =
+             HtmlUrlValidator.document_context(
+               %{children: [%{tag: "base", attributes: %{"href" => "https://example.test/"}}]},
+               []
+             )
+
+    FontValidator.with_budget(fn ->
+      for bytes <- ["first", "second"] do
+        opts = [
+          __document_url_context__: context,
+          assets: %{"https://example.test/font.ttf" => {:bytes, bytes}}
+        ]
+
+        assert {:ok, ^bytes} = AssetLoader.resolve("font.ttf", :font, opts)
+      end
+    end)
+  end
+
   test "resolves explicit bytes trusted files and authorized local references" do
     directory = Path.join(System.tmp_dir!(), "native-elixir-pdf-asset-loader")
     path = Path.join(directory, "asset.bin")

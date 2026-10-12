@@ -171,7 +171,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PngDecoder do
             previous -> previous
           end
 
-        unfilter_bytes(filter, row, previous, bytes_per_pixel, 0, [], [], [])
+        # The tuple retains one decoded byte per pixel-byte position. The
+        # previous row already holds every upper-left byte, without a queue copy.
+        unfilter_bytes(
+          filter,
+          row,
+          previous,
+          bytes_per_pixel,
+          0,
+          :erlang.make_tuple(bytes_per_pixel, 0),
+          previous,
+          []
+        )
     end
   end
 
@@ -182,7 +193,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PngDecoder do
          bytes_per_pixel,
          index,
          left_window,
-         up_left_window,
+         previous_row,
          acc
        ) do
     case {row, previous} do
@@ -192,8 +203,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PngDecoder do
         |> :binary.list_to_bin()
 
       {<<byte, row_rest::binary>>, <<up, previous_rest::binary>>} ->
-        left = if index >= bytes_per_pixel, do: hd(left_window), else: 0
-        up_left = if index >= bytes_per_pixel, do: hd(up_left_window), else: 0
+        position = rem(index, bytes_per_pixel)
+        left = elem(left_window, position)
+
+        up_left =
+          if index >= bytes_per_pixel,
+            do: :binary.at(previous_row, index - bytes_per_pixel),
+            else: 0
 
         predictor =
           case filter do
@@ -211,17 +227,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PngDecoder do
           previous_rest,
           bytes_per_pixel,
           index + 1,
-          window_push(left_window, decoded, bytes_per_pixel),
-          window_push(up_left_window, up, bytes_per_pixel),
+          put_elem(left_window, position, decoded),
+          previous_row,
           [decoded | acc]
         )
-    end
-  end
-
-  defp window_push(window, byte, bytes_per_pixel) do
-    case length(window) < bytes_per_pixel do
-      true -> window ++ [byte]
-      false -> tl(window) ++ [byte]
     end
   end
 

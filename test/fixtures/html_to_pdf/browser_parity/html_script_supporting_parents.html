@@ -1,0 +1,26 @@
+<!doctype html><html><head><style>
+@page {size:264pt 390pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt;}
+body {padding:12pt;}
+h2 {font-size:11pt;line-height:14pt;margin:6pt 0 0;}
+ul,ol,dl {margin:0;padding-top:0;padding-bottom:0;}
+ul,ol {padding-left:24pt;}
+dt {font-weight:bold;}
+dd {margin-left:24pt;}
+li:nth-child(3),td:nth-child(3),tr:nth-child(4) {color:#064f80;}
+ul script.shown {display:block;}
+ul template.shown {display:block;border:1px solid #777;padding:2pt;}
+table {width:216pt;border-collapse:collapse;margin:0;}
+td {padding:3pt;border:1px solid #777;}
+select {display:block;width:180pt;box-sizing:border-box;border:1px solid #777;background:white;padding:2pt 3pt;margin:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt;}
+</style></head><body>
+<h2>List siblings and visible inert boxes</h2>
+<ol reversed><script type="text/plain">Unused data</script><template><li>Unused item</li><img src="denied.png"></template><li>First item</li><script type="text/plain">Unused data</script><template><li>Unused item</li></template><li>Second item</li></ol>
+<ul><li>Before data</li><script class=shown type="text/plain">Visible list data</script><template class=shown><p>Unused content</p></template><li>After data</li></ul>
+<h2>Description groups</h2>
+<dl><script type="application/json">{}</script><template><p>Unused</p></template><dt>Term</dt><script type="text/plain">Unused data</script><template></template><dd>Description</dd></dl>
+<h2>Implicit table ancestry</h2>
+<table><colgroup><col><template><p>Unused</p></template><col></colgroup><tr><script type="text/plain">Unused data</script><template></template><td>First cell</td><td>Other cell</td></tr><script type="application/json">{}</script><template><tr><td>Unused cell</td></tr></template><tr><td>Last row</td><td>Final cell</td></tr></table>
+<h2>Select choices</h2>
+<select><script type="text/plain">Unused choice</script><template><option selected>Unused option</option><img src="denied.png"></template><option>First choice</option><script type="application/json">{}</script><option selected>Selected choice</option></select>
+</body></html>

@@ -1,0 +1,18 @@
+<!doctype html><html><head><style>
+@page {size:264pt 440pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt;}
+body {padding:12pt;}
+p {margin:0 0 6pt;}
+.fallback {color:#164e63;}
+.block {display:block;color:#9a3412;}
+</style></head><body>
+Before <noscript class=fallback>start<p>Default block fallback</p>end</noscript> after
+<p>Following paragraph</p>
+<span>Nested start <span><span class=block>CSS block within neutral spans</span></span> nested end</span>
+<p>Final visible label</p>
+<table style="width:180pt;border-collapse:collapse"><tr><td style="padding:0">Cell before <span><span class=block style="width:50%;background:#eee">Half-width nested block</span></span> cell after</td></tr></table>
+<span style="display:inline-block;width:180pt">Atomic before <span><span class=block>Nested atomic block</span></span> atomic after</span>
+<div style="background:#eee"><span></span><span><span class=block style="margin:6pt 0;width:100%">Margin through inline ancestors</span></span></div>
+<div style="background:#ddd;padding:1pt"><span><span class=block style="margin:6pt 0;width:100%">Padding prevents collapse</span></span></div>
+<p>Complete final label</p>
+</body></html>

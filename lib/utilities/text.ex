@@ -7,6 +7,10 @@ defmodule NativeElixirPdfUtilities.Text do
   every shown text string has a reliable Unicode mapping; it never guesses from
   an embedded font program or merges CMaps from unrelated fonts.
 
+  Marked-content `ActualText` replaces the enclosed decoded text operands once.
+  Nested replacements use the outermost string, and empty replacements suppress
+  their pieces. Physical operands still undergo font and geometry validation.
+
   PDFs store positioned text operations, not semantic rows, columns, or tables.
   `extract_spans/2` exposes those decoded operations for callers that need to
   interpret document-specific structure. `extract/2` remains a string
@@ -48,8 +52,8 @@ defmodule NativeElixirPdfUtilities.Text do
   @typedoc """
   A decoded text-showing operand and its positioned extraction context.
 
-  `source_index` is zero-based within a page and follows text-show execution
-  order. Page content streams are traversed in `/Contents` order, and Form
+  `source_index` is zero-based within a page and follows emitted-span execution
+  order. An `ActualText` group emits one span in place of its text operands. Page content streams are traversed in `/Contents` order, and Form
   XObjects are traversed where their `Do` operator occurs. Reusing a Form
   therefore produces new spans with new indexes.
 
@@ -58,7 +62,9 @@ defmodule NativeElixirPdfUtilities.Text do
   increases rightward, Y increases downward, and page rotation and Form CTMs
   are applied. These points are not glyph bounding boxes. The end point uses
   the PDF font widths available to the extractor and can be approximate when a
-  font omits explicit metrics.
+  font omits explicit metrics. Replacement spans use the first operand's start
+  and context, and the last operand's end. They combine painting and clipping
+  flags across all pieces. These endpoints are not the group's bounding box.
 
   `text_matrix` is the PDF text matrix at the start of the operand. `ctm` is the
   active PDF current transformation matrix, including Form transforms. Neither
@@ -179,8 +185,10 @@ defmodule NativeElixirPdfUtilities.Text do
   @doc """
   Extracts positioned, reliably decoded text spans from a PDF binary.
 
-  The result preserves every resolved page and every non-empty text operand
-  that can be decoded, including rendering modes 3 (neither painted nor added
+  The result preserves every resolved page and every non-empty decoded text
+  operand, except operands covered by `ActualText`, which emit one replacement
+  span. An empty replacement suppresses the operands. This includes rendering
+  modes 3 (neither painted nor added
   to the clipping path) and 7 (added to the clipping path without painting).
   This preservation guarantee applies to decoded text operations, not to OCR,
   undecodable fonts, glyph outlines, semantic tables, or evaluated visual
@@ -327,6 +335,57 @@ defmodule NativeElixirPdfUtilities.Text do
     operands = operation.operands
 
     case {operator, operands} do
+      {operator, _operands} when operator in ["BMC", "BDC"] ->
+        text = Map.get(operation, :actual_text)
+        owns_replacement? = is_binary(text) and is_nil(state.replacement)
+
+        replacement =
+          if owns_replacement?,
+            do: %{
+              text: text,
+              first: nil,
+              last: nil,
+              follows_replacement?: state.previous_replacement?
+            },
+            else: state.replacement
+
+        {:ok,
+         %{
+           state
+           | marked_content: [owns_replacement? | state.marked_content],
+             replacement: replacement
+         }, spans}
+
+      {"EMC", []} ->
+        [owns_replacement? | marked_content] = state.marked_content
+        state = %{state | marked_content: marked_content}
+
+        case {owns_replacement?, state.replacement} do
+          {true, %{text: text, first: first, last: last} = replacement}
+          when text != "" and not is_nil(first) ->
+            span = %{
+              first
+              | text: text,
+                end_x: last.end_x,
+                end_y: last.end_y,
+                joins_previous?: first.joins_previous? or replacement.follows_replacement?
+            }
+
+            {:ok,
+             %{
+               state
+               | replacement: nil,
+                 next_source_index: state.next_source_index + 1,
+                 previous_replacement?: true
+             }, [span | spans]}
+
+          {true, _replacement} ->
+            {:ok, %{state | replacement: nil}, spans}
+
+          {false, _replacement} ->
+            {:ok, state, spans}
+        end
+
       {"q", []} ->
         saved_state = Map.take(state, @graphics_state_fields)
         {:ok, %{state | stack: [saved_state | state.stack]}, spans}
@@ -492,7 +551,7 @@ defmodule NativeElixirPdfUtilities.Text do
       decoded.text == "" ->
         {:ok, state, spans}
 
-      state.next_source_index >= Limits.get(:max_text_spans) ->
+      state.shown_span_count >= Limits.get(:max_text_spans) ->
         error(:limits, :resource_limit_exceeded, "text span count exceeds the limit", page: page)
 
       true ->
@@ -514,13 +573,41 @@ defmodule NativeElixirPdfUtilities.Text do
             joins_previous?: join_previous?
           }
 
-          {:ok,
-           %{
-             state
-             | text_matrix: geometry.next_text_matrix,
-               next_source_index: state.next_source_index + 1,
-               join_next_span?: true
-           }, [span | spans]}
+          case state.replacement do
+            nil ->
+              {:ok,
+               %{
+                 state
+                 | next_source_index: state.next_source_index + 1,
+                   text_matrix: geometry.next_text_matrix,
+                   shown_span_count: state.shown_span_count + 1,
+                   join_next_span?: true,
+                   previous_replacement?: false
+               }, [span | spans]}
+
+            replacement ->
+              first =
+                case replacement.first do
+                  nil ->
+                    span
+
+                  first ->
+                    %{
+                      first
+                      | paints_text?: first.paints_text? or span.paints_text?,
+                        adds_to_clip_path?: first.adds_to_clip_path? or span.adds_to_clip_path?
+                    }
+                end
+
+              {:ok,
+               %{
+                 state
+                 | replacement: %{replacement | first: first, last: span},
+                   text_matrix: geometry.next_text_matrix,
+                   shown_span_count: state.shown_span_count + 1,
+                   join_next_span?: true
+               }, spans}
+          end
         end
     end
   end
@@ -537,13 +624,20 @@ defmodule NativeElixirPdfUtilities.Text do
             state
             | ctm: ctm,
               stack: [],
+              marked_content: [],
               in_text?: false,
               join_next_span?: false
           }
 
           with {:ok, child_state, child_spans} <- interpret(form.instructions, child_state, page) do
-            {:ok, %{state | next_source_index: child_state.next_source_index},
-             Enum.reverse(child_spans, spans)}
+            {:ok,
+             %{
+               state
+               | next_source_index: child_state.next_source_index,
+                 shown_span_count: child_state.shown_span_count,
+                 replacement: child_state.replacement,
+                 previous_replacement?: child_state.previous_replacement?
+             }, Enum.reverse(child_spans, spans)}
           end
         end
     end
@@ -659,6 +753,10 @@ defmodule NativeElixirPdfUtilities.Text do
       join_next_span?: false,
       stack: [],
       next_source_index: 0,
+      shown_span_count: 0,
+      marked_content: [],
+      replacement: nil,
+      previous_replacement?: false,
       rotation: page.rotation,
       page: %{media_box: page.media_box, rotation: page.rotation}
     }

@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- Document comment containing > and an unmatched " quote. -->
+<html lang=en>
+  <head>
+    <meta charset=utf-8>
+    <title>HTML comments and attribute syntax</title>
+    <style>
+      @page { size: 612pt 792pt; margin: 0; }
+      html, body { margin: 0; padding: 0; }
+      body { padding: 24pt; font-family: "DejaVu Sans"; font-size: 10pt; line-height: 14pt; }
+      p { margin: 0 0 10pt; }
+      .copy { color: #1d4ed8; }
+      [data-label]::before { content: attr(data-label); }
+      table { border-collapse: collapse; width: 300pt; }
+      td { padding: 4pt; border: 1pt solid #334155; }
+    </style>
+  </head>
+  <body>
+    <!-- This comment paints nothing. <script> is comment text. -->
+    <p ID=intro class=copy title>Joined<!-- no inserted space -->words and <!-- whitespace retained -->separate words.</p>
+    <p data-label=Ready&amp;waiting:> attribute references.</p>
+    <p title="<tag> is metadata">Quoted delimiters remain metadata.</p>
+    <table><!-- between table elements --><tbody><tr><!-- before cell --><td>Visible<!-- inside cell -->value</td></tr></tbody></table>
+    <p style=break-before:page>Second<!-- page -->page.</p>
+    <!---->
+  </body>
+</html>

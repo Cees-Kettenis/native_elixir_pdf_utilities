@@ -1,0 +1,27 @@
+<!doctype html><html><head>
+<meta http-equiv="content-language" content="en-US">
+<style>
+@page {size:264pt 360pt;margin:12pt}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:14pt}
+p {margin:0 0 4pt;color:#222222}
+p:lang(en) {color:#b00000}
+p:lang(fr) {color:#0040b0}
+p:lang(de) {color:#006030}
+p:lang(und) {color:#600080}
+p:lang(qaa) {color:#804000}
+p:not(:lang(en)) {background-color:#f0f0f0}
+p:lang(fr),p:lang(de) {font-weight:700}
+p:lang(\65 n) {background-color:#fff0f0}
+p:lang(de-DE) {font-style:italic}
+a {color:#b00000}
+</style></head><body>
+<p>Document default</p>
+<div lang="fr-CA"><p>French parent</p><section><p>Inherited French</p></section>
+<p lang="de-DE">German override</p><p lang="">Unknown stops inheritance</p>
+<p xml:lang="de">Literal XML attribute</p><p lang="fr">French explicit</p></div>
+<p lang="EN-gb">ASCII case</p><p lang="und">Undetermined language</p>
+<p lang="qaa">Private use language</p><p lang=" en ">Whitespace preserved</p>
+<div lang="en"><p><a href="https://example.com/language">English linked label</a></p></div>
+<p hidden lang="fr">Hidden language</p><template><p lang="de">Inert language</p></template>
+<p>Final default</p>
+</body></html>

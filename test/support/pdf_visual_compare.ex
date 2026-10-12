@@ -16,6 +16,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
           required(:dpi) => pos_integer(),
           required(:pixel_channel_tolerance) => non_neg_integer(),
           required(:chromium_version) => String.t(),
+          required(:scripting) => :disabled,
           required(:rasterizer_version) => String.t(),
           required(:font_sources) => [map()],
           required(:embedded_fonts) => %{chromium: String.t(), native: String.t()},
@@ -31,6 +32,15 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
           required(:bounds) =>
             {non_neg_integer(), non_neg_integer(), non_neg_integer(), non_neg_integer()}
         }
+
+  @doc false
+  @spec gauge_reference(String.t()) :: String.t()
+  def gauge_reference(html) do
+    # Chromium 152 overflows max-min for these finite meter endpoints and paints
+    # zero. HTML requires the relative midpoint. Compare equivalent finite range
+    # geometry while the native validator/layout tests retain the extreme inputs.
+    String.replace(html, "min=-1e308 max=1e308 value=0", "min=0 max=1 value=.5")
+  end
 
   @doc false
   @spec assert_browser_match!(String.t(), keyword()) :: comparison_stats()
@@ -60,7 +70,8 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     render_chromium_pdf!(chromium_bin, chromium_fixture_path, chromium_pdf)
 
     html = File.read!(fixture_path)
-    assert {:ok, native_pdf_binary} = HtmlToPdf.render(html, render_opts)
+    native_renderer = Keyword.get(opts, :native_renderer, &HtmlToPdf.render/2)
+    assert {:ok, native_pdf_binary} = native_renderer.(html, render_opts)
     File.write!(native_pdf, native_pdf_binary)
 
     chromium_pages =
@@ -95,6 +106,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       dpi: dpi,
       pixel_channel_tolerance: 12,
       chromium_version: command_output!(chromium_bin, ["--version"]),
+      scripting: :disabled,
       rasterizer_version: command_output!(pdftoppm_bin, ["-v"]) |> String.split("\n") |> hd(),
       font_sources:
         render_opts
@@ -246,6 +258,101 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
           fonts
       end
 
+    fonts =
+      if String.contains?(File.read!(fixture_path), "DejaVu Sans Mono") do
+        fonts ++
+          Enum.map(
+            [
+              {"", 400, :normal},
+              {"-Bold", 700, :normal},
+              {"-Oblique", 400, :italic},
+              {"-BoldOblique", 700, :italic}
+            ],
+            fn {suffix, weight, style} ->
+              %{
+                family: "DejaVu Sans Mono",
+                path: Path.join(font_dir, "DejaVuSansMono#{suffix}.ttf"),
+                weight: weight,
+                style: style
+              }
+            end
+          )
+      else
+        fonts
+      end
+
+    fonts =
+      if String.contains?(File.read!(fixture_path), "STIX Two Math") do
+        fonts ++
+          [
+            %{
+              family: "STIX Two Math",
+              path: Path.expand("../../priv/fonts/stix/STIXTwoMath-Regular.ttf", __DIR__),
+              weight: 400,
+              style: :normal
+            }
+          ]
+      else
+        fonts
+      end
+
+    fonts =
+      if String.contains?(File.read!(fixture_path), "Math Glyph Test Reference") do
+        fonts ++
+          [
+            %{
+              family: "Math Glyph Test Reference",
+              weight: 400,
+              style: :normal,
+              path:
+                Path.expand(
+                  "../fixtures/html_to_pdf/browser_parity/assets/math-glyph-reference.ttf",
+                  __DIR__
+                )
+            }
+          ]
+      else
+        fonts
+      end
+
+    fonts =
+      if String.contains?(File.read!(fixture_path), "Math Row Test Reference") do
+        fonts ++
+          [
+            %{
+              family: "Math Row Test Reference",
+              weight: 400,
+              style: :normal,
+              path:
+                Path.expand(
+                  "../fixtures/html_to_pdf/browser_parity/assets/math-row-reference.ttf",
+                  __DIR__
+                )
+            }
+          ]
+      else
+        fonts
+      end
+
+    fonts =
+      if String.contains?(File.read!(fixture_path), "Math Stretch Test Reference") do
+        fonts ++
+          [
+            %{
+              family: "Math Stretch Test Reference",
+              weight: 400,
+              style: :normal,
+              path:
+                Path.expand(
+                  "../fixtures/html_to_pdf/browser_parity/assets/math-stretch-reference.ttf",
+                  __DIR__
+                )
+            }
+          ]
+      else
+        fonts
+      end
+
     Enum.each(fonts, fn font ->
       assert File.regular?(font.path), "Missing bundled browser parity font: #{font.path}"
     end)
@@ -296,6 +403,12 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
 
   defp render_chromium_pdf!(chromium_bin, fixture_path, output_path) do
     profile_dir = Path.join(Path.dirname(output_path), "chromium-profile")
+    File.mkdir_p!(Path.join(profile_dir, "Default"))
+
+    File.write!(
+      Path.join([profile_dir, "Default", "Preferences"]),
+      :json.encode(%{profile: %{default_content_setting_values: %{javascript: 2}}})
+    )
 
     args = [
       "--headless",
@@ -328,6 +441,34 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     end
   end
 
+  @doc "Builds equivalent CSS artwork for the fixed horizontal-rule fixture's pinned HTML presentation hints."
+  @spec horizontal_rule_reference(String.t()) :: String.t()
+  def horizontal_rule_reference(html) do
+    # Chromium 151 sets hr color as background/border color and implements size
+    # as content height, including invalid/nonpositive sizes. Pinned HTML instead
+    # specifies color and, for color/noshade, half-size border widths. Keep every
+    # native case unchanged; supply independent, explicit CSS to the browser.
+    css = """
+    <style>
+    hr {color:#808080;background-color:transparent;border-color:#808080;}
+    hr[color="RebeccaPurple"] {color:#663399;border-color:#663399;}
+    hr[color="chucknorris"] {color:#c00000;border-color:#c00000;}
+    hr[color="#abc"] {color:#aabbcc;border-color:#aabbcc;}
+    hr[color="#abcdef12"] {color:#abde12;border-color:#abde12;}
+    hr[color="red"] {color:#ff0000;border-color:#ff0000;}
+    hr[color="navy"] {color:#000080;border-color:#000080;}
+    hr[color="goldenrod"] {color:#daa520;border-color:#daa520;}
+    hr[size="0"],hr[size="-1"] {height:auto;border-bottom-width:1px;}
+    hr[size="0"][noshade] {border-width:0;}
+    hr[size="1"][noshade] {height:auto;border-width:0.5px;}
+    hr[size="3"][noshade],hr[size="3"][color] {height:auto;border-width:1.5px;}
+    hr[size="8"][color] {height:auto;border-width:4px;}
+    </style>
+    """
+
+    String.replace(html, "</head>", css <> "</head>", global: false)
+  end
+
   defp chromium_fixture_path!(fixture_path, artifact_dir, opts, render_opts) do
     page_size =
       Keyword.get(opts, :chromium_page_size) ||
@@ -336,15 +477,19 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     page_furniture = Keyword.get(opts, :chromium_page_furniture)
     fonts = Keyword.get(render_opts, :fonts, [])
 
-    case {page_size, page_furniture, fonts} do
-      {nil, nil, []} ->
+    chromium_transform = Keyword.get(opts, :chromium_transform)
+
+    case {page_size, page_furniture, fonts, chromium_transform} do
+      {nil, nil, [], nil} ->
         fixture_path
 
       _configured ->
         chromium_fixture_path = Path.join(artifact_dir, "chromium-input.html")
 
-        fixture_path
-        |> File.read!()
+        html = File.read!(fixture_path)
+        html = if chromium_transform, do: chromium_transform.(html), else: html
+
+        html
         |> maybe_inject_chromium_fonts(fonts)
         |> maybe_inject_chromium_page_css(page_size)
         |> maybe_inject_chromium_page_furniture(

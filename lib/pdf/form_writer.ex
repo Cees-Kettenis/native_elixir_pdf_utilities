@@ -52,8 +52,8 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
       order = groups |> Enum.map(&hd(&1).name) |> Enum.uniq()
       groups = Enum.group_by(controls, & &1.name)
 
-      {objects, roots, annots, next} =
-        Enum.reduce(order, {objects, [], %{}, next}, fn name, {objects, roots, annots, id} ->
+      {field_objects, roots, annots, next} =
+        Enum.reduce(order, {[], [], %{}, next}, fn name, {objects, roots, annots, id} ->
           controls = groups[name]
           first = hd(controls)
 
@@ -69,6 +69,7 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
             case first.type do
               :checkbox -> {:name, if(first.value, do: "Yes", else: "Off")}
               :radio -> {:name, Enum.find_value(controls, "Off", & &1.value)}
+              :choice -> if is_nil(first.value), do: nil, else: InfoCodec.encode_text(first.value)
               _ -> InfoCodec.encode_text(first.value)
             end
 
@@ -90,6 +91,8 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
             "V" => value,
             "Kids" => kids
           }
+
+          dictionary = if is_nil(value), do: Map.delete(dictionary, "V"), else: dictionary
 
           dictionary =
             if first.type == :choice,
@@ -139,13 +142,16 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
                  annots,
                  page.ref,
                  [{:ref, {widget_id, 0}}],
-                 &(&1 ++ [{:ref, {widget_id, 0}}])
+                 &[{:ref, {widget_id, 0}} | &1]
                )}
             end)
 
-          {objects ++ [{id, 0, {:value, dictionary}} | widgets], roots ++ [{:ref, {id, 0}}],
-           annots, id + 1 + length(controls)}
+          {Enum.reverse(widgets, [{id, 0, {:value, dictionary}} | objects]),
+           [{:ref, {id, 0}} | roots], annots, id + 1 + length(controls)}
         end)
+
+      objects = objects ++ Enum.reverse(field_objects)
+      roots = Enum.reverse(roots)
 
       page_objects =
         Enum.flat_map(context.pages, fn page ->
@@ -162,7 +168,7 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
                   Map.put(
                     page.dictionary,
                     "Annots",
-                    Map.get(page.dictionary, "Annots", []) ++ widgets
+                    Map.get(page.dictionary, "Annots", []) ++ Enum.reverse(widgets)
                   )}}
               ]
           end
@@ -458,16 +464,9 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
         end
 
       _ ->
-        with {:ok, pdf} <- PdfWriter.render(pages, forms: :static),
-             {:ok, source} <- Reader.read_validated(pdf),
-             :ok <-
-               FormValidator.capacity(
-                 context,
-                 map_size(source.document.objects) + length(pages) + extra_objects
-               ) do
-          {objects, appearances, next} =
-            import_appearances(source, context.document.trailer["Size"])
-
+        with {:ok, objects, appearances, next} <-
+               PdfWriter.appearance_objects(pages, context.document.trailer["Size"]),
+             :ok <- FormValidator.capacity(context, length(objects) + extra_objects) do
           {:ok, objects, appearances, next}
         end
     end

@@ -16,6 +16,104 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubsetTest do
     %{font: font}
   end
 
+  test "glyph ink geometry comes from selected source bytes and refreshes reused font IDs", %{
+    font: font
+  } do
+    assert {:ok, plan} = TrueTypeSubsetValidator.prepare(font, [font.cmap[?A]])
+    assert {:ok, bounds} = Font.glyph_bounds(font)
+    assert tuple_size(bounds) == plan.glyph_count
+    assert elem(bounds, font.cmap[?\s]) == {0, 0, 0, 0}
+
+    glyph = font.cmap[?A]
+    offset = table_offset(font.data, "glyf") + elem(plan.offsets, glyph)
+
+    <<_contours::16, xmin::signed-16, ymin::signed-16, xmax::signed-16, ymax::signed-16>> =
+      binary_part(font.data, offset, 10)
+
+    assert elem(bounds, glyph) == {xmin, ymin, xmax, ymax}
+    changed = %{font | data: replace_u16(font.data, offset + 6, xmax + 1)}
+
+    assert {:ok, changed_bounds} =
+             NativeElixirPdfUtilities.Validators.FontValidator.with_budget(fn ->
+               assert {:ok, ^bounds} = Font.glyph_bounds(font)
+               assert {:ok, ^bounds} = Font.glyph_bounds(font)
+               Font.glyph_bounds(changed)
+             end)
+
+    assert elem(changed_bounds, glyph) == {xmin, ymin, xmax + 1, ymax}
+
+    short = replace_glyph(font, glyph, <<0::16>>, 2)
+    assert {:error, {:invalid_document, diagnostic}} = Font.glyph_bounds(short)
+    assert diagnostic.stage == :font
+    assert diagnostic.operation == :glyph_bounds
+    assert diagnostic.source == font.family
+    assert diagnostic.message =~ "ink bounds"
+    reversed = %{font | data: replace_u16(font.data, offset + 2, 32767)}
+    assert {:error, {:invalid_document, %{message: message}}} = Font.glyph_bounds(reversed)
+    assert message =~ "ink bounds"
+  end
+
+  test "glyph bounds are lazy and cumulatively bounded, including source bytes", %{font: font} do
+    assert {:ok, plan} = TrueTypeSubsetValidator.prepare(font, [0])
+
+    work =
+      plan.glyph_count * 11 +
+        (plan.glyph_count + 1) * if(plan.location_format == 0, do: 2, else: 4)
+
+    Limits.install(%{Limits.effective() | max_font_math_work: work})
+    assert {:ok, _registry} = Font.load_registry(system_font_discovery: false)
+
+    assert {:ok, _} =
+             NativeElixirPdfUtilities.Validators.FontValidator.with_budget(fn ->
+               assert {:ok, _} = Font.glyph_bounds(font)
+               Font.glyph_bounds(font)
+             end)
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :font, message: message}}} =
+             NativeElixirPdfUtilities.Validators.FontValidator.with_budget(fn ->
+               assert {:ok, _} = Font.glyph_bounds(font)
+               TrueTypeSubsetValidator.prepare_glyph_bounds(font.data)
+             end)
+
+    assert message =~ "max_font_math_work"
+    Limits.install(%{Limits.effective() | max_font_math_work: work - 1})
+
+    assert {:error, {:resource_limit_exceeded, %{operation: :glyph_bounds}}} =
+             Font.glyph_bounds(font)
+
+    Limits.install(%{Limits.effective() | max_font_source_bytes: 1})
+
+    assert {:error, {:resource_limit_exceeded, %{message: source_message}}} =
+             Font.glyph_bounds(font)
+
+    assert source_message =~ "max_font_source_bytes"
+  end
+
+  test "glyph geometry rejects absent or malformed outline data with diagnostics", %{font: font} do
+    assert {:error, {:invalid_document, %{operation: :glyph_bounds, message: message}}} =
+             Font.glyph_bounds(%{type: :built_in})
+
+    assert message =~ "embedded TrueType"
+
+    assert {:error, {:invalid_document, %{stage: :font, operation: :glyph_bounds}}} =
+             Font.glyph_bounds(nil)
+
+    assert {:error, {:invalid_document, _}} = TrueTypeSubsetValidator.prepare_glyph_bounds(nil)
+    assert {:error, {:invalid_document, _}} = TrueTypeSubsetValidator.prepare_glyph_bounds(<<>>)
+    missing = replace_bytes(font.data, table_record_offset(font.data, "glyf"), 4, "NONE")
+
+    assert {:error, {:invalid_document, %{message: missing_message}}} =
+             Font.glyph_bounds(%{font | data: missing})
+
+    assert missing_message =~ "missing the glyf"
+    loca = replace_u32(font.data, table_record_offset(font.data, "loca") + 12, 0)
+
+    assert {:error, {:invalid_document, %{message: loca_message}}} =
+             Font.glyph_bounds(%{font | data: loca})
+
+    assert loca_message =~ "loca"
+  end
+
   test "keeps composite dependencies and produces a checksummed standalone font", %{font: font} do
     glyph_id = font.cmap[?é]
     assert {:ok, original_plan} = TrueTypeSubsetValidator.prepare(font, [glyph_id])
@@ -67,6 +165,46 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubsetTest do
              TrueTypeSubset.subset(%{font | data: invalid_loca}, [0])
 
     assert loca_message =~ "glyph offsets"
+  end
+
+  test "retains checksums and bytes of opaque tables at every word and block boundary", %{
+    font: font
+  } do
+    record = table_record_offset(font.data, "FFTM")
+    payload = for byte <- 1..35, into: <<>>, do: <<byte>>
+    offset = byte_size(font.data)
+
+    for length <- 0..35 do
+      data =
+        font.data
+        |> replace_bytes(record, 4, "TEST")
+        |> replace_u32(record + 8, offset)
+        |> replace_u32(record + 12, length)
+
+      assert {:ok, subset} =
+               TrueTypeSubset.subset(%{font | data: data <> payload}, [font.cmap[?A]])
+
+      table = table_record_offset(subset, "TEST")
+      <<checksum::32, table_offset::32, ^length::32>> = binary_part(subset, table + 4, 12)
+      expected = binary_part(payload, 0, length)
+      assert binary_part(subset, table_offset, length) == expected
+
+      padded = expected <> :binary.copy(<<0>>, rem(4 - rem(length, 4), 4))
+
+      reference =
+        for <<word::32 <- padded>>, reduce: 0 do
+          total -> total + word &&& 0xFFFF_FFFF
+        end
+
+      assert checksum == reference
+
+      whole_checksum =
+        for <<word::32 <- subset>>, reduce: 0 do
+          total -> total + word &&& 0xFFFF_FFFF
+        end
+
+      assert whole_checksum == 0xB1B0_AFBA
+    end
   end
 
   test "respects no-subsetting licenses and the subset work budget", %{font: font} do

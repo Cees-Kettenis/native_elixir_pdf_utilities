@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><style>
+@page { size: 264pt 360pt; margin: 0; }
+html, body { margin: 0; padding: 0; }
+body { padding: 12pt; font-family: 'DejaVu Sans'; font-size: 10.5pt; line-height: 13.5pt; }
+input, textarea {
+  display: block; width: 180pt; box-sizing: border-box;
+  border: 1px solid #777777; background: white; padding: 1.5pt 3pt;
+  margin: 0 0 6pt; font-family: 'DejaVu Sans'; font-size: 10.5pt; line-height: 13.5pt;
+}
+textarea { height: 42pt; }
+[readonly] { color: #21517b; }
+[readonly="false"] { color: #993300; }
+[disabled] { color: #666666; background: #f4f4f4; }
+</style></head><body>
+<input value="Editable reference" name="editable">
+<input readonly value="Default readonly" name="default">
+<input type="TEXT" READONLY="readonly" value="A&#13;B&#10;C" name="uppercase">
+<input type="search" readonly="" value="Search value" name="query">
+<input type="search" readonly="false" value="Boolean presence" name="presence">
+<input readonly name="empty">
+<input readonly disabled value="Combined attributes" name="both">
+<textarea readonly name="notes">Line one
+Line two</textarea>
+<textarea readonly disabled name="disabled-notes">Locked and disabled</textarea>
+<textarea readonly="false" name="empty-notes"></textarea>
+</body></html>

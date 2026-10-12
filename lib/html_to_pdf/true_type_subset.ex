@@ -99,10 +99,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubset do
   end
 
   defp checksum(data) do
-    padding = rem(4 - rem(byte_size(data), 4), 4)
+    checksum_words(data, 0)
+  end
 
-    for <<word::32 <- data <> :binary.copy(<<0>>, padding)>>, reduce: 0 do
-      total -> total + word &&& 0xFFFF_FFFF
+  defp checksum_words(data, total) do
+    case data do
+      <<first::32, second::32, third::32, fourth::32, remaining::binary>> ->
+        checksum_words(remaining, total + first + second + third + fourth)
+
+      <<word::32, remaining::binary>> ->
+        checksum_words(remaining, total + word)
+
+      <<>> ->
+        total &&& 0xFFFF_FFFF
+
+      remaining ->
+        # OpenType checksums pad the final word with zero bytes on the right.
+        word = :binary.decode_unsigned(remaining) <<< ((4 - byte_size(remaining)) * 8)
+        total + word &&& 0xFFFF_FFFF
     end
   end
 

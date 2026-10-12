@@ -1,8 +1,2221 @@
+Code.require_file("../support/png_fixture.ex", __DIR__)
+
 defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
+  alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
+  alias NativeElixirPdfUtilities.HtmlToPdf.CounterStyle
+  alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
   use ExUnit.Case
+
+  test "processing instructions neither paint nor affect element sibling selectors and counters" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html =
+      "<style>p{counter-increment:item}p::before{content:counter(item)}p:first-child{color:red}p:nth-child(2){color:blue}p:last-child{font-weight:bold}</style><div><?marker><p>First</p><?start><p>Second</p><?end></div>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, %{children: [%{children: [first, second]}]}} = Style.compute_detailed(dom)
+    assert first.style.color == {1.0, 0.0, 0.0}
+    assert second.style.color == {0.0, 0.0, 1.0}
+    assert second.style.font_weight == 700
+    assert hd(hd(first.children).children).text == "1"
+    assert hd(hd(second.children).children).text == "2"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed("<?marker name='unused.png'?>")
+    assert {:ok, %{children: []}} = Style.compute_detailed(dom)
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<ul><?marker><li>One</li><?end><li>Two</li></ul><select><?marker><option>A<?end><option selected>B</select>"
+             )
+
+    assert {:ok, %{children: [list, select]}} = Style.compute_detailed(dom)
+    assert length(list.children) == 2
+    assert select.children == [%{type: :text, text: "B", style: hd(select.children).style}]
+  end
+
+  test "direct processing instruction nodes validate before nonpainting selection" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+    marker = %{type: :processing_instruction, target: "marker", data: "name=A"}
+    assert {:ok, %{children: []}} = Style.compute_detailed(%{type: :document, children: [marker]})
+
+    for extra <- [
+          %{children: [%{type: :element, tag: "script", attributes: %{}, children: []}]},
+          %{attributes: %{"onclick" => "run()"}},
+          %{tag: "img"},
+          %{data: "x>y"},
+          %{source: %{text: <<255>>, line: 1, column: 1}}
+        ] do
+      invalid = Map.merge(marker, extra)
+
+      for children <- [
+            [invalid],
+            [
+              %{
+                type: :element,
+                tag: "template",
+                attributes: %{},
+                children: [],
+                content: %{type: :document_fragment, children: [invalid]}
+              }
+            ]
+          ] do
+        assert {:error, {:invalid_document, diagnostic}} =
+                 Style.compute_detailed(%{type: :document, children: children})
+
+        assert diagnostic.stage == :style and diagnostic.source == "processing_instruction"
+      end
+    end
+
+    for tag <- ~w(style title textarea script xmp plaintext noembed) do
+      attrs = if tag == "script", do: %{"type" => "text/plain"}, else: %{}
+
+      dom = %{
+        type: :document,
+        children: [%{type: :element, tag: tag, attributes: attrs, children: [marker]}]
+      }
+
+      assert {:error, {:invalid_document, diagnostic}} = Style.compute_detailed(dom)
+      assert diagnostic.stage == :style
+      assert diagnostic.source == tag
+      assert diagnostic.message =~ "text-only"
+    end
+
+    for tag <- ~w(input br wbr img col meta hr) do
+      dom = %{
+        type: :document,
+        children: [%{type: :element, tag: tag, attributes: %{}, children: [marker]}]
+      }
+
+      assert {:error, {:invalid_document, diagnostic}} = Style.compute_detailed(dom)
+      assert diagnostic.stage == :style and diagnostic.source == tag
+      assert diagnostic.message =~ "empty"
+    end
+
+    foreign = %{
+      type: :element,
+      tag: "style",
+      namespace: :svg,
+      attributes: %{},
+      children: [marker]
+    }
+
+    template = %{
+      type: :element,
+      tag: "template",
+      attributes: %{},
+      children: [],
+      content: %{type: :document_fragment, children: [foreign]}
+    }
+
+    assert {:ok, _} = Style.compute_detailed(%{type: :document, children: [template]})
+  end
+
+  test "xmp and plaintext use preformatted defaults without dropping their first newline" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    for tag <- ~w(xmp plaintext) do
+      suffix = if tag == "xmp", do: "</xmp></div>", else: ""
+
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<div style='font-size:15pt;font-weight:bold'><#{tag}>\r\n  é &amp;\rNext" <>
+                   suffix
+               )
+
+      assert {:ok, %{children: [%{children: [node]}]}} = Style.compute_detailed(dom)
+      assert node.style.display == :block and node.style.white_space == :pre
+      assert node.style.font_face.family == "DejaVu Sans Mono"
+      assert node.style.font_size == 15.0 and node.style.font_weight == 700
+      assert node.style.margin.top == 15.0 and node.style.margin.bottom == 15.0
+      assert [%{text: "\n  é &amp;\nNext"}] = node.children
+
+      html =
+        "<#{tag} style='font-family:DejaVu Sans;white-space:normal;margin:0;font-size:9pt'>é &amp;" <>
+          if(tag == "xmp", do: "</xmp>", else: "")
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, %{children: [overridden]}} = Style.compute_detailed(dom)
+      assert overridden.style.white_space == :normal and overridden.style.font_size == 9.0
+      assert overridden.style.font_face.family == "DejaVu Sans"
+      assert overridden.style.margin == %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+    end
+  end
+
+  test "noembed stays raw and produces no box even with authored display overrides" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html =
+      "<style>noembed.shown{display:block!important;color:red;background-image:url(unused-override.png)}</style><noembed style='background-image:url(unused.png)'><img src=denied.png><style>p{color:blue}</style></noembed><noembed class=shown>é &amp; <b>Literal</b></noembed><p>After</p>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+
+    assert {:ok, %{children: [hidden, shown, after_node]}} =
+             Style.compute_detailed(dom,
+               asset_resolver: fn request ->
+                 flunk("literal resource resolved #{inspect(request)}")
+               end
+             )
+
+    assert hidden.tag == "noembed" and hidden.style.display == :none and hidden.children == []
+    refute Map.has_key?(hidden.style, :background_image)
+    refute Map.has_key?(hidden.style, :background_image_source)
+    assert shown.tag == "noembed" and shown.style.display == :none and shown.children == []
+    assert shown.style.color == {1, 0, 0} and shown.style.white_space == :normal
+    refute Map.has_key?(shown.style, :background_image_source)
+    assert [%{text: "é &amp; <b>Literal</b>"}] = Enum.at(dom.children, 2).children
+    assert after_node.style.color == {0, 0, 0}
+  end
+
+  test "indeterminate selector consumes existing radio ownership and never guesses checkbox state" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html =
+      "<style>:indeterminate{color:red}</style><input type=radio name=a><input type=radio name=a><input type=radio name=b checked><input type=radio name=b><input type=radio><input type=radio checked><input type=checkbox><form><input type=radio name=b></form>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, %{children: nodes}} = Style.compute_detailed(dom)
+
+    assert Enum.map(Enum.take(nodes, 7), & &1.style.color) == [
+             {1, 0, 0},
+             {1, 0, 0},
+             {0, 0, 0},
+             {0, 0, 0},
+             {1, 0, 0},
+             {0, 0, 0},
+             {0, 0, 0}
+           ]
+
+    assert hd(List.last(nodes).children).style.color == {1, 0, 0}
+  end
+
+  test "gauge styles consume prepared state and preserve authored selector attributes and fallback semantics" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<style>progress[value='.5']{font-size:20pt;width:90pt;background:red}progress:indeterminate{height:18pt}meter{appearance:none}meter:indeterminate{color:red}</style><progress value=.5><span>Fallback</span></progress><progress></progress><meter value=.5></meter>"
+             )
+
+    assert {:ok, %{children: [determinate, unknown, meter]}} = Style.compute_detailed(dom)
+    assert determinate.style._gauge.position == 0.5
+    assert determinate.style.width == 90 and determinate.style.height == 20
+    assert determinate.style.vertical_align == -4
+    assert determinate.style.background_color == {1, 0, 0}
+    assert [%{tag: "span", children: [%{text: "Fallback"}]}] = determinate.style._gauge_fallback
+    assert determinate.children == []
+    assert unknown.style.height == 18 and unknown.style._gauge.position == -1
+    assert meter.style.width == 60 and meter.style.appearance == :none
+    refute meter.style.color == {1, 0, 0}
+    refute Map.has_key?(meter.style, :_form_control)
+
+    for value <- [".1", ".9", ".1"] do
+      assert {:ok, dom} = HtmlParser.parse_detailed("<progress value=#{value}></progress>")
+
+      forged =
+        put_in(dom.children, [Map.put(hd(dom.children), :_initial_gauge_state, %{position: 99})])
+
+      assert {:ok, %{children: [node]}} = Style.compute_detailed(forged)
+      assert node.style._gauge.position == String.to_float("0" <> value)
+    end
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<div style='accent-color:red'><progress value=.5></progress></div>"
+             )
+
+    assert {:ok, %{children: [%{children: [node]}]}} = Style.compute_detailed(dom)
+    assert node.style.accent_color == {1, 0, 0}
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<div style='accent-color:red'><progress value=.5 style='accent-color:AUTO;display:inline;width:48pt'></progress></div>"
+             )
+
+    assert {:ok, %{children: [%{children: [node]}]}} = Style.compute_detailed(dom)
+    refute Map.has_key?(node.style, :accent_color)
+    assert node.style._gauge_native
+    assert node.style.display == :inline_block and node.style.width == 48
+  end
+
+  test "direct gauge trees must obey content models attributes and hidden executable policy" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+    assert {:ok, dom} = HtmlParser.parse_detailed("<progress><span>Fallback</span></progress>")
+    progress = hd(dom.children)
+
+    for invalid <- [
+          put_in(progress.children, [%{progress | children: []}]),
+          put_in(progress.children, [%{hd(progress.children) | tag: "div"}])
+        ] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               Style.compute_detailed(%{dom | children: [invalid]})
+
+      assert diagnostic.stage == :style and diagnostic.reason == :invalid_document
+      assert is_binary(diagnostic.message) and is_binary(diagnostic.source)
+    end
+
+    assert {:error, {:unsupported_html, diagnostic}} =
+             Style.compute_detailed(%{
+               dom
+               | children: [put_in(progress.attributes, %{"onclick" => "run()"})]
+             })
+
+    assert diagnostic.reason == :unsupported_html and diagnostic.source == "progress"
+
+    for css <- ["appearance:button", "accent-color:invalid", "vertical-align:invalid"] do
+      assert {:ok, dom} = HtmlParser.parse_detailed("<meter style='#{css}'></meter>")
+      assert {:error, _} = Style.compute_detailed(dom)
+    end
+  end
+
+  test "editability selectors use own and inherited state without changing authored attributes" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html = ~S"""
+    <style>:read-only{color:red}:read-write{color:blue}
+    .escape:\72 ead-write:not(:read-only){color:green}
+    .escape{color:red}</style>
+    <div contenteditable=TRUE><p>Inherited</p><div contenteditable='false'><p>Locked</p>
+    <p contenteditable='plaintext-only'>New host</p></div><p contenteditable=' false '>Invalid inherits</p>
+    <p class=escape>Escaped specificity</p><input name=locked readonly value=Readonly>
+    <input name=active contenteditable=false value=Editable><textarea disabled>Disabled</textarea>
+    <button disabled>Editable region button</button></div><p>Outside</p>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, %{children: [host, outside]}} = Style.compute_detailed(dom)
+
+    [inherited, locked, invalid, escaped, readonly, input, textarea, button] =
+      Enum.filter(host.children, &(&1.type == :element))
+
+    assert host.style.color == {0, 0, 1}
+    assert inherited.style.color == {0, 0, 1}
+    assert locked.style.color == {1, 0, 0}
+
+    assert Enum.at(Enum.filter(locked.children, &(&1.type == :element)), 0).style.color ==
+             {1, 0, 0}
+
+    assert Enum.at(Enum.filter(locked.children, &(&1.type == :element)), 1).style.color ==
+             {0, 0, 1}
+
+    assert invalid.style.color == {0, 0, 1}
+    assert {0, green, 0} = escaped.style.color
+    assert_in_delta green, 128 / 255, 1.0e-10
+    assert readonly.style.color == {1, 0, 0}
+    assert input.style.color == {0, 0, 1}
+    assert textarea.style.color == {1, 0, 0}
+    assert button.style.color == {0, 0, 1}
+    assert outside.style.color == {1, 0, 0}
+    [authored_host | _] = Enum.filter(dom.children, &(&1.type == :element and &1.tag == "div"))
+    assert authored_host.attributes["contenteditable"] == "TRUE"
+
+    assert Enum.any?(
+             authored_host.children,
+             &(Map.get(&1, :attributes, %{})["contenteditable"] == " false ")
+           )
+
+    assert input.style._form_control.attributes["contenteditable"] == "false"
+  end
+
+  test "editing cache is isolated between computations and inert template trees" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    for editable <- [true, false, true] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<style>p:read-write{color:blue}p:read-only{color:red}</style><div contenteditable=#{editable}><p>Visible</p><template><div contenteditable=#{not editable}><p>Unused</p></div></template></div>"
+               )
+
+      assert {:ok, %{children: [%{children: [node | _]}]}} = Style.compute_detailed(dom)
+      assert node.style.color == if(editable, do: {0, 0, 1}, else: {1, 0, 0})
+      assert {:ok, %{children: [%{children: [again | _]}]}} = Style.compute_detailed(dom)
+      assert again.style.color == node.style.color
+    end
+  end
+
+  test "direct picture trees reject invalid ordering and source ownership before resolution" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    assert {:ok, %{children: [picture]}} =
+             HtmlParser.parse_detailed("<picture><source srcset=tile><img src=tile></picture>")
+
+    [source, image] = picture.children
+
+    for node <- [
+          source,
+          %{picture | children: [image, source]},
+          %{picture | children: [image, image]}
+        ] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               Style.compute_detailed(%{type: :document, children: [node]})
+
+      assert diagnostic.stage == :style and diagnostic.message =~ "picture"
+    end
+  end
+
+  test "responsive source dimensions and density correction precede author CSS without mutating cached decodes" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    bytes =
+      NativeElixirPdfUtilities.TestSupport.PngFixture.build(80, 40, 2, 8, 0, fn _, _ ->
+        [10, 80, 200]
+      end)
+
+    html =
+      "<style>picture>img{width:30pt;height:auto}source{display:block;background-image:url(denied)}</style>" <>
+        "<picture style='display:block'><source type=image/png media=print srcset='tile 2x' width=100 height=50><img src=denied width=200 height=200></picture>" <>
+        "<img srcset='tile 2x'><img src=tile>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+
+    assert {:ok, %{children: [picture, corrected, ordinary]}} =
+             Style.compute_detailed(dom, assets: %{"tile" => {:bytes, bytes}})
+
+    [source, image] = picture.children
+    assert source.style.display == :none
+    refute Map.has_key?(source.style, :background_image_source)
+    assert image.style.width == 30.0 and image.style.height == :auto
+    assert image.style._image_selection.dimensions == %{width: 75.0, height: 37.5}
+    assert image.style._image_selection.source == "source"
+    assert image.style.image.width == 30.0 and image.style.image.height == 15.0
+    assert corrected.style.image.width == 30.0 and ordinary.style.image.width == 60.0
+    assert corrected.style.image.width_px == ordinary.style.image.width_px
+    assert ordinary.style.image.width_px == 80 and ordinary.style.image.height_px == 40
+
+    assert {:ok, %{children: [plain_picture]}} =
+             Style.compute_detailed(%{dom | children: [Enum.at(dom.children, 1)]},
+               assets: %{"tile" => {:bytes, bytes}}
+             )
+
+    assert plain_picture.style.display == :block
+    assert List.last(plain_picture.children).style.image_display == :inline
+
+    for source_dimensions <- ["", "width=100", "height=50"] do
+      html =
+        "<picture style='display:block'><source srcset=tile #{source_dimensions}><img src=denied width=200 height=200></picture>"
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+
+      assert {:ok, %{children: [%{children: [_, image]}]}} =
+               Style.compute_detailed(dom, assets: %{"tile" => {:bytes, bytes}})
+
+      expected =
+        case source_dimensions do
+          "" -> %{width: 150.0, height: 150.0}
+          "width=100" -> %{width: 75.0}
+          "height=50" -> %{height: 37.5}
+        end
+
+      assert image.style._image_selection.dimensions == expected
+    end
+
+    svg =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='80' height='40'><rect width='80' height='40' fill='blue'/></svg>"
+
+    data = "data:image/svg+xml;base64," <> Base.encode64(svg)
+    assert {:ok, dom} = HtmlParser.parse_detailed("<img srcset='#{data} 2x'>")
+    assert {:ok, %{children: [image]}} = Style.compute_detailed(dom)
+    assert image.style.image.width == 30 and image.style.image.height == 15
+    assert {:ok, dom} = HtmlParser.parse_detailed("<picture><img src=tile></picture>")
+
+    assert {:ok, %{children: [image]}} =
+             Style.compute_detailed(dom, assets: %{"tile" => {:bytes, bytes}})
+
+    assert image.style.display == :inline
+  end
+
+  test "computed image display preserves replaced-image identity and inline or block intent" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    for {display, expected} <- [
+          {"", :inline},
+          {"display:inline", :inline},
+          {"display:inline-block", :inline},
+          {"display:block", :block}
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse(
+                 "<body><a href='https://example.com'><img src='data:image/png;base64,#{Base.encode64(png_fixture(1, 1))}' style='#{display}'></a></body>"
+               )
+
+      assert {:ok, tree} = Style.compute(dom)
+      [body] = tree.children
+      [anchor] = body.children
+      [image] = anchor.children
+      assert image.style.display == :image
+      assert image.style.image_display == expected
+      assert image.style.link_url == "https://example.com"
+    end
+  end
+
+  test "metadata selectors match authored values while translation mode inherits independently" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
+    alias NativeElixirPdfUtilities.Validators.HtmlValidator
+
+    html = """
+    <style>[itemscope]{color:red}[itemtype='urn:example:Record']{font-weight:700}[itemprop~=name]{color:blue}[translate=' no ']{background-color:yellow}[translate=NO]{font-style:italic}</style>
+    <div itemscope itemtype='urn:example:Record' translate=NO><span itemprop='name Name'>Inherited</span><x-box translate=' no ' arbitrary=unchanged>Padded</x-box><b translate>Enabled</b><i translate=YES>Case</i><u translate=invalid>Invalid</u></div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    [_style, parent] = HtmlValidator.assign_render_metadata(dom.children)
+    refute parent._html_translate
+    [inherited, padded, empty, yes, invalid] = parent.children
+    refute inherited._html_translate or padded._html_translate or invalid._html_translate
+    assert empty._html_translate and yes._html_translate
+    assert parent.attributes["translate"] == "NO"
+    refute HtmlValidator.attribute_selector_matches?({:equals, "translate", "no"}, parent)
+
+    assert HtmlValidator.attribute_selector_matches?(
+             {:equals, "translate", "no", :insensitive},
+             parent
+           )
+
+    refute HtmlValidator.attribute_selector_matches?(
+             {:equals, "itemtype", "urn:example:record"},
+             parent
+           )
+
+    assert padded.attributes["translate"] == " no "
+    assert padded.attributes["arbitrary"] == "unchanged"
+    assert {:ok, %{children: [styled]}} = Style.compute_detailed(dom)
+    assert styled.style.color == {1, 0, 0} and styled.style.font_weight == 700
+    [inherited, padded | _] = styled.children
+    assert inherited.style.color == {0, 0, 1}
+    assert padded.style.background_color == {1, 1, 0}
+  end
+
+  test "translation inheritance crosses foreign hosts and resets at HTML integration points" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
+    alias NativeElixirPdfUtilities.Validators.HtmlValidator
+
+    assert {:ok, %{children: [parent]}} =
+             HtmlParser.parse_detailed(
+               "<div translate=no><svg translate=yes><foreignObject translate=yes><p translate=yes>HTML</p></foreignObject></svg><math translate=yes><mtext translate=yes><span translate>HTML</span></mtext></math></div>"
+             )
+
+    [parent] = HtmlValidator.assign_render_metadata([parent])
+    refute parent._html_translate
+
+    for foreign <- parent.children do
+      refute foreign._html_translate
+      [integration] = foreign.children
+      refute integration._html_translate
+      assert hd(integration.children)._html_translate
+    end
+
+    [forged] = HtmlValidator.assign_render_metadata([Map.put(parent, :_html_translate, true)])
+    refute forged._html_translate
+  end
+
+  test "namespace math defaults and style hints precede authored CSS" do
+    html = """
+    <math display=block mathcolor=blue mathbackground=yellow mathsize=40pt
+      displaystyle=false scriptlevel=2 style='font-size:20pt;color:red;math-depth:0;math-style:normal;math-shift:compact'>
+      <mi mathvariant=normal style='text-transform:math-auto'>x</mi><mn>2</mn>
+    </math>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    [block] = styled.children
+    [atom] = block.children
+    assert block.style.display == :block
+    assert block.style.math_style == :normal
+    assert block.style.math_depth == 0
+    assert block.style.math_shift == :compact
+    assert block.style.font_size == 20.0
+    assert block.style.color == {1, 0, 0}
+    assert block.style.background_color == {1, 1, 0}
+    assert atom.style.font_face.family == "STIX Two Math"
+    [x, number] = atom.style._math_box.glyphs
+    assert x.glyph_id == atom.style.font_face.cmap[0x1D465]
+    assert number.glyph_id == atom.style.font_face.cmap[?2]
+  end
+
+  test "math depth uses selected-font scaling and explicit size resets" do
+    for {attributes, size, _depth} <- [
+          {"scriptlevel=1", 14.0, 1},
+          {"scriptlevel=2", 11.0, 2},
+          {"scriptlevel=+3", 7.81, 3},
+          {"style='math-depth:auto-add'", 14.0, 1},
+          {"scriptlevel=2 style='font-size:30pt'", 30.0, 2},
+          {"mathsize=150%", 30.0, 0},
+          {"mathsize=2em", 40.0, 0},
+          {"scriptlevel=bogus mathsize=bogus mathcolor=bogus displaystyle=bogus", 20.0, 0}
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<math style='font-size:20pt'><mn #{attributes}>2</mn></math>"
+               )
+
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      [atom] = styled.children
+      [glyph] = atom.style._math_box.glyphs
+      assert_in_delta glyph.font_size, size, 0.00001
+      assert atom.style.math_depth == 0
+    end
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<math style='font-size:20pt'><mrow scriptlevel=2><mn scriptlevel=0>2</mn></mrow></math>"
+             )
+
+    assert {:ok, %{children: [atom]}} = Style.compute_detailed(dom)
+    [glyph] = atom.style._math_box.glyphs
+    assert_in_delta glyph.font_size, 20.0, 0.00001
+  end
+
+  test "authored math display keywords retain namespace layout and font size units" do
+    for {display, expected} <- [
+          {"math", :block},
+          {"block math", :block},
+          {"inline math", :inline_block}
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<math style='display:#{display};font-size:2rem'><mn>12</mn></math>"
+               )
+
+      assert {:ok, %{children: [node]}} = Style.compute_detailed(dom)
+      assert node.style.display == expected
+      atom = if expected == :block, do: hd(node.children), else: node
+      [number | _] = atom.style._math_box.glyphs
+      assert number.font_size == 24.0
+    end
+  end
+
+  test "ordinary token flow retains its CSS baseline while ordinary row flow diagnoses" do
+    for display <- ["block", "inline", "inline-block"] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<math><mtext style='display:#{display}'><span>a</span><span>b</span></mtext></math>"
+               )
+
+      assert {:ok, %{children: [atom]}} = Style.compute_detailed(dom)
+      assert length(atom.style._math_box.glyphs) == 2
+      assert Enum.map(atom.style._math_box.glyphs, & &1.y) == [0.0, 0.0]
+      assert atom.style._math_box.ascent + atom.style._math_box.descent == atom.style.line_height
+
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed("<math style='display:#{display}'><mi>x</mi></math>")
+
+      assert {:error, {:unsupported_html, diagnostic}} = Style.compute_detailed(dom)
+      assert diagnostic.source == "math"
+    end
+
+    assert {:error, {:invalid_css, _}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(
+               "<div style='display:math'>Unsupported math formatting</div>"
+             )
+  end
+
+  test "disclosures select their first summary and preserve authored selector positions" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html = """
+    <style>summary:nth-child(2){color:red}summary{font-weight:bold}
+    summary::before{content:"Authored "}</style>
+    <details><span>Closed before</span><summary>Closed legend</summary><p>Closed body</p></details>
+    <details open=false><span>Open before</span><summary>Open legend</summary>
+    <summary>Additional summary</summary><p>Open body</p></details>
+    <details></details><details open><p>Fallback body</p></details>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, %{children: [closed, open, empty, fallback]}} = Style.compute_detailed(dom)
+    assert closed.style.display == :block
+    assert length(closed.children) == 1
+    [legend] = closed.children
+    assert legend.style.display == :list_item
+    assert legend.style.list_style_position == :inside
+    assert legend.style.list_marker_type == :disclosure_closed
+    assert legend.style.color == {1, 0, 0}
+    assert legend.style.font_weight == 700
+    assert length(open.children) == 5
+    assert hd(open.children).style.list_marker_type == :disclosure_open
+
+    assert Enum.find(Enum.drop(open.children, 1), &(&1.type == :element and &1.tag == "summary")).style.display ==
+             :block
+
+    assert Enum.map(hd(empty.children).children, & &1.text) == ["Details"]
+    assert hd(empty.children).style.font_weight == 400
+    assert hd(fallback.children).style.list_marker_type == :disclosure_open
+    assert length(fallback.children) == 2
+  end
+
+  test "summary marker overrides use existing list CSS and author display" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    for {css, display, marker} <- [
+          {"list-style:none", :list_item, :none},
+          {"list-style:outside square", :list_item, :square},
+          {"list-style-type:disclosure-open", :list_item, :disclosure_open},
+          {"display:block", :block, :disclosure_closed},
+          {"display:none", :none, :disclosure_closed}
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<details><summary style='#{css}'>Legend</summary>Hidden</details>"
+               )
+
+      assert {:ok, %{children: [%{children: [summary]}]}} = Style.compute_detailed(dom)
+      assert summary.style.display == display
+      assert summary.style.list_marker_type == marker
+    end
+  end
+
+  test "requirement selectors preserve individual radio attributes and initial state" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html = """
+    <style>:required{color:red}:optional{color:blue}</style>
+    <input id=a required=false><input id=b readonly required><input id=c disabled required>
+    <textarea id=d required></textarea><select id=e required><option>Choice</option></select>
+    <input id=f type=hidden required><input id=g type=button required value=Button>
+    <input id=h type=radio name=group required><input id=i type=radio name=group checked>
+    <input id=j><textarea id=k></textarea><select id=l></select>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, tree} = Style.compute_detailed(dom)
+    elements = Enum.filter(tree.children, &(&1.type == :element))
+    assert length(elements) == 12
+    nodes = Map.new(Enum.zip(~w(a b c d e f g h i j k l), elements))
+    for id <- ~w(a b c d e h), do: assert(nodes[id].style.color == {1, 0, 0})
+    for id <- ~w(i j k l), do: assert(nodes[id].style.color == {0, 0, 1})
+    for id <- ~w(f g), do: assert(nodes[id].style.color == {0, 0, 0})
+    assert nodes["a"].style._form_control.attributes["required"] == "false"
+    refute nodes["h"].style._form_control.initial_state.checked
+    assert nodes["i"].style._form_control.initial_state.checked
+    refute Map.has_key?(nodes["i"].style._form_control.attributes, "required")
+  end
+
+  test "horizontal rules resolve inherited font margins and legacy hints" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    for {attributes, expected} <- [
+          {"",
+           %{
+             style: :inset,
+             left: true,
+             right: true,
+             width: :auto,
+             height: :auto,
+             borders: %{top: 0.75, right: 0.75, bottom: 0.75, left: 0.75}
+           }},
+          {"align=LEFT width=25% size=1",
+           %{
+             style: :inset,
+             left: false,
+             right: true,
+             width: {:percent, 0.25},
+             height: :auto,
+             borders: %{top: 0.75, right: 0.75, bottom: 0.0, left: 0.75}
+           }},
+          {"align=right size=5",
+           %{
+             style: :inset,
+             left: true,
+             right: false,
+             width: :auto,
+             height: 2.25,
+             borders: %{top: 0.75, right: 0.75, bottom: 0.75, left: 0.75}
+           }},
+          {"color=transparent noshade=false size=0",
+           %{
+             style: :solid,
+             left: true,
+             right: true,
+             width: :auto,
+             height: :auto,
+             borders: %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+           }}
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<div style='font-size:10pt;color:blue'><hr #{attributes}></div>"
+               )
+
+      assert {:ok, %{children: [container]}} = Style.compute_detailed(dom)
+      [rule] = container.children
+      assert rule.style.display == :block
+      assert rule.style.overflow == :hidden
+      assert rule.style.font_size == 10
+      assert rule.style.color == {0.5019607843, 0.5019607843, 0.5019607843}
+      assert rule.style.margin == %{top: 4.9921875, right: 0.0, bottom: 4.9921875, left: 0.0}
+      assert rule.style.margin_inline_auto == Map.take(expected, [:left, :right])
+      assert Map.get(rule.style, :width, :auto) == expected.width
+      assert Map.get(rule.style, :height, :auto) == expected.height
+      assert rule.style.border_widths == expected.borders
+      assert Enum.all?(rule.style.border_styles, fn {_side, value} -> value == expected.style end)
+    end
+  end
+
+  test "author styles override horizontal-rule presentation hints and automatic margins" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html =
+      "<hr color=red noshade width=90 height=999 size=8 align=right style='width:40pt;margin:1pt 2pt 3pt 4pt;color:blue;border:2pt dashed green;overflow:visible'>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, %{children: [rule]}} = Style.compute_detailed(dom)
+    assert rule.style.width == 40
+    refute Map.has_key?(rule.style, :height)
+    assert rule.style.margin == %{top: 1.0, right: 2.0, bottom: 3.0, left: 4.0}
+    refute Map.has_key?(rule.style, :margin_inline_auto)
+    assert rule.style.color == {0, 0, 1}
+    assert rule.style.overflow == :visible
+    assert rule.style.border_widths == %{top: 1.5, right: 1.5, bottom: 1.5, left: 1.5}
+    assert Enum.all?(rule.style.border_styles, fn {_side, value} -> value == :dashed end)
+
+    assert Enum.all?(rule.style.border_colors, fn {_side, value} ->
+             value == {0, 0.5019607843, 0}
+           end)
+
+    assert {:ok, dom} = HtmlParser.parse_detailed("<div style='margin:auto 2pt'>Text</div>")
+    assert {:ok, %{children: [block]}} = Style.compute_detailed(dom)
+    assert block.style.margin == %{top: 0.0, right: 2.0, bottom: 0.0, left: 2.0}
+    assert block.style.margin_after == 0.0
+    refute Map.has_key?(block.style, :margin_inline_auto)
+  end
+
+  test "named colors flow through foreground backgrounds borders and inherited currentcolor" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html = """
+    <div style='color:RebeccaPurple;background-color:aliceblue;border:2pt solid goldenrod'>
+    <span style='color:currentcolor;background:khaki;text-decoration:underline darkslategrey'>Text</span>
+    </div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, %{children: [container]}} = Style.compute_detailed(dom)
+    assert container.style.color == {0.4, 0.2, 0.6}
+    assert container.style.background_color == {240 / 255, 248 / 255, 1}
+    assert container.style.border_colors.top == {218 / 255, 165 / 255, 32 / 255}
+    child = Enum.find(container.children, &match?(%{tag: "span"}, &1))
+    assert child.style.color == container.style.color
+    assert child.style.background_color == {240 / 255, 230 / 255, 140 / 255}
+  end
+
+  test "closed popovers match static selectors and skip unused image resources" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html = """
+    <style>
+    :popover-open {color:red}
+    [popover]:not(:popover-open) {color:blue;background-image:url(missing.png)}
+    p {color:green}
+    </style>
+    <div popover=auto><img src=missing.png><input name=closed value=Unused></div>
+    <img popover=hint src=missing.png><wbr popover><input popover name=closed2 value=Unused>
+    <p>Visible</p>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+
+    assert {:ok, tree} =
+             Style.compute(dom,
+               asset_resolver: fn request ->
+                 flunk("closed popover resolved #{inspect(request)}")
+               end
+             )
+
+    [container, image, break, input, visible] = tree.children
+
+    for node <- [container, image, break, input] do
+      assert node.style.display == :none
+      assert node.children == []
+      refute Map.has_key?(node.style, :_popover_state)
+    end
+
+    assert container.style.color == {0, 0, 1}
+    assert visible.style.color == {0, 0.5019607843, 0}
+  end
+
+  test "author display overrides diagnose unfinished popover geometry and hidden inputs remain hidden" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    for tag <- ["div", "x-box", "wbr", "input", "img"] do
+      ending = if tag in ["wbr", "input", "img"], do: "", else: "</#{tag}>"
+
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<#{tag} popover style='display:block!important'>" <> ending
+               )
+
+      assert {:error, {:unsupported_html, diagnostic}} = Style.compute_detailed(dom)
+      assert diagnostic.stage == :style and diagnostic.source == tag
+      assert diagnostic.message =~ "fixed positioning"
+    end
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<input type=hidden popover style='display:block!important'>"
+             )
+
+    assert {:ok, %{children: [%{style: %{display: :none}}]}} = Style.compute(dom)
+
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "div",
+          attributes: %{"popover" => ""},
+          children: [
+            %{
+              type: :element,
+              tag: "img",
+              attributes: %{"src" => "javascript:run()"},
+              children: []
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:error, {:unsupported_html, %{stage: :html, source: "src"}}} =
+             Style.compute_detailed(dom)
+  end
+
+  test "option enabled and disabled selectors use inherited groups without changing attributes" do
+    alias NativeElixirPdfUtilities.Validators.{HtmlFormValidator, HtmlValidator}
+
+    assert {:ok, %{children: children}} =
+             HtmlParser.parse_detailed("""
+             <select><optgroup label='Closed' disabled><script type='text/plain'>Unused data</script><template><option selected>Unused option</option></template><option>A</option><option selected>B</option></optgroup>
+             <optgroup label='Open'><option disabled>C</option><option>D</option></optgroup></select>
+             """)
+
+    [select] = HtmlFormValidator.prepare_initial_nodes(children)
+    groups = Enum.filter(select.children, &match?(%{tag: "optgroup"}, &1))
+    [closed, open] = groups
+    assert HtmlValidator.control_state_matches?(:disabled, closed)
+    assert HtmlValidator.control_state_matches?(:enabled, open)
+    [a, b, c, d] = HtmlValidator.select_options(select.children)
+    refute Map.has_key?(a.attributes, "disabled")
+    assert HtmlValidator.control_state_matches?(:disabled, a)
+    assert HtmlValidator.control_state_matches?(:disabled, b)
+    assert HtmlValidator.control_state_matches?(:disabled, c)
+    assert HtmlValidator.control_state_matches?(:enabled, d)
+    assert HtmlValidator.control_state_matches?(:checked, b)
+    refute HtmlValidator.control_state_matches?(:checked, d)
+    assert select._initial_form_state.selection.value == "B"
+    assert length(select._initial_form_state.selection.disabled_ids) == 3
+    assert HtmlValidator.select_options([Map.put(a, :namespace, :svg)]) == []
+  end
+
+  test "checked selectors use effective radio, checkbox and option state" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+    alias NativeElixirPdfUtilities.Validators.{HtmlValidator, HtmlFormValidator}
+
+    html = """
+    <form><input type='radio' name='mode' checked><input type='radio' name='mode' checked>
+    <input type='checkbox' checked><input type='checkbox'><input type='text'>
+    <select><option selected>Alpha</option><option selected>Beta</option></select></form>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    [prepared] = HtmlFormValidator.prepare_initial_nodes(dom.children)
+
+    [first, last, checked, unchecked, text, select] =
+      Enum.filter(prepared.children, &match?(%{type: :element}, &1))
+
+    refute HtmlValidator.control_state_matches?(:checked, first)
+    assert HtmlValidator.control_state_matches?(:checked, last)
+    assert HtmlValidator.control_state_matches?(:checked, checked)
+    refute HtmlValidator.control_state_matches?(:checked, unchecked)
+    refute HtmlValidator.control_state_matches?(:checked, text)
+    refute HtmlValidator.control_state_matches?(:checked, prepared)
+    refute HtmlValidator.control_state_matches?(:checked, Map.put(checked, :namespace, :svg))
+    [alpha, beta] = select.children
+
+    assert Map.has_key?(alpha.attributes, "selected") and
+             Map.has_key?(beta.attributes, "selected")
+
+    refute HtmlValidator.control_state_matches?(:checked, alpha)
+    assert HtmlValidator.control_state_matches?(:checked, beta)
+    assert select._initial_form_state.selection.value == "Beta"
+
+    assert {:ok, %{children: [form]}} =
+             Style.compute_detailed(dom,
+               stylesheets: [{:css, "input:checked{color:red}input:not(:checked){color:blue}"}]
+             )
+
+    assert Enum.map(
+             form.children |> Enum.filter(&match?(%{type: :element}, &1)) |> Enum.take(5),
+             & &1.style.color
+           ) ==
+             [{0, 0, 1}, {1, 0, 0}, {1, 0, 0}, {0, 0, 1}, {0, 0, 1}]
+  end
+
+  test "initial select state preserves authored attributes and dormant template isolation" do
+    alias NativeElixirPdfUtilities.Validators.{HtmlFormValidator, HtmlValidator}
+
+    for {html, expected} <- [
+          {"<select></select>", nil},
+          {"<select><option disabled>A</option><option>B</option></select>", "B"},
+          {"<select><option disabled>A</option></select>", nil},
+          {"<select><option disabled selected>A</option><option>B</option></select>", "A"},
+          {"<select><template><option selected>Unused</option></template><option></option></select>",
+           ""}
+        ] do
+      assert {:ok, %{children: children}} = HtmlParser.parse_detailed(html)
+      [select] = HtmlFormValidator.prepare_initial_nodes(children)
+      assert select._initial_form_state.selection.value == expected
+
+      for option <- HtmlValidator.select_options(select.children) do
+        assert HtmlValidator.control_state_matches?(:checked, option) ==
+                 (option._selector_id == select._initial_form_state.selection.id)
+      end
+    end
+  end
+
+  test "initial radio groups use real owners and preserve authored checked selectors" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html =
+      "<form id='one'><input type='radio' name='mode' value='a' checked><input type='radio' name='mode' value='b' checked></form><form id='two'><input type='radio' name='mode' value='c' checked><input type='radio' name='mode' value='d'></form>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+
+    assert {:ok, %{children: [one, two]}} =
+             Style.compute_detailed(dom,
+               stylesheets: [{:css, "input[checked]{color:red}"}],
+               system_font_discovery: false
+             )
+
+    [a, b] = one.children
+    [c, d] = two.children
+    assert one.style.display == :block and two.style.display == :block
+
+    assert Enum.map([a, b, c, d], & &1.style._form_control.initial_state.checked) == [
+             false,
+             true,
+             true,
+             false
+           ]
+
+    assert a.style._form_control.initial_state.owner == b.style._form_control.initial_state.owner
+    refute a.style._form_control.initial_state.owner == c.style._form_control.initial_state.owner
+    assert a.style.color == {1, 0, 0} and b.style.color == {1, 0, 0}
+    assert Map.has_key?(a.style._form_control.attributes, "checked")
+    assert Map.has_key?(b.style._form_control.attributes, "checked")
+  end
+
+  test "ownership uses first matching IDs, unresolved explicit owners and scoped label targets" do
+    alias NativeElixirPdfUtilities.Validators.HtmlFormValidator
+
+    html =
+      "<input form='late' name='forward'><div id='blocked'></div><form id='late'><input id='inside' type='radio' name='mode' value='a' checked><input type='radio' name='mode' value='b' form='missing' checked><input name='wrong' form='blocked'></form><form id='blocked'></form><label for='inside'>Explicit</label><label><input type='hidden' id='secret'><input id='visible'>Implicit</label>"
+
+    assert {:ok, %{children: children}} = HtmlParser.parse_detailed(html)
+
+    [forward, blocker, form, duplicate, explicit, implicit] =
+      HtmlFormValidator.prepare_initial_nodes(children)
+
+    assert forward._initial_form_state.owner == form._selector_id
+    [inside, missing, wrong] = form.children
+    assert inside._initial_form_state.owner == form._selector_id
+    assert missing._initial_form_state.owner == nil
+    assert wrong._initial_form_state.owner == nil
+    assert blocker.tag == "div" and duplicate.tag == "form"
+    assert explicit._initial_label_control == inside._selector_id
+    [hidden, visible, _] = implicit.children
+    refute implicit._initial_label_control == hidden._selector_id
+    assert implicit._initial_label_control == visible._selector_id
+
+    key = {HtmlFormValidator, :initial_context}
+    previous = Process.get(key)
+    retained = %{ids: [], controls: [], labels: []}
+
+    try do
+      Process.put(key, retained)
+
+      assert [%{_initial_form_state: %{checked: false}}] =
+               HtmlFormValidator.prepare_initial_nodes([
+                 %{
+                   type: :element,
+                   tag: "input",
+                   attributes: %{"type" => "radio", "name" => "mode"},
+                   children: []
+                 }
+               ])
+
+      assert Process.get(key) == retained
+    after
+      if is_nil(previous), do: Process.delete(key), else: Process.put(key, previous)
+    end
+  end
+
+  test "unowned and nameless groups, empty labels and template contents keep their initial states" do
+    alias NativeElixirPdfUtilities.Validators.HtmlFormValidator
+
+    html =
+      "<input type='radio' name='x' checked><input type='radio' name='x' checked>" <>
+        "<input type='radio' checked><input type='radio' name='' checked>" <>
+        "<label for='absent'>Missing</label><label for='block'>Wrong kind</label>" <>
+        "<label>Empty</label><div id='block'></div>" <>
+        "<template><input type='radio' name='x' checked></template>" <>
+        "<label for='hidden'>Hidden</label><input type='hidden' id='hidden'>" <>
+        "<label for='duplicate'>First ID wins</label><span id='duplicate'></span><input id='duplicate'>"
+
+    assert {:ok, %{children: children}} = HtmlParser.parse_detailed(html)
+
+    [
+      first,
+      last,
+      nameless,
+      empty_name,
+      missing,
+      wrong_kind,
+      empty_label,
+      _,
+      template,
+      hidden_label,
+      _,
+      duplicate_label,
+      _,
+      _
+    ] = HtmlFormValidator.prepare_initial_nodes(children)
+
+    refute first._initial_form_state.checked
+    assert last._initial_form_state.checked
+    assert nameless._initial_form_state.checked and empty_name._initial_form_state.checked
+    assert first._initial_form_state.owner == nil
+
+    assert Enum.all?(
+             [missing, wrong_kind, empty_label, hidden_label, duplicate_label],
+             &is_nil(&1._initial_label_control)
+           )
+
+    assert template.children == []
+    assert template.content.children != []
+
+    foreign = %{
+      type: :element,
+      namespace: :svg,
+      tag: "text",
+      attributes: %{"id" => "foreign"},
+      children: []
+    }
+
+    label = %{type: :element, tag: "label", attributes: %{"for" => "foreign"}, children: []}
+
+    assert [_, %{_initial_label_control: nil}] =
+             HtmlFormValidator.prepare_initial_nodes([foreign, label])
+  end
+
+  test "language selectors inherit nearest language and preserve empty and literal XML states" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html =
+      "<div lang='en-US'><p>Inherited</p><p lang='de-Latn-DE'>German</p>" <>
+        "<p lang=''>Unknown<span>Still unknown</span></p><p xml:lang='fr'>Literal</p>" <>
+        "<p lang='und'>Undetermined</p><p lang=' en '>Padded</p><p lang='qaa'>Private</p></div>"
+
+    css =
+      "p,span{color:black}:lang(en){color:red}:lang('de-DE'){color:blue}" <>
+        ":lang(''){color:green}:lang(und){color:#800080}:lang(qaa){color:#ffa500}"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+
+    assert {:ok, %{children: [container]}} =
+             Style.compute_detailed(dom, stylesheets: [{:css, css}])
+
+    [inherited, german, blank, literal, undetermined, padded, private] = container.children
+    assert inherited.style.color == {1, 0, 0}
+    assert german.style.color == {0, 0, 1}
+    assert_style_value(blank.style.color, {0, 128 / 255, 0})
+    assert List.last(blank.children).style.color == blank.style.color
+    assert literal.style.color == {1, 0, 0}
+    assert_style_value(undetermined.style.color, {128 / 255, 0, 128 / 255})
+    assert padded.style.color == {0, 0, 0}
+    assert_style_value(private.style.color, {1, 165 / 255, 0})
+  end
+
+  test "content language pragmas use tree order and ignore comma, empty and inert values" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html =
+      "<html><head><meta http-equiv='Content-Language' content='de extra'>" <>
+        "<noscript><meta http-equiv='content-language' content='en-US later'></noscript>" <>
+        "<meta http-equiv='content-language' content='fr,de'><meta http-equiv='content-language' content=' '>" <>
+        "<meta http-equiv='content-language'><template><meta http-equiv='content-language' content='fr'></template>" <>
+        "</head><body><p>Default</p><p lang=''>Explicit empty</p></body></html>"
+
+    css = "p{color:black}p:lang(en){color:red}p:lang(''){color:blue}"
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, %{children: [body]}} = Style.compute_detailed(dom, stylesheets: [{:css, css}])
+    assert Enum.map(body.children, & &1.style.color) == [{1, 0, 0}, {0, 0, 1}]
+
+    assert {:ok, fragment} =
+             HtmlParser.parse_detailed(
+               "<meta http-equiv='content-language' content='fr'><p>Fragment</p>"
+             )
+
+    assert {:ok, %{children: [paragraph]}} =
+             Style.compute_detailed(fragment, stylesheets: [{:css, "p:lang(fr){color:red}"}])
+
+    assert paragraph.style.color == {1, 0, 0}
+  end
+
+  test "negated language selectors receive the document default context" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<meta http-equiv='content-language' content='fr'><p>Default French</p><p lang='en'>Explicit English</p>"
+             )
+
+    assert {:ok, %{children: [french, english]}} =
+             Style.compute_detailed(dom, stylesheets: [{:css, "p:not(:lang(en)){color:blue}"}])
+
+    assert french.style.color == {0, 0, 1}
+    assert english.style.color == {0, 0, 0}
+  end
+
+  test "cached stylesheets do not share default language across style computations" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{RenderCache, Style}
+    css = "p:lang(en){color:red}p:lang(fr){color:blue}"
+
+    RenderCache.with_stylesheets(fn ->
+      for {language, expected} <- [{"en", {1, 0, 0}}, {"fr", {0, 0, 1}}, {"en", {1, 0, 0}}] do
+        assert {:ok, dom} =
+                 HtmlParser.parse_detailed(
+                   "<meta http-equiv='content-language' content='#{language}'><p>Current document</p>"
+                 )
+
+        assert {:ok, %{children: [paragraph]}} =
+                 Style.compute_detailed(dom, stylesheets: [{:css, css}])
+
+        assert paragraph.style.color == expected
+      end
+    end)
+  end
+
+  test "language cache belongs to each style computation and source attributes are unchanged" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+    css = "p:lang(en){color:red}p:lang(fr){color:blue}"
+
+    for {language, expected} <- [{"en", {1, 0, 0}}, {"fr", {0, 0, 1}}, {"en", {1, 0, 0}}] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed("<div lang='#{language}'><p>Current document</p></div>")
+
+      supplied = update_in(dom, [:children, Access.at(0)], &Map.put(&1, :_selector_id, :forged))
+
+      assert {:ok, %{children: [container]}} =
+               Style.compute_detailed(supplied, stylesheets: [{:css, css}])
+
+      assert hd(container.children).style.color == expected
+      assert hd(dom.children).attributes["lang"] == language
+    end
+
+    assert {:ok, dom} = HtmlParser.parse_detailed("<p>Text</p>")
+
+    for css <- ["p:lang(){color:red}", "p:lang(en,){color:red}"] do
+      assert {:error, {:invalid_css, diagnostic}} =
+               Style.compute_detailed(dom, stylesheets: [{:css, css}])
+
+      assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
+      assert is_binary(diagnostic.message) and diagnostic.message != ""
+    end
+  end
+
+  test "heading offsets carry computed levels without changing heading or descendant text styles" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html =
+      "<div headingoffset='2'><h1>Three <span>plain</span></h1>" <>
+        "<section headingoffset='1'><h2>Five</h2><h6>Cap</h6></section>" <>
+        "<div headingreset='false' headingoffset='1'><h2>Reset</h2></div></div><h2>Outside</h2>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, %{children: [container, outside]}} = Style.compute_detailed(dom)
+    [three, section, reset] = container.children
+    assert three.style.heading_level == 3
+    assert Enum.map(section.children, & &1.style.heading_level) == [5, 9]
+    assert hd(reset.children).style.heading_level == 3
+    refute Map.has_key?(container.style, :heading_level)
+    refute Map.has_key?(outside.style, :heading_level)
+    refute Map.has_key?(List.last(three.children).style, :heading_level)
+    assert three.style.font_size == 24.0
+    assert outside.style.font_size == 18.0
+  end
+
+  test "supplied DOM heading flags are recomputed from canonical attributes" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+    assert {:ok, dom} = HtmlParser.parse_detailed("<h2>Heading</h2>")
+    supplied = update_in(dom, [:children, Access.at(0)], &Map.put(&1, :_heading_level, 9))
+    assert {:ok, %{children: [heading]}} = Style.compute_detailed(supplied)
+    refute Map.has_key?(heading.style, :heading_level)
+
+    supplied =
+      update_in(
+        supplied,
+        [:children, Access.at(0), :attributes],
+        &Map.put(&1, "headingoffset", "1")
+      )
+
+    assert {:ok, %{children: [heading]}} = Style.compute_detailed(supplied)
+    assert heading.style.heading_level == 3
+  end
+
+  test "word break pseudo content and own counter effects create no boxes" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<div style='counter-reset:item'><wbr style='counter-increment:item'><span class=result>Visible</span></div>"
+             )
+
+    css =
+      "wbr::before{content:'Before'}wbr::after{content:'After'}.result::before{content:counter(item)}"
+
+    assert {:ok, %{children: [%{children: [marker, result]}]}} =
+             Style.compute_detailed(dom, stylesheets: [{:css, css}])
+
+    assert marker.children == [] and marker.style.display == :soft_break
+    [pseudo, _] = result.children
+    assert hd(pseudo.children).text == "0"
+  end
+
+  test "legacy nobr and void word breaks apply defaults below author CSS" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<nobr>A<span><wbr></span>B</nobr><wbr hidden><wbr style='display:block;font-size:30pt;white-space:nowrap'>"
+             )
+
+    assert {:ok, %{children: [nobr, hidden, authored]}} = Style.compute_detailed(dom)
+    assert nobr.style.white_space == :nowrap
+    [_, span, _] = nobr.children
+    assert hd(span.children).style.white_space == :normal
+    assert hd(span.children).style.display == :soft_break
+    assert hidden.style.display == :none
+    assert authored.style.display == :soft_break
+    assert authored.style.font_size == 30 and authored.style.white_space == :nowrap
+
+    assert {:ok, %{children: [%{style: %{white_space: :normal}}, %{style: %{display: :none}}, _]}} =
+             Style.compute_detailed(dom,
+               stylesheets: [{:css, "nobr{white-space:normal}wbr{display:none}"}]
+             )
+  end
+
+  test "line-break and overflow-wrap retain separate inherited behavior" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<p style='line-break:anywhere;overflow-wrap:normal;word-break:normal'><span>Text</span></p>"
+             )
+
+    assert {:ok, %{children: [%{style: parent, children: [%{style: child}]}]}} =
+             Style.compute_detailed(dom)
+
+    for style <- [parent, child] do
+      assert style.line_break == :anywhere
+      assert style.overflow_wrap == :normal
+      assert style.word_break == :normal
+    end
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<p style='overflow-wrap:anywhere'><span style='line-break:normal'>Text</span></p>"
+             )
+
+    assert {:ok, %{children: [%{children: [%{style: style}]}]}} = Style.compute_detailed(dom)
+    assert style.line_break == :normal and style.overflow_wrap == :anywhere
+  end
+
+  test "unvisited links underline below author CSS while placeholder anchors inherit" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html =
+      "<p style='color:red'><a>Placeholder</a><a href='https://example.com'>Active <span>Nested</span></a><a inert href='mailto:test@example.com'>Held</a></p>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+
+    assert {:ok, %{children: [%{children: [placeholder, active, held]}]}} =
+             Style.compute_detailed(dom)
+
+    assert placeholder.style.color == {1, 0, 0}
+    assert Map.get(placeholder.style, :text_decoration_line, []) == []
+    refute Map.has_key?(placeholder.style, :link_url)
+    assert active.style.color == {0, 0, 238 / 255}
+    assert active.style.text_decoration_line == [:underline]
+    assert active.style.link_url == "https://example.com"
+    assert hd(active.children).style.color == active.style.color
+    assert List.last(active.children).style.color == active.style.color
+    assert held.style.color == active.style.color
+    assert held.style.text_decoration_line == [:underline]
+    refute Map.has_key?(held.style, :link_url)
+
+    assert {:ok, %{children: [%{children: [_, active, held]}]}} =
+             Style.compute_detailed(dom,
+               stylesheets: [{:css, "a[href]{color:green;text-decoration:none}"}]
+             )
+
+    for node <- [active, held] do
+      assert node.style.color == {0, 0.5019607843, 0}
+      assert node.style.text_decoration_line == []
+    end
+
+    assert active.style.link_url == "https://example.com"
+    refute Map.has_key?(held.style, :link_url)
+  end
+
+  test "highlight colors and modification decorations share existing CSS precedence" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<p style='color:red'><mark>Marked</mark><ins>Added</ins><del>Removed</del><strike>Legacy</strike></p>"
+             )
+
+    assert {:ok, %{children: [%{children: [mark, ins, del, strike]}]}} =
+             Style.compute_detailed(dom)
+
+    assert mark.style.background_color == {1, 1, 0} and mark.style.color == {0, 0, 0}
+    assert ins.style.text_decoration_line == [:underline]
+    assert del.style.text_decoration_line == [:line_through]
+    assert strike.style.text_decoration_line == [:line_through]
+    assert ins.style.color == {1, 0, 0} and del.style.color == {1, 0, 0}
+
+    assert {:ok, %{children: [%{children: [mark, ins, del, strike]}]}} =
+             Style.compute_detailed(dom,
+               stylesheets: [
+                 {:css, "mark{background:blue;color:red} ins,del,strike{text-decoration:none}"}
+               ]
+             )
+
+    assert mark.style.background_color == {0, 0, 1} and mark.style.color == {1, 0, 0}
+    for node <- [ins, del, strike], do: assert(node.style.text_decoration_line == [])
+
+    for tag <- ["mark", "ins", "del", "strike"] do
+      parent = if tag in ["ins", "del"], do: "p", else: tag
+
+      inner =
+        if parent == tag,
+          do: %{type: :element, tag: "div", attributes: %{}, children: []},
+          else: %{
+            type: :element,
+            tag: tag,
+            attributes: %{},
+            children: [%{type: :element, tag: "div", attributes: %{}, children: []}]
+          }
+
+      root = %{type: :element, tag: parent, attributes: %{}, children: [inner]}
+
+      assert {:error,
+              {:invalid_document, %{stage: :style, operation: :compute, message: message}}} =
+               Style.compute_detailed(%{type: :document, children: [root]})
+
+      assert message =~ "content"
+    end
+  end
+
+  test "inert descendants keep artwork and selector states while losing active links and fields" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html =
+      "<div><x-box inert=false><input name=held value=Printed><a href='https://example.com'>Link <span>Nested</span></a></x-box><input name=active value=Initial></div>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+
+    assert {:ok, %{children: [%{children: [held, active]}]}} =
+             Style.compute_detailed(dom,
+               stylesheets: [{:css, "input:enabled{color:red} input:disabled{color:blue}"}]
+             )
+
+    assert [
+             %{tag: "input", style: input_style},
+             %{tag: "a", style: link_style, children: [text, nested]}
+           ] = held.children
+
+    assert input_style.color == {1, 0, 0}
+    refute Map.has_key?(input_style, :_form_control)
+    refute Map.has_key?(link_style, :link_url)
+    refute Map.has_key?(text.style, :link_url)
+    refute Map.has_key?(nested.style, :link_url)
+    assert active.style._form_control.attributes["name"] == "active"
+    assert active.style.color == {1, 0, 0}
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<a href='https://example.com'>Active<span inert>Held</span>Active</a>"
+             )
+
+    assert {:ok, %{children: [%{children: [first, held, last]}]}} = Style.compute_detailed(dom)
+    assert first.style.link_url == "https://example.com"
+    refute Map.has_key?(held.style, :link_url)
+    assert last.style.link_url == "https://example.com"
+
+    node = %{
+      type: :element,
+      tag: "x-box",
+      attributes: %{"inert" => "false"},
+      children: [
+        %{
+          type: :element,
+          tag: "input",
+          attributes: %{"name" => "held", "value" => "Printed"},
+          children: []
+        }
+      ]
+    }
+
+    assert {:ok, %{children: [%{children: [input]}]}} =
+             Style.compute_detailed(%{type: :document, children: [node]})
+
+    refute Map.has_key?(input.style, :_form_control)
+
+    for stale <- [true, false, :invalid] do
+      input = %{
+        type: :element,
+        tag: "input",
+        attributes: %{"name" => "active", "value" => "Initial"},
+        children: [],
+        _html_inert: stale
+      }
+
+      link = %{
+        type: :element,
+        tag: "a",
+        attributes: %{"href" => "https://example.com"},
+        children: [%{type: :text, text: "Active"}],
+        _html_inert: stale
+      }
+
+      root = %{
+        type: :element,
+        tag: "div",
+        attributes: %{},
+        children: [input, link],
+        _html_inert: stale
+      }
+
+      assert {:ok, %{children: [%{children: [input, link]}]}} =
+               Style.compute_detailed(%{type: :document, children: [root]})
+
+      assert input.style._form_control.attributes["name"] == "active"
+      assert link.style.link_url == "https://example.com"
+      assert hd(link.children).style.link_url == "https://example.com"
+    end
+  end
+
+  test "hidden defaults keep actual selector siblings and permit author display overrides" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html =
+      "<div><p hidden=false>Gone</p><p hidden style='display:block'>Shown</p><p>After</p></div>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+
+    assert {:ok, %{children: [%{children: [gone, shown, after_node]}]}} =
+             Style.compute_detailed(dom,
+               stylesheets: [{:css, "p:nth-child(2)[hidden]{color:red}"}]
+             )
+
+    assert gone.style.display == :none
+    assert gone.children == []
+    assert shown.style.display == :block
+    assert shown.style.color == {1, 0, 0}
+    assert [%{text: "Shown"}] = shown.children
+    assert [%{text: "After"}] = after_node.children
+
+    for tag <- ["p", "x-box", "script", "template"] do
+      node = %{type: :element, tag: tag, attributes: %{"hidden" => "until-found"}, children: []}
+
+      assert {:error, {:unsupported_html, %{stage: :html, operation: :compute, source: ^tag}}} =
+               Style.compute_detailed(%{type: :document, children: [node]})
+    end
+  end
+
+  test "custom containers inherit inline styles and keep arbitrary attributes as metadata" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html =
+      "<div><x-É custom-note='Active' disabled readonly multiple href='metadata' src='metadata'><span>Text</span><input name='actual' value='Initial'></x-É></div>"
+
+    css =
+      ~S|x-É[custom-\6e ote=\41 ctive] {color:red} x-É:disabled, x-É:enabled {color:blue} x-é {color:blue}|
+
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+
+    assert {:ok, %{children: [%{children: [%{children: [custom]}]}]}} =
+             Style.compute_detailed(dom, stylesheets: [{:css, css}])
+
+    assert custom.tag == "x-É"
+    assert custom.style.display == :inline
+    assert custom.style.color == {1, 0, 0}
+    refute Map.has_key?(custom.style, :link)
+    refute Map.has_key?(custom.style, :form_control)
+    assert [%{tag: "span", style: style}, %{tag: "input"}] = custom.children
+    assert style.color == {1, 0, 0}
+
+    for {name, selector} <- [{~S|x-"quote|, ~S|x-\"quote|}, {"x-<angle", ~S|x-\<angle|}] do
+      assert {:ok, dom} = HtmlParser.parse_detailed("<" <> name <> ">Literal</" <> name <> ">")
+
+      assert {:ok, %{children: [%{tag: ^name, style: %{color: {1, 0, 0}}}]}} =
+               Style.compute_detailed(dom, stylesheets: [{:css, selector <> "{color:red}"}])
+    end
+  end
+
+  test "supplied custom DOMs delegate name context namespace and active attribute failures" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+    text = %{type: :text, text: "Text"}
+    custom = %{type: :element, tag: "x-box", attributes: %{}, children: [text]}
+    assert {:ok, _} = Style.compute_detailed(%{type: :document, children: [custom]})
+
+    for node <- [
+          %{custom | tag: "invalid"},
+          %{custom | tag: "x-Upper"},
+          %{custom | attributes: %{"onclick" => "run()"}},
+          Map.put(custom, :namespace, :invalid)
+        ] do
+      assert {:error, {_reason, diagnostic}} =
+               Style.compute_detailed(%{type: :document, children: [node]})
+
+      assert diagnostic.operation == :compute
+      assert diagnostic.source == node.tag
+      assert is_binary(diagnostic.message)
+    end
+
+    block = %{type: :element, tag: "div", attributes: %{}, children: [text]}
+
+    parent = %{
+      type: :element,
+      tag: "p",
+      attributes: %{},
+      children: [%{custom | children: [block]}]
+    }
+
+    assert {:error, {:invalid_document, %{stage: :style, source: "div", message: message}}} =
+             Style.compute_detailed(%{type: :document, children: [parent]})
+
+    assert message =~ "transparent"
+  end
+
+  test "escaped selectors match Unicode names without Unicode case folding or whitespace splitting" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html =
+      "<div><p class='café' id='123' data-kind='Active'>First</p><p class='e\u0301 a\u00A0b'>Second</p><p class='É' id='CAFÉ'>Third</p></div>"
+
+    css =
+      ~S|\70 .\63 afé#\31 23[data-\6b ind="\41 ctive"] {color:red} .é.a\a0 b {color:blue} .É#CAFÉ {color:green} .é#café {color:red}|
+
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+
+    assert {:ok, %{children: [%{children: [%{children: [first, second, third]}]}]}} =
+             Style.compute_detailed(dom, stylesheets: [{:css, css}])
+
+    assert first.style.color == {1, 0, 0}
+    assert second.style.color == {0, 0, 1}
+    assert {0, green, 0} = third.style.color
+    assert_in_delta green, 128 / 255, 1.0e-10
+  end
+
+  test "noscript participates in selectors and style collection while unused templates stay inert" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html =
+      "<html><head><noscript><style>noscript[data-state='Fallback']{color:red} noscript>b{font-weight:700}</style></noscript></head><body><p><noscript data-state=Fallback>Text <b>Bold</b></noscript></p><template><noscript><style>p{color:blue}</style><img src=denied.png></noscript></template></body></html>"
+
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    assert {:ok, %{children: [%{children: [p, _template]}]}} = Style.compute_detailed(dom)
+    assert [%{tag: "noscript", style: style, children: [text, bold]}] = p.children
+    assert style.display == :inline
+    assert style.color == {1, 0, 0}
+    assert text.text == "Text "
+    assert bold.style.font_weight == 700
+  end
+
+  test "supplied noscript trees delegate head and nested-content validation" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+    text = %{type: :text, text: "Fallback"}
+    noscript = %{type: :element, tag: "noscript", attributes: %{}, children: [text]}
+
+    for dom <- [
+          %{
+            type: :document,
+            children: [%{type: :element, tag: "head", attributes: %{}, children: [noscript]}]
+          },
+          %{
+            type: :document,
+            children: [
+              %{
+                noscript
+                | children: [
+                    %{type: :element, tag: "span", attributes: %{}, children: [noscript]}
+                  ]
+              }
+            ]
+          }
+        ] do
+      assert {:error,
+              {:invalid_document,
+               %{
+                 stage: :style,
+                 reason: :invalid_document,
+                 operation: :compute,
+                 source: "noscript",
+                 message: message
+               }}} = Style.compute_detailed(dom)
+
+      assert message =~ "noscript"
+    end
+  end
+
+  test "inactive supplied DOM attributes use the same ASCII event policy as SVG assets" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    for {namespace, tag} <- [{:svg, "path"}, {:mathml, "mi"}, {:html, "span"}],
+        name <- ~w(onclick ONCLICK OnClick) do
+      child = %{
+        type: :element,
+        namespace: namespace,
+        tag: tag,
+        attributes: %{name => "run()"},
+        children: []
+      }
+
+      template = %{
+        type: :element,
+        tag: "template",
+        attributes: %{},
+        children: [],
+        content: %{type: :document_fragment, children: [child]}
+      }
+
+      assert {:error,
+              {:unsupported_html,
+               %{
+                 stage: :html,
+                 reason: :unsupported_html,
+                 operation: :compute,
+                 source: ^tag,
+                 message: message
+               }}} = Style.compute_detailed(%{type: :document, children: [template]})
+
+      assert message =~ "event handlers"
+    end
+  end
+
+  test "selects use canonical options without changing script-supporting sibling identity" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    inert =
+      "<script type='text/plain'>Data</script><template><option selected>Unused</option></template>"
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<style>li:nth-child(3),td:nth-child(3){color:red}</style><ol reversed>#{inert}<li>One</li>#{inert}<li>Two</li></ol><select>#{inert}<option>First</option>#{inert}<option selected>Second</option></select>"
+             )
+
+    assert {:ok, %{children: [list, select]}} = Style.compute_detailed(dom)
+    assert Enum.map(list.children, & &1.tag) == ~w(script template li script template li)
+    items = Enum.filter(list.children, &(&1.tag == "li"))
+
+    assert Enum.map(items, &Enum.map_join(&1.style._list_marker, fn marker -> marker.text end)) ==
+             ["2.", "1."]
+
+    assert hd(items).style.color == {1, 0, 0}
+    assert select.children == [%{type: :text, text: "Second", style: hd(select.children).style}]
+
+    assert Enum.map(select.style._form_control.children, & &1.tag) ==
+             ~w(script template option script template option)
+
+    assert {:ok, %{children: [select]}} =
+             HtmlParser.parse("<select>#{inert}<option>First</option></select>")
+
+    document = %{type: :document, children: [select]}
+
+    for children <- [
+          [hd(select.children), %{type: :text, text: "Invalid"}],
+          [
+            %{
+              type: :element,
+              tag: "option",
+              attributes: %{},
+              children: [%{type: :element, tag: "span", attributes: %{}, children: []}]
+            }
+          ]
+        ] do
+      assert {:error,
+              {:invalid_document,
+               %{
+                 stage: :style,
+                 reason: :invalid_document,
+                 operation: :compute,
+                 source: "select",
+                 message: message
+               }}} =
+               Style.compute_detailed(%{document | children: [%{select | children: children}]})
+
+      assert message =~ "option"
+    end
+  end
+
+  test "positional caches stay tied to each computation's current sibling list" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{Style, RenderCache}
+
+    assert {:ok, %{children: [parent]} = dom} =
+             HtmlParser.parse("<div><p>One</p><p>Two</p></div>")
+
+    third = %{
+      type: :element,
+      tag: "p",
+      attributes: %{},
+      children: [%{type: :text, text: "Three"}]
+    }
+
+    changed = %{dom | children: [%{parent | children: parent.children ++ [third]}]}
+    opts = [stylesheets: [{:css, "p:nth-last-of-type(2){color:red}"}]]
+
+    RenderCache.with_stylesheets(fn ->
+      assert {:ok, %{children: [first]}} = Style.compute_detailed(dom, opts)
+      assert {:ok, %{children: [second]}} = Style.compute_detailed(changed, opts)
+      assert Enum.map(first.children, & &1.style.color) == [{1, 0, 0}, {0, 0, 0}]
+      assert Enum.map(second.children, & &1.style.color) == [{0, 0, 0}, {1, 0, 0}, {0, 0, 0}]
+
+      assert {:ok, roots} = HtmlParser.parse("<p>One</p><p>Two</p>")
+      assert {:ok, first_roots} = Style.compute_detailed(roots, opts)
+      changed_roots = %{roots | children: roots.children ++ [third]}
+      assert {:ok, second_roots} = Style.compute_detailed(changed_roots, opts)
+      assert Enum.map(first_roots.children, & &1.style.color) == [{1, 0, 0}, {0, 0, 0}]
+
+      assert Enum.map(second_roots.children, & &1.style.color) == [
+               {0, 0, 0},
+               {1, 0, 0},
+               {0, 0, 0}
+             ]
+    end)
+  end
+
+  test "positional selectors count element siblings, type positions and reverse ranges" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    markup =
+      "<div>text<!--ignored--><p id=p1>One</p><span>Other</span><p id=p2>Two</p><template><p>Unused</p></template><p id=p3>Three</p><p id=p4>Four</p><p id=p5>Five</p></div>"
+
+    for {selector, expected} <- [
+          {"p:nth-child(2n+1)", ~w(p1 p2 p3 p5)},
+          {"p:nth-last-child(2)", ~w(p4)},
+          {"p:nth-of-type(-n+3)", ~w(p1 p2 p3)},
+          {"p:nth-last-of-type(-n+2)", ~w(p4 p5)},
+          {"p:nth-of-type(-2n+5)", ~w(p1 p3 p5)},
+          {"p:nth-of-type(0n+2)", ~w(p2)},
+          {"p:nth-of-type(0)", []},
+          {"p:nth-of-type(-3)", []},
+          {"p:nth-of-type(0n)", []},
+          {"p:not(:nth-of-type(-n+3))", ~w(p4 p5)},
+          {"p:only-child", []},
+          {"p:only-of-type", []}
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse("<style>" <> selector <> "{color:red}</style>" <> markup)
+
+      assert {:ok, %{children: [container]}} = Style.compute_detailed(dom)
+
+      paragraphs = Enum.filter(container.children, &match?(%{tag: "p"}, &1))
+
+      matched =
+        for {paragraph, index} <- Enum.with_index(paragraphs, 1),
+            paragraph.style.color == {1, 0, 0},
+            do: "p#{index}"
+
+      assert matched == expected, selector
+    end
+
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               "<style>p:only-child{color:red}span:only-of-type{color:blue}</style><div>text<p>Only</p><!--ignored--></div><div><p>One</p><span>Only type</span><p>Two</p></div>"
+             )
+
+    assert {:ok, %{children: [first, second]}} = Style.compute_detailed(dom)
+    assert Enum.find(first.children, &match?(%{tag: "p"}, &1)).style.color == {1, 0, 0}
+    assert Enum.find(second.children, &match?(%{tag: "span"}, &1)).style.color == {0, 0, 1}
+  end
+
+  test "inert template fragments never collect styles, fonts, assets or fields" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    source =
+      "<template id=unused><style>p{color:red} @font-face{font-family:Unused;src:url(denied.ttf)}</style><img src=denied.png><input name=same value=Hidden><svg><image href='https://invalid.test/image'/></svg></template><input name=same value=Visible><p>After</p>"
+
+    resolver = fn request ->
+      send(self(), {:unexpected_template_asset, request})
+      {:error, :denied}
+    end
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(source)
+
+    assert {:ok, %{children: [template, input, paragraph]}} =
+             Style.compute_detailed(dom, asset_resolver: resolver)
+
+    assert template.style.display == :none
+    assert template.children == []
+    assert input.style._form_control.attributes["value"] == "Visible"
+    assert paragraph.style.color == {0, 0, 0}
+    refute_received {:unexpected_template_asset, _}
+
+    assert {:ok, %{children: [shown, _, _]}} =
+             Style.compute_detailed(dom,
+               asset_resolver: resolver,
+               stylesheets: [
+                 {:css, "template#unused{display:block;border:1px solid blue;padding:3pt}"}
+               ]
+             )
+
+    assert shown.style.display == :block
+    assert shown.children == []
+    refute_received {:unexpected_template_asset, _}
+  end
+
+  test "template DOM callers must retain fragment shape, UTF-8 and static input policy" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    element = %{
+      type: :element,
+      tag: "template",
+      attributes: %{},
+      children: [],
+      content: %{type: :document_fragment, children: []}
+    }
+
+    for malformed <- [
+          Map.delete(element, :content),
+          %{element | children: [%{type: :text, text: "lost"}]},
+          %{element | content: %{type: :document, children: []}},
+          %{element | content: %{type: :document_fragment, children: "bad"}}
+        ] do
+      assert {:error,
+              {:invalid_document,
+               %{stage: :style, operation: :compute, source: "template", message: message}}} =
+               Style.compute_detailed(%{type: :document, children: [malformed]})
+
+      assert message =~ "document_fragment"
+    end
+
+    assert {:error,
+            {:unsupported_html,
+             %{message: event_message, operation: :compute, source: "template"}}} =
+             Style.compute_detailed(%{
+               type: :document,
+               children: [%{element | attributes: %{"onclick" => "run()"}}]
+             })
+
+    assert event_message =~ "event handlers"
+
+    for child <- [
+          %{type: :text, text: <<255>>},
+          %{type: :element, tag: "script", attributes: %{}, children: []},
+          %{type: :element, tag: "span", attributes: %{"onclick" => "run()"}, children: []},
+          %{
+            type: :element,
+            namespace: :svg,
+            tag: "path",
+            attributes: %{"onload" => "run()"},
+            children: []
+          }
+        ] do
+      supplied = %{element | content: %{type: :document_fragment, children: [child]}}
+
+      assert {:error, {reason, %{message: message, operation: :compute, source: source}}} =
+               Style.compute_detailed(%{type: :document, children: [supplied]})
+
+      assert source in ["text", "script", "span", "path"]
+
+      assert reason in [:invalid_document, :unsupported_html]
+      assert message =~ "UTF-8" or message =~ "script" or message =~ "event"
+    end
+
+    assert {:error, {:invalid_document, %{stage: :style, operation: :compute, message: message}}} =
+             Style.compute_detailed(%{type: :document, children: [%{type: :text, text: <<255>>}]})
+
+    assert message =~ "UTF-8"
+  end
+
+  test "data scripts default hidden and author styles expose literal text only" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html =
+      "<script type='text/plain' src='denied.json'>p{color:red}<img src='denied.png'>&amp;</script><p>Visible</p>"
+
+    resolver = fn request ->
+      send(self(), {:unexpected_script_asset, request})
+      {:error, :denied}
+    end
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+
+    assert {:ok, %{children: [script, paragraph]}} =
+             Style.compute_detailed(dom, asset_resolver: resolver)
+
+    assert script.style.display == :none
+    assert script.children == []
+    assert paragraph.style.color == {0, 0, 0}
+
+    assert {:ok, %{children: [shown, _]}} =
+             Style.compute_detailed(dom,
+               asset_resolver: resolver,
+               stylesheets: [
+                 {:css, "script[type='TEXT/PLAIN']{display:block;white-space:pre;color:blue}"}
+               ]
+             )
+
+    assert shown.style.display == :block
+    assert shown.style.color == {0, 0, 1}
+    assert [%{type: :text, text: "p{color:red}<img src='denied.png'>&amp;"}] = shown.children
+    refute_received {:unexpected_script_asset, _}
+
+    for {attrs, children} <- [
+          {%{}, []},
+          {%{"type" => "module", "style" => "display:none"}, []},
+          {%{"type" => "text/plain", "onclick" => "x"}, []},
+          {%{"type" => "text/plain"},
+           [%{type: :element, tag: "img", attributes: %{"src" => "denied.png"}, children: []}]}
+        ] do
+      supplied = %{
+        type: :document,
+        children: [%{type: :element, tag: "script", attributes: attrs, children: children}]
+      }
+
+      assert {:error, {reason, %{message: message}}} =
+               Style.compute_detailed(supplied, asset_resolver: resolver)
+
+      assert reason in [:unsupported_html, :invalid_document]
+      assert message =~ "script"
+      refute_received {:unexpected_script_asset, _}
+    end
+  end
+
+  test "text decorations preserve originating metrics, color, and propagation boundaries" do
+    html = """
+    <p style='color:red;text-decoration:underline solid 1pt'>A
+    <span style='color:blue;text-decoration:none;font-size:20pt'>B</span>
+    <s>C</s><span style='display:inline-block'>D</span><u style='text-decoration:none'>E</u></p>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled} = NativeElixirPdfUtilities.HtmlToPdf.Style.compute(dom)
+    [paragraph] = styled.children
+    [origin] = paragraph.style._text_decorations
+    assert origin.lines == [:underline]
+    assert origin.color == {1, 0, 0}
+    assert origin.thickness == 0.75
+
+    [_, span, strike, atomic, cleared] =
+      Enum.reject(paragraph.children, fn node ->
+        node.type == :text and String.trim(node.text) == ""
+      end)
+
+    assert span.style._text_decorations == [origin]
+    assert length(strike.style._text_decorations) == 2
+    refute Map.has_key?(atomic.style, :_text_decorations)
+    assert cleared.style._text_decorations == [origin]
+
+    for {css, thickness} <- [
+          {"font-size:20pt;text-decoration-thickness:0.1em", 2.25},
+          {"text-decoration-thickness:0.1em;font-size:20pt", 2.25},
+          {"text-decoration-thickness:10%;font-size:20pt", 2.25},
+          {"text-decoration-thickness:0", 0.75}
+        ] do
+      assert {:ok, dom} = HtmlParser.parse("<u style='#{css}'>A</u>")
+      assert {:ok, %{children: [element]}} = NativeElixirPdfUtilities.HtmlToPdf.Style.compute(dom)
+      assert hd(element.style._text_decorations).thickness == thickness
+    end
+  end
+
+  test "counter representations cover alphabetic transitions, Roman ranges and signed padding" do
+    for {style, number, expected} <- [
+          {:decimal, -2, "-2."},
+          {:decimal_leading_zero, -3, "-3."},
+          {:decimal_leading_zero, 0, "00."},
+          {:decimal_leading_zero, 123, "123."},
+          {:lower_alpha, 1, "a."},
+          {:lower_alpha, 26, "z."},
+          {:lower_alpha, 27, "aa."},
+          {:upper_alpha, 703, "AAA."},
+          {:lower_alpha, 0, "0."},
+          {:upper_alpha, -1, "-1."},
+          {:lower_roman, 4, "iv."},
+          {:upper_roman, 944, "CMXLIV."},
+          {:upper_roman, 3999, "MMMCMXCIX."},
+          {:lower_roman, 4000, "4000."},
+          {:upper_roman, 0, "0."},
+          {:disc, 1, "•"},
+          {:circle, 1, "◦"},
+          {:square, 1, "▪"},
+          {:none, 1, ""}
+        ] do
+      assert CounterStyle.marker(style, number) == expected
+    end
+  end
+
+  test "list numbering follows styled ownership and preserves children" do
+    html = """
+    <ol reversed start=' +27 trailing' type='A'>
+      <li>First</li><li style='display:none' value='100'>Hidden</li>
+      <li style='display:block'>Block</li><li value='4'>Reset</li><li>Last</li>
+    </ol>
+    """
+
+    assert {:ok, dom} = NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse(html)
+    assert {:ok, styled} = NativeElixirPdfUtilities.HtmlToPdf.Style.compute(dom)
+    [list] = styled.children
+    [first, hidden, block, reset, last] = list.children
+    assert [%{text: "First"}] = first.children
+    assert hd(first.style._list_marker).text == "AA."
+    assert hidden.style.display == :none
+    assert block.style.display == :block
+    refute Map.has_key?(block.style, :_list_marker)
+    assert hd(reset.style._list_marker).text == "D."
+    assert hd(last.style._list_marker).text == "C."
+
+    for {attributes, expected} <- [
+          {"reversed", ["2.", "1."]},
+          {"start='bad'", ["1.", "2."]},
+          {"start='-1'", ["-1.", "0."]}
+        ] do
+      assert {:ok, dom} =
+               NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse(
+                 "<ol #{attributes}><li>A</li><li style='display:none'>H</li><li>B</li></ol>"
+               )
+
+      assert {:ok, styled} = NativeElixirPdfUtilities.HtmlToPdf.Style.compute(dom)
+
+      markers =
+        hd(styled.children).children
+        |> Enum.reject(&(&1.style.display == :none))
+        |> Enum.map(&hd(&1.style._list_marker).text)
+
+      assert markers == expected
+    end
+  end
+
+  test "list presentational hints yield to author CSS and marker declarations reject ambiguity" do
+    for type <- ["1", "a", "A", "i", "I", "invalid"] do
+      assert {:ok, dom} =
+               NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse(
+                 "<ol type='#{type}' style='list-style: square inside'><li type='i' style='list-style-type:none'>A</li></ol>"
+               )
+
+      assert {:ok, styled} = NativeElixirPdfUtilities.HtmlToPdf.Style.compute(dom)
+      [list] = styled.children
+      assert list.style.list_marker_type == :square
+      assert list.style.list_style_position == :inside
+      assert hd(list.children).style._list_marker == []
+    end
+
+    for {tag, type} <- [
+          {"ul", "disc"},
+          {"ul", "circle"},
+          {"ul", "square"},
+          {"ul", "A"},
+          {"ol", "disc"}
+        ] do
+      assert {:ok, dom} =
+               NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse(
+                 "<#{tag} type='#{type}'><li>A</li></#{tag}>"
+               )
+
+      assert {:ok, _} = NativeElixirPdfUtilities.HtmlToPdf.Style.compute(dom)
+    end
+
+    for value <- [
+          "decimal",
+          "decimal-leading-zero",
+          "lower-alpha",
+          "upper-alpha",
+          "lower-latin",
+          "upper-latin",
+          "lower-roman",
+          "upper-roman",
+          "disc",
+          "circle",
+          "square",
+          "none"
+        ] do
+      assert {:ok, _} =
+               NativeElixirPdfUtilities.Validators.HtmlValidator.parse_css_list_style(
+                 "list-style-type",
+                 value
+               )
+    end
+
+    for {property, value} <- [
+          {"list-style", "circle square"},
+          {"list-style-type", "inside"},
+          {"list-style-position", "square"},
+          {"list-style", "inside outside"},
+          {"list-style", "url(marker.png)"},
+          {"list-style-type", ""}
+        ] do
+      assert :error =
+               NativeElixirPdfUtilities.Validators.HtmlValidator.parse_css_list_style(
+                 property,
+                 value
+               )
+
+      assert {:error, {:invalid_css, %{stage: :css, message: message}}} =
+               NativeElixirPdfUtilities.HtmlToPdf.render(
+                 "<ul style='#{property}:#{value}'><li>A</li></ul>"
+               )
+
+      assert message != ""
+    end
+
+    assert {:ok, %{list_style_position: :outside}} =
+             NativeElixirPdfUtilities.Validators.HtmlValidator.parse_css_list_style(
+               "list-style-position",
+               "outside"
+             )
+  end
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
   alias NativeElixirPdfUtilities.TestSupport.JpegFixture
+
+  test "static semantic and legacy defaults inherit fonts and allow author overrides" do
+    html = """
+    <address>Address</address><center>Center</center><blockquote cite='source'>Quote</blockquote>
+    <figure><figcaption>Caption</figcaption>Figure</figure><hgroup><h2>Title</h2></hgroup><search>Search</search>
+    <dl><dt>Term</dt><dd>Description</dd></dl><pre>  Code</pre><listing>Listing</listing>
+    <p><abbr>AB</abbr><cite>Cite</cite><dfn>Definition</dfn><data value='7'>Seven</data>
+    <time datetime='2026-10-06'>Today</time><code>Code</code><samp>Sample</samp><kbd>Key</kbd>
+    <tt>Type</tt><var>Variable</var><big>Big</big><small>Small</small></p>
+    <pre style='font-family:DejaVu Sans;white-space:normal;margin:0'>Override</pre>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled} = Style.compute(dom, system_font_discovery: false)
+
+    [address, center, quote, figure, _hgroup, _search, dl, pre, listing, paragraph, override] =
+      styled.children
+
+    assert address.style.font_style == :italic
+    assert center.style.text_align == :center
+    assert quote.style.margin.left == 30.0
+    assert figure.style.margin.right == 30.0
+    assert Enum.at(dl.children, 1).style.margin.left == 30.0
+    assert pre.style.white_space == :pre
+    assert listing.style.font_face.family == "DejaVu Sans Mono"
+    assert pre.style.font_face.source == :bundled
+    assert override.style.white_space == :normal
+    assert override.style.font_face.family == "DejaVu Sans"
+    assert override.style.margin.top == 0
+
+    assert Enum.find(paragraph.children, &(Map.get(&1, :tag) == "cite")).style.font_style ==
+             :italic
+
+    assert Enum.find(paragraph.children, &(Map.get(&1, :tag) == "small")).style.font_size <
+             paragraph.style.font_size
+  end
 
   test "zero-margin bodies retain padding, backgrounds, and layout containers" do
     for {fixture, display, padding} <- [
@@ -213,16 +2426,114 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     refute Map.has_key?(first, :_selector_classes)
   end
 
-  test "positional selectors retain fragment-root behavior without an element parent" do
+  test "positional selectors count top-level source elements without an element parent" do
+    markup =
+      "text<!--ignored--><p id=p1>One</p><span id=s1>Other</span><template><p>Unused</p></template><p id=p2>Two</p><p id=p3>Three</p>"
+
+    for {selector, expected} <- [
+          {"p:first-child", ~w(p1)},
+          {"p:last-child", ~w(p3)},
+          {"p:first-of-type", ~w(p1)},
+          {"p:last-of-type", ~w(p3)},
+          {"p:only-child", []},
+          {"p:only-of-type", []},
+          {"span:only-of-type", ~w(s1)},
+          {"p:nth-child(4)", ~w(p2)},
+          {"p:nth-last-child(2)", ~w(p2)},
+          {"p:nth-of-type(2)", ~w(p2)},
+          {"p:nth-last-of-type(2)", ~w(p2)},
+          {"p:nth-child(2n+1)", ~w(p1 p3)},
+          {"p:nth-last-of-type(-n+2)", ~w(p2 p3)},
+          {"p:nth-of-type(0)", []},
+          {"p:nth-child(-2)", []},
+          {"p:not(:first-child)", ~w(p2 p3)},
+          {"* > p:first-child", []},
+          {"div p:last-child", []}
+        ] do
+      assert {:ok, dom} = HtmlParser.parse(markup)
+
+      assert {:ok, styled} =
+               Style.compute_detailed(dom, stylesheets: [{:css, selector <> "{color:red}"}])
+
+      matched =
+        for node <- styled.children,
+            match?(%{type: :element}, node),
+            node.style.color == {1, 0, 0},
+            do:
+              Map.fetch!(
+                %{"One" => "p1", "Other" => "s1", "Two" => "p2", "Three" => "p3"},
+                hd(node.children).text
+              )
+
+      assert matched == expected, selector
+    end
+
+    for selector <-
+          ~w|first-child last-child first-of-type last-of-type only-child only-of-type nth-child(1) nth-last-child(1) nth-of-type(1) nth-last-of-type(1)| do
+      assert {:ok, dom} = HtmlParser.parse("<p>Single root</p>")
+
+      assert {:ok, %{children: [paragraph]}} =
+               Style.compute_detailed(dom,
+                 stylesheets: [{:css, "p:" <> selector <> "{color:red}"}]
+               )
+
+      assert paragraph.style.color == {1, 0, 0}, selector
+    end
+
+    # Hidden source style elements still occupy a position in the fragment.
     assert {:ok, dom} =
-             HtmlParser.parse("""
-             <style>
-             p:first-child, p:last-child, p:first-of-type, p:last-of-type, p:nth-child(1) { color: red; }
-             </style><p>Root paragraph</p>
-             """)
+             HtmlParser.parse(
+               "<style>p:first-child{color:red}p:nth-child(2){font-weight:bold}</style><p>After style</p>"
+             )
 
     assert {:ok, %{children: [paragraph]}} = Style.compute_detailed(dom)
     assert paragraph.style.color == {0, 0, 0}
+    assert paragraph.style.font_weight == 700
+  end
+
+  test "document elements match singleton child and type positions" do
+    for selector <-
+          ~w|first-child last-child first-of-type last-of-type only-child only-of-type nth-child(1) nth-last-child(1) nth-of-type(1) nth-last-of-type(1) nth-child(odd) nth-last-child(-n+1)| do
+      assert {:ok, dom} =
+               HtmlParser.parse(
+                 "<!doctype html><html><head></head><body><p>Root</p></body></html>"
+               )
+
+      assert {:ok, %{children: [html]}} =
+               Style.compute_detailed(dom,
+                 stylesheets: [{:css, "html:" <> selector <> "{color:red}"}]
+               )
+
+      assert html.style.color == {1, 0, 0}, selector
+    end
+
+    for selector <-
+          ~w|nth-child(0) nth-child(2) nth-last-child(even) nth-of-type(-1) not(:only-child)| do
+      assert {:ok, dom} = HtmlParser.parse("<html><head></head><body><p>Root</p></body></html>")
+
+      assert {:ok, %{children: [html]}} =
+               Style.compute_detailed(dom,
+                 stylesheets: [{:css, "html:" <> selector <> "{color:red}"}]
+               )
+
+      assert html.style.color == {0, 0, 0}, selector
+    end
+  end
+
+  test "the virtual fragment body is outside the source sibling table" do
+    opts = [
+      stylesheets: [{:css, "body:first-child{color:red}body:nth-child(1){font-weight:bold}"}]
+    ]
+
+    assert {:ok, fragment} = HtmlParser.parse("<p>Fragment</p>")
+    assert {:ok, %{children: [paragraph]}} = Style.compute_detailed(fragment, opts)
+    assert paragraph.style.color == {0, 0, 0}
+    assert paragraph.style.font_weight == 400
+
+    assert {:ok, document} = HtmlParser.parse("<body><p>Explicit body</p></body>")
+    assert {:ok, %{children: [body]}} = Style.compute_detailed(document, opts)
+    assert body.style.color == {1, 0, 0}
+    assert body.style.font_weight == 700
   end
 
   test "selector candidates preserve grouped specificity, source order and general selectors" do
@@ -369,6 +2680,128 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert article.style.display == :block
   end
 
+  test "HTML type selectors fold ASCII case without altering authored attributes" do
+    html = """
+    <style>
+      input[type="SEARCH"] { color: blue; }
+      input[value="AB"] { color: red; }
+      input[data-kind="NOTE"] { background: #ffff00; }
+    </style>
+    <div><input type="search" value="A&#10;B" data-kind="note"><input type="SeArCh" value="AB" data-kind="NOTE"></div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, tree} = Style.compute(dom)
+    [container] = tree.children
+    [raw, literal] = container.children
+    assert raw.style._form_control.attributes["type"] == "search"
+    assert literal.style._form_control.attributes["type"] == "SeArCh"
+    assert raw.style.color == {0, 0, 1}
+    assert literal.style.color == {1, 0, 0}
+    assert raw.style.background_color == {1, 1, 1}
+    assert literal.style.background_color == {1, 1, 0}
+    assert raw.style._form_control.attributes["value"] == "AB"
+    assert [%{text: "AB"}] = raw.children
+  end
+
+  test "attribute operators and case flags participate in cascade and negation" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <style>
+               p[data-kind^="ab" i] { color:red; }
+               p[data-kind$="EF" I] { background-color:blue; }
+               p[data-kind*="Cd" s] { font-weight:bold; }
+               p[title~="two" i]:not([title="one Two three" s]) { color:blue; }
+               p[title~="one Two"] { color:red; }
+               p[data-lang|=EN i] { color:blue; }
+               p[data-lang|=EN S] { background-color:red; }
+               p[data-kind^=""] { font-size:99pt; }
+             </style>
+             <p data-kind="AbCd-Ef">Substring</p>
+             <p title="one&#9;Two&#10;three">Words</p>
+             <p data-lang="en-US">Language</p>
+             <p>Missing</p>
+             """)
+
+    assert {:ok, tree} = Style.compute(dom)
+    [substring, words, language, missing] = tree.children
+    assert substring.style.color == {1, 0, 0}
+    assert substring.style.background_color == {0, 0, 1}
+    assert substring.style.font_weight == 700
+    assert substring.style.font_size != 99
+    assert words.style.color == {0, 0, 1}
+    assert language.style.color == {0, 0, 1}
+    assert Map.get(language.style, :background_color) == nil
+    assert missing.style.color == {0, 0, 0}
+  end
+
+  test "caller supplied trees reject non-string and invalid UTF-8 attributes before matching" do
+    for attributes <- [
+          %{"lang" => nil},
+          %{"lang" => 42},
+          %{lang: "en"},
+          %{"lang" => <<255>>},
+          %{<<255>> => "en"}
+        ] do
+      dom = %{
+        type: :document,
+        children: [
+          %{
+            type: :element,
+            tag: "p",
+            attributes: attributes,
+            children: [%{type: :text, text: "Text"}]
+          }
+        ]
+      }
+
+      assert {:error, {:invalid_document, diagnostic}} = Style.compute_detailed(dom)
+      assert diagnostic.stage == :style
+      assert diagnostic.reason == :invalid_document
+      assert diagnostic.operation == :compute
+      assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlValidator
+      assert diagnostic.source == "p"
+      assert diagnostic.message =~ "UTF-8 string names and values"
+    end
+  end
+
+  test "caller supplied trees reject malformed attribute namespace maps" do
+    for namespaces <- [nil, [], "namespace", 42] do
+      assert {:ok, dom} = HtmlParser.parse(~s(<input type="text" value="Text">))
+
+      dom =
+        update_in(dom, [:children, Access.at(0)], &Map.put(&1, :attribute_namespaces, namespaces))
+
+      assert {:error, {:invalid_document, diagnostic}} = Style.compute_detailed(dom)
+      assert diagnostic.stage == :style
+      assert diagnostic.reason == :invalid_document
+      assert diagnostic.operation == :compute
+      assert diagnostic.source == "input"
+      assert diagnostic.message == "attribute_namespaces must be a map"
+    end
+  end
+
+  test "text and search values sanitize after selectors match the original attribute" do
+    for type <- ["text", "search", "SEARCH"] do
+      html = """
+      <style>input[value="AB"] { color: red; }</style>
+      <div><input type="#{type}" value="A&#13;&#10;B"><input type="#{type}" value="AB"></div>
+      """
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert [%{tag: "style"}, %{children: [raw, _reference]}] = dom.children
+      assert raw.attributes["value"] == "A\r\nB"
+      assert {:ok, tree} = Style.compute(dom)
+      [container] = tree.children
+      [prepared, reference] = container.children
+      assert prepared.style.color == {0, 0, 0}
+      assert reference.style.color == {1, 0, 0}
+      assert prepared.style._form_control.attributes["value"] == "AB"
+      assert reference.style._form_control.attributes["value"] == "AB"
+      assert [%{text: "AB"}] = prepared.children
+    end
+  end
+
   test "compute turns form state and values into static styled content" do
     html = """
     <style>
@@ -430,7 +2863,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert button.style.font_size == 10.0
     assert button.style.box_sizing == :border_box
     assert button.style.font_families == ["Arial", "sans-serif"]
-    assert Enum.map(button_fallback.children, & &1.text) == ["Fallback button"]
+    assert button_fallback.children == []
   end
 
   test "button author typography overrides the browser defaults" do
@@ -468,6 +2901,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
              )
 
     assert {:ok, %{children: [%{children: [%{style: %{display: :none}}]}]}} = Style.compute(dom)
+  end
+
+  test "hidden inputs suppress author display, generated content, and image resolution" do
+    for type <- ["hidden", "HIDDEN", "HiDdEn"] do
+      html = """
+      <style>
+      input { display: block !important; background-image: url(missing.png); }
+      input::before { content: attr(value); }
+      input::after { content: "After"; }
+      </style>
+      <div><input type="#{type}" name="reference" value="Secret" disabled
+        style="display:inline-block!important;width:90pt;height:60pt;border:3pt solid red"></div>
+      """
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+
+      resolver = fn source ->
+        send(self(), {:hidden_image_resolved, source})
+        {:error, :missing_asset}
+      end
+
+      assert {:ok, tree} = Style.compute(dom, asset_resolver: resolver)
+      [container] = tree.children
+      [input] = container.children
+      assert input.style.form_kind == :hidden
+      assert input.style.display == :none
+      assert input.children == []
+      refute Map.has_key?(input.style, :_form_control)
+      refute_received {:hidden_image_resolved, _source}
+    end
   end
 
   test "compute applies body inherited styles to document fragments" do
@@ -585,7 +3048,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert label.style.background_color == {1.0, 1.0, 1.0}
     assert label.style.border_widths == %{top: 0.75, right: 0.75, bottom: 0.75, left: 0.75}
     assert label.style.break_after == :auto
-    assert label.style.line_break == :break_word
+    assert label.style.word_break == :break_word
     assert label.style.width == {:min, [{:percent, 1.0}, 270.0]}
     assert first_text.text == "ONE"
     assert second.style.display == :block
@@ -670,8 +3133,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert style_for!("div", "letter-spacing: 2px").letter_spacing == 1.5
     assert style_for!("div", "font-size: 10pt; letter-spacing: 0.05em").letter_spacing == 0.5
     assert style_for!("div", "white-space: nowrap").white_space == :nowrap
-    assert style_for!("div", "word-wrap: normal").line_break == :normal
-    assert style_for!("div", "overflow-wrap: anywhere").line_break == :anywhere
+    assert style_for!("div", "word-wrap: normal").overflow_wrap == :normal
+    assert style_for!("div", "overflow-wrap: anywhere").overflow_wrap == :anywhere
     assert style_for!("div", "break-inside: avoid").break_inside == :avoid
     assert style_for!("div", "page-break-inside: auto").break_inside == :auto
     assert style_for!("div", "border: 0").border_widths == edges(0.0)
@@ -704,7 +3167,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "box-sizing: padding-box",
       "text-transform: sideways",
       "letter-spacing: wide",
-      "white-space: pre-wrap",
+      "white-space: invalid",
       "page-break-inside: always",
       "float: left",
       "display: grid; grid-template-columns: minmax()",
@@ -862,6 +3325,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert root_relative_line_height.style.line_height == 24.0
   end
 
+  test "unstyled descendants retain resolved root lengths and semantic defaults" do
+    html = """
+    <html style="font-size:2rem;line-height:1rem;--spacing:0.5rem">
+    <body><div style="padding:var(--spacing);font-size:0.75rem">
+    <h2>Heading</h2><p>Text <span>inside</span></p>
+    <ol><li>First</li><li>Second</li></ol>
+    <table><thead><tr><th>Header</th></tr></thead>
+    <tbody><tr><td>Value</td></tr></tbody></table>
+    </div></body></html>
+    """
+
+    explicit =
+      Regex.replace(~r/<(body|h2|p|span|ol|li|table|thead|tr|th|tbody|td)>/, html, fn _, tag ->
+        "<#{tag} style=\"letter-spacing:0\">"
+      end)
+
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    assert {:ok, explicit_dom} = HtmlParser.parse_document_detailed(explicit)
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, explicit_styled} = Style.compute(explicit_dom)
+    assert styled == explicit_styled
+    [body] = styled.children
+    [container] = Enum.reject(body.children, &(&1.type == :text))
+    assert container.style.padding == edges(12.0)
+    assert container.style.font_size == 18.0
+    paragraph = Enum.find(container.children, &(Map.get(&1, :tag) == "p"))
+    assert paragraph.style.line_height == 24.0
+    assert paragraph.style.margin.bottom == 18.0
+  end
+
   test "rem resolution scales without traversing runtime font payloads per element" do
     cell =
       ~s(<td style="font-size: 0.9rem; padding: 0.25rem; border-width: 0.05rem"><span>Item</span></td>)
@@ -927,7 +3420,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     assert paragraph.style.margin_after == 24.0
     assert paragraph.style.margin.bottom == 24.0
-    assert_in_delta heading.style.margin_after, 20.0, 0.0001
+    assert_in_delta heading.style.margin_after, 20.1, 0.0001
     assert list.style.margin_after == 18.0
     assert explicit_margin.style.margin_after == 5.0
     assert explicit_margin.style.margin.bottom == 5.0
@@ -1306,7 +3799,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert list.style.list_marker_type == :decimal
     assert item.style.display == :list_item
     assert link.style.display == :inline
-    assert link.style.color == {0, 0, 1}
+    assert link.style.color == {0, 0, 238 / 255}
     assert link.style.link_url == "mailto:team@example.com"
     assert link_text.style.link_url == "mailto:team@example.com"
   end
@@ -1652,7 +4145,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
              {:error, :invalid_document}
 
     invalid_stylesheet_path = Path.join(css_dir, "invalid.css")
-    File.write!(invalid_stylesheet_path, "p { color: chartreuse; }")
+    File.write!(invalid_stylesheet_path, "p { color: not-a-color; }")
 
     assert {:error, {:invalid_css, %{stage: :css}}} =
              Style.compute_detailed(dom, stylesheets: [{:file, invalid_stylesheet_path}])
@@ -2812,34 +5305,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
              []
            ) == {:error, :invalid_document}
 
-    assert Style.compute(
-             %{
-               type: :document,
-               children: [
-                 %{
-                   type: :element,
-                   tag: "table",
-                   attributes: %{},
-                   children: [
-                     %{
-                       type: :element,
-                       tag: "tr",
-                       attributes: %{},
-                       children: [
-                         %{
-                           type: :element,
-                           tag: "td",
-                           attributes: %{"colspan" => "0"},
-                           children: [%{type: :text, text: "Bad span"}]
-                         }
-                       ]
-                     }
-                   ]
-                 }
-               ]
-             },
-             []
-           ) == {:error, :invalid_document}
+    assert {:ok, _tree} =
+             Style.compute(
+               %{
+                 type: :document,
+                 children: [
+                   %{
+                     type: :element,
+                     tag: "table",
+                     attributes: %{},
+                     children: [
+                       %{
+                         type: :element,
+                         tag: "tr",
+                         attributes: %{},
+                         children: [
+                           %{
+                             type: :element,
+                             tag: "td",
+                             attributes: %{"colspan" => "0"},
+                             children: [%{type: :text, text: "Bad span"}]
+                           }
+                         ]
+                       }
+                     ]
+                   }
+                 ]
+               },
+               []
+             )
 
     assert Style.compute(
              %{
@@ -3995,7 +6489,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     [link] = link_tree.children
     assert link.style.display == :inline
-    assert link.style.color == {0, 0, 1}
+    assert link.style.color == {0, 0, 0}
     refute Map.has_key?(link.style, :link_url)
 
     assert Style.compute(%{type: :document, children: []}, stylesheets: :bad) ==
@@ -4301,5 +6795,236 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     [header, _scan] = :binary.split(data, <<255, 218>>)
     scan = JpegFixture.segment(218, <<1, 1, 0, 0, 63, 0>>)
     header <> JpegFixture.segment(221, <<1::16>>) <> scan <> <<63, 255, 208, 63, 255, 217>>
+  end
+
+  test "list defaults use outside markers and browser item spacing" do
+    assert {:ok, dom} = HtmlParser.parse("<ul><li>First<li>Second</ul>")
+    assert {:ok, %{children: [list]}} = Style.compute(dom, [])
+    assert list.style.padding.left == 30.0
+    assert list.style.margin.top == list.style.font_size
+    assert list.style.margin.bottom == list.style.font_size
+    assert Enum.all?(list.children, &(&1.style.margin.bottom == 0.0))
+  end
+
+  test "readonly selector values remain authored and disabled styling stays independent" do
+    assert {:ok, dom} =
+             HtmlParser.parse("""
+             <style>
+               input[readonly=READONLY] { color:blue; }
+               input[disabled] { background-color:#eeeeee; }
+             </style>
+             <input readonly="readonly" value="A&#10;B">
+             <input readonly="readonly" disabled value="A&#10;B">
+             <input readonly="false" value="C">
+             """)
+
+    assert {:ok, tree} = Style.compute(dom)
+    [readonly, both, literal] = tree.children
+    assert readonly.style.color == {0, 0, 1}
+    assert readonly.style.background_color == {1.0, 1.0, 1.0}
+    assert both.style.color == {0, 0, 1}
+    assert both.style.background_color == {238 / 255, 238 / 255, 238 / 255}
+    assert literal.style.color == {0, 0, 0}
+    assert literal.style._form_control.attributes["readonly"] == "false"
+    assert readonly.style._form_control.attributes["value"] == "AB"
+  end
+
+  test "readonly caller trees delegate applicability to the validator" do
+    for {tag, attributes} <- [
+          {"input", %{"type" => "checkbox", "readonly" => ""}},
+          {"input", %{"type" => "radio", "readonly" => ""}},
+          {"input", %{"type" => "hidden", "readonly" => ""}},
+          {"button", %{"readonly" => ""}},
+          {"select", %{"readonly" => ""}},
+          {"p", %{"readonly" => ""}}
+        ] do
+      dom = %{
+        type: :document,
+        children: [%{type: :element, tag: tag, attributes: attributes, children: []}]
+      }
+
+      assert {:error, {:invalid_document, diagnostic}} = Style.compute_detailed(dom)
+      assert diagnostic.stage == :style and diagnostic.reason == :invalid_document
+      assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlValidator
+      assert diagnostic.operation == :compute and diagnostic.source == tag
+      assert diagnostic.message =~ "readonly"
+    end
+  end
+
+  test "contact input selectors use authored values before sanitation" do
+    for type <- ["tel", "URL", "EmAiL"] do
+      assert {:ok, dom} =
+               HtmlParser.parse(
+                 ~s(<input type="#{type}" value=" &#9;A&#13;B&#10;C " readonly="false">)
+               )
+
+      css = ~s([value^=" "][readonly="FALSE" i] { color:blue; })
+      assert {:ok, %{children: [node]}} = Style.compute_detailed(dom, stylesheets: [{:css, css}])
+      assert node.style.color == {0.0, 0.0, 1.0}
+      assert hd(dom.children).attributes["value"] == " \tA\rB\nC "
+      assert node.style._form_control.attributes["readonly"] == "false"
+      expected = if type == "tel", do: " \tABC ", else: "ABC"
+      assert node.style._form_control.attributes["value"] == expected
+      assert node.style.form_kind == :text
+    end
+  end
+
+  test "multiple email selectors retain authored list values before sanitation" do
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               ~s(<input type="EMAIL" multiple="false" readonly name="contacts" value=" A ,&#10; B ">)
+             )
+
+    css = ~s([multiple="FALSE" i][value^=" "] { color:blue; })
+    assert {:ok, %{children: [node]}} = Style.compute_detailed(dom, stylesheets: [{:css, css}])
+    assert node.style.color == {0, 0, 1}
+    assert node.style._form_control.attributes["value"] == "A,B"
+    assert hd(dom.children).attributes["value"] == " A ,\n B "
+
+    for tag <- ["input", "textarea", "button", "p"] do
+      attributes =
+        if tag == "input",
+          do: %{"type" => "text", "multiple" => "", "readonly" => ""},
+          else: %{"multiple" => ""}
+
+      invalid = %{
+        type: :document,
+        children: [%{type: :element, tag: tag, attributes: attributes, children: []}]
+      }
+
+      assert {:error, {:invalid_document, diagnostic}} = Style.compute_detailed(invalid)
+      assert diagnostic.stage == :style and diagnostic.source == tag
+      assert diagnostic.message =~ "multiple" and diagnostic.message =~ "email"
+    end
+  end
+
+  test "caller input trees share the same effective state validation and defaults" do
+    for type <- ["", "unknown", "hidden ", "checKbox"] do
+      dom = %{
+        type: :document,
+        children: [
+          %{
+            type: :element,
+            tag: "input",
+            attributes: %{"type" => type, "value" => "A\rB\nC"},
+            children: []
+          }
+        ]
+      }
+
+      assert {:ok, %{children: [node]}} = Style.compute_detailed(dom)
+      assert node.style.form_kind == :text
+      assert node.style._form_control.attributes["type"] == type
+      assert node.style._form_control.attributes["value"] == "ABC"
+    end
+
+    for {attributes, children} <- [
+          {%{"type" => "file"}, []},
+          {%{"type" => "number"}, []},
+          {%{"type" => "unknown", "checked" => ""}, []},
+          {%{}, [%{type: :text, text: "Invalid child"}]}
+        ] do
+      dom = %{
+        type: :document,
+        children: [%{type: :element, tag: "input", attributes: attributes, children: children}]
+      }
+
+      assert {:error, {:invalid_document, diagnostic}} = Style.compute_detailed(dom)
+      assert diagnostic.stage == :style and diagnostic.operation == :compute
+      assert diagnostic.source == "input" and diagnostic.message =~ "effective type"
+    end
+  end
+
+  test "button inputs use static button styles without reserving PDF fields" do
+    for {type, label} <- [{"button", ""}, {"RESET", "Reset"}, {"SuBmIt", "Submit"}] do
+      assert {:ok, dom} = HtmlParser.parse(~s(<input type="#{type}" disabled name="reserved">))
+      css = ~s(input[type="#{type}"] { color:blue; } input[value] { color:red; })
+      assert {:ok, %{children: [node]}} = Style.compute_detailed(dom, stylesheets: [{:css, css}])
+      assert node.style.form_kind == :input_button and node.style.text_align == :center
+      assert node.style.white_space == :pre
+      assert node.style.box_sizing == :border_box and node.style.color == {0.0, 0.0, 1.0}
+      assert Enum.map(node.children, & &1.text) == [label]
+      refute Map.has_key?(node.style, :_form_control)
+      refute Map.has_key?(node.style, :_form_owner)
+
+      assert {:ok, %{children: [overridden]}} =
+               Style.compute_detailed(dom,
+                 stylesheets: [{:css, "input { text-align:left; box-sizing:content-box; }"}]
+               )
+
+      assert overridden.style.text_align == :left and overridden.style.box_sizing == :content_box
+      bad = put_in(dom, [:children, Access.at(0), :attributes, "readonly"], "")
+      assert {:error, {:invalid_document, diagnostic}} = Style.compute_detailed(bad)
+      assert diagnostic.stage == :style and diagnostic.operation == :compute
+      assert diagnostic.source == "input" and diagnostic.message =~ "readonly"
+    end
+
+    assert {:ok, dom} = HtmlParser.parse(~s(<button value="Submission value"></button>))
+    assert {:ok, %{children: [empty]}} = Style.compute_detailed(dom)
+    assert empty.children == []
+  end
+
+  test "enabled disabled selectors use initial state without treating readonly or aria as disabled" do
+    html =
+      ~s(<input type="unknown" readonly value="Readonly"><input disabled="false" value="Disabled"><button aria-disabled="true">Enabled button</button><p role="button" aria-disabled="true">Ordinary text</p>)
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+
+    css =
+      "*:enabled { color:blue; } *:disabled { color:red; } input:enabled:not([readonly]) { color:green; }"
+
+    assert {:ok, %{children: [readonly, disabled, button, paragraph]}} =
+             Style.compute_detailed(dom, stylesheets: [{:css, css}])
+
+    assert readonly.style.color == {0.0, 0.0, 1.0}
+    assert disabled.style.color == {1.0, 0.0, 0.0}
+    assert button.style.color == {0.0, 0.0, 1.0}
+    assert paragraph.style.color == {0.0, 0.0, 0.0}
+    assert disabled.style._form_control.attributes["disabled"] == "false"
+    assert readonly.style._form_control.attributes["type"] == "unknown"
+  end
+
+  test "image hints precede authored CSS and keep loaded natural aspect ratio" do
+    png =
+      NativeElixirPdfUtilities.TestSupport.PngFixture.build(8, 4, 2, 8, 0, fn _, _ ->
+        [20, 80, 160]
+      end)
+
+    for {attributes, width, height} <- [
+          {~s(width="24" height="12"), 18.0, 9.0},
+          {~s(width="24.5%" height="bad"), {:percent, 0.245}, nil},
+          {~s(width="+24"), nil, nil}
+        ] do
+      assert {:ok, dom} = HtmlParser.parse("<img src='tile' #{attributes}>")
+
+      assert {:ok, %{children: [node]}} =
+               Style.compute_detailed(dom, assets: %{"tile" => {:bytes, png}})
+
+      assert Map.get(node.style, :width) == width
+      assert Map.get(node.style, :height) == height
+    end
+
+    assert {:ok, dom} = HtmlParser.parse(~s(<img src="tile" width="24" height="48">))
+    css = ~s(img[width="24"][height="48"] { width:30pt; height:auto; })
+
+    assert {:ok, %{children: [node]}} =
+             Style.compute_detailed(dom,
+               assets: %{"tile" => {:bytes, png}},
+               stylesheets: [{:css, css}]
+             )
+
+    assert node.style.width == 30.0 and node.style.height == :auto
+    refute Map.has_key?(node.style, :aspect_ratio)
+  end
+
+  test "password artwork obscures graphemes while fields preserve sanitized values and raw CSS" do
+    assert {:ok, dom} =
+             HtmlParser.parse(~s(<input type="PASSWORD" name="secret" value="A&#13;é🦊">))
+
+    css = ~s(input[type="password"][value$="🦊"] {color:red;})
+    assert {:ok, %{children: [node]}} = Style.compute_detailed(dom, stylesheets: [{:css, css}])
+    assert node.style.form_kind == :text and node.style.color == {1.0, 0.0, 0.0}
+    assert node.style._form_control.attributes["value"] == "Aé🦊"
+    assert Enum.map(node.children, & &1.text) == ["•••"]
   end
 end

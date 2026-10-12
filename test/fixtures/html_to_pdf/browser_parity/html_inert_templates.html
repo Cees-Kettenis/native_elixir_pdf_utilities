@@ -1,0 +1,15 @@
+<!doctype html><html><head><style>
+@page {size:264pt 210pt;margin:0;}
+html,body {margin:0;padding:0;}
+body {padding:12pt;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt;}
+p {margin:0 0 6pt;}
+template.empty {display:block;border:1px solid #777;padding:3pt;margin:0 0 6pt;}
+p:nth-child(3) {color:#164e63;}
+</style><template><style>body{color:red}</style><p>Never printed in head</p></template></head><body>
+<p>Before unused templates</p>
+<template id="outer"><p>Never printed</p><style>p{color:red}</style><img src="denied.png"><input name="unused" value="Hidden"><template><p>Nested unused</p></template><script type="application/json">&amp;<img></script><svg><path d="M0 0"/></svg></template>
+<p>After unused styles and assets</p>
+<template class="empty"><p>Only its empty box is visible</p></template>
+<template class="empty"></template>
+<p>All visible content remains present</p>
+</body></html>

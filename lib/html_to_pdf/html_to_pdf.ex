@@ -23,6 +23,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   current element, CSS, layout, image, and font support.
   """
 
+  alias NativeElixirPdfUtilities.HtmlToPdf.ResourceContext
+  alias NativeElixirPdfUtilities.Validators.ResourceValidator
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback
@@ -93,6 +95,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   @type outlines :: :headings | [NativeElixirPdfUtilities.Outlines.item_input()] | false | nil
   @type render_option ::
           {:forms, :interactive | :static}
+          | {:print_viewport, {number(), number()}}
+          | {:image_selection_density, number()}
           | {:page_size, page_size()}
           | {:margin, page_margin()}
           | {:base_url, String.t() | nil}
@@ -122,6 +126,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | :invalid_path
           | :invalid_pdf_input
           | :not_implemented
+          | :resource_denied
+          | :resource_cycle
+          | :resource_not_found
           | :resource_limit_exceeded
           | :unsupported_form
           | :unsupported_glyph
@@ -143,7 +150,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   `:stylesheets`, `:default_font`, explicit local `:fonts`,
   `:system_font_discovery`, PDF `:metadata`, opt-in `:page_furniture` headers
   and footers, PDF `:outlines`, `:unsupported_glyphs`, `:compress_streams`, and
-  `:subset_fonts`.
+  `:subset_fonts`. Responsive selection accepts `:print_viewport` as a positive
+  `{width, height}` in CSS pixels and `:image_selection_density` as a positive
+  number, defaulting to the effective page area and density 1. Pictures compose
+  inline by default and accept authored `display:block` for block placement.
   Stream compression and TrueType font subsetting are enabled by default to keep
   PDFs small. Set `compress_streams: false` or `subset_fonts: false` to opt out.
   Subsetting retains the original glyph IDs for PDF character mapping and keeps
@@ -185,11 +195,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   The explicit tag determines whether content is parsed directly or read from
   the local filesystem; bare strings are rejected.
 
-  `:base_url` is also the authorization root for document-selected local image
-  and `@font-face` paths. Relative paths and absolute paths beneath that root
+  Initial local and `srcdoc` iframe documents render in isolated, clipped
+  viewports. `srcdoc` takes precedence; absent, empty and `about:blank` sources
+  initialize a blank document. Child documents share cumulative rendering
+  budgets and caches. Their resources use local authorization before every
+  read or cache lookup, and never invoke the asset resolver. `forms: :static`
+  preserves child control artwork; interactive child widgets return an
+  `:unsupported_form` diagnostic pending transformed widget support. Child HTML
+  that requires automatic scrollbars returns `:not_implemented` until client-area
+  geometry is supported. Author `html` or `body` with `overflow:hidden` for a
+  static clipped viewport.
+
+  `:base_url` is also the authorization root for local iframe documents and
+  document-selected local image and `@font-face` paths. Relative paths and absolute paths beneath that root
   are accepted; traversal outside it and symlink components are rejected.
   Explicit `:fonts` and `{:file, stylesheet}` paths are trusted caller
-  configuration and are not reclassified as document-selected resources.
+  configuration at the top level. Child documents authorize explicit font and
+  stylesheet file paths beneath the same immutable root; supplied inline bytes
+  remain permitted.
   """
   @spec render(String.t(), [render_option()]) ::
           {:ok, binary()} | {:error, detailed_error_reason()}
@@ -272,23 +295,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
         {:ok, opts} = font_options
         image_budget = HtmlValidator.new_image_budget()
 
-        with {:ok, dom} <- HtmlParser.parse_detailed(html),
-             {:ok, effective_opts} <- effective_render_options_detailed(dom, opts),
-             {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts, image_budget),
-             {:ok, styled_tree} <-
-               FontFallback.resolve(
-                 styled_tree,
-                 Keyword.get(effective_opts, :unsupported_glyphs, :replace)
-               ),
-             {:ok, layout_tree} <-
-               Font.with_measurement_cache(fn -> layout_document(styled_tree, effective_opts) end),
-             {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
-             effective_opts <- prepared_outline_options(pages, effective_opts),
-             {:ok, pages} <-
-               PageFurniture.decorate(pages, layout_tree, effective_opts, image_budget),
-             {:ok, pdf_binary} <- PdfWriter.render(pages, effective_opts) do
-          {:ok, pdf_binary}
-        end
+        ResourceContext.run(
+          ResourceValidator.renderer_context_options(opts),
+          image_budget,
+          fn _context ->
+            with {:ok, dom} <- HtmlParser.parse_document_detailed(html),
+                 {:ok, effective_opts} <- effective_render_options_detailed(dom, opts),
+                 {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts, image_budget),
+                 {:ok, styled_tree} <-
+                   FontFallback.resolve(
+                     styled_tree,
+                     Keyword.get(effective_opts, :unsupported_glyphs, :replace)
+                   ),
+                 {:ok, layout_tree} <-
+                   Font.with_measurement_cache(fn ->
+                     layout_document(styled_tree, effective_opts)
+                   end),
+                 {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
+                 effective_opts <- prepared_outline_options(pages, effective_opts),
+                 {:ok, pages} <-
+                   PageFurniture.decorate(pages, layout_tree, effective_opts, image_budget),
+                 {:ok, pdf_binary} <- PdfWriter.render(pages, effective_opts) do
+              {:ok, pdf_binary}
+            end
+          end
+        )
 
       {:error, {_reason, _diagnostic}} = error ->
         error
@@ -312,6 +343,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
       {:ok, layout_tree} ->
         {:ok, layout_tree}
 
+      {:error, {_reason, diagnostic}} = error when is_map(diagnostic) ->
+        error
+
       {:error, reason} ->
         Diagnostics.error(:layout, reason, layout_message(reason))
     end
@@ -325,7 +359,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
         end)
 
       effective_opts = Keyword.merge(page_options, opts)
-      {:ok, metadata_options(dom, effective_opts)}
+      {:ok, HtmlValidator.document_metadata_options(dom, effective_opts)}
     else
       {:error, :invalid_document} ->
         Diagnostics.error(
@@ -336,49 +370,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
 
       {:error, {_reason, _diagnostic}} = error ->
         error
-    end
-  end
-
-  defp metadata_options(dom, opts) do
-    case document_title(dom) do
-      nil ->
-        opts
-
-      title ->
-        case Keyword.fetch(opts, :metadata) do
-          :error ->
-            Keyword.put(opts, :metadata, title: title)
-
-          {:ok, metadata} when is_map(metadata) ->
-            Keyword.put(opts, :metadata, Map.put_new(metadata, :title, title))
-
-          {:ok, metadata} when is_list(metadata) ->
-            case Keyword.keyword?(metadata) do
-              true -> Keyword.put(opts, :metadata, Keyword.put_new(metadata, :title, title))
-              false -> opts
-            end
-
-          {:ok, _metadata} ->
-            opts
-        end
-    end
-  end
-
-  defp document_title(node) do
-    case node do
-      %{type: :element, tag: "title", children: children} ->
-        title =
-          children
-          |> Enum.map_join("", & &1.text)
-          |> String.trim()
-
-        if title == "", do: nil, else: title
-
-      %{children: children} when is_list(children) ->
-        Enum.find_value(children, &document_title/1)
-
-      _ ->
-        nil
     end
   end
 

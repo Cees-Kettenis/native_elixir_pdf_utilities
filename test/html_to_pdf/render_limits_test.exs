@@ -12,6 +12,204 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsTest do
     :ok
   end
 
+  test "HTML destination descriptors charge the existing render work budget" do
+    alias NativeElixirPdfUtilities.Validators.HtmlLinkValidator
+    limits = Limits.effective()
+    Limits.install(%{limits | max_css_work: 2})
+    identity = {make_ref(), make_ref(), make_ref()}
+    targets = List.duplicate(%{identity: identity, dx: 0, dy: 0}, 3)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               HtmlLinkValidator.validate_boxes([%{html_targets: targets}])
+             end)
+
+    assert diagnostic.stage == :pagination and diagnostic.message =~ "max_css_work"
+  end
+
+  test "logical table expansion and header scans have separate shared budgets" do
+    original = Limits.effective()
+    html = "<table><tr><th id=h>Header</th><td headers=h>Value</td></tr></table>"
+
+    for key <- [:max_table_model_work, :max_table_header_work] do
+      Limits.install(Map.put(original, key, 1))
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
+      assert diagnostic.stage == :style and diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.operation == :render and diagnostic.message =~ Atom.to_string(key)
+      Limits.install(original)
+      assert {:ok, _pdf} = HtmlToPdf.render(html)
+    end
+
+    Limits.install(%{original | max_table_model_work: 80})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render("<table><tr><td rowspan=100>Implied</td></tr></table>")
+
+    assert diagnostic.message =~ "max_table_model_work"
+    assert {:ok, _pdf} = HtmlToPdf.render("<p>No table model work</p>")
+  end
+
+  test "logical span budget diagnostics preserve optional original source locations" do
+    Limits.install(%{Limits.effective() | max_layout_cardinality: 2})
+
+    node = %{
+      type: :element,
+      tag: "td",
+      attributes: %{"rowspan" => "3"},
+      children: [],
+      source: %{text: "<td rowspan=3>", line: 8, column: 5}
+    }
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Style.compute_detailed(%{type: :document, children: [node]})
+
+    assert diagnostic.line == 8 and diagnostic.column == 5
+    assert diagnostic.source == "<td rowspan=3>"
+    assert diagnostic.reason == :resource_limit_exceeded and diagnostic.message =~ "2-item limit"
+  end
+
+  test "column group formation ignores parent span independently of strict source conformance" do
+    Limits.install(%{Limits.effective() | max_layout_cardinality: 2})
+    html = "<table><colgroup><col span=1></colgroup><tr><td>Actual column</td></tr></table>"
+    assert {:ok, reference} = HtmlToPdf.render(String.replace(html, " span=1", ""))
+    assert {:ok, ^reference} = HtmlToPdf.render(html)
+    assert {:ok, dom} = HtmlParser.parse(html)
+
+    assert {:ok, styled} =
+             Style.compute_detailed(dom, stylesheets: [{:css, "col[span='1']{width:42pt}"}])
+
+    [table] = styled.children
+    assert table.style._table_model.width == 1
+    assert hd(hd(table.children).children).style.width == 42.0
+
+    # HTML source conformance prohibits span together with authored col children.
+    invalid = String.replace(html, "<colgroup>", "<colgroup span=99999>")
+    assert {:error, :unsupported_html} = HtmlParser.parse(invalid)
+
+    # The logical formation algorithm still defines ignored-parent recovery.
+    [table] = dom.children
+    [group, row] = table.children
+    group = %{group | attributes: Map.put(group.attributes, "span", "99999")}
+    nodes = HtmlValidator.assign_render_metadata([%{table | children: [group, row]}])
+
+    assert {:ok, [prepared]} =
+             NativeElixirPdfUtilities.Validators.HtmlTableValidator.prepare_document(nodes)
+
+    assert prepared._table_model.width == 1
+  end
+
+  test "editability traversal charges shared CSS work and releases failed caches" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
+    limits = Limits.effective()
+    Limits.install(%{limits | max_css_work: 3})
+    host = %{tag: "div", attributes: %{"contenteditable" => ""}, _selector_id: make_ref()}
+    child = %{tag: "p", attributes: %{}, _selector_id: make_ref()}
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               RenderCache.run(fn cache ->
+                 for _ <- 1..4 do
+                   assert HtmlValidator.editing_state_matches?(:read_write, child, [host], cache)
+                 end
+
+                 HtmlValidator.reserve_render_resource(:max_css_work, 2, :css)
+               end)
+             end)
+
+    assert diagnostic.stage == :css and diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "max_css_work"
+
+    assert HtmlValidator.with_render_budget(fn ->
+             RenderCache.run(fn cache ->
+               HtmlValidator.editing_state_matches?(
+                 :read_only,
+                 child,
+                 [%{host | attributes: %{"contenteditable" => "false"}}],
+                 cache
+               )
+             end)
+           end)
+
+    html = "<div contenteditable>" <> String.duplicate("<p>Visible</p>", 10) <> "</div>"
+    Limits.install(%{limits | max_css_work: 10})
+
+    assert {:error, {:resource_limit_exceeded, public}} =
+             HtmlToPdf.render(html, stylesheets: [{:css, "p:read-write{color:blue}"}])
+
+    assert public.operation == :render and public.stage == :css
+    assert public.message =~ "max_css_work"
+    Limits.install(limits)
+    assert {:ok, pdf} = HtmlToPdf.render(html, stylesheets: [{:css, "p:read-write{color:blue}"}])
+    assert {:ok, ^pdf} = HtmlToPdf.render(html, stylesheets: [{:css, "p{color:blue}"}])
+  end
+
+  test "impossible positive selector requirements do not spend sibling-position work" do
+    html = String.duplicate("<p class='exists' data-state='actual'>Visible</p>", 600)
+    Limits.install(%{Limits.effective() | max_css_work: 1_000})
+
+    assert {:ok, reference} = HtmlToPdf.render(html)
+
+    for selector <- [
+          ".exists.missing:nth-child(2n)",
+          "p[data-state='different']:first-child",
+          ".exists.missing:not(:nth-last-of-type(2n))"
+        ] do
+      assert {:ok, ^reference} =
+               HtmlToPdf.render(html, stylesheets: [{:css, "#{selector}{color:red}"}])
+    end
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render(html, stylesheets: [{:css, ".exists:nth-child(2n){color:red}"}])
+
+    assert diagnostic.stage == :css
+    assert diagnostic.operation == :render
+    assert diagnostic.message =~ "max_css_work"
+  end
+
+  test "a compound selector that cannot match does not resolve unused language state" do
+    language = String.duplicate("aa-", 1_000)
+    html = "<p class='exists' lang='#{language}'>Visible</p>"
+    Limits.install(%{Limits.effective() | max_css_work: 500})
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(html, stylesheets: [{:css, ".exists.missing:lang(en){color:red}"}])
+
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+    assert text =~ "Visible"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render(html, stylesheets: [{:css, ".exists:lang(en){color:red}"}])
+
+    assert diagnostic.stage == :css
+    assert diagnostic.message =~ "max_css_work"
+  end
+
+  test "language canonicalization and range matching consume the shared CSS budget" do
+    alias NativeElixirPdfUtilities.Validators.LanguageValidator
+    Limits.install(%{Limits.effective() | max_css_work: 5})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               LanguageValidator.canonicalize("en-US")
+               LanguageValidator.matches?(["en"], ["en", "us"])
+             end)
+
+    assert diagnostic.stage == :css
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "max_css_work"
+
+    Limits.install(%{Limits.effective() | max_css_work: 50})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render("<p lang='en'>Budgeted</p>",
+               stylesheets: [{:css, "p:lang(en){color:red}"}]
+             )
+
+    assert diagnostic.operation == :render
+    assert diagnostic.stage == :css
+    assert diagnostic.message =~ "max_css_work"
+  end
+
   test "source byte limits reject oversized UTF-8 before parsing" do
     Limits.install(%{Limits.effective() | max_html_source_bytes: 8, max_css_source_bytes: 4})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render("<p>é</p>")
@@ -124,7 +322,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsTest do
   end
 
   test "table grid expansion shares a bounded budget and reports layout diagnostics" do
-    table = "<table style='border-collapse:collapse'><tr><td colspan='20'>x</td></tr></table>"
+    table = "<table style='border-collapse:collapse'><tr><td colspan='30'>x</td></tr></table>"
 
     for maximum <- [1, 50, 110] do
       Limits.install(%{Limits.effective() | max_table_grid_work: maximum})
@@ -145,6 +343,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsTest do
       assert diagnostic.stage == :layout
       assert diagnostic.message =~ "max_table_grid_work"
     end
+
+    # The prepared grid is reused by outer-border and track geometry. A
+    # 20-column table fits this budget; real 30-column expansion exceeds it.
+    Limits.install(%{Limits.effective() | max_table_grid_work: 110})
+    assert {:ok, _pdf} = HtmlToPdf.render(String.replace(table, "colspan='30'", "colspan='20'"))
 
     Limits.install(%{Limits.effective() | max_table_grid_work: 1_000})
     assert {:ok, _pdf} = HtmlToPdf.render(table)

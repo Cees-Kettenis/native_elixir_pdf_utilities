@@ -7,6 +7,834 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Text
 
+  defp glyph_text_box(font, text) do
+    %{
+      type: :text,
+      text: text,
+      x: 10,
+      y: 80,
+      font: Font.pdf_name(font),
+      font_face: font,
+      font_size: 20,
+      color: {0, 0, 0}
+    }
+  end
+
+  test "image border-box links intersect page bounds independently of fitted ink clipping" do
+    box = %{
+      type: :image,
+      x: 5.0,
+      y: 15.0,
+      width: 60.0,
+      height: 30.0,
+      image: image_fixture(:png, <<255, 0, 0>>, 1, 1, :device_rgb),
+      link_url: "https://example.com/photo",
+      clip: %{x: 10.0, y: 20.0, width: 40.0, height: 20.0},
+      link_rect: %{x: -8.0, y: -4.0, width: 115.0, height: 110.0}
+    }
+
+    page = %{size: {100, 100}, boxes: [box]}
+    assert {:ok, pdf} = PdfWriter.render([page], compress_streams: false)
+    assert pdf =~ "/Subtype /Link /Rect [0 0 100 100]"
+    assert pdf =~ "/URI (https://example.com/photo)"
+    refute pdf =~ "/Rect [10 20 50 40]"
+
+    invisible = %{box | link_rect: %{x: 100.0, y: 10.0, width: 10.0, height: 10.0}}
+    assert {:ok, pdf} = PdfWriter.render([%{page | boxes: [invisible]}])
+    refute pdf =~ "/Subtype /Link"
+  end
+
+  test "URI annotations intersect final page bounds and omit invisible regions" do
+    box = %{
+      type: :text,
+      text: "Clipped",
+      x: -5,
+      y: -3,
+      font: "Helvetica",
+      font_size: 10,
+      annotation_width: 30,
+      line_height: 12,
+      color: {0, 0, 0},
+      link_url: "https://example.test/chapter"
+    }
+
+    pages = [
+      %{size: {100, 100}, boxes: [box, %{box | x: 90, y: 95}, %{box | x: 110}, %{box | y: -20}]}
+    ]
+
+    assert {:ok, pdf} = PdfWriter.render(pages, compress_streams: false)
+    assert length(Regex.scan(~r{/Subtype /Link}, pdf)) == 2
+    assert pdf =~ "/Rect [0 0 25 9]"
+    assert pdf =~ "/Rect [90 95 100 100]"
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    assert text =~ "Clipped"
+  end
+
+  test "image links intersect fitted clipping rectangles and omit invisible annotations" do
+    image = image_fixture(:png, <<255, 0, 0>>, 1, 1, :device_rgb)
+
+    box = %{
+      type: :image,
+      x: 5.0,
+      y: 15.0,
+      width: 60.0,
+      height: 30.0,
+      image: image,
+      link_url: "https://example.com/photo",
+      clip: %{x: 10.0, y: 20.0, width: 40.0, height: 20.0}
+    }
+
+    page = %{size: {100, 100}, boxes: [box]}
+    assert {:ok, pdf} = PdfWriter.render([page], compress_streams: false)
+    assert pdf =~ "/Subtype /Link /Rect [10 20 50 40]"
+    assert pdf =~ "/URI (https://example.com/photo)"
+    assert {:ok, invisible} = PdfWriter.render([%{page | boxes: [%{box | x: 80.0}]}])
+    refute invisible =~ "/Subtype /Link"
+    border_box = Map.put(box, :link_rect, %{x: 3.0, y: 12.0, width: 66.0, height: 36.0})
+    assert {:ok, linked} = PdfWriter.render([%{page | boxes: [border_box]}])
+    assert linked =~ "/Subtype /Link /Rect [3 12 69 48]"
+
+    for invalid <- [
+          %{box | link_url: "javascript:bad"},
+          Map.put(box, :link_rect, %{x: 1, y: 1, width: 0, height: 1})
+        ] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} =
+               PdfWriter.render([%{page | boxes: [invalid]}])
+
+      assert diagnostic.stage == :pdf and diagnostic.operation == :write_pdf
+      assert diagnostic.message =~ "valid pages"
+    end
+  end
+
+  test "gauge gradients remain scoped page and Form resources without fields or images" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout}
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<p style='margin:0'><meter value=.5 style='appearance:none;width:40pt;height:20pt'></meter></p>"
+             )
+
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {100, 100}, margin: 0)
+    frame = %{size: {100, 100}, boxes: layout.boxes}
+    assert {:ok, entries, references, next} = PdfWriter.appearance_objects([frame], 10)
+    assert length(references) == 1 and next > 10
+
+    {dictionary, content} =
+      Enum.find_value(entries, fn entry ->
+        case entry do
+          {_id, 0, {:stream, %{"Subtype" => {:name, "Form"}} = dictionary, content}} ->
+            {dictionary, content}
+
+          _ ->
+            nil
+        end
+      end)
+
+    assert map_size(dictionary["Resources"]["Shading"]) == 2
+
+    assert Enum.all?(dictionary["Resources"]["Shading"], fn {_name, shading} ->
+             shading["ShadingType"] == 2 and shading["Function"]["FunctionType"] == 3
+           end)
+
+    assert content =~ " sh"
+    refute Map.has_key?(dictionary["Resources"], "XObject")
+    assert {:ok, pdf} = PdfWriter.render([frame, frame], compress_streams: false)
+    assert length(Regex.scan(~r/\/Shading << \/Gauge/, pdf)) == 2
+    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+    assert {:ok, 2} = NativeElixirPdfUtilities.Info.page_count(pdf)
+  end
+
+  test "nested nonuniform groups clip image border-box links independently of letterbox ink" do
+    image = image_fixture(:png, <<255, 0, 0>>, 1, 1, :device_rgb)
+
+    box = %{
+      type: :image,
+      x: 4,
+      y: 4,
+      width: 8,
+      height: 2,
+      image: image,
+      clip: %{x: 4, y: 4, width: 8, height: 2},
+      link_url: "https://example.com/border",
+      link_rect: %{x: 1, y: 2, width: 18, height: 8}
+    }
+
+    ink = box |> Map.delete(:link_rect) |> Map.put(:link_url, "https://example.com/ink")
+
+    inner = %{
+      type: :drawing_group,
+      width: 25,
+      height: 15,
+      transform: {0.5, 0, 0, 2, 5, 7},
+      clip: %{x: 0, y: 0, width: 25, height: 15},
+      boxes: [box, ink]
+    }
+
+    outer = %{
+      type: :drawing_group,
+      width: 20,
+      height: 20,
+      transform: {2, 0, 0, 3, 10, 20},
+      clip: %{x: 0, y: 0, width: 20, height: 20},
+      boxes: [inner]
+    }
+
+    sibling =
+      box
+      |> Map.delete(:clip)
+      |> Map.delete(:link_rect)
+      |> Map.merge(%{x: 60, y: 50, width: 10, height: 5, link_url: "https://example.com/sibling"})
+
+    assert {:ok, pdf} =
+             PdfWriter.render([%{size: {100, 150}, boxes: [outer, sibling]}],
+               compress_streams: false
+             )
+
+    assert pdf =~ "/Rect [21 53 39 80]"
+    assert pdf =~ "/Rect [24 65 32 77]"
+    assert pdf =~ "/Rect [60 50 70 55]"
+    assert length(Regex.scan(~r/\/Subtype \/Link/, pdf)) == 3
+
+    for empty <- [%{outer | width: 0}, %{outer | clip: %{x: 0, y: 0, width: 0, height: 20}}] do
+      assert {:ok, pdf} = PdfWriter.render([%{size: {100, 150}, boxes: [empty, sibling]}])
+      assert length(Regex.scan(~r/\/Subtype \/Link/, pdf)) == 1
+      assert pdf =~ "https://example.com/sibling"
+    end
+
+    huge = %{
+      box
+      | link_rect: %{
+          x: 0,
+          y: 0,
+          width: NativeElixirPdfUtilities.Limits.get(:max_pdf_numeric_magnitude),
+          height: 1
+        }
+    }
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             PdfWriter.render([%{size: {100, 150}, boxes: [%{outer | boxes: [huge]}]}])
+
+    assert diagnostic.stage == :pdf and diagnostic.message =~ "transformed bounds"
+  end
+
+  test "nested drawing groups preserve Unicode, images, painting order and clipped logical links" do
+    assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    assert {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    text =
+      glyph_text_box(font, "Ω")
+      |> Map.merge(%{
+        x: 0,
+        y: 0,
+        width: 20,
+        line_height: 10,
+        font_size: 10,
+        glyph_ids: [font.cmap[0x03A9]],
+        link_url: "https://example.com/visible"
+      })
+
+    glyphs = %{type: :glyph_group, actual_text: "∫𝑥", boxes: [text]}
+
+    rectangle = %{
+      type: :rect,
+      x: 0,
+      y: 0,
+      width: 30,
+      height: 20,
+      fill_color: {0, 0, 1, 0.5},
+      stroke_color: nil,
+      stroke_width: 0,
+      border_radius: 0
+    }
+
+    image = %{
+      type: :image,
+      x: 1,
+      y: 2,
+      width: 6,
+      height: 8,
+      clip: %{x: 2, y: 3, width: 3, height: 4},
+      image: image_fixture(:png, <<255, 0, 0>>, 1, 1, :device_rgb)
+    }
+
+    hidden = %{text | x: 100, link_url: "https://example.com/clipped"}
+
+    inner = %{
+      type: :drawing_group,
+      width: 50,
+      height: 30,
+      transform: {0.5, 0, 0, 2, 5, 4},
+      clip: %{x: 0, y: 0, width: 15, height: 8},
+      boxes: [rectangle, image, glyphs, hidden]
+    }
+
+    outer = %{
+      type: :drawing_group,
+      width: 80,
+      height: 80,
+      transform: {2, 0, 0, 3, 10, 20},
+      clip: %{x: 7, y: 6, width: 50, height: 8},
+      boxes: [inner]
+    }
+
+    sibling =
+      Map.delete(
+        %{text | text: "Sibling", x: 100, y: 100, link_url: "https://example.com/sibling"},
+        :glyph_ids
+      )
+
+    pages = [%{size: {300, 300}, boxes: [outer, sibling]}, %{size: {300, 300}, boxes: [outer]}]
+
+    for options <- [[compress_streams: false], [], [subset_fonts: false]] do
+      assert {:ok, pdf} = PdfWriter.render(pages, options)
+      assert {:ok, extracted} = Text.extract(pdf, layout: false)
+      assert extracted =~ "∫𝑥" and extracted =~ "Sibling"
+      assert {:ok, context} = Reader.read_validated(pdf)
+      assert length(context.pages) == 2
+      assert {:ok, %{pages: [%{spans: spans}, _]}} = Text.extract_spans(pdf)
+      span = Enum.find(spans, &(&1.text == "∫𝑥"))
+      assert span.x == 20.0, inspect(span)
+      assert span.y == 268.0
+      assert span.ctm == [1.0, 0.0, 0.0, 6.0, 20.0, 32.0]
+      assert pdf =~ "/Rect [24 38 35 62]"
+      assert pdf =~ "/Rect [100 100 120 110]"
+      refute pdf =~ "https://example.com/clipped"
+      assert pdf =~ "/Subtype /Image" and pdf =~ "/ExtGState"
+      assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+
+      if options == [compress_streams: false] do
+        assert pdf =~ "q 2 0 0 3 10 20 cm 7 6 50 8 re W n"
+        assert pdf =~ "q 0.5 0 0 2 5 4 cm 0 0 15 8 re W n"
+        assert pdf =~ "2 3 3 4 re W n"
+        assert pdf =~ "/ActualText"
+      end
+    end
+
+    assert {:ok, objects, [_ref], _next} = PdfWriter.appearance_objects([hd(pages)], 1)
+
+    assert Enum.any?(objects, fn {_id, _generation, value} ->
+             case value do
+               {:stream, _dictionary, body} -> body =~ "q 2 0 0 3 10 20 cm"
+               _ -> false
+             end
+           end)
+  end
+
+  test "drawing groups count every expanded box across nested groups and pages, and bound depth" do
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
+    text = %{
+      type: :text,
+      text: "x",
+      x: 0,
+      y: 0,
+      font: "Helvetica",
+      font_size: 10,
+      color: {0, 0, 0}
+    }
+
+    group = %{
+      type: :drawing_group,
+      width: 10,
+      height: 10,
+      transform: {1, 0, 0, 1, 0, 0},
+      boxes: [text]
+    }
+
+    page = %{size: {100, 100}, boxes: [group]}
+    Limits.install(%{original | max_layout_boxes: 6, max_drawing_group_depth: 2})
+    assert {:ok, _} = PdfWriter.render([page, page])
+    assert {:ok, _} = PdfWriter.render([%{page | boxes: [%{group | boxes: [group]}]}])
+
+    for pages <- [
+          [page, page, page],
+          [%{page | boxes: [group, group, group]}],
+          [%{page | boxes: [%{group | boxes: [group, group]}]}]
+        ] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = PdfWriter.render(pages)
+      assert diagnostic.stage == :writer and diagnostic.message =~ "max_layout_boxes"
+    end
+
+    Limits.install(%{original | max_drawing_group_depth: 2})
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             PdfWriter.render([%{page | boxes: [%{group | boxes: [%{group | boxes: [group]}]}]}])
+
+    assert message =~ "max_drawing_group_depth"
+    assert {:ok, _} = PdfWriter.render([page])
+
+    Limits.install(%{original | max_layout_boxes: 5})
+    glyphs = %{type: :glyph_group, actual_text: "x", boxes: [text]}
+    assert {:ok, _} = PdfWriter.render([%{page | boxes: [%{group | boxes: [glyphs]}]}])
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             PdfWriter.render([%{page | boxes: [%{group | boxes: [glyphs, text]}]}])
+  end
+
+  test "unclipped drawing groups isolate siblings and use local viewport pixel snapping" do
+    text = %{
+      type: :text,
+      text: "Local",
+      x: 0,
+      y: 7,
+      font: "Helvetica",
+      font_size: 10,
+      color: {0, 0, 0},
+      snap_to_css_pixel_grid: true,
+      width: 10,
+      link_url: "https://example.com/local"
+    }
+
+    group = %{
+      type: :drawing_group,
+      width: 20,
+      height: 20,
+      transform: {1.00004, 0, 0, 1, 5.00004, 6.00004},
+      boxes: [text]
+    }
+
+    assert {:ok, pdf} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [group]}], compress_streams: false)
+
+    assert pdf =~ "q 1 0 0 1 5 6 cm"
+    assert pdf =~ "0 7.2501 Td"
+    assert pdf =~ "/Rect [5 13.2501 15 25.2501]"
+
+    rounded_up = %{group | transform: {1.00006, 0, 0, 1, 5.00006, 6.00006}}
+
+    assert {:ok, up} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [rounded_up]}], compress_streams: false)
+
+    assert up =~ "q 1.0001 0 0 1 5.0001 6.0001 cm"
+    assert up =~ "/Rect [5.0001 13.2502 15.0011 25.2502]"
+
+    for clip <- [nil, %{x: 0, y: 0, width: 0, height: 0}] do
+      assert {:ok, clipped} =
+               PdfWriter.render([%{size: {100, 100}, boxes: [Map.put(group, :clip, clip)]}])
+
+      if clip == nil,
+        do: assert(clipped =~ "https://example.com/local"),
+        else: refute(clipped =~ "https://example.com/local")
+    end
+  end
+
+  test "direct appearance objects preserve complete page artwork and resource graphs" do
+    alias NativeElixirPdfUtilities.Pdf.{FormWriter, IncrementalWriter}
+    assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    assert {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+    text = glyph_text_box(font, "Appearance Ω") |> Map.put(:color, {0.2, 0.3, 0.4, 0.5})
+
+    rectangle = %{
+      type: :rect,
+      x: 1,
+      y: 15,
+      width: 20,
+      height: 8,
+      fill_color: {0.4, 0.5, 0.6, 0.7},
+      stroke_color: {0, 0, 0, 0.8},
+      stroke_width: 1,
+      border_radius: 0
+    }
+
+    image = image_fixture(:png, <<255, 0, 0>>, 1, 1, :device_rgb) |> Map.put(:alpha_data, <<128>>)
+    png = %{type: :image, x: 5, y: 10, width: 4, height: 4, image: image}
+    jpeg = %{png | image: image_fixture(:jpeg, jpeg_fixture(1, 1, 4), 1, 1, :device_cmyk)}
+
+    builtin =
+      Map.drop(text, [:font_face]) |> Map.put(:font, "Helvetica") |> Map.put(:text, "Built in")
+
+    group = %{type: :glyph_group, actual_text: "Original Ω", boxes: [text]}
+    marker = %{type: :flow_marker, x: 0, y: 0, width: 0, height: 12}
+
+    frames = [
+      %{size: {100, 100}, boxes: [rectangle, group, png, jpeg, marker]},
+      %{size: {30, 20}, boxes: []},
+      %{size: {100, 100}, boxes: [builtin, text, png]}
+    ]
+
+    assert {:ok, base} = PdfWriter.render([%{size: {200, 200}, boxes: []}])
+    assert {:ok, context} = Reader.read_validated(base)
+    first = context.document.trailer["Size"]
+    assert {:ok, direct, refs, next} = PdfWriter.appearance_objects(frames, first)
+    assert length(refs) == 3 and next == first + length(direct)
+    assert {:ok, original} = PdfWriter.render(frames, forms: :static)
+    assert {:ok, source} = Reader.read_validated(original)
+    {legacy, legacy_refs, _} = FormWriter.import_appearances(source, first)
+    assert length(direct) < length(legacy)
+    assert {:ok, direct_pdf} = IncrementalWriter.write(context, direct)
+    assert {:ok, legacy_pdf} = IncrementalWriter.write(context, legacy)
+    assert {:ok, direct_context} = Reader.read_validated(direct_pdf)
+    assert {:ok, legacy_context} = Reader.read_validated(legacy_pdf)
+
+    canonical = fn canonical, document, value ->
+      case value do
+        {:ref, ref} ->
+          object = Map.fetch!(document.objects, ref)
+          {canonical.(canonical, document, Map.delete(object.value, "Length")), object.stream}
+
+        dictionary when is_map(dictionary) ->
+          Map.new(dictionary, fn {key, value} -> {key, canonical.(canonical, document, value)} end)
+
+        values when is_list(values) ->
+          Enum.map(values, &canonical.(canonical, document, &1))
+
+        value ->
+          value
+      end
+    end
+
+    for {direct_ref, legacy_ref} <- Enum.zip(refs, legacy_refs) do
+      assert canonical.(canonical, direct_context.document, direct_ref) ==
+               canonical.(canonical, legacy_context.document, legacy_ref)
+    end
+
+    assert length(direct_context.pages) == 1
+
+    refute Enum.any?(direct, fn {_, _, body} ->
+             match?({:value, %{"Type" => {:name, "Page"}}}, body) or
+               match?({:value, %{"Type" => {:name, "Catalog"}}}, body)
+           end)
+  end
+
+  test "appearance frame budgets are separate from actual page limits" do
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    page = %{size: {10, 10}, boxes: []}
+
+    Limits.install(%{
+      original
+      | max_rendered_pages: 1,
+        max_pdf_pages: 1,
+        max_appearance_widgets: 2
+    })
+
+    assert {:ok, _, [_, _], _} = PdfWriter.appearance_objects([page, page], 1)
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             PdfWriter.render([page, page])
+
+    assert message =~ "max_rendered_pages"
+    Limits.install(%{original | max_pdf_pages: 1})
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             PdfWriter.render([page, page])
+
+    assert message =~ "max_pdf_pages"
+    Limits.install(%{original | max_appearance_widgets: 1})
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             PdfWriter.appearance_objects([page, page], 1)
+
+    assert message =~ "max_appearance_widgets"
+    Limits.install(%{original | max_pdf_objects: 1})
+
+    for id <- [2, 1] do
+      assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+               PdfWriter.appearance_objects([page], id)
+
+      assert message =~ "max_pdf_objects"
+    end
+
+    Limits.install(%{original | max_rendered_pdf_bytes: 1})
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             PdfWriter.appearance_objects([page], 1)
+
+    assert message =~ "max_rendered_pdf_bytes"
+    Limits.install(original)
+
+    for {pages, id} <- [{[], 1}, {[page], 0}, {[page], nil}, {[%{size: {0, 0}, boxes: []}], 1}] do
+      assert {:error,
+              {:invalid_pdf_input,
+               %{reason: :invalid_pdf_input, operation: :write_pdf, message: message}}} =
+               PdfWriter.appearance_objects(pages, id)
+
+      assert message != ""
+    end
+  end
+
+  test "flow markers count toward the cumulative layout-box budget before removal" do
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_layout_boxes: 1})
+    marker = %{type: :flow_marker, x: 10, y: 20, width: 0, height: 12}
+    page = %{size: {100, 100}, boxes: [marker]}
+    assert {:ok, _} = PdfWriter.render([page])
+
+    for pages <- [[%{page | boxes: [marker, marker]}], [page, page]] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = PdfWriter.render(pages)
+      assert diagnostic.stage == :writer and diagnostic.message =~ "max_layout_boxes"
+    end
+  end
+
+  test "flow markers preserve pages and produce exactly the PDF of the visible boxes" do
+    marker = %{type: :flow_marker, x: 10, y: 20, width: 0.0, height: 12}
+
+    text = %{
+      type: :text,
+      text: "Visible",
+      x: 10,
+      y: 80,
+      font: "Helvetica",
+      font_size: 12,
+      color: {0, 0, 0},
+      annotation_width: 40,
+      link_url: "https://example.com"
+    }
+
+    page = %{size: {100, 100}, boxes: [text]}
+    empty = %{page | boxes: []}
+
+    for opts <- [[], [compress_streams: false], [subset_fonts: false]] do
+      assert {:ok, reference} = PdfWriter.render([page, empty, page], opts)
+
+      assert {:ok, ^reference} =
+               PdfWriter.render(
+                 [
+                   %{page | boxes: [marker, text, marker]},
+                   %{empty | boxes: [marker]},
+                   %{page | boxes: [text, marker]}
+                 ],
+                 opts
+               )
+
+      assert {:ok, "Visible\nVisible"} = Text.extract(reference, layout: false)
+    end
+  end
+
+  test "atomic bottom baselines preserve fractional depth and reject invalid supplied depths" do
+    box = %{
+      type: :text,
+      text: "Visible",
+      x: 10,
+      y: 65.5,
+      font: "Helvetica",
+      font_size: 8,
+      color: {0, 0, 0},
+      snap_to_css_pixel_grid: true,
+      baseline_snap_depth: 9.5
+    }
+
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box]}], [])
+    assert pdf =~ "10 65.7579 Td"
+
+    assert {:ok, ordinary_pdf} =
+             PdfWriter.render(
+               [%{size: {100, 100}, boxes: [Map.delete(box, :baseline_snap_depth)]}],
+               []
+             )
+
+    for depth <- [0, 0.0] do
+      assert {:ok, ^ordinary_pdf} =
+               PdfWriter.render(
+                 [%{size: {100, 100}, boxes: [Map.put(box, :baseline_snap_depth, depth)]}],
+                 []
+               )
+    end
+
+    for invalid <- [nil, "invalid", %{}, -1] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} =
+               PdfWriter.render(
+                 [%{size: {100, 100}, boxes: [Map.put(box, :baseline_snap_depth, invalid)]}],
+                 []
+               )
+
+      assert diagnostic.stage == :pdf
+      assert diagnostic.operation == :write_pdf
+      assert diagnostic.message =~ "baseline_snap_depth"
+    end
+  end
+
+  test "decoration raster placement follows the painted baseline and validates supplied offsets" do
+    box = %{
+      type: :rect,
+      x: 10,
+      y: 20.1,
+      width: 30,
+      height: 0.75,
+      fill_color: {0, 0, 0},
+      stroke_color: nil,
+      stroke_width: 0,
+      border_radius: 0,
+      snap_to_css_pixel_grid: true,
+      text_baseline_offset: -1.5
+    }
+
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box]}], [])
+    assert pdf =~ "9.75 19.75 30 0.75 re f"
+
+    atomic = Map.merge(box, %{y: 64.375, text_baseline_offset: -1.125, baseline_snap_depth: 9.5})
+    assert {:ok, atomic_pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [atomic]}], [])
+    assert atomic_pdf =~ "9.75 64.75 30 0.75 re f"
+
+    for field <- [:text_baseline_offset, :baseline_snap_depth],
+        invalid <- [nil, "invalid", %{}] do
+      assert {:error,
+              {:invalid_pdf_input, %{stage: :pdf, operation: :write_pdf, message: message}}} =
+               PdfWriter.render(
+                 [%{size: {100, 100}, boxes: [Map.put(box, field, invalid)]}],
+                 []
+               )
+
+      assert is_binary(message) and message != ""
+    end
+  end
+
+  test "glyph groups paint selected pieces and extract one original Unicode string" do
+    assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    assert {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
+
+    pieces =
+      for {text, index} <- Enum.with_index(["x", "y", "z"]),
+          do:
+            glyph_text_box(font, text)
+            |> Map.put(:glyph_ids, [font.cmap[String.to_charlist(text) |> hd()]])
+            |> Map.put(:x, 10 + index * 15)
+
+    group = %{type: :glyph_group, actual_text: "∫𝑥", boxes: pieces}
+    page = %{size: {100, 100}, boxes: [group]}
+
+    for opts <- [[compress_streams: false], [subset_fonts: false], []] do
+      assert {:ok, pdf} = PdfWriter.render([page, page], opts)
+      assert {:ok, "∫𝑥\n∫𝑥"} = Text.extract(pdf, layout: false)
+      assert {:ok, %{pages: [%{spans: [first]}, %{spans: [second]}]}} = Text.extract_spans(pdf)
+      assert first.text == "∫𝑥"
+      assert first.x == 10.0
+      assert first.end_x > 40.0
+      assert first.source_index == 0
+      assert first == second
+    end
+  end
+
+  test "glyph group strings use the shared PDF codec and permit empty replacements" do
+    box = %{
+      type: :text,
+      text: "pieces",
+      x: 10,
+      y: 80,
+      font: "Helvetica",
+      font_size: 12,
+      color: {0, 0, 0}
+    }
+
+    text = "a(b)\\c\n"
+
+    groups = [
+      %{type: :glyph_group, actual_text: text, boxes: [box]},
+      %{type: :glyph_group, actual_text: "", boxes: [box]},
+      %{type: :glyph_group, actual_text: "", boxes: []}
+    ]
+
+    assert {:ok, pdf} =
+             PdfWriter.render([%{size: {100, 100}, boxes: groups}], compress_streams: false)
+
+    assert {:ok, ^text} = Text.extract(pdf, layout: false)
+    assert {:ok, %{pages: [%{spans: [%{text: ^text}]}]}} = Text.extract_spans(pdf)
+    assert pdf =~ "/ActualText"
+    assert pdf =~ "BDC"
+    assert pdf =~ "EMC"
+  end
+
+  test "glyph group validation rejects malformed strings, nested groups and raw markers" do
+    box = %{
+      type: :text,
+      text: "x",
+      x: 10,
+      y: 80,
+      font: "Helvetica",
+      font_size: 12,
+      color: {0, 0, 0}
+    }
+
+    group = %{type: :glyph_group, actual_text: "x", boxes: [box]}
+
+    for invalid <- [
+          %{group | actual_text: <<255>>},
+          %{group | actual_text: 1},
+          %{group | boxes: [group]},
+          %{group | boxes: [1]},
+          %{group | boxes: :invalid},
+          %{group | boxes: [%{box | type: :image}]},
+          %{group | boxes: [Map.put(box, :snap_to_css_pixel_grid, 1)]},
+          %{type: :actual_text_start, text: "x"},
+          %{type: :actual_text_end}
+        ] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} =
+               PdfWriter.render([%{size: {100, 100}, boxes: [invalid]}])
+
+      assert diagnostic.stage == :pdf
+      assert diagnostic.reason == :invalid_pdf_input
+      assert diagnostic.operation == :write_pdf
+      assert diagnostic.module == PdfWriter
+      assert diagnostic.message =~ "glyph_group"
+    end
+  end
+
+  test "glyph groups check cumulative replacement bytes and piece expansion before allocating" do
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_rendered_text_bytes: 3, max_layout_boxes: 6})
+
+    box = %{
+      type: :text,
+      text: "x",
+      x: 10,
+      y: 80,
+      font: "Helvetica",
+      font_size: 12,
+      color: {0, 0, 0}
+    }
+
+    group = %{type: :glyph_group, actual_text: "ab", boxes: [box]}
+    assert {:ok, _pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [group]}])
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :writer, message: message}}} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [group, group]}])
+
+    assert message =~ "max_rendered_text_bytes"
+    Limits.install(%{original | max_layout_boxes: 3})
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [box, %{group | boxes: [box, box]}]}])
+
+    assert message =~ "max_layout_boxes"
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             PdfWriter.render([
+               %{size: {100, 100}, boxes: [group]},
+               %{size: {100, 100}, boxes: [group]}
+             ])
+  end
+
+  test "zero-size text paints no operators or extractable text" do
+    box = %{
+      type: :text,
+      text: "Invisible",
+      x: 10,
+      y: 30,
+      font: "Helvetica",
+      font_size: 0,
+      color: {0, 0, 0}
+    }
+
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box]}])
+    refute pdf =~ "(Invisible) Tj"
+    assert {:error, {:no_extractable_text, _}} = Text.extract(pdf)
+
+    assert {:ok, pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(
+               "<pre style='font-size:0'>A\tB</pre><p>Visible</p>"
+             )
+
+    assert {:ok, "Visible"} = Text.extract(pdf)
+  end
+
   test "CSS rectangle edges snap relative to the page top" do
     box = %{
       type: :rect,
@@ -23,6 +851,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
     assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box]}], [])
     assert pdf =~ "9.75 19.75 30 40.5 re f"
+
+    bordered = %{box | fill_color: nil, stroke_color: {0, 0, 0}, stroke_width: 0.75}
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [bordered]}], forms: :static)
+    assert pdf =~ "13.4999 26.8335 39 53 re S"
+
+    control = Map.put(bordered, :form_control, %{id: :local_appearance})
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [control]}], forms: :static)
+    assert pdf =~ "13.5 26.8333 39 53 re S"
   end
 
   test "advanced embedded fonts retain default widths beyond supplied metrics" do
@@ -268,6 +1104,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box]}], [])
     assert pdf =~ "0.3294 0.3294 0.3294 RG"
     assert pdf =~ "0 0 0 RG"
+
+    thin_rule =
+      %{
+        box
+        | height: 1.5,
+          stroke_width: 0.75,
+          border_widths: %{top: 0.75, right: 0.75, bottom: 0.75, left: 0.75}
+      }
+      |> Map.put(:role, :horizontal_rule)
+
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [thin_rule]}], [])
+    # The two 1px strokes meet at their edges and do not overlap.
+    assert pdf =~ "0 1.5 m 40 1.5 l"
+    assert pdf =~ "0 0.5 m 40 0.5 l"
   end
 
   test "CSS font painting preserves shaped advances and text extraction" do
@@ -1204,6 +2054,212 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert {:ok, "AB😀"} = Text.extract(pdf, layout: false)
   end
 
+  describe "selected glyph text" do
+    setup do
+      limits = NativeElixirPdfUtilities.Limits.effective()
+      on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
+      assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
+      assert {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
+      {:ok, font: font, limits: limits}
+    end
+
+    test "normal, script, and scriptscript forms retain original supplementary Unicode", %{
+      font: font
+    } do
+      assert {:ok, metrics} = Font.math_metrics(font)
+      [scripts] = metrics.substitutions["ssty"]
+      unicode = 0x1D465
+      [script, scriptscript] = scripts[font.cmap[unicode]]
+      box = glyph_text_box(font, <<unicode::utf8>>)
+
+      boxes = [
+        box,
+        Map.put(%{box | y: 50}, :glyph_ids, [script]),
+        Map.put(%{box | y: 20}, :glyph_ids, [scriptscript])
+      ]
+
+      expected = String.duplicate(<<unicode::utf8>>, 3)
+
+      for subset <- [true, false], compress <- [true, false] do
+        assert {:ok, pdf} =
+                 PdfWriter.render([%{size: {100, 100}, boxes: boxes}],
+                   subset_fonts: subset,
+                   compress_streams: compress
+                 )
+
+        assert {:ok, text} = Text.extract(pdf, layout: false)
+        assert String.replace(text, " ", "") == expected
+        assert {:ok, document} = Reader.read_validated(pdf)
+
+        cid_streams =
+          document.document.objects
+          |> Map.values()
+          |> Enum.filter(fn object ->
+            case object do
+              %{value: %{"Length" => _} = dict, stream: data} when is_binary(data) ->
+                not Map.has_key?(dict, "Length1") and byte_size(data) == 8
+
+              _ ->
+                false
+            end
+          end)
+
+        # The uncompressed mapping has reserved CID 0 and three distinct selected glyph IDs.
+        if not compress do
+          assert Enum.any?(cid_streams, fn object ->
+                   data = object.stream
+                   data == <<0::16, font.cmap[unicode]::16, script::16, scriptscript::16>>
+                 end)
+        end
+      end
+    end
+
+    test "explicit glyphs bypass Latin shaping and preserve presentation ligatures literally", %{
+      font: font
+    } do
+      text = "ffiﬃ"
+      glyphs = Enum.map(String.to_charlist(text), &Map.fetch!(font.cmap, &1))
+      literal = glyph_text_box(font, text) |> Map.put(:glyph_ids, glyphs)
+      regular = %{glyph_text_box(font, "ffi") | y: 50}
+      repeated = %{literal | y: 20} |> Map.put(:letter_spacing, 2)
+
+      assert {:ok, pdf} =
+               PdfWriter.render([%{size: {200, 100}, boxes: [regular, literal, repeated]}],
+                 compress_streams: false
+               )
+
+      assert {:ok, "ffi ffiﬃ ffiﬃ"} = Text.extract(pdf, layout: false)
+      assert pdf =~ "<FB03>"
+      assert pdf =~ "2 Tc"
+
+      # Explicit default glyphs reuse normal CIDs where Unicode extraction agrees.
+      normal = glyph_text_box(font, "x")
+      explicit = normal |> Map.put(:glyph_ids, [font.cmap[?x]]) |> Map.put(:y, 40)
+
+      assert {:ok, pdf} =
+               PdfWriter.render([%{size: {100, 100}, boxes: [normal, explicit]}],
+                 compress_streams: false
+               )
+
+      assert pdf =~ "1 beginbfchar"
+      assert {:ok, "x x"} = Text.extract(pdf, layout: false)
+
+      assert {:ok, pdf} =
+               PdfWriter.render(
+                 [
+                   %{
+                     size: {100, 100},
+                     boxes: [
+                       Map.put(explicit, :snap_to_css_pixel_grid, true)
+                       |> Map.put(:font_size, 10.3)
+                     ]
+                   }
+                 ],
+                 compress_streams: false
+               )
+
+      assert pdf =~ "] TJ"
+      assert {:ok, "x"} = Text.extract(pdf, layout: false)
+
+      assert {:ok, pdf} =
+               PdfWriter.render([%{size: {100, 100}, boxes: [Map.put(explicit, :font_size, 0)]}])
+
+      assert {:error, {:no_extractable_text, _}} = Text.extract(pdf)
+      tiny = explicit |> Map.put(:font_size, 0.001) |> Map.put(:snap_to_css_pixel_grid, true)
+      assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [tiny]}])
+      assert {:error, {:no_extractable_text, _}} = Text.extract(pdf)
+
+      snapped = explicit |> Map.put(:font_size, 30) |> Map.put(:snap_to_css_pixel_grid, true)
+
+      assert {:ok, pdf} =
+               PdfWriter.render([%{size: {100, 100}, boxes: [snapped]}], compress_streams: false)
+
+      [_, painted, adjustment] = Regex.run(~r{/F1 ([0-9.]+) Tf.*\[<0001> (-?[0-9.]+)\] TJ}, pdf)
+      painted = String.to_float(painted)
+      adjustment = String.to_float(adjustment)
+      assert painted == 29.9999
+      advance = Enum.at(font.widths, font.cmap[?x]) / font.units_per_em
+      assert_in_delta painted * (advance - adjustment / 1000), 30 * advance, 0.00001
+
+      empty = %{explicit | text: "", glyph_ids: []}
+
+      for empty <- [empty, Map.delete(empty, :glyph_ids)] do
+        assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [empty]}])
+        assert {:error, {:no_extractable_text, _}} = Text.extract(pdf)
+      end
+    end
+
+    test "invalid glyph lists, unavailable outlines, and cumulative budgets return diagnostics",
+         %{font: font, limits: limits} do
+      box = glyph_text_box(font, "x")
+
+      for glyphs <- [nil, [], [0], [-1], [65_536], ["1"], [1, 2], [length(font.widths)], [1.5]] do
+        assert {:error, {:invalid_pdf_input, diagnostic}} =
+                 PdfWriter.render([
+                   %{size: {100, 100}, boxes: [Map.put(box, :glyph_ids, glyphs)]}
+                 ])
+
+        assert diagnostic.stage == :pdf
+        assert diagnostic.reason == :invalid_pdf_input
+        assert diagnostic.operation == :write_pdf
+        assert is_binary(diagnostic.message)
+      end
+
+      for face <- [nil, %{type: :built_in, pdf_name: "Helvetica", family: "Helvetica"}] do
+        builtin = %{box | font: "Helvetica", font_face: face} |> Map.put(:glyph_ids, [1])
+
+        assert {:error, {:invalid_pdf_input, _}} =
+                 PdfWriter.render([%{size: {100, 100}, boxes: [builtin]}])
+      end
+
+      explicit = Map.put(box, :glyph_ids, [font.cmap[?x]])
+      invalid = %{explicit | font_face: %{font | data: <<>>}}
+
+      assert {:error, {:invalid_pdf_input, %{message: message}}} =
+               PdfWriter.render([%{size: {100, 100}, boxes: [invalid]}], subset_fonts: false)
+
+      assert message =~ "TrueType"
+      truncated = %{explicit | font_face: %{font | widths: [600]}}
+
+      assert {:error, {:invalid_pdf_input, %{message: message}}} =
+               PdfWriter.render([%{size: {100, 100}, boxes: [truncated]}])
+
+      assert message =~ "width metrics"
+
+      NativeElixirPdfUtilities.Limits.install(%{
+        NativeElixirPdfUtilities.Limits.effective()
+        | max_font_math_work: 1
+      })
+
+      assert {:error, {:resource_limit_exceeded, %{stage: :font, message: message}}} =
+               PdfWriter.render([%{size: {100, 100}, boxes: [explicit]}])
+
+      assert message =~ "max_font_math_work"
+      NativeElixirPdfUtilities.Limits.install(%{limits | max_font_source_bytes: 1})
+
+      assert {:error,
+              {:resource_limit_exceeded, %{stage: :font, operation: :write_pdf, message: message}}} =
+               PdfWriter.render([%{size: {100, 100}, boxes: [explicit]}])
+
+      assert message =~ "max_font_source_bytes"
+    end
+
+    test "the fixed CID ceiling includes multiple glyph forms of the same Unicode character", %{
+      font: font
+    } do
+      unicode = Enum.to_list(0x10000..0x1FFFE)
+      face = %{font | cmap: Map.new(unicode, &{&1, font.cmap[?x]})}
+      normal = glyph_text_box(face, List.to_string(unicode))
+      alternate = glyph_text_box(face, <<0x10000::utf8>>) |> Map.put(:glyph_ids, [font.cmap[?y]])
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} =
+               PdfWriter.render([%{size: {100, 100}, boxes: [normal, alternate]}])
+
+      assert diagnostic.message =~ "65,535 CID"
+      assert diagnostic.operation == :write_pdf
+    end
+  end
+
   test "spaced and unspaced text share a font without changing their glyph sequences" do
     assert {:ok, registry} = Font.load_registry([])
     assert {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
@@ -1230,6 +2286,60 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
       assert pdf =~ ~r/<[0-9A-F]{4}> <0069>/
       assert pdf =~ ~r/<[0-9A-F]{4}> <006600660069>/
       assert {:ok, "ffi ffi"} = Text.extract(pdf, layout: false)
+    end
+  end
+
+  test "interleaved builtin and embedded runs preserve spacing and explicit glyph resources" do
+    assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    assert {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+    normal = glyph_text_box(font, "ffi")
+
+    builtin = %{
+      type: :text,
+      text: "First",
+      x: 10,
+      y: 100,
+      font: "Helvetica",
+      font_size: 20,
+      color: {0, 0, 0}
+    }
+
+    repeated =
+      %{builtin | text: "Last", y: 20}
+      |> Map.put(:font_face, %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"})
+      |> Map.put(:letter_spacing, 2)
+
+    literal =
+      %{normal | y: 40}
+      |> Map.put(:glyph_ids, Enum.map(~c"ffi", &Map.fetch!(font.cmap, &1)))
+      |> Map.put(:letter_spacing, 1)
+
+    for subset <- [true, false], compress <- [true, false] do
+      assert {:ok, pdf} =
+               PdfWriter.render(
+                 [%{size: {200, 120}, boxes: [builtin, normal, repeated, literal]}],
+                 subset_fonts: subset,
+                 compress_streams: compress
+               )
+
+      assert {:ok, "First ffi Last ffi"} = Text.extract(pdf, layout: false)
+      assert {:ok, context} = Reader.read_validated(pdf)
+
+      assert {:ok, resources} =
+               Reader.dictionary(
+                 context.document,
+                 context.pages |> hd() |> Map.fetch!(:resources)
+               )
+
+      assert {:ok, fonts} = Reader.dictionary(context.document, resources["Font"])
+      assert map_size(fonts) == 2
+      assert pdf =~ "/BaseFont /Helvetica"
+      assert pdf =~ "/Subtype /Type0"
+
+      unless compress do
+        assert pdf =~ "2 Tc (Last) Tj 0 Tc"
+        assert pdf =~ "1 Tc"
+      end
     end
   end
 

@@ -8,7 +8,9 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
 
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.InfoValidator
   alias NativeElixirPdfUtilities.Validators.OutlineValidator
@@ -66,6 +68,32 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   @spec prepare(term(), term()) ::
           {:ok, context()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare(pages, opts) do
+    HtmlValidator.with_render_budget(fn -> prepare(pages, opts, :pages) end)
+  end
+
+  @doc false
+  @spec prepare_appearances(term(), term()) ::
+          {:ok, context()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_appearances(frames, first_object_id) do
+    HtmlValidator.with_render_budget(fn ->
+      case first_object_id do
+        id when is_integer(id) and id > 0 ->
+          HtmlValidator.check_render_resource(:max_pdf_objects, id, :writer)
+          prepare(frames, [], :appearances)
+
+        _ ->
+          Diagnostics.error(
+            :pdf,
+            :invalid_pdf_input,
+            "appearance object IDs must start at a positive integer",
+            operation: :write_pdf,
+            module: __MODULE__
+          )
+      end
+    end)
+  end
+
+  defp prepare(pages, opts, kind) do
     case {pages, opts} do
       {pages, opts} when is_list(pages) and is_list(opts) ->
         case Keyword.keyword?(opts) do
@@ -78,31 +106,85 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                      length(pages)
                    ) do
                 {:ok, outlines} ->
-                  case pages != [] and Enum.all?(pages, &valid_page?/1) do
-                    true ->
-                      case validate_embedded_fonts(pages) do
-                        :ok ->
-                          {:ok,
-                           %{
-                             pages: pages,
-                             metadata: metadata,
-                             outlines: outlines,
-                             compress_streams: Keyword.get(opts, :compress_streams, true),
-                             subset_fonts: Keyword.get(opts, :subset_fonts, true)
-                           }}
+                  validity =
+                    Enum.reduce_while(pages, :ok, fn page, validity ->
+                      case valid_page?(page) do
+                        {:error, _} = error -> {:halt, error}
+                        false -> {:halt, false}
+                        :box_normalization -> {:cont, :box_normalization}
+                        true -> {:cont, validity}
+                      end
+                    end)
 
-                        {:error, message} ->
-                          Diagnostics.error(:pdf, :invalid_pdf_input, message,
-                            operation: :write_pdf,
-                            module: __MODULE__
+                  case {pages != [], validity} do
+                    {_, {:error, _} = error} ->
+                      error
+
+                    {true, validity} when validity in [true, :ok, :box_normalization] ->
+                      pages =
+                        if validity == :box_normalization,
+                          do: normalize_layout_boxes(pages),
+                          else: pages
+
+                      case kind do
+                        :pages ->
+                          HtmlValidator.check_render_resource(
+                            :max_rendered_pages,
+                            length(pages),
+                            :writer
+                          )
+
+                          HtmlValidator.check_render_resource(
+                            :max_pdf_pages,
+                            length(pages),
+                            :writer
+                          )
+
+                        :appearances ->
+                          HtmlValidator.check_render_resource(
+                            :max_appearance_widgets,
+                            length(pages),
+                            :writer
                           )
                       end
 
-                    false ->
+                      Enum.reduce(pages, 0, fn page, count ->
+                        count = count + length(page.boxes)
+                        HtmlValidator.check_render_resource(:max_layout_boxes, count, :writer)
+                        count
+                      end)
+
+                      with :ok <-
+                             NativeElixirPdfUtilities.Validators.HtmlLinkValidator.validate_destinations(
+                               pages
+                             ) do
+                        case validate_embedded_fonts(pages) do
+                          :ok ->
+                            {:ok,
+                             %{
+                               pages: pages,
+                               metadata: metadata,
+                               outlines: outlines,
+                               compress_streams: Keyword.get(opts, :compress_streams, true),
+                               subset_fonts: Keyword.get(opts, :subset_fonts, true)
+                             }}
+
+                          {:error, {_reason, _diagnostic}} = error ->
+                            error
+
+                          {:error, message} ->
+                            Diagnostics.error(:pdf, :invalid_pdf_input, message,
+                              operation: :write_pdf,
+                              module: __MODULE__
+                            )
+                        end
+                      end
+
+                    _ ->
                       Diagnostics.error(
                         :pdf,
                         :invalid_pdf_input,
-                        "PDF writer requires non-empty valid pages",
+                        "PDF writer requires non-empty valid pages; flow_marker requires zero width, non-negative height and no link/field; baseline_snap_depth must be non-negative numeric when supplied; rectangle text_baseline_offset must be numeric when supplied; glyph_group requires valid UTF-8 actual_text and text-only boxes; explicit glyph_ids require an embedded font and one positive 16-bit glyph ID per Unicode scalar",
                         operation: :write_pdf,
                         module: __MODULE__
                       )
@@ -184,9 +266,25 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     case page do
       %{size: {width, height}, boxes: boxes}
       when is_number(width) and is_number(height) and width > 0 and height > 0 and is_list(boxes) ->
-        Enum.all?(boxes, fn box ->
-          is_map(box) and is_boolean(Map.get(box, :snap_to_css_pixel_grid, false)) and
-            valid_box?(box)
+        Enum.reduce_while(boxes, true, fn box, validity ->
+          result =
+            is_map(box) and is_boolean(Map.get(box, :snap_to_css_pixel_grid, false)) and
+              valid_box?(box)
+
+          case result do
+            {:error, _} = error ->
+              {:halt, error}
+
+            true ->
+              {:cont,
+               if(box.type in [:drawing_group, :glyph_group, :flow_marker],
+                 do: :box_normalization,
+                 else: validity
+               )}
+
+            false ->
+              {:halt, false}
+          end
         end)
 
       _ ->
@@ -194,12 +292,119 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     end
   end
 
+  defp normalize_layout_boxes(pages) do
+    {pages, _count} =
+      Enum.map_reduce(pages, 0, fn page, count ->
+        {boxes, count} = normalize_boxes(page.boxes, count, nil)
+
+        {%{page | boxes: List.flatten(boxes)}, count}
+      end)
+
+    pages
+  end
+
+  defp normalize_boxes(boxes, count, composition) do
+    Enum.map_reduce(boxes, count, fn box, count ->
+      case box do
+        %{type: :drawing_group} ->
+          count = count + 2
+          HtmlValidator.check_render_resource(:max_layout_boxes, count, :writer)
+          {a, _b, _c, d, e, f} = box.transform
+          [a, d, e, f] = Enum.map([a, d, e, f], &Float.round(&1 * 1.0, 4))
+
+          {scale_x, scale_y, translate_x, translate_y, inherited_clip, _height} =
+            composition || {1, 1, 0, 0, nil, nil}
+
+          transform =
+            {scale_x * a, scale_y * d, scale_x * e + translate_x, scale_y * f + translate_y}
+
+          local_clip =
+            if box.width == 0 or box.height == 0,
+              do: %{x: 0, y: 0, width: 0, height: 0},
+              else: Map.get(box, :clip)
+
+          clip = intersect_clip(inherited_clip, transform_clip(local_clip, transform))
+          {sx, sy, tx, ty} = transform
+
+          {children, count} =
+            normalize_boxes(box.boxes, count, {sx, sy, tx, ty, clip, box.height})
+
+          start = %{type: :drawing_group_start, transform: box.transform, clip: local_clip}
+          {[start, children, %{type: :drawing_group_end}], count}
+
+        %{type: :flow_marker} ->
+          count = count + 1
+          HtmlValidator.check_render_resource(:max_layout_boxes, count, :writer)
+          {[], count}
+
+        %{type: :glyph_group, actual_text: text, boxes: children} ->
+          count = count + length(children) + 2
+          HtmlValidator.check_render_resource(:max_layout_boxes, count, :writer)
+
+          HtmlValidator.reserve_render_resource(
+            :max_rendered_text_bytes,
+            byte_size(text),
+            :writer
+          )
+
+          children = Enum.map(children, &normalize_group_annotation(&1, composition))
+
+          {[%{type: :actual_text_start, text: text}] ++
+             children ++ [%{type: :actual_text_end}], count}
+
+        box ->
+          count = count + 1
+          HtmlValidator.check_render_resource(:max_layout_boxes, count, :writer)
+          {[normalize_group_annotation(box, composition)], count}
+      end
+    end)
+  end
+
   defp valid_box?(box) do
     case box do
+      %{drawing_annotation_rect: _} ->
+        false
+
+      %{drawing_page_height: _} ->
+        false
+
+      %{type: :drawing_group} ->
+        case valid_drawing_group(box, 1, {1, 1, 0, 0}, 0) do
+          {:ok, _count} -> true
+          {:error, _} = error -> error
+        end
+
+      %{type: :glyph_group, actual_text: text, boxes: children}
+      when is_binary(text) and is_list(children) ->
+        String.valid?(text) and
+          Enum.all?(children, fn child ->
+            is_map(child) and Map.get(child, :type) == :text and
+              is_boolean(Map.get(child, :snap_to_css_pixel_grid, false)) and valid_box?(child)
+          end)
+
+      %{type: :flow_marker, x: x, y: y, width: width, height: height}
+      when is_number(x) and is_number(y) and is_number(width) and width == 0 and
+             is_number(height) and height >= 0 ->
+        Enum.all?(
+          [
+            :text,
+            :image,
+            :fill_color,
+            :stroke_color,
+            :font_face,
+            :glyph_ids,
+            :link_url,
+            :link_destination,
+            :form_control
+          ],
+          &(Map.get(box, &1) == nil)
+        )
+
       %{type: :text, text: text, x: x, y: y, font_size: font_size, font: font, color: color}
       when is_binary(text) and is_number(x) and is_number(y) and is_number(font_size) and
              font_size >= 0 and is_binary(font) ->
-        valid_color?(color) and valid_font_box?(box) and valid_link_box?(box)
+        valid_baseline_depth?(box) and valid_color?(color) and valid_font_box?(box) and
+          valid_link_box?(box)
 
       %{
         type: :rect,
@@ -216,6 +421,28 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
              width > 0 and height > 0 and is_number(stroke_width) and stroke_width >= 0 and
              is_number(border_radius) and border_radius >= 0 ->
         valid_optional_color?(fill_color) and valid_optional_color?(stroke_color) and
+          case box do
+            %{text_baseline_offset: offset} -> is_number(offset)
+            _ -> true
+          end and
+          valid_baseline_depth?(box) and
+          valid_gauge_frame?(box) and
+          is_boolean(Map.get(box, :gauge_quantize_value, false)) and
+          is_boolean(Map.get(box, :gauge_clip_track, false)) and
+          case Map.get(box, :gauge_fraction) do
+            nil -> true
+            fraction -> is_number(fraction) and fraction >= 0 and fraction <= 1
+          end and
+          case Map.get(box, :gauge_gradient) do
+            nil ->
+              true
+
+            colors ->
+              is_list(colors) and length(colors) == 4 and
+                Enum.all?(colors, fn color ->
+                  is_tuple(color) and tuple_size(color) == 3 and valid_color?(color)
+                end)
+          end and
           valid_border_widths?(Map.get(box, :border_widths)) and
           valid_border_colors?(Map.get(box, :border_colors)) and
           valid_border_styles?(Map.get(box, :border_styles)) and
@@ -224,10 +451,356 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       %{type: :image, x: x, y: y, width: width, height: height, image: image}
       when is_number(x) and is_number(y) and is_number(width) and is_number(height) and
              width > 0 and height > 0 ->
-        valid_image?(image) and valid_image_clip?(Map.get(box, :clip))
+        valid_image?(image) and valid_image_clip?(Map.get(box, :clip)) and
+          valid_baseline_depth?(box) and valid_link_box?(box)
 
       _ ->
         false
+    end
+  end
+
+  # The frame is relative to each rectangle, so pagination can translate paint
+  # without reparsing state or losing the native widget's final page-grid phase.
+  defp valid_gauge_frame?(box) do
+    case Map.get(box, :gauge_frame) do
+      nil ->
+        true
+
+      {dx, dy, width, height} ->
+        Enum.all?(
+          [dx, dy, width, height],
+          &match?({:ok, _}, HtmlValidator.normalize_geometry_number(&1))
+        ) and width > 0 and height > 0 and
+          dx >= 0 and dx <= width and dy >= 0 and dy <= height and
+          Map.get(box, :role) in [
+            :gauge_track,
+            :gauge_value,
+            :gauge_indeterminate,
+            :gauge_outline
+          ] and
+          NativeElixirPdfUtilities.Validators.HtmlGaugeValidator.valid_prepared?(
+            Map.get(box, :gauge_state)
+          )
+
+      _ ->
+        false
+    end
+  end
+
+  # Group dimensions are viewport metadata. Only the explicit clip restricts
+  # nondegenerate viewports; a zero dimension prepares an empty visible region.
+  defp valid_drawing_group(box, depth, {sx, sy, tx, ty}, count) do
+    HtmlValidator.check_render_resource(:max_drawing_group_depth, depth, :writer)
+    HtmlValidator.check_render_resource(:max_layout_boxes, count + 2, :writer)
+
+    case box do
+      %{width: width, height: height, transform: {a, b, c, d, e, f}, boxes: children}
+      when is_number(width) and width >= 0 and is_number(height) and height >= 0 and
+             is_list(children) ->
+        baseline = Map.get(box, :baseline, 0)
+        clip = Map.get(box, :clip)
+
+        cond do
+          Map.has_key?(box, :drawing_annotation_rect) or Map.has_key?(box, :drawing_page_height) ->
+            drawing_group_error(
+              "drawing_group cannot contain caller-supplied private prepared fields"
+            )
+
+          not is_boolean(Map.get(box, :snap_to_css_pixel_grid, false)) ->
+            drawing_group_error("drawing_group snap_to_css_pixel_grid must be boolean")
+
+          not Enum.all?([width, height, a, b, c, d, e, f, baseline], &bounded_number?/1) ->
+            drawing_group_error(
+              "drawing_group dimensions, baseline and affine values must be numeric and within max_pdf_numeric_magnitude"
+            )
+
+          baseline < 0 or baseline > height ->
+            drawing_group_error("drawing_group baseline must lie within its local height")
+
+          b != 0 or c != 0 or a < 0 or d < 0 ->
+            drawing_group_error(
+              "drawing_group rotations, skews and reflections are unsupported; use positive axis-aligned scaling and translation"
+            )
+
+          Float.round(a * 1.0, 4) <= 0 or Float.round(d * 1.0, 4) <= 0 ->
+            drawing_group_error(
+              "drawing_group scales must remain positive at the writer's four-decimal PDF precision"
+            )
+
+          not valid_group_clip?(clip) ->
+            drawing_group_error(
+              "drawing_group clip requires bounded numeric x/y and non-negative width/height"
+            )
+
+          not is_nil(Map.get(box, :form_control)) ->
+            drawing_group_error(
+              "drawing_group form controls require transformed widget support",
+              :unsupported_form
+            )
+
+          not is_nil(Map.get(box, :link_destination)) ->
+            drawing_group_error(
+              "drawing_group destinations require scoped root placement and final composition geometry",
+              :unsupported_html
+            )
+
+          not is_nil(Map.get(box, :link_url)) ->
+            drawing_group_error("drawing_group links belong on child text boxes")
+
+          true ->
+            [a, d, e, f] = Enum.map([a, d, e, f], &Float.round(&1 * 1.0, 4))
+            transform = {sx * a, sy * d, sx * e + tx, sy * f + ty}
+            {sx, sy, tx, ty} = transform
+
+            clip_bounds =
+              case transform_clip(clip, transform) do
+                nil -> []
+                bounds -> Tuple.to_list(bounds)
+              end
+
+            if Enum.all?(
+                 [sx, sy, tx, ty, sx * width + tx, sy * height + ty] ++ clip_bounds,
+                 &bounded_number?/1
+               ) do
+              Enum.reduce_while(children, {:ok, count + 2}, fn child, {:ok, count} ->
+                result =
+                  case child do
+                    %{type: :drawing_group} ->
+                      valid_drawing_group(child, depth + 1, transform, count)
+
+                    child when is_map(child) ->
+                      HtmlValidator.check_render_resource(:max_layout_boxes, count + 1, :writer)
+
+                      pieces =
+                        if child[:type] == :glyph_group, do: Map.get(child, :boxes), else: [child]
+
+                      if is_list(pieces) and child[:type] == :glyph_group do
+                        HtmlValidator.check_render_resource(
+                          :max_layout_boxes,
+                          count + length(pieces) + 2,
+                          :writer
+                        )
+                      end
+
+                      cond do
+                        not is_list(pieces) ->
+                          drawing_group_error(
+                            "drawing_group children must contain valid existing writer boxes"
+                          )
+
+                        not is_nil(Map.get(child, :form_control)) or
+                            Enum.any?(
+                              pieces,
+                              &(is_map(&1) and not is_nil(Map.get(&1, :form_control)))
+                            ) ->
+                          drawing_group_error(
+                            "drawing_group form controls require transformed widget support",
+                            :unsupported_form
+                          )
+
+                        not is_nil(Map.get(child, :link_destination)) or
+                            Enum.any?(
+                              pieces,
+                              &(is_map(&1) and not is_nil(Map.get(&1, :link_destination)))
+                            ) ->
+                          drawing_group_error(
+                            "drawing_group child destinations require scoped root placement and final composition geometry",
+                            :unsupported_html
+                          )
+
+                        child[:type] not in [:text, :rect, :image, :glyph_group] or
+                          not is_boolean(Map.get(child, :snap_to_css_pixel_grid, false)) or
+                            not valid_box?(child) ->
+                          drawing_group_error(
+                            "drawing_group children must contain valid text, rectangle, image, glyph_group or drawing_group boxes"
+                          )
+
+                        not Enum.all?(pieces, &valid_group_geometry?(&1, transform, height)) ->
+                          drawing_group_error(
+                            "drawing_group child geometry and transformed bounds must be within max_pdf_numeric_magnitude"
+                          )
+
+                        true ->
+                          count =
+                            count +
+                              if child[:type] == :glyph_group, do: length(pieces) + 2, else: 1
+
+                          HtmlValidator.check_render_resource(:max_layout_boxes, count, :writer)
+                          {:ok, count}
+                      end
+
+                    _ ->
+                      drawing_group_error("drawing_group children must be writer box maps")
+                  end
+
+                case result do
+                  {:ok, _count} -> {:cont, result}
+                  {:error, _} -> {:halt, result}
+                end
+              end)
+            else
+              drawing_group_error(
+                "drawing_group cumulative transform and viewport bounds exceed max_pdf_numeric_magnitude"
+              )
+            end
+        end
+
+      _ ->
+        drawing_group_error(
+          "drawing_group requires non-negative width/height, a six-value transform and a list of boxes"
+        )
+    end
+  end
+
+  defp bounded_number?(value) do
+    is_number(value) and abs(value) <= Limits.get(:max_pdf_numeric_magnitude)
+  end
+
+  defp valid_group_clip?(clip) do
+    case clip do
+      nil ->
+        true
+
+      %{x: x, y: y, width: width, height: height} when map_size(clip) == 4 ->
+        Enum.all?([x, y, width, height], &bounded_number?/1) and width >= 0 and height >= 0 and
+          bounded_number?(x + width) and bounded_number?(y + height)
+
+      _ ->
+        false
+    end
+  end
+
+  defp valid_group_geometry?(box, {sx, sy, tx, ty} = transform, page_height) do
+    width = Map.get(box, :annotation_width, Map.get(box, :width, 0))
+
+    height =
+      if box.type == :text, do: Map.get(box, :line_height, box.font_size * 1.2), else: box.height
+
+    dimensions =
+      [box.x, box.y, width, height] ++
+        Enum.map(
+          [
+            :font_size,
+            :baseline_snap_depth,
+            :text_baseline_offset,
+            :stroke_width,
+            :border_radius,
+            :letter_spacing
+          ],
+          &Map.get(box, &1, 0)
+        ) ++
+        if(box.type == :rect, do: Map.values(Map.get(box, :border_widths) || %{}), else: [])
+
+    Enum.all?(dimensions, &bounded_number?/1) and width >= 0 and height >= 0 and
+      case box.type do
+        :text ->
+          {x, y} = DrawingGeometry.text_position(box, page_height)
+
+          Enum.all?(
+            [sx * x + tx, sy * y + ty, sx * (x + width) + tx, sy * (y + height) + ty],
+            &bounded_number?/1
+          )
+
+        _ ->
+          Enum.all?(
+            [
+              sx * box.x + tx,
+              sy * box.y + ty,
+              sx * (box.x + width) + tx,
+              sy * (box.y + height) + ty
+            ],
+            &bounded_number?/1
+          )
+      end and
+      valid_group_clip?(Map.get(box, :clip)) and
+      valid_group_clip?(Map.get(box, :link_rect)) and
+      case transform_clip(Map.get(box, :link_rect), transform) do
+        nil -> true
+        {left, bottom, right, top} -> Enum.all?([left, bottom, right, top], &bounded_number?/1)
+      end and
+      case transform_clip(Map.get(box, :clip), transform) do
+        nil -> true
+        {left, bottom, right, top} -> Enum.all?([left, bottom, right, top], &bounded_number?/1)
+      end
+  end
+
+  defp drawing_group_error(message, reason \\ :invalid_pdf_input) do
+    Diagnostics.error(:pdf, reason, message, operation: :write_pdf, module: __MODULE__)
+  end
+
+  defp transform_clip(clip, {sx, sy, tx, ty}) do
+    case clip do
+      nil ->
+        nil
+
+      %{x: x, y: y, width: width, height: height} ->
+        [x, y, width, height] = Enum.map([x, y, width, height], &Float.round(&1 * 1.0, 4))
+        {sx * x + tx, sy * y + ty, sx * (x + width) + tx, sy * (y + height) + ty}
+    end
+  end
+
+  defp intersect_clip(first, second) do
+    case {first, second} do
+      {nil, clip} ->
+        clip
+
+      {clip, nil} ->
+        clip
+
+      {{left, bottom, right, top}, {x1, y1, x2, y2}} ->
+        {max(left, x1), max(bottom, y1), min(right, x2), min(top, y2)}
+    end
+  end
+
+  defp normalize_group_annotation(box, composition) do
+    box =
+      case composition do
+        nil -> box
+        {_sx, _sy, _tx, _ty, _clip, height} -> Map.put(box, :drawing_page_height, height)
+      end
+
+    case {composition, box} do
+      {{sx, sy, tx, ty, clip, page_height}, %{type: :text, link_url: url}} when is_binary(url) ->
+        width = Map.get(box, :annotation_width, Map.get(box, :width))
+        height = Map.get(box, :line_height, box.font_size * 1.2)
+
+        {x, y} = DrawingGeometry.text_position(box, page_height)
+        [x, y] = Enum.map([x, y], &Float.round(&1 * 1.0, 4))
+        rect = {sx * x + tx, sy * y + ty, sx * (x + width) + tx, sy * (y + height) + ty}
+
+        {left, bottom, right, top} = intersect_clip(rect, clip)
+
+        if right > left and top > bottom,
+          do: Map.put(box, :drawing_annotation_rect, {left, bottom, right, top}),
+          else: Map.delete(box, :link_url)
+
+      {{_sx, _sy, _tx, _ty, clip, _height}, %{type: :image, link_url: url}} when is_binary(url) ->
+        {sx, sy, tx, ty, _clip, _height} = composition
+        region = Map.get(box, :link_rect, Map.take(box, [:x, :y, :width, :height]))
+        rect = transform_clip(region, {sx, sy, tx, ty})
+        # Explicit link_rect is the border box, including contain letterboxing.
+        # An image's fit clip restricts ink, not that authored clickable box.
+        rect =
+          if Map.has_key?(box, :link_rect),
+            do: rect,
+            else: intersect_clip(rect, transform_clip(Map.get(box, :clip), {sx, sy, tx, ty}))
+
+        {left, bottom, right, top} = intersect_clip(rect, clip)
+
+        if right > left and top > bottom,
+          do: Map.put(box, :drawing_annotation_rect, {left, bottom, right, top}),
+          else: Map.delete(box, :link_url)
+
+      _ ->
+        box
+    end
+  end
+
+  @compile {:inline, valid_baseline_depth?: 1}
+  defp valid_baseline_depth?(box) do
+    case Map.fetch(box, :baseline_snap_depth) do
+      {:ok, depth} -> is_number(depth) and depth >= 0
+      :error -> true
     end
   end
 
@@ -308,7 +881,9 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     end
   end
 
-  defp valid_color?(color) do
+  @doc false
+  @spec valid_color?(term()) :: boolean()
+  def valid_color?(color) do
     case color do
       {red, green, blue} -> Enum.all?([red, green, blue], &valid_color_channel?/1)
       {red, green, blue, alpha} -> Enum.all?([red, green, blue, alpha], &valid_color_channel?/1)
@@ -360,37 +935,49 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   end
 
   defp valid_link_box?(box) do
-    case Map.get(box, :link_url) do
-      nil ->
-        true
+    url = Map.get(box, :link_url)
+    destination = Map.get(box, :link_destination)
+    linked? = url != nil or destination != nil
+    width = Map.get(box, :annotation_width, Map.get(box, :width))
 
-      link_url when is_binary(link_url) ->
-        width = Map.get(box, :annotation_width, Map.get(box, :width))
+    height =
+      case box.type do
+        :text -> Map.get(box, :line_height, box.font_size * 1.2)
+        :image -> box.height
+      end
 
-        is_number(width) and width > 0 and HtmlValidator.valid_link_url?(link_url)
-
-      _ ->
-        false
-    end
+    valid_image_clip?(Map.get(box, :link_rect)) and
+      (not linked? or (is_number(width) and width > 0 and is_number(height) and height > 0)) and
+      (url == nil or (is_binary(url) and HtmlValidator.valid_link_url?(url)))
   end
 
   defp valid_font_box?(box) do
     case Map.get(box, :font_face) do
       %{type: :embedded, id: id, cmap: cmap} when is_binary(id) and is_map(cmap) ->
         box.font == Font.pdf_name(box.font_face) and String.valid?(box.text) and
-          Enum.all?(String.to_charlist(box.text), fn codepoint ->
-            glyph = Map.get(cmap, codepoint, 0)
-            # PDF CIDToGIDMap entries are fixed unsigned 16-bit glyph indexes.
-            is_integer(glyph) and glyph in 1..65_535 and
-              codepoint <= 0x10FFFF and codepoint not in 0xD800..0xDFFF
-          end)
+          case Map.fetch(box, :glyph_ids) do
+            {:ok, glyphs} when is_list(glyphs) ->
+              length(glyphs) == length(String.to_charlist(box.text)) and
+                Enum.all?(glyphs, &(is_integer(&1) and &1 in 1..65_535))
+
+            :error ->
+              Enum.all?(String.to_charlist(box.text), fn codepoint ->
+                glyph = Map.get(cmap, codepoint, 0)
+                # PDF CIDToGIDMap entries are fixed unsigned 16-bit glyph indexes.
+                is_integer(glyph) and glyph in 1..65_535 and
+                  codepoint <= 0x10FFFF and codepoint not in 0xD800..0xDFFF
+              end)
+
+            _ ->
+              false
+          end
 
       %{type: :built_in, pdf_name: pdf_name} when is_binary(pdf_name) ->
-        box.font == pdf_name and pdf_name in @built_in_fonts and
+        not Map.has_key?(box, :glyph_ids) and box.font == pdf_name and pdf_name in @built_in_fonts and
           Font.supports_text?(box.font_face, box.text)
 
       nil ->
-        box.font in @built_in_fonts and
+        not Map.has_key?(box, :glyph_ids) and box.font in @built_in_fonts and
           Font.supports_text?(%{type: :built_in, family: box.font, pdf_name: box.font}, box.text)
 
       _ ->
@@ -401,7 +988,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   defp validate_embedded_fonts(pages) do
     pages
     |> Enum.flat_map(& &1.boxes)
-    |> Enum.reduce_while({:ok, %{}}, fn box, {:ok, faces} ->
+    |> Enum.reduce_while({:ok, %{}, %{}}, fn box, {:ok, faces, glyph_faces} ->
       case Map.get(box, :font_face) do
         %{type: :embedded, id: id} = face ->
           writer_data =
@@ -409,27 +996,120 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             |> Map.take(@writer_font_fields)
             |> Map.put(:kerning, Map.get(face, :kerning, %{}))
 
+          glyph_faces =
+            if Map.has_key?(box, :glyph_ids),
+              do: Map.put(glyph_faces, id, face),
+              else: glyph_faces
+
           case Map.fetch(faces, id) do
             {:ok, ^writer_data} ->
-              {:cont, {:ok, faces}}
+              {:cont, {:ok, faces, glyph_faces}}
 
             {:ok, _different_face} ->
               {:halt, {:error, "PDF writer font ID #{inspect(id)} has conflicting face data"}}
 
             :error ->
               case valid_embedded_font_face?(face) do
-                true -> {:cont, {:ok, Map.put(faces, id, writer_data)}}
+                true -> {:cont, {:ok, Map.put(faces, id, writer_data), glyph_faces}}
                 false -> {:halt, {:error, "PDF writer requires valid embedded font data"}}
               end
           end
 
         _ ->
-          {:cont, {:ok, faces}}
+          {:cont, {:ok, faces, glyph_faces}}
       end
     end)
     |> case do
-      {:ok, _faces} -> :ok
+      {:ok, _faces, glyph_faces} -> validate_glyph_faces(pages, glyph_faces)
       {:error, _message} = error -> error
+    end
+  end
+
+  defp validate_glyph_faces(pages, faces) do
+    if map_size(faces) == 0 do
+      :ok
+    else
+      result =
+        FontValidator.with_budget(fn ->
+          Enum.reduce_while(faces, :ok, fn {id, face}, :ok ->
+            boxes =
+              for page <- pages,
+                  box <- page.boxes,
+                  box.type == :text,
+                  Map.get(box, :font_face, %{})[:id] == id,
+                  do: box
+
+            glyph_count =
+              Enum.reduce(boxes, 0, fn box, total ->
+                total + length(Map.get(box, :glyph_ids, []))
+              end)
+
+            FontValidator.reserve(:max_font_math_work, glyph_count)
+
+            case FontValidator.prepare_glyph_bounds(face) do
+              {:ok, bounds} ->
+                maximum_glyph = min(tuple_size(bounds), length(face.widths))
+
+                valid =
+                  Enum.all?(boxes, fn box ->
+                    Enum.all?(Map.get(box, :glyph_ids, []), &(&1 < maximum_glyph))
+                  end)
+
+                if valid do
+                  keys =
+                    Enum.reduce(boxes, MapSet.new(), fn box, keys ->
+                      {unicode, glyphs, literal?} =
+                        case Map.fetch(box, :glyph_ids) do
+                          {:ok, glyphs} ->
+                            {String.to_charlist(box.text), glyphs, true}
+
+                          :error ->
+                            unicode =
+                              box.text
+                              |> Font.shape_ligatures(face, Map.get(box, :letter_spacing, 0))
+                              |> String.to_charlist()
+
+                            {unicode, Enum.map(unicode, &Map.fetch!(face.cmap, &1)), false}
+                        end
+
+                      Enum.reduce(Enum.zip(unicode, glyphs), keys, fn {unicode, glyph}, keys ->
+                        key =
+                          if unicode in 0xFB00..0xFB04,
+                            do: {unicode, glyph, literal?},
+                            else: {unicode, glyph}
+
+                        MapSet.put(keys, key)
+                      end)
+                    end)
+
+                  # PDF CIDs are fixed 16-bit format values, not a tunable resource limit.
+                  if MapSet.size(keys) <= 65_535,
+                    do: {:cont, :ok},
+                    else:
+                      {:halt, {:error, "PDF font glyph runs exceed the 65,535 CID format bound"}}
+                else
+                  {:halt,
+                   {:error,
+                    "PDF glyph IDs must exist in the selected font's outlines and width metrics"}}
+                end
+
+              {:error, {_reason, diagnostic}} ->
+                {:halt, {:error, diagnostic.message}}
+            end
+          end)
+        end)
+
+      case result do
+        {:error, {reason, diagnostic}} ->
+          Diagnostics.error(diagnostic.stage, reason, diagnostic.message,
+            operation: :write_pdf,
+            module: __MODULE__,
+            source: Map.get(diagnostic, :source)
+          )
+
+        result ->
+          result
+      end
     end
   end
 

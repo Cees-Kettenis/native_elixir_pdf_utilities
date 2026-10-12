@@ -267,7 +267,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
   end
 
   @doc """
-  Returns the vertical `{top, bottom}` bounds for a drawable layout box.
+  Returns the vertical `{top, bottom}` bounds for a drawing or nonpainting flow marker.
 
   Text bounds account for both the font ascent and the full line height so all
   rendering stages agree about the vertical space occupied by a line.
@@ -276,7 +276,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
   def box_vertical_bounds(box) do
     case box do
       %{type: type, y: y, height: height}
-      when type in [:rect, :image] and is_number(y) and is_number(height) ->
+      when type in [:rect, :image, :flow_marker, :glyph_group, :drawing_group] and is_number(y) and
+             is_number(height) ->
         {y + height, y}
 
       %{type: :text, y: y, line_baseline_depth: depth, line_box_height: height}

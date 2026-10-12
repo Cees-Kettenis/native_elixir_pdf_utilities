@@ -40,16 +40,49 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
           variable_font?: boolean(),
           source: :configured | :bundled | :system
         }
-  @typedoc "A document-scoped mapping from Unicode code points to PDF CIDs and font glyphs."
+  @typedoc "A document-scoped mapping from Unicode or selected glyph pairs to PDF CIDs and glyphs."
   @type pdf_encoding :: %{
-          required(:codepoint_to_cid) => %{optional(non_neg_integer()) => pos_integer()},
+          required(:codepoint_to_cid) => %{
+            optional(non_neg_integer() | {non_neg_integer(), non_neg_integer()}) => pos_integer()
+          },
           required(:cid_to_gid) => %{optional(pos_integer()) => non_neg_integer()},
-          required(:cid_to_unicode) => %{optional(pos_integer()) => non_neg_integer()}
+          required(:cid_to_unicode) => %{
+            optional(pos_integer()) => non_neg_integer() | String.t()
+          }
         }
   @type font_face :: built_in_font() | embedded_font()
 
   @bundled_font_family "DejaVu Sans"
   @measurement_cache_key {__MODULE__, :measurement_cache}
+
+  @doc """
+  Reads the selected font's OpenType MATH constants, glyph corrections,
+  height-dependent kerning, stretch variants, and assemblies in design units.
+  The `:substitutions` map contains the default math language's `ssty`, `flac`,
+  and `dtls` features. Each feature retains ordered lookup maps from glyph IDs
+  to alternate glyph lists. `:substitution_kinds` retains each lookup's single
+  or alternate kind, so a single substitution is not mistaken for a one-item
+  alternate set. Scaling and positioning are separate layout work.
+
+  Parsing is lazy and reused within the font-loading budget scope. Missing or
+  malformed metrics return a diagnostic; another font's metrics are never used.
+  """
+  @spec math_metrics(font_face()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def math_metrics(font) do
+    FontValidator.prepare_math_metrics(font)
+  end
+
+  @doc """
+  Reads glyph ink bounds from the selected TrueType font in design units.
+
+  Tuple positions are glyph IDs and contain `{xmin, ymin, xmax, ymax}`. Empty
+  outlines have zero bounds. Parsing is lazy and reuses identical source bytes
+  within the font budget; decoded geometry consumes `max_font_math_work`.
+  """
+  @spec glyph_bounds(font_face()) :: {:ok, tuple()} | {:error, {atom(), map()}}
+  def glyph_bounds(font) do
+    FontValidator.prepare_glyph_bounds(font)
+  end
 
   @doc false
   @spec with_measurement_cache((-> result)) :: result when result: term()
@@ -57,7 +90,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     case Process.get(@measurement_cache_key) do
       nil ->
         table = :ets.new(:font_measurements, [:set, :private])
-        Process.put(@measurement_cache_key, {table, 0})
+        Process.put(@measurement_cache_key, {table, 0, %{}})
 
         try do
           fun.()
@@ -246,8 +279,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       %{type: :embedded, units_per_em: units_per_em} ->
         {width, work} =
           case Process.get(@measurement_cache_key) do
-            {table, _bytes} ->
-              cache_key = {Map.get(font, :id) || font, font_size, letter_spacing, text}
+            {table, _bytes, _fonts} ->
+              identity = measurement_font_identity(font)
+              cache_key = {identity, font_size, letter_spacing, text}
 
               case :ets.lookup(table, cache_key) do
                 [{^cache_key, width, work}] ->
@@ -257,12 +291,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
                   measured =
                     embedded_text_width(text, font, units_per_em, font_size, letter_spacing)
 
-                  {^table, bytes} = Process.get(@measurement_cache_key)
+                  {^table, bytes, fonts} = Process.get(@measurement_cache_key)
 
-                  if :ets.info(table, :size) < Limits.get(:max_layout_measurement_cache_entries) and
+                  if :ets.info(table, :size) + map_size(fonts) <
+                       Limits.get(:max_layout_measurement_cache_entries) and
                        bytes + byte_size(text) <= Limits.get(:max_layout_measurement_cache_bytes) do
                     :ets.insert(table, {cache_key, elem(measured, 0), elem(measured, 1)})
-                    Process.put(@measurement_cache_key, {table, bytes + byte_size(text)})
+                    Process.put(@measurement_cache_key, {table, bytes + byte_size(text), fonts})
                   end
 
                   measured
@@ -293,7 +328,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
         {glyph, max(glyph, maximum)}
       end)
 
-    widths = font.widths |> Enum.take(maximum_glyph + 1) |> List.to_tuple()
+    widths = measurement_widths(font, maximum_glyph)
 
     width =
       glyphs
@@ -309,7 +344,79 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       |> Kernel./(units_per_em)
       |> Kernel.*(font_size)
 
-    {width, maximum_glyph + 1}
+    {width, length(glyphs)}
+  end
+
+  defp measurement_font_identity(font) do
+    {table, bytes, fonts} = Process.get(@measurement_cache_key)
+    key = Map.get(font, :id) || font
+
+    case Map.get(fonts, key) do
+      {^font, identity, _widths, _complete, _allocated} ->
+        identity
+
+      previous ->
+        if map_size(fonts) + :ets.info(table, :size) <
+             Limits.get(:max_layout_measurement_cache_entries) do
+          identity = make_ref()
+          allocated = if previous, do: elem(previous, 4), else: 0
+          fonts = Map.put(fonts, key, {font, identity, {}, false, 0})
+          Process.put(@measurement_cache_key, {table, bytes - allocated, fonts})
+          identity
+        else
+          font
+        end
+    end
+  end
+
+  @doc false
+  @spec glyph_widths(embedded_font(), non_neg_integer()) :: tuple()
+  def glyph_widths(font, maximum_glyph) do
+    if Process.get(@measurement_cache_key) != nil, do: measurement_font_identity(font)
+    measurement_widths(font, maximum_glyph)
+  end
+
+  defp measurement_widths(font, maximum_glyph) do
+    requested = maximum_glyph + 1
+    key = Map.get(font, :id) || font
+
+    cached =
+      case Process.get(@measurement_cache_key) do
+        {_table, _bytes, fonts} -> Map.get(fonts, key)
+        nil -> nil
+      end
+
+    case cached do
+      {^font, _identity, widths, complete, _allocated}
+      when complete or tuple_size(widths) >= requested ->
+        widths
+
+      _ ->
+        HtmlValidator.reserve_render_resource(:max_layout_text_work, requested, :layout)
+        widths = font.widths |> Enum.take(requested) |> List.to_tuple()
+
+        case {cached, Process.get(@measurement_cache_key)} do
+          {{^font, identity, _previous, _complete, allocated}, {table, bytes, fonts}} ->
+            # Only the newly allocated tuple is owned here; font terms remain shared.
+            tuple_bytes = (tuple_size(widths) + 1) * :erlang.system_info(:wordsize)
+
+            if bytes - allocated + tuple_bytes <= Limits.get(:max_layout_measurement_cache_bytes) do
+              fonts =
+                Map.put(
+                  fonts,
+                  key,
+                  {font, identity, widths, tuple_size(widths) < requested, tuple_bytes}
+                )
+
+              Process.put(@measurement_cache_key, {table, bytes - allocated + tuple_bytes, fonts})
+            end
+
+          _ ->
+            :ok
+        end
+
+        widths
+    end
   end
 
   @doc "Shapes common Latin ligatures when the font provides them and letter spacing is zero."
@@ -618,7 +725,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
       result =
         fetch.(path, fn data ->
-          with {:ok, parsed} <- parse_ttf(data) do
+          with {:ok, parsed} <- FontValidator.prepare_ttf(data) do
             {:ok, {data, parsed}}
           else
             {:error, {_reason, _diagnostic}} = error -> error
@@ -639,7 +746,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       FontValidator.reserve(:max_font_candidates, 1)
       FontValidator.reserve_source(data)
 
-      case FontValidator.memo({:parsed, :crypto.hash(:sha256, data)}, fn -> parse_ttf(data) end) do
+      case FontValidator.memo({:parsed, :crypto.hash(:sha256, data)}, fn ->
+             FontValidator.prepare_ttf(data)
+           end) do
         {:ok, parsed} -> {:halt, {:ok, data, parsed}}
         {:error, {_reason, _diagnostic}} = error -> {:halt, error}
         :error -> {:cont, :error}
@@ -675,7 +784,73 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
   defp resolve_family(family, weight, style, registry) do
     embedded_family(family, weight, style, registry) ||
-      discover_system_family(family, weight, style, registry)
+      case String.downcase(family) do
+        "stix two math" ->
+          bundled_math_font()
+
+        "math" ->
+          embedded_family("STIX Two Math", weight, style, registry) || bundled_math_font()
+
+        "dejavu sans mono" ->
+          bundled_monospace_font(weight, style)
+
+        "monospace" ->
+          discover_system_family(family, weight, style, registry) ||
+            bundled_monospace_font(weight, style)
+
+        _ ->
+          discover_system_family(family, weight, style, registry)
+      end
+  end
+
+  defp bundled_math_font do
+    FontValidator.memo(:bundled_math, fn ->
+      {:ok, font} =
+        load_font(%{
+          family: "STIX Two Math",
+          path: [
+            Application.app_dir(
+              :native_elixir_pdf_utilities,
+              "priv/fonts/stix/STIXTwoMath-Regular.ttf"
+            )
+          ],
+          weight: 400,
+          style: :normal,
+          source: :bundled
+        })
+
+      font
+    end)
+  end
+
+  defp bundled_monospace_font(weight, style) do
+    weight = if weight >= 600, do: 700, else: 400
+
+    FontValidator.memo({:bundled_monospace, weight, style}, fn ->
+      suffix =
+        case {weight, style} do
+          {700, :italic} -> "-BoldOblique"
+          {700, _} -> "-Bold"
+          {_, :italic} -> "-Oblique"
+          _ -> ""
+        end
+
+      {:ok, font} =
+        load_font(%{
+          family: "DejaVu Sans Mono",
+          path: [
+            Application.app_dir(
+              :native_elixir_pdf_utilities,
+              "priv/fonts/dejavu/DejaVuSansMono#{suffix}.ttf"
+            )
+          ],
+          weight: weight,
+          style: style,
+          source: :bundled
+        })
+
+      font
+    end)
   end
 
   defp discover_system_family(family, weight, style, registry) do
@@ -732,197 +907,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     end
   end
 
-  defp parse_ttf(data) do
-    with {:ok, tables} <- table_directory(data),
-         {:ok, head} <- table(data, tables, "head"),
-         {:ok, hhea} <- table(data, tables, "hhea"),
-         {:ok, maxp} <- table(data, tables, "maxp"),
-         {:ok, hmtx} <- table(data, tables, "hmtx"),
-         {:ok, cmap} <- table(data, tables, "cmap"),
-         {:ok, units_per_em, bbox} <- parse_head(head),
-         {:ok, ascent, descent, line_gap, hmetric_count} <- parse_hhea(hhea),
-         {:ok, glyph_count} <- read_u16(maxp, 4),
-         {:ok, widths} <- parse_hmtx(hmtx, glyph_count, hmetric_count),
-         {:ok, cmap} <- parse_cmap(cmap),
-         {:ok, kerning} <-
-           FontValidator.prepare_kerning(
-             case table(data, tables, "kern") do
-               {:ok, kern} -> kern
-               :error -> <<>>
-             end,
-             glyph_count
-           ),
-         {:ok, embedding_flags} <- font_embedding_flags(data, tables) do
-      {:ok,
-       %{
-         units_per_em: units_per_em,
-         widths: widths,
-         default_width: List.last(widths) || 600,
-         cmap: cmap,
-         kerning: kerning,
-         ascent: ascent,
-         descent: descent,
-         line_gap: line_gap,
-         bbox: bbox,
-         embedding_flags: embedding_flags,
-         variable_font?: Map.has_key?(tables, "fvar")
-       }}
-    end
-  end
-
-  defp font_embedding_flags(data, tables) do
-    case table(data, tables, "OS/2") do
-      {:ok, os2} -> read_u16(os2, 8)
-      :error -> {:ok, 0}
-    end
-  end
-
-  defp table_directory(data) do
-    with {:ok, scaler_type} <- read_u32(data, 0),
-         true <- scaler_type in [0x0001_0000, 0x7472_7565],
-         {:ok, table_count} <- read_u16(data, 4),
-         true <- table_count > 0,
-         true <- byte_size(data) >= 12 + table_count * 16 do
-      records =
-        0..(table_count - 1)
-        |> Enum.reduce(%{}, fn index, acc ->
-          offset = 12 + index * 16
-          tag = binary_part(data, offset, 4)
-          <<_checksum::32, table_offset::32, length::32>> = binary_part(data, offset + 4, 12)
-          Map.put(acc, tag, {table_offset, length})
-        end)
-
-      {:ok, records}
-    else
-      _ -> :error
-    end
-  end
-
-  defp table(data, tables, tag) do
-    case Map.get(tables, tag) do
-      {offset, length} when offset >= 0 and length >= 0 and byte_size(data) >= offset + length ->
-        {:ok, binary_part(data, offset, length)}
-
-      _ ->
-        :error
-    end
-  end
-
-  defp parse_head(head) do
-    with {:ok, units_per_em} <- read_u16(head, 18),
-         {:ok, x_min} <- read_i16(head, 36),
-         {:ok, y_min} <- read_i16(head, 38),
-         {:ok, x_max} <- read_i16(head, 40),
-         {:ok, y_max} <- read_i16(head, 42),
-         true <- units_per_em > 0 do
-      {:ok, units_per_em, {x_min, y_min, x_max, y_max}}
-    else
-      _ -> :error
-    end
-  end
-
-  defp parse_hhea(hhea) do
-    with {:ok, ascent} <- read_i16(hhea, 4),
-         {:ok, descent} <- read_i16(hhea, 6),
-         {:ok, line_gap} <- read_i16(hhea, 8),
-         {:ok, hmetric_count} <- read_u16(hhea, 34),
-         true <- hmetric_count > 0 do
-      {:ok, ascent, descent, line_gap, hmetric_count}
-    else
-      _ -> :error
-    end
-  end
-
-  defp parse_hmtx(hmtx, glyph_count, hmetric_count) do
-    cond do
-      glyph_count <= 0 or hmetric_count <= 0 or byte_size(hmtx) < hmetric_count * 4 ->
-        :error
-
-      true ->
-        metric_widths =
-          0..(hmetric_count - 1)
-          |> Enum.map(fn index ->
-            {:ok, width} = read_u16(hmtx, index * 4)
-            width
-          end)
-
-        last_width = List.last(metric_widths)
-        extra_count = max(glyph_count - hmetric_count, 0)
-        {:ok, metric_widths ++ List.duplicate(last_width, extra_count)}
-    end
-  end
-
-  defp parse_cmap(cmap) do
-    with {:ok, subtables} <- FontValidator.prepare_cmap(cmap) do
-      Enum.find_value(subtables, :error, fn segments ->
-        mappings =
-          Enum.reduce(segments, %{}, fn {first, last, delta, glyphs}, mappings ->
-            first..last
-            |> Enum.reject(&(&1 == 0xFFFF))
-            |> Enum.reduce(mappings, fn codepoint, mappings ->
-              glyph_id =
-                case glyphs do
-                  nil ->
-                    Integer.mod(codepoint + delta, 65_536)
-
-                  glyphs ->
-                    case :binary.decode_unsigned(binary_part(glyphs, 2 * (codepoint - first), 2)) do
-                      0 -> 0
-                      glyph_id -> Integer.mod(glyph_id + delta, 65_536)
-                    end
-                end
-
-              case glyph_id > 0 do
-                true -> Map.put(mappings, codepoint, glyph_id)
-                false -> mappings
-              end
-            end)
-          end)
-
-        if map_size(mappings) > 0, do: {:ok, mappings}
-      end)
-    end
-  end
-
   defp pdf_safe_name(name) do
     name
     |> String.replace(~r/[^A-Za-z0-9_-]/u, "")
     |> case do
       "" -> "EmbeddedFont"
       safe -> safe
-    end
-  end
-
-  defp read_u16(data, offset) do
-    case byte_size(data) >= offset + 2 do
-      true ->
-        <<value::16>> = binary_part(data, offset, 2)
-        {:ok, value}
-
-      false ->
-        :error
-    end
-  end
-
-  defp read_i16(data, offset) do
-    case byte_size(data) >= offset + 2 do
-      true ->
-        <<value::signed-16>> = binary_part(data, offset, 2)
-        {:ok, value}
-
-      false ->
-        :error
-    end
-  end
-
-  defp read_u32(data, offset) do
-    case byte_size(data) >= offset + 4 do
-      true ->
-        <<value::32>> = binary_part(data, offset, 4)
-        {:ok, value}
-
-      false ->
-        :error
     end
   end
 end

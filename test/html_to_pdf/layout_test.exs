@@ -6,6 +6,1427 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Limits
 
+  @inline_image "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC"
+
+  test "zero rowspans preserve empty row height and match positive rowspans within their group" do
+    html =
+      "<table style='width:120pt;table-layout:fixed;border-collapse:collapse'><tbody><tr style='height:18pt'><td rowspan=0 style='background:red;border:1pt solid'>Span</td><td>A</td></tr><tr style='height:15pt'></tr><tr style='height:18pt'><td>B</td></tr></tbody><tbody><tr><td>C</td><td>D</td></tr></tbody></table><p>After</p>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {180, 200}, margin: 10)
+
+    assert {:ok, reference_dom} =
+             HtmlParser.parse_detailed(String.replace(html, "rowspan=0", "rowspan=3"))
+
+    assert {:ok, reference_tree} = Style.compute_detailed(reference_dom)
+    assert {:ok, reference} = Layout.layout(reference_tree, page_size: {180, 200}, margin: 10)
+    assert layout == reference
+    spanning = Enum.find(layout.boxes, &(Map.get(&1, :role) == :table_cell_background))
+    assert spanning.height >= 51.0
+    [a, b, c, d] = Enum.filter(layout.boxes, &(Map.get(&1, :text) in ~w(A B C D)))
+    assert_in_delta b.x, a.x, 1.0
+    assert c.x < b.x and d.x > c.x
+    assert_in_delta d.x, a.x, 1.0
+    shorter = String.replace(html, "<tr style='height:15pt'></tr>", "")
+    assert {:ok, shorter_dom} = HtmlParser.parse_detailed(shorter)
+    assert {:ok, shorter_tree} = Style.compute_detailed(shorter_dom)
+    assert {:ok, shorter_layout} = Layout.layout(shorter_tree, page_size: {180, 200}, margin: 10)
+    shorter_b = Enum.find(shorter_layout.boxes, &(Map.get(&1, :text) == "B"))
+    assert_in_delta shorter_b.y - b.y, 15.0, 0.0001
+    assert c.y < b.y
+  end
+
+  test "public rendering diagnoses a table model overlap without moving its cell" do
+    html = "<table><tr><td>A</td><td rowspan=2>B</td></tr><tr><td colspan=2>C</td></tr></table>"
+
+    assert {:error, {:invalid_layout, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(html)
+
+    assert diagnostic.stage == :layout and diagnostic.reason == :invalid_layout
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlTableValidator
+    assert diagnostic.operation == :layout and diagnostic.source == "td"
+    assert diagnostic.message =~ "row 2, column 1"
+    assert diagnostic.message =~ "colspan overlaps"
+  end
+
+  test "definite percentage heights propagate through nested blocks and atomic containers to inline images" do
+    for container <- [
+          "div style='height:50%'",
+          "span style='display:inline-block;width:80pt;height:50%'"
+        ] do
+      [tag | _] = String.split(container)
+
+      html =
+        "<body style='margin:0'><div style='height:80pt'><#{container}><span><img src='#{@inline_image}' style='width:20pt;height:50%'></span></#{tag}></div><p style='margin:0'>Following</p></body>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {180, 150}, margin: 10)
+      [image] = Enum.filter(layout.boxes, &(&1.type == :image))
+      assert {image.width, image.height} == {20.0, 20.0}
+      following = Enum.find(layout.boxes, &(Map.get(&1, :text) == "Following"))
+      assert following.y < 60
+    end
+  end
+
+  test "middle image alignment uses font fallback metrics and preserves outline diagnostics" do
+    image = %{
+      type: :element,
+      tag: "img",
+      children: [],
+      style:
+        image_style(image_fixture(20.0, 10.0))
+        |> Map.merge(%{image_display: :inline, vertical_align: :middle})
+    }
+
+    parent = %{type: :element, tag: "div", children: [image], style: block_style()}
+    assert {:ok, layout} = Layout.layout(document([parent]), page_size: {100, 100}, margin: 10)
+    assert Enum.any?(layout.boxes, &(&1.type == :image))
+    without_x = %{type: :embedded, cmap: %{}, units_per_em: 1000}
+
+    assert {:ok, missing_x} =
+             Layout.layout(
+               document([%{parent | style: Map.put(parent.style, :font_face, without_x)}]),
+               page_size: {100, 100},
+               margin: 10
+             )
+
+    assert Enum.find(missing_x.boxes, &(&1.type == :image)).y ==
+             Enum.find(layout.boxes, &(&1.type == :image)).y
+
+    invalid = %{
+      type: :embedded,
+      id: "inline-invalid-outlines",
+      data: "invalid",
+      cmap: %{?x => 1},
+      units_per_em: 1000
+    }
+
+    assert {:error, {_reason, diagnostic}} =
+             Layout.layout(
+               document([%{parent | style: Map.put(parent.style, :font_face, invalid)}])
+             )
+
+    assert diagnostic.operation == :glyph_bounds
+    assert diagnostic.message =~ "TrueType"
+  end
+
+  test "explicit block images retain anonymous inline boundary behavior" do
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               "<body style='margin:0'><span>Before<img src='#{@inline_image}' style='display:block;width:20pt'>After</span></body>"
+             )
+
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {180, 120}, margin: 10)
+    [image] = Enum.filter(layout.boxes, &(&1.type == :image))
+    [before, after_image] = Enum.filter(layout.boxes, &(&1.type == :text))
+    assert image.y + image.height < before.y
+    assert after_image.y < image.y
+  end
+
+  test "image vertical alignment uses the full margin box and font x height" do
+    for align <- ["baseline", "top", "middle", "bottom"] do
+      html =
+        "<body style='margin:0;font-size:12pt;line-height:15pt'><p style='margin:0'>A<img src='#{@inline_image}' style='width:24pt;height:24pt;margin:2pt 3pt 4pt;vertical-align:#{align}'>B</p><p style='margin:0'>Following</p></body>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {200, 140}, margin: 10)
+      [image] = Enum.filter(layout.boxes, &(&1.type == :image))
+      line = Enum.find(layout.boxes, &(Map.get(&1, :role) == :inline_image_line))
+      [before, after_image, following] = Enum.filter(layout.boxes, &(&1.type == :text))
+      assert_in_delta before.y, after_image.y, 0.0001
+      assert following.y < before.y
+
+      case align do
+        "baseline" -> assert_in_delta image.y, before.y + 4, 0.0001
+        "top" -> assert_in_delta image.y + image.height + 2, line.y + line.height, 0.0001
+        "bottom" -> assert_in_delta image.y - 4, line.y, 0.0001
+        "middle" -> assert image.y < before.y and image.y + image.height > before.y
+      end
+    end
+  end
+
+  test "relative inline image positioning moves clickable border bounds with fitted ink" do
+    for {wrapper, expected_x} <- [{"", 16}, {"position:relative;left:5pt", 21}] do
+      html =
+        "<body style='margin:0'><span style='#{wrapper}'><a href='https://example.com'><img src='#{@inline_image}' style='width:30pt;height:24pt;object-fit:contain;border:1pt solid blue;position:relative;left:6pt;top:3pt'></a></span></body>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {200, 140}, margin: 10)
+      [image] = Enum.filter(layout.boxes, &(&1.type == :image))
+      assert image.link_rect.width == 31.5 and image.link_rect.height == 25.5
+      assert_in_delta image.link_rect.x, expected_x, 0.0001
+      assert image.height == 15
+      assert image.link_rect.y < image.y
+    end
+  end
+
+  test "inline images preserve natural sizing, styled nesting, whitespace and shared baselines" do
+    html =
+      "<body style='margin:0;font-size:12pt;line-height:15pt'><p style='margin:0'>Before <span><a href='https://example.com/photo'><img src='#{@inline_image}'></a> </span>After</p></body>"
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 100}, margin: 10)
+    [image] = Enum.filter(layout.boxes, &(&1.type == :image))
+    texts = Enum.filter(layout.boxes, &(&1.type == :text))
+    assert Enum.map_join(texts, & &1.text) == "Before  After"
+    assert image.width == 12.0 and image.height == 6.0
+    assert image.link_url == "https://example.com/photo"
+    assert Enum.all?(texts, &(abs(&1.y - image.y) < 0.0001))
+    assert image.x > hd(texts).x
+    assert List.last(texts).x >= image.x + image.width
+  end
+
+  test "inline images use authored boxes, margins and a bottom margin baseline" do
+    html =
+      "<body style='margin:0;font-size:12pt;line-height:15pt'><p style='margin:0'>A<img src='#{@inline_image}' width=80 height=40 style='width:30pt;height:auto;border:1pt solid blue;padding:2pt;margin:3pt 4pt 5pt 6pt'>B</p></body>"
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 120}, margin: 10)
+    [image] = Enum.filter(layout.boxes, &(&1.type == :image))
+    [border] = Enum.filter(layout.boxes, &(&1.type == :rect))
+    [before, after_image] = Enum.filter(layout.boxes, &(&1.type == :text))
+    assert {image.width, image.height} == {30.0, 15.0}
+    assert {border.width, border.height} == {35.5, 20.5}
+    assert_in_delta border.y, before.y + 5, 0.0001
+    assert_in_delta image.x, border.x + 2.75, 0.0001
+    assert_in_delta after_image.x, border.x + border.width + 4, 0.0001
+    assert_in_delta after_image.y, before.y, 0.0001
+  end
+
+  test "inline image percentage sizes resolve against the containing block, including definite height" do
+    for {height, expected} <- [{"height:80pt", {40.0, 40.0}}, {"", {40.0, 20.0}}] do
+      html =
+        "<body style='margin:0'><div style='width:80pt;#{height}'><span><img src='#{@inline_image}' style='width:50%;height:50%'></span></div></body>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {200, 120}, margin: 10)
+      [image] = Enum.filter(layout.boxes, &(&1.type == :image))
+      assert {image.width, image.height} == expected
+    end
+  end
+
+  test "inline images wrap atomically and nowrap preserves the complete sequence" do
+    for {white_space, wrapped} <- [{"normal", true}, {"nowrap", false}] do
+      html =
+        "<body style='margin:0;font-size:10pt;line-height:13pt'><p style='margin:0;width:50pt;white-space:#{white_space}'>Before<img src='#{@inline_image}' style='width:30pt;height:18pt'>After</p></body>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {200, 150}, margin: 10)
+      [image] = Enum.filter(layout.boxes, &(&1.type == :image))
+      [before, after_image] = Enum.filter(layout.boxes, &(&1.type == :text))
+      assert image.y < before.y == wrapped
+      assert after_image.y < image.y == wrapped
+      assert {image.width, image.height} == {30.0, 18.0}
+    end
+  end
+
+  test "inline image intrinsic dimensions determine flex, grid and table wrapper heights" do
+    for wrapper <- [
+          "<div style='display:flex'><span>ITEM</span><span>Other</span></div>",
+          "<div style='display:flex;flex-direction:column'><span>ITEM</span><span>Other</span></div>",
+          "<div style='display:grid;grid-template-columns:auto auto'><span>ITEM</span><span>Other</span></div>",
+          "<table style='border-spacing:0'><tr><td>ITEM</td><td>Other</td></tr></table>"
+        ] do
+      body =
+        String.replace(
+          wrapper,
+          "ITEM",
+          "A<img src='#{@inline_image}' style='width:40pt;height:36pt'>B"
+        )
+
+      html =
+        "<body style='margin:0;font-size:10pt;line-height:13pt'>#{body}<p style='margin:0'>Following</p></body>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {240, 180}, margin: 10)
+      [image] = Enum.filter(layout.boxes, &(&1.type == :image))
+      following = Enum.find(layout.boxes, &(Map.get(&1, :text) == "Following"))
+      assert {image.width, image.height} == {40.0, 36.0}
+      assert following.y < image.y
+    end
+  end
+
+  test "fitted inline image clipping and inherited links move with the full line across pages" do
+    html =
+      "<body style='margin:0;font-size:10pt;line-height:13pt'><div style='height:55pt'>Prior</div><p style='margin:0'><a href='https://example.com/photo'>Before<img src='#{@inline_image}' style='width:30pt;height:24pt;object-fit:cover'>After</a></p></body>"
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 90}, margin: 10)
+    assert {:ok, pages} = NativeElixirPdfUtilities.HtmlToPdf.Pagination.paginate(layout)
+    assert length(pages) == 2
+    assert Enum.all?(hd(pages).boxes, &(&1.type != :image))
+    [image] = Enum.filter(List.last(pages).boxes, &(&1.type == :image))
+    assert {image.clip.width, image.clip.height} == {30.0, 24.0}
+    assert image.width == 48.0
+    assert image.link_url == "https://example.com/photo"
+    assert image.clip.y >= 10
+    assert_in_delta image.link_rect.y, image.clip.y, 0.0001
+    assert Enum.count(List.last(pages).boxes, &(&1.type == :text)) == 2
+  end
+
+  test "block image automatic horizontal margins preserve the block sizing path" do
+    for {margins, expected_x} <- [{"margin:auto", 80.0}, {"margin-left:auto", 150.0}] do
+      html =
+        "<body style='margin:0'><img src='#{@inline_image}' style='display:block;width:40pt;#{margins}'></body>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {200, 100}, margin: 10)
+      [image] = layout.boxes
+      assert image.type == :image
+      assert {image.x, image.width, image.height} == {expected_x, 40.0, 20.0}
+    end
+  end
+
+  test "authored automatic dimensions replace gauge UA dimensions without painting fallback" do
+    for tag <- ~w(progress meter) do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<p style='margin:0'><#{tag} value=.5 style='width:auto;height:auto;font-size:12pt'></#{tag}></p>"
+               )
+
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {300, 100}, margin: 0)
+      refute Enum.any?(layout.boxes, &Map.has_key?(&1, :gauge_state))
+      assert hd(hd(styled.children).children).style.width == :auto
+      assert hd(hd(styled.children).children).style.height == :auto
+    end
+  end
+
+  test "extreme finite meter ranges retain independent midpoint geometry and tiny extents remain valid" do
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<p style='margin:0'><meter min=-1e308 max=1e308 value=0 style='width:100pt;height:12pt'></meter></p>"
+             )
+
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {300, 100}, margin: 0)
+    value = Enum.find(layout.boxes, &(Map.get(&1, :role) == :gauge_value))
+    assert value.gauge_fraction == 0.5
+    assert_in_delta value.width * value.gauge_fraction, 49.25, 0.375
+    assert value.gauge_state.min == -1.0e308 and value.gauge_state.max == 1.0e308
+
+    for tag <- ~w(progress meter),
+        size <- ["width:.1pt", "height:.1pt", "height:1pt"],
+        appearance <- ["auto", "none"] do
+      assert {:ok, _} =
+               NativeElixirPdfUtilities.HtmlToPdf.render(
+                 "<#{tag} value=.5 style='#{size};appearance:#{appearance}'></#{tag}>"
+               )
+    end
+
+    [paragraph] = styled.children
+    [gauge] = paragraph.children
+
+    for state <- [nil, %{kind: :meter}, Map.put(gauge.style._gauge, :position, 9.0)] do
+      forged = put_in(gauge.style._gauge, state)
+
+      assert {:error, {:invalid_layout, diagnostic}} =
+               Layout.layout(%{styled | children: [%{paragraph | children: [forged]}]})
+
+      assert diagnostic.reason == :invalid_layout and diagnostic.stage == :layout
+      assert is_binary(diagnostic.message)
+    end
+  end
+
+  test "gauges use required dimensions baseline fractions and distinct static unknown artwork" do
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<p style='margin:0;font-size:10pt;line-height:14pt'>Before<progress value=.25></progress>After<meter min=-2 max=2 value=0></meter><progress></progress></p>"
+             )
+
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {400, 100}, margin: 0)
+    tracks = Enum.filter(layout.boxes, &(Map.get(&1, :role) == :gauge_track))
+
+    for {track, expected} <- Enum.zip(tracks, [100, 50, 100]),
+        do: assert_in_delta(track.width, expected, 0.75)
+
+    assert Enum.all?(tracks, &(abs(&1.height - 5) <= 0.75))
+    values = Enum.filter(layout.boxes, &(Map.get(&1, :role) == :gauge_value))
+    assert Enum.map(values, & &1.gauge_fraction) == [0.25, 0.5]
+    unknown = Enum.find(layout.boxes, &(Map.get(&1, :role) == :gauge_indeterminate))
+    track = List.last(tracks)
+    assert unknown.width == unknown.height and unknown.gauge_state.position == -1
+    assert_in_delta unknown.x + unknown.width / 2, track.x + track.width / 2, 1.0e-10
+    before = Enum.find(layout.boxes, &(Map.get(&1, :text) == "Before"))
+    first = hd(tracks)
+    # A 1em atomic box with -0.2em alignment has its bottom 2pt below baseline.
+    assert_in_delta first.y + first.height / 2, before.y + 3, 0.375
+    refute Enum.any?(layout.boxes, &Map.get(&1, :form_control))
+  end
+
+  test "gauge art shares block flex grid positioning and explicit box model paths" do
+    for wrapper <- ["", "display:flex", "display:grid;grid-template-columns:100pt"],
+        display <- ["block", "inline-block"] do
+      html =
+        "<div style='#{wrapper}'><meter value=.5 style='display:#{display};width:80pt;height:20pt;padding:2pt;border:1pt solid red'></meter></div>"
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {200, 100}, margin: 10)
+      track = Enum.find(layout.boxes, &(Map.get(&1, :role) == :gauge_track))
+      assert_in_delta track.width, 80, 0.75
+      assert_in_delta track.height, 10, 0.75
+
+      assert Enum.any?(
+               layout.boxes,
+               &(Map.get(&1, :fill_color) == nil and Map.get(&1, :stroke_color) == {1, 0, 0})
+             )
+    end
+
+    for size <- ["width:0", "height:0"], tag <- ~w(progress meter) do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed("<p><#{tag} value=.5 style='#{size}'></#{tag}></p>")
+
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      assert {:ok, layout} = Layout.layout(styled)
+      refute Enum.any?(layout.boxes, &Map.has_key?(&1, :gauge_state))
+    end
+
+    for region <- [{"1", "2"}, {"1", "5"}, {"1", "9"}], appearance <- ["auto", "none"] do
+      {optimum, value} = region
+
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<meter max=10 low=3 high=7 optimum=#{optimum} value=#{value} style='appearance:#{appearance};width:20pt;height:8pt;position:absolute;left:5pt;top:3pt'></meter>"
+               )
+
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {200, 100}, margin: 0)
+      track = Enum.find(layout.boxes, &(Map.get(&1, :role) == :gauge_track))
+      assert_in_delta track.x, 5, 0.375
+      assert_in_delta track.width, 20, 0.75
+      assert_in_delta track.height, 4, 0.75
+      value = Enum.find(layout.boxes, &(Map.get(&1, :role) == :gauge_value))
+      assert Map.has_key?(value, :gauge_gradient) == (appearance == "none")
+    end
+  end
+
+  test "disclosure marker advances use initial state and preserve author layout overrides" do
+    for {css, open, marker, offset} <- [
+          {"", "", "▶ ", 10.59375},
+          {"", "open", "▼ ", 10.59375},
+          {"list-style:none", "", nil, 0.0},
+          {"list-style:inside square", "", "▪ ", 13.74609375},
+          {"list-style:inside disc", "", "• ", 13.74609375},
+          {"list-style:inside circle", "", "◦ ", 13.74609375},
+          {"display:block", "", nil, 0.0},
+          {"list-style:outside disclosure-closed", "", "▶", 0.0}
+        ] do
+      html =
+        "<details #{open} style='font-size:10pt;line-height:13pt'><summary style='#{css}'>Legend</summary></details>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {180, 100}, margin: 20)
+      legend = Enum.find(layout.boxes, &(Map.get(&1, :text) == "Legend"))
+      assert_in_delta legend.x, 20 + offset, 0.0001
+
+      markers =
+        Enum.filter(layout.boxes, &(Map.get(&1, :text) in ["▶ ", "▼ ", "▪ ", "• ", "◦ ", "▶"]))
+
+      assert Enum.map(markers, & &1.text) == if(marker, do: [marker], else: [])
+    end
+
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               "<details><summary style='list-style:inside square'>Legend</summary></details>"
+             )
+
+    assert {:ok, styled} = Style.compute(dom)
+    [details] = styled.children
+    [summary] = details.children
+    builtin = %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"}
+    style = Map.put(summary.style, :font_face, builtin)
+
+    style =
+      put_in(
+        style._list_marker,
+        Enum.map(style._list_marker, &put_in(&1.style.font_face, builtin))
+      )
+
+    [text] = summary.children
+
+    summary = %{
+      summary
+      | style: style,
+        children: [%{text | style: Map.put(text.style, :font_face, builtin)}]
+    }
+
+    assert {:ok, _} = Layout.layout(%{styled | children: [%{details | children: [summary]}]})
+  end
+
+  test "ordinary blocks distribute remaining inline space to automatic margins" do
+    for {margin, expected_x} <- [
+          {"0 auto", 90.0},
+          {"0 0 0 auto", 180.0},
+          {"0 auto 0 0", 0.0},
+          {"auto", 90.0},
+          {"0 12pt 0 auto", 168.0},
+          {"0 auto 0 12pt", 12.0}
+        ] do
+      html =
+        "<div style='width:240pt'><div style='width:60pt;height:12pt;background:red;margin:#{margin}'></div></div>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {300, 200}, margin: 0)
+      box = Enum.find(layout.boxes, &(&1.type == :rect and &1.fill_color == {1, 0, 0}))
+      assert_in_delta box.x, expected_x, 0.0001
+      assert_in_delta box.width, 60.0, 0.0001
+    end
+
+    for {sizing, width, x} <- [{"border-box", 60.0, 90.0}, {"content-box", 73.5, 83.25}] do
+      html =
+        "<div style='width:240pt'><div style='width:60pt;height:12pt;background:red;padding:6pt;border:0.75pt solid;margin:0 auto;box-sizing:#{sizing}'></div></div>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {300, 200}, margin: 0)
+      box = Enum.find(layout.boxes, &(&1.type == :rect and &1.fill_color == {1, 0, 0}))
+      assert_in_delta box.width, width, 0.0001
+      assert_in_delta box.x, x, 0.0001
+    end
+  end
+
+  test "horizontal rules retain native border-box geometry and centered automatic margins" do
+    for hints <- ["width=60", "width=60 size=3 color=navy"] do
+      assert {:ok, dom} = HtmlParser.parse("<div style='width:240pt'><hr #{hints}></div>")
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {300, 200}, margin: 0)
+
+      rule =
+        Enum.find(layout.boxes, &(&1.type == :rect and Map.get(&1, :role) == :horizontal_rule))
+
+      assert rule.width == 46.5 and rule.height == 1.5
+      assert rule.x == 96.75
+    end
+  end
+
+  test "fractional empty atomic baselines retain the depth from their rasterized top edge" do
+    for height <- ["8pt", "8.25pt"], content <- ["", "Inside"] do
+      overflow = if content == "", do: "visible", else: "hidden"
+
+      html =
+        "<div style='font-size:8pt;line-height:13pt'><span style='display:inline-block;height:#{height};width:28pt;border:0.75pt solid;overflow:#{overflow}'>#{content}</span>After</div>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {250, 150}, margin: 0)
+      after_text = Enum.find(layout.boxes, &(&1.type == :text and &1.text == "After"))
+      box = Enum.find(layout.boxes, &(&1.type == :rect))
+      assert_in_delta after_text.y, box.y, 0.0001
+
+      if height == "8pt" do
+        assert_in_delta after_text.baseline_snap_depth, 9.4921875, 0.0001
+      else
+        refute Map.has_key?(after_text, :baseline_snap_depth)
+      end
+    end
+
+    atomic =
+      "<span style='display:inline-block;height:8pt;width:28pt;border:0.75pt solid'></span>"
+
+    tall_text = "<span style='font-size:20pt;line-height:24pt'>Tall</span>"
+
+    for content <- [atomic <> tall_text, tall_text <> atomic] do
+      html = "<div style='font-size:8pt;line-height:13pt'>#{content}</div>"
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {250, 150}, margin: 0)
+      text = Enum.find(layout.boxes, &(&1.type == :text and &1.text == "Tall"))
+      assert text.line_baseline_depth > 9.4921875
+      refute Map.has_key?(text, :baseline_snap_depth)
+    end
+  end
+
+  test "empty dropdowns retain the same intrinsic line as populated dropdowns" do
+    for parent <- ["display:block", "display:flex", "display:grid"],
+        display <- ["block", "inline-block"],
+        line_height <- ["12pt", "18pt", "2", "normal"],
+        {font_size, expected_height} <- [{10, 17.25}, {12, 20.25}] do
+      rectangles =
+        for options <- [
+              "",
+              "<option></option>",
+              "<option>A</option>",
+              "<option disabled>A</option>"
+            ] do
+          html =
+            "<div style='#{parent}'><select style='display:#{display};font-size:#{font_size}pt;line-height:#{line_height}'>#{options}</select></div>"
+
+          assert {:ok, dom} = HtmlParser.parse(html)
+          assert {:ok, styled} = Style.compute(dom)
+          assert {:ok, layout} = Layout.layout(styled, page_size: {240, 120}, margin: 0)
+          box = Enum.find(layout.boxes, &is_map(Map.get(&1, :form_control)))
+          assert_in_delta box.height, expected_height, 0.0001
+          Map.take(box, [:x, :y, :width, :height])
+        end
+
+      assert length(Enum.uniq(rectangles)) == 1
+    end
+  end
+
+  test "a final flow line containing only an unpainted atomic block retains its baseline" do
+    html =
+      "<div style='font-size:10pt;line-height:12pt;margin:0'>Before<div style='display:inline-block'><div><span style='display:inline-block;width:20pt;height:20pt'></span></div></div>After</div>"
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {250, 150}, margin: 0)
+    [before, after_text] = Enum.filter(layout.boxes, &(&1.type == :text))
+    assert before.text == "Before" and after_text.text == "After"
+    assert_in_delta before.y, after_text.y, 0.0001
+    assert before.line_box_height > 20
+    refute Enum.any?(layout.boxes, &(&1.type == :baseline_measurement))
+  end
+
+  test "automatic multiline inline blocks use their widest forced line for trailing text placement" do
+    for content <- [
+          "First<br>Last",
+          "<span style='display:inline-block'>First<br>Last</span>",
+          "First<br><br>"
+        ] do
+      html =
+        "<div style='font-size:10pt;line-height:12pt;margin:0'>Before<span style='display:inline-block;background:#ddd'>#{content}</span>After</div>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {250, 150}, margin: 0)
+      first = Enum.find(layout.boxes, &(&1.type == :text and &1.text == "First"))
+      after_text = Enum.find(layout.boxes, &(&1.type == :text and &1.text == "After"))
+      background = Enum.find(layout.boxes, &(&1.type == :rect and &1.fill_color != nil))
+      assert_in_delta background.width, first.annotation_width, 0.0001
+      assert_in_delta after_text.x, background.x + background.width, 0.0001
+    end
+  end
+
+  test "supplied private measurement flags do not enable internal baseline records" do
+    for flag <- [true, false, make_ref()] do
+      block = paragraph("Visible")
+      block = %{block | style: Map.put(block.style, :_measure_inline_baseline, flag)}
+      assert {:ok, layout} = Layout.layout(%{type: :document, children: [block]})
+      refute Enum.any?(layout.boxes, &Map.has_key?(&1, :_measured_baseline))
+      refute Enum.any?(layout.boxes, &(&1.type == :baseline_measurement))
+    end
+  end
+
+  test "inline blocks align the last normal-flow baseline independently of declared height" do
+    for {content, extra, last} <- [
+          {"Inside", "", "Inside"},
+          {"First<br>Last", "width:40pt", "Last"},
+          {"First<br>Last", "height:40pt", "Last"},
+          {"Inside", "font-size:14pt;line-height:18pt", "Inside"},
+          {"Inside", "font-family:DejaVu Serif", "Inside"},
+          {"First<br>Last", "padding:2pt;border:1pt solid red;margin:3pt", "Last"},
+          {"<div>First</div><div>Last</div>", "width:40pt;padding:2pt", "Last"},
+          {"<div style='position:relative;top:3pt'>First</div><div>Last</div>", "width:40pt",
+           "Last"},
+          {"<span style='display:inline-block'>First<br>Last</span>", "width:40pt", "Last"}
+        ] do
+      html =
+        "<div style='font-family:DejaVu Sans;font-size:10pt;line-height:12pt;margin:0'>Before<div style='display:inline-block;#{extra}'>#{content}</div>After<br>Next</div>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {250, 150}, margin: 0)
+      boxes = Enum.filter(layout.boxes, &(&1.type == :text))
+      before = Enum.find(boxes, &(&1.text == "Before"))
+      after_text = Enum.find(boxes, &(&1.text == "After"))
+      inside = Enum.find(boxes, &(&1.text == last))
+      next = Enum.find(boxes, &(&1.text == "Next"))
+      assert_in_delta before.y, inside.y, 0.0001
+      assert_in_delta after_text.y, inside.y, 0.0001
+      assert next.y < before.y
+      assert_in_delta next.y, 150 - before.line_box_height - next.line_baseline_depth, 0.0001
+    end
+  end
+
+  test "empty and non-visible-overflow inline blocks use their bottom margin edge" do
+    for {content, extra} <- [{"", ""}, {" ", ""}, {"Inside", "overflow:hidden"}] do
+      html =
+        "<div style='font-size:10pt;line-height:12pt;margin:0'>Before<span style='display:inline-block;width:30pt;height:20pt;margin:2pt 0 3pt;padding:1pt;border:1pt solid red;background:#eee;#{extra}'>#{content}</span>After<br>Next</div>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {250, 150}, margin: 0)
+      before = Enum.find(layout.boxes, &(&1.type == :text and &1.text == "Before"))
+      after_text = Enum.find(layout.boxes, &(&1.type == :text and &1.text == "After"))
+      background = Enum.find(layout.boxes, &(&1.type == :rect and &1.fill_color != nil))
+      assert_in_delta before.y, background.y - 3, 0.0001
+      assert_in_delta after_text.y, before.y, 0.0001
+      assert before.line_box_height > background.height + 5
+    end
+  end
+
+  test "relative paint offsets and absolute descendants leave the inline block flow baseline intact" do
+    for content <- [
+          "<div style='position:relative;top:3pt'>Inside</div>",
+          "<div style='position:relative'>Inside<span style='position:absolute;top:40pt'>Outside</span></div>"
+        ] do
+      html =
+        "<div style='font-size:10pt;line-height:12pt;margin:0'>Before<div style='display:inline-block;width:60pt'>#{content}</div>After</div>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {250, 150}, margin: 0)
+      before = Enum.find(layout.boxes, &(&1.type == :text and &1.text == "Before"))
+      inside = Enum.find(layout.boxes, &(&1.type == :text and &1.text == "Inside"))
+      after_text = Enum.find(layout.boxes, &(&1.type == :text and &1.text == "After"))
+      assert_in_delta after_text.y, before.y, 0.0001
+
+      if String.contains?(content, "top:3pt"),
+        do: assert_in_delta(inside.y + 3, before.y, 0.0001),
+        else: assert_in_delta(inside.y, before.y, 0.0001)
+
+      if String.contains?(content, "Outside"),
+        do:
+          assert(
+            Enum.any?(
+              layout.boxes,
+              &(&1.type == :text and &1.text == "Outside" and &1.out_of_flow)
+            )
+          )
+    end
+  end
+
+  test "forced and preserved blank lines contribute the final inline block baseline" do
+    for {content, extra} <- [
+          {"First<br><br>", ""},
+          {"First\n\n", "white-space:pre"},
+          {"First<br> ", "white-space:pre"}
+        ] do
+      html =
+        "<div style='font-size:10pt;line-height:12pt;margin:0'>Before<div style='display:inline-block;#{extra}'>#{content}</div>After</div>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {250, 150}, margin: 0)
+      before = Enum.find(layout.boxes, &(&1.type == :text and &1.text == "Before"))
+      first = Enum.find(layout.boxes, &(&1.type == :text and &1.text == "First"))
+      assert_in_delta first.y - before.y, 12, 0.0001
+    end
+  end
+
+  test "heading titles omit validated replaced-image nodes without child text" do
+    heading = paragraph("Visible") |> Map.put(:tag, "h1")
+
+    heading = %{
+      heading
+      | style: Map.put(heading.style, :heading_level, 3),
+        children:
+          heading.children ++
+            [%{type: :element, tag: "img", style: image_style(image_fixture(20.0, 10.0))}]
+    }
+
+    assert {:ok, layout} = Layout.layout(%{type: :document, children: [heading]}, margin: 0)
+
+    assert Enum.find(layout.boxes, &Map.has_key?(&1, :outline_anchor)).outline_anchor == %{
+             title: "Visible",
+             level: 3
+           }
+
+    assert Enum.any?(layout.boxes, &(&1.type == :image))
+  end
+
+  test "computed heading levels reach block flex grid and anonymous outline anchors" do
+    for container <- ["div", "heading-box"], display <- ["block", "flex", "grid"] do
+      html =
+        "<#{container} headingoffset='2' style='display:#{display}'><h1>Heading</h1></#{container}>"
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, tree} = Style.compute_detailed(dom)
+      assert {:ok, layout} = Layout.layout(tree)
+
+      anchors =
+        Enum.flat_map(layout.boxes, fn box ->
+          case Map.fetch(box, :outline_anchor) do
+            {:ok, anchor} -> [anchor]
+            :error -> []
+          end
+        end)
+
+      assert anchors == [%{title: "Heading", level: 3}]
+    end
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<div headingoffset='2'>Before<h1>Anonymous</h1>After</div>"
+             )
+
+    assert {:ok, tree} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(tree)
+
+    assert Enum.find(layout.boxes, &Map.has_key?(&1, :outline_anchor)).outline_anchor ==
+             %{title: "Anonymous", level: 3}
+  end
+
+  test "word breaks preserve styled tails and relative contexts through table measurement" do
+    for {content, expected} <- [
+          {"A<span style='position:relative'></span>BC", "ABC"},
+          {"ABC<span style='color:red;overflow-wrap:anywhere'>DEFGHI</span>", "ABCDEFGHI"},
+          {"ABC<span style='color:red;word-break:break-word'>DEFGHI</span>", "ABCDEFGHI"},
+          {"A<span style='display:inline-block;width:20pt;white-space:nowrap'>B</span>C", "ABC"},
+          {"ABC<br><span style='color:red'>DEF</span>", "ABCDEF"},
+          {"<span style='line-break:anywhere'>e</span><span style='color:red;line-break:anywhere'>\u0301e</span>",
+           "e\u0301e"}
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<table style='width:120pt;font-size:10pt;line-height:12pt'><tr><td style='padding:0;background:white'>" <>
+                   content <>
+                   "</td><td style='width:75%;padding:0;background:white'>Other</td></tr></table>"
+               )
+
+      assert {:ok, tree} = Style.compute_detailed(dom)
+      assert {:ok, layout} = Layout.layout(tree, page_size: {240, 200}, margin: 0)
+      text = layout.boxes |> Enum.filter(&(&1.type == :text)) |> Enum.map_join(& &1.text)
+      assert String.replace(text, ~r/\s/u, "") == expected <> "Other"
+    end
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<p style='width:40pt;margin:0;font-size:10pt;line-height:12pt'>go<wbr>ABC<strong>DEF</strong>GHI</p>"
+             )
+
+    assert {:ok, tree} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(tree, margin: 0)
+    text = Enum.filter(layout.boxes, &(&1.type == :text))
+    [prefix | word] = text
+    assert prefix.text == "go"
+    assert Enum.map_join(word, & &1.text) == "ABCDEFGHI"
+    assert Enum.uniq_by(word, & &1.y) |> length() == 1
+    assert prefix.y > hd(word).y
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<p style='margin:0'><span style='position:relative;left:3pt;top:2pt'><wbr></span></p>"
+             )
+
+    assert {:ok, tree} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(tree, margin: 0)
+    [marker] = Enum.filter(layout.boxes, &(&1.type == :flow_marker))
+    assert marker.x == 3 and marker.width == 0
+  end
+
+  test "grid and flex preserve an empty word-break item without its authored box" do
+    for {display, same_row?} <- [{"flex", true}, {"grid", false}] do
+      html =
+        "<div style='display:" <>
+          display <>
+          ";grid-template-columns:40pt 40pt;gap:6pt;font-size:10pt;line-height:12pt'><span>First</span><wbr style='font-size:30pt;width:100pt;height:80pt;padding:20pt;background:red'><span>Second</span></div>"
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, tree} = Style.compute_detailed(dom)
+      assert {:ok, layout} = Layout.layout(tree, margin: 0)
+      [first, second] = Enum.filter(layout.boxes, &(&1.type == :text))
+      assert first.text == "First" and second.text == "Second"
+      assert first.y == second.y == same_row?
+      refute Enum.any?(layout.boxes, &(&1.type == :rect))
+    end
+  end
+
+  test "table min-content groups styled words and separates explicit optional breaks" do
+    widths =
+      for content <- [
+            "ABCDEFGHIJKLMNO",
+            "ABC<span style='color:red'>DEF</span>GHIJKLMNO",
+            "ABC<wbr><span style='color:red'>DEF</span><wbr>GHIJKLMNO"
+          ] do
+        assert {:ok, dom} =
+                 HtmlParser.parse_detailed(
+                   "<table style='width:120pt;font-size:10pt;line-height:12pt'><tr><td style='padding:0;background:white'>" <>
+                     content <>
+                     "</td><td style='width:75%;padding:0;background:white'>Other</td></tr></table>"
+                 )
+
+        assert {:ok, tree} = Style.compute_detailed(dom)
+        assert {:ok, layout} = Layout.layout(tree, page_size: {240, 200}, margin: 0)
+        [first, _] = Enum.filter(layout.boxes, &(Map.get(&1, :role) == :table_cell_background))
+        first.width
+      end
+
+    [plain, styled, optional] = widths
+    assert_in_delta plain, styled, 0.0001
+    assert optional < styled
+
+    [plain_nowrap, styled_nowrap] =
+      for content <- [
+            "<nobr>ABC DEF GHI</nobr>",
+            "<nobr>ABC<span style='color:red'> DEF</span> GHI</nobr>"
+          ] do
+        assert {:ok, dom} =
+                 HtmlParser.parse_detailed(
+                   "<table style='width:100pt;font-size:10pt;line-height:12pt'><tr><td style='padding:0;background:white'>" <>
+                     content <>
+                     "</td><td style='width:75%;padding:0;background:white'>Other</td></tr></table>"
+                 )
+
+        assert {:ok, tree} = Style.compute_detailed(dom)
+        assert {:ok, layout} = Layout.layout(tree, page_size: {240, 200}, margin: 0)
+        [first, _] = Enum.filter(layout.boxes, &(Map.get(&1, :role) == :table_cell_background))
+        first.width
+      end
+
+    assert_in_delta plain_nowrap, styled_nowrap, 0.0001
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<table style='width:100pt;font-size:12pt;line-height:14.25pt;background:#ddd'><caption style='background:#eee'>Expanded caption</caption><tr><td style='padding:0'><span style='display:inline-block;width:200pt'>Wide</span></td></tr></table>"
+             )
+
+    assert {:ok, tree} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(tree, page_size: {300, 200}, margin: 0)
+    caption = Enum.filter(layout.boxes, &match?({:table_caption, _}, Map.get(&1, :flow_id)))
+    [caption_background | caption_text] = caption
+
+    table_background =
+      Enum.find(layout.boxes, &(Map.get(&1, :fill_color) == {221 / 255, 221 / 255, 221 / 255}))
+
+    assert caption_background.width == table_background.width
+    assert caption_background.width >= 200
+    assert Enum.map_join(caption_text, & &1.text) == "Expanded caption"
+    assert length(Enum.uniq_by(caption_text, & &1.y)) == 1
+  end
+
+  test "optional word breaks retain parent metrics without drawing marker content" do
+    for {content, mode} <- [
+          {"ABC<wbr>DEF<wbr>GHI", "normal"},
+          {"<nobr>ABC<wbr>DEF<wbr>GHI</nobr>", "normal"},
+          {"ABC<wbr>DEF<wbr>GHI", "nowrap"},
+          {"ABC<wbr>DEF<wbr>GHI", "pre"}
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<p style='width:40pt;font-size:10pt;line-height:12pt;margin:0;white-space:" <>
+                   mode <> "'>" <> content <> "</p>"
+               )
+
+      assert {:ok, tree} = Style.compute_detailed(dom)
+      assert {:ok, layout} = Layout.layout(tree, margin: 0)
+      text = Enum.filter(layout.boxes, &(&1.type == :text))
+      assert Enum.map_join(text, & &1.text) == "ABCDEFGHI"
+      assert text |> Enum.group_by(& &1.y) |> map_size() == 2
+      assert Enum.filter(layout.boxes, &(&1.type == :flow_marker)) |> length() == 2
+      refute Enum.any?(layout.boxes, &(&1.type not in [:text, :flow_marker]))
+    end
+
+    for content <- [
+          "<wbr>",
+          "<wbr><wbr>",
+          "<wbr style='font-size:30pt;line-height:36pt;padding:5pt;border:2pt solid red;background:blue;position:absolute;left:80pt'>"
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<p style='margin:0;font-size:10pt;line-height:12pt'>" <> content <> "</p>"
+               )
+
+      assert {:ok, tree} = Style.compute_detailed(dom)
+      assert {:ok, layout} = Layout.layout(tree, margin: 0)
+      assert Enum.uniq_by(layout.boxes, & &1.y) |> length() == 1
+
+      assert Enum.all?(
+               layout.boxes,
+               &(&1.type == :flow_marker and &1.width == 0 and &1.height == 12)
+             )
+    end
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<p style='margin:0;font-size:10pt;line-height:12pt'><span style='font-size:24pt;line-height:30pt'><wbr></span></p>"
+             )
+
+    assert {:ok, tree} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(tree, margin: 0)
+    assert Enum.all?(layout.boxes, &(&1.type == :flow_marker and &1.height == 30))
+  end
+
+  test "legacy advanced wrapping and cross-style graphemes retain character boundaries" do
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<p style='width:10pt;font-size:10pt;margin:0'>ABCDEFGHI</p>"
+             )
+
+    assert {:ok, tree} = Style.compute_detailed(dom)
+
+    legacy =
+      update_in(
+        tree,
+        [:children, Access.at(0), :children, Access.at(0), :style],
+        &Map.put(&1, :line_break, :break_word)
+      )
+
+    assert {:ok, layout} = Layout.layout(legacy, margin: 0)
+
+    assert Enum.filter(layout.boxes, &(&1.type == :text)) |> Enum.map_join(& &1.text) ==
+             "ABCDEFGHI"
+
+    assert length(Enum.uniq_by(layout.boxes, & &1.y)) > 1
+
+    for property <- ["overflow-wrap:anywhere", "line-break:anywhere"] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<p style='width:5pt;font-size:10pt;margin:0;" <>
+                   property <>
+                   "'><span>e</span><strong>\u0301</strong><span>e</span><strong>\u0301</strong></p>"
+               )
+
+      assert {:ok, tree} = Style.compute_detailed(dom)
+      assert {:ok, layout} = Layout.layout(tree, margin: 0)
+      [a, b, c, d] = Enum.filter(layout.boxes, &(&1.type == :text))
+      assert [a.text, b.text, c.text, d.text] == ["e", "\u0301", "e", "\u0301"]
+      assert a.y == b.y and c.y == d.y and a.y > c.y
+    end
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<p style='width:10pt;font-size:10pt;margin:0;white-space:break-spaces;line-break:anywhere'>ABCDEFGHI</p>"
+             )
+
+    assert {:ok, tree} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(tree, margin: 0)
+    assert length(Enum.uniq_by(layout.boxes, & &1.y)) > 1
+  end
+
+  test "overflow wrapping uses an ordinary break before emergency grapheme breaks" do
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<p style='width:78pt;font-size:10pt;line-height:12pt;margin:0;overflow-wrap:anywhere'>prefix ABC<strong>DEF</strong>GHIJKLMNO end</p>"
+             )
+
+    assert {:ok, tree} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(tree, margin: 0)
+
+    lines =
+      layout.boxes
+      |> Enum.filter(&(&1.type == :text))
+      |> Enum.chunk_by(& &1.y)
+      |> Enum.map(&Enum.map_join(&1, fn box -> box.text end))
+
+    assert lines == ["prefix", "ABCDEFGHIJKL", "MNO end"]
+  end
+
+  test "emergency wrapping retains styled words, atomic neighbors, and grapheme clusters" do
+    for content <- [
+          "prefix ABC<strong>DEF</strong>GHIJKLMNO end",
+          "x ABC<strong>DEF</strong>GHIJKLMNO end",
+          "ABC<strong>DEF</strong>GHIJKLMNO",
+          "prefix ABC<span style='position:relative'></span><strong>DEF</strong>GHIJKLMNO end",
+          "prefix ABC<span style='white-space:nowrap'>DEF</span>GHIJKLMNO end",
+          "prefix ABC<span style='white-space:pre'>DEF</span>GHIJKLMNO end",
+          "go <strong>ABCDEFGHIJKLMNOP</strong>",
+          "<span style='display:inline-block;width:12pt'>X</span><strong>ABCDEFGHIJKLMNOP</strong>",
+          "<span style='position:relative'></span>ABCDEFGHIJKLMNOP"
+        ],
+        property <- [
+          "overflow-wrap:anywhere",
+          "overflow-wrap:break-word",
+          "word-break:break-word"
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<p style='width:40pt;font-size:10pt;line-height:12pt;margin:0;" <>
+                   property <> "'>" <> content <> "</p>"
+               )
+
+      assert {:ok, tree} = Style.compute_detailed(dom)
+      assert {:ok, layout} = Layout.layout(tree, margin: 0)
+      text = Enum.filter(layout.boxes, &(&1.type == :text))
+
+      assert Enum.map_join(text, & &1.text) |> String.replace(" ", "") ==
+               content |> String.replace(~r/<[^>]+>/u, "") |> String.replace(" ", "")
+
+      assert length(Enum.uniq_by(text, & &1.y)) > 1
+    end
+
+    for content <- [
+          "go ABC-<strong>DEF</strong>-GHI",
+          "go !<strong>-DEF</strong>",
+          "go ABC<strong>-!</strong>",
+          "ABC<strong>DEF-</strong>GHI",
+          "<span style='display:inline-block;width:20pt'>Box</span><strong>Word</strong>"
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<p style='width:40pt;font-size:10pt;line-height:12pt;margin:0'>" <>
+                   content <> "</p>"
+               )
+
+      assert {:ok, tree} = Style.compute_detailed(dom)
+      assert {:ok, layout} = Layout.layout(tree, margin: 0)
+
+      assert Enum.filter(layout.boxes, &(&1.type == :text))
+             |> Enum.map_join(& &1.text)
+             |> String.replace(" ", "") ==
+               content |> String.replace(~r/<[^>]+>/u, "") |> String.replace(" ", "")
+    end
+
+    cluster = "e\u0301"
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<p style='width:5pt;overflow-wrap:anywhere'>" <>
+                 String.duplicate(cluster, 4) <> "</p>"
+             )
+
+    assert {:ok, tree} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(tree, margin: 0)
+
+    assert Enum.filter(layout.boxes, &(&1.type == :text)) |> Enum.map(& &1.text) ==
+             List.duplicate(cluster, 4)
+
+    for property <- ["overflow-wrap:anywhere", "word-break:break-word"],
+        html <- ["<table><tr><td>ABCDEFGHIJKLMNOP</td><td>B</td></tr></table>", "<p>Text</p>"] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<div style='width:40pt;" <> property <> "'>" <> html <> "</div>"
+               )
+
+      assert {:ok, tree} = Style.compute_detailed(dom)
+      assert {:ok, _} = Layout.layout(tree, margin: 0)
+    end
+  end
+
+  test "styled inline boundaries keep an overflowing word together" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<p style='width:40pt;font-size:10pt;line-height:12pt;margin:0'>go ABC<strong>DEF</strong>GHI</p>"
+             )
+
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, margin: 0)
+    text = Enum.filter(layout.boxes, &(&1.type == :text))
+    assert Enum.map(text, & &1.text) == ["go", "ABC", "DEF", "GHI"]
+    [first, a, b, c] = text
+    assert first.y > a.y
+    assert a.y == b.y and b.y == c.y
+    assert a.x == first.x
+    assert_in_delta b.x, a.x + a.annotation_width, 0.0001
+    assert_in_delta c.x, b.x + b.annotation_width, 0.0001
+    assert c.x + c.annotation_width > 40
+  end
+
+  test "inline backgrounds retain ancestor metrics through nesting, wrapping and atomic content" do
+    html =
+      "<div style='width:85pt;font-size:10pt;line-height:16pt'><mark>First <strong>bold</strong> <span style='background:blue;font-size:14pt'>nested</span> words wrap <span style='display:inline-block;width:20pt'>Box</span></mark></div>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {160, 180}, margin: 0)
+    backgrounds = Enum.filter(layout.boxes, &(Map.get(&1, :role) == :inline_background))
+    assert backgrounds != []
+    yellow = Enum.filter(backgrounds, &(&1.fill_color == {1, 1, 0}))
+    blue = Enum.filter(backgrounds, &(&1.fill_color == {0, 0, 1}))
+    assert blue != [] and length(yellow) > length(blue)
+    assert length(Enum.uniq_by(yellow, & &1.y)) > 1
+    assert length(Enum.uniq_by(yellow, & &1.height)) == 1
+    assert hd(blue).height > hd(yellow).height
+    assert Enum.all?(backgrounds, &(&1.width > 0 and Map.has_key?(&1, :fragment_id)))
+
+    for {box, index} <- Enum.with_index(layout.boxes),
+        Map.get(box, :role) == :inline_background do
+      assert Enum.any?(Enum.drop(layout.boxes, index + 1), &(&1.type == :text))
+    end
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<div><mark style='position:relative;left:3pt;top:2pt'>Shifted</mark></div>"
+             )
+
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, shifted} = Layout.layout(styled)
+    assert Enum.any?(shifted.boxes, &(Map.get(&1, :role) == :inline_background and &1.x == 3))
+
+    builtin =
+      update_in(
+        styled,
+        [:children, Access.at(0), :children, Access.at(0), :style],
+        &Map.put(&1, :font_face, %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"})
+      )
+
+    assert {:ok, builtin_layout} = Layout.layout(builtin)
+
+    assert Enum.any?(
+             builtin_layout.boxes,
+             &(Map.get(&1, :role) == :inline_background and &1.height == 12)
+           )
+
+    for html <- [
+          "<mark></mark>",
+          "<mark style='background:transparent'>Text</mark>",
+          "<span style='background:red;font-size:0'>Zero</span>"
+        ] do
+      assert {:ok, dom} = HtmlParser.parse_detailed("<div>" <> html <> "</div>")
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      assert {:ok, layout} = Layout.layout(styled)
+      refute Enum.any?(layout.boxes, &(Map.get(&1, :role) == :inline_background))
+    end
+  end
+
+  test "empty text and search controls retain a single line of intrinsic height" do
+    for parent <- ["display:block", "display:flex", "display:grid"],
+        display <- ["block", "inline-block"],
+        type <- ["text", "search"] do
+      layouts =
+        for value <- ["", "A", "&#13;&#10;"] do
+          assert {:ok, dom} =
+                   HtmlParser.parse(
+                     ~s(<div style="#{parent}"><input type="#{type}" value="#{value}" style="display:#{display};font-size:12pt;line-height:18pt"></div>)
+                   )
+
+          assert {:ok, tree} = Style.compute(dom)
+          assert {:ok, layout} = Layout.layout(tree, page_size: {240, 120}, margin: 0)
+          control = Enum.find(layout.boxes, &is_map(Map.get(&1, :form_control)))
+          assert control.height >= 18
+          Map.take(control, [:x, :y, :width, :height])
+        end
+
+      assert Enum.uniq(layouts) |> length() == 1
+    end
+  end
+
+  test "display none excludes absolute descendants from positioned layout" do
+    for hidden <- [
+          ~s(<input type="hidden" style="position:absolute;width:100pt;height:100pt">),
+          ~s(<span style="display:none;position:absolute"><span style="position:absolute">Secret</span></span>)
+        ] do
+      assert {:ok, dom} = HtmlParser.parse("<p>Left" <> hidden <> "Right</p>")
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {200, 100}, margin: 0)
+      assert {:ok, reference_dom} = HtmlParser.parse("<p>Left<span></span>Right</p>")
+      assert {:ok, reference_styled} = Style.compute(reference_dom)
+      assert {:ok, reference} = Layout.layout(reference_styled, page_size: {200, 100}, margin: 0)
+      assert layout.boxes == reference.boxes
+    end
+  end
+
+  test "text decorations wrap, retain fragment metadata, and validate advanced input" do
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               "<p style='width:70pt;text-decoration-line:underline overline line-through'>Several words wrap across multiple lines.</p>"
+             )
+
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {140, 100}, margin: 0)
+    text = Enum.filter(layout.boxes, &(&1.type == :text))
+    decorations = Enum.filter(layout.boxes, &(Map.get(&1, :role) == :text_decoration))
+    assert length(decorations) == 3 * length(text)
+    assert length(Enum.uniq_by(text, & &1.y)) > 1
+    assert Enum.all?(decorations, &Map.has_key?(&1, :fragment_id))
+
+    for value <- [:invalid, [nil], [%{}], [%{lines: [:bad]}]] do
+      invalid =
+        update_in(
+          styled,
+          [:children, Access.at(0), :style],
+          &Map.put(&1, :_text_decorations, value)
+        )
+
+      assert {:error, :invalid_layout} = Layout.layout(invalid)
+    end
+
+    origin = hd(hd(styled.children).style._text_decorations)
+
+    for {field, value} <- [
+          lines: [],
+          lines: [:underline, :underline],
+          color: :bad,
+          thickness: -1,
+          underline: "invalid"
+        ] do
+      changed = Map.put(origin, field, value)
+
+      invalid =
+        update_in(
+          styled,
+          [:children, Access.at(0), :style],
+          &Map.put(&1, :_text_decorations, [changed])
+        )
+
+      assert {:error, :invalid_layout} = Layout.layout(invalid)
+    end
+
+    assert Enum.all?(decorations, fn decoration ->
+             Enum.any?(text, &(abs(&1.annotation_width - decoration.width) < 0.001))
+           end)
+
+    for css <- ["text-decoration-color:transparent", "font-size:0"] do
+      assert {:ok, dom} = HtmlParser.parse("<p><u style='#{css}'>A</u></p>")
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled)
+      refute Enum.any?(layout.boxes, &(Map.get(&1, :role) == :text_decoration))
+    end
+  end
+
+  test "advanced list trees retain legacy markers and diagnose malformed content" do
+    assert {:ok, dom} =
+             HtmlParser.parse("<ol><li>A</li></ol><ul style='list-style:none'><li>B</li></ul>")
+
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, expected} = Layout.layout(styled)
+
+    legacy = %{
+      styled
+      | children:
+          Enum.map(styled.children, fn list ->
+            %{
+              list
+              | children:
+                  Enum.map(list.children, fn item ->
+                    %{item | style: Map.delete(item.style, :_list_marker)}
+                  end)
+            }
+          end)
+    }
+
+    assert Layout.layout(legacy) == {:ok, expected}
+
+    invalid_marker =
+      put_in(
+        styled,
+        [:children, Access.at(0), :children, Access.at(0), :style, :_list_marker],
+        :invalid
+      )
+
+    assert {:error, :invalid_layout} = Layout.layout(invalid_marker)
+
+    [list | _] = styled.children
+    [item] = list.children
+    marker_style = Map.delete(item.style, :_list_marker)
+
+    for marker <- [
+          %{type: :text, text: <<255>>, style: marker_style},
+          %{type: :element, style: marker_style, children: []}
+        ] do
+      invalid =
+        put_in(
+          styled,
+          [:children, Access.at(0), :children, Access.at(0), :style, :_list_marker],
+          [marker]
+        )
+
+      assert {:error, :invalid_layout} = Layout.layout(invalid)
+    end
+
+    invalid_content =
+      update_in(styled, [:children, Access.at(0), :children], fn [item] -> [hd(item.children)] end)
+
+    assert {:error, :invalid_layout} = Layout.layout(invalid_content)
+  end
+
+  test "list marker placement preserves wrapping and the item box" do
+    html = """
+    <ol start='9' style='margin:0;padding-left:30pt;width:100pt'>
+    <li style='list-style-position:inside;padding:4pt;border:1pt solid red;background-color:#eee'>Inside marker wraps with the text</li>
+    <li style='margin-top:3pt;padding-left:5pt'>Outside</li>
+    <li style='display:none'>Hidden</li><li style='display:block'>Block</li>
+    <li style='height:0'>Zero height</li><li></li></ol>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {240, 300}, margin: 0)
+    text = Enum.filter(layout.boxes, &(&1.type == :text))
+    inside = Enum.find(text, &(&1.text == "9."))
+    assert_in_delta inside.x, 34.75, 0.001
+    assert Enum.any?(text, &(&1.text == "10." and &1.x < 35))
+    refute Enum.any?(text, &(&1.text == "Hidden"))
+    assert Enum.any?(layout.boxes, &(&1.type == :rect))
+    assert Enum.any?(text, &(&1.text == "Block"))
+    assert Enum.any?(text, &(&1.text == "12."))
+  end
+
+  test "zero-size preformatted tabs have zero advance without raising" do
+    assert {:ok, dom} = HtmlParser.parse("<pre style='font-size:0;margin:0'>A\tB</pre>")
+    assert {:ok, styled} = Style.compute(dom, system_font_discovery: false)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 150}, margin: 0)
+
+    assert [%{text: "AB", annotation_width: width}] =
+             Enum.filter(layout.boxes, &(&1.type == :text))
+
+    assert width == 0
+
+    assert {:ok, _pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.render("<pre style='font-size:0'>A\tB</pre>")
+  end
+
+  test "preserved terminal newlines terminate lines without creating a blank final line" do
+    for html <- [
+          "<pre style='margin:0'>first\n</pre>",
+          "<div style='white-space:pre;margin:0'>first<strong> bold</strong>\n</div>"
+        ] do
+      assert {:ok, dom} = HtmlParser.parse(html <> "<div>second</div>")
+      assert {:ok, styled} = Style.compute(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {200, 200}, margin: 0)
+      text = Enum.filter(layout.boxes, &(&1.type == :text))
+      assert_in_delta hd(text).y - List.last(text).y, hd(styled.children).style.line_height, 0.75
+    end
+  end
+
+  test "preformatted whitespace retains spaces, tab stops, newlines and overflow" do
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               "<pre style='font-size:10pt;line-height:14pt;width:30pt;margin:0'>\n  A\tB  \n<span> C</span>  D</pre>"
+             )
+
+    assert {:ok, styled} = Style.compute(dom, system_font_discovery: false)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 150}, margin: 0)
+    [first, second, third] = Enum.filter(layout.boxes, &(&1.type == :text))
+    assert first.text == "  A     B  "
+    assert first.annotation_width > 30
+    assert second.text == " C"
+    assert third.text == "  D"
+    assert second.y == third.y
+    assert_in_delta first.y - second.y, 14, 0.001
+
+    for mode <- ["pre-wrap", "break-spaces"] do
+      assert {:ok, dom} =
+               HtmlParser.parse(
+                 "<div style='white-space:#{mode};font-size:10pt;line-height:14pt;width:24pt'>A  B C</div>"
+               )
+
+      assert {:ok, styled} = Style.compute(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {200, 150}, margin: 0)
+      text = Enum.filter(layout.boxes, &(&1.type == :text))
+      assert Enum.map_join(text, & &1.text) == "A  B C"
+      assert Enum.uniq(Enum.map(text, & &1.y)) |> length() > 1
+    end
+  end
+
+  test "nested lists retain block children, marker baselines and empty item height" do
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               "<ul><li>First<ul><li>Inner<ul><li>Deep</li></ul></li></ul></li><li><p>Block</p>Tail</li><li></li></ul>"
+             )
+
+    assert {:ok, styled} = Style.compute(dom, system_font_discovery: false)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {250, 300}, margin: 0)
+    texts = Enum.filter(layout.boxes, &(&1.type == :text))
+
+    for text <- ["First", "Inner", "Deep", "Block", "Tail", "◦", "▪"],
+        do: assert(Enum.any?(texts, &(&1.text == text)))
+
+    first = Enum.find(texts, &(&1.text == "First"))
+    inner = Enum.find(texts, &(&1.text == "Inner"))
+    assert inner.x > first.x
+    assert inner.y < first.y
+    assert Enum.count(texts, &(&1.text == "•")) == 3
+  end
+
   test "advanced layout rejects nonboolean viewport metadata without raising" do
     styled = %{type: :document, children: []}
 
@@ -129,7 +1550,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert {:ok, layout} = Layout.layout(styled, page_size: {200, 150}, margin: 0)
     texts = Enum.filter(layout.boxes, &(&1.type == :text))
     assert length(Enum.uniq_by(texts, & &1.y)) == 1
-    assert Enum.map(texts, & &1.x) == [0.0, 20.0, 40.0]
+    assert Enum.map(texts, & &1.x) == [0.0, 19.9921875, 39.984375]
   end
 
   test "normal text can wrap before a nested nowrap phrase" do
@@ -209,6 +1630,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       Enum.filter(layout.boxes, &(&1.type == :rect and &1.fill_color in [{1, 0, 0}, {0, 0, 1}]))
 
     assert first.y - second.y == 2.0
+  end
+
+  test "block form and ordinary parent margins collapse with grid and flex child margins" do
+    for parent <- ["form", "div"], display <- ["grid", "flex"] do
+      html =
+        "<#{parent} style='margin-top:20pt;margin-bottom:8pt'>" <>
+          "<div style='display:#{display};height:10pt;margin-top:30pt;margin-bottom:6pt;background:red'></div>" <>
+          "</#{parent}><div style='height:10pt;background:blue'></div>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {100, 100}, margin: 0)
+      red = Enum.find(layout.boxes, &(&1.type == :rect and &1.fill_color == {1, 0, 0}))
+      blue = Enum.find(layout.boxes, &(&1.type == :rect and &1.fill_color == {0, 0, 1}))
+      assert_in_delta red.y, 60.0, 0.0001
+      assert_in_delta blue.y, 42.0, 0.0001
+    end
   end
 
   test "inline flex and grid containers share a line and preserve inner layout" do
@@ -974,7 +2412,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {100, 100}, margin: 10)
 
     assert Enum.any?(layout_tree.boxes, fn
-             %{type: :rect, width: 23.5, height: 15.5} -> true
+             %{type: :rect, width: 23.4921875, height: 15.5} -> true
              _ -> false
            end)
 
@@ -1003,7 +2441,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     after_text = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == " After"))
     background = Enum.find(layout_tree.boxes, &(&1.type == :rect and &1.fill_color != nil))
 
-    assert_in_delta background.width, 44.0, 0.0001
+    assert_in_delta background.width, 43.99609375, 0.0001
     assert first.x == second.x
     assert first.y > second.y
     assert before.x < background.x
@@ -1029,7 +2467,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert block.y < lead.y
   end
 
-  test "layout rejects invalid inline flow inside a block-backed inline block" do
+  test "layout flows neutral inline ancestors inside an atomic inline block" do
     html = """
     <div><div style="display: inline-block"><div style="display: inline"><div>Invalid nested flow</div></div></div></div>
     """
@@ -1037,8 +2475,81 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert {:ok, dom} = HtmlParser.parse(html)
     assert {:ok, styled_tree} = Style.compute(dom, [])
 
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {140, 100}, margin: 10)
+    assert Enum.any?(layout_tree.boxes, &(&1.type == :text and &1.text == "Invalid nested flow"))
+  end
+
+  test "anonymous flow keeps nested blocks, empty fragments and table-cell order" do
+    for wrapper <- ["div", "td"] do
+      inner =
+        "Before<span style='color:red'><span><span style='display:block;width:50%'>First</span><span style='display:none'><span style='display:block'>Hidden</span></span><span style='display:block'>Second</span></span></span>After"
+
+      html =
+        if wrapper == "td",
+          do: "<table><tr><td>#{inner}</td></tr></table>",
+          else: "<div style='width:80pt'>#{inner}</div>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled_tree} = Style.compute(dom, [])
+      assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {140, 160}, margin: 10)
+      boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
+      assert Enum.map(boxes, & &1.text) == ["Before", "First", "Second", "After"]
+      [before, first, second, after_box] = boxes
+      assert before.y > first.y and first.y > second.y and second.y > after_box.y
+      assert first.color == {1, 0, 0}
+      assert second.color == {1, 0, 0}
+    end
+  end
+
+  test "atomic inline blocks retain unsupported nested flex diagnostics" do
+    html =
+      "<div><div style='display:inline-block'><div style='display:flex'><ul><li>Unsupported flex child</li></ul></div></div></div>"
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+
+    assert {:error, :invalid_layout} =
+             Layout.layout(styled_tree, page_size: {140, 100}, margin: 10)
+  end
+
+  test "empty inline ancestors around blocks do not create extra line boxes" do
+    html =
+      "<body>Before<span></span><span><span style='display:block'>Block</span><span></span></span>After</body>"
+
+    reference = "<body>Before<span style='display:block'>Block</span>After</body>"
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, reference_dom} = HtmlParser.parse(reference)
+    assert {:ok, reference_tree} = Style.compute(reference_dom, [])
+
     assert Layout.layout(styled_tree, page_size: {140, 100}, margin: 10) ==
-             {:error, :invalid_layout}
+             Layout.layout(reference_tree, page_size: {140, 100}, margin: 10)
+  end
+
+  test "anonymous margins retain preserved whitespace and positioned siblings" do
+    for before <- [
+          "",
+          " ",
+          "&nbsp;",
+          "<span style='white-space:pre'> </span>",
+          "<span style='position:absolute;left:0;top:0'>Positioned</span>"
+        ] do
+      block = "<span style='display:block;margin:6pt 0'>Block</span>"
+
+      raw =
+        "<body><div style='background:#eee'>#{before}<span>#{block}</span></div><p>Following</p></body>"
+
+      reference =
+        "<body><div style='background:#eee'>#{before}#{block}</div><p>Following</p></body>"
+
+      assert {:ok, dom} = HtmlParser.parse(raw)
+      assert {:ok, styled_tree} = Style.compute(dom, [])
+      assert {:ok, ref_dom} = HtmlParser.parse(reference)
+      assert {:ok, ref_tree} = Style.compute(ref_dom, [])
+
+      assert Layout.layout(styled_tree, page_size: {140, 160}, margin: 10) ==
+               Layout.layout(ref_tree, page_size: {140, 160}, margin: 10)
+    end
   end
 
   test "layout measures embedded font text with TTF glyph widths" do
@@ -1377,15 +2888,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert {:ok, styled_tree} = Style.compute(dom, [])
     assert {:ok, layout_tree} = Layout.layout(styled_tree, margin: 10)
-    [first_marker, plain, link, second_marker, second_text] = layout_tree.boxes
+    [first_marker, plain, underline, link, second_marker, second_text] = layout_tree.boxes
 
     assert first_marker.text == "1."
-    assert_in_delta first_marker.x, 34.0, 0.0001
+    assert_in_delta first_marker.x, 24.736328125, 0.0001
     assert plain.text == "Read "
-    assert_in_delta plain.x, 52.0, 0.0001
+    assert_in_delta plain.x, 40.0, 0.0001
     assert link.text == "docs"
     assert link.link_url == "https://example.com"
-    assert_in_delta link.x, 85.966796875, 0.0001
+    assert underline.type == :rect
+    assert underline.role == :text_decoration
+    assert underline.fill_color == link.color
+    assert_in_delta underline.x, link.x, 0.0001
+    assert_in_delta underline.width, link.annotation_width, 0.0001
+
+    assert_in_delta link.x, 73.966796875, 0.0001
     assert_in_delta link.annotation_width, 27.80859375, 0.0001
     assert second_marker.text == "2."
     assert second_text.text == "Ship"
@@ -3905,7 +5422,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       children: [%{type: :element, style: %{display: :block}, children: []}]
     }
 
-    assert Layout.layout(document([bad_table]), []) == {:error, :invalid_layout}
+    assert {:error, {:invalid_layout, diagnostic}} = Layout.layout(document([bad_table]), [])
+    assert diagnostic.stage == :layout and diagnostic.reason == :invalid_layout
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlTableValidator
+    assert diagnostic.operation == :layout and diagnostic.message =~ "table"
 
     bad_row_group = %{
       type: :element,
@@ -3919,7 +5439,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       ]
     }
 
-    assert Layout.layout(document([bad_row_group]), []) == {:error, :invalid_layout}
+    assert {:error, {:invalid_layout, diagnostic}} = Layout.layout(document([bad_row_group]), [])
+    assert diagnostic.stage == :layout and diagnostic.reason == :invalid_layout
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlTableValidator
+    assert diagnostic.operation == :layout and diagnostic.message =~ "table"
 
     bad_row = %{
       type: :element,
@@ -3933,7 +5456,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       ]
     }
 
-    assert Layout.layout(document([bad_row]), []) == {:error, :invalid_layout}
+    assert {:error, {:invalid_layout, diagnostic}} = Layout.layout(document([bad_row]), [])
+    assert diagnostic.stage == :layout and diagnostic.reason == :invalid_layout
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlTableValidator
+    assert diagnostic.operation == :layout and diagnostic.message =~ "table"
 
     empty_table = %{
       type: :element,
@@ -4069,7 +5595,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       ]
     }
 
-    assert Layout.layout(document([bad_table_after_error]), []) == {:error, :invalid_layout}
+    assert {:error, {:invalid_layout, diagnostic}} =
+             Layout.layout(document([bad_table_after_error]), [])
+
+    assert diagnostic.stage == :layout and diagnostic.reason == :invalid_layout
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlTableValidator
+    assert diagnostic.operation == :layout and diagnostic.message =~ "table"
   end
 
   test "layout positions right-aligned table cell text" do
@@ -5348,13 +6879,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     f = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "F"))
     g = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "G"))
 
-    assert_in_delta b.x - a.x, 49.948585319882625, 0.1
-    assert_in_delta c.x - b.x, 42.732838570112875, 0.1
-    assert_in_delta e.x - d.x, 82.02435690524028, 0.1
-    assert_in_delta g.x - f.x, 82.02435690524028, 0.1
+    assert_in_delta b.x - a.x, 51.832, 0.03
+    assert_in_delta c.x - b.x, 36.785, 0.03
+    assert_in_delta e.x - d.x, 51.5, 0.03
+    assert_in_delta g.x - f.x, e.x - d.x, 0.0001
   end
 
-  test "layout proportionally shrinks columns when intrinsic minimums exceed table width" do
+  test "automatic tables expand when column minimums exceed the authored width" do
     assert {:ok, dom} =
              HtmlParser.parse("""
              <table style="width: 100pt">
@@ -5371,11 +6902,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     [first_cell, second_cell] =
       Enum.filter(layout_tree.boxes, &(Map.get(&1, :role) == :table_cell_background))
 
-    assert_in_delta first_cell.width, 47.75, 0.0001
-    assert_in_delta second_cell.width, 47.75, 0.0001
+    assert first_cell.width + second_cell.width > 100
+    assert first_cell.x + first_cell.width <= second_cell.x
+
+    for text <- Enum.filter(layout_tree.boxes, &(&1.type == :text)) do
+      cell = if text.x < second_cell.x, do: first_cell, else: second_cell
+      assert text.x + text.annotation_width <= cell.x + cell.width + 0.0001
+    end
   end
 
-  test "layout constrains an intrinsic inline-block column beside a percentage column" do
+  test "automatic tables preserve atomic minimums beside a percentage column" do
     assert {:ok, dom} =
              HtmlParser.parse("""
              <table style="width: 100pt">
@@ -5392,8 +6928,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     [first_cell, second_cell] =
       Enum.filter(layout_tree.boxes, &(Map.get(&1, :role) == :table_cell_background))
 
-    assert_in_delta first_cell.width + second_cell.width, 95.5, 0.0001
+    assert first_cell.width + second_cell.width > 100
     assert second_cell.width > first_cell.width
+    assert second_cell.width >= 199.9921875
   end
 
   test "layout measures a block cell beside a percentage column without an inline preference" do
@@ -5854,5 +7391,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   defp png_chunk(type, data) do
     crc = :erlang.crc32(type <> data)
     <<byte_size(data)::32, type::binary, data::binary, crc::32>>
+  end
+
+  test "empty buttons retain line height across block flex and grid layout" do
+    for parent <- ["display:block", "display:flex", "display:grid"],
+        display <- ["block", "inline-block"] do
+      layouts =
+        for child <- [
+              ~s(<input type="button" value="">),
+              ~s(<input type="reset" value="">),
+              ~s(<input type="submit" value="">),
+              "<button>A</button>"
+            ] do
+          css = "input,button { display:#{display}; font-size:12pt;line-height:18pt; }"
+
+          assert {:ok, dom} =
+                   HtmlParser.parse("<style>#{css}</style><div style='#{parent}'>#{child}</div>")
+
+          assert {:ok, tree} = Style.compute(dom)
+          assert {:ok, layout} = Layout.layout(tree, page_size: {240, 120}, margin: 0)
+          box = Enum.find(layout.boxes, &(&1.type == :rect and &1.width == 105.0))
+          assert box.height >= 18
+          Map.take(box, [:x, :y, :width, :height])
+        end
+
+      assert length(Enum.uniq(layouts)) == 1
+
+      assert {:ok, dom} =
+               HtmlParser.parse(
+                 "<style>input,button { display:#{display}; font-size:12pt;line-height:18pt; }</style><div style='#{parent}'><button value='Not label'></button></div>"
+               )
+
+      assert {:ok, tree} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(tree, page_size: {240, 120}, margin: 0)
+      empty = Enum.find(layout.boxes, &(&1.type == :rect and &1.width == 105.0))
+      assert empty.height < 18
+    end
   end
 end

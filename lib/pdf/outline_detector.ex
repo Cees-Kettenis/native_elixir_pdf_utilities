@@ -26,12 +26,13 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineDetector do
       |> Enum.flat_map(fn {page, page_number} ->
         Enum.flat_map(page.boxes, fn box ->
           case Map.get(box, :outline_anchor) do
-            %{title: title, level: level} ->
+            %{title: title, level: level} = anchor ->
               page_height = elem(page.size, 1)
               top = min(max(outline_top(box), 0.0), page_height * 1.0)
 
               [
                 %{
+                  anchor_id: Map.get(anchor, :id, make_ref()),
                   level: level,
                   item: %{
                     title: title,
@@ -49,7 +50,7 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineDetector do
         end)
       end)
 
-    nest(headings)
+    headings |> Enum.uniq_by(& &1.anchor_id) |> nest()
   end
 
   defp visual_headings(pages) do
