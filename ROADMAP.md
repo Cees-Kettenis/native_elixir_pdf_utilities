@@ -34,6 +34,9 @@ with page rules, headers and footers, counters, and predictable page breaks.
 
 Typography should work across languages, including right-to-left text, scripts
 that require shaping, Unicode line breaking, hyphenation, and emoji sequences.
+Implement the HTML elements `bdi` and `bdo` and the `dir` attribute as part of
+this work, including direction isolation, overrides, inheritance, and automatic
+direction selection. These HTML features are deferred from 1.1.0 to 1.2.0.
 The goal is to reuse ordinary stylesheets and produce consistent PDFs for
 complex documents. Document coverage and compare supported rendering against
 Chromium as these capabilities grow.

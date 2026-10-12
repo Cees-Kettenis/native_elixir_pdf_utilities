@@ -33,13 +33,45 @@ radio export values are strings.
 
 ## HTML field names and compatibility
 
-Text inputs, textareas, checkboxes, radio buttons and single-selection selects
-become interactive fields. Buttons remain static artwork. Use
+Text/search/telephone/URL/email inputs, textareas, checkboxes, radio buttons and single-selection selects
+become interactive fields. Button elements and submit/reset/button inputs remain static artwork. Use
 `HtmlToPdf.render(html, forms: :static)` for the pre-0.18 behavior.
+
+Hidden inputs produce neither artwork nor fields in either mode. Their names
+and values remain in the parsed HTML tree and do not reserve PDF field names.
+Author display declarations cannot make a hidden input visible.
+
+Submit/reset/button inputs use their initial value as the printed label. A missing
+submit/reset value uses English `Submit`/`Reset`; a missing button value is empty.
+An explicit empty value stays empty. They create no fields, reserve no names and
+consume no appearance widgets, even in interactive mode. Button elements print
+child content; their `value` supplies no fallback label. Printed button labels
+remain page content when other fields are filled or flattened.
+
+Text/search/telephone input values strip CR and LF before field creation and appearance generation.
+URL and single-email inputs also trim leading/trailing ASCII whitespace. Invalid
+initial URL/email strings still render; constraint state remains unfinished.
+For example, `value="A&#10;B"` initializes the field to `"AB"`. The same value
+appears in static mode. Textareas keep their multiline values.
+
+For `<input type="email" multiple>`, initial tokens trim ASCII edge whitespace and
+rejoin with commas in the same order. Empty tokens and internal CR/LF inside
+invalid tokens remain. `multiple="false"` still enables this boolean attribute.
+The PDF field remains `:text` with a string value, without multiple-choice flags.
+Readonly/disabled flags, generated `TEXT` names, filling and flattening retain
+their existing behavior. Filling uses the PDF text API; it does not rerun the
+HTML initial-value algorithm. Constraint state and IDN display conversion remain
+unfinished.
+
+Missing, empty or unknown input types use the Text state, with the same initial
+CR/LF sanitation, `:text` fields, `TEXT` generated names and readonly behavior.
+Keyword matching is ASCII only and does not trim; `type="hidden "` is a visible
+text input. The authored string remains available to CSS. Recognized unsupported
+states return a rendering diagnostic instead of defaulting.
 
 A nonempty HTML `name` becomes the field key. Otherwise the renderer generates
 `TYPE_PAGENR_ELEMENT`, such as `TEXT_1_1`, `CHECKBOX_1_2`, `RADIO_2_1` or
-`CHOICE_2_2`. Textareas use `TEXT`. Pages and element numbers start at 1.
+`CHOICE_2_2`. Textareas and all supported text-entry input types use `TEXT`. Pages and element numbers start at 1.
 The element number counts controls on that page in HTML document order after
 pagination. CSS visual ordering does not change this order. The HTML `id`
 attribute does not supply a field name.
@@ -47,20 +79,58 @@ attribute does not supply a field name.
 All explicit names are reserved before assigning generated names. A generated
 name that collides gains `_1`, `_2`, and so on until unique. Explicit duplicate
 names fail, except for radio controls sharing a group name. Radio group values
-must be distinct, nonempty, and different from the reserved `Off` state. At
-most one radio control in a group may be checked. Select options require unique
+must be distinct, nonempty, and different from the reserved `Off` state.
+Initial groups use actual HTML form ownership and nonempty authored names.
+If several members have `checked`, the last in HTML tree order wins. Radios
+without a nonempty name remain independent. Authored attributes stay intact for
+CSS attribute selectors; printed artwork and PDF values use effective checkedness.
+Separate owner groups sharing one PDF name return `:unsupported_form` with that
+name as diagnostic context. Use unique names or `forms: :static`.
+An explicit `form` reference uses the first matching ID and must target an HTML
+form. A missing or non-form target leaves the control unowned rather than falling
+back to an ancestor. Select options require unique
 values. HTML names cannot contain a period or NUL; periods separate nested
 field names in existing PDFs.
+
+Ordinary single-select dropdowns use the last authored selected option. Without
+an authored selection they use the first enabled option. An explicitly selected
+disabled option remains selected. Empty selects and all-disabled selects without
+an authored selection have no selection and expose `nil` as their PDF value.
+An empty option can be selected and has the empty string value. Empty and absent
+values remain distinct through inspection, filling and flattening.
+
+Static artwork, PDF values and initial `:checked` selectors consume canonical
+state. Authored `selected` and `checked` attributes remain intact for CSS
+attribute selectors. `:checked` applies to effective checkbox/radio checkedness
+and option selectedness in the supported ordinary HTML tree. Ordinary optgroups preserve their label metadata and
+option order. Disabled groups disable their options for fallback selection and
+initial selectors; an explicitly selected disabled option remains selected.
+A nonempty option `label` attribute supplies its display label. Empty or absent
+labels use ASCII-trimmed and collapsed option text. Explicit `value` attributes
+are preserved, while absent values use normalized text independently of the
+label. NBSP remains intact. Empty dropdowns reserve the same normal font line as
+populated dropdowns without an authored height. Native dropdown appearance uses
+the font's normal line height rather than an authored CSS line-height.
+Multiple/listbox sizing, rich/custom controls, interactive disabled-option policy,
+constraints and shadow integration remain unfinished.
 
 Generated names can change when pagination changes. Supply `name` for keys
 used by application code. Controls cannot span pages or repeat with the same
 control identity in page furniture. HTML `disabled` makes a field read-only.
+Text/search/telephone/URL/email inputs and textareas also accept boolean `readonly`, including
+`readonly="false"`. It preserves the value and styling, and sets PDF flag bit 1.
+Combined disabled/readonly sets that bit once; textareas keep multiline bit 4096.
+`Forms.fill/3` returns `:read_only_form_field` with the shared diagnostic for a
+read-only field. `Forms.flatten/2` can still flatten it. Static mode adds no
+readonly appearance unless author CSS selects the attribute.
 All members of a radio group must be enabled or all disabled. Interactive
 rendering rejects mixed groups with `:unsupported_form` because PDF read-only
 status applies to the whole field. Use `forms: :static` to render mixed groups
 as artwork without interactive fields.
 The HTML parser still supports its documented subset; HTML listboxes and
 multiple-selection selects are not implemented.
+
+Initial appearances are native Form XObjects with shared font, image and graphics-state resources. Temporary appearance frames use the appearance limits rather than the actual-page limits. Default-limit tests cover rendering, filling and flattening 1,000 controls; document content must still fit the field, object, byte and font budgets.
 
 Initial appearances use the rendered HTML styling. Text extraction reads page
 content, so flatten fields first when you need their values included in
@@ -141,7 +211,7 @@ redaction.
 
 ## Unsupported structures
 
-XFA, pushbuttons, signature operations, password/comb/rich-text fields,
+XFA, pushbuttons, signature operations, comb/rich-text fields,
 editable combo boxes, field/widget actions and widget-specific rotation are
 unsupported. Changing signed PDFs or PDFs with signature permissions is
 rejected. Encrypted input follows the reader's existing rejection policy.
@@ -158,3 +228,20 @@ must apply their own policy to uploaded PDFs before distributing them.
 See [resource limits](resource-limits.md#forms-and-attachments) for field,
 appearance-object and byte budgets, and [attachments](pdf-attachments.md) for
 embedding supporting files.
+
+
+HTML password inputs produce Text fields with the PDF Password flag. Initial and
+newly filled appearances show grapheme bullets. `Forms.fields/1` returns their
+stored values, and readonly/disabled fields retain the usual fill diagnostic.
+Filling externally supplied password Text fields is supported; flattening preserves
+current screen appearances. Stored values and earlier incremental revisions are
+retained, so these operations do not redact password data.
+
+
+HTML controls support boolean `required` attributes and initial `:required` /
+`:optional` styling for the existing supported control types. Empty initial values
+remain valid rendering inputs. Editable required fields carry the native PDF
+Required flag; disabled and readonly fields retain their existing read-only flags.
+Named radio widgets share a requirement when any radio in their actual HTML form
+owner group is required. CSS matching still follows each button's own attribute.
+This does not add submission actions or complete HTML constraint validation.

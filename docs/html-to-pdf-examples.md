@@ -1268,7 +1268,7 @@ alias NativeElixirPdfUtilities.HtmlToPdf
 
 <img src="assets/html-to-pdf-examples/statement-page-1.png" alt="Native PDF output: Statement" width="640">
 
-The first non-empty HTML `<title>` supplies the PDF title unless `metadata[:title]` is set. Use [Info.put/2](pdf-information.md#updating-information) to change an existing PDF.
+The first non-empty HTML `<title>` supplies the PDF title unless `metadata[:title]` is set. Head `meta[name=author]`, `meta[name=description]`, and `meta[name=keywords]` also supply author, subject, and keywords defaults; explicit caller fields take precedence. Use [Info.put/2](pdf-information.md#updating-information) to change an existing PDF.
 
 ### Create bookmarks from headings
 
@@ -1397,6 +1397,13 @@ Filled and flattened output:
 
 Explicit `name` values give your application stable field keys. See [PDF forms](pdf-forms.md) for supported controls and fill values.
 
+Templates may also contain `<input type="hidden" name="reference" value="123">`.
+The renderer preserves its parsed attributes and emits no artwork or PDF field.
+Text inputs such as `<input name="code" value="A&#10;B">` initialize to `AB` in
+both form modes. Search controls such as
+`<input type="search" name="query" value="A&#10;B">` use the same initial value
+and PDF text-field behavior. Textareas retain their line breaks.
+
 ### Render static form values
 
 Use `forms: :static` when a form template is only a printout:
@@ -1508,3 +1515,402 @@ mix run scripts/generate-html-to-pdf-examples.exs
 ```
 
 The script executes every Elixir example independently. Preview generation requires Poppler's `pdftoppm`; rendering the PDFs only needs the library. Generated files live in `docs/assets/html-to-pdf-examples` and are included in the published documentation.
+
+
+## Attribute selector comparisons
+
+```html
+<style>
+  [data-tags~="urgent" i] { color: #cc3300; }
+  [data-language|="en" i] { font-weight: bold; }
+  [data-code^="PO-"][data-code$="-2026"] { color: #0066cc; }
+  [title*="Approved" s] { background-color: #eeeeee; }
+  input[type="SEARCH" s] { color: #cc3300; }
+</style>
+<p data-tags="review URGENT" data-language="en-US">Review this order</p>
+<p data-code="PO-145-2026" title="Approved by finance">Order 145</p>
+<input type="search" name="query" value="Initial query">
+```
+
+The input selector above requires the authored uppercase type value because `s`
+overrides HTML's default ASCII-insensitive type comparison. `i` folds only ASCII
+letters, including on data attributes. A token selector matches one CSS whitespace
+separated word. Empty token and substring patterns never match.
+
+
+## Readonly initial values
+
+```html
+<input readonly name="order_id" value="PO-145">
+<input type="search" readonly name="query" value="Initial query">
+<textarea readonly name="notes">Confirmed by finance</textarea>
+```
+
+These controls keep their initial values and expose `read_only: true` in an
+interactive PDF. Attribute presence applies even to `readonly="false"`.
+`Forms.fill/3` returns the existing read-only diagnostic; `Forms.flatten/2` can
+flatten the fields. Readonly does not add disabled styling. Use author selectors
+such as `[readonly]` when the printed document needs a visual distinction.
+
+
+## Contact fields
+
+```html
+<input type="tel" name="phone" value="+60 (12) 345-6789">
+<input type="url" name="website" value=" https://example.com/ ">
+<input type="email" readonly name="contact" value=" finance@example.com ">
+```
+
+These fields use the existing PDF text mapping. URL/email edge ASCII whitespace
+is removed; telephone spacing is preserved. Every state strips CR/LF. Original
+attributes remain available to CSS before sanitation. Invalid URL/email strings
+still render, and constraint selector states and IDN display conversion remain unfinished.
+
+
+## Initial email lists
+
+```html
+<input type="email" multiple name="contacts"
+       value=" finance@example.com , operations@example.com ">
+```
+
+The initial PDF text value is
+`"finance@example.com,operations@example.com"`. `multiple="false"` has the same
+boolean-presence effect. Empty comma tokens remain, and readonly/disabled behavior
+is unchanged. Lists stay one text field; complete constraint state is unfinished.
+
+
+An unknown input type uses the Text default while selectors retain its original value:
+
+```html
+<style>input[type="customer-code"] { color: #21517b; }</style>
+<input type="customer-code" readonly name="code" value="A&#10;B">
+```
+
+This initializes a read-only PDF text field to `AB`. Empty or omitted types also
+select Text. Untrimmed values such as `hidden ` select Text; recognized unsupported
+states such as password or file still produce diagnostics.
+
+
+Input buttons produce static artwork alongside editable controls:
+
+```html
+<input name="customer" value="Example customer">
+<input type="submit">
+<input type="reset" value="Clear form">
+<input type="button" value="Review">
+<button value="submission-data">Child label</button>
+```
+
+Only the customer input becomes a PDF field. The buttons print `Submit`, `Clear
+form`, `Review` and `Child label`; submission/reset actions remain excluded.
+Empty button values print no label. Buttons do not reserve PDF field names.
+
+
+Initial enabled/disabled selectors can style supported controls:
+
+```html
+<style>
+  input:enabled { color: #21517b; }
+  input:disabled { color: #993300; }
+</style>
+<input readonly name="reference" value="Readonly, still enabled">
+<input disabled="false" name="locked" value="Disabled by boolean presence">
+```
+
+Both interactive fields are read-only in the PDF. The HTML readonly control still
+matches `:enabled`; the disabled control matches `:disabled`. ARIA attributes alone
+do not change these states. Fieldset and optgroup inheritance remains unfinished.
+
+
+Image dimensions provide presentation hints that author CSS can override:
+
+```html
+<img src="chart.png" width="320" height="180">
+<img src="chart.png" width="320" height="180" style="width:240pt;height:auto">
+```
+
+The second image uses its loaded natural ratio. Assets must be supplied or authorized
+through the existing resource API. A zero width or height still validates the asset.
+
+
+Password controls preserve initial values while masking artwork:
+
+```html
+<input type="password" name="pin" value="ABCD">
+<input type="PASSWORD" readonly="false" name="locked" value="Initial">
+```
+
+With interactive forms, the stored field values remain inspectable. Readonly uses
+boolean presence. Use static forms for plain artwork; flattening an interactive
+PDF preserves its revision history and does not redact stored values.
+
+
+Inline script data remains inert. Author CSS may display its raw contents:
+
+```html
+<script type="application/json">{"title":"Report"}</script>
+<body>
+  <script type="text/plain" style="display:block;white-space:pre">
+Literal &amp; remains a character reference string.
+  </script>
+</body>
+```
+
+The JSON-like data above is preserved without format validation. Omitted or exact
+empty type selects an executable classic script and returns a diagnostic.
+
+
+An unused template preserves source content without adding it to the printout:
+
+```html
+<body>
+  <template id="unused">
+    <style>p { color: red; }</style>
+    <img src="unused.png">
+    <p>Unused content</p>
+  </template>
+  <p>Visible content</p>
+</body>
+```
+
+The unused stylesheet and image are not loaded. Styling the template with
+`display:block` exposes its empty box, while its content remains unused.
+Executable content still returns a diagnostic. Active replacement, declarative
+shadow roots and full template insertion rules are unfinished.
+
+
+Use positional selectors to style alternating or bounded sibling sets:
+
+```css
+tr:nth-child(2n + 1) { background-color: #eeeeee; }
+p:nth-last-of-type(-n + 2) { color: #004488; }
+li:only-child { font-weight: bold; }
+```
+
+Only actual siblings determine positions. Unused template contents are separate
+fragments and do not join the sibling list.
+
+
+Data scripts and unused templates can accompany real choices without becoming options:
+
+```html
+<select name="status">
+  <script type="application/json">{"source":"initial"}</script>
+  <template><option selected>Unused</option><img src="unused.png"></template>
+  <option value="draft">Draft</option>
+  <option value="approved" selected>Approved</option>
+</select>
+```
+
+The field retains both real choices and its approved initial value. The unused
+image is not resolved. The same script/template sibling rules apply to supported
+lists, description lists, table rows/groups and buttons. Ordinary scripts still
+need a non-executable type. Keep visible script/template boxes outside CSS table
+structures while anonymous formatting is unfinished.
+
+
+Scripting-disabled fallback can include active markup and a supported control:
+
+```html
+<head><noscript><style>.fallback { color: #164e63; }</style></noscript></head>
+<body>
+  <p>Before <noscript class="fallback">printed fallback</noscript> after</p>
+  <noscript style="display:block">
+    <p>Block fallback</p><input name="fallback" value="Initial">
+  </noscript>
+</body>
+```
+
+The field is editable in interactive output. The fallback style applies normally.
+Default neutral inline fallback can also surround a block:
+
+```html
+Before <noscript>start<p>Block fallback</p>end</noscript> after
+```
+
+Text before and after the block stays in its surrounding inline groups. Decorated,
+positioned and linked interrupted inline ancestors still diagnose until complete
+fragment painting is available. Unsupported executable scripts return diagnostics.
+
+
+Unicode classes and literal punctuation can use CSS escapes:
+
+```html
+<style>
+  .\63 afé { color: #164e63; }
+  .a\,b { color: #9a3412; }
+</style>
+<p class="café">Unicode name</p>
+<p class="a,b">Escaped comma</p>
+```
+
+The hexadecimal escape includes its optional terminating space. A literal comma
+inside an escaped name stays part of the class rather than splitting selectors.
+
+
+Unregistered custom elements can hold ordinary static content:
+
+```html
+<style>
+  x-card { display: block; padding: 8pt; border: 1pt solid #164e63; }
+  .reveal { display: block; }
+</style>
+<x-card><strong>Invoice</strong><p>Initial content</p></x-card>
+<p hidden>Omitted from the PDF</p>
+<p hidden class="reveal">Author CSS reveals this content</p>
+<div inert><input name="held" value="Visible artwork"></div>
+<p><mark>Highlight</mark> <ins>Added</ins> <del>Removed</del></p>
+```
+
+Custom elements use transparent HTML content rules. No registration or component
+code runs. `hidden="false"` also hides content; remove the attribute to use the
+ordinary display default. `hidden="until-found"` currently returns a diagnostic. `inert` keeps visible
+initial values and omits active fields and links. `cite`/`datetime` edit metadata
+does not fetch assets or create destinations.
+
+
+Initial anchor defaults follow the static unvisited state:
+
+```html
+<p><a>Plain inherited text</a></p>
+<p><a href="https://example.com">Blue underlined link</a></p>
+<p><a inert href="mailto:held@example.com">Visible inactive link</a></p>
+<p><a href="https://example.com" style="color:red;text-decoration:none">Authored appearance</a></p>
+```
+
+Links do not fetch their destinations. Relative and fragment destinations remain unsupported.
+
+
+Inline markup preserves a word; overflow wrapping is an independent choice:
+
+```html
+<p style='width:40pt'>go ABC<strong>DEF</strong>GHI</p>
+<p style='width:78pt;overflow-wrap:anywhere'>prefix ABC<strong>DEF</strong>GHIJKLMNO end</p>
+```
+
+An indivisible word may overflow. Emergency wrapping first uses ordinary opportunities. `line-break:anywhere` permits grapheme opportunities directly; `overflow-wrap:break-word` retains whole-word min-content widths.
+
+
+Use an explicit optional opportunity inside a word, or a legacy nowrap container:
+
+```html
+<p style="width:40pt">ABC<wbr><strong>DEF</strong><wbr>GHI</p>
+<p style="width:40pt"><nobr>ABC DEF GHI</nobr></p>
+```
+
+Author CSS can override the nobr whitespace default. A wbr creates no substitute
+glyph or authored CSS box, and its own background image is never loaded.
+
+
+Use `outlines: :headings` with heading offsets to control semantic bookmark nesting:
+
+```html
+<h1>Root</h1>
+<section headingoffset="2"><h1>Child at level three</h1>
+<div headingreset headingoffset="1"><h1>Reset to level two</h1></div></section>
+```
+
+Offsets alter bookmark levels while authored typography remains unchanged.
+
+
+An inline block with multiple lines aligns its last line with surrounding text:
+
+```html
+<div style="font-size:10pt;line-height:12pt">Before <span style="display:inline-block">First<br>Last</span> After</div>
+```
+
+A declared height adds space below the flow baseline; it does not move that baseline to the bottom. Empty content and overflow:hidden use the bottom margin edge instead.
+
+
+Large editable forms use native appearance objects under the existing limits:
+
+```elixir
+html = Enum.map_join(1..1_000, fn i ->
+  "<div><input name='field#{i}' value='Initial#{i}'></div>"
+end)
+{:ok, pdf} = HtmlToPdf.render(html, forms: :interactive, system_font_discovery: false)
+```
+
+Actual document pages retain the page limits. Controls and their appearances
+still use the form, appearance, object, font and byte limits.
+
+
+Language selectors can style inherited, overridden and explicitly untagged text:
+
+```elixir
+html = """
+<meta http-equiv="content-language" content="en-US">
+<style>
+  p:lang(en, "de-*-DE") { font-weight: bold; }
+  p:lang("") { color: blue; }
+</style>
+<p>English default</p>
+<div lang="de-Latn-DE"><p>German override</p><p lang="">Untagged</p></div>
+"""
+{:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+```
+
+Literal HTML `xml:lang` does not change effective language. Unknown language tags
+remain usable, and authored whitespace is preserved rather than trimmed.
+
+An initial popover remains closed when scripts are disabled:
+
+```html
+<p>Printed before the popover</p>
+<div popover="auto"><p>Closed content is omitted</p></div>
+<p>Printed after the popover</p>
+```
+
+Author CSS that changes the popover to a visible display receives a diagnostic
+until native fixed positioning and intrinsic geometry are implemented.
+
+Named CSS colors and horizontal rules work without substituting numeric colors
+or drawing a separate PDF line:
+
+```html
+<style>
+  html:only-child { color: rebeccapurple; }
+  hr { width: 60%; border: 1px solid steelblue; }
+</style>
+<p>Printed before the thematic break</p>
+<hr>
+<p>Printed after the thematic break</p>
+```
+
+Author CSS takes precedence over horizontal-rule defaults and legacy hints.
+Structural positional selectors also match the document element and inclusive
+element siblings in fragments.
+
+Required controls can start empty and receive author styling without causing a
+rendering failure:
+
+```html
+<style>
+  input:required { border: 1px solid firebrick; }
+  input:optional { border: 1px solid steelblue; }
+</style>
+<input name="account" required value="">
+<input name="reference" value="Optional reference">
+```
+
+With `forms: :interactive`, editable required fields carry the PDF Required flag.
+Static rendering preserves their artwork without creating fields.
+
+
+### Initial disclosure state
+
+```html
+<details name="report-sections">
+  <summary>Supporting calculations</summary>
+  <p>This closed body is omitted from the PDF.</p>
+</details>
+<details name="report-sections" open>
+  <summary>Report findings</summary>
+  <p>This initially open body prints and paginates normally.</p>
+</details>
+```
+
+Attribute presence controls `open`; `open="false"` still prints the body. Use at
+most one open member per named group. Omit `name` for independent disclosures.
+Summary typography, list markers and display follow supported author CSS.

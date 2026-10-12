@@ -41,7 +41,7 @@ These limits apply when reading existing PDFs.
 | `max_pdf_reader_work` | 250,000,000 | Bytes scanned by tokenizers, xref searches, stream decoding and predictor processing, including repeated passes |
 | `max_pdf_container_entries` | 100,000 | Entries in one array or dictionary, including repeated dictionary keys |
 | `max_pdf_numeric_token_bytes` | 1,024 | Decimal numeric-token bytes before integer/float conversion, and bytes in one binary xref integer |
-| `max_pdf_objects` | 100,000 | Parsed PDF objects |
+| `max_pdf_objects` | 100,000 | Parsed and generated PDF object counts and allocation IDs |
 | `max_pdf_object_stream_entries` | 10,000 | Entries in one PDF object stream |
 | `max_pdf_pages` | 10,000 | Pages in one PDF |
 | `max_pdf_page_tree_depth` | 1,000 | PDF page-tree nesting |
@@ -146,6 +146,7 @@ See [render options and supported formats](html-to-pdf-compatibility.md) and
 | --- | ---: | --- |
 | `max_font_kerning_pairs` | 100,000 | Kerning subtables and glyph pairs inspected per font |
 | `max_font_cmap_work` | 1,000,000 | Encoding records, segments, and codepoint visits prepared per TTF character map |
+| `max_font_math_work` | 1,000,000 | Decoded MATH, selected math GSUB, and glyph-location/header bytes, plus explicit glyph IDs, variant/part searches and expanded geometry, coverage, and device entries per font-budget scope |
 | `max_font_subset_work` | 100,000 | Glyphs and composite components visited while building a TrueType subset |
 | `max_font_cache_entries` | 64 | Parsed font files retained by the cache |
 | `max_system_font_cache_entries` | 64 | Positive and negative installed-font discovery results retained by the cache |
@@ -200,14 +201,15 @@ limits apply across all returned PDFs. See [Merging](pdf-merging.md) and
 
 | Setting | Default | Applies to |
 | --- | ---: | --- |
-| `max_extracted_text_bytes` | 50,000,000 | Aggregate UTF-8 text prepared across all pages and Form executions |
+| `max_extracted_text_bytes` | 50,000,000 | Aggregate UTF-8 text and replacement strings prepared across all pages and Form executions |
 | `max_cmap_expanded_bytes` | 10,000,000 | Aggregate expanded ToUnicode mapping keys and UTF-8 destinations, including overwritten entries |
 | `max_text_decoded_content_bytes` | 50,000,000 | Decoded content used by extraction |
 | `max_text_parsed_instructions` | 100,000 | Unique parsed content instructions |
 | `max_text_stream_uses` | 100,000 | Content stream references traversed |
 | `max_text_instruction_uses` | 1,000,000 | Aggregate content instruction work |
 | `max_text_form_expansions` | 10,000 | Form XObject executions |
-| `max_text_spans` | 25,000 | Extracted spans per page |
+| `max_text_spans` | 25,000 | Non-empty decoded text operands per page, including pieces suppressed by replacement text |
+| `max_text_marked_content_depth` | 128 | Nested BMC/BDC marked-content scopes |
 | `max_text_layout_whitespace_bytes` | 1,000,000 | Coordinate-based padding spaces reconstructed across one text extraction |
 | `max_cmap_work` | 1,000,000 | Aggregate CMap source bytes, expanded declarations, and conservative codespace lookup work across extraction |
 | `max_cmap_bytes` | 1,000,000 | One CMap stream |
@@ -252,7 +254,7 @@ the original binary, which counts toward the output byte limit described below.
 appearances. Repeating text on multiple pages or widgets charges each copy.
 `max_appearance_widgets` defaults to 10,000 generated appearances or selected
 widgets; HTML controls reserve both their normal and alternate appearances.
-These limits are checked before appearance rendering.
+These limits are checked before appearance rendering. Native appearance frames do not count as document pages; `max_rendered_pages` and `max_pdf_pages` still bound actual PDF pages. Appearance resources retain the existing layout, font, reader, object and output-byte budgets.
 
 The shared incremental writer checks serialized pieces as they accumulate. All
 incremental writers also check the complete iodata before

@@ -22,6 +22,26 @@ Both omit pages with no painted text. A document with no extractable painted
 text returns `:no_extractable_text`. Extraction fails if shown text cannot be
 decoded reliably; it does not return a partial result.
 
+## Replacement text
+
+A marked-content `ActualText` string replaces the enclosed decoded text operands
+once. This preserves a ligature or an assembled mathematical symbol as its
+original Unicode. Literal strings, Unicode strings, named `/Properties` lists,
+and indirect property values use the shared PDF text-string codec.
+
+Nested replacements use the outermost string. Empty replacements suppress their
+pieces. Adjacent replacement groups join without an inserted word break in
+`layout: false` output. Spans use the first piece's baseline and font context and
+the last piece's endpoint, with painting and clipping flags combined across the
+pieces. These endpoints do not describe the group's bounding box.
+
+Physical operands still require reliable font mappings and valid geometry.
+Replacement strings and decoded pieces share the cumulative extraction byte
+budget; suppressed pieces still count toward the per-page span limit. Extraction
+checks balanced marked-content scopes and the configured nesting limit. This
+support applies to groups containing text operands. It does not recover text
+from a structure tree or a group containing only vector paths or images.
+
 ## Positioned text
 
 Use spans when you need to interpret columns, rows, or other document-specific
