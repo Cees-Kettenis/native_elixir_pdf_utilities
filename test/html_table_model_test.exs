@@ -202,41 +202,26 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableModelTest do
   end
 
   test "canonical identity is preserved while path locators and tree scopes remain separate" do
-    assert {:ok, dom} =
+    assert {:ok, outside_dom} = HtmlParser.parse("<p id=h>Different scope</p>")
+
+    assert {:ok, table_dom} =
              HtmlParser.parse(
-               "<p id=h>Different scope</p><table><tr><th id=h>Header</th><td headers=h>Data</td></tr></table>"
+               "<table><tr><th id=h>Header</th><td headers=h>Data</td></tr></table>"
              )
 
-    [outside, table] = dom.children
+    [outside] = outside_dom.children
+    [table] = table_dom.children
     [row] = table.children
-    [header, value] = row.children
-
-    header =
-      Map.merge(header, %{
-        document_id: 1,
-        tree_scope_id: 2,
-        node_id: 4,
-        parent_id: 3,
-        source: %{line: 1, column: 38}
-      })
-
-    value = Map.merge(value, %{document_id: 1, tree_scope_id: 2, node_id: 5, parent_id: 3})
-    row = %{row | children: [header, value]}
-
-    table =
-      Map.merge(%{table | children: [row]}, %{
-        document_id: 1,
-        tree_scope_id: 2,
-        node_id: 2,
-        parent_id: 0
-      })
-
-    outside = Map.merge(outside, %{document_id: 1, tree_scope_id: 1, node_id: 1, parent_id: 0})
+    [authored_header, _] = row.children
     nodes = HtmlValidator.assign_render_metadata([outside, table])
     assert {:ok, [_, table]} = HtmlTableValidator.prepare_document(nodes)
     [header, value] = table._table_model.cells
-    assert header.identity == %{document_id: 1, tree_scope_id: 2, node_id: 4, parent_id: 3}
-    assert header.source_metadata == %{line: 1, column: 38}
+
+    assert header.identity ==
+             Map.take(authored_header, [:document_id, :tree_scope_id, :node_id, :parent_id])
+
+    assert header.source_metadata == authored_header.source
+    refute header.identity.tree_scope_id == outside.tree_scope_id
     assert value.headers == [header.source]
     assert header.source == [1, 0, 0]
   end
@@ -302,7 +287,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableModelTest do
   end
 
   test "metadata-free caller DOM retains source locations without issuing canonical IDs" do
-    assert {:ok, dom} = HtmlParser.parse("<table><tr><td rowspan=3>Implied</td></tr></table>")
+    assert {:ok, parsed} = HtmlParser.parse("<table><tr><td rowspan=3>Implied</td></tr></table>")
+    dom = NativeElixirPdfUtilities.HtmlTreeHelpers.tree_content(parsed)
     [table] = dom.children
     table = Map.put(table, :source, %{text: "<table>", line: 7, column: 4})
     assert {:ok, styled} = Style.compute_detailed(%{dom | children: [table]})

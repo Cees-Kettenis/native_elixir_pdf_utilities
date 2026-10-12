@@ -49,6 +49,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   Its painted pieces share one PDF replacement string, so an assembled symbol
   can be extracted once. Groups cannot contain other groups.
 
+  Text and image links may supply `:link_destination` as
+  `{:xyz, page_number, x, y}` using one-based pages and PDF bottom-left points.
+  The validator checks the referenced page and its bounds. The writer emits an
+  explicit PDF destination using the actual page object reference. Prepared HTML
+  target identities must first pass through pagination; they are not writer inputs.
+
   A `:drawing_group` contains non-negative local `:width` and `:height`, a
   six-value `:transform` tuple, optional `:baseline` within its height, optional
   rectangular `:clip`, and child `:boxes`. Coordinates are PDF points measured
@@ -70,6 +76,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   A zero-width `:flow_marker` retains non-negative vertical geometry for layout
   and pagination. It cannot carry text, painting, links or form controls. The
   validator counts it toward layout limits and removes it before serialization.
+
+  Text, rectangle and image boxes may carry an absolute `:clip` rectangle with
+  numeric `x`/`y` and positive `width`/`height`. Each clip is scoped to its box.
 
   Gauge rectangles can carry a validator-checked `:gauge_fraction`, boolean
   `:gauge_quantize_value` and `:gauge_clip_track` paint flags, and a
@@ -659,9 +668,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             " ET"
           ]
 
-        case opacity_resource(box.color, :fill, graphics_state_resources) do
+        text =
+          case opacity_resource(box.color, :fill, graphics_state_resources) do
+            nil -> text
+            resource -> ["q /", resource.name, " gs "] ++ text ++ [" Q"]
+          end
+
+        case Map.get(box, :clip) do
           nil -> text
-          resource -> ["q /", resource.name, " gs "] ++ text ++ [" Q"]
+          clip -> ["q ", clip_rectangle_stream(clip), text, " Q"]
         end
     end
   end
@@ -878,9 +893,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp rect_stream(box, page_height, graphics_state_resources) do
     box = snap_gauge_box(box, page_height)
 
-    if box.width <= 0 or box.height <= 0,
-      do: "",
-      else: rect_paint_stream(box, page_height, graphics_state_resources)
+    if box.width <= 0 or box.height <= 0 do
+      ""
+    else
+      case Map.get(box, :clip) do
+        nil ->
+          rect_paint_stream(box, page_height, graphics_state_resources)
+
+        clip ->
+          [
+            "q ",
+            clip_rectangle_stream(clip),
+            rect_paint_stream(box, page_height, graphics_state_resources),
+            " Q"
+          ]
+      end
+    end
   end
 
   defp rect_paint_stream(box, page_height, graphics_state_resources) do
@@ -914,6 +942,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
     box =
       case Map.get(box, :role) do
+        :fieldset ->
+          %{box | x: box.x - @raster_boundary_bias}
+
         :inline_background ->
           # Match Chromium's print-matrix ties at the left and top raster edges.
           %{box | x: box.x - @raster_boundary_bias, y: box.y + @raster_boundary_bias}
@@ -1055,7 +1086,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
               []
           end
 
-        Enum.join(fill_stream ++ stroke_stream, " ")
+        Enum.join(fill_stream ++ border_cutout_stream(stroke_stream, box), " ")
     end
   end
 
@@ -1087,6 +1118,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     }
   end
 
+  defp clip_rectangle_stream(%{x: x, y: y, width: width, height: height}) do
+    [
+      format_number(x),
+      " ",
+      format_number(y),
+      " ",
+      format_number(width),
+      " ",
+      format_number(height),
+      " re W n "
+    ]
+  end
+
   defp image_stream(box, image_resources) do
     box = snap_box_to_css_pixel_grid(box)
 
@@ -1110,20 +1154,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
     clip =
       case Map.get(box, :clip) do
-        %{x: x, y: y, width: width, height: height} ->
-          [
-            format_number(x),
-            " ",
-            format_number(y),
-            " ",
-            format_number(width),
-            " ",
-            format_number(height),
-            " re W n "
-          ]
-
-        _ ->
-          []
+        nil -> []
+        clip -> clip_rectangle_stream(clip)
       end
 
     [
@@ -1306,7 +1338,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         border_side_stream(box, side, stroke_width, graphics_state_resources)
       end)
 
-    Enum.join(fill_parts ++ stroke_parts, " ")
+    Enum.join(fill_parts ++ border_cutout_stream(stroke_parts, box), " ")
+  end
+
+  # Cut only border paint. The legend remains transparent to the fieldset's
+  # background, and box-relative offsets survive pagination and inline placement.
+  defp border_cutout_stream(parts, box) do
+    case Map.get(box, :border_cutout) do
+      nil ->
+        parts
+
+      %{x: x, y: y, width: width, height: height} ->
+        cutout = %{
+          x: box.x + x,
+          y: box.y + box.height + y,
+          width: width,
+          height: height,
+          border_radius: 0
+        }
+
+        ["q", rect_path(box), rect_path(cutout), "W* n"] ++ parts ++ ["Q"]
+    end
   end
 
   defp border_side_color(box, side) do
@@ -1357,33 +1409,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
       {true, border_style, color} when border_style in [:groove, :ridge] ->
         line_width = stroke_width / 2
-        {outer_color, inner_color} = relief_pair(color, side, border_style)
+        {outer_color, inner_color} = relief_pair(color, side, border_style, Map.get(box, :role))
 
-        border_stroke(
-          box,
-          side,
-          line_width,
-          outer_color,
-          :solid,
-          0.0,
-          graphics_state_resources
-        ) ++
+        strips = [{outer_color, 0.0}, {inner_color, line_width}]
+        # Blink paints relief halves from top to bottom and left to right.
+        # The fill order matters where two subpixel strips share a raster pixel.
+        strips =
+          if Map.get(box, :role) == :fieldset and side in [:bottom, :right],
+            do: Enum.reverse(strips),
+            else: strips
+
+        Enum.flat_map(strips, fn {strip_color, inset} ->
           border_stroke(
             box,
             side,
             line_width,
-            inner_color,
+            strip_color,
             :solid,
-            line_width,
+            inset,
             graphics_state_resources
           )
+        end)
 
       {true, border_style, color} when border_style in [:inset, :outset] ->
         border_stroke(
           box,
           side,
           stroke_width,
-          relief_color(color, side, border_style),
+          relief_color(color, side, border_style, Map.get(box, :role)),
           :solid,
           0.0,
           graphics_state_resources
@@ -1451,18 +1504,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           inset + stroke_width / 2
       end
 
-    ["q", "#{format_number(scale)} 0 0 #{format_number(scale)} 0 0 cm"]
-    |> put_opacity(color, :stroke, graphics_state_resources)
-    |> put_stroke_color(color, stroke_width)
-    |> put_stroke_pattern(border_style, stroke_width, side_length)
-    |> Kernel.++([
-      border_side_path(box, side, painted_inset, border_style),
-      "S",
-      "Q"
-    ])
+    if Map.get(box, :role) == :fieldset and border_style == :solid do
+      strip =
+        case side do
+          :top ->
+            %{
+              x: box.x,
+              y: box.y + box.height - inset - stroke_width,
+              width: box.width,
+              height: stroke_width
+            }
+
+          :bottom ->
+            %{x: box.x, y: box.y + inset, width: box.width, height: stroke_width}
+
+          :left ->
+            %{x: box.x + inset, y: box.y, width: stroke_width, height: box.height}
+
+          :right ->
+            %{
+              x: box.x + box.width - inset - stroke_width,
+              y: box.y,
+              width: stroke_width,
+              height: box.height
+            }
+        end
+
+      ["q", "#{format_number(scale)} 0 0 #{format_number(scale)} 0 0 cm"]
+      |> put_opacity(color, :fill, graphics_state_resources)
+      |> put_fill_color(color)
+      |> Kernel.++([rect_path(Map.put(strip, :border_radius, 0.0)), "f", "Q"])
+    else
+      ["q", "#{format_number(scale)} 0 0 #{format_number(scale)} 0 0 cm"]
+      |> put_opacity(color, :stroke, graphics_state_resources)
+      |> put_stroke_color(color, stroke_width)
+      |> put_stroke_pattern(border_style, stroke_width, side_length)
+      |> Kernel.++([
+        border_side_path(box, side, painted_inset, border_style),
+        "S",
+        "Q"
+      ])
+    end
   end
 
-  defp relief_pair(color, side, border_style) do
+  defp relief_pair(color, side, border_style, role) do
     outer_style =
       case border_style do
         :groove -> :inset
@@ -1475,10 +1560,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         :ridge -> :inset
       end
 
-    {relief_color(color, side, outer_style), relief_color(color, side, inner_style)}
+    {relief_color(color, side, outer_style, role), relief_color(color, side, inner_style, role)}
   end
 
-  defp relief_color(color, side, border_style) do
+  defp relief_color(color, side, border_style, role) do
     dark_side? = side in [:top, :left]
 
     dark? =
@@ -1499,6 +1584,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           target = if dark?, do: max(0.0, value - 0.33), else: min(1.0, value + 0.33)
           multiplier = if value == 0.0, do: 0.0, else: target / value
           Enum.map(channels, &(round(&1 * multiplier * 255) / 255))
+      end
+
+    adjusted =
+      if role == :fieldset and not dark? do
+        # Chromium 152's CalculateInsetOutsetColor keeps the original lighter
+        # edge unless its contrast against Color::Dark is below 1.75.
+        dark =
+          relief_color(color, side, if(side in [:top, :left], do: :inset, else: :outset), nil)
+
+        luminance = fn rgb ->
+          rgb
+          |> Tuple.to_list()
+          |> Enum.take(3)
+          |> Enum.zip([0.2126, 0.7152, 0.0722])
+          |> Enum.reduce(0.0, fn {channel, weight}, sum ->
+            linear =
+              if channel <= 0.04045,
+                do: channel / 12.92,
+                else: :math.pow((channel + 0.055) / 1.055, 2.4)
+
+            sum + linear * weight
+          end)
+        end
+
+        if (luminance.(color) + 0.05) / (luminance.(dark) + 0.05) >= 1.75,
+          do: channels,
+          else: adjusted
+      else
+        adjusted
       end
 
     case tuple_size(color) do
@@ -1533,7 +1647,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       :bottom ->
         pixel_alignment =
           case Map.get(box, :role) do
-            role when role in [:table_border, :horizontal_rule] -> 0.0
+            role when role in [:table_border, :horizontal_rule, :fieldset] -> 0.0
             _ -> @css_pixel_points / 2
           end
 
@@ -1586,7 +1700,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
         opacity_resource_keys(box.fill_color, :fill) ++
           Enum.flat_map([box.stroke_color | border_colors], fn color ->
-            opacity_resource_keys(color, :stroke)
+            opacity_resource_keys(color, :stroke) ++
+              if(Map.get(box, :role) == :fieldset,
+                do: opacity_resource_keys(color, :fill),
+                else: []
+              )
           end)
 
       type

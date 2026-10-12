@@ -69,6 +69,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     {root_positioned_boxes, flow_boxes} =
       Enum.split_with(boxes, &(Map.get(&1, :position_anchor) == :root))
 
+    fieldset_paints = Enum.filter(flow_boxes, &Map.has_key?(&1, :fieldset_paint_id))
+
+    flow_boxes =
+      if fieldset_paints == [] do
+        flow_boxes
+      else
+        Enum.map(flow_boxes, fn box ->
+          case Map.get(box, :fieldset_paint_id) do
+            nil ->
+              if Map.has_key?(box, :fieldset_ancestors),
+                do: Map.put(box, :fieldset_source_y, box.y),
+                else: box
+
+            _ ->
+              top = box.y + box.fieldset_bounds.top
+
+              box
+              |> Map.put(:type, :flow_marker)
+              |> Map.put(:width, 0.0)
+              |> Map.put(:height, 0.0)
+              |> Map.put(:y, top)
+              |> Map.put(:fieldset_source_y, top)
+          end
+        end)
+      end
+
     groups =
       flow_boxes
       |> flow_groups()
@@ -81,6 +107,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       |> keep_table_groups(headers, content_height)
       |> groups_to_pages(headers, page_size, margins)
       |> close_table_fragments()
+      |> paint_fieldset_fragments(fieldset_paints, margins, pagination_order)
       |> restore_root_positioned_boxes(root_positioned_boxes, pagination_order)
       |> paint_table_outlines()
       |> Enum.map(fn page ->
@@ -95,6 +122,103 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       expected_targets,
       document_targets
     )
+  end
+
+  # Fieldset decoration is sliced at page boundaries, while legend artwork and
+  # the top notch occur only in the first fragment. Keep authored backgrounds
+  # behind the descendants on every page without making them pagination items.
+  defp paint_fieldset_fragments(pages, paints, margins, pagination_order) do
+    case paints do
+      [] ->
+        pages
+
+      _ ->
+        membership =
+          pages
+          |> Enum.with_index()
+          |> Enum.reduce(%{}, fn {page, index}, membership ->
+            Enum.reduce(page.boxes, membership, fn box, membership ->
+              Enum.reduce(Map.get(box, :fieldset_ancestors, []), membership, fn id, membership ->
+                Map.update(membership, id, {index, index}, fn {first, _last} -> {first, index} end)
+              end)
+            end)
+          end)
+
+        paints = Enum.group_by(paints, & &1.fieldset_paint_id)
+
+        pages
+        |> Enum.with_index()
+        |> Enum.map(fn {page, index} ->
+          members =
+            Enum.reduce(page.boxes, %{}, fn box, members ->
+              Enum.reduce(Map.get(box, :fieldset_ancestors, []), members, fn id, members ->
+                Map.update(members, id, [box], &[box | &1])
+              end)
+            end)
+
+          decorations =
+            Enum.flat_map(members, fn {id, reversed} ->
+              {first_page, last_page} = Map.fetch!(membership, id)
+              [first_member | _] = members = Enum.reverse(reversed)
+              last_member = List.last(members)
+              first_delta = first_member.y - first_member.fieldset_source_y
+              last_delta = last_member.y - last_member.fieldset_source_y
+
+              Enum.map(Map.fetch!(paints, id), fn paint ->
+                top =
+                  if index == first_page,
+                    do: paint.y + paint.fieldset_bounds.top + first_delta,
+                    else: elem(page.size, 1) - margins.top
+
+                bottom =
+                  if index == last_page,
+                    do: paint.y + paint.fieldset_bounds.bottom + last_delta,
+                    else: margins.bottom
+
+                HtmlValidator.reserve_render_resource(:max_layout_boxes, 1, :pagination)
+
+                case paint.type do
+                  :rect ->
+                    widths =
+                      Map.get(paint, :border_widths, %{
+                        top: 0.0,
+                        right: 0.0,
+                        bottom: 0.0,
+                        left: 0.0
+                      })
+
+                    widths = %{
+                      widths
+                      | top: if(index == first_page, do: widths.top, else: 0.0),
+                        bottom: if(index == last_page, do: widths.bottom, else: 0.0)
+                    }
+
+                    paint = %{
+                      paint
+                      | y: bottom,
+                        height: max(top - bottom, 0.0),
+                        border_widths: widths,
+                        stroke_width: Enum.max(Map.values(widths))
+                    }
+
+                    if index == first_page, do: paint, else: Map.delete(paint, :border_cutout)
+
+                  :image ->
+                    delta = first_delta
+
+                    clip = paint.clip
+
+                    paint
+                    |> Map.put(:y, paint.y + delta)
+                    |> Map.put(:clip, %{clip | y: bottom, height: max(top - bottom, 0.0)})
+                end
+              end)
+            end)
+
+          boxes = Enum.reject(page.boxes, &Map.has_key?(&1, :fieldset_paint_id))
+          %{page | boxes: Enum.sort_by(decorations ++ boxes, &Map.fetch!(&1, pagination_order))}
+        end)
+    end
   end
 
   defp paint_table_outlines(pages) do

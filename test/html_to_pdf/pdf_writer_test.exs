@@ -856,7 +856,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [bordered]}], forms: :static)
     assert pdf =~ "13.4999 26.8335 39 53 re S"
 
-    control = Map.put(bordered, :form_control, %{id: :local_appearance})
+    control =
+      Map.put(bordered, :form_control, %{
+        id: :local_appearance,
+        order: [0],
+        tag: "input",
+        attributes: %{},
+        children: [],
+        initial_state: %{owner: nil, checked: false, disabled: false, value: ""}
+      })
+
     assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [control]}], forms: :static)
     assert pdf =~ "13.5 26.8333 39 53 re S"
   end
@@ -2712,4 +2721,74 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
   defp jpeg_fixture(width, height, components \\ 3),
     do: NativeElixirPdfUtilities.TestSupport.JpegFixture.baseline(width, height, components)
+
+  test "fieldset relief strips preserve author colors, transparency and contrasting edges" do
+    for color <- [{0, 0, 0}, {0, 0, 0.1}, {1, 1, 1}, {0.9, 0.9, 0.9, 0.4}],
+        style <- [:groove, :ridge, :inset, :outset, :double] do
+      box = %{
+        type: :rect,
+        role: :fieldset,
+        x: 10,
+        y: 20,
+        width: 80,
+        height: 30,
+        fill_color: {1, 1, 0},
+        stroke_color: color,
+        stroke_width: 3,
+        border_radius: 0,
+        border_widths: %{top: 3, right: 3, bottom: 3, left: 3},
+        border_styles: %{top: style, right: style, bottom: style, left: style},
+        border_cutout: %{x: 5, y: -3, width: 20, height: 3}
+      }
+
+      assert {:ok, pdf} =
+               PdfWriter.render([%{size: {120, 100}, boxes: [box]}], compress_streams: false)
+
+      assert pdf =~ "W* n" and pdf =~ "1 1 0 rg"
+      if tuple_size(color) == 4, do: assert(pdf =~ "/ca 0.4")
+    end
+  end
+
+  test "border cutouts preserve rectangle backgrounds and validate box-relative clipping geometry" do
+    box = %{
+      type: :rect,
+      x: 10,
+      y: 20,
+      width: 80,
+      height: 30,
+      fill_color: {1, 1, 0},
+      stroke_color: {1, 0, 0},
+      stroke_width: 2,
+      border_radius: 0,
+      border_cutout: %{x: 5, y: -2, width: 20, height: 2}
+    }
+
+    for style <- [:solid, :groove, :dashed] do
+      box = Map.put(box, :border_styles, %{top: style, right: style, bottom: style, left: style})
+      box = Map.put(box, :border_widths, %{top: 2, right: 2, bottom: 2, left: 2})
+
+      assert {:ok, pdf} =
+               PdfWriter.render([%{size: {120, 100}, boxes: [box]}], compress_streams: false)
+
+      assert pdf =~ "15 48 20 2 re W* n"
+      assert pdf =~ "1 1 0 rg"
+      assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(pdf)
+    end
+
+    for cutout <- [
+          %{x: 0, y: 0, width: 0, height: 1},
+          %{x: 0, y: 0, width: 1, height: -1},
+          %{x: "bad", y: 0, width: 1, height: 1},
+          %{x: 0, y: 0, width: 1, height: 1, extra: true},
+          :bad
+        ] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} =
+               PdfWriter.render([
+                 %{size: {120, 100}, boxes: [Map.put(box, :border_cutout, cutout)]}
+               ])
+
+      assert diagnostic.stage == :pdf and diagnostic.operation == :write_pdf
+      assert diagnostic.message =~ "border_cutout"
+    end
+  end
 end

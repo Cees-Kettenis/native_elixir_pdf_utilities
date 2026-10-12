@@ -49,6 +49,74 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsTest do
     assert {:ok, _pdf} = HtmlToPdf.render("<p>No table model work</p>")
   end
 
+  test "automatic table headers avoid unused document ID work and preserve opaque scan bounds" do
+    alias NativeElixirPdfUtilities.Validators.HtmlTableValidator
+    limits = Limits.effective()
+
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               "<table><tr><th>Top</th></tr><tr><td>Gap</td></tr><tr><th>Near</th></tr><tr><td>Value</td></tr></table>"
+             )
+
+    nodes = HtmlValidator.assign_render_metadata(dom.children)
+    Limits.install(%{limits | max_css_work: 1, max_table_header_work: 18})
+    assert {:ok, [table]} = HtmlTableValidator.prepare_document(nodes)
+    [top, gap, near, value] = table._table_model.cells
+    assert gap.headers == [top.source]
+    assert near.headers == []
+    assert value.headers == [near.source]
+
+    Limits.install(%{limits | max_css_work: 1, max_table_header_work: 17})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlTableValidator.prepare_document(nodes)
+
+    assert diagnostic.stage == :style and diagnostic.message =~ "max_table_header_work"
+
+    Limits.install(%{limits | max_css_work: 1})
+
+    assert {:ok, explicit} =
+             HtmlParser.parse(
+               "<table><tr><th id=h>Header</th><td headers=h>Value</td></tr></table>"
+             )
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlTableValidator.prepare_document(
+               HtmlValidator.assign_render_metadata(explicit.children)
+             )
+
+    assert diagnostic.message =~ "max_css_work"
+  end
+
+  test "repeated validated document preparation shares work while changed limits remain enforced" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Font
+    limits = Limits.effective()
+    assert {:ok, dom} = HtmlParser.parse("<p>Text</p>")
+    [element] = dom.children
+    [text] = element.children
+    work = 3 + Enum.sum(Enum.map([dom, element, text], &byte_size(&1.source.text)))
+    Limits.install(%{limits | max_html_tree_work: work})
+    options = Font.normalize_options([])
+
+    assert :ok ==
+             HtmlValidator.with_render_budget(fn ->
+               assert {:ok, false} = HtmlValidator.prepare_style_input(dom, [], options)
+               assert {:ok, false} = HtmlValidator.prepare_style_input(dom, [], options)
+               :ok
+             end)
+
+    Limits.install(limits)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               assert {:ok, false} = HtmlValidator.prepare_style_input(dom, [], options)
+               Limits.install(%{limits | max_html_nodes: 1})
+               HtmlValidator.prepare_style_input(dom, [], options)
+             end)
+
+    assert diagnostic.message =~ "max_html_nodes"
+  end
+
   test "logical span budget diagnostics preserve optional original source locations" do
     Limits.install(%{Limits.effective() | max_layout_cardinality: 2})
 

@@ -7,6 +7,62 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
+  test "fragmented fieldsets keep side borders and paint the legend notch only on their first page" do
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               File.read!(
+                 "test/fixtures/html_to_pdf/browser_parity/html_fieldset_fragmentation.html"
+               )
+             )
+
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {210, 180}, margin: 12)
+    assert {:ok, [first, middle, last]} = Pagination.paginate(layout, margin: 12)
+    [first_border] = Enum.filter(first.boxes, &(Map.get(&1, :role) == :fieldset))
+    [middle_border] = Enum.filter(middle.boxes, &(Map.get(&1, :role) == :fieldset))
+    [last_border] = Enum.filter(last.boxes, &(Map.get(&1, :role) == :fieldset))
+    assert first_border.border_widths.top == 1.5 and first_border.border_widths.bottom == 0
+    assert middle_border.border_widths.top == 0 and middle_border.border_widths.bottom == 0
+    assert middle_border.y == 12 and middle_border.height == 156
+    assert last_border.border_widths.top == 0 and last_border.border_widths.bottom == 1.5
+
+    for border <- [first_border, middle_border, last_border],
+        do: assert(border.border_widths.left == 1.5 and border.border_widths.right == 1.5)
+
+    assert Map.has_key?(first_border, :border_cutout)
+    refute Map.has_key?(middle_border, :border_cutout)
+    refute Map.has_key?(last_border, :border_cutout)
+    assert Enum.any?(first.boxes, &(Map.get(&1, :text) == "Fragmented group"))
+    refute Enum.any?(middle.boxes ++ last.boxes, &(Map.get(&1, :text) == "Fragmented group"))
+  end
+
+  test "nested fieldsets retain background images and their own border identities across fragments" do
+    image =
+      "data:image/svg+xml;base64," <>
+        Base.encode64(
+          "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><rect width='8' height='8' fill='yellow'/></svg>"
+        )
+
+    lines = Enum.map_join(1..18, &"<p>Line #{&1}</p>")
+
+    html =
+      "<style>p{margin:0}fieldset{background-image:url('#{image}');background-repeat:repeat;background-size:8pt 8pt}</style><fieldset><legend>Outer</legend><fieldset><legend>Inner</legend>#{lines}</fieldset></fieldset>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {160, 160}, margin: 10)
+    assert {:ok, pages} = Pagination.paginate(layout, margin: 10)
+    assert length(pages) >= 2
+
+    for page <- pages do
+      borders = Enum.filter(page.boxes, &(Map.get(&1, :role) == :fieldset and &1.type == :rect))
+      assert length(borders) == 2
+      assert borders |> Enum.map(& &1.fieldset_paint_id) |> Enum.uniq() |> length() == 2
+      assert Enum.any?(page.boxes, &(&1.type == :image))
+      for tile <- Enum.filter(page.boxes, &(&1.type == :image)), do: assert(tile.clip.height > 0)
+    end
+  end
+
   test "empty inline lines retain their height at automatic page boundaries" do
     for {content, height} <- [
           {"<br>", 12},

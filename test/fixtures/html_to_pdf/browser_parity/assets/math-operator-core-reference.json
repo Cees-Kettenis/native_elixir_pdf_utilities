@@ -1,0 +1,327 @@
+{
+  "font_sha256": "49b22767985171bce579307b21d98f4d35012fa39e316acc4ffcab8644dfb69b",
+  "core_sha256": "f61ebea74ba54c489646e6969983ef977f448c26602edff75ec4e3ba77216373",
+  "reference_sha256": "ecd4e597e8762ffae4aa698922c828da328ecfce3093bbca311e4451fbc0a68b",
+  "records": {
+    "left16": {
+      "text": "(",
+      "font_size": 16,
+      "kind": "assembly",
+      "target_ascent": 35.0,
+      "target_descent": 26.744,
+      "ascent": 38.528,
+      "descent": 30.272,
+      "width": 7.744,
+      "axis": 4.128,
+      "overlap_design_units": 250.0,
+      "repetitions": 2,
+      "pieces": [
+        {
+          "glyph_id": 4862,
+          "name": "uni239D",
+          "x": 0.0,
+          "y": -30.272,
+          "alias": 58112
+        },
+        {
+          "glyph_id": 4861,
+          "name": "uni239C",
+          "x": 0.0,
+          "y": -13.888,
+          "alias": 58113
+        },
+        {
+          "glyph_id": 4861,
+          "name": "uni239C",
+          "x": 0.0,
+          "y": 2.144,
+          "alias": 58113
+        },
+        {
+          "glyph_id": 4860,
+          "name": "uni239B",
+          "x": 0.0,
+          "y": 18.16,
+          "alias": 58114
+        }
+      ],
+      "html": "<mtext data-core-reference=\"left16\" style=\"display:inline-block;position:relative;width:7.74400000pt;height:68.80000000pt;line-height:0;font-size:0\"><span style=\"display:inline-block;width:0;height:38.52800000pt;line-height:0;font-size:0\"></span><span style=\"position:absolute;left:0.00000000pt;top:56.80000000pt;font-family:'Math Operator Core Reference';font-size:16pt;line-height:16pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:40.41600000pt;font-family:'Math Operator Core Reference';font-size:16pt;line-height:16pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:24.38400000pt;font-family:'Math Operator Core Reference';font-size:16pt;line-height:16pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:8.36800000pt;font-family:'Math Operator Core Reference';font-size:16pt;line-height:16pt\"></span></mtext>"
+    },
+    "right16": {
+      "text": ")",
+      "font_size": 16,
+      "kind": "assembly",
+      "target_ascent": 35.0,
+      "target_descent": 26.744,
+      "ascent": 38.528,
+      "descent": 30.272,
+      "width": 7.744,
+      "axis": 4.128,
+      "overlap_design_units": 250.0,
+      "repetitions": 2,
+      "pieces": [
+        {
+          "glyph_id": 4865,
+          "name": "uni23A0",
+          "x": 0.0,
+          "y": -30.272,
+          "alias": 58115
+        },
+        {
+          "glyph_id": 4864,
+          "name": "uni239F",
+          "x": 0.0,
+          "y": -13.888,
+          "alias": 58116
+        },
+        {
+          "glyph_id": 4864,
+          "name": "uni239F",
+          "x": 0.0,
+          "y": 2.144,
+          "alias": 58116
+        },
+        {
+          "glyph_id": 4863,
+          "name": "uni239E",
+          "x": 0.0,
+          "y": 18.16,
+          "alias": 58117
+        }
+      ],
+      "html": "<mtext data-core-reference=\"right16\" style=\"display:inline-block;position:relative;width:7.74400000pt;height:68.80000000pt;line-height:0;font-size:0\"><span style=\"display:inline-block;width:0;height:38.52800000pt;line-height:0;font-size:0\"></span><span style=\"position:absolute;left:0.00000000pt;top:56.80000000pt;font-family:'Math Operator Core Reference';font-size:16pt;line-height:16pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:40.41600000pt;font-family:'Math Operator Core Reference';font-size:16pt;line-height:16pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:24.38400000pt;font-family:'Math Operator Core Reference';font-size:16pt;line-height:16pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:8.36800000pt;font-family:'Math Operator Core Reference';font-size:16pt;line-height:16pt\"></span></mtext>"
+    },
+    "bracket16": {
+      "text": "[",
+      "font_size": 16,
+      "kind": "glyph",
+      "target_ascent": 35.0,
+      "target_descent": 12.0,
+      "ascent": 36.308,
+      "descent": 13.308,
+      "width": 8.448,
+      "axis": 4.128,
+      "overlap_design_units": 0.0,
+      "repetitions": 0,
+      "pieces": [
+        {
+          "glyph_id": 1333,
+          "name": "bracketleft.s9",
+          "x": 0.0,
+          "y": 7.188,
+          "alias": 58118
+        }
+      ],
+      "html": "<mtext data-core-reference=\"bracket16\" style=\"display:inline-block;position:relative;width:8.44800000pt;height:49.61600000pt;line-height:0;font-size:0\"><span style=\"display:inline-block;width:0;height:36.30800000pt;line-height:0;font-size:0\"></span><span style=\"position:absolute;left:0.00000000pt;top:17.12000000pt;font-family:'Math Operator Core Reference';font-size:16pt;line-height:16pt\"></span></mtext>"
+    },
+    "min-bracket16": {
+      "text": "]",
+      "font_size": 16,
+      "kind": "glyph",
+      "target_ascent": 15.312,
+      "target_descent": 7.056,
+      "ascent": 15.536,
+      "descent": 7.28,
+      "width": 6.24,
+      "axis": 4.128,
+      "overlap_design_units": 0.0,
+      "repetitions": 0,
+      "pieces": [
+        {
+          "glyph_id": 1338,
+          "name": "bracketright.s2",
+          "x": 0.0,
+          "y": -0.192,
+          "alias": 58119
+        }
+      ],
+      "html": "<mtext data-core-reference=\"min-bracket16\" style=\"display:inline-block;position:relative;width:6.24000000pt;height:22.81600000pt;line-height:0;font-size:0\"><span style=\"display:inline-block;width:0;height:15.53600000pt;line-height:0;font-size:0\"></span><span style=\"position:absolute;left:0.00000000pt;top:3.72800000pt;font-family:'Math Operator Core Reference';font-size:16pt;line-height:16pt\"></span></mtext>"
+    },
+    "left-brace12": {
+      "text": "{",
+      "font_size": 12,
+      "kind": "assembly",
+      "target_ascent": 65.0,
+      "target_descent": 58.808,
+      "ascent": 65.0,
+      "descent": 58.808,
+      "width": 7.2,
+      "axis": 3.096,
+      "overlap_design_units": 218.76666666666668,
+      "repetitions": 4,
+      "pieces": [
+        {
+          "glyph_id": 4874,
+          "name": "uni23A9",
+          "x": 0.0,
+          "y": -58.808,
+          "alias": 58120
+        },
+        {
+          "glyph_id": 4875,
+          "name": "uni23AA",
+          "x": 0.0,
+          "y": -46.1332,
+          "alias": 58121
+        },
+        {
+          "glyph_id": 4875,
+          "name": "uni23AA",
+          "x": 0.0,
+          "y": -36.7464,
+          "alias": 58121
+        },
+        {
+          "glyph_id": 4875,
+          "name": "uni23AA",
+          "x": 0.0,
+          "y": -27.3596,
+          "alias": 58121
+        },
+        {
+          "glyph_id": 4875,
+          "name": "uni23AA",
+          "x": 0.0,
+          "y": -17.9728,
+          "alias": 58121
+        },
+        {
+          "glyph_id": 4873,
+          "name": "uni23A8",
+          "x": 0.0,
+          "y": -8.586,
+          "alias": 58122
+        },
+        {
+          "glyph_id": 4875,
+          "name": "uni23AA",
+          "x": 0.0,
+          "y": 12.1528,
+          "alias": 58121
+        },
+        {
+          "glyph_id": 4875,
+          "name": "uni23AA",
+          "x": 0.0,
+          "y": 21.5396,
+          "alias": 58121
+        },
+        {
+          "glyph_id": 4875,
+          "name": "uni23AA",
+          "x": 0.0,
+          "y": 30.9264,
+          "alias": 58121
+        },
+        {
+          "glyph_id": 4875,
+          "name": "uni23AA",
+          "x": 0.0,
+          "y": 40.3132,
+          "alias": 58121
+        },
+        {
+          "glyph_id": 4872,
+          "name": "uni23A7",
+          "x": 0.0,
+          "y": 49.7,
+          "alias": 58123
+        }
+      ],
+      "html": "<mtext data-core-reference=\"left-brace12\" style=\"display:inline-block;position:relative;width:7.20000000pt;height:123.80800000pt;line-height:0;font-size:0\"><span style=\"display:inline-block;width:0;height:65.00000000pt;line-height:0;font-size:0\"></span><span style=\"position:absolute;left:0.00000000pt;top:114.80800000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:102.13320000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:92.74640000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:83.35960000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:73.97280000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:64.58600000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:43.84720000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:34.46040000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:25.07360000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:15.68680000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:6.30000000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span></mtext>"
+    },
+    "right-brace12": {
+      "text": "}",
+      "font_size": 12,
+      "kind": "assembly",
+      "target_ascent": 65.0,
+      "target_descent": 58.808,
+      "ascent": 65.0,
+      "descent": 58.808,
+      "width": 7.2,
+      "axis": 3.096,
+      "overlap_design_units": 218.76666666666668,
+      "repetitions": 4,
+      "pieces": [
+        {
+          "glyph_id": 4878,
+          "name": "uni23AD",
+          "x": 0.0,
+          "y": -58.808,
+          "alias": 58124
+        },
+        {
+          "glyph_id": 4875,
+          "name": "uni23AA",
+          "x": 0.0,
+          "y": -46.1332,
+          "alias": 58121
+        },
+        {
+          "glyph_id": 4875,
+          "name": "uni23AA",
+          "x": 0.0,
+          "y": -36.7464,
+          "alias": 58121
+        },
+        {
+          "glyph_id": 4875,
+          "name": "uni23AA",
+          "x": 0.0,
+          "y": -27.3596,
+          "alias": 58121
+        },
+        {
+          "glyph_id": 4875,
+          "name": "uni23AA",
+          "x": 0.0,
+          "y": -17.9728,
+          "alias": 58121
+        },
+        {
+          "glyph_id": 4877,
+          "name": "uni23AC",
+          "x": 0.0,
+          "y": -8.586,
+          "alias": 58125
+        },
+        {
+          "glyph_id": 4875,
+          "name": "uni23AA",
+          "x": 0.0,
+          "y": 12.1528,
+          "alias": 58121
+        },
+        {
+          "glyph_id": 4875,
+          "name": "uni23AA",
+          "x": 0.0,
+          "y": 21.5396,
+          "alias": 58121
+        },
+        {
+          "glyph_id": 4875,
+          "name": "uni23AA",
+          "x": 0.0,
+          "y": 30.9264,
+          "alias": 58121
+        },
+        {
+          "glyph_id": 4875,
+          "name": "uni23AA",
+          "x": 0.0,
+          "y": 40.3132,
+          "alias": 58121
+        },
+        {
+          "glyph_id": 4876,
+          "name": "uni23AB",
+          "x": 0.0,
+          "y": 49.7,
+          "alias": 58126
+        }
+      ],
+      "html": "<mtext data-core-reference=\"right-brace12\" style=\"display:inline-block;position:relative;width:7.20000000pt;height:123.80800000pt;line-height:0;font-size:0\"><span style=\"display:inline-block;width:0;height:65.00000000pt;line-height:0;font-size:0\"></span><span style=\"position:absolute;left:0.00000000pt;top:114.80800000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:102.13320000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:92.74640000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:83.35960000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:73.97280000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:64.58600000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:43.84720000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:34.46040000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:25.07360000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:15.68680000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span><span style=\"position:absolute;left:0.00000000pt;top:6.30000000pt;font-family:'Math Operator Core Reference';font-size:12pt;line-height:12pt\"></span></mtext>"
+    }
+  }
+}

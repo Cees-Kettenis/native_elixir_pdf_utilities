@@ -353,6 +353,25 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
         fonts
       end
 
+    fonts =
+      if String.contains?(File.read!(fixture_path), "Math Operator Core Reference") do
+        fonts ++
+          [
+            %{
+              family: "Math Operator Core Reference",
+              weight: 400,
+              style: :normal,
+              path:
+                Path.expand(
+                  "../fixtures/html_to_pdf/browser_parity/assets/math-operator-core-reference.ttf",
+                  __DIR__
+                )
+            }
+          ]
+      else
+        fonts
+      end
+
     Enum.each(fonts, fn font ->
       assert File.regular?(font.path), "Missing bundled browser parity font: #{font.path}"
     end)

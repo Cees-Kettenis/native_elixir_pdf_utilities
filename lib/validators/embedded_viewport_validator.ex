@@ -128,16 +128,6 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
       end)
 
     cond do
-      Map.get(surface.tree, :link_scope) != nil ->
-        Diagnostics.error(
-          :layout,
-          :unsupported_html,
-          "Child fragment destinations require scoped root placement and final composition geometry; they cannot bind to parent document targets",
-          module: __MODULE__,
-          operation: :layout_embedded_viewport,
-          source: "link_scope"
-        )
-
       surface.host == :iframe and width > 0 and height > 0 and overflow != :hidden and
           overflowing? ->
         Diagnostics.error(

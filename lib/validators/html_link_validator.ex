@@ -9,6 +9,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
   beginning of the document. Final destinations use PDF bottom-left points.
   """
 
+  alias NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry
+  alias NativeElixirPdfUtilities.Validators.WriterValidator
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.HtmlUrlValidator
@@ -271,7 +273,40 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
 
            Enum.all?(scopes, &(&1 == scope))
          end) do
-        :ok
+        Enum.reduce_while(boxes, :ok, fn box, :ok ->
+          result =
+            case box do
+              %{type: :drawing_group, boxes: children, width: width, height: height} ->
+                child_scope = Map.get(box, :link_scope, scope)
+
+                with :ok <- WriterValidator.validate_drawing_group(box),
+                     :ok <- validate_document_origin(box, child_scope, {width, height}),
+                     :ok <- validate_boxes(children, child_scope),
+                     :ok <-
+                       validate_expected_targets(
+                         Map.get(box, :link_expected_targets, []),
+                         child_scope
+                       ),
+                     :ok <-
+                       validate_document_targets(
+                         Map.get(box, :link_document_targets, []),
+                         child_scope,
+                         {width, height}
+                       ),
+                     do: :ok
+
+              %{type: :glyph_group, boxes: children} ->
+                validate_boxes(children, scope)
+
+              _ ->
+                :ok
+            end
+
+          case result do
+            :ok -> {:cont, :ok}
+            error -> {:halt, error}
+          end
+        end)
       else
         Diagnostics.error(
           :pagination,
@@ -282,6 +317,50 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
           source: "link_scope"
         )
       end
+    end
+  end
+
+  defp validate_document_origin(box, scope, size) do
+    case Map.fetch(box, :link_scope) do
+      :error ->
+        :ok
+
+      {:ok, {document, tree}} when is_reference(document) and is_reference(tree) ->
+        case Map.get(box, :link_document_origin) do
+          %{x: x, y: y} ->
+            validate_document_targets(
+              [
+                %{
+                  identity: {document, tree, make_ref()},
+                  source: "document beginning",
+                  x: x,
+                  y: y
+                }
+              ],
+              scope,
+              size
+            )
+
+          _ ->
+            Diagnostics.error(
+              :pagination,
+              :invalid_layout,
+              "A scoped child document requires its local printed root origin",
+              operation: :paginate,
+              module: __MODULE__,
+              source: "link_document_origin"
+            )
+        end
+
+      _ ->
+        Diagnostics.error(
+          :pagination,
+          :invalid_layout,
+          "A child document requires reference document and tree identities",
+          operation: :paginate,
+          module: __MODULE__,
+          source: "link_scope"
+        )
     end
   end
 
@@ -366,89 +445,195 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
   @spec resolve_pages([map()], term(), [map()], [map()]) ::
           {:ok, [map()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def resolve_pages(pages, root_scope, expected_targets \\ [], document_targets \\ []) do
-    if root_scope == nil do
+    if root_scope == nil and
+         Enum.all?(pages, fn page ->
+           Enum.all?(page.boxes, &(Map.get(&1, :type) not in [:drawing_group, :glyph_group]))
+         end) do
       {:ok, pages}
     else
-      document_positions =
-        Map.new(document_targets, fn target ->
-          {target.identity, {:xyz, 1, target.x, target.y}}
-        end)
+      document_positions = Map.new(document_targets, &{&1.identity, {:xyz, 1, &1.x, &1.y}})
 
-      positions =
+      beginnings =
+        if root_scope == nil,
+          do: %{},
+          else: %{root_scope => {:xyz, 1, 0, elem(hd(pages).size, 1)}}
+
+      {positions, beginnings, expected, requested} =
         pages
         |> Enum.with_index(1)
-        |> Enum.reduce(document_positions, fn {page, number}, positions ->
+        |> Enum.reduce({document_positions, beginnings, expected_targets, MapSet.new()}, fn {page,
+                                                                                             number},
+                                                                                            acc ->
           {width, height} = page.size
-
-          Enum.reduce(page.boxes, positions, fn box, positions ->
-            Enum.reduce(Map.get(box, :html_targets, []), positions, fn target, positions ->
-              x = box.x + target.dx
-              y = box.y + target.dy
-
-              position =
-                if x >= 0 and x <= width and y >= 0 and y <= height,
-                  do: {:xyz, number, x, y},
-                  else: {:unavailable, number, x, y}
-
-              Map.put_new(positions, target.identity, position)
-            end)
-          end)
+          collect_positions(page.boxes, number, {1, 1, 0, 0, {0, 0, width, height}, height}, acc)
         end)
 
-      missing = Enum.find(expected_targets, &(not Map.has_key?(positions, &1.identity)))
+      missing = Enum.find(expected, &(not Map.has_key?(positions, &1.identity)))
 
-      if missing != nil do
-        Diagnostics.error(
-          :pagination,
-          :unsupported_html,
-          "Selected visible HTML fragment target has no final placement for PDF destination serialization; this element requires target geometry transport through layout and pagination",
-          operation: :paginate,
-          module: __MODULE__,
-          source: missing.source
+      unavailable =
+        Enum.find(
+          Map.merge(positions, Map.take(beginnings, MapSet.to_list(requested))),
+          fn {_identity, position} ->
+            elem(position, 0) == :unavailable
+          end
         )
-      else
-        case Enum.find(positions, fn {_identity, position} ->
-               elem(position, 0) == :unavailable
-             end) do
-          {identity, {:unavailable, page, x, y}} ->
-            source =
-              Enum.find_value(expected_targets, "html fragment target", fn target ->
-                if target.identity == identity, do: target.source, else: nil
-              end)
 
-            Diagnostics.error(
-              :pagination,
-              :unsupported_html,
-              "Selected HTML fragment target has no representable destination inside final PDF page #{page} at #{x}, #{y}; keep its target geometry inside the printed page. Transformed or fully clipped child targets require composition destination support",
-              operation: :paginate,
-              module: __MODULE__,
-              source: source
-            )
+      cond do
+        missing != nil ->
+          Diagnostics.error(
+            :pagination,
+            :unsupported_html,
+            "Selected visible HTML fragment target has no final placement for PDF destination serialization; this element requires target geometry transport through layout and pagination",
+            operation: :paginate,
+            module: __MODULE__,
+            source: missing.source
+          )
 
-          nil ->
-            {:ok,
-             Enum.map(pages, fn page ->
-               boxes =
-                 Enum.map(page.boxes, fn box ->
-                   destination =
-                     case Map.get(box, :link_destination) do
-                       {:target, identity} -> Map.get(positions, identity)
-                       {:top, ^root_scope} -> {:xyz, 1, 0, elem(hd(pages).size, 1)}
-                       nil -> nil
-                     end
+        unavailable != nil ->
+          {identity, {:unavailable, page, x, y}} = unavailable
 
-                   box = Map.delete(box, :html_targets)
+          source =
+            Enum.find_value(expected, "document beginning", fn target ->
+              if target.identity == identity, do: target.source
+            end)
 
-                   if destination == nil,
-                     do: Map.delete(box, :link_destination),
-                     else: Map.put(box, :link_destination, destination)
-                 end)
+          Diagnostics.error(
+            :pagination,
+            :unsupported_html,
+            "Selected HTML fragment target has no representable destination inside final PDF page #{page} at #{x}, #{y}; keep its target geometry inside the printed page and all ancestor clips, with a positive visible viewport",
+            operation: :paginate,
+            module: __MODULE__,
+            source: source
+          )
 
-               %{page | boxes: boxes}
-             end)}
-        end
+        true ->
+          {:ok,
+           Enum.map(pages, fn page ->
+             %{page | boxes: resolve_boxes(page.boxes, positions, beginnings)}
+           end)}
       end
     end
+  end
+
+  # Recursion follows paint groups after parent pagination. Each local transform
+  # uses the same PDF precision and intersected clips as writer annotations.
+  defp collect_positions(boxes, page, composition, acc) do
+    Enum.reduce(boxes, acc, fn box, {positions, beginnings, expected, requested} ->
+      {sx, sy, tx, ty, clip, _height} = composition
+
+      requested =
+        case Map.get(box, :link_destination) do
+          {:top, scope} -> MapSet.put(requested, scope)
+          _ -> requested
+        end
+
+      positions =
+        Enum.reduce(Map.get(box, :html_targets, []), positions, fn target, positions ->
+          position =
+            target_position(box.x + target.dx, box.y + target.dy, page, {sx, sy, tx, ty}, clip)
+
+          Map.put_new(positions, target.identity, position)
+        end)
+
+      case box do
+        %{type: :drawing_group, boxes: children} ->
+          composition = DrawingGeometry.compose_group(box, composition)
+          {sx, sy, tx, ty, clip, _height} = composition
+          transform = {sx, sy, tx, ty}
+
+          positions =
+            Enum.reduce(Map.get(box, :link_document_targets, []), positions, fn target,
+                                                                                positions ->
+              Map.put_new(
+                positions,
+                target.identity,
+                target_position(target.x, target.y, page, transform, clip)
+              )
+            end)
+
+          beginnings =
+            case Map.get(box, :link_scope) do
+              nil ->
+                beginnings
+
+              scope ->
+                origin = box.link_document_origin
+
+                Map.put_new(
+                  beginnings,
+                  scope,
+                  target_position(origin.x, origin.y, page, transform, clip)
+                )
+            end
+
+          collect_positions(
+            children,
+            page,
+            composition,
+            {positions, beginnings, expected ++ Map.get(box, :link_expected_targets, []),
+             requested}
+          )
+
+        %{type: :glyph_group, boxes: children} ->
+          collect_positions(
+            children,
+            page,
+            composition,
+            {positions, beginnings, expected, requested}
+          )
+
+        _ ->
+          {positions, beginnings, expected, requested}
+      end
+    end)
+  end
+
+  defp target_position(x, y, page, transform, {left, bottom, right, top}) do
+    {x, y} = DrawingGeometry.transform_point(x, y, transform)
+    HtmlValidator.check_render_resource(:max_pdf_numeric_magnitude, abs(x), :pagination)
+    HtmlValidator.check_render_resource(:max_pdf_numeric_magnitude, abs(y), :pagination)
+
+    if right > left and top > bottom and x >= left and x <= right and y >= bottom and y <= top,
+      do: {:xyz, page, x, y},
+      else: {:unavailable, page, x, y}
+  end
+
+  defp resolve_boxes(boxes, positions, beginnings) do
+    Enum.map(boxes, fn box ->
+      destination =
+        case Map.get(box, :link_destination) do
+          {:target, identity} -> Map.get(positions, identity)
+          {:top, scope} -> Map.get(beginnings, scope)
+          nil -> nil
+        end
+
+      box =
+        Map.drop(box, [
+          :html_targets,
+          :link_scope,
+          :link_expected_targets,
+          :link_document_targets,
+          :link_document_origin
+        ])
+
+      box =
+        if destination == nil,
+          do: Map.delete(box, :link_destination),
+          else: Map.put(box, :link_destination, destination)
+
+      case box do
+        %{type: type, boxes: children} when type in [:drawing_group, :glyph_group] ->
+          %{
+            box
+            | boxes:
+                resolve_boxes(children, positions, beginnings)
+                |> Enum.reject(&(Map.get(&1, :type) == :flow_marker))
+          }
+
+        _ ->
+          box
+      end
+    end)
   end
 
   @doc false
@@ -456,25 +641,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
   def validate_destinations(pages) do
     sizes = pages |> Enum.map(& &1.size) |> List.to_tuple()
 
-    if Enum.all?(pages, fn page ->
-         Enum.all?(page.boxes, fn box ->
-           case Map.get(box, :link_destination) do
-             nil ->
-               true
-
-             {:xyz, number, x, y}
-             when is_integer(number) and number > 0 and number <= tuple_size(sizes) ->
-               {width, height} = elem(sizes, number - 1)
-
-               box.type in [:text, :image] and Map.get(box, :link_url) == nil and
-                 is_number(x) and is_number(y) and x >= 0 and x <= width and y >= 0 and
-                 y <= height
-
-             _ ->
-               false
-           end
-         end)
-       end) do
+    if Enum.all?(pages, &valid_destination_boxes?(&1.boxes, sizes)) do
       :ok
     else
       Diagnostics.error(
@@ -486,5 +653,30 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
         source: "link_destination"
       )
     end
+  end
+
+  defp valid_destination_boxes?(boxes, sizes) do
+    Enum.all?(boxes, fn box ->
+      case Map.get(box, :link_destination) do
+        nil ->
+          case box do
+            %{type: type, boxes: children} when type in [:drawing_group, :glyph_group] ->
+              valid_destination_boxes?(children, sizes)
+
+            _ ->
+              true
+          end
+
+        {:xyz, number, x, y}
+        when is_integer(number) and number > 0 and number <= tuple_size(sizes) ->
+          {width, height} = elem(sizes, number - 1)
+
+          box.type in [:text, :image] and Map.get(box, :link_url) == nil and
+            is_number(x) and is_number(y) and x >= 0 and x <= width and y >= 0 and y <= height
+
+        _ ->
+          false
+      end
+    end)
   end
 end

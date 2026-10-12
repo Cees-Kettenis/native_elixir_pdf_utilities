@@ -6,8 +6,9 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.MathOperatorValidator
 
-  @rendered_elements ~w(math mi mn mtext ms mspace mrow)
+  @rendered_elements ~w(math mi mn mo mtext ms mspace mrow)
 
   @doc false
   @spec validate_flow_geometry([term()], number(), number()) ::
@@ -408,8 +409,24 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_element(node, context) do
     NativeElixirPdfUtilities.HtmlToPdf.MathLayout.with_context(fn ->
-      with {:ok, prepared} <- prepare_node(node, context),
-           do: {:ok, Map.put(prepared, :root, true)}
+      with {:ok, prepared} <- prepare_node(node, context) do
+        inline = Map.get(context, :inline_stretch_size)
+        block = Map.get(context, :block_stretch_size)
+        constraint = if inline != nil, do: inline, else: block
+
+        with :ok <- validate_operator_constraint(constraint) do
+          cond do
+            inline != nil and (block != nil or not is_number(inline)) ->
+              failure("math preparation requires one inline or block stretch constraint")
+
+            block != nil and not is_tuple(block) ->
+              failure("math preparation requires one inline or block stretch constraint")
+
+            true ->
+              {:ok, prepared |> Map.put(:root, true) |> Map.put(:stretch_constraint, constraint)}
+          end
+        end
+      end
     end)
   end
 
@@ -495,106 +512,126 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                 end
               end
 
-            tag in ~w(mi mn mtext ms) ->
+            tag == "mo" ->
               with {:ok, runs} <- token_runs(children, true),
-                   :ok <- validate_token_text(runs) do
-                math_formatting? =
-                  Map.get(style, :_math_formatting, style.display != :inline_block)
-
-                if not math_formatting? or Enum.any?(children, &(Map.get(&1, :type) == :element)) do
-                  # Math formatting blockifies direct child boxes. An authored
-                  # flow display instead retains ordinary HTML inline flow.
-                  lines =
-                    if not math_formatting?,
-                      do: [children],
-                      else: Enum.map(children, &[&1])
-
-                  Enum.reduce_while(lines, {:ok, []}, fn line, {:ok, prepared} ->
-                    with {:ok, runs} <- token_runs(line, true),
-                         {:ok, glyphs, text} <- prepare_token_glyphs(runs) do
-                      if glyphs == [] do
-                        {:cont, {:ok, prepared}}
-                      else
-                        {:cont,
-                         {:ok,
-                          [
-                            %{kind: :token, children: glyphs, style: style, actual_text: text}
-                            | prepared
-                          ]}}
-                      end
-                    else
-                      error -> {:halt, error}
-                    end
-                  end)
-                  |> case do
-                    {:ok, prepared} ->
-                      {:ok,
-                       %{
-                         kind: :flow,
-                         children: Enum.reverse(prepared),
-                         style: style,
-                         actual_text: runs |> token_characters() |> Enum.map_join(& &1.text),
-                         baseline_depth:
-                           if(prepared == [],
-                             do: 0.0,
-                             else: HtmlValidator.text_baseline_depth(style)
-                           ),
-                         line_height: style.line_height
-                       }}
-
-                    error ->
-                      error
-                  end
-                else
-                  with {:ok, glyphs, actual_text} <- prepare_token_glyphs(runs),
+                   {:ok, x_height} <- FontValidator.prepare_x_height(font),
+                   {:ok, operator} <-
+                     MathOperatorValidator.prepare(
+                       runs |> token_characters() |> Enum.map_join(& &1.text),
+                       attributes,
+                       Map.merge(Map.get(context, :operator_context, %{}), %{
+                         font_size: size,
+                         root_font_size: Map.get(style, :_root_font_size, size),
+                         x_height: x_height * size,
+                         text_only: Enum.all?(children, &(Map.get(&1, :type) == :text))
+                       })
+                     ),
+                   {:ok, content} <-
+                     if(operator.invisible,
                        do:
                          {:ok,
                           %{
-                            kind: :token,
-                            children: glyphs,
+                            kind: :space,
+                            width: 0.0,
+                            ascent: 0.0,
+                            descent: 0.0,
                             style: style,
-                            actual_text: actual_text
-                          }}
-                end
-              end
-
-            true ->
-              Enum.reduce_while(children, {:ok, []}, fn child, {:ok, prepared} ->
-                result =
-                  case child do
-                    %{type: :element, style: %{display: :none}} ->
-                      {:ok, nil}
-
-                    %{type: :text, text: text} ->
-                      if Regex.match?(~r/^[ \t\n\r\f]*$/u, text) do
-                        {:ok, nil}
-                      else
-                        prepare_node(
-                          %{
-                            type: :element,
-                            namespace: :mathml,
-                            tag: "mtext",
-                            attributes: %{},
-                            style: style,
-                            children: [child]
-                          },
-                          context
-                        )
-                      end
+                            actual_text: operator.text
+                          }},
+                       else: prepare_token_content(children, style, runs)
+                     ) do
+                source =
+                  case content do
+                    %{kind: :token, children: [%{glyph: glyph}]} when operator.single_character ->
+                      glyph
 
                     _ ->
-                      prepare_node(child, context)
+                      nil
+                  end
+
+                {:ok,
+                 %{
+                   kind: :operator,
+                   content: content,
+                   style: style,
+                   actual_text: content.actual_text,
+                   core_operator: operator,
+                   source_glyph: source,
+                   math_formatting: Map.get(style, :_math_formatting, true)
+                 }}
+              end
+
+            tag in ~w(mi mn mtext ms) ->
+              with {:ok, runs} <- token_runs(children, true),
+                   do: prepare_token_content(children, style, runs)
+
+            true ->
+              in_flow =
+                Enum.reject(children, fn child ->
+                  Map.get(child, :style, %{}) |> Map.get(:display) == :none or
+                    (Map.get(child, :type) == :text and
+                       Regex.match?(~r/^[ \t\n\r\f]*$/u, child.text))
+                end)
+
+              count = Enum.count(in_flow, &(not space_like?(&1)))
+              embellished? = embellished?(node)
+
+              in_flow
+              |> Enum.with_index()
+              |> Enum.reduce_while({:ok, [], 0}, fn {child, child_index},
+                                                    {:ok, prepared, index} ->
+                operator_context =
+                  if embellished? and tag != "math" do
+                    Map.get(context, :operator_context, %{})
+                  else
+                    %{parent: tag, index: index, count: count, child_index: child_index}
+                  end
+
+                child_context = Map.put(context, :operator_context, operator_context)
+
+                result =
+                  case child do
+                    %{type: :text} ->
+                      prepare_node(
+                        %{
+                          type: :element,
+                          namespace: :mathml,
+                          tag: "mtext",
+                          attributes: %{},
+                          style: style,
+                          children: [child]
+                        },
+                        child_context
+                      )
+
+                    _ ->
+                      prepare_node(child, child_context)
                   end
 
                 case result do
-                  {:ok, nil} -> {:cont, {:ok, prepared}}
-                  {:ok, child} -> {:cont, {:ok, [child | prepared]}}
-                  error -> {:halt, error}
+                  {:ok, result} ->
+                    {:cont,
+                     {:ok, [result | prepared], index + if(space_like?(child), do: 0, else: 1)}}
+
+                  error ->
+                    {:halt, error}
                 end
               end)
               |> case do
-                {:ok, prepared} ->
-                  {:ok, %{kind: :row, children: Enum.reverse(prepared), style: style}}
+                {:ok, prepared, _index} ->
+                  children = Enum.reverse(prepared)
+
+                  core =
+                    if embellished?, do: Enum.find_value(children, &Map.get(&1, :core_operator))
+
+                  {:ok,
+                   %{
+                     kind: :row,
+                     children: children,
+                     style: style,
+                     core_operator: core,
+                     add_operator_space: tag == "math" or not embellished?
+                   }}
 
                 error ->
                   error
@@ -606,6 +643,289 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
         failure(
           "math preparation requires styled MathML nodes; non-token HTML children need a later composition batch"
         )
+    end
+  end
+
+  # Core's multi-character operator fallback is the same text/HTML flow as
+  # the other tokens, including blockification of original direct child boxes.
+  defp prepare_token_content(children, style, runs) do
+    with :ok <- validate_token_text(runs) do
+      math_formatting? =
+        Map.get(style, :_math_formatting, style.display != :inline_block)
+
+      if not math_formatting? or Enum.any?(children, &(Map.get(&1, :type) == :element)) do
+        # Math formatting blockifies direct child boxes. An authored
+        # flow display instead retains ordinary HTML inline flow.
+        lines =
+          if not math_formatting?,
+            do: [children],
+            else: Enum.map(children, &[&1])
+
+        Enum.reduce_while(lines, {:ok, []}, fn line, {:ok, prepared} ->
+          with {:ok, runs} <- token_runs(line, true),
+               {:ok, glyphs, text} <- prepare_token_glyphs(runs) do
+            if glyphs == [] do
+              {:cont, {:ok, prepared}}
+            else
+              {:cont,
+               {:ok,
+                [
+                  %{kind: :token, children: glyphs, style: style, actual_text: text}
+                  | prepared
+                ]}}
+            end
+          else
+            error -> {:halt, error}
+          end
+        end)
+        |> case do
+          {:ok, prepared} ->
+            {:ok,
+             %{
+               kind: :flow,
+               children: Enum.reverse(prepared),
+               style: style,
+               actual_text: runs |> token_characters() |> Enum.map_join(& &1.text),
+               baseline_depth:
+                 if(prepared == [],
+                   do: 0.0,
+                   else: HtmlValidator.text_baseline_depth(style)
+                 ),
+               line_height: style.line_height
+             }}
+
+          error ->
+            error
+        end
+      else
+        with {:ok, glyphs, actual_text} <- prepare_token_glyphs(runs),
+             do:
+               {:ok,
+                %{
+                  kind: :token,
+                  children: glyphs,
+                  style: style,
+                  actual_text: actual_text
+                }}
+      end
+    end
+  end
+
+  # Core 3.2.4.1 and 3.2.5.1 classify original in-flow structure, before
+  # preparation adds anonymous token boxes. This determines the outer form.
+  defp space_like?(node) do
+    case node do
+      %{namespace: :mathml, tag: tag} when tag in ["mtext", "mspace"] ->
+        true
+
+      %{namespace: :mathml, tag: tag, children: children} when tag in ["math", "mrow"] ->
+        Enum.all?(children, fn child ->
+          Map.get(child, :style, %{}) |> Map.get(:display) == :none or space_like?(child)
+        end)
+
+      %{type: :text, text: text} ->
+        Regex.match?(~r/^[ \t\n\r\f]*$/u, text)
+
+      _ ->
+        false
+    end
+  end
+
+  defp embellished?(node) do
+    case node do
+      %{namespace: :mathml, tag: "mo"} ->
+        true
+
+      %{namespace: :mathml, tag: tag, children: children} when tag in ["math", "mrow"] ->
+        case Enum.reject(children, fn child ->
+               Map.get(child, :style, %{}) |> Map.get(:display) == :none or space_like?(child)
+             end) do
+          [child] -> embellished?(child)
+          _ -> false
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  @doc false
+  @spec prepare_operator_stretch(term(), term()) ::
+          {:ok, map() | nil} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_operator_stretch(prepared, constraint) do
+    NativeElixirPdfUtilities.HtmlToPdf.MathLayout.with_context(fn ->
+      case {prepared, constraint} do
+        {%{
+           kind: :operator,
+           source_glyph: base,
+           core_operator: operator,
+           math_formatting: formatting?,
+           style: style
+         }, constraint}
+        when is_map(operator) and is_map(style) and
+               (is_nil(constraint) or is_tuple(constraint) or is_number(constraint)) ->
+          with :ok <- validate_operator_constraint(constraint) do
+            if is_nil(base) or not formatting? do
+              {:ok, nil}
+            else
+              prepare_operator_shape(base, operator, style, constraint)
+            end
+          end
+
+        _ ->
+          failure("operator stretching requires validator-prepared operator state")
+      end
+    end)
+  end
+
+  # Shared transport validation for the public styled-tree measurement entry
+  # and the operator request used when a row supplies its measured ink target.
+  defp validate_operator_constraint(constraint) do
+    valid? =
+      case constraint do
+        nil ->
+          true
+
+        {ascent, descent} ->
+          Enum.all?(
+            [ascent, descent],
+            &(is_number(&1) and abs(&1) <= Limits.get(:max_css_numeric_magnitude))
+          )
+
+        width when is_number(width) ->
+          width >= 0 and width <= Limits.get(:max_css_numeric_magnitude)
+
+        _ ->
+          false
+      end
+
+    if valid?,
+      do: :ok,
+      else: failure("operator stretch constraints require bounded point extents")
+  end
+
+  # Core 3.2.4.3 resolves glyph-relative constraints here, so geometry consumers
+  # never parse attributes or reinterpret min/max sizing.
+  defp prepare_operator_shape(base, operator, style, constraint) do
+    scale = base.font_size / base.units_per_em
+    construction = Map.get(base.source.metrics.variants[operator.stretch_axis], base.glyph_id)
+
+    stretch? =
+      operator.stretchy and construction != nil and
+        ((operator.stretch_axis == :vertical and is_tuple(constraint)) or
+           (operator.stretch_axis == :horizontal and is_number(constraint)))
+
+    cond do
+      stretch? ->
+        with {:ok, {axis, pixels}} <-
+               prepare_value(base.source.metrics.constants.axis_height, base.font_size) do
+          axis = axis * scale + pixels
+
+          {ascent, descent, target} =
+            if operator.stretch_axis == :vertical do
+              {ascent, descent} = constraint
+
+              {ascent, descent} =
+                if operator.symmetric do
+                  half = max(ascent - axis, descent + axis)
+                  {half + axis, half - axis}
+                else
+                  {ascent, descent}
+                end
+
+              natural = (elem(base.bounds, 3) - elem(base.bounds, 1)) * scale
+              minimum = max(resolve_operator_size(operator.minsize, natural), 0)
+
+              maximum =
+                case operator.maxsize do
+                  :infinity -> :infinity
+                  value -> max(resolve_operator_size(value, natural), minimum)
+                end
+
+              total = ascent + descent
+
+              target =
+                cond do
+                  total <= 0 -> minimum
+                  total < minimum -> minimum
+                  maximum != :infinity and total > maximum -> maximum
+                  true -> total
+                end
+
+              ascent =
+                if total <= 0,
+                  do: target / 2 + axis,
+                  else: max(0, (ascent - axis) * (target / total) + axis)
+
+              {ascent, target - ascent, target}
+            else
+              {nil, nil, constraint}
+            end
+
+          with {:ok, shape} <-
+                 prepare_stretch(
+                   base.text,
+                   base.font_face,
+                   base.font_size,
+                   operator.stretch_axis,
+                   target,
+                   script_feature_level: min(max(Map.get(style, :math_depth, 0), 0), 2)
+                 ) do
+            preferred =
+              if operator.stretch_axis == :vertical do
+                ids =
+                  [base.glyph_id] ++
+                    Enum.map(construction.variants, & &1.glyph) ++
+                    case construction.assembly do
+                      %{parts: parts} -> Enum.map(parts, & &1.glyph)
+                      _ -> []
+                    end
+
+                Enum.max(Enum.map(ids, &(elem(base.source.advances, &1) * scale)))
+              else
+                base.advance * scale
+              end
+
+            {:ok,
+             %{
+               shape: shape,
+               target_ascent: ascent,
+               target_descent: descent,
+               intrinsic_width: preferred
+             }}
+          end
+        end
+
+      not operator.stretchy and operator.largeop and
+          Map.get(style, :math_style, :normal) == :normal ->
+        construction = Map.get(base.source.metrics.variants.vertical, base.glyph_id)
+        variants = if construction, do: construction.variants, else: []
+        minimum = base.source.metrics.constants.display_operator_min_height * scale
+        selected = Enum.find(variants, &(&1.advance * scale >= minimum)) || List.last(variants)
+
+        if selected do
+          with {:ok, glyph} <- selected_glyph(selected.glyph, base.source),
+               do:
+                 {:ok,
+                  %{
+                    shape: %{kind: :glyph, glyph: glyph},
+                    target_ascent: nil,
+                    target_descent: nil,
+                    intrinsic_width: glyph.advance * scale
+                  }}
+        else
+          {:ok, nil}
+        end
+
+      true ->
+        {:ok, nil}
+    end
+  end
+
+  defp resolve_operator_size(value, natural) do
+    case value do
+      {:percentage, number} -> natural * (number / 100)
+      number -> number
     end
   end
 

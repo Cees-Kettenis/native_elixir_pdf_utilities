@@ -284,14 +284,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewportTest do
         ) <> "</body>"
 
     assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {240, 100}, margin: 0)
-    assert pdf =~ "/Rect [7 87 57 97]"
+    # Embedded paint origins round to CSS pixels before child clips and
+    # border-box annotations use the shared rounded transform.
+    assert pdf =~ "/Rect [6.75 87 56.75 97]"
     assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
 
     links =
       for {_, %{value: %{"Subtype" => {:name, "Link"}} = annotation}} <- document.objects,
           do: annotation
 
-    assert [%{"Rect" => [7, 87, 57, 97]}] = links
+    assert [%{"Rect" => [6.75, 87, 56.75, 97]}] = links
   end
 
   test "static child controls paint completely while interactive widgets diagnose" do
@@ -439,7 +441,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewportTest do
              )
 
     [frame] = dom.children
-    assert frame.children == [%{type: :text, text: "literal<img src=denied.png></iframe-suffix>"}]
+
+    assert NativeElixirPdfUtilities.HtmlTreeHelpers.tree_content(frame.children) ==
+             [%{type: :text, text: "literal<img src=denied.png></iframe-suffix>"}]
+
+    assert hd(frame.children).source.text == "literal<img src=denied.png></iframe-suffix>"
+    assert hd(frame.children).parent_id == frame.node_id
 
     assert {:ok, %{children: [%{text: "<p>literal &amp;</p>"}]}} =
              HtmlParser.parse_fragment_detailed("<p>literal &amp;</p>", "iframe")
@@ -595,11 +602,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewportTest do
                  parent
                )
 
-      assert {:error, {:unsupported_html, diagnostic}} =
-               EmbeddedViewport.layout(destinations, 150, 60)
+      assert destinations.tree.link_scope ==
+               {destinations.context.document_id, destinations.context.tree_scope_id}
 
-      assert diagnostic.stage == :layout and diagnostic.source == "link_scope"
-      assert diagnostic.message =~ "final composition geometry"
+      assert {:ok, group} = EmbeddedViewport.layout(destinations, 150, 60)
+      assert group.link_scope == destinations.tree.link_scope
       assert ResourceContext.current() == parent
     end)
   end

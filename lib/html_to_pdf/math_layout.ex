@@ -8,7 +8,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
   alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
 
   @doc """
-  Measures a styled MathML token/row tree after validator preparation.
+  Measures a styled MathML token, operator or row tree after validator preparation.
 
   Coordinates are points relative to the alphabetic baseline, with positive y
   upwards. Layout and ink extents are separate. Drawing items retain the selected
@@ -18,12 +18,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
   def measure(node, context \\ %{}) do
     with_context(fn ->
       with {:ok, prepared} <- MathLayoutValidator.prepare_element(node, context) do
-        {:ok, measure_prepared(prepared)}
+        {:ok, measure_prepared(prepared, prepared.stretch_constraint)}
       end
     end)
   end
 
-  defp measure_prepared(prepared) do
+  defp measure_prepared(prepared, constraint \\ nil) do
     measured =
       case prepared do
         %{kind: :glyph, glyph: glyph, style: style} ->
@@ -39,6 +39,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             top_accent_attachment: nil,
             glyphs: []
           }
+
+        %{kind: :operator} ->
+          natural = measure_prepared(Map.put(prepared.content, :root, true))
+          result = MathLayoutValidator.prepare_operator_stretch(prepared, constraint)
+
+          case result do
+            {:ok, nil} ->
+              natural
+
+            {:ok, %{shape: shape} = resolved} ->
+              shaped = stretch_geometry(shape)
+
+              offset =
+                if is_number(resolved.target_ascent),
+                  do:
+                    (resolved.target_ascent - resolved.target_descent -
+                       (shaped.ascent - shaped.descent)) / 2,
+                  else: 0.0
+
+              glyphs =
+                Enum.map(
+                  shaped.glyphs,
+                  &(&1
+                    |> Map.put(:y, &1.y + offset)
+                    |> Map.put(:color, prepared.style.color))
+                )
+
+              shaped
+              |> Map.put(:ascent, shaped.ascent + offset)
+              |> Map.put(:descent, shaped.descent - offset)
+              |> Map.put(:glyphs, glyphs)
+              |> Map.put(:drawing_items, Enum.map(glyphs, &Map.put(&1, :kind, :glyph)))
+              |> Map.put(:min_content_width, resolved.intrinsic_width)
+              |> Map.put(:max_content_width, resolved.intrinsic_width)
+
+            {:error, _} = error ->
+              throw({:math_layout_error, error})
+          end
 
         %{kind: :flow, children: children, baseline_depth: baseline, line_height: height} ->
           children = Enum.map(children, &measure_prepared/1)
@@ -74,7 +112,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
           }
 
         %{children: children, kind: kind} ->
-          children = Enum.map(children, &measure_prepared/1)
+          children =
+            if kind == :row do
+              measure_row_children(prepared, children, constraint)
+            else
+              Enum.map(children, &measure_prepared/1)
+            end
+
           # A token is a text run. Italic row spacing applies between boxes, not
           # between letters of a multi-character token.
           children =
@@ -111,7 +155,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
 
               {items, _, _} =
                 Enum.reduce(children, {[], 0.0, 0.0}, fn child, {items, offset, previous} ->
-                  slanted = child.italic_correction != 0
+                  slanted = Map.get(child, :core_operator) == nil and child.italic_correction != 0
                   offset = if slanted, do: offset, else: offset + previous
                   positioned = Enum.map(child.drawing_items, &%{&1 | x: &1.x + offset})
 
@@ -123,6 +167,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
               |> Map.put(
                 :italic_correction,
                 if(kind == :token, do: 0.0, else: measured.italic_correction)
+              )
+              |> Map.put(
+                :min_content_width,
+                measured.width + Enum.sum(Enum.map(children, &(&1.min_content_width - &1.width)))
+              )
+              |> Map.put(
+                :max_content_width,
+                measured.width + Enum.sum(Enum.map(children, &(&1.max_content_width - &1.width)))
               )
               |> Map.put(:actual_text, Enum.map_join(children, & &1.actual_text))
               |> Map.put(:drawing_items, items)
@@ -141,8 +193,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
       measured
       |> Map.put(:ink_ascent, Map.get(measured, :ink_ascent, measured.ascent))
       |> Map.put(:ink_descent, Map.get(measured, :ink_descent, measured.descent))
-      |> Map.put(:min_content_width, measured.width)
-      |> Map.put(:max_content_width, measured.width)
+      |> Map.put_new(:min_content_width, measured.width)
+      |> Map.put_new(:max_content_width, measured.width)
+      |> Map.put(:core_operator, Map.get(prepared, :core_operator))
       |> Map.put(
         :drawing_items,
         Map.get(measured, :drawing_items, Enum.map(measured.glyphs, &Map.put(&1, :kind, :glyph)))
@@ -159,6 +212,70 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
     if Map.get(prepared, :root, false),
       do: measured,
       else: decorate_geometry(measured, prepared.style)
+  end
+
+  # Ordinary child ink is known before any operator receives its row target.
+  # Wrapped operators propagate the parent's constraint to their core only.
+  defp measure_row_children(prepared, children, constraint) do
+    {stretching, ordinary} =
+      children
+      |> Enum.with_index()
+      |> Enum.split_with(fn {child, _} ->
+        case {Map.get(child, :core_operator), constraint} do
+          {%{stretchy: true, stretch_axis: :vertical}, target}
+          when is_nil(target) or is_tuple(target) ->
+            true
+
+          {%{stretchy: true, stretch_axis: :horizontal}, target} when is_number(target) ->
+            true
+
+          _ ->
+            false
+        end
+      end)
+
+    measured =
+      Map.new(ordinary, fn {child, index} ->
+        {index, measure_prepared(child)}
+      end)
+
+    target =
+      if constraint != nil do
+        constraint
+      else
+        {Enum.max(Enum.map(Map.values(measured), & &1.ink_ascent), fn -> 0.0 end),
+         Enum.max(Enum.map(Map.values(measured), & &1.ink_descent), fn -> 0.0 end)}
+      end
+
+    measured =
+      Enum.reduce(stretching, measured, fn {child, index}, measured ->
+        Map.put(measured, index, measure_prepared(child, target))
+      end)
+
+    Enum.map(Enum.with_index(children), fn {child, index} ->
+      result = Map.fetch!(measured, index)
+      operator = Map.get(child, :core_operator)
+
+      if operator != nil and Map.get(prepared, :add_operator_space, false) do
+        result
+        |> Map.put(:width, result.width + operator.lspace + operator.rspace)
+        |> Map.put(
+          :min_content_width,
+          result.min_content_width + operator.lspace + operator.rspace
+        )
+        |> Map.put(
+          :max_content_width,
+          result.max_content_width + operator.lspace + operator.rspace
+        )
+        |> Map.put(:glyphs, Enum.map(result.glyphs, &%{&1 | x: &1.x + operator.lspace}))
+        |> Map.put(
+          :drawing_items,
+          Enum.map(result.drawing_items, &%{&1 | x: &1.x + operator.lspace})
+        )
+      else
+        result
+      end
+    end)
   end
 
   defp decorate_geometry(measured, style) do
@@ -204,13 +321,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
     |> Map.put(:width, content_width + left + right)
     |> Map.put(:ascent, measured.ascent + above)
     |> Map.put(:descent, content_height - measured.ascent + below)
+    |> Map.put(:ink_ascent, measured.ink_ascent + above)
+    |> Map.put(:ink_descent, measured.ink_descent + below)
     |> Map.put(:glyphs, Enum.map(measured.glyphs, &%{&1 | x: &1.x + left}))
     |> Map.put(
       :drawing_items,
       background ++ Enum.map(measured.drawing_items, &%{&1 | x: &1.x + left})
     )
-    |> Map.put(:min_content_width, content_width + left + right)
-    |> Map.put(:max_content_width, content_width + left + right)
+    |> Map.put(
+      :min_content_width,
+      if(is_number(Map.get(style, :width)), do: content_width, else: measured.min_content_width) +
+        left + right
+    )
+    |> Map.put(
+      :max_content_width,
+      if(is_number(Map.get(style, :width)), do: content_width, else: measured.max_content_width) +
+        left + right
+    )
   end
 
   @doc false
@@ -231,63 +358,72 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
     with_context(fn ->
       with {:ok, prepared} <-
              MathLayoutValidator.prepare_stretch(text, font, size, axis, target, opts) do
-        case prepared do
-          %{kind: :glyph, glyph: glyph} ->
-            {:ok, glyph_geometry(glyph)}
-
-          %{kind: :assembly, parts: parts} ->
-            {glyphs, _offset} =
-              Enum.map_reduce(parts, 0.0, fn part, offset ->
-                measured = glyph_geometry(part.metric)
-                [glyph] = measured.glyphs
-
-                glyph =
-                  if axis == :horizontal,
-                    do: %{glyph | x: offset},
-                    else: %{glyph | y: offset + measured.descent}
-
-                {glyph,
-                 offset + part.full_advance * size / prepared.source.metrics.units_per_em -
-                   prepared.overlap}
-              end)
-
-            {width, ascent, descent} =
-              if axis == :vertical do
-                {Enum.max(
-                   Enum.map(
-                     prepared.metric_parts,
-                     &(&1.metric.advance * size / &1.metric.units_per_em)
-                   )
-                 ), prepared.stretch_size, 0.0}
-              else
-                {prepared.stretch_size,
-                 Enum.max(
-                   Enum.map(prepared.metric_parts, fn part ->
-                     elem(part.metric.bounds, 3) * size / part.metric.units_per_em
-                   end)
-                 ),
-                 Enum.max(
-                   Enum.map(prepared.metric_parts, fn part ->
-                     -elem(part.metric.bounds, 1) * size / part.metric.units_per_em
-                   end)
-                 )}
-              end
-
-            {value, pixels} = prepared.italic
-            italic = value * size / prepared.source.metrics.units_per_em + pixels
-
-            {:ok,
-             %{
-               width: width,
-               ascent: ascent,
-               descent: descent,
-               italic_correction: italic,
-               top_accent_attachment: nil,
-               glyphs: glyphs
-             }}
-        end
+        {:ok, stretch_geometry(prepared)}
       end
     end)
+  end
+
+  # Shared by public stretch measurement and prepared operators. The validator
+  # has already chosen variants or an assembly and reserved expansion work.
+  defp stretch_geometry(prepared) do
+    axis = Map.get(prepared, :axis)
+
+    case prepared do
+      %{kind: :glyph, glyph: glyph} ->
+        glyph_geometry(glyph)
+
+      %{kind: :assembly, parts: parts} ->
+        size = prepared.source.size
+
+        {glyphs, _offset} =
+          Enum.map_reduce(parts, 0.0, fn part, offset ->
+            measured = glyph_geometry(part.metric)
+            [glyph] = measured.glyphs
+
+            glyph =
+              if axis == :horizontal,
+                do: %{glyph | x: offset},
+                else: %{glyph | y: offset + measured.descent}
+
+            {glyph,
+             offset + part.full_advance * size / prepared.source.metrics.units_per_em -
+               prepared.overlap}
+          end)
+
+        {width, ascent, descent} =
+          if axis == :vertical do
+            {Enum.max(
+               Enum.map(
+                 prepared.metric_parts,
+                 &(&1.metric.advance * size / &1.metric.units_per_em)
+               )
+             ), prepared.stretch_size, 0.0}
+          else
+            {prepared.stretch_size,
+             Enum.max(
+               Enum.map(prepared.metric_parts, fn part ->
+                 elem(part.metric.bounds, 3) * size / part.metric.units_per_em
+               end)
+             ),
+             Enum.max(
+               Enum.map(prepared.metric_parts, fn part ->
+                 -elem(part.metric.bounds, 1) * size / part.metric.units_per_em
+               end)
+             )}
+          end
+
+        {value, pixels} = prepared.italic
+        italic = value * size / prepared.source.metrics.units_per_em + pixels
+
+        %{
+          width: width,
+          ascent: ascent,
+          descent: descent,
+          italic_correction: italic,
+          top_accent_attachment: nil,
+          glyphs: glyphs
+        }
+    end
   end
 
   defp glyph_geometry(glyph) do
@@ -337,7 +473,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
       with :ok <- MathLayoutValidator.validate_row(children) do
         {glyphs, offset, previous} =
           Enum.reduce(children, {[], 0.0, 0.0}, fn child, {glyphs, offset, previous} ->
-            slanted? = child.italic_correction != 0
+            slanted? = Map.get(child, :core_operator) == nil and child.italic_correction != 0
             offset = if slanted?, do: offset, else: offset + previous
             positioned = Enum.map(child.glyphs, &%{&1 | x: &1.x + offset})
 
@@ -363,7 +499,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
   def with_context(fun) do
     result =
       HtmlValidator.with_render_budget(fn ->
-        Font.with_measurement_cache(fn -> FontValidator.with_budget(fun) end)
+        try do
+          Font.with_measurement_cache(fn -> FontValidator.with_budget(fun) end)
+        catch
+          {:math_layout_error, error} -> error
+        end
       end)
 
     case result do

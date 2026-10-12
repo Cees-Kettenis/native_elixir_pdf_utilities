@@ -28,9 +28,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
       ResourceContext.with_document(document.context, fn ->
         with {:ok, opts} <- EmbeddedViewportValidator.prepare_options(opts, document.context),
              {:ok, fonts} <- local_fonts(Keyword.fetch!(opts, :fonts), document.context, opts),
-             opts <-
-               opts |> Keyword.put(:fonts, fonts) |> Keyword.put(:__document_url_context__, urls),
-             {:ok, tree} <- Style.compute_detailed(document.dom, opts, context.image_budget),
+             opts <- Keyword.put(opts, :fonts, fonts),
+             {:ok, tree} <-
+               Style.compute_child_detailed(
+                 document.dom,
+                 opts,
+                 context.image_budget,
+                 urls.fallback_base
+               ),
              {:ok, tree} <-
                FontFallback.resolve(tree, Keyword.get(opts, :unsupported_glyphs, :replace)) do
           {:ok,
@@ -89,17 +94,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
                EmbeddedViewportValidator.prepare_paint(layout, surface, width, height) do
           # Child flow, headings and canvas anchors remain inside the group. No child
           # pagination, page furniture, metadata or outlines enter the parent pipeline.
-          boxes = Enum.reject(boxes, &(&1.type in [:flow_marker, :page_break]))
+          boxes =
+            Enum.reject(
+              boxes,
+              &(&1.type == :page_break or
+                  (&1.type == :flow_marker and Map.get(&1, :html_targets, []) == []))
+            )
+
+          link_metadata =
+            layout
+            |> Map.take([:link_scope, :link_expected_targets, :link_document_targets])
+            |> Map.update(:link_document_targets, [], fn targets ->
+              Enum.map(
+                targets,
+                &Map.merge(&1, %{x: layout.margins.left, y: height - layout.margins.top})
+              )
+            end)
+
+          link_metadata =
+            if Map.has_key?(link_metadata, :link_scope),
+              do:
+                Map.put(link_metadata, :link_document_origin, %{
+                  x: layout.margins.left,
+                  y: height - layout.margins.top
+                }),
+              else: link_metadata
 
           {:ok,
-           %{
-             type: HtmlValidator.reserve_layout_box(:drawing_group),
-             width: width,
-             height: height,
-             transform: {1, 0, 0, 1, 0, 0},
-             clip: %{x: 0.0, y: 0.0, width: width, height: height},
-             boxes: boxes
-           }}
+           Map.merge(
+             %{
+               type: HtmlValidator.reserve_layout_box(:drawing_group),
+               width: width,
+               height: height,
+               transform: {1, 0, 0, 1, 0, 0},
+               clip: %{x: 0.0, y: 0.0, width: width, height: height},
+               boxes: boxes
+             },
+             link_metadata
+           )}
         else
           {:error, {_reason, _diagnostic}} = error ->
             error

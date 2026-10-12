@@ -1804,6 +1804,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     end
   end
 
+  test "initial control sizing uses font averages and falls back for missing and legacy metrics" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
+    os2 = fn average -> <<0::16, average::signed-16, 0::size(26 * 8)>> end
+    hhea = replace_bytes(hhea_table(), 10, <<900::16>>)
+
+    cases = [
+      {"No Average", valid_tables(), 42.0},
+      {"Metric Average", valid_tables() |> Map.put("OS/2", os2.(300)) |> Map.put("hhea", hhea),
+       27.0},
+      {"Wide Average", valid_tables() |> Map.put("OS/2", os2.(2000)), 42.0},
+      {"Courier", valid_tables() |> Map.put("OS/2", os2.(300)), 42.0}
+    ]
+
+    for {family, tables, width} <- cases do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<input size=7 value=A style='font-family:#{family};font-size:10pt'>"
+               )
+
+      font = %{family: family, data: ttf_fixture(tables), weight: 400, style: :normal}
+
+      assert {:ok, %{children: [input]}} =
+               Style.compute_detailed(dom, fonts: [font], system_font_discovery: false)
+
+      assert input.style.width == width
+      assert input.style.font_family == family
+      assert input.style._form_control.initial_state.value == "A"
+    end
+  end
+
   test "text metrics use selected font tables and cache exact source content" do
     assert :error = FontValidator.prepare_text_metrics(nil)
     assert :error = FontValidator.prepare_text_metrics(%{type: :built_in})
@@ -1815,6 +1845,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert metrics.underline == %{position: -40, thickness: 90}
     assert metrics.strike.position > 0
     assert metrics.strike.thickness > 0
+    assert metrics.average_width > 0 and metrics.max_width >= metrics.average_width
+
+    for hhea <- [nil, <<>>] do
+      tables =
+        if is_nil(hhea),
+          do: Map.delete(valid_tables(), "hhea"),
+          else: Map.put(valid_tables(), "hhea", hhea)
+
+      assert {:ok, %{max_width: nil}} =
+               FontValidator.prepare_text_metrics(%{font | data: ttf_fixture(tables)})
+    end
 
     post = <<0::64, -200::signed-16, 120::signed-16>>
     os2 = <<0::208, 80::signed-16, 350::signed-16>>

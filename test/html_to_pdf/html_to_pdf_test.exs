@@ -389,22 +389,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     end
   end
 
-  test "invalid editing selectors and deferred fieldsets retain public diagnostics" do
-    for selector <- [":read-only()", ":read-write(1)", ":read-onlyness", ":read-wrıte"] do
-      html = "<style>p#{selector}{color:red}</style><p contenteditable>Visible</p>"
-      assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html)
-      assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
-      assert diagnostic.operation == :render and is_binary(diagnostic.message)
-      assert diagnostic.source =~ selector
-    end
-
-    assert {:error, {:unsupported_html, diagnostic}} =
-             HtmlToPdf.render("<fieldset disabled><input></fieldset>")
-
-    assert diagnostic.stage == :html and diagnostic.reason == :unsupported_html
-    assert diagnostic.source == "<fieldset disabled>" and diagnostic.line == 1
-  end
-
   test "mixed anchor and button contents preserve visible text, pages and field state" do
     html =
       File.read!(
@@ -919,7 +903,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
 
     for tag <-
-          ~w(mo mfrac msqrt mroot msup msub msubsup mover munder munderover mmultiscripts mstyle merror mpadded mphantom mtable semantics annotation annotation-xml maction unknown-math) do
+          ~w(mfrac msqrt mroot msup msub msubsup mover munder munderover mmultiscripts mstyle merror mpadded mphantom mtable semantics annotation annotation-xml maction unknown-math) do
       assert {:error, {:unsupported_html, diagnostic}} =
                HtmlToPdf.render("<math><#{tag}/></math>")
 
@@ -5048,6 +5032,163 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       assert pdf =~ "/Dest ["
       assert pdf =~ "/XYZ"
       refute pdf =~ "/S /URI"
+    end
+
+    for html <- ["<head><base></head><body>Text</body>", "<body><base href='/'>Text</body>"] do
+      assert {:error, {_reason, diagnostic}} = HtmlToPdf.render(html)
+      assert diagnostic.reason in [:invalid_document, :unsupported_html]
+      assert is_binary(diagnostic.message) and diagnostic.operation in [:render, :parse]
+    end
+
+    for href <- ["javascript:run()", "java&#10;script:run()", "vbscript:run()"] do
+      assert {:error, {:unsupported_html, %{stage: :html, source: "href"}}} =
+               HtmlToPdf.render("<head><base href='#{href}'></head><body>Text</body>")
+    end
+  end
+
+  test "invalid editing selectors retain public diagnostics" do
+    for selector <- [":read-only()", ":read-write(1)", ":read-onlyness", ":read-wrıte"] do
+      html = "<style>p#{selector}{color:red}</style><p contenteditable>Visible</p>"
+      assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html)
+      assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
+      assert diagnostic.operation == :render and is_binary(diagnostic.message)
+      assert diagnostic.source =~ selector
+    end
+  end
+
+  test "long fieldset groups preserve every paragraph across page boundaries" do
+    paragraphs = Enum.map_join(1..20, fn index -> "<p>Line #{index}</p>" end)
+
+    html =
+      "<style>html,body{margin:0;padding:0;font-size:10pt;line-height:12pt}p{margin:0}</style><fieldset><legend>Caption</legend>#{paragraphs}</fieldset><p>After</p>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {150, 120}, margin: 10, forms: :static)
+    assert {:ok, 3} = NativeElixirPdfUtilities.Info.page_count(pdf)
+    assert {:ok, text} = Text.extract(pdf)
+    assert text =~ "Caption" and text =~ "After"
+    for index <- 1..20, do: assert(text =~ "Line #{index}")
+    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+  end
+
+  test "mixed effective radio disabling is diagnosed for interactive fields and preserved in static artwork" do
+    html =
+      "<fieldset disabled><legend>Caption<input type=radio name=mode checked value=A></legend><input type=radio name=mode checked value=B></fieldset>"
+
+    assert {:error, {:unsupported_form, diagnostic}} = HtmlToPdf.render(html, forms: :interactive)
+    assert diagnostic.stage == :forms and diagnostic.source == "mode"
+
+    assert diagnostic.message =~ "mixes enabled and disabled" and
+             diagnostic.message =~ "forms: :static"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, forms: :static)
+    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+    assert {:ok, text} = Text.extract(pdf)
+    assert text =~ "Caption"
+  end
+
+  test "fieldset inheritance controls PDF flags without changing authored values or static content" do
+    html = """
+    <fieldset disabled=false><legend>Group <input name=toggle required value=Editable></legend>
+    <input name=locked required value=Locked><textarea name=notes required>Notes</textarea>
+    <select name=choice required><option selected value=A>Choice</option></select>
+    <fieldset><legend>Nested <input name=caption required value=Caption></legend>
+    <input name=body required value=Body></fieldset></fieldset>
+    <input name=outside required value=Outside>
+    <template><fieldset disabled><legend>Unused</legend><input name=unused><img src=denied.png></fieldset></template>
+    """
+
+    for mode <- [:static, :interactive] do
+      assert {:ok, pdf} =
+               HtmlToPdf.render(html,
+                 forms: mode,
+                 asset_resolver: fn source -> flunk("unused resource read: #{source}") end
+               )
+
+      assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(pdf)
+      assert {:ok, flat} = NativeElixirPdfUtilities.Forms.flatten(pdf)
+      assert {:ok, text} = Text.extract(flat)
+
+      for caption <- ~w(Group Editable Locked Notes Choice Nested Caption Body Outside),
+          do: assert(text =~ caption)
+
+      refute text =~ "Unused"
+      assert {:ok, context} = NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf)
+
+      assert {:ok, %{fields: fields}} =
+               NativeElixirPdfUtilities.Validators.FormValidator.inspect_document(context)
+
+      if mode == :interactive do
+        fields = Map.new(fields, &{&1.name, &1})
+        assert map_size(fields) == 7
+        assert fields["toggle"].flags == 2 and fields["outside"].flags == 2
+        assert fields["locked"].flags == 1 and fields["locked"].value == "Locked"
+        assert fields["notes"].flags == 4097 and fields["notes"].value == "Notes"
+        assert fields["choice"].flags == 131_073 and fields["choice"].value == "A"
+        assert fields["caption"].flags == 1 and fields["body"].flags == 1
+      else
+        assert fields == []
+      end
+    end
+
+    for html <- [
+          "<fieldset><legend onclick='go()'>Caption</legend></fieldset>",
+          "<template><fieldset><script>alert(1)</script></fieldset></template>",
+          "<fieldset disabled><img src=denied.png></fieldset>"
+        ] do
+      assert {:error, {reason, diagnostic}} = HtmlToPdf.render(html)
+      assert diagnostic.reason == reason and diagnostic.stage in [:html, :asset]
+      assert diagnostic.message != ""
+    end
+  end
+
+  test "disabled fieldset radios retain the last initial selection and PDF read-only flags" do
+    html =
+      "<form><fieldset disabled><legend>Radio group</legend><input type=radio name=mode value=A checked><input type=radio name=mode value=B checked></fieldset></form>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert {:ok, context} = NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf)
+
+    assert {:ok, %{fields: [field]}} =
+             NativeElixirPdfUtilities.Validators.FormValidator.inspect_document(context)
+
+    assert field.flags == 32769 and field.value == "B"
+    assert {:ok, [summary]} = NativeElixirPdfUtilities.Forms.fields(pdf)
+    assert summary.export_values == ["A", "B"]
+
+    for mode <- [:static, :interactive] do
+      assert {:ok, pdf} =
+               HtmlToPdf.render(
+                 "<fieldset><legend></legend></fieldset><fieldset></fieldset><fieldset style='padding:0;border:0;width:0;height:0'><legend style='font-size:0;line-height:0;padding:0'></legend></fieldset>",
+                 forms: mode
+               )
+
+      assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(pdf)
+      assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+    end
+  end
+
+  test "invalid editing selectors retain public diagnostics and fieldsets render" do
+    for selector <- [":read-only()", ":read-write(1)", ":read-onlyness", ":read-wrıte"] do
+      html = "<style>p#{selector}{color:red}</style><p contenteditable>Visible</p>"
+      assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html)
+      assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
+      assert diagnostic.operation == :render and is_binary(diagnostic.message)
+      assert diagnostic.source =~ selector
+    end
+
+    assert {:ok, pdf} = HtmlToPdf.render("<fieldset disabled><input></fieldset>")
+    assert pdf =~ "%PDF-"
+    assert {:ok, [field]} = NativeElixirPdfUtilities.Forms.fields(pdf)
+    assert field.read_only
+  end
+
+  test "internal destinations resolve and invalid base structure returns actionable diagnostics" do
+    for html <- [
+          "<a href='#later'>Jump</a><p id=later>Target</p>",
+          "<head><base href=''></head><body><a href='#'>Top</a></body>"
+        ] do
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert pdf =~ "/Dest [" and pdf =~ "/XYZ"
     end
 
     for html <- ["<head><base></head><body>Text</body>", "<body><base href='/'>Text</body>"] do

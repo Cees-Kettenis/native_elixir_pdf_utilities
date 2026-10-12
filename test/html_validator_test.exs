@@ -1,6 +1,8 @@
 defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
   use ExUnit.Case, async: true
 
+  import NativeElixirPdfUtilities.HtmlTreeHelpers
+
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
@@ -570,7 +572,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     p = node.("p", %{}, [anchor])
 
     assert {:error, {:invalid_document, diagnostic}} =
-             Style.compute_detailed(%{dom | children: [p]})
+             Style.compute_detailed(tree_content(%{dom | children: [p]}))
 
     assert diagnostic.stage == :style and diagnostic.source == "p"
 
@@ -1327,7 +1329,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     assert styled.style.list_marker_type == :disclosure_closed
 
     orphan = %{dom | children: [summary]}
-    assert {:error, {:invalid_document, diagnostic}} = Style.compute_detailed(orphan)
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             Style.compute_detailed(tree_content(orphan))
+
     assert diagnostic.stage == :style and diagnostic.source == "summary"
     assert {:ok, foreign} = HtmlParser.parse_detailed("<svg><details name=group></details></svg>")
     assert {:error, {:unsupported_html, diagnostic}} = Style.compute_detailed(foreign)
@@ -1903,7 +1908,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
         [%{type: :text, text: "Invalid"}]
       end)
 
-    assert {:error, {:invalid_document, diagnostic}} = Style.compute_detailed(invalid)
+    assert {:error, {:invalid_document, diagnostic}} =
+             Style.compute_detailed(tree_content(invalid))
+
     assert diagnostic.stage == :style and diagnostic.operation == :compute
     assert diagnostic.source == "wbr" and diagnostic.message =~ "empty children"
     assert {:ok, tree} = Style.compute_detailed(dom)
@@ -3552,5 +3559,343 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
              NativeElixirPdfUtilities.Validators.FormValidator.password_display_text("Aé🦊")
 
     assert {:ok, ""} = NativeElixirPdfUtilities.Validators.FormValidator.password_display_text("")
+  end
+
+  test "pagination rejects non-map decoration transport before executing geometry" do
+    tree = %{type: :layout, page_size: {100, 100}, boxes: [:invalid]}
+
+    assert {:error, {:invalid_layout, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.Pagination.paginate(tree)
+
+    assert diagnostic.stage == :pagination and diagnostic.operation == :paginate
+
+    assert is_binary(diagnostic.source) and is_binary(diagnostic.message)
+  end
+
+  test "pagination rejects forged fieldset decoration metadata with actionable diagnostics" do
+    id = make_ref()
+
+    box = %{
+      type: :rect,
+      x: 0,
+      y: 0,
+      width: 20,
+      height: 20,
+      fieldset_paint_id: id,
+      fieldset_ancestors: [id],
+      fieldset_bounds: %{top: 20, bottom: 0}
+    }
+
+    for invalid <- [
+          Map.delete(box, :fieldset_bounds),
+          Map.put(box, :fieldset_paint_id, "id"),
+          Map.put(box, :fieldset_ancestors, :invalid),
+          Map.put(box, :fieldset_bounds, %{top: 0, bottom: 20}),
+          Map.put(box, :fieldset_ancestors, [make_ref()]),
+          Map.put(box, :type, :image)
+        ] do
+      tree = %{type: :layout, page_size: {100, 100}, boxes: [invalid]}
+
+      assert {:error, {:invalid_layout, diagnostic}} =
+               NativeElixirPdfUtilities.HtmlToPdf.Pagination.paginate(tree)
+
+      assert diagnostic.stage == :pagination and diagnostic.operation == :paginate
+
+      assert diagnostic.source == "fieldset_paint_id" and
+               diagnostic.message =~ "matching paint boxes"
+    end
+  end
+
+  test "effective fieldset disabling uses only each ancestor's first direct HTML legend exemption" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
+    alias NativeElixirPdfUtilities.Validators.HtmlFormValidator
+
+    html = """
+    <fieldset id=outer disabled=false><legend style='display:none'>
+    <input id=exempt><input id=own disabled><span><input id=deep></span></legend>
+    <legend><input id=second></legend><input id=body>
+    <fieldset id=nested><legend><input id=nested_caption></legend><input id=nested_body></fieldset>
+    <select id=choice><option id=option>A</option></select><textarea id=notes></textarea>
+    <button id=button>Button</button><input id=hidden type=hidden></fieldset>
+    <fieldset id=enabled><legend><input id=outside></legend>
+    <fieldset id=inner disabled><legend><input id=inner_exempt></legend><input id=inner_body></fieldset></fieldset>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    nodes = HtmlFormValidator.prepare_initial_nodes(dom.children)
+
+    collect = fn collect, nodes ->
+      Enum.flat_map(nodes, fn node ->
+        if node.type == :element, do: [node | collect.(collect, node.children)], else: []
+      end)
+    end
+
+    nodes = Map.new(collect.(collect, nodes), &{Map.get(&1.attributes, "id"), &1})
+
+    for id <-
+          ~w(outer own second body nested nested_caption nested_body choice notes button hidden inner inner_body) do
+      assert nodes[id]._initial_form_state.disabled
+      assert HtmlValidator.control_state_matches?(:disabled, nodes[id])
+      refute HtmlValidator.control_state_matches?(:enabled, nodes[id])
+    end
+
+    for id <- ~w(exempt deep enabled outside inner_exempt) do
+      refute nodes[id]._initial_form_state.disabled
+      assert HtmlValidator.control_state_matches?(:enabled, nodes[id])
+    end
+
+    refute HtmlValidator.control_state_matches?(:disabled, nodes["option"])
+    refute Map.has_key?(nodes["body"].attributes, "disabled")
+    assert nodes["outer"].attributes["disabled"] == "false"
+    assert {:ok, _} = Style.compute_detailed(dom)
+
+    for invalid <- [
+          "<legend>Orphan</legend>",
+          "<fieldset><legend><div>Block</div></legend></fieldset>"
+        ] do
+      assert {:ok, ordinary} = HtmlParser.parse_detailed("<div><span>Text</span></div>")
+      [container] = ordinary.children
+      [span] = container.children
+      legend = %{span | tag: "legend"}
+
+      tree =
+        if invalid =~ "Block",
+          do: %{
+            ordinary
+            | children: [
+                %{container | tag: "fieldset", children: [%{legend | children: [container]}]}
+              ]
+          },
+          else: %{ordinary | children: [legend]}
+
+      assert {:error, {:invalid_document, diagnostic}} =
+               Style.compute_detailed(NativeElixirPdfUtilities.HtmlTreeHelpers.tree_content(tree))
+
+      assert diagnostic.stage == :style and diagnostic.message =~ "content models"
+    end
+  end
+
+  test "fieldset ownership does not reassign descendant controls or make fieldsets labelable" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
+    alias NativeElixirPdfUtilities.Validators.HtmlFormValidator
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed("""
+             <form id=ancestor><fieldset id=group form=forward name=group>
+             <legend>Caption</legend><input id=child></fieldset></form>
+             <label for=group>Group label</label><label for=child>Control label</label>
+             <label><input type=hidden><input id=implicit></label><form id=forward></form>
+             <template><form id=forward><fieldset disabled><input id=child></fieldset></form></template>
+             """)
+
+    [ancestor, group_label, control_label, implicit_label, forward, template] =
+      HtmlFormValidator.prepare_initial_nodes(dom.children)
+
+    [fieldset] = ancestor.children
+    [legend, child] = Enum.filter(fieldset.children, &(&1.type == :element))
+    assert fieldset._initial_form_state.owner == forward._selector_id
+    assert legend._initial_legend_form_owner == forward._selector_id
+    assert child._initial_form_state.owner == ancestor._selector_id
+    assert group_label._initial_label_control == nil
+    assert control_label._initial_label_control == child._selector_id
+    [_, implicit] = implicit_label.children
+    assert implicit_label._initial_label_control == implicit._selector_id
+    assert implicit._initial_form_state.owner == nil
+    refute child._initial_form_state.disabled
+    assert template.children == []
+
+    [empty] =
+      HtmlFormValidator.prepare_initial_nodes([
+        %{type: :element, tag: "fieldset", attributes: %{}, children: []}
+      ])
+
+    assert empty._initial_form_state == %{owner: nil, disabled: false, checked: false}
+    assert HtmlValidator.valid_form_attribute?("fieldset", "name", "Group")
+    assert HtmlValidator.valid_boolean_form_attribute?("fieldset", "disabled")
+    refute HtmlValidator.valid_boolean_form_attribute?("legend", "disabled")
+  end
+
+  test "C6 URL preparation preserves document identity and raw URL diagnostics" do
+    alias NativeElixirPdfUtilities.Validators.HtmlUrlValidator
+    fallback = "https://example.test/docs/document.html"
+
+    for href <- ["http://", "data:text/plain,ignored", "relative/", ""] do
+      dom = %{
+        children: [
+          %{tag: "base", attributes: %{"href" => href}},
+          %{tag: "base", attributes: %{"href" => "https://ignored.test/"}}
+        ]
+      }
+
+      assert {:ok, context} = HtmlUrlValidator.document_context(dom, base_url: fallback)
+      expected = if href == "relative/", do: "https://example.test/docs/relative/", else: fallback
+      assert context.resolution_base == expected
+    end
+
+    assert {:ok, empty} = HtmlUrlValidator.document_context(%{children: []}, [])
+
+    assert {:ok, {:fragment, "target space"}} =
+             HtmlUrlValidator.prepare_anchor("#target%20space", empty)
+
+    assert {:ok, {:fragment, "�"}} = HtmlUrlValidator.prepare_anchor("#%FF", empty)
+    assert {:ok, {:fragment, "#target"}} = HtmlUrlValidator.prepare_anchor("##target", empty)
+    assert {:ok, {:fragment, ""}} = HtmlUrlValidator.prepare_anchor("#", empty)
+
+    assert {:ok, {:uri, "https://example.test/path%20with%20spaces"}} =
+             HtmlUrlValidator.prepare_anchor(" \nhttps://example.test/path with spaces\t ", empty)
+
+    assert {:ok, {:uri, "mailto:test@example.test"}} =
+             HtmlUrlValidator.prepare_anchor("mailto:test@example.test", empty)
+
+    assert {:ok, {:fragment, ""}} = HtmlUrlValidator.prepare_anchor("", empty)
+
+    assert {:ok, identity} =
+             HtmlUrlValidator.document_context(%{children: []}, base_url: fallback)
+
+    assert {:ok, {:fragment, "end"}} =
+             HtmlUrlValidator.prepare_anchor(fallback <> "#end", identity)
+
+    assert {:ok, {:fragment, ""}} = HtmlUrlValidator.prepare_anchor("", identity)
+
+    assert {:ok, same_base} =
+             HtmlUrlValidator.document_context(
+               %{children: [%{tag: "base", attributes: %{"href" => fallback <> "#ignored"}}]},
+               base_url: fallback
+             )
+
+    assert {:ok, {:fragment, "end"}} = HtmlUrlValidator.prepare_anchor("#end", same_base)
+
+    assert {:ok, remote} =
+             HtmlUrlValidator.document_context(
+               %{children: [%{tag: "base", attributes: %{"href" => "https://other.test/"}}]},
+               []
+             )
+
+    assert {:ok, {:uri, "https://other.test/#target"}} =
+             HtmlUrlValidator.prepare_anchor("#target", remote)
+
+    assert {:ok, {:uri, "https://cdn.test/a"}} =
+             HtmlUrlValidator.prepare_anchor("//cdn.test/a", remote)
+
+    assert {:ok, {:uri, "https://other.test/?q=value"}} =
+             HtmlUrlValidator.prepare_anchor("?q=value", remote)
+
+    for href <- [
+          nil,
+          "relative.html",
+          "//example.test/a",
+          "mailto:missing",
+          "ftp://example.test/a",
+          "http://",
+          "https://bad host/a",
+          "https://x.test:99999/a",
+          "http://[",
+          "https://x.test:bad/",
+          "https://x.test\\@evil.test/path",
+          "https://x.test/%escape",
+          "https://x%20.test/a",
+          "file://other.test/a"
+        ] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               HtmlUrlValidator.prepare_anchor(href, empty)
+
+      assert diagnostic.stage == :style and diagnostic.reason == :invalid_document
+      assert is_binary(diagnostic.message) and byte_size(diagnostic.message) > 0
+      assert is_binary(diagnostic.source)
+    end
+
+    for href <- ["javascript:run()", "\tvbscript:run()", "java\nscript:run()"] do
+      assert {:error, {:unsupported_html, %{stage: :html, source: "href"}}} =
+               HtmlUrlValidator.prepare_anchor(href, empty)
+
+      assert {:error, {:unsupported_html, %{stage: :html}}} =
+               HtmlUrlValidator.document_context(
+                 %{children: [%{tag: "base", attributes: %{"href" => href}}]},
+                 []
+               )
+    end
+
+    assert {:error, {:invalid_document, %{source: "base_url"}}} =
+             HtmlUrlValidator.document_context(%{children: []}, base_url: 1)
+
+    assert {:error, {:invalid_document, _}} =
+             HtmlUrlValidator.document_context(%{children: []}, base_url: "http://")
+
+    assert {:ok, %{fallback_base: "file:///allowed/space%20dir/"}} =
+             HtmlUrlValidator.document_context(%{children: []},
+               base_url: "file:///allowed/space%20dir"
+             )
+
+    assert {:error, {:invalid_document, %{source: "child.html"}}} =
+             HtmlUrlValidator.resolve_reference("child.html", "mailto:test@example.test")
+
+    assert {:error, {:invalid_document, %{source: "<<255>>"}}} =
+             HtmlUrlValidator.resolve_reference(<<255>>, nil)
+
+    assert {:ok, "mailto:test@example.test#section"} =
+             HtmlUrlValidator.resolve_reference("#section", "mailto:test@example.test")
+
+    assert {:ok, "data:image/png;base64,eA=="} =
+             HtmlUrlValidator.resolve_reference("data:image/png;base64,eA==", nil)
+
+    assert {:ok, "unchanged.png"} = HtmlUrlValidator.resource_reference("unchanged.png", empty)
+
+    assert {:ok, "https://other.test/a.png"} =
+             HtmlUrlValidator.resource_reference("a.png", remote)
+
+    assert {:error, {:invalid_document, _}} =
+             HtmlUrlValidator.resource_reference("a.png", %{empty | authored_base?: true})
+
+    assert :ok = HtmlUrlValidator.validate_base_element(%{"target" => "_blank"}, [])
+
+    assert {:error, {:invalid_document, %{source: "base"}}} =
+             HtmlUrlValidator.validate_base_element(%{}, [])
+
+    assert {:error, {:invalid_document, %{source: "base"}}} =
+             HtmlUrlValidator.validate_base_element(%{"href" => "/"}, [%{type: :text, text: "x"}])
+  end
+
+  test "metadata-free picture trees retain actionable content-model diagnostics" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    for {tag, children} <- [
+          {"source", []},
+          {"picture", [%{type: :text, text: "Invalid artwork"}]}
+        ] do
+      dom = %{
+        type: :document,
+        children: [%{type: :element, tag: tag, attributes: %{}, children: children}]
+      }
+
+      assert {:error, {:invalid_document, diagnostic}} = Style.compute_detailed(dom)
+      assert diagnostic.stage == :style and diagnostic.operation == :compute
+      assert diagnostic.source == tag
+      assert diagnostic.message =~ "picture"
+    end
+  end
+
+  test "validated DOM reuse rejects changed contents and options with retained canonical IDs" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Font}
+    assert {:ok, dom} = HtmlParser.parse("<p>Text</p>")
+    options = Font.normalize_options([])
+
+    assert :ok ==
+             HtmlValidator.with_render_budget(fn ->
+               assert {:ok, false} = HtmlValidator.prepare_style_input(dom, [], options)
+               [node] = dom.children
+               changed = %{dom | children: [%{node | tag: "unsupported"}]}
+
+               assert {:error, {:invalid_document, diagnostic}} =
+                        HtmlValidator.prepare_style_input(changed, [], options)
+
+               assert diagnostic.stage == :style and diagnostic.source == "unsupported"
+
+               assert {:error, {:invalid_options, diagnostic}} =
+                        HtmlValidator.prepare_style_input(dom, [outlines: :invalid], options)
+
+               assert diagnostic.stage == :style or diagnostic.stage == :options
+               assert {:ok, false} = HtmlValidator.prepare_style_input(dom, [], options)
+               :ok
+             end)
   end
 end

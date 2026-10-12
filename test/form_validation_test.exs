@@ -491,7 +491,7 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
       tag: "input",
       attributes: %{},
       children: [],
-      initial_state: %{owner: nil, checked: false}
+      initial_state: %{owner: nil, checked: false, disabled: false, value: ""}
     }
 
     page = %{size: {200, 200}, boxes: [%{form_control: control}]}
@@ -524,10 +524,18 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
 
     control = %{id: make_ref(), order: [0], tag: "input", attributes: %{}, children: []}
 
-    for state <- [:missing, %{}, %{checked: "yes", owner: nil}, %{checked: false, owner: "form"}] do
+    for state <- [
+          :missing,
+          %{},
+          %{checked: false, owner: nil},
+          %{checked: false, owner: nil, disabled: "yes"},
+          %{checked: "yes", owner: nil, disabled: false},
+          %{checked: false, owner: "form", disabled: false}
+        ],
+        mode <- [:static, :interactive] do
       control = if state == :missing, do: control, else: Map.put(control, :initial_state, state)
       page = %{size: {200, 200}, boxes: [Map.put(box, :form_control, control)]}
-      assert {:error, {:invalid_form, diagnostic}} = PdfWriter.render([page], [])
+      assert {:error, {:invalid_form, diagnostic}} = PdfWriter.render([page], forms: mode)
       assert diagnostic.stage == :forms and diagnostic.reason == :invalid_form
       assert diagnostic.source == "initial_state"
       assert diagnostic.operation == :write_pdf
@@ -543,7 +551,7 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
           %{choices: [%{value: "a", label: nil, selected: true}], value: "a"},
           %{choices: [%{value: "a", label: "A", selected: "yes"}], value: "a"}
         ] do
-      state = %{checked: false, owner: nil}
+      state = %{checked: false, owner: nil, disabled: false}
       state = if selection == :missing, do: state, else: Map.put(state, :selection, selection)
       control = %{control | tag: "select"} |> Map.put(:initial_state, state)
       page = %{size: {200, 200}, boxes: [Map.put(box, :form_control, control)]}
@@ -551,6 +559,42 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
       assert diagnostic.stage == :forms and diagnostic.source == "initial_state"
       assert diagnostic.operation == :write_pdf
       assert diagnostic.message =~ "selection state"
+    end
+  end
+
+  test "transported HTML controls diagnose unsupported field kinds in both form modes" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+
+    box = %{
+      type: :rect,
+      x: 0,
+      y: 0,
+      width: 20,
+      height: 20,
+      fill_color: nil,
+      stroke_color: {0, 0, 0},
+      stroke_width: 1,
+      border_radius: 0
+    }
+
+    control = %{
+      id: make_ref(),
+      order: [0],
+      tag: "input",
+      children: [],
+      initial_state: %{owner: nil, checked: false, disabled: false, value: ""}
+    }
+
+    for type <- ~w(date range color file image button submit reset hidden),
+        mode <- [:static, :interactive] do
+      page = %{
+        size: {100, 100},
+        boxes: [Map.put(box, :form_control, Map.put(control, :attributes, %{"type" => type}))]
+      }
+
+      assert {:error, {:invalid_form, diagnostic}} = PdfWriter.render([page], forms: mode)
+      assert diagnostic.stage == :forms and diagnostic.operation == :write_pdf
+      assert diagnostic.source == "initial_state" and diagnostic.message =~ "validated initial"
     end
   end
 

@@ -83,6 +83,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   end
 
   @fixture_thresholds [
+    {"html_child_fragment_destinations.html",
+     native_renderer: &__MODULE__.render_embedded_fixture/2,
+     chromium_transform: &__MODULE__.local_iframe_reference/1,
+     max_changed_ratio: 0.01,
+     max_average_delta: 0.01},
+    {"html_table_caption_blocks.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_table_headers.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_iframe_math_gauges.html",
      native_renderer: &__MODULE__.render_embedded_fixture/2,
@@ -122,6 +128,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
      chromium_transform: &PdfVisualCompare.gauge_reference/1,
      max_changed_ratio: 0.01,
      max_average_delta: 0.01},
+    {"html_initial_text_controls.html",
+     render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_fieldset_fragmentation.html",
+     render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_fieldsets.html",
+     render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_editability.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_responsive_images.html",
      chromium_transform: &__MODULE__.responsive_print_reference/1,
@@ -131,6 +143,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
      chromium_transform: &__MODULE__.responsive_print_reference/1,
      max_changed_ratio: 0.01,
      max_average_delta: 0.01},
+    {"mathml_operators.html",
+     chromium_transform: &__MODULE__.math_operator_core_reference/1,
+     max_changed_ratio: 0.01,
+     max_average_delta: 0.01},
+    {"mathml_operators_ordinary.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_token_defaults.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_tokens_rows.html",
      chromium_transform: &__MODULE__.math_token_italic_reference/1,
@@ -365,6 +382,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     |> String.replace("sizes=\"(min-width:600px) calc(50vw / 5), 100px\"", "sizes=\"64px\"")
   end
 
+  @doc "Replaces explicitly marked tall operators with independently generated Core artwork."
+  @spec math_operator_core_reference(String.t()) :: String.t()
+  def math_operator_core_reference(html) do
+    manifest =
+      :json.decode(
+        File.read!(Path.join(@fixtures_dir, "assets/math-operator-core-reference.json"))
+      )
+
+    Regex.replace(~r/<mo data-core-stretch="([^"]+)"([^>]*)>([^<]*)<\/mo>/u, html, fn _,
+                                                                                      key,
+                                                                                      _attributes,
+                                                                                      text ->
+      record = Map.fetch!(manifest["records"], key)
+      true = record["text"] == text
+      record["html"]
+    end)
+  end
+
   @doc "Adds the selected font's Core italic spacing omitted by Chromium's math-auto tokens."
   @spec math_token_italic_reference(String.t()) :: String.t()
   def math_token_italic_reference(html) do
@@ -496,13 +531,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
       |> String.replace("__MATH_FONT__", Path.expand("priv/fonts/stix/STIXTwoMath-Regular.ttf"))
       |> String.replace("__ASSET_ROOT__", Path.join(@fixtures_dir, "assets"))
 
-    Enum.reduce(["iframe_local_child.html", "iframe_local_leaf.html"], html, fn name, html ->
-      String.replace(
-        html,
-        ~s(src="#{name}"),
-        ~s(src="#{Path.join([@fixtures_dir, "assets", name])}")
-      )
-    end)
+    Enum.reduce(
+      ["iframe_local_child.html", "iframe_local_leaf.html", "iframe_link_child.html"],
+      html,
+      fn name, html ->
+        String.replace(
+          html,
+          ~s(src="#{name}"),
+          ~s(src="#{Path.join([@fixtures_dir, "assets", name])}")
+        )
+      end
+    )
   end
 
   @doc false
@@ -880,13 +919,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     @fixture_name fixture_name
     @thresholds thresholds
     @tag math_tokens: fixture_name in ["mathml_token_defaults.html", "mathml_tokens_rows.html"]
+    @tag math_operators:
+           fixture_name in ["mathml_operators.html", "mathml_operators_ordinary.html"]
 
     if fixture_name in ["html_responsive_images.html", "html_inline_images.html"],
       do: @tag(:responsive_images)
 
+    if fixture_name in [
+         "html_child_fragment_destinations.html",
+         "html_fragment_destinations.html",
+         "html_base_relative_links.html"
+       ],
+       do: @tag(:child_destinations)
+
     @tag gauge_parity: @fixture_name in ["html_gauges.html", "html_gauge_boxes.html"]
-    if fixture_name in ["html_table_formation.html", "html_table_headers.html"],
-      do: @tag(:table_formation)
+    if fixture_name in [
+         "html_table_formation.html",
+         "html_table_headers.html",
+         "html_table_caption_blocks.html"
+       ],
+       do: @tag(:table_formation)
 
     if fixture_name == "drawing_group_viewports.html", do: @tag(:drawing_group)
     if String.starts_with?(fixture_name, "html_iframe_"), do: @tag(:embedded_viewport)
@@ -921,6 +973,114 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
 
       assert Enum.all?(font_sources, &String.match?(&1.sha256, ~r/\A[0-9a-f]{64}\z/))
       assert File.dir?(artifact_dir)
+
+      if @fixture_name == "html_child_fragment_destinations.html" do
+        assert page_count == 2
+        alias NativeElixirPdfUtilities.Pdf.Reader
+
+        for name <- ["native.pdf", "chromium.pdf"] do
+          assert {:ok, text} =
+                   NativeElixirPdfUtilities.Text.extract(
+                     File.read!(Path.join(artifact_dir, name))
+                   )
+
+          for caption <- [
+                "Parent target",
+                "Parent jump",
+                "Child jump",
+                "Child target",
+                "Nested jump",
+                "Nested target",
+                "Child beginning",
+                "Child root",
+                "End scoped child destinations"
+              ],
+              do: assert(text =~ caption)
+
+          assert length(Regex.scan(~r/Child target/, text)) == 2
+          assert length(Regex.scan(~r/Nested target/, text)) == 2
+        end
+
+        assert {:ok, native} =
+                 Reader.read_validated(File.read!(Path.join(artifact_dir, "native.pdf")))
+
+        [first, second] = Enum.map(native.pages, & &1.ref)
+
+        destinations =
+          for {_ref, %{value: %{"Subtype" => {:name, "Link"}, "Dest" => destination}}} <-
+                native.document.objects,
+              do: destination
+
+        assert [{:ref, first}, {:name, "XYZ"}, 12, 168, nil] in destinations
+
+        # Child paint origins round once to CSS pixels. Nested origins round
+        # in the containing child viewport before cumulative group transforms.
+        for {ref, ys} <- [{first, [141.75, 128.75, 102.5]}, {second, [168, 155, 128.75]}] do
+          for y <- ys,
+              do: assert([{:ref, ref}, {:name, "XYZ"}, 12, y, nil] in destinations)
+        end
+
+        assert length(destinations) == 9
+        refute File.read!(Path.join(artifact_dir, "native.pdf")) =~ "/URI (#"
+      end
+
+      if @fixture_name == "html_table_caption_blocks.html" do
+        assert page_count == 1
+
+        for name <- ["native.pdf", "chromium.pdf"] do
+          pdf = File.read!(Path.join(artifact_dir, name))
+          assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+          text = String.replace(text, ~r/\s+/u, " ")
+
+          for label <- [
+                "Block captions before.",
+                "Block title",
+                "Caption linked",
+                "First detail",
+                "Second detail",
+                "Mixed image",
+                "end.",
+                "Column",
+                "Value",
+                "Body one",
+                "One",
+                "Body two",
+                "Two",
+                "Fixed caption",
+                "Fixed body",
+                "Fixed value",
+                "Empty caption body",
+                "Visible value",
+                "Block captions after."
+              ],
+              do: assert(text =~ label)
+
+          assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+          assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+          assert length(document.pages) == 1
+
+          links =
+            for {_ref, %{value: %{"Subtype" => {:name, "Link"}} = link}} <- document.objects,
+                do: link
+
+          assert [
+                   %{
+                     "A" => %{"URI" => {:string, "https://example.com/caption"}},
+                     "Rect" => [left, bottom, right, top]
+                   }
+                 ] = links
+
+          assert right > left and top > bottom
+
+          images =
+            for {_ref, %{value: %{"Subtype" => {:name, "Image"}} = object}} <- document.objects,
+                do: object
+
+          assert length(images) == 1
+          assert image_draw_count(document) == 1
+          assert Enum.all?(document.pages, &Map.has_key?(&1.resources, "Font"))
+        end
+      end
 
       if @fixture_name == "html_table_headers.html" do
         assert page_count == 1
@@ -1102,6 +1262,102 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
         end
       end
 
+      if @fixture_name == "html_initial_text_controls.html" do
+        assert page_count == 2
+
+        for name <- ["native.pdf", "chromium.pdf"] do
+          pdf = File.read!(Path.join(artifact_dir, name))
+          assert {:ok, 2} = NativeElixirPdfUtilities.Info.page_count(pdf)
+          assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+          assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+          text = String.replace(text, ~r/\s+/u, " ")
+
+          for caption <- [
+                "Initial dimensions and whitespace",
+                "Sized",
+                "Empty input hint",
+                "Password hint",
+                "Textarea rows and columns",
+                "First spaced line",
+                "Indented second",
+                "Third line",
+                "Textarea hint",
+                "Second hint line",
+                "After initial values",
+                "Wrapping and clipping",
+                "After clipping",
+                "Inline control",
+                "Second row",
+                "Following inline caption"
+              ],
+              do: assert(text =~ caption)
+
+          refute text =~ "Unused fallback" or text =~ "Hidden third row" or
+                   text =~ "Hidden inline row"
+        end
+      end
+
+      if @fixture_name == "html_fieldset_fragmentation.html" do
+        assert page_count == 3
+
+        for name <- ["native.pdf", "chromium.pdf"] do
+          pdf = File.read!(Path.join(artifact_dir, name))
+          assert {:ok, 3} = NativeElixirPdfUtilities.Info.page_count(pdf)
+          assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+          assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+          assert text =~ "Fragmented group" and text =~ "After the group"
+          for index <- 1..25, do: assert(text =~ "Grouped line #{index}")
+        end
+      end
+
+      if @fixture_name == "html_fieldsets.html" do
+        assert page_count == 2
+
+        for name <- ["native.pdf", "chromium.pdf"] do
+          pdf = File.read!(Path.join(artifact_dir, name))
+          assert {:ok, 2} = NativeElixirPdfUtilities.Info.page_count(pdf)
+          assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+          assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+          text = String.replace(text, ~r/\s+/u, " ")
+
+          for caption <- [
+                "Default caption",
+                "Default grouped prose",
+                "Exempt",
+                "First legend exception",
+                "Disabled text",
+                "Locked",
+                "Nested caption",
+                "Nested locked",
+                "Outer disabling still applies",
+                "Earlier radio",
+                "Selected disabled radio",
+                "Choice",
+                "Notes",
+                "Centered authored caption",
+                "Transparent legend keeps the background",
+                "Right caption",
+                "Right alignment keeps grouped prose",
+                "Flex caption",
+                "Flex first",
+                "Flex second",
+                "Grid caption",
+                "Grid first",
+                "Grid second",
+                "Inline caption",
+                "Inline group",
+                "Following inline text",
+                "A long wrapping legend caption",
+                "Narrow grouped prose",
+                "Empty caption body",
+                "After fieldsets"
+              ],
+              do: assert(text =~ caption)
+
+          refute text =~ "Unused caption"
+        end
+      end
+
       if @fixture_name == "html_metadata_preservation.html" do
         assert page_count == 1
 
@@ -1187,28 +1443,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
           assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
           assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
 
-          image_draws =
-            Enum.reduce(document.pages, 0, fn page, total ->
-              assert {:ok, dictionary} =
-                       NativeElixirPdfUtilities.Pdf.Reader.dictionary(document, {:ref, page.ref})
-
-              streams =
-                case dictionary["Contents"] do
-                  values when is_list(values) -> values
-                  value -> [value]
-                end
-
-              total +
-                Enum.reduce(streams, 0, fn stream_ref, count ->
-                  assert {:ok, content} =
-                           NativeElixirPdfUtilities.Pdf.Reader.decoded_stream(
-                             document,
-                             stream_ref
-                           )
-
-                  count + length(Regex.scan(~r/\/\S+\s+Do\b/u, content))
-                end)
-            end)
+          image_draws = image_draw_count(document)
 
           assert image_draws == 20
 
@@ -1573,6 +1808,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
         assert native =~ "/Rect [53.25 85.25 98.25 120.25]"
       end
 
+      if @fixture_name == "mathml_operators.html" do
+        assert page_count == 1
+
+        for name <- ["native.pdf", "chromium.pdf"] do
+          assert {:ok, text} =
+                   NativeElixirPdfUtilities.Text.extract(
+                     File.read!(Path.join(artifact_dir, name)),
+                     layout: false
+                   )
+
+          compact = String.replace(text, ~r/\s/u, "")
+
+          for expected <- [
+                "Small",
+                "Medium",
+                "Large",
+                "Fences",
+                "Assembly",
+                "1+2=3",
+                "∑1",
+                "→"
+              ],
+              do: assert(compact =~ expected)
+        end
+
+        assert {:ok, native} =
+                 NativeElixirPdfUtilities.Text.extract(
+                   File.read!(Path.join(artifact_dir, "native.pdf")),
+                   layout: false
+                 )
+
+        assert native =~ "1\u20622"
+      end
+
       if @fixture_name == "html_disclosures.html" do
         assert page_count == 1
 
@@ -1919,5 +2188,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
       assert Enum.all?(font_sources, &String.match?(&1.sha256, ~r/\A[0-9a-f]{64}\z/))
       assert File.dir?(artifact_dir)
     end
+  end
+
+  defp image_draw_count(document) do
+    Enum.reduce(document.pages, 0, fn page, total ->
+      assert {:ok, dictionary} =
+               NativeElixirPdfUtilities.Pdf.Reader.dictionary(document, {:ref, page.ref})
+
+      streams =
+        case dictionary["Contents"] do
+          values when is_list(values) -> values
+          value -> [value]
+        end
+
+      total +
+        Enum.reduce(streams, 0, fn stream_ref, count ->
+          assert {:ok, content} =
+                   NativeElixirPdfUtilities.Pdf.Reader.decoded_stream(
+                     document,
+                     stream_ref
+                   )
+
+          count + length(Regex.scan(~r/\/\S+\s+Do\b/u, content))
+        end)
+    end)
   end
 end

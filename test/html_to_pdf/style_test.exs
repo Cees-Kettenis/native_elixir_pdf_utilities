@@ -7,6 +7,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   use ExUnit.Case
 
+  import NativeElixirPdfUtilities.HtmlTreeHelpers
+
   test "processing instructions neither paint nor affect element sibling selectors and counters" do
     alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
@@ -339,6 +341,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert {:ok, %{children: [picture]}} =
              HtmlParser.parse_detailed("<picture><source srcset=tile><img src=tile></picture>")
 
+    picture = tree_content(picture)
     [source, image] = picture.children
 
     for node <- [
@@ -1755,7 +1758,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                  source: "select",
                  message: message
                }}} =
-               Style.compute_detailed(%{document | children: [%{select | children: children}]})
+               Style.compute_detailed(
+                 tree_content(%{document | children: [%{select | children: children}]})
+               )
 
       assert message =~ "option"
     end
@@ -1779,14 +1784,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     RenderCache.with_stylesheets(fn ->
       assert {:ok, %{children: [first]}} = Style.compute_detailed(dom, opts)
-      assert {:ok, %{children: [second]}} = Style.compute_detailed(changed, opts)
+      assert {:ok, %{children: [second]}} = Style.compute_detailed(tree_content(changed), opts)
       assert Enum.map(first.children, & &1.style.color) == [{1, 0, 0}, {0, 0, 0}]
       assert Enum.map(second.children, & &1.style.color) == [{0, 0, 0}, {1, 0, 0}, {0, 0, 0}]
 
       assert {:ok, roots} = HtmlParser.parse("<p>One</p><p>Two</p>")
       assert {:ok, first_roots} = Style.compute_detailed(roots, opts)
       changed_roots = %{roots | children: roots.children ++ [third]}
-      assert {:ok, second_roots} = Style.compute_detailed(changed_roots, opts)
+      assert {:ok, second_roots} = Style.compute_detailed(tree_content(changed_roots), opts)
       assert Enum.map(first_roots.children, & &1.style.color) == [{1, 0, 0}, {0, 0, 0}]
 
       assert Enum.map(second_roots.children, & &1.style.color) == [
@@ -2700,7 +2705,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert literal.style.color == {1, 0, 0}
     assert raw.style.background_color == {1, 1, 1}
     assert literal.style.background_color == {1, 1, 0}
-    assert raw.style._form_control.attributes["value"] == "AB"
+    assert raw.style._form_control.initial_state.value == "AB"
+    assert raw.style._form_control.attributes["value"] == "A\nB"
     assert [%{text: "AB"}] = raw.children
   end
 
@@ -2796,8 +2802,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       [prepared, reference] = container.children
       assert prepared.style.color == {0, 0, 0}
       assert reference.style.color == {1, 0, 0}
-      assert prepared.style._form_control.attributes["value"] == "AB"
-      assert reference.style._form_control.attributes["value"] == "AB"
+      assert prepared.style._form_control.initial_state.value == "AB"
+      assert prepared.style._form_control.attributes["value"] == "A\r\nB"
+      assert reference.style._form_control.initial_state.value == "AB"
       assert [%{text: "AB"}] = prepared.children
     end
   end
@@ -2843,7 +2850,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     ] = Enum.reject(container.children, &match?(%{type: :text}, &1))
 
     assert text.style.form_kind == :text
-    assert text.style.width == 126.0
+    assert text.style.width == 138.75
     assert Enum.map(text.children, & &1.text) == ["Alice"]
     assert Enum.map(checked_box.children, & &1.text) == ["☒"]
     assert checked_box.style.color == {0.4666666666666667, 0.4666666666666667, 0.4666666666666667}
@@ -2856,8 +2863,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert selected.style.padding.right == 14.25
     assert Enum.map(first.children, & &1.text) == ["First"]
     assert Enum.map(textarea.children, & &1.text) == ["Line one\nLine two"]
-    assert textarea.style.white_space == :pre_line
-    assert Enum.map(textarea_fallback.children, & &1.text) == ["Fallback"]
+    assert textarea.style.white_space == :pre_wrap
+    assert Enum.map(textarea_fallback.children, & &1.text) == [""]
     assert [%{tag: "strong", children: [%{text: "Save"}]}] = button.children
     assert button.style.font_weight == 400
     assert button.style.font_size == 10.0
@@ -3343,8 +3350,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
     assert {:ok, explicit_dom} = HtmlParser.parse_document_detailed(explicit)
-    assert {:ok, styled} = Style.compute(dom)
-    assert {:ok, explicit_styled} = Style.compute(explicit_dom)
+    assert {:ok, styled} = Style.compute(tree_content(dom))
+    assert {:ok, explicit_styled} = Style.compute(tree_content(explicit_dom))
     assert styled == explicit_styled
     [body] = styled.children
     [container] = Enum.reject(body.children, &(&1.type == :text))
@@ -6826,7 +6833,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert both.style.background_color == {238 / 255, 238 / 255, 238 / 255}
     assert literal.style.color == {0, 0, 0}
     assert literal.style._form_control.attributes["readonly"] == "false"
-    assert readonly.style._form_control.attributes["value"] == "AB"
+    assert readonly.style._form_control.initial_state.value == "AB"
+    assert readonly.style._form_control.attributes["value"] == "A\nB"
   end
 
   test "readonly caller trees delegate applicability to the validator" do
@@ -6864,7 +6872,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       assert hd(dom.children).attributes["value"] == " \tA\rB\nC "
       assert node.style._form_control.attributes["readonly"] == "false"
       expected = if type == "tel", do: " \tABC ", else: "ABC"
-      assert node.style._form_control.attributes["value"] == expected
+      assert node.style._form_control.initial_state.value == expected
+      assert node.style._form_control.attributes["value"] == " \tA\rB\nC "
       assert node.style.form_kind == :text
     end
   end
@@ -6878,7 +6887,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     css = ~s([multiple="FALSE" i][value^=" "] { color:blue; })
     assert {:ok, %{children: [node]}} = Style.compute_detailed(dom, stylesheets: [{:css, css}])
     assert node.style.color == {0, 0, 1}
-    assert node.style._form_control.attributes["value"] == "A,B"
+    assert node.style._form_control.initial_state.value == "A,B"
+    assert node.style._form_control.attributes["value"] == " A ,\n B "
     assert hd(dom.children).attributes["value"] == " A ,\n B "
 
     for tag <- ["input", "textarea", "button", "p"] do
@@ -6915,7 +6925,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       assert {:ok, %{children: [node]}} = Style.compute_detailed(dom)
       assert node.style.form_kind == :text
       assert node.style._form_control.attributes["type"] == type
-      assert node.style._form_control.attributes["value"] == "ABC"
+      assert node.style._form_control.initial_state.value == "ABC"
+      assert node.style._form_control.attributes["value"] == "A\rB\nC"
     end
 
     for {attributes, children} <- [
@@ -7024,7 +7035,154 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     css = ~s(input[type="password"][value$="🦊"] {color:red;})
     assert {:ok, %{children: [node]}} = Style.compute_detailed(dom, stylesheets: [{:css, css}])
     assert node.style.form_kind == :text and node.style.color == {1.0, 0.0, 0.0}
-    assert node.style._form_control.attributes["value"] == "Aé🦊"
+    assert node.style._form_control.initial_state.value == "Aé🦊"
+    assert node.style._form_control.attributes["value"] == "A\ré🦊"
     assert Enum.map(node.children, & &1.text) == ["•••"]
+  end
+
+  test "fieldset hidden boxes and legend alignment defaults retain authored overrides" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    for {attribute, expected} <- [
+          {"align=right", :flex_end},
+          {"align=RIGHT", :flex_end},
+          {"align=center", :center},
+          {"align=unknown", :flex_start}
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<fieldset><legend #{attribute}>Caption</legend></fieldset><fieldset hidden></fieldset>"
+               )
+
+      assert {:ok, %{children: [visible, hidden]}} = Style.compute_detailed(dom)
+      assert hd(visible.children).style.justify_self == expected
+      assert hidden.style.display == :none
+    end
+  end
+
+  test "fieldset defaults and author overrides preserve effective selector state" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+    html = """
+    <style>fieldset:disabled{color:red}fieldset:enabled{color:blue}
+    input:disabled{background-color:red}input:enabled{background-color:blue}
+    input[disabled]{color:green}legend:disabled{color:green}</style>
+    <fieldset disabled=false style='font-size:10pt'><legend align=CENTER>Caption<input></legend>
+    <input value=Locked><fieldset><legend>Nested<input></legend></fieldset></fieldset>
+    <fieldset style='font-size:20pt;display:flex;padding:0;border:0'><legend>Other</legend>Body</fieldset>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, %{children: [disabled, enabled]}} = Style.compute_detailed(dom)
+    assert disabled.style.display == :block and disabled.style._fieldset
+    assert disabled.style.border_widths == %{top: 1.5, right: 1.5, bottom: 1.5, left: 1.5}
+    assert disabled.style.border_styles.top == :groove
+    assert disabled.style.padding == %{top: 3.4921875, right: 7.5, bottom: 6.24609375, left: 7.5}
+    assert disabled.style.margin == %{top: 0.0, right: 1.5, bottom: 0.0, left: 1.5}
+    assert disabled.style.color == {1, 0, 0}
+    [legend, input, nested] = Enum.filter(disabled.children, &(&1.type == :element))
+    assert legend.style.justify_self == :center
+    assert legend.style.padding.left == 1.5
+    assert legend.style.color == {1, 0, 0}
+    exempt = List.last(legend.children)
+    assert exempt.style.background_color == {0, 0, 1}
+    refute exempt.style._form_control.initial_state.disabled
+    assert input.style.background_color == {1, 0, 0}
+    assert input.style._form_control.initial_state.disabled
+    refute Map.has_key?(input.style._form_control.attributes, "disabled")
+    assert nested.style.color == {1, 0, 0}
+    assert enabled.style.color == {0, 0, 1}
+    assert enabled.style.display == :block and enabled.style._fieldset_content_display == :flex
+    assert enabled.style.padding.top == 0.0 and enabled.style.border_widths.top == 0.0
+  end
+
+  test "fieldset disabling preserves owner-scoped radio winners including disabled and hidden controls" do
+    alias NativeElixirPdfUtilities.Validators.HtmlFormValidator
+
+    html = """
+    <form id=owner><fieldset disabled><legend><input type=radio name=mode value=A checked></legend>
+    <input type=radio name=mode value=B checked><input type=hidden name=secret>
+    <template><input type=radio name=mode value=Ignored checked></template></fieldset></form>
+    <input type=radio name=mode value=C checked form=owner><input type=radio name=mode value=D checked>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    [form, external, independent] = HtmlFormValidator.prepare_initial_nodes(dom.children)
+    [fieldset] = form.children
+    [legend, disabled, hidden, template] = Enum.filter(fieldset.children, &(&1.type == :element))
+    [exempt] = legend.children
+    refute exempt._initial_form_state.checked
+    refute disabled._initial_form_state.checked
+    assert external._initial_form_state.checked and independent._initial_form_state.checked
+    assert external._initial_form_state.owner == form._selector_id
+    assert independent._initial_form_state.owner == nil
+    refute exempt._initial_form_state.disabled
+    assert disabled._initial_form_state.disabled and hidden._initial_form_state.disabled
+    assert template.children == []
+
+    [next] =
+      HtmlFormValidator.prepare_initial_nodes([
+        %{type: :element, tag: "input", attributes: %{}, children: []}
+      ])
+
+    refute next._initial_form_state.disabled
+  end
+
+  test "fieldset editability and gauge labels consume canonical state across hidden legends and nested scopes" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+    alias NativeElixirPdfUtilities.Validators.HtmlFormValidator
+
+    html = """
+    <style>input:read-write,textarea:read-write{color:blue}input:read-only,textarea:read-only{color:red}</style>
+    <fieldset disabled><legend hidden><input id=hidden_exempt></legend>
+    <legend><input id=later value=Later></legend><input id=body value=Body>
+    <fieldset><legend><textarea id=nested>Nested</textarea></legend></fieldset>
+    <label for=progress>Gauge label</label><progress id=progress value=.5></progress>
+    <label for=meter>Meter label</label><meter id=meter value=.75></meter>
+    <input type=radio name=empty><input type=radio name=empty></fieldset>
+    <fieldset disabled><legend><textarea id=exempt>Exempt</textarea>
+    <input id=own disabled value=Own></legend></fieldset>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+
+    [first, second] =
+      HtmlFormValidator.prepare_initial_nodes(
+        Enum.filter(dom.children, &(Map.get(&1, :tag) == "fieldset"))
+      )
+
+    hidden_input = hd(hd(first.children).children)
+    refute hidden_input._initial_form_state.disabled
+    [exempt, own] = Enum.filter(hd(second.children).children, &(&1.type == :element))
+    refute exempt._initial_form_state.disabled
+    assert own._initial_form_state.disabled
+
+    [_, _, _, _, label, progress, meter_label, meter, _, _] =
+      Enum.filter(first.children, &(&1.type == :element))
+
+    assert label._initial_label_control == progress._selector_id
+    assert meter_label._initial_label_control == meter._selector_id
+    refute Map.has_key?(progress, :_initial_form_state)
+    refute Map.has_key?(meter, :_initial_form_state)
+    assert {:ok, %{children: [first, second]}} = Style.compute_detailed(dom)
+
+    [_, later, body, nested, _label, progress, _meter_label, meter, radio_a, radio_b] =
+      Enum.filter(first.children, &(&1.type == :element))
+
+    for node <- [hd(later.children), body, hd(hd(nested.children).children)] do
+      assert node.style.color == {1, 0, 0}
+      assert node.style._form_control.initial_state.disabled
+      refute Map.has_key?(node.style._form_control.attributes, "disabled")
+    end
+
+    assert progress.style._gauge.position == 0.5
+    assert meter.style._gauge.position == 0.75
+    refute Map.has_key?(progress, :_initial_form_state)
+    refute Map.has_key?(meter, :_initial_form_state)
+    assert radio_a.style._form_control.initial_state.indeterminate
+    assert radio_b.style._form_control.initial_state.indeterminate
+    [exempt, own] = Enum.filter(hd(second.children).children, &(&1.type == :element))
+    assert exempt.style.color == {0, 0, 1}
+    assert own.style.color == {1, 0, 0}
   end
 end

@@ -617,7 +617,38 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
             nil
         end
 
-      {:ok, %{units_per_em: units, underline: underline, strike: strike}}
+      average_width =
+        case table(data, tables, "OS/2") do
+          {:ok, os2} ->
+            case read_i16(os2, 2) do
+              {:ok, width} when width > 0 -> width
+              _ -> nil
+            end
+
+          :error ->
+            nil
+        end
+
+      max_width =
+        case table(data, tables, "hhea") do
+          {:ok, hhea} ->
+            case read_u16(hhea, 10) do
+              {:ok, width} -> width
+              _ -> nil
+            end
+
+          :error ->
+            nil
+        end
+
+      {:ok,
+       %{
+         units_per_em: units,
+         underline: underline,
+         strike: strike,
+         average_width: average_width,
+         max_width: max_width
+       }}
     end
   end
 

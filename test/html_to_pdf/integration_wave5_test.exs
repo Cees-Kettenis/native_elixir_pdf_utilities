@@ -22,10 +22,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
     assert {:ok, "fix"} = Text.extract(pdf, layout: false)
     refute pdf =~ "Invisible"
 
+    legacy_dom = NativeElixirPdfUtilities.HtmlTreeHelpers.tree_content(dom)
+
     bad =
-      put_in(dom.children, [
+      put_in(legacy_dom.children, [
         %{
-          hd(dom.children)
+          hd(legacy_dom.children)
           | children: [%{type: :processing_instruction, target: "xml", data: ""}]
         }
       ])
@@ -115,6 +117,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
     assert_in_delta top - bottom, 40, 0.001
   end
 
+  test "fieldset disabledness preserves legend and root text values beside static clipped child controls" do
+    root =
+      "<fieldset disabled><legend><textarea name=legend rows=2 cols=8>Legend\nvalue</textarea></legend><textarea name=locked rows=2 cols=8>Locked\nvalue</textarea><meter value='.6' style='appearance:none'></meter></fieldset><textarea name=plain rows=2 cols=8>Plain\nvalue</textarea>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(root, forms: :interactive, compress_streams: false)
+    assert {:ok, context} = NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf)
+
+    assert {:ok, %{fields: fields}} =
+             NativeElixirPdfUtilities.Validators.FormValidator.inspect_document(context)
+
+    assert Enum.map(fields, &{&1.name, &1.value, &1.flags}) == [
+             {"legend", "Legend\nvalue", 4096},
+             {"locked", "Locked\nvalue", 4097},
+             {"plain", "Plain\nvalue", 4096}
+           ]
+
+    assert pdf =~ "/Shading << /Gauge"
+
+    child =
+      "<body style='margin:0;overflow:hidden'><fieldset disabled><legend>Child legend</legend><progress value='.5' style='appearance:none;width:35pt;height:10pt;display:block'></progress><textarea rows=2 cols=8 style='height:20pt;overflow:hidden'>Child line 1\nChild line 2\nChild line 3</textarea></fieldset></body>"
+
+    assert {:ok, child_pdf} =
+             HtmlToPdf.render(
+               "<iframe style='border:0;width:100pt;height:70pt' srcdoc='#{escape(child)}'></iframe>",
+               forms: :static,
+               compress_streams: false
+             )
+
+    assert {:ok, []} = Forms.fields(child_pdf)
+    assert {:ok, child_text} = Text.extract(child_pdf, layout: false)
+    assert child_text =~ "Child legend"
+    assert length(Regex.scan(~r{ re W n}, child_pdf)) >= 2
+  end
+
   test "nested glyph transport rejects private fields malformed GIDs transformed bounds and box budgets" do
     assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
     assert {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
@@ -182,11 +218,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
     end
   end
 
-  test "unsupported MathML HTML children inline SVG and child destinations return actionable failures" do
+  test "unsupported MathML HTML children and inline SVG diagnose while child destinations serialize" do
     for content <- [
           "<math><mtext><span style='background:red'>Painted</span></mtext></math>",
-          "<svg><text>SVG text</text></svg>",
-          "<a href='#target'>Jump</a><p id=target>Target</p>"
+          "<svg><text>SVG text</text></svg>"
         ] do
       html =
         "<iframe srcdoc='#{escape("<body style=\"overflow:hidden\">" <> content <> "</body>")}'></iframe>"
@@ -197,6 +232,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
       assert diagnostic.stage in [:layout, :style, :html]
       assert is_binary(diagnostic.source)
     end
+
+    child =
+      "<body style='overflow:hidden'><a href='#target'>Jump</a><p id=target>Target</p></body>"
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render("<iframe srcdoc='#{escape(child)}'></iframe>", forms: :static)
+
+    assert pdf =~ "/Dest ["
   end
 
   test "authorized exact font and PNG bytes pass the closed SVG backend into a local child image" do
@@ -311,10 +354,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
     assert {:error, {:unsupported_html, %{stage: :layout}}} =
              HtmlToPdf.render("<a href='#token'>Token</a><math><mi id=token>x</mi></math>")
 
-    assert {:error, {:unsupported_html, %{stage: :layout}}} =
+    assert {:ok, child_targets} =
              HtmlToPdf.render(
                "<p id=parent>Parent</p><iframe srcdoc='#{escape("<a href=#parent>Child cannot select parent</a><p id=parent>Child target</p>")}'></iframe>"
              )
+
+    assert child_targets =~ "/Dest ["
   end
 
   test "shared ID authority preserves logical table PI children and first scoped header selection" do
@@ -337,7 +382,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
       children: []
     }
 
-    nodes = HtmlValidator.assign_render_metadata([foreign | dom.children])
+    legacy_dom = NativeElixirPdfUtilities.HtmlTreeHelpers.tree_content(dom)
+    nodes = HtmlValidator.assign_render_metadata([foreign | legacy_dom.children])
     assert {:ok, prepared} = HtmlTableValidator.prepare_document(nodes)
     table = List.last(prepared)
     cells = Map.new(table._table_model.cells, &{&1.id, &1})
@@ -389,7 +435,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
     end
   end
 
-  test "group destinations remain diagnosed and public URL contexts cannot bypass option validation" do
+  test "canonical group destinations serialize and public URL contexts cannot bypass option validation" do
     text = %{
       type: :text,
       text: "Jump",
@@ -413,15 +459,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
 
     for box <- [
           group,
-          %{group | boxes: [%{type: :glyph_group, actual_text: "Jump", boxes: [text]}]},
-          Map.put(%{group | boxes: []}, :link_destination, {:xyz, 1, 1, 1})
+          %{group | boxes: [%{type: :glyph_group, actual_text: "Jump", boxes: [text]}]}
         ] do
-      assert {:error, {:unsupported_html, diagnostic}} =
-               PdfWriter.render([%{size: {100, 100}, boxes: [box]}])
-
-      assert diagnostic.stage == :pdf and diagnostic.operation == :write_pdf
-      assert diagnostic.message =~ "composition geometry"
+      assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box]}])
+      assert pdf =~ "/Dest ["
     end
+
+    assert {:error, {:unsupported_html, diagnostic}} =
+             PdfWriter.render([
+               %{
+                 size: {100, 100},
+                 boxes: [Map.put(%{group | boxes: []}, :link_destination, {:xyz, 1, 1, 1})]
+               }
+             ])
+
+    assert diagnostic.stage == :pdf and diagnostic.operation == :write_pdf
+    assert diagnostic.message =~ "composition geometry"
 
     urls = %{
       fallback_base: "file:///tmp/child.html",
@@ -472,6 +525,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
     assert {:ok, _} =
              HtmlToPdf.render(
                "<div contenteditable><math contenteditable=true><mi>x</mi></math></div>"
+             )
+  end
+
+  test "ordinary operators retain PI token text inside linked child artwork" do
+    child =
+      "<body style='overflow:hidden;margin:0'><a href='https://example.test/operator'>Child operator</a><math><mi>f<?marker?>i</mi><mo>+</mo><mn>1</mn><mo>=</mo><mn>2</mn></math><meter style='appearance:none' value='.6'></meter></body>"
+
+    html =
+      "<math><mn>3</mn><mo>+</mo><mn>4</mn></math><iframe style='border:0;width:180pt;height:70pt' srcdoc='#{escape(child)}'></iframe>"
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(html,
+               forms: :static,
+               system_font_discovery: false,
+               compress_streams: false
+             )
+
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    assert String.replace(text, ~r/\s/u, "") =~ "3+4Childoperatorfi+1=2"
+    refute text =~ "marker"
+    assert length(Regex.scan(~r{/ActualText}, pdf)) == 2
+    assert pdf =~ "/Shading << /Gauge"
+    assert {:ok, []} = Forms.fields(pdf)
+    assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+
+    assert [%{"A" => %{"URI" => {:string, "https://example.test/operator"}}}] =
+             for(
+               {_ref, %{value: %{"Subtype" => {:name, "Link"}} = link}} <- document.objects,
+               do: link
              )
   end
 

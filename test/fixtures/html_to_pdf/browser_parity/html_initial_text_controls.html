@@ -1,0 +1,37 @@
+<!doctype html><html><head><style>
+@page {size:340pt 420pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt;}
+body {padding:12pt;}
+p {margin:0 0 3pt;}
+input,textarea {display:block;margin:0 0 7.5pt;padding:1.5pt 2.25pt;border:.75pt solid #777777;
+ background:#ffffff;color:#222222;font-family:"DejaVu Sans Mono";font-size:10.5pt;line-height:13.5pt;}
+input {height:13.5pt;}
+</style></head><body>
+<p>Initial dimensions and whitespace</p>
+<input name=small size=9 value="Sized">
+<input name=empty size=18 placeholder="Empty input hint">
+<input name=secret type=password size=18 placeholder="Password hint">
+<input name=filled type=password size=9 value="Secret">
+<p>Textarea rows and columns</p>
+<textarea name=lines cols=24 rows=3>
+First  spaced line
+  Indented second
+Third line</textarea>
+<textarea name=hint cols=24 rows=2 placeholder="Textarea hint
+Second hint line"></textarea>
+<textarea name=ignored cols=12 rows=1 value="Unused fallback"></textarea>
+<textarea cols=16 rows=1 style="width:auto;height:auto;overflow:hidden">Automatic dimensions</textarea><p>After initial values</p>
+<div style="break-before:page">
+<p>Wrapping and clipping</p>
+<textarea name=soft cols=16 rows=3 style="overflow:hidden">Soft wrapping retains all spaces and wraps long words.</textarea>
+<textarea name=off cols=16 rows=2 wrap=OFF style="overflow:hidden">No wrapping is requested and this line extends beyond the viewport.
+Second visible row
+Hidden third row</textarea>
+<textarea name=hard cols=16 rows=2 wrap=hard style="overflow:hidden">Hard wrapping affects submission, while the initial value remains complete.</textarea>
+<textarea name=override cols=80 rows=9 wrap=off style="width:150pt;height:27pt;white-space:pre-wrap;overflow-wrap:break-word;overflow:hidden">CSS overrides dimensions and wrapping.</textarea>
+<p>After clipping</p>
+<textarea name=inline cols=16 rows=2 style="display:inline-block;overflow:hidden;position:relative;left:3pt">Inline control
+Second row
+Hidden inline row</textarea><span>Following inline caption</span>
+</div>
+</body></html>

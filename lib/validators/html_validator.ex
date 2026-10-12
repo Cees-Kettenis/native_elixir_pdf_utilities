@@ -14,9 +14,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   alias NativeElixirPdfUtilities.Limits
 
   @structural_tags ~w(html head body base style title meta script template)
-  @flow_container_tags ~w(form article aside div footer header main nav section address blockquote figure figcaption hgroup search center li dt dd details)
+  @flow_container_tags ~w(form article aside div footer header main nav section address blockquote figure figcaption hgroup search center li dt dd details fieldset)
   @block_tags @flow_container_tags ++
-                ~w(p h1 h2 h3 h4 h5 h6 ul ol dl dt pre listing xmp plaintext table img picture hr summary)
+                ~w(p h1 h2 h3 h4 h5 h6 ul ol dl dt pre listing xmp plaintext table img picture hr summary legend)
   @text_inline_tags ~w(iframe label noscript noembed u s strong b em i span a br wbr nobr abbr cite dfn data time code samp kbd tt var big small mark ins del strike)
   @form_control_tags ~w(input select textarea button)
   @text_input_types ~w(text search tel url email password)
@@ -1122,6 +1122,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     case Process.get(key) do
       nil ->
         Process.put(key, %{})
+        Process.delete({__MODULE__, :validated_dom})
 
         try do
           fun.()
@@ -1129,6 +1130,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           {:render_resource_limit, error} -> error
         after
           Process.delete(key)
+          Process.delete({__MODULE__, :validated_dom})
         end
 
       _budget ->
@@ -1140,15 +1142,23 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec reserve_render_resource(Limits.key(), non_neg_integer(), atom()) :: :ok
   def reserve_render_resource(limit, amount, stage) do
     key = {__MODULE__, :render_budget}
-    budget = Process.get(key, %{})
-    used = Map.get(budget, limit, 0) + amount
-    check_render_resource(limit, used, stage)
-    if Process.get(key) != nil, do: Process.put(key, Map.put(budget, limit, used))
+
+    case Process.get(key) do
+      nil ->
+        check_render_resource(limit, amount, stage)
+
+      budget ->
+        used = Map.get(budget, limit, 0) + amount
+        check_render_resource(limit, used, stage)
+        if amount != 0, do: Process.put(key, Map.put(budget, limit, used))
+    end
+
     :ok
   end
 
   @doc false
   @spec check_render_resource(Limits.key(), number(), atom()) :: :ok
+  @compile {:inline, check_render_resource: 3}
   def check_render_resource(limit, amount, stage) do
     case amount <= Limits.get(limit) do
       true ->
@@ -1237,6 +1247,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         false
 
       tag in ~w(progress meter) and tag in [context | ancestors] ->
+        false
+
+      tag == "legend" and context != "fieldset" ->
         false
 
       tag == "summary" and context != "details" ->
@@ -1340,7 +1353,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       context == "button" ->
         tag in @inline_tags or tag in ~w(img progress meter script template)
 
-      context == "summary" ->
+      context in ["summary", "legend"] ->
         tag in @inline_tags or tag in ~w(img h1 h2 h3 h4 h5 h6 script template)
 
       context in @table_content_tags ->
@@ -2115,6 +2128,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           (length(captions) == 1 and
              (hd(captions) == List.first(meaningful) or hd(captions) == List.last(meaningful)))
 
+      "caption" ->
+        descendants_exclude_html_tag?(children, "table")
+
       "table" ->
         table_children_valid?(children)
 
@@ -2156,16 +2172,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         _ ->
           false
       end
-    end) and noscript_free_descendants?(children)
+    end) and descendants_exclude_html_tag?(children, "noscript")
   end
 
   # Template fragments are separate trees, not descendants of their template.
-  defp noscript_free_descendants?(nodes) do
+  defp descendants_exclude_html_tag?(nodes, excluded_tag) do
     Enum.all?(nodes, fn node ->
       case node do
-        %{type: :element, tag: "noscript"} -> false
-        %{type: :element, children: children} -> noscript_free_descendants?(children)
-        _ -> true
+        %{type: :element, tag: tag, children: children} ->
+          not (tag == excluded_tag and Map.get(node, :namespace, :html) == :html) and
+            descendants_exclude_html_tag?(children, excluded_tag)
+
+        _ ->
+          true
       end
     end)
   end
@@ -2688,69 +2707,82 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec validate_html_processing_instruction(term()) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_html_processing_instruction(value) do
-    {node, stage, source} =
-      case value do
-        token when is_binary(token) ->
-          check_render_resource(:max_html_source_bytes, byte_size(token), :html)
-          reserve_render_resource(:max_html_tree_work, byte_size(token), :html)
+    with_render_budget(fn ->
+      {node, stage, source} =
+        case value do
+          token when is_binary(token) ->
+            check_render_resource(:max_html_source_bytes, byte_size(token), :html)
+            reserve_render_resource(:max_html_tree_work, byte_size(token), :html)
 
-          node =
-            case Regex.named_captures(@processing_instruction_token, token) do
-              %{"target" => target, "tail" => tail} ->
-                data = Regex.replace(~r/\A[ \t\n\f\r]+/, tail, "")
+            node =
+              case Regex.named_captures(@processing_instruction_token, token) do
+                %{"target" => target, "tail" => tail} ->
+                  data = Regex.replace(~r/\A[ \t\n\f\r]+/, tail, "")
 
-                data =
-                  if String.ends_with?(data, "?"),
-                    do: binary_part(data, 0, byte_size(data) - 1),
-                    else: data
+                  data =
+                    if String.ends_with?(data, "?"),
+                      do: binary_part(data, 0, byte_size(data) - 1),
+                      else: data
 
-                %{type: :processing_instruction, target: target, data: data}
+                  %{type: :processing_instruction, target: target, data: data}
 
-              _ ->
-                nil
-            end
+                _ ->
+                  nil
+              end
 
-          {node, :html, token}
+            {node, :html, token}
 
-        node when is_map(node) ->
-          {node, :style, "processing_instruction"}
+          node when is_map(node) ->
+            {node, :style, "processing_instruction"}
 
-        _ ->
-          {nil, :style, "processing_instruction"}
+          _ ->
+            {nil, :style, "processing_instruction"}
+        end
+
+      case valid_processing_instruction_node?(node) do
+        true ->
+          check_render_resource(
+            :max_html_source_bytes,
+            byte_size(node.target) + byte_size(node.data),
+            :html
+          )
+
+          {:ok, node}
+
+        false ->
+          Diagnostics.error(
+            stage,
+            if(stage == :html, do: :unsupported_html, else: :invalid_document),
+            "processing instructions require an ASCII letter or underscore target followed by letters, digits, hyphens or underscores, literal data and a > or ?> terminator; xml and xml-stylesheet declarations are unsupported",
+            module: __MODULE__,
+            source: source
+          )
       end
-
-    case valid_processing_instruction_node?(node) do
-      true ->
-        check_render_resource(
-          :max_html_source_bytes,
-          byte_size(node.target) + byte_size(node.data),
-          :html
-        )
-
-        {:ok, node}
-
-      false ->
-        Diagnostics.error(
-          stage,
-          if(stage == :html, do: :unsupported_html, else: :invalid_document),
-          "processing instructions require an ASCII letter or underscore target followed by letters, digits, hyphens or underscores, literal data and a > or ?> terminator; xml and xml-stylesheet declarations are unsupported",
-          module: __MODULE__,
-          source: source
-        )
-    end
+    end)
   end
 
   defp valid_processing_instruction_node?(node) do
     case node do
       %{type: :processing_instruction, target: target, data: data}
       when is_binary(target) and is_binary(data) ->
-        allowed_keys = [:type, :target, :data, :node_id, :source]
+        allowed_keys = [
+          :type,
+          :target,
+          :data,
+          :node_id,
+          :source,
+          :document_id,
+          :tree_scope_id,
+          :parent_id
+        ]
 
         String.valid?(target) and String.valid?(data) and
           Regex.match?(@processing_instruction_target, target) and
           String.downcase(target, :ascii) not in ["xml", "xml-stylesheet"] and
           not String.contains?(data, [">", <<0>>]) and not String.ends_with?(data, "?") and
           Enum.all?(Map.keys(node), &(&1 in allowed_keys)) and
+          NativeElixirPdfUtilities.Validators.HtmlTreeValidator.validate_node_metadata(node) ==
+            :ok and
           (not Map.has_key?(node, :node_id) or is_reference(node.node_id)) and
           case Map.fetch(node, :source) do
             :error ->
@@ -2759,6 +2791,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             {:ok, %{text: text, line: line, column: column} = source}
             when is_binary(text) and is_integer(line) and line > 0 and is_integer(column) and
                    column > 0 ->
+              reserve_render_resource(:max_html_tree_work, 2 * byte_size(text), :html)
+
               map_size(source) == 3 and String.valid?(text) and
                 case validate_html_processing_instruction(String.replace(text, ~r/\r\n?/, "\n")) do
                   {:ok, parsed} -> parsed.target == target and parsed.data == data
@@ -2961,6 +2995,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         {name, "hr", false} when name in ~w(align color height noshade size width) ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
+        {"align", "legend", false} ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
         {name, "details", false} when name in ~w(open name) ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
@@ -2981,7 +3018,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           {:cont, {:ok, Map.put(acc, name, value)}}
 
         {name, tag, false}
-        when tag in ~w(input select textarea button form label option optgroup progress meter) ->
+        when tag in ~w(input select textarea button form label option optgroup fieldset progress meter) ->
           case valid_form_attribute?(tag, name, value) do
             true -> {:cont, {:ok, Map.put(acc, name, value)}}
             false -> {:halt, {:error, :unsupported_html}}
@@ -3784,7 +3821,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         disabled? =
           if Map.get(node, :tag) == "option",
             do: Map.get(node, :_initial_option_disabled, Map.has_key?(attributes, "disabled")),
-            else: Map.has_key?(attributes, "disabled")
+            else:
+              Map.get(
+                Map.get(node, :_initial_form_state, Map.get(node, :initial_state, %{})),
+                :disabled,
+                Map.has_key?(attributes, "disabled")
+              )
 
         applicable? and if(state == :enabled, do: not disabled?, else: disabled?)
 
@@ -3842,7 +3884,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       {"textarea", name} when name in ["disabled", "readonly", "required"] ->
         true
 
-      {"button", "disabled"} ->
+      {tag, "disabled"} when tag in ["button", "fieldset"] ->
         true
 
       _ ->
@@ -3867,14 +3909,27 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       {"meter", name, _value} when name in ~w(value min max low high optimum) ->
         true
 
-      {tag, "form", _value} when tag in ~w(input select textarea button) ->
+      {tag, "form", _value} when tag in ~w(input select textarea button fieldset) ->
+        true
+
+      {"fieldset", name, _value} when name in ~w(name disabled) ->
         true
 
       {"input", "type", value} ->
         input_type(value) in @input_types
 
       {"input", name, _value}
-      when name in ["value", "name", "checked", "disabled", "readonly", "multiple", "required"] ->
+      when name in [
+             "value",
+             "name",
+             "checked",
+             "disabled",
+             "readonly",
+             "multiple",
+             "required",
+             "size",
+             "placeholder"
+           ] ->
         true
 
       {"select", name, _value} when name in ["name", "disabled", "required"] ->
@@ -3887,7 +3942,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         true
 
       {"textarea", name, _value}
-      when name in ["value", "name", "disabled", "readonly", "required"] ->
+      when name in [
+             "value",
+             "name",
+             "disabled",
+             "readonly",
+             "required",
+             "rows",
+             "cols",
+             "wrap",
+             "placeholder"
+           ] ->
         true
 
       {"button", "type", value} ->
@@ -3982,7 +4047,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         children == [] and type in @input_types and
           (not Map.has_key?(attributes, "checked") or type in ["checkbox", "radio"]) and
           (not Map.has_key?(attributes, "readonly") or type in @text_input_types) and
-          (not Map.has_key?(attributes, "multiple") or type == "email")
+          (not Map.has_key?(attributes, "multiple") or type == "email") and
+          (not Map.has_key?(attributes, "size") or type in @text_input_types) and
+          (not Map.has_key?(attributes, "placeholder") or type in @text_input_types)
 
       "select" ->
         Enum.all?(children, fn child ->
@@ -4389,7 +4456,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                    Map.get(layout_tree, :link_document_targets, []),
                    Map.get(layout_tree, :link_scope),
                    page_size
-                 ) do
+                 ),
+               :ok <- validate_fieldset_pagination_metadata(boxes) do
             :ok
           else
             {:error, {_reason, _diagnostic}} = error -> error
@@ -5075,13 +5143,36 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   defp validate_dom(node) do
-    case node do
-      %{type: :document, children: children} when is_list(children) ->
-        validate_render_tree(children)
-        validate_dom_nodes(children)
+    key = {__MODULE__, :validated_dom}
+    limits = Limits.effective()
+
+    case Process.get(key) do
+      {^node, ^limits, result} ->
+        result
 
       _ ->
-        :invalid_document
+        result =
+          case node do
+            %{type: :document, children: children} when is_list(children) ->
+              validate_render_tree(children)
+
+              with :ok <-
+                     NativeElixirPdfUtilities.Validators.HtmlTreeValidator.validate_transport(
+                       node
+                     ),
+                   do: validate_dom_nodes(children)
+
+            _ ->
+              :invalid_document
+          end
+
+        # Page-rule preparation and final styling share one immutable DOM.
+        # Reuse only exact successful input under the same current limits; options
+        # and all resource authorization remain independently validated.
+        if match?({:ok, _}, result) and Process.get({__MODULE__, :render_budget}) != nil,
+          do: Process.put(key, {node, limits, result})
+
+        result
     end
   end
 
@@ -5254,7 +5345,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                     )
                   else
                     if child_controls? or
-                         (tag in ~w(input select textarea button form label progress meter) and
+                         (tag in ~w(input select textarea button form label fieldset progress meter) and
                             Map.get(node, :namespace, :html) == :html),
                        do: {:ok, true},
                        else: {:ok, false}
@@ -5352,6 +5443,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             source: "base"
           )
 
+        node.tag == "caption" and
+            not valid_html_element?(node.tag, node.attributes, node.children) ->
+          Diagnostics.error(
+            :style,
+            :invalid_document,
+            "caption accepts flow content without descendant table elements; move the nested table outside the caption",
+            operation: :compute,
+            module: __MODULE__,
+            source: "caption"
+          )
+
         node.tag == "wbr" and not valid_html_element?(node.tag, node.attributes, node.children) ->
           Diagnostics.error(
             :style,
@@ -5378,7 +5480,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              "plaintext",
              "noembed",
              "progress",
-             "meter"
+             "meter",
+             "fieldset",
+             "legend"
            ] or
            parent in [
              "a",
@@ -5397,7 +5501,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              "plaintext",
              "noembed",
              "progress",
-             "meter"
+             "meter",
+             "fieldset",
+             "legend"
            ]) and
             not valid_html_child?(parent || :document, node.tag, ancestors) ->
           Diagnostics.error(
@@ -5792,6 +5898,69 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       _ ->
         false
+    end
+  end
+
+  defp validate_fieldset_pagination_metadata(boxes) do
+    paint_ids =
+      boxes
+      |> Enum.flat_map(fn box ->
+        case box do
+          %{fieldset_paint_id: id} -> [id]
+          _ -> []
+        end
+      end)
+      |> MapSet.new()
+
+    valid? =
+      Enum.all?(boxes, fn box ->
+        valid_fieldset_pagination_metadata?(box) and
+          Enum.all?(Map.get(box, :fieldset_ancestors, []), &MapSet.member?(paint_ids, &1))
+      end)
+
+    if valid? do
+      :ok
+    else
+      Diagnostics.error(
+        :pagination,
+        :invalid_layout,
+        "fieldset decoration requires reference IDs with matching paint boxes, numeric coordinates and ordered top/bottom bounds; image paints require a clip rectangle",
+        operation: :paginate,
+        module: __MODULE__,
+        source: "fieldset_paint_id"
+      )
+    end
+  end
+
+  defp valid_fieldset_pagination_metadata?(box) do
+    case box do
+      %{fieldset_ancestors: ancestors} when is_list(ancestors) ->
+        Enum.all?(ancestors, &is_reference/1) and
+          case Map.fetch(box, :fieldset_paint_id) do
+            :error ->
+              is_number(Map.get(box, :y))
+
+            {:ok, id} ->
+              is_reference(id) and id in ancestors and is_number(Map.get(box, :y)) and
+                Map.get(box, :type) in [:rect, :image] and
+                (Map.get(box, :type) != :image or
+                   match?(
+                     %{clip: %{x: x, width: width}}
+                     when is_number(x) and is_number(width) and width > 0,
+                     box
+                   )) and
+                case Map.get(box, :fieldset_bounds) do
+                  %{top: top, bottom: bottom} ->
+                    is_number(top) and is_number(bottom) and top > bottom
+
+                  _ ->
+                    false
+                end
+          end
+
+      # HtmlLinkValidator.validate_boxes/2 has already validated each box map.
+      box ->
+        not Map.has_key?(box, :fieldset_paint_id)
     end
   end
 

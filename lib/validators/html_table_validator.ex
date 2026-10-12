@@ -24,13 +24,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   def prepare_document(children) do
     HtmlValidator.with_render_budget(fn ->
       try do
-        {scopes, node_count} = table_preparation_scopes(children)
+        {scopes, node_count, explicit_scopes} = table_preparation_scopes(children)
 
         if MapSet.size(scopes) > 0 do
           HtmlValidator.reserve_render_resource(:max_table_model_work, node_count, :style)
 
           ids =
-            Enum.reduce(scopes, %{}, fn scope, ids ->
+            Enum.reduce(explicit_scopes, %{}, fn scope, ids ->
               Map.merge(ids, HtmlMetadataValidator.first_tree_ids(children, scope))
             end)
 
@@ -44,27 +44,29 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
     end)
   end
 
-  # Index each relevant logical scope once through the shared ID authority.
-  # The scope walk also retains the table model's original node-work charge.
-  defp table_preparation_scopes(nodes) do
-    Enum.reduce(nodes, {MapSet.new(), 0}, fn node, {scopes, count} ->
+  # Automatic associations use table slots, while explicit headers require the
+  # shared first-ID index. Collect both scopes and work in one traversal.
+  defp table_preparation_scopes(nodes, acc \\ {MapSet.new(), 0, MapSet.new()}) do
+    Enum.reduce(nodes, acc, fn node, {scopes, count, explicit_scopes} ->
       case node do
         %{type: :element, tag: tag, children: children} ->
-          scopes =
-            if tag in ["table", "td", "th", "col", "colgroup"] and
-                 Map.get(node, :namespace, :html) == :html,
-               do: MapSet.put(scopes, tree_scope(node)),
-               else: scopes
+          html? = Map.get(node, :namespace, :html) == :html
 
-          if tag == "template" and Map.get(node, :namespace, :html) == :html do
-            {scopes, count + 1}
-          else
-            {nested, work} = table_preparation_scopes(children)
-            {MapSet.union(scopes, nested), count + work + 1}
-          end
+          scopes =
+            if html? and tag in ["table", "td", "th", "col", "colgroup"],
+              do: MapSet.put(scopes, tree_scope(node)),
+              else: scopes
+
+          explicit_scopes =
+            if html? and tag in ["td", "th"] and Map.has_key?(node.attributes, "headers"),
+              do: MapSet.put(explicit_scopes, tree_scope(node)),
+              else: explicit_scopes
+
+          acc = {scopes, count + 1, explicit_scopes}
+          if tag == "template" and html?, do: acc, else: table_preparation_scopes(children, acc)
 
         _ ->
-          {scopes, count + 1}
+          {scopes, count + 1, explicit_scopes}
       end
     end)
   end
@@ -124,6 +126,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   defp attach_cell_semantics(nodes, cells) do
     Enum.map(nodes, fn node ->
       case node do
+        %{type: :element, tag: "table"} ->
+          # Nested tables already own their cell metadata and associations.
+          node
+
         %{type: :element, children: children} ->
           node =
             case Map.fetch(cells, node._document_order) do
@@ -556,6 +562,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   end
 
   defp scan_headers(principal, x, y, dx, dy, slots, cells, kinds) do
+    # Every scan reaches the leading row/column boundary. Reserve its exact slot
+    # visits before reading slots; opaque-header comparisons remain incremental.
+    visits = if x < 0 or y < 0, do: 0, else: if(dx == 0, do: y + 1, else: x + 1)
+
+    if visits > 0,
+      do: HtmlValidator.reserve_render_resource(:max_table_header_work, visits, :style)
+
     initial = %{
       headers: [],
       opaque: [],
@@ -571,11 +584,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
     if x < 0 or y < 0 do
       state
     else
-      HtmlValidator.reserve_render_resource(
-        :max_table_header_work,
-        1 + length(state.opaque),
-        :style
-      )
+      if state.opaque != [] do
+        HtmlValidator.reserve_render_resource(
+          :max_table_header_work,
+          length(state.opaque),
+          :style
+        )
+      end
 
       state =
         case Map.get(slots, {x, y}) do

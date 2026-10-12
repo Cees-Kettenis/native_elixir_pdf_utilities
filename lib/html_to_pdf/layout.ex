@@ -214,7 +214,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             independent? =
               Map.get(style, :position, :static) == :absolute or
                 parent_display in [:flex, :inline_flex, :grid, :inline_grid] or
-                Map.get(style, :overflow, :visible) != :visible
+                Map.get(style, :overflow, :visible) != :visible or
+                Map.get(style, :_fieldset, false) or Map.get(node, :tag) == "legend"
 
             if independent? do
               node
@@ -528,6 +529,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       %{type: :element, style: %{display: :none}} ->
         {:ok, [], y}
 
+      %{type: :element, style: %{_fieldset: true}} ->
+        layout_fieldset(block, x, y, width)
+
       %{type: :element, tag: "summary", style: %{display: :list_item} = style} ->
         layout_list_item(block, Map.get(style, :list_marker_type, :disc), 1, x, y, width)
 
@@ -663,6 +667,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                     box_height
                 end
 
+              content_boxes =
+                clip_control_contents(content_boxes, style, %{
+                  x: content_x,
+                  y: content_top - content_box_height,
+                  width: content_width,
+                  height: content_box_height
+                })
+
               background_box =
                 style
                 |> background_box(box_x, box_top - box_height, box_width, paint_height)
@@ -782,6 +794,249 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       _ ->
         {:error, :invalid_layout}
+    end
+  end
+
+  # The rendered legend occupies the top border allocation; the remaining
+  # children use an anonymous content box. Geometry and painting stay separate
+  # so a transparent legend cuts the border without erasing the background.
+  defp layout_fieldset(block, x, y, available_width) do
+    style = block.style
+    margin = Map.get(style, :margin, edges(0.0))
+    padding = Map.get(style, :padding, edges(0.0))
+    border = Map.get(style, :border_widths, edges(0.0))
+
+    minimum =
+      if Map.has_key?(style, :min_width),
+        do: 0.0,
+        else: fieldset_content_width(block.children, style, :min)
+
+    content_width =
+      max(
+        minimum,
+        resolved_content_size(
+          style,
+          :width,
+          available_width,
+          available_width - margin.left - margin.right - horizontal_box_size(style)
+        )
+      )
+
+    box_width = content_width + horizontal_box_size(style)
+    free_space = max(available_width - margin.left - margin.right - box_width, 0.0)
+
+    box_x =
+      x + margin.left +
+        case Map.get(style, :margin_inline_auto) do
+          %{left: true, right: true} -> free_space / 2
+          %{left: true, right: false} -> free_space
+          _ -> 0.0
+        end
+
+    box_top = y - margin.top
+    content_x = box_x + border.left + padding.left
+
+    {preceding, following} =
+      Enum.split_while(block.children, fn child ->
+        not (Map.get(child, :tag) == "legend" and
+               Map.get(Map.get(child, :style, %{}), :display) != :none and
+               Map.get(Map.get(child, :style, %{}), :position, :static) != :absolute)
+      end)
+
+    {legend, children} =
+      case following do
+        [legend | rest] -> {legend, preceding ++ rest}
+        [] -> {nil, preceding}
+      end
+
+    with {:ok, legend_boxes, legend_height, legend_rect} <-
+           layout_fieldset_legend(legend, content_x, box_top, content_width, border.top) do
+      reserved = max(border.top, legend_height)
+      spill = reserved - border.top
+
+      proxy_style =
+        style
+        |> Map.delete(:_fieldset)
+        |> Map.put(:display, :block)
+        |> Map.put(:box_sizing, :content_box)
+        |> Map.put(:width, content_width)
+        |> Map.put(:margin, %{margin | left: box_x - x, right: 0.0})
+        |> Map.delete(:margin_inline_auto)
+        |> Map.put(:border_widths, %{border | top: reserved})
+        |> Map.put(:border_styles, edges(:none))
+        |> Map.put(:background_color, nil)
+        |> Map.put(:background_image, nil)
+
+      proxy_style =
+        Enum.reduce([:height, :min_height, :max_height], proxy_style, fn property, acc ->
+          case resolved_content_size(style, property, nil, nil) do
+            value when is_number(value) -> Map.put(acc, property, max(value - spill, 0.0))
+            _ -> Map.delete(acc, property)
+          end
+        end)
+
+      proxy = %{block | style: proxy_style, children: children}
+
+      with {:ok, content_boxes, next_y} <- do_layout_block(proxy, x, y, available_width) do
+        total_height = box_top - next_y - margin.bottom
+        border_top = box_top - spill / 2
+        paint_height = max(total_height - spill / 2, 0.0)
+
+        background =
+          background_box(style, box_x, border_top - paint_height, box_width, paint_height)
+
+        background =
+          Enum.map(background, fn box ->
+            box = Map.put(box, :role, :fieldset)
+
+            case {box.type, legend_rect} do
+              {:rect, %{x: legend_x, width: legend_width}}
+              when legend_width > 0 and border.top > 0 and box.stroke_width > 0 ->
+                Map.put(box, :border_cutout, %{
+                  x: legend_x - box_x,
+                  y: -border.top,
+                  width: legend_width,
+                  height: border.top
+                })
+
+              _ ->
+                box
+            end
+          end)
+
+        paint_id = make_ref()
+
+        background =
+          Enum.map(background, fn box ->
+            box
+            |> Map.put(:fieldset_paint_id, paint_id)
+            |> Map.put(:fieldset_bounds, %{
+              top: border_top - box.y,
+              bottom: border_top - paint_height - box.y
+            })
+          end)
+
+        metadata = style |> break_metadata() |> Map.put(:flow_id, {:fieldset, box_x, box_top})
+        boxes = tag_boxes(background ++ legend_boxes ++ content_boxes, metadata)
+
+        boxes =
+          if background == [],
+            do: boxes,
+            else:
+              Enum.map(boxes, fn box ->
+                Map.update(box, :fieldset_ancestors, [paint_id], &[paint_id | &1])
+              end)
+
+        {:ok, boxes, next_y}
+      end
+    end
+  end
+
+  defp layout_fieldset_legend(legend, x, top, width, border_top) do
+    case legend do
+      nil ->
+        {:ok, [], 0.0, nil}
+
+      %{style: style} ->
+        margin = Map.get(style, :margin, edges(0.0))
+        intrinsic = fieldset_content_width(legend.children, style, :max)
+        minimum = fieldset_content_width(legend.children, style, :min)
+
+        content_width =
+          max(
+            if(Map.get(style, :width) in [nil, :auto], do: minimum, else: 0.0),
+            resolved_content_size(
+              style,
+              :width,
+              width,
+              min(
+                intrinsic,
+                max(width - horizontal_box_size(style) - margin.left - margin.right, 0.0)
+              )
+            )
+          )
+
+        box_width = content_width + horizontal_box_size(style)
+        free_space = max(width - box_width - margin.left - margin.right, 0.0)
+
+        offset =
+          case Map.get(style, :margin_inline_auto) do
+            %{left: true, right: true} ->
+              free_space / 2
+
+            %{left: true, right: false} ->
+              free_space
+
+            _ ->
+              case Map.get(style, :justify_self, :flex_start) do
+                :center -> free_space / 2
+                :flex_end -> free_space
+                _ -> 0.0
+              end
+          end
+
+        display =
+          case style.display do
+            value when value in [:flex, :inline_flex] -> :flex
+            value when value in [:grid, :inline_grid] -> :grid
+            _ -> :block
+          end
+
+        used_style =
+          style
+          |> Map.put(:display, display)
+          |> Map.put(:width, content_width)
+          |> Map.put(:box_sizing, :content_box)
+          |> Map.delete(:margin_inline_auto)
+
+        legend = %{legend | style: used_style}
+
+        with {:ok, boxes, next_y} <-
+               layout_block(legend, x + offset, top, box_width + margin.left + margin.right) do
+          height = top - next_y
+          shift = -max(border_top - height, 0.0) / 2
+          boxes = shift_layout_boxes(boxes, 0.0, shift)
+          {:ok, boxes, height, %{x: x + offset + margin.left, width: box_width}}
+        end
+    end
+  end
+
+  defp fieldset_content_width(children, style, kind) do
+    case inline_runs(children, style) do
+      {:ok, runs} ->
+        case kind do
+          :min ->
+            inline_minimum_content_width(runs)
+
+          :max ->
+            runs
+            |> inline_lines(nil, false)
+            |> Enum.map(&inline_line_width(&1, nil))
+            |> Enum.max(fn -> 0.0 end)
+        end
+
+      {:error, _} ->
+        Enum.reduce(children, 0.0, fn child, minimum ->
+          value =
+            case child do
+              %{style: %{display: :none}} ->
+                0.0
+
+              %{style: %{display: :image}} ->
+                flex_child_intrinsic_width(child)
+
+              %{style: child_style, children: nested} ->
+                intrinsic = fieldset_content_width(nested, child_style, kind)
+
+                resolved_content_size(child_style, :width, nil, intrinsic) +
+                  horizontal_box_size(child_style)
+
+              _ ->
+                flex_child_intrinsic_width(child)
+            end
+
+          max(minimum, value)
+        end)
     end
   end
 
@@ -1148,13 +1403,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         resolved_content_size(style, :height, Map.get(style, :_containing_height), nil)
       )
 
-    case Map.fetch(style, :embedded_document) do
-      {:ok, surface} ->
+    cond do
+      Map.has_key?(style, :embedded_document) ->
+        surface = style.embedded_document
         height = resolved_content_size(style, :height, Map.get(style, :_containing_height), 0.0)
 
         with {:ok, group} <- EmbeddedViewport.layout(surface, width, height) do
           group =
             group
+            |> Map.put(:role, :embedded_viewport_host)
             |> Map.put(:x, x)
             |> Map.put(:y, y - height)
             |> Map.put(:transform, {1, 0, 0, 1, x, y - height})
@@ -1163,7 +1420,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {:ok, [group], height}
         end
 
-      :error ->
+      Map.get(style, :_fieldset, false) ->
+        padding = Map.get(style, :padding, edges(0.0))
+        border = Map.get(style, :border_widths, edges(0.0))
+        used_style = style |> Map.put(:margin, edges(0.0)) |> Map.delete(:margin_inline_auto)
+
+        with {:ok, boxes, next_y} <-
+               layout_fieldset(
+                 %{type: :element, style: used_style, children: children},
+                 x - border.left - padding.left,
+                 y + border.top + padding.top,
+                 width + horizontal_box_size(style)
+               ) do
+          {:ok, boxes, y + border.top + padding.top - next_y - vertical_box_size(style)}
+        end
+
+      Map.get(style, :_fieldset_content_display) in [:flex, :grid] ->
+        display = style._fieldset_content_display
+
+        inner_style =
+          style
+          |> Map.drop([:width, :height, :min_height, :max_height, :min_width, :max_width])
+          |> Map.put(:display, display)
+          |> Map.put(:margin, edges(0.0))
+          |> Map.put(:padding, edges(0.0))
+          |> Map.put(:border_widths, edges(0.0))
+
+        result =
+          if display == :flex,
+            do: layout_flex(inner_style, children, x, y, width),
+            else: layout_grid(inner_style, children, x, y, width)
+
+        case result do
+          {:ok, boxes, next_y} -> {:ok, tag_boxes(boxes, metadata), y - next_y}
+          error -> error
+        end
+
+      true ->
         case inline_runs(children, style) do
           {:ok, runs} ->
             {boxes, content_height} = inline_text_boxes(runs, style, x, y, width, metadata)
@@ -1659,6 +1952,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       %{type: :element, style: %{display: :image} = style} ->
         {:ok, build_grid_image_item(style, index)}
+
+      %{type: :element, style: %{_fieldset: true} = style, children: children} ->
+        build_grid_block_item(style, children, index)
 
       %{type: :element, style: style, children: children} when is_list(children) ->
         case inline_runs(children, style) do
@@ -2510,6 +2806,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       %{type: :element, style: %{display: :image} = style} ->
         {:ok, build_flex_image_item(style, index, main_axis, available_main, available_cross)}
 
+      %{type: :element, style: %{_fieldset: true} = style, children: children} ->
+        build_flex_block_item(style, children, index, main_axis, available_main, available_cross)
+
       %{type: :element, style: style, children: children} when is_list(children) ->
         case inline_runs(children, style) do
           {:ok, runs} ->
@@ -3075,33 +3374,48 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp flex_block_item_boxes(item, style, padding, border_widths, children) do
-    case Map.get(style, :display) do
-      :table ->
-        nested_style = nested_flex_item_style(style, item)
+    case Map.get(style, :_fieldset, false) do
+      true ->
+        style = nested_flex_item_style(style, item)
 
-        with {:ok, boxes, _next_y} <-
-               layout_table(nested_style, children, item.x, item.y, item.box_width) do
-          {:ok, boxes}
+        with {:ok, boxes, _} <-
+               layout_fieldset(
+                 %{type: :element, style: style, children: children},
+                 item.x,
+                 item.y,
+                 item.box_width
+               ),
+             do: {:ok, boxes}
+
+      false ->
+        case Map.get(style, :display) do
+          :table ->
+            nested_style = nested_flex_item_style(style, item)
+
+            with {:ok, boxes, _next_y} <-
+                   layout_table(nested_style, children, item.x, item.y, item.box_width) do
+              {:ok, boxes}
+            end
+
+          display when display in [:grid, :inline_grid] ->
+            nested_style = nested_flex_item_style(style, item)
+
+            with {:ok, boxes, _next_y} <-
+                   layout_grid(nested_style, children, item.x, item.y, item.box_width) do
+              {:ok, boxes}
+            end
+
+          display when display in [:flex, :inline_flex] ->
+            nested_style = nested_flex_item_style(style, item)
+
+            with {:ok, boxes, _next_y} <-
+                   layout_flex(nested_style, children, item.x, item.y, item.box_width) do
+              {:ok, boxes}
+            end
+
+          _ ->
+            flex_plain_block_item_boxes(item, style, padding, border_widths, children)
         end
-
-      display when display in [:grid, :inline_grid] ->
-        nested_style = nested_flex_item_style(style, item)
-
-        with {:ok, boxes, _next_y} <-
-               layout_grid(nested_style, children, item.x, item.y, item.box_width) do
-          {:ok, boxes}
-        end
-
-      display when display in [:flex, :inline_flex] ->
-        nested_style = nested_flex_item_style(style, item)
-
-        with {:ok, boxes, _next_y} <-
-               layout_flex(nested_style, children, item.x, item.y, item.box_width) do
-          {:ok, boxes}
-        end
-
-      _ ->
-        flex_plain_block_item_boxes(item, style, padding, border_widths, children)
     end
   end
 
@@ -3743,40 +4057,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       nil ->
         {:ok, [], y}
 
-      %{style: style, children: caption_children} when is_list(caption_children) ->
-        with {:ok, runs} <- inline_runs(caption_children, style) do
-          margin =
-            Map.get(style, :margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
+      %{style: style} = caption ->
+        flow_metadata =
+          Map.merge(break_metadata(style), %{
+            flow_id: {:table_caption, table_id},
+            table_id: table_id
+          })
 
-          padding = Map.get(style, :padding, edges(0.0))
-          border_widths = Map.get(style, :border_widths, edges(0.0))
-          box_x = x + margin.left
-          box_top = y - margin.top
-          box_width = width - margin.left - margin.right
+        # Caption contents establish block formatting. Reuse ordinary block box
+        # sizing and flow instead of maintaining an inline-only caption path.
+        caption = %{caption | style: Map.put(style, :display, :block)}
 
-          content_x = box_x + border_widths.left + padding.left
-
-          content_width =
-            box_width - border_widths.left - padding.left - padding.right - border_widths.right
-
-          content_top = box_top - border_widths.top - padding.top
-
-          flow_metadata = %{flow_id: {:table_caption, table_id}, table_id: table_id}
-
-          {text_boxes, content_height} =
-            inline_text_boxes(runs, style, content_x, content_top, content_width, flow_metadata)
-
-          box_height =
-            border_widths.top + padding.top + content_height + padding.bottom +
-              border_widths.bottom
-
-          background_box =
-            style
-            |> background_box(box_x, box_top - box_height, box_width, box_height)
-            |> tag_boxes(flow_metadata)
-
-          {:ok, attach_html_target(style, background_box ++ text_boxes, box_x, box_top),
-           box_top - box_height - margin.bottom}
+        with {:ok, boxes, next_y} <- layout_block(caption, x, y, width) do
+          {:ok, tag_atomic_boxes(boxes, flow_metadata), next_y}
         end
     end
   end
@@ -5533,6 +5826,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
+  # Block and atomic inline controls share one viewport. Offscreen artwork
+  # must not enlarge a control's page allocation, while fields keep their value.
+  defp clip_control_contents(boxes, style, clip) do
+    if Map.get(style, :form_kind) in [:text, :textarea] do
+      if clip.width > 0 and clip.height > 0 do
+        Enum.flat_map(boxes, fn box ->
+          {top, bottom} = PageGeometry.box_vertical_bounds(box)
+
+          if top > clip.y and bottom < clip.y + clip.height do
+            [box |> Map.put(:clip, clip) |> Map.put(:out_of_flow, true)]
+          else
+            []
+          end
+        end)
+      else
+        []
+      end
+    else
+      boxes
+    end
+  end
+
   defp inline_run_boxes(run, x, line_top, baseline_y, width, metadata) do
     boxes =
       case run do
@@ -5660,6 +5975,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             {:error, _} -> [%{type: :layout_error}]
           end
 
+        %{type: :inline_block, style: %{_fieldset: true} = style, children: children} ->
+          top = baseline_y + Map.fetch!(run, :_inline_baseline_depth)
+          style = Map.put(style, :width, inline_block_content_width(run, width))
+
+          case layout_block(
+                 %{type: :element, style: style, children: children},
+                 x,
+                 top,
+                 inline_run_width(run, width)
+               ) do
+            {:ok, boxes, _} -> Enum.map(boxes, &Map.merge(&1, metadata))
+            {:error, _} -> [%{type: :layout_error}]
+          end
+
         %{type: :inline_block, style: style} ->
           margin = Map.get(style, :margin, edges(0.0))
           padding = Map.get(style, :padding, edges(0.0))
@@ -5685,6 +6014,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                   {:ok, group} ->
                     group =
                       group
+                      |> Map.put(:role, :embedded_viewport_host)
                       |> Map.put(:x, content_x)
                       |> Map.put(:y, content_top - content_height)
                       |> Map.put(
@@ -5724,7 +6054,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 end
             end
 
-          boxes = attach_html_target(style, background ++ content_boxes, box_x, box_top)
+          content_boxes =
+            clip_control_contents(content_boxes, style, %{
+              x: content_x,
+              y: content_top - content_height,
+              width: content_width,
+              height: content_height
+            })
+
+          boxes = background ++ content_boxes
+          boxes = attach_html_target(style, boxes, box_x, box_top)
 
           case Map.get(run, :inline_positioning_contexts, []) do
             [] ->
@@ -6842,7 +7181,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           Map.put(style, :_containing_height, Map.get(parent_style, :_inline_available_height))
 
         inline_children =
-          if display == :inline_block do
+          if display == :inline_block and not Map.get(style, :_fieldset, false) do
             inline_runs(
               children,
               Map.put(

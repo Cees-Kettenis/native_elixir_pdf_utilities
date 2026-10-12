@@ -21,7 +21,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert {:ok, reference_tree} = Style.compute_detailed(reference_dom)
     assert {:ok, reference} = Layout.layout(reference_tree, page_size: {180, 200}, margin: 10)
-    assert layout == reference
+    # Source identities differ across parses; painted geometry must match exactly.
+    assert %{layout | boxes: Enum.map(layout.boxes, &Map.delete(&1, :table_cell))} ==
+             %{reference | boxes: Enum.map(reference.boxes, &Map.delete(&1, :table_cell))}
+
     spanning = Enum.find(layout.boxes, &(Map.get(&1, :role) == :table_cell_background))
     assert spanning.height >= 51.0
     [a, b, c, d] = Enum.filter(layout.boxes, &(Map.get(&1, :text) in ~w(A B C D)))
@@ -7426,6 +7429,137 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       assert {:ok, layout} = Layout.layout(tree, page_size: {240, 120}, margin: 0)
       empty = Enum.find(layout.boxes, &(&1.type == :rect and &1.width == 105.0))
       assert empty.height < 18
+    end
+  end
+
+  test "fieldset intrinsic sizing retains authorized image artwork and generated content" do
+    image = "data:image/png;base64,#{Base.encode64(png_fixture())}"
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<style>fieldset::before{content:'Before';display:block}fieldset::after{content:'After';display:block}</style><fieldset><legend>Caption</legend><img src='#{image}' style='width:140pt;height:20pt'><p>Body</p></fieldset>"
+             )
+
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, %{boxes: boxes}} = Layout.layout(styled, page_size: {100, 180}, margin: 10)
+    border = Enum.find(boxes, &(Map.get(&1, :role) == :fieldset))
+    assert border.width >= 140
+    assert Enum.any?(boxes, &(&1.type == :image and &1.width == 140))
+    text = Enum.map_join(boxes, " ", &Map.get(&1, :text, ""))
+    for caption <- ~w(Caption Before Body After), do: assert(text =~ caption)
+  end
+
+  test "fieldset backend propagates failed nested block layout without dropping its content" do
+    for display <- ["block", "inline-block", "flex", "grid"] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<div><fieldset style='display:#{display}'><legend>Caption</legend><div><p>Content</p></div></fieldset></div>"
+               )
+
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      [outer] = styled.children
+      [fieldset] = outer.children
+      [legend, container] = fieldset.children
+      [paragraph] = container.children
+
+      paragraph = %{
+        paragraph
+        | style: paragraph.style |> Map.put(:font_size, nil) |> Map.put(:line_height, nil)
+      }
+
+      container = %{container | children: [paragraph]}
+
+      broken = %{
+        styled
+        | children: [%{outer | children: [%{fieldset | children: [legend, container]}]}]
+      }
+
+      assert Layout.layout(broken) == {:error, :invalid_layout}
+    end
+  end
+
+  test "fieldset reserves legend height and cuts only the border behind its fitted caption" do
+    html = """
+    <fieldset style='width:100pt;min-width:0;padding:4pt;border:3pt solid red;margin:0;font-size:10pt;line-height:12pt'>
+    <legend>Legend</legend><p style='margin:0'>Body</p></fieldset>
+    <p style='margin:0;font-size:10pt;line-height:12pt'>After</p>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, %{boxes: boxes}} = Layout.layout(styled, page_size: {200, 120}, margin: 10)
+    border = Enum.find(boxes, &(Map.get(&1, :role) == :fieldset))
+    legend = Enum.find(boxes, &(Map.get(&1, :text) == "Legend"))
+    body = Enum.find(boxes, &(Map.get(&1, :text) == "Body"))
+    after_text = Enum.find(boxes, &(Map.get(&1, :text) == "After"))
+    assert border.x == 10 and border.y == 75
+    assert border.width == 114 and border.height == 30.5
+    assert border.border_widths.top == 3
+    assert border.border_cutout.x == 7 and border.border_cutout.y == -3
+    assert border.border_cutout.height == 3
+    assert border.border_cutout.width > legend.width
+    assert legend.x == 18.5 and body.x == 17
+    assert_in_delta legend.y - body.y, 16, 0.0001
+    assert_in_delta body.y - after_text.y, 19, 0.0001
+  end
+
+  test "fieldset layout keeps zero, empty, author sizing, alignment and anonymous flex/grid boxes" do
+    for {fieldset_css, legend_css} <- [
+          {"", ""},
+          {"height:30pt", ""},
+          {"height:30pt;box-sizing:border-box", ""},
+          {"height:0;width:0;padding:0;border:0;min-width:0",
+           "font-size:0;line-height:0;padding:0"},
+          {"display:inline-block", ""},
+          {"display:inline", ""},
+          {"display:inline-flex", "display:flex"},
+          {"display:inline-grid", "display:grid"},
+          {"display:flex;gap:3pt", ""},
+          {"display:grid;grid-template-columns:1fr 1fr", ""},
+          {"margin-left:auto;margin-right:auto;width:100pt",
+           "margin-left:auto;margin-right:auto"},
+          {"margin-left:auto;width:100pt", "margin-left:auto"},
+          {"", "justify-self:center"},
+          {"", "justify-self:end"},
+          {"", "border:4pt groove blue;height:16pt;padding:3pt"},
+          {"border-top-width:30pt", ""},
+          {"", "position:relative;left:2pt;top:1pt"}
+        ] do
+      html =
+        "<div style='font-size:10pt;line-height:12pt'><fieldset style='#{fieldset_css}'><legend style='#{legend_css}'>Caption</legend><span>One</span><span>Two</span></fieldset><p style='margin:0'>After</p></div>"
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      assert {:ok, %{boxes: boxes}} = Layout.layout(styled, page_size: {240, 180}, margin: 10)
+      text = Enum.map_join(boxes, " ", &Map.get(&1, :text, ""))
+      assert text =~ "One" and text =~ "Two" and text =~ "After"
+      assert text =~ "Caption" or legend_css =~ "font-size:0"
+    end
+
+    for contents <- [
+          "",
+          "<legend></legend>",
+          "<legend style='display:none'>Hidden</legend><p>Body</p>",
+          "<legend>First</legend><legend>Second</legend>",
+          "<legend><h2>Heading</h2>Caption</legend><p>Body</p>",
+          "<legend style='position:absolute;top:0'>Positioned</legend><p>Body</p>"
+        ] do
+      assert {:ok, dom} = HtmlParser.parse_detailed("<fieldset>#{contents}</fieldset>")
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      assert {:ok, %{boxes: boxes}} = Layout.layout(styled)
+      refute Enum.any?(boxes, &(Map.get(&1, :text) == "Hidden"))
+    end
+
+    for display <- ["flex", "grid"] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<div style='display:#{display}'><fieldset><legend>Child</legend><p>Body</p></fieldset></div>"
+               )
+
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      assert {:ok, %{boxes: boxes}} = Layout.layout(styled)
+      assert Enum.any?(boxes, &(Map.get(&1, :role) == :fieldset))
+      assert Enum.any?(boxes, &(Map.get(&1, :text) == "Child"))
     end
   end
 end
