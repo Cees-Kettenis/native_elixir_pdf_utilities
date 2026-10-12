@@ -44,11 +44,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: dtolnay/rust-toolchain@1.90.0
+
       - name: Verify container runtime
         id: runtime
         run: |
           elixir --version
           elixir --version | grep -F "Elixir ${{ matrix.elixir }}."
+          cargo --version | grep -F "cargo 1.90.0 "
+          rustc --version | grep -F "rustc 1.90.0 "
           runtime_id="$(elixir -e 'IO.write("#{System.version()}-erts-#{:erlang.system_info(:version)}")')"
           echo "cache-key=${runtime_id}" >> "${GITHUB_OUTPUT}"
 
