@@ -4368,10 +4368,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec disclosure_children(map()) :: [map()]
   def disclosure_children(node) do
-    {preceding, rest} =
-      Enum.split_while(node.children, fn child ->
-        not (Map.get(child, :tag) == "summary" and Map.get(child, :namespace, :html) == :html)
-      end)
+    {preceding, rest} = disclosure_parts(node)
 
     {summary, body} =
       case rest do
@@ -4396,6 +4393,27 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     open? = Map.has_key?(node.attributes, "open")
     summary = Map.put(summary, :_disclosure_open, open?)
     [summary | if(open?, do: body, else: [])]
+  end
+
+  @doc false
+  @spec source_disclosure_children(map()) :: [map()]
+  def source_disclosure_children(node) do
+    {preceding, rest} = disclosure_parts(node)
+
+    case rest do
+      [summary | following] ->
+        preceding ++
+          [Map.put(summary, :_disclosure_open, Map.has_key?(node.attributes, "open")) | following]
+
+      [] ->
+        node.children
+    end
+  end
+
+  defp disclosure_parts(node) do
+    Enum.split_while(node.children, fn child ->
+      not (Map.get(child, :tag) == "summary" and Map.get(child, :namespace, :html) == :html)
+    end)
   end
 
   defp assign_selector_ids(
@@ -4452,6 +4470,96 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           node
       end
     end)
+  end
+
+  @doc false
+  @spec validate_source_style_input(term(), term(), term(), term()) ::
+          {:ok, boolean()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_source_style_input(dom, sources, budget, consumer) do
+    with {:ok, controls?} <-
+           prepare_style_input(
+             dom,
+             [],
+             NativeElixirPdfUtilities.HtmlToPdf.Font.normalize_options([])
+           ) do
+      valid_budget? =
+        try do
+          match?(%{size: 2, min: 0}, :atomics.info(budget))
+        rescue
+          ArgumentError -> false
+        end
+
+      cond do
+        not (is_list(sources) and Enum.all?(sources, &is_binary/1)) ->
+          Diagnostics.error(
+            :css,
+            :invalid_options,
+            "source stylesheets must be a list of CSS strings; file and URL references require separate resource policy",
+            module: __MODULE__,
+            source: "stylesheets"
+          )
+
+        not is_function(consumer, 3) ->
+          Diagnostics.error(
+            :css,
+            :invalid_options,
+            "source context consumer must accept the original node, pseudo-element and limited context",
+            module: __MODULE__,
+            source: "consumer"
+          )
+
+        not valid_budget? ->
+          Diagnostics.error(
+            :css,
+            :invalid_options,
+            "source contexts require the invocation's unsigned two-slot CSS budget",
+            module: __MODULE__,
+            source: "css_budget"
+          )
+
+        true ->
+          {:ok, controls?}
+      end
+    end
+  end
+
+  @doc false
+  @spec consume_source_style_context(function(), map(), atom() | nil, map()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def consume_source_style_context(consumer, node, pseudo, context) do
+    case consumer.(node, pseudo, context) do
+      :ok ->
+        :ok
+
+      {:error, {reason, diagnostic}} = error when is_atom(reason) and is_map(diagnostic) ->
+        error
+
+      _ ->
+        Diagnostics.error(
+          :css,
+          :invalid_options,
+          "source context consumer must return :ok or a shared diagnostic",
+          module: __MODULE__,
+          source: "consumer"
+        )
+    end
+  end
+
+  @doc false
+  @spec source_style_error(map(), term()) :: {:error, {atom(), Diagnostics.diagnostic()}}
+  def source_style_error(node, declaration) do
+    source = Map.get(node, :source, %{text: Map.get(node.attributes, "style", node.tag)})
+
+    Diagnostics.error(
+      :css,
+      :invalid_css,
+      "declaration/context policy failed for #{inspect(declaration)}; font metrics and resource policy have not been checked",
+      module: __MODULE__,
+      operation: :source_style_contexts,
+      source: source.text,
+      line: Map.get(source, :line),
+      column: Map.get(source, :column)
+    )
   end
 
   @doc false

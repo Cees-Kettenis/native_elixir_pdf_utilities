@@ -1889,6 +1889,106 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     end
   end
 
+  test "radicals resolve caller font bytes and device values and diagnose missing font data" do
+    {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    {:ok, _, source} = Font.resolve("math", 400, :normal, registry)
+    <<_::32, count::16, _::48, records::binary-size(count * 16), _::binary>> = source.data
+
+    tables =
+      Map.new(
+        for <<tag::binary-size(4), _::32, offset::32, length::32 <- records>>,
+          do: {tag, binary_part(source.data, offset, length)}
+      )
+
+    math = tables["MATH"]
+    <<_::32, constants_offset::16, _::binary>> = math
+    # These byte offsets are fixed OpenType MathConstants format invariants.
+    constants =
+      default_constants()
+      |> replace_bytes(188, <<100::signed-16>>)
+      |> replace_bytes(196, <<40::signed-16>>)
+      |> replace_bytes(200, <<10::signed-16>>)
+      |> replace_bytes(204, <<-50::signed-16>>)
+      |> replace_bytes(208, <<-400::signed-16>>)
+
+    changed = replace_bytes(math, constants_offset, constants)
+
+    for {data, expected} <- [
+          {changed, {:ok, 0.8}},
+          {math_table(
+             replace_bytes(constants, 198, <<214::16>>) <> <<27::16, 27::16, 1::16, 0x4000::16>>
+           ), {:ok, 1.55}},
+          {math_table(replace_bytes(constants, 198, <<214::16>>) <> <<1::16, 2::16, 0x8000::16>>),
+           :variation},
+          {nil, :missing}
+        ] do
+      caller_tables = if data, do: Map.put(tables, "MATH", data), else: Map.delete(tables, "MATH")
+      font = %{source | data: ttf_fixture(caller_tables)}
+
+      style = %{
+        display: :block,
+        font_face: font,
+        font_size: 20,
+        line_height: 24,
+        color: {0, 0, 1},
+        math_style: :compact
+      }
+
+      space = %{
+        type: :element,
+        namespace: :mathml,
+        tag: "mspace",
+        style: style,
+        children: [],
+        attributes: %{"width" => "3pt", "height" => "5pt"}
+      }
+
+      node = %{
+        type: :element,
+        namespace: :mathml,
+        tag: "msqrt",
+        style: style,
+        children: [space],
+        attributes: %{}
+      }
+
+      case expected do
+        {:ok, thickness} ->
+          assert {:ok, prepared} = MathLayoutValidator.prepare_element(node, %{})
+          assert_in_delta prepared.rule_thickness, thickness, 1.0e-10
+          assert prepared.gap == 2.0 and prepared.extra_ascender == 0.2
+          assert prepared.kern_before == 0.0 and prepared.kern_after == -8.0
+
+          if data == changed do
+            assert {:ok, measured} = MathLayout.measure(node)
+            assert hd(measured.glyphs).font_face.data == font.data
+            assert measured.ascent == 8.0
+
+            assert {:error, {:unsupported_glyph, diagnostic}} =
+                     MathLayout.measure(%{
+                       node
+                       | style: %{
+                           style
+                           | font_face: %{font | cmap: Map.delete(font.cmap, 0x221A)}
+                         }
+                     })
+
+            assert diagnostic.source == "√" and diagnostic.operation == :measure_math
+          else
+            # This valid caller face deliberately has no stretch construction.
+            assert {:error, {:unsupported_glyph, diagnostic}} = MathLayout.measure(node)
+            assert diagnostic.message =~ "no vertical stretch construction"
+          end
+
+        _ ->
+          assert {:error, {_, diagnostic}} = MathLayout.measure(node)
+          assert diagnostic.stage == if(expected == :variation, do: :layout, else: :font)
+          assert diagnostic.operation == :measure_math
+          assert diagnostic.message =~ if(expected == :variation, do: "variation", else: "MATH")
+      end
+    end
+  end
+
   test "fractions resolve caller MATH constants and diagnose unsupported variation values" do
     constants = replace_bytes(default_constants(), 12, <<250::signed-16>>)
     constants = replace_bytes(constants, 144, <<40::signed-16>>)

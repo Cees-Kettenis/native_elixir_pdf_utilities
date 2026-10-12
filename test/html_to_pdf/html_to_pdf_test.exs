@@ -1060,7 +1060,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
 
     for tag <-
-          ~w(msqrt mroot msup msub msubsup mover munder munderover mmultiscripts mstyle merror mpadded mphantom mtable semantics annotation annotation-xml maction unknown-math) do
+          ~w(msup msub msubsup mover munder munderover mmultiscripts mstyle merror mpadded mphantom mtable semantics annotation annotation-xml maction unknown-math) do
       assert {:error, {:unsupported_html, diagnostic}} =
                HtmlToPdf.render("<math><#{tag}/></math>")
 

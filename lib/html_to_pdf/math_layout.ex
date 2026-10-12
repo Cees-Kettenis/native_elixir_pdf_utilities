@@ -8,7 +8,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
   alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
 
   @doc """
-  Measures styled MathML tokens, operators, rows and fractions after preparation.
+  Measures styled MathML tokens, operators, rows, fractions and radicals after preparation.
 
   Coordinates are points relative to the alphabetic baseline, with positive y
   upwards. Layout and ink extents are separate. Drawing items retain the selected
@@ -134,6 +134,120 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             glyphs: positioned.(:glyphs),
             drawing_items: rule ++ positioned.(:drawing_items),
             actual_text: numerator.actual_text <> denominator.actual_text
+          }
+
+        %{kind: :radical} ->
+          base = measure_prepared(prepared.base)
+          index = if prepared.index, do: measure_prepared(prepared.index)
+
+          resolved =
+            case MathLayoutValidator.prepare_radical_stretch(prepared, base) do
+              {:ok, resolved} -> resolved
+              {:error, _} = error -> throw({:math_layout_error, error})
+            end
+
+          surd = stretch_geometry(resolved.shape)
+          thickness = prepared.rule_thickness
+
+          ascent =
+            max(base.ascent, base.ink_ascent + prepared.gap + thickness + prepared.extra_ascender)
+
+          descent =
+            max(base.descent, surd.ascent + surd.descent + prepared.extra_ascender - ascent)
+
+          surd_y = ascent - prepared.extra_ascender - surd.ascent
+
+          {shift, offsets, width, minimum, maximum, final_ascent, final_descent} =
+            if index do
+              shift = prepared.kern_before + index.width + max(-index.width, prepared.kern_after)
+              raise = prepared.degree_raise * (ascent + descent)
+              index_y = -descent + raise + index.descent
+
+              {shift, [{base, shift + surd.width, 0.0}, {index, prepared.kern_before, index_y}],
+               shift + surd.width + base.width,
+               prepared.kern_before + index.min_content_width +
+                 max(-index.min_content_width, prepared.kern_after) + resolved.intrinsic_width +
+                 base.min_content_width,
+               prepared.kern_before + index.max_content_width +
+                 max(-index.max_content_width, prepared.kern_after) + resolved.intrinsic_width +
+                 base.max_content_width, max(ascent, -descent + raise + index.ascent),
+               max(descent, descent - raise + index.ascent)}
+            else
+              {0.0, [{base, surd.width, 0.0}], surd.width + base.width,
+               resolved.intrinsic_width + base.min_content_width,
+               resolved.intrinsic_width + base.max_content_width, ascent, descent}
+            end
+
+          surd_glyphs =
+            Enum.map(surd.glyphs, fn glyph ->
+              glyph
+              |> Map.put(:x, glyph.x + shift)
+              |> Map.put(:y, glyph.y + surd_y)
+              |> Map.put(:color, prepared.style.color)
+            end)
+
+          # The generated radical has no authored character. Suppress only its
+          # extraction while retaining the original base/index groups in DOM order.
+          group = make_ref()
+
+          surd_items =
+            Enum.map(
+              surd_glyphs,
+              &Map.merge(&1, %{kind: :glyph, logical_group: group, logical_text: ""})
+            )
+
+          rule =
+            if thickness > 0 and base.width > 0 do
+              [
+                %{
+                  kind: :native,
+                  x: 0.0,
+                  y: 0.0,
+                  box: %{
+                    type: :rect,
+                    x: shift + surd.width,
+                    y: ascent - prepared.extra_ascender - thickness,
+                    width: base.width,
+                    height: thickness,
+                    fill_color: prepared.style.color,
+                    stroke_color: nil,
+                    stroke_width: 0.0,
+                    border_radius: 0.0,
+                    snap_to_css_pixel_grid: false
+                  }
+                }
+              ]
+            else
+              []
+            end
+
+          positioned = fn field ->
+            Enum.flat_map(offsets, fn {child, x, y} ->
+              Enum.map(Map.fetch!(child, field), &%{&1 | x: &1.x + x, y: &1.y + y})
+            end)
+          end
+
+          %{
+            width: width,
+            min_content_width: minimum,
+            max_content_width: maximum,
+            ascent: final_ascent,
+            descent: final_descent,
+            ink_ascent:
+              Enum.max([
+                ascent - prepared.extra_ascender
+                | Enum.map(offsets, fn {child, _, y} -> child.ink_ascent + y end)
+              ]),
+            ink_descent:
+              Enum.max([
+                surd.descent - surd_y
+                | Enum.map(offsets, fn {child, _, y} -> child.ink_descent - y end)
+              ]),
+            italic_correction: 0.0,
+            top_accent_attachment: nil,
+            glyphs: surd_glyphs ++ positioned.(:glyphs),
+            drawing_items: rule ++ surd_items ++ positioned.(:drawing_items),
+            actual_text: base.actual_text <> if(index, do: index.actual_text, else: "")
           }
 
         %{kind: :operator} ->

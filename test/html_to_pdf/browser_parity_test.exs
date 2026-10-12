@@ -7,6 +7,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
 
   @fixtures_dir Path.expand("../fixtures/html_to_pdf/browser_parity", __DIR__)
   @real_fixtures_dir Path.expand("../fixtures/html_to_pdf", __DIR__)
+  @radical_reference_dir Path.expand("../fixtures/mathml_radical_reference", __DIR__)
 
   @furniture_image "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjAiIGhlaWdodD0iNDAiPjxyZWN0IHdpZHRoPSIxMjAiIGhlaWdodD0iNDAiIGZpbGw9IiMxZDRlZDgiLz48L3N2Zz4="
   @page_furniture_header """
@@ -182,6 +183,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     assert text =~ "11Link"
   end
 
+  @tag :math_radicals
+  test "approved fixed radical CSS artwork restores the authored tree and preserves native text and links" do
+    html = File.read!(Path.join(@fixtures_dir, "mathml_radicals.html"))
+    adjusted = math_radical_core_reference(html)
+
+    manifest =
+      :json.decode(File.read!(Path.join(@radical_reference_dir, "reference-manifest.json")))
+
+    assert manifest["native_or_browser_geometry_inputs"] == false
+    assert manifest["empirical_offsets"] == []
+    assert manifest["new_outer_radical_display_overrides"] == 4
+
+    assert manifest["unchanged_thresholds"] == %{
+             "max_changed_ratio" => 0.01,
+             "max_average_delta" => 0.01,
+             "dpi" => 72,
+             "pixel_channel_tolerance" => 12
+           }
+
+    restored = String.replace(adjusted, manifest["font_stylesheet"], "", global: false)
+
+    restored =
+      Enum.reduce(manifest["records"], restored, fn record, document ->
+        assert length(:binary.matches(document, record["reference_fragment"])) == 1
+
+        String.replace(document, record["reference_fragment"], record["original_fragment"],
+          global: false
+        )
+      end)
+
+    assert restored == html
+    assert adjusted =~ ~s(<msqrt><mtext><a href="https://radical.test/">Link</a></mtext></msqrt>)
+    assert length(Regex.scan(~r/<math\b/, adjusted)) == 5
+    assert length(Regex.scan(~r/data-m4-text=/, adjusted)) == 16
+
+    assert Enum.map(manifest["records"], &hd(&1["geometry"]["glyphs"])["gid"]) ==
+             [1657, 1657, 1657, 1660]
+
+    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html)
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
+
+    assert String.replace(text, ~r/\s/u, "") ==
+             "Small2end.Medium163end.Large7+9end.Nested1235end.LinkedLinkend."
+
+    assert pdf =~ "https://radical.test/"
+    refute text =~ "√"
+  end
+
   @fixture_thresholds [
     {"html_svg_stylesheet_cascade.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_fractions.html",
@@ -189,6 +238,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
      max_changed_ratio: 0.01,
      max_average_delta: 0.01},
     {"mathml_fractions_ordinary.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_radicals.html",
+     chromium_transform: &__MODULE__.math_radical_core_reference/1,
+     max_changed_ratio: 0.01,
+     max_average_delta: 0.01},
     {"mathml_html_children.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_geometry.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_opacity_groups.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
@@ -543,6 +596,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
       end)
 
     String.replace(html, "</head>", css <> "</head>", global: false)
+  end
+
+  @doc "Uses the approved fixed four-root CSS artwork comparison, with the original tree retained for native rendering."
+  @spec math_radical_core_reference(String.t()) :: String.t()
+  def math_radical_core_reference(html) do
+    true =
+      Base.encode16(:crypto.hash(:sha256, html), case: :lower) ==
+        "cc76de79b7b35335a26c78ffe0efa09a5832b31cc5f6798d72365602ce042666"
+
+    reference = File.read!(Path.join(@radical_reference_dir, "reference.html"))
+
+    true =
+      Base.encode16(:crypto.hash(:sha256, reference), case: :lower) ==
+        "dee328c2a651e5f0c8770658e71055d1b4606dbbf39c4259dfedd376fd89d070"
+
+    reference
   end
 
   @doc "Replaces only explicitly marked script glyph artwork with the approved source-font aliases."
@@ -1136,6 +1205,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
       do: @tag(:math_fractions)
 
     if fixture_name == "mathml_fractions_ordinary.html", do: @tag(:math_fraction_ordinary)
+
+    if fixture_name == "mathml_radicals.html", do: @tag(:math_radicals)
 
     if fixture_name == "mathml_html_children.html", do: @tag(:math_html_children)
     @tag math_tokens: fixture_name in ["mathml_token_defaults.html", "mathml_tokens_rows.html"]

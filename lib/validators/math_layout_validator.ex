@@ -8,7 +8,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.MathOperatorValidator
 
-  @rendered_elements ~w(math mi mn mo mtext ms mspace mrow mfrac)
+  @rendered_elements ~w(math mi mn mo mtext ms mspace mrow mfrac msqrt mroot)
 
   @doc false
   @spec validate_flow_geometry([term()], number(), number()) ::
@@ -156,6 +156,11 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     }
     |> then(fn defaults ->
       defaults =
+        if node.tag in ["msqrt", "mroot"],
+          do: Map.put(defaults, :math_shift, :compact),
+          else: defaults
+
+      defaults =
         if node.tag == "mfrac",
           do: Map.put(defaults, :padding, %{top: 0.0, right: 0.75, bottom: 0.0, left: 0.75}),
           else: defaults
@@ -182,6 +187,14 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   @spec schema_child_defaults(map(), map(), [map()]) :: map()
   def schema_child_defaults(node, inherited, ancestors) do
     case ancestors do
+      [%{namespace: :mathml, tag: "mroot", children: children} | _] ->
+        first = Enum.find(children, &(Map.get(&1, :type) == :element))
+
+        if first != nil and Map.has_key?(node, :_selector_id) and
+             Map.get(first, :_selector_id) != Map.get(node, :_selector_id),
+           do: %{math_depth: Map.get(inherited, :math_depth, 0) + 2, math_style: :compact},
+           else: %{}
+
       [%{namespace: :mathml, tag: "mfrac", children: children} | _] ->
         elements = Enum.filter(children, &(Map.get(&1, :type) == :element))
         second = Enum.at(elements, 1)
@@ -604,9 +617,28 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
             true ->
               with {:ok, row} <- prepare_row_children(node, context) do
-                if tag == "mfrac" and length(row.children) == 2,
-                  do: prepare_fraction(row, attributes),
-                  else: {:ok, row}
+                cond do
+                  tag == "mfrac" and length(row.children) == 2 ->
+                    prepare_fraction(row, attributes)
+
+                  tag == "msqrt" ->
+                    prepare_radical(
+                      %{
+                        row
+                        | style:
+                            Map.drop(style, [:width, :height, :padding, :border_widths, :margin])
+                      },
+                      nil,
+                      style
+                    )
+
+                  tag == "mroot" and length(row.children) == 2 ->
+                    [base, index] = row.children
+                    prepare_radical(base, index, style)
+
+                  true ->
+                    {:ok, row}
+                end
               end
           end
         end
@@ -614,6 +646,91 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
       _ ->
         failure(
           "math preparation requires styled MathML nodes; non-token HTML children need a later composition batch"
+        )
+    end
+  end
+
+  # Core 3.3.3 resolves the selected face's values before geometry consumes them.
+  defp prepare_radical(base, index, style) do
+    mode = Map.get(style, :math_style, :normal)
+
+    if mode in [:normal, :compact] and style.font_size <= Limits.get(:max_css_numeric_magnitude) do
+      with {:ok, metrics} <- Font.math_metrics(style.font_face) do
+        gap =
+          if mode == :compact,
+            do: :radical_vertical_gap,
+            else: :radical_display_style_vertical_gap
+
+        names = [
+          gap,
+          :radical_rule_thickness,
+          :radical_extra_ascender,
+          :radical_kern_before_degree,
+          :radical_kern_after_degree
+        ]
+
+        FontValidator.reserve(:max_font_math_work, length(names))
+
+        values =
+          Enum.reduce_while(names, {:ok, []}, fn name, {:ok, values} ->
+            case prepare_value(Map.fetch!(metrics.constants, name), style.font_size) do
+              {:ok, {value, pixels}} ->
+                {:cont,
+                 {:ok, values ++ [value * style.font_size / metrics.units_per_em + pixels]}}
+
+              error ->
+                {:halt, error}
+            end
+          end)
+
+        with {:ok, [gap, thickness, extra, before_degree, after_degree]} <- values do
+          if thickness > 0,
+            do: HtmlValidator.reserve_render_resource(:max_layout_boxes, 1, :layout)
+
+          {:ok,
+           %{
+             kind: :radical,
+             base: base,
+             index: index,
+             style: style,
+             gap: gap,
+             rule_thickness: max(thickness, 0.0),
+             extra_ascender: extra,
+             kern_before: max(before_degree, 0.0),
+             kern_after: after_degree,
+             degree_raise: metrics.constants.radical_degree_bottom_raise_percent / 100
+           }}
+        end
+      end
+    else
+      failure("radicals require a bounded font size and normal or compact math-style")
+    end
+  end
+
+  @doc false
+  @spec prepare_radical_stretch(term(), term()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_radical_stretch(prepared, measured) do
+    case {prepared, measured} do
+      {%{
+         kind: :radical,
+         style: %{font_face: font, font_size: size},
+         gap: gap,
+         rule_thickness: thickness
+       }, %{ink_ascent: ascent, ink_descent: descent}}
+      when is_number(ascent) and is_number(descent) and is_number(gap) and is_number(thickness) ->
+        target = max(thickness + gap + ascent + descent, 0.0)
+
+        with {:ok, base} <- prepare_glyph("√", font, size, []),
+             {:ok, shape} <-
+               prepare_stretch("√", font, size, :vertical, target, []) do
+          construction = Map.fetch!(base.source.metrics.variants.vertical, base.glyph_id)
+          {:ok, %{shape: shape, intrinsic_width: preferred_vertical_width(base, construction)}}
+        end
+
+      _ ->
+        failure(
+          "radical stretching requires validator-prepared radical state and measured base ink"
         )
     end
   end
@@ -1182,15 +1299,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                  ) do
             preferred =
               if operator.stretch_axis == :vertical do
-                ids =
-                  [base.glyph_id] ++
-                    Enum.map(construction.variants, & &1.glyph) ++
-                    case construction.assembly do
-                      %{parts: parts} -> Enum.map(parts, & &1.glyph)
-                      _ -> []
-                    end
-
-                Enum.max(Enum.map(ids, &(elem(base.source.advances, &1) * scale)))
+                preferred_vertical_width(base, construction)
               else
                 base.advance * scale
               end
@@ -1231,6 +1340,20 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     end
   end
 
+  defp preferred_vertical_width(base, construction) do
+    scale = base.font_size / base.units_per_em
+
+    ids =
+      [base.glyph_id] ++
+        Enum.map(construction.variants, & &1.glyph) ++
+        case construction.assembly do
+          %{parts: parts} -> Enum.map(parts, & &1.glyph)
+          _ -> []
+        end
+
+    Enum.max(Enum.map(ids, &(elem(base.source.advances, &1) * scale)))
+  end
+
   defp resolve_operator_size(value, natural) do
     case value do
       {:percentage, number} -> natural * (number / 100)
@@ -1240,7 +1363,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
   defp validate_box_style(tag, style) do
     unsupported? =
-      (tag in ["math", "mrow", "mspace", "mfrac"] and not Map.get(style, :_math_formatting, true)) or
+      (tag in ["math", "mrow", "mspace", "mfrac", "msqrt", "mroot"] and
+         not Map.get(style, :_math_formatting, true)) or
         Map.get(style, :link_url) != nil or Map.get(style, :link_destination) != nil or
         (tag != "math" and Map.get(style, :html_target) != nil) or
         Map.get(style, :position, :static) != :static or
@@ -1251,7 +1375,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
           value != nil and
             (not is_number(value) or
-               (tag == "mfrac" and (value < 0 or value > Limits.get(:max_css_numeric_magnitude))))
+               (tag in ["mfrac", "msqrt", "mroot"] and
+                  (value < 0 or value > Limits.get(:max_css_numeric_magnitude))))
         end) or
         Enum.any?(
           [:min_width, :max_width, :min_height, :max_height],

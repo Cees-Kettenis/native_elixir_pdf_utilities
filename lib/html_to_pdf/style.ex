@@ -21,6 +21,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Validators.CssValueValidator
   alias NativeElixirPdfUtilities.Validators.FormValidator
   alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlLinkValidator
@@ -72,18 +73,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     "#PilGi"
   ]
 
-  @border_styles [
-    :none,
-    :hidden,
-    :dotted,
-    :dashed,
-    :solid,
-    :double,
-    :groove,
-    :ridge,
-    :inset,
-    :outset
-  ]
   @medium_border_width 2.25
   @rem_opaque_style_keys [
     :_font_registry,
@@ -306,24 +295,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                   |> Keyword.put(:__image_budget__, image_budget)
                   |> Keyword.put(:__link_context__, link_context)
 
-                base_style = %{
-                  _custom_properties: %{},
-                  _font_registry: font_registry,
-                  _root_font_size: 12.0,
-                  color: {0, 0, 0},
-                  font_face: font_face,
-                  font_families: font_families,
-                  font_family: font_face.family,
-                  font_size: 12.0,
-                  font_style: :normal,
-                  font_weight: 400,
-                  letter_spacing: 0.0,
-                  line_height: 14.4,
-                  line_height_normal: true,
-                  text_align: :left,
-                  text_transform: :none,
-                  white_space: :normal
-                }
+                base_style = base_style(font_registry, font_families, font_face)
 
                 base_style =
                   if mode == :prepare_svg or svg_nodes?(children),
@@ -436,6 +408,227 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end)
   end
 
+  @doc """
+  Visits original HTML declaration contexts without reading fonts, files or assets.
+
+  This internal execution path shares normal DOM validation, defaults, inheritance,
+  selectors and cascade ordering. The three-argument consumer receives the original
+  node with added render metadata, a pseudo-element or nil, and a limited context.
+  `:resolved` means declaration/context policy only, never a render-ready style.
+  Detached template contents retain their unresolved authored scope. MathML
+  contexts need selected MATH metrics and remain unresolved without font reads.
+
+  The result preserves source obligations for unmatched rules, inactive media,
+  references and detached insertion contexts. Font selection, metrics, decorations
+  and resource authorization/contents remain unchecked runtime obligations.
+  CSS sources are strings, never filenames to load. No certificate, receipt,
+  permission or parser mutation is produced. Keep the enclosing render budget and
+  the same CSS budget across the original invocation.
+  """
+  @spec with_source_style_contexts(term(), term(), term(), term()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def with_source_style_contexts(dom, sources, budget, consumer) do
+    HtmlValidator.with_render_budget(fn ->
+      with {:ok, controls?} <-
+             HtmlValidator.validate_source_style_input(dom, sources, budget, consumer),
+           {:ok, media_context} <- PrintMediaValidator.renderer_context([]),
+           entries = Enum.map(sources, &%{css: &1}),
+           embedded = Enum.map(style_sources(dom.children, media_context), &%{css: &1}),
+           {:ok, prepared} <- prepare_stylesheet_entries(entries ++ embedded, media_context),
+           {:ok, rules} <- stylesheet_rules(prepared) do
+        children =
+          if controls?,
+            do:
+              NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare_initial_nodes(
+                dom.children
+              ),
+            else: HtmlValidator.assign_render_metadata(dom.children)
+
+        compiled = compile_selector_rules(rules)
+
+        RenderCache.run(fn cache ->
+          context = %{
+            rules: compiled,
+            cache: cache,
+            root_selector_id: cache,
+            root_children: children,
+            source_budget: budget
+          }
+
+          traverse = fn ->
+            with {:ok, inherited} <-
+                   fragment_root_style(children, source_base_style(children), context, []),
+                 :ok <- source_context_children(children, inherited, context, [], consumer) do
+              {:ok,
+               %{
+                 source_obligations: %{
+                   stylesheets: Enum.map(entries ++ embedded, & &1.css),
+                   unmatched_rules: :unresolved,
+                   inactive_media: :unresolved,
+                   resource_references: :unresolved,
+                   template_insertion_contexts: :unresolved,
+                   math_font_contexts: :unresolved
+                 },
+                 runtime_obligations: [
+                   :font_selection,
+                   :font_metrics,
+                   :text_decorations,
+                   :resources
+                 ]
+               }}
+            end
+          end
+
+          if Map.get(compiled.selectors, :language_dependent, false),
+            do: LanguageValidator.with_document(children, cache, traverse),
+            else: traverse.()
+        end)
+      end
+    end)
+  end
+
+  defp base_style(registry, families, face) do
+    %{
+      _custom_properties: %{},
+      _font_registry: registry,
+      _root_font_size: 12.0,
+      color: {0, 0, 0},
+      font_face: face,
+      font_families: families,
+      font_family: if(is_nil(face), do: nil, else: face.family),
+      font_size: 12.0,
+      font_style: :normal,
+      font_weight: 400,
+      letter_spacing: 0.0,
+      line_height: 14.4,
+      line_height_normal: true,
+      text_align: :left,
+      text_transform: :none,
+      white_space: :normal
+    }
+  end
+
+  defp source_base_style(children) do
+    style = base_style(nil, [], nil)
+
+    if svg_nodes?(children),
+      do: Map.merge(style, SvgStyleValidator.defaults(%{}) |> Map.put(:_svg_prepare, true)),
+      else: style
+  end
+
+  # Source policy walks authored children even when painting selects a subset.
+  # Detached template contents have no final insertion context to execute here.
+  defp source_context_children(children, inherited, rules, ancestors, consumer) do
+    Enum.reduce_while(children, :ok, fn node, :ok ->
+      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+
+      result =
+        case node do
+          %{type: :element, namespace: :mathml} ->
+            unresolved_source_context(node, consumer, :math_font_context)
+
+          %{type: :element} ->
+            with {:ok, style} <- element_style(node, inherited, rules, ancestors, []),
+                 :ok <-
+                   HtmlValidator.consume_source_style_context(consumer, node, nil, %{
+                     status: :resolved,
+                     style: style
+                   }),
+                 :ok <- source_pseudo_contexts(node, style, rules, ancestors, consumer),
+                 :ok <-
+                   source_context_children(
+                     source_children(node),
+                     style,
+                     rules,
+                     [node | ancestors],
+                     consumer
+                   ) do
+              case Map.get(node, :content) do
+                %{type: :document_fragment} = fragment ->
+                  unresolved_source_context(fragment, consumer, :template_insertion_context)
+
+                _ ->
+                  :ok
+              end
+            end
+
+          _ ->
+            :ok
+        end
+
+      case result do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp source_children(node) do
+    if node.tag == "details" and Map.get(node, :namespace, :html) == :html do
+      HtmlValidator.source_disclosure_children(node)
+    else
+      node.children
+    end
+  end
+
+  defp source_pseudo_contexts(node, style, rules, ancestors, consumer) do
+    Enum.reduce_while([:before, :after], :ok, fn pseudo, :ok ->
+      declarations = matching_declarations(rules, node, ancestors, pseudo)
+
+      result =
+        case declarations do
+          [] ->
+            :ok
+
+          _ ->
+            with {:ok, context} <-
+                   apply_author_styles(
+                     text_style(style) |> Map.put(:display, :inline),
+                     node,
+                     ancestors,
+                     rules,
+                     pseudo,
+                     declarations
+                   ),
+                 do:
+                   HtmlValidator.consume_source_style_context(consumer, node, pseudo, %{
+                     status: :resolved,
+                     style: context
+                   })
+        end
+
+      case result do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp unresolved_source_context(node, consumer, reason) do
+    HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+
+    with :ok <-
+           HtmlValidator.consume_source_style_context(consumer, node, nil, %{
+             status: :unresolved,
+             reason: reason
+           }),
+         :ok <-
+           Enum.reduce_while(Map.get(node, :children, []), :ok, fn child, :ok ->
+             case unresolved_source_context(child, consumer, reason) do
+               :ok -> {:cont, :ok}
+               error -> {:halt, error}
+             end
+           end) do
+      case Map.get(node, :content) do
+        %{type: :document_fragment} = fragment ->
+          unresolved_source_context(fragment, consumer, :template_insertion_context)
+
+        _ ->
+          :ok
+      end
+    end
+  end
+
   @doc false
   @spec load_stylesheets(term(), [render_option()]) ::
           {:ok, [stylesheet_entry()]}
@@ -478,8 +671,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       end
 
     RenderCache.fetch_stylesheet(
-      {:entries, document_id, entries,
-       Enum.map(entries, &PrintMediaValidator.cache_context(&1.css, media_context))},
+      {:entries, document_id, entries, media_context, Limits.effective()},
       fn ->
         Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, prepared_entries} ->
           case CssParser.prepare_stylesheet(entry.css, media_context) do
@@ -584,7 +776,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                      prepared,
                      Keyword.fetch!(opts, :__image_budget__)
                    ) do
-              style = ensure_box_style(style)
+              style = CssValueValidator.ensure_box_style(style)
 
               style =
                 Map.put(
@@ -1150,8 +1342,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
         with {:ok, body_style} <- element_style(body_node, base_style, rules, [], opts) do
           case Map.get(body_style, :display) do
-            :none -> {:ok, nil}
-            _ -> {:ok, text_style(body_style)}
+            :none ->
+              if Map.has_key?(rules, :source_budget),
+                do: {:ok, text_style(body_style)},
+                else: {:ok, nil}
+
+            _ ->
+              {:ok, text_style(body_style)}
           end
         end
     end
@@ -1193,8 +1390,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             defaults = block_defaults(inherited_font_size, 400, 0.0)
 
             case ResourceContext.current() do
-              %{depth: depth} when depth > 0 -> Map.put(defaults, :margin, edges(6.0))
-              _ -> defaults
+              %{depth: depth} when depth > 0 ->
+                Map.put(defaults, :margin, CssValueValidator.edges(6.0))
+
+              _ ->
+                defaults
             end
 
           tag
@@ -1204,11 +1404,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           "fieldset" ->
             block_defaults(inherited_font_size, 400, 0.0)
             |> Map.merge(%{
-              margin: edges(0.0, 1.5, 0.0, 1.5),
-              border_widths: edges(1.5),
-              border_styles: edges(:groove),
+              margin: CssValueValidator.edges(0.0, 1.5, 0.0, 1.5),
+              border_widths: CssValueValidator.edges(1.5),
+              border_styles: CssValueValidator.edges(:groove),
               # ThreeDFace in the pinned Chromium print theme is rgb(239,239,239).
-              border_colors: edges({239 / 255, 239 / 255, 239 / 255}),
+              border_colors: CssValueValidator.edges({239 / 255, 239 / 255, 239 / 255}),
               _fieldset_default_padding: true,
               _fieldset: true
             })
@@ -1222,7 +1422,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               end
 
             block_defaults(inherited_font_size, 400, 0.0)
-            |> Map.merge(%{padding: edges(0.0, 1.5, 0.0, 1.5), justify_self: alignment})
+            |> Map.merge(%{
+              padding: CssValueValidator.edges(0.0, 1.5, 0.0, 1.5),
+              justify_self: alignment
+            })
 
           "summary" ->
             case Map.fetch(node, :_disclosure_open) do
@@ -1246,7 +1449,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
           tag when tag in ~w(blockquote figure) ->
             block_defaults(inherited_font_size, 400, inherited_font_size)
-            |> Map.put(:margin, edges(inherited_font_size, 30.0, inherited_font_size, 30.0))
+            |> Map.put(
+              :margin,
+              CssValueValidator.edges(inherited_font_size, 30.0, inherited_font_size, 30.0)
+            )
             |> Map.put(:_margin_before_em, 1.0)
             |> Map.put(:_margin_after_em, 1.0)
 
@@ -1259,7 +1465,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             Map.put(
               block_defaults(inherited_font_size, 400, 0.0),
               :margin,
-              edges(0.0, 0.0, 0.0, 30.0)
+              CssValueValidator.edges(0.0, 0.0, 0.0, 30.0)
             )
 
           tag when tag in ~w(pre listing xmp plaintext) ->
@@ -1321,7 +1527,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               defaults
             else
               defaults
-              |> Map.put(:margin, edges(0.0))
+              |> Map.put(:margin, CssValueValidator.edges(0.0))
               |> Map.put(:margin_after, 0.0)
               |> Map.delete(:_margin_before_em)
               |> Map.delete(:_margin_after_em)
@@ -1407,7 +1613,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             %{display: :inline}
 
           "a" ->
-            link_defaults(attributes, opts)
+            link_defaults(attributes, opts, Map.has_key?(rules, :source_budget))
 
           "nobr" ->
             %{display: :inline, white_space: :nowrap}
@@ -1426,8 +1632,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               block_defaults(inherited_font_size, 400, 0.0)
               |> Map.merge(%{
                 color: gray,
-                border_styles: edges(:inset),
-                border_widths: edges(0.75),
+                border_styles: CssValueValidator.edges(:inset),
+                border_widths: CssValueValidator.edges(0.75),
                 margin: %{top: 0.0, right: :auto, bottom: 0.0, left: :auto},
                 _margin_before_em: {:css_layout_em, 0.5},
                 _margin_after_em: {:css_layout_em, 0.5},
@@ -1455,16 +1661,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                 width: 225.0,
                 height: 112.5,
                 overflow: :hidden,
-                margin: edges(0.0),
-                padding: edges(0.0),
-                border_widths: edges(1.5),
-                border_styles: edges(:inset)
+                margin: CssValueValidator.edges(0.0),
+                padding: CssValueValidator.edges(0.0),
+                border_widths: CssValueValidator.edges(1.5),
+                border_styles: CssValueValidator.edges(:inset)
               })
               |> Map.merge(hints)
             end
 
           "img" ->
-            image_defaults(node, ancestors, opts, inherited_font_size)
+            if Map.has_key?(rules, :source_budget),
+              do: image_box_defaults(attributes, inherited_font_size),
+              else: image_defaults(node, ancestors, opts, inherited_font_size)
 
           "input" ->
             form_control_defaults(
@@ -1594,7 +1802,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             :error -> style
           end
 
-        target = HtmlLinkValidator.target(node, Keyword.fetch!(opts, :__link_context__))
+        target =
+          if Map.has_key?(rules, :source_budget),
+            do: nil,
+            else: HtmlLinkValidator.target(node, Keyword.fetch!(opts, :__link_context__))
 
         style =
           if target == nil,
@@ -1610,21 +1821,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                   )
               })
 
-        result =
-          tag
-          |> finalize_element_style(
-            if(Map.get(node, :_default_disclosure_summary, false),
-              do: apply_author_styles(style, node, ancestors, rules, nil, []),
-              else: apply_author_styles(style, node, ancestors, rules)
-            ),
-            Keyword.fetch!(opts, :__image_budget__),
-            opts
+        authored =
+          if(Map.get(node, :_default_disclosure_summary, false),
+            do: apply_author_styles(style, node, ancestors, rules, nil, []),
+            else: apply_author_styles(style, node, ancestors, rules)
           )
+
+        result =
+          if Map.has_key?(rules, :source_budget),
+            do: authored,
+            else:
+              finalize_element_style(tag, authored, Keyword.fetch!(opts, :__image_budget__), opts)
 
         result =
           case result do
             {:ok, style} ->
-              if tag == "fieldset" or Map.get(style, :_fieldset_precision, false) do
+              if not Map.has_key?(rules, :source_budget) and
+                   (tag == "fieldset" or Map.get(style, :_fieldset_precision, false)) do
                 # LayoutNG's used line heights retain fixed 1/64 CSS-pixel precision.
                 height = Float.floor(style.line_height / 0.75 * 64) / 64 * 0.75
 
@@ -1975,19 +2188,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       background_size: {:auto, :auto},
       break_inside: :auto,
       border_color: :current_color,
-      border_colors: edges(:current_color),
+      border_colors: CssValueValidator.edges(:current_color),
       border_radius: 0.0,
-      border_styles: edges(:none),
-      border_widths: edges(@medium_border_width),
+      border_styles: CssValueValidator.edges(:none),
+      border_widths: CssValueValidator.edges(@medium_border_width),
       box_sizing: :content_box,
       display: :block,
       font_size: font_size,
       font_weight: font_weight,
-      margin: edges(0.0, 0.0, margin_bottom, 0.0),
+      margin: CssValueValidator.edges(0.0, 0.0, margin_bottom, 0.0),
       margin_after: margin_bottom,
-      padding: edges(0.0),
+      padding: CssValueValidator.edges(0.0),
       position: :static,
-      offsets: edges(:auto),
+      offsets: CssValueValidator.edges(:auto),
       z_index: :auto
     }
   end
@@ -2000,8 +2213,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       display: :list,
       list_marker_type: marker_type,
       list_style_position: :outside,
-      margin: edges(font_size, 0.0, font_size, 0.0),
-      padding: edges(0.0, 0.0, 0.0, 30.0)
+      margin: CssValueValidator.edges(font_size, 0.0, font_size, 0.0),
+      padding: CssValueValidator.edges(0.0, 0.0, 0.0, 30.0)
     })
   end
 
@@ -2015,8 +2228,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       display: :table,
       border_collapse: :separate,
       border_spacing: {1.5, 1.5},
-      margin: edges(0.0),
-      padding: edges(0.0),
+      margin: CssValueValidator.edges(0.0),
+      padding: CssValueValidator.edges(0.0),
       table_layout: :auto
     })
   end
@@ -2033,13 +2246,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     %{
       background_color: nil,
       border_color: :current_color,
-      border_colors: edges(:current_color),
+      border_colors: CssValueValidator.edges(:current_color),
       border_radius: 0.0,
-      border_styles: edges(:none),
-      border_widths: edges(@medium_border_width),
+      border_styles: CssValueValidator.edges(:none),
+      border_widths: CssValueValidator.edges(@medium_border_width),
       box_sizing: :content_box,
       display: :table_row_group,
-      padding: edges(0.0),
+      padding: CssValueValidator.edges(0.0),
       table_section: section
     }
   end
@@ -2048,13 +2261,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     %{
       background_color: nil,
       border_color: :current_color,
-      border_colors: edges(:current_color),
+      border_colors: CssValueValidator.edges(:current_color),
       border_radius: 0.0,
-      border_styles: edges(:none),
-      border_widths: edges(@medium_border_width),
+      border_styles: CssValueValidator.edges(:none),
+      border_widths: CssValueValidator.edges(@medium_border_width),
       box_sizing: :content_box,
       display: :table_row,
-      padding: edges(0.0)
+      padding: CssValueValidator.edges(0.0)
     }
   end
 
@@ -2070,17 +2283,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     base = %{
       background_color: nil,
       border_color: :current_color,
-      border_colors: edges(:current_color),
+      border_colors: CssValueValidator.edges(:current_color),
       border_radius: 0.0,
-      border_styles: edges(:none),
-      border_widths: edges(0.0),
+      border_styles: CssValueValidator.edges(:none),
+      border_widths: CssValueValidator.edges(0.0),
       box_sizing: :content_box,
       colspan: 1,
       display: :table_cell,
       font_size: font_size,
       font_weight: 400,
-      margin: edges(0.0),
-      padding: edges(0.75),
+      margin: CssValueValidator.edges(0.0),
+      padding: CssValueValidator.edges(0.75),
       rowspan: 1,
       vertical_align: :middle
     }
@@ -2093,30 +2306,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp link_defaults(attributes, opts) do
+  defp link_defaults(attributes, opts, source?) do
     case Map.get(attributes, "href") do
       nil ->
         {:ok, %{display: :inline}}
 
       href ->
-        case Map.fetch!(Keyword.fetch!(opts, :__link_context__).links, href) do
-          {:uri, url} ->
-            {:ok,
-             %{
-               display: :inline,
-               color: {0, 0, 238 / 255},
-               text_decoration_line: [:underline],
-               link_url: url
-             }}
+        defaults = %{
+          display: :inline,
+          color: {0, 0, 238 / 255},
+          text_decoration_line: [:underline]
+        }
 
-          destination ->
-            {:ok,
-             %{
-               display: :inline,
-               color: {0, 0, 238 / 255},
-               text_decoration_line: [:underline],
-               link_destination: destination
-             }}
+        if source? do
+          {:ok, defaults}
+        else
+          case Map.fetch!(Keyword.fetch!(opts, :__link_context__).links, href) do
+            {:uri, url} -> {:ok, Map.put(defaults, :link_url, url)}
+            destination -> {:ok, Map.put(defaults, :link_destination, destination)}
+          end
         end
     end
   end
@@ -2162,20 +2370,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       with {:ok, image_style} <- corrected do
         {:ok,
-         block_defaults(font_size, 400, 0.0)
-         |> Map.merge(%{
-           display: :inline,
-           margin: edges(0.0),
-           object_fit: :fill,
-           object_position: {{:percent, 0.5}, {:percent, 0.5}},
-           padding: edges(0.0)
-         })
+         image_box_style(font_size)
          |> Map.merge(image_style)
          |> Map.merge(selected.dimensions)}
       end
     else
       {:error, {_reason, _diagnostic}} = error -> error
     end
+  end
+
+  defp image_box_defaults(attributes, font_size) do
+    with {:ok, hints} <- HtmlValidator.image_dimension_hints(attributes),
+         do: {:ok, Map.merge(image_box_style(font_size), hints)}
+  end
+
+  defp image_box_style(font_size) do
+    block_defaults(font_size, 400, 0.0)
+    |> Map.merge(%{
+      display: :inline,
+      margin: CssValueValidator.edges(0.0),
+      object_fit: :fill,
+      object_position: {{:percent, 0.5}, {:percent, 0.5}},
+      padding: CssValueValidator.edges(0.0)
+    })
   end
 
   # Fixed native appearance sizing combines font metrics with HTML character
@@ -2223,13 +2440,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       |> Map.merge(%{
         background_color: {1.0, 1.0, 1.0},
         border_color: {0.47, 0.47, 0.47},
-        border_colors: edges({0.47, 0.47, 0.47}),
-        border_styles: edges(:solid),
-        border_widths: edges(0.75),
+        border_colors: CssValueValidator.edges({0.47, 0.47, 0.47}),
+        border_styles: CssValueValidator.edges(:solid),
+        border_widths: CssValueValidator.edges(0.75),
         form_kind:
           if(HtmlValidator.text_input_type?(kind), do: :text, else: String.to_atom(kind)),
-        margin: edges(0.0),
-        padding: edges(1.5, 2.25, 1.5, 2.25)
+        margin: CssValueValidator.edges(0.0),
+        padding: CssValueValidator.edges(1.5, 2.25, 1.5, 2.25)
       })
 
     case kind do
@@ -2237,10 +2454,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         base
         |> Map.merge(%{
           background_color: nil,
-          border_colors: edges(nil),
-          border_styles: edges(:none),
-          border_widths: edges(0.0),
-          padding: edges(0.0),
+          border_colors: CssValueValidator.edges(nil),
+          border_styles: CssValueValidator.edges(:none),
+          border_widths: CssValueValidator.edges(0.0),
+          padding: CssValueValidator.edges(0.0),
           width: font_size
         })
 
@@ -2320,14 +2537,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       _ ->
         children
     end
-  end
-
-  defp edges(value) do
-    edges(value, value, value, value)
-  end
-
-  defp edges(top, right, bottom, left) do
-    %{top: top, right: right, bottom: bottom, left: left}
   end
 
   defp stylesheet_rules(entries) do
@@ -2555,7 +2764,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     case stylesheet_diagnostic_sources(dom, opts) do
       {:ok, sources} ->
         Enum.find_value(sources, fn {_label, source} ->
-          invalid_declaration_detail(source, stylesheet_declaration_sources(source))
+          CssValueValidator.declaration_error(
+            source,
+            CssValueValidator.stylesheet_declaration_sources(source)
+          )
         end)
 
       {:error, error} ->
@@ -2599,14 +2811,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
          do: {:ok, Enum.map(style_sources(children, media_context), &{:embedded, &1})}
   end
 
-  defp stylesheet_declaration_sources(css) do
-    css
-    |> then(&Regex.replace(~r/@font-face\s*\{[^{}]*\}/ui, &1, ""))
-    |> then(&Regex.scan(~r/[^{}]+\{(?<declarations>[^{}]*)\}/u, &1, capture: ["declarations"]))
-    |> List.flatten()
-    |> Enum.flat_map(&CssParser.declaration_sources/1)
-  end
-
   defp inline_style_diagnostic_error(dom, opts) do
     Enum.find_value(inline_style_sources(dom), &inline_style_error(&1, opts))
   end
@@ -2614,7 +2818,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp inline_style_error(style_source, _opts) do
     case CssParser.parse_declarations_detailed(style_source) do
       {:ok, _declarations} ->
-        invalid_declaration_detail(style_source, CssParser.declaration_sources(style_source))
+        CssValueValidator.declaration_error(
+          style_source,
+          CssParser.declaration_sources(style_source)
+        )
 
       {:error, error} ->
         error
@@ -2638,69 +2845,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       _ ->
         []
     end
-  end
-
-  defp invalid_declaration_detail(css_source, declaration_sources) do
-    Enum.find_value(declaration_sources, fn declaration_source ->
-      with {:ok, [declaration]} <- CssParser.parse_declarations(declaration_source),
-           {:ok, style} <- diagnostic_style(),
-           {:ok, _style} <- apply_declaration(style, declaration) do
-        nil
-      else
-        _ -> {:invalid_css, declaration_detail(css_source, declaration_source)}
-      end
-    end)
-  end
-
-  defp diagnostic_style do
-    with {:ok, registry} <- font_registry([], []),
-         {:ok, families, font_face} <- resolve_font("DejaVu Sans", 400, :normal, registry) do
-      {:ok,
-       12.0
-       |> block_defaults(400, 0.0)
-       |> flex_container_defaults()
-       |> grid_container_defaults()
-       |> Map.merge(%{
-         _custom_properties: %{},
-         _font_registry: registry,
-         _root_font_size: 12.0,
-         color: {0, 0, 0},
-         font_face: font_face,
-         font_families: families,
-         font_family: font_face.family,
-         font_size: 12.0,
-         font_style: :normal,
-         font_weight: 400,
-         letter_spacing: 0.0,
-         line_height: 14.4,
-         line_height_normal: true,
-         text_align: :left,
-         text_transform: :none
-       })}
-    end
-  end
-
-  defp declaration_detail(css_source, declaration_source) do
-    source = HtmlValidator.trim_css_whitespace(declaration_source)
-    {line, column} = source_location(css_source, source)
-
-    %{
-      stage: :css,
-      reason: :invalid_css,
-      message: ~s(line #{line}: declaration "#{source}" is invalid or unsupported),
-      line: line,
-      column: column,
-      source: source
-    }
-  end
-
-  defp source_location(source, snippet) do
-    {index, _length} = :binary.match(source, snippet)
-    prefix = binary_part(source, 0, index)
-    lines = String.split(prefix, "\n", trim: false)
-    line = length(lines)
-    column = String.length(List.last(lines) || "") + 1
-    {line, column}
   end
 
   defp resolve_font(family_value, weight, style, registry, cache \\ nil) do
@@ -2730,7 +2874,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           |> Enum.map(fn {declaration, declaration_index} ->
             %{
               declaration: declaration,
-              important: important_declaration?(declaration),
+              important: CssValueValidator.important_declaration?(declaration),
               inline: false,
               order: rule.order,
               declaration_index: declaration_index
@@ -2843,7 +2987,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               |> Enum.map(fn {declaration, declaration_index} ->
                 %{
                   declaration: declaration,
-                  important: important_declaration?(declaration),
+                  important: CssValueValidator.important_declaration?(declaration),
                   inline: true,
                   specificity: {0, 0, 0},
                   order: 0,
@@ -2865,45 +3009,65 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
           hints = if pseudo_element == nil, do: MathLayoutValidator.style_hints(node), else: []
 
-          with {:ok, style} <- apply_declarations(style, hints ++ declarations, rules.cache),
-               # Defaults contain no rem values; inherited lengths are already resolved.
-               style = if(declarations == [], do: style, else: resolve_rem_values(style)),
-               style =
-                 style
-                 |> resolve_font_relative_defaults()
-                 |> Map.delete(:_inherited_color)
-                 |> Map.delete(:_root_element)
-                 |> resolve_current_color_values(),
-               style = style |> apply_border_styles() |> resolve_auto_margin_values(),
-               {:ok, style} <- put_font_face(style, rules.cache),
-               {:ok, style} <- MathLayoutValidator.compute_style(style) do
-            # Native dropdown appearance uses the font's normal line height.
-            # HTML's select rendering rules reset authored line-height here.
-            # Native dropdown text includes one CSS pixel of internal leading
-            # above and below the font line, independent of authored padding.
-            style =
+          if Map.has_key?(rules, :source_budget) do
+            with {:ok, validated} <-
+                   CssValueValidator.validate_source_cascade(
+                     style,
+                     hints ++ declarations,
+                     rules.source_budget,
+                     node
+                   ) do
+              {:ok,
+               validated
+               |> resolve_rem_values()
+               |> resolve_font_relative_defaults()
+               |> Map.delete(:_inherited_color)
+               |> Map.delete(:_root_element)
+               |> resolve_current_color_values()}
+            end
+          else
+            with {:ok, style} <- apply_declarations(style, hints ++ declarations, rules.cache),
+                 # Defaults contain no rem values; inherited lengths are already resolved.
+                 style = if(declarations == [], do: style, else: resolve_rem_values(style)),
+                 style =
+                   style
+                   |> resolve_font_relative_defaults()
+                   |> Map.delete(:_inherited_color)
+                   |> Map.delete(:_root_element)
+                   |> resolve_current_color_values(),
+                 style = style |> apply_border_styles() |> resolve_auto_margin_values(),
+                 {:ok, style} <- put_font_face(style, rules.cache),
+                 {:ok, style} <- MathLayoutValidator.compute_style(style) do
+              # Native dropdown appearance uses the font's normal line height.
+              # HTML's select rendering rules reset authored line-height here.
+              # Native dropdown text includes one CSS pixel of internal leading
+              # above and below the font line, independent of authored padding.
+              style =
+                case style do
+                  %{form_kind: :select} ->
+                    style
+                    |> Map.put(:line_height_normal, false)
+                    |> Map.delete(:line_height_multiplier)
+                    |> Map.delete(:line_height_explicit)
+                    |> Map.put(:line_height, normal_line_height(style) + 1.5)
+
+                  _ ->
+                    put_line_height(style)
+                end
+
               case style do
-                %{form_kind: :select} ->
-                  style
-                  |> Map.put(:line_height_normal, false)
-                  |> Map.delete(:line_height_multiplier)
-                  |> Map.delete(:line_height_explicit)
-                  |> Map.put(:line_height, normal_line_height(style) + 1.5)
-
-                _ ->
-                  put_line_height(style)
+                %{text_decoration_line: [_ | _]} -> HtmlValidator.resolve_text_decorations(style)
+                %{_text_decorations: _} -> HtmlValidator.resolve_text_decorations(style)
+                _ -> {:ok, style}
               end
-
-            case style do
-              %{text_decoration_line: [_ | _]} -> HtmlValidator.resolve_text_decorations(style)
-              %{_text_decorations: _} -> HtmlValidator.resolve_text_decorations(style)
-              _ -> {:ok, style}
             end
           end
         end
 
       {:error, _reason} ->
-        {:error, :invalid_document}
+        if Map.has_key?(rules, :source_budget),
+          do: HtmlValidator.source_style_error(node, :inline_syntax),
+          else: {:error, :invalid_document}
     end
   end
 
@@ -3107,713 +3271,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp apply_declarations(style, declarations, cache) do
-    {custom_property_declarations, ordinary_declarations} =
-      Enum.split_with(declarations, &custom_property_declaration?/1)
-
-    {foundational_declarations, dependent_declarations} =
-      Enum.split_with(ordinary_declarations, fn declaration ->
-        case declaration do
-          {property, _value} -> property in ["color", "font-size"]
-          {property, _value, :important} -> property in ["color", "font-size"]
-        end
-      end)
-
-    with {:ok, style} <- apply_declaration_list(style, custom_property_declarations, cache),
-         {:ok, custom_properties} <-
-           HtmlValidator.compute_custom_properties(style._custom_properties, css_budget(cache)),
-         style = Map.put(style, :_custom_properties, custom_properties),
-         {:ok, style} <- apply_declaration_list(style, foundational_declarations, cache) do
-      style =
-        case Map.get(style, :_root_element, false) do
-          true -> Map.put(style, :_root_font_size, Map.fetch!(style, :font_size))
-          false -> style
-        end
-
-      style =
-        if Map.get(style, :_fieldset_default_padding, false) do
-          font_size = style.font_size
-          padding = edges(font_size * 0.35, font_size * 0.75, font_size * 0.625, font_size * 0.75)
-
-          padding =
-            Map.new(padding, fn {side, value} ->
-              {side, Float.floor(value / 0.75 * 64) / 64 * 0.75}
-            end)
-
-          style |> Map.put(:padding, padding) |> Map.delete(:_fieldset_default_padding)
-        else
-          style
-        end
-
-      apply_declaration_list(style, dependent_declarations, cache)
-    end
-  end
-
-  defp custom_property_declaration?(declaration) do
-    case declaration do
-      {"--" <> _custom_property, _value} -> true
-      {"--" <> _custom_property, _value, :important} -> true
-      _ -> false
-    end
-  end
-
-  defp apply_declaration_list(style, declarations, cache) do
-    Enum.reduce_while(declarations, {:ok, style}, fn declaration, {:ok, acc} ->
-      case apply_declaration(acc, declaration, cache) do
-        {:ok, style} -> {:cont, {:ok, style}}
-        {:error, reason} -> {:halt, {:error, reason}}
-        _ -> {:halt, {:error, :invalid_document}}
+    CssValueValidator.validate_cascade(
+      style,
+      declarations,
+      css_budget(cache),
+      fn declaration, validated ->
+        if elem(declaration, 0) == "font-family",
+          do: put_font_face(validated, cache),
+          else: {:ok, validated}
       end
-    end)
-  end
-
-  defp important_declaration?(declaration) do
-    case declaration do
-      {_property, _value, :important} -> true
-      _ -> false
-    end
-  end
-
-  defp apply_declaration(style, declaration, cache \\ nil) do
-    case declaration do
-      {property, value} -> apply_declaration_value(style, property, value, cache)
-      {property, value, :important} -> apply_declaration_value(style, property, value, cache)
-    end
-  end
-
-  defp apply_declaration_value(style, property, value, cache) do
-    case property do
-      "--" <> _custom_property when is_binary(value) ->
-        custom_properties =
-          style
-          |> Map.get(:_custom_properties, %{})
-          |> Map.put(property, value)
-
-        {:ok, Map.put(style, :_custom_properties, custom_properties)}
-
-      _ ->
-        with {:ok, value} <- resolved_css_value(style, value, cache) do
-          apply_resolved_declaration_value(style, property, value, cache)
-        else
-          :error -> {:error, :invalid_document}
-          {:error, _detail} = error -> error
-        end
-    end
-  end
-
-  defp apply_resolved_declaration_value(style, property, value, cache) do
-    svg_property =
-      if Map.get(style, :_svg_prepare, false) and
-           (Map.get(style, :_svg_element, false) or
-              property not in ~w(width height opacity visibility transform)),
-         do: SvgStyleValidator.apply(style, property, value),
-         else: :unhandled
-
-    case svg_property do
-      :unhandled -> apply_host_declaration_value(style, property, value, cache)
-      result -> result
-    end
-  end
-
-  defp apply_host_declaration_value(style, property, value, cache) do
-    case property do
-      "color" ->
-        with {:ok, color} <-
-               HtmlValidator.parse_css_color_declaration(
-                 value,
-                 Map.get(style, :_inherited_color, Map.fetch!(style, :color))
-               ) do
-          case color do
-            :transparent -> {:ok, Map.put(style, :color, {0, 0, 0, 0.0})}
-            color -> {:ok, Map.put(style, :color, color)}
-          end
-        end
-
-      "background-color" ->
-        with {:ok, color} <- HtmlValidator.parse_css_color(value, Map.fetch!(style, :color)) do
-          {:ok, Map.put(style, :background_color, transparent_color_to_nil(color))}
-        end
-
-      "background" ->
-        put_background(style, value)
-
-      "background-image" ->
-        put_background_image(style, value)
-
-      "background-size" ->
-        put_background_size(style, value)
-
-      "background-position" ->
-        put_two_axis_position(style, :background_position, value)
-
-      "background-repeat" ->
-        put_background_repeat(style, value)
-
-      "box-sizing" ->
-        put_box_sizing(style, value)
-
-      "margin" ->
-        with {:ok, lengths} <- HtmlValidator.parse_css_box_lengths(value, :margin),
-             do: {:ok, put_box_lengths(style, "margin", lengths)}
-
-      "padding" ->
-        with {:ok, lengths} <- parse_box_lengths(value),
-             do: {:ok, put_box_lengths(style, "padding", lengths)}
-
-      "border-width" ->
-        with {:ok, widths} <- parse_border_widths(value),
-             do: {:ok, put_box_lengths(style, "border-width", widths)}
-
-      property when property in ["margin-top", "margin-right", "margin-bottom", "margin-left"] ->
-        with {:ok, length} <- HtmlValidator.parse_css_margin(value),
-             do: {:ok, put_edge_length(style, property, length)}
-
-      property
-      when property in ["padding-top", "padding-right", "padding-bottom", "padding-left"] ->
-        with {:ok, length} <- parse_length(value),
-             do: {:ok, put_edge_length(style, property, length)}
-
-      "border-color" ->
-        with {:ok, border_colors} <-
-               parse_border_colors(value, Map.fetch!(style, :color)) do
-          border_color = border_colors.top
-
-          {:ok,
-           style
-           |> Map.put(:border_color, border_color)
-           |> Map.put(:border_colors, border_colors)}
-        end
-
-      property when property in ["border-top", "border-right", "border-bottom", "border-left"] ->
-        with {:ok, width, color, border_style} <-
-               parse_border_edge(value, Map.fetch!(style, :color)) do
-          {:ok,
-           style
-           |> put_border_edge_width(property, width)
-           |> put_border_edge_color(property, color)
-           |> put_border_edge_style(property, border_style)}
-        end
-
-      property
-      when property in [
-             "border-top-width",
-             "border-right-width",
-             "border-bottom-width",
-             "border-left-width"
-           ] ->
-        with {:ok, width} <- parse_border_width(value) do
-          {:ok, put_border_edge_width(style, border_edge_property(property), width)}
-        end
-
-      property
-      when property in [
-             "border-top-color",
-             "border-right-color",
-             "border-bottom-color",
-             "border-left-color"
-           ] ->
-        with {:ok, color} <- HtmlValidator.parse_css_color(value, Map.fetch!(style, :color)) do
-          {:ok,
-           put_border_edge_color(
-             style,
-             border_edge_property(property),
-             transparent_color_to_nil(color)
-           )}
-        end
-
-      property
-      when property in [
-             "border-style",
-             "border-top-style",
-             "border-right-style",
-             "border-bottom-style",
-             "border-left-style"
-           ] ->
-        put_border_style(style, property, value)
-
-      "border-radius" ->
-        with {:ok, length} <- parse_length(value),
-             do: {:ok, Map.put(style, :border_radius, length)}
-
-      "text-align" ->
-        put_text_align(style, value)
-
-      "text-transform" ->
-        put_text_transform(style, value)
-
-      "content" ->
-        put_generated_content(style, value)
-
-      "counter-reset" ->
-        put_counter_values(style, :counter_reset, value, 0)
-
-      "counter-increment" ->
-        put_counter_values(style, :counter_increment, value, 1)
-
-      "letter-spacing" ->
-        put_letter_spacing(style, value)
-
-      property
-      when property in ["white-space", "word-break", "word-wrap", "overflow-wrap", "line-break"] ->
-        put_text_wrapping(style, property, value)
-
-      property when property in ["break-before", "page-break-before"] ->
-        with {:ok, break_value} <- page_break_value(value),
-             do: {:ok, Map.put(style, :break_before, break_value)}
-
-      property when property in ["break-after", "page-break-after"] ->
-        with {:ok, break_value} <- page_break_value(value),
-             do: {:ok, Map.put(style, :break_after, break_value)}
-
-      property when property in ["break-inside", "page-break-inside"] ->
-        put_break_inside(style, value)
-
-      "vertical-align" ->
-        with {:ok, align} <- HtmlValidator.parse_vertical_align(value, style.font_size),
-             do: {:ok, Map.put(style, :vertical_align, align)}
-
-      "appearance" ->
-        with {:ok, appearance} <- HtmlValidator.parse_gauge_appearance(value),
-             do: {:ok, Map.put(style, :appearance, appearance)}
-
-      "accent-color" ->
-        case HtmlValidator.parse_css_accent_color(value, style.color) do
-          {:ok, :auto} -> {:ok, Map.delete(style, :accent_color)}
-          {:ok, color} -> {:ok, Map.put(style, :accent_color, color)}
-          :error -> {:error, :invalid_document}
-        end
-
-      "min-height" ->
-        put_size(style, :min_height, value)
-
-      property when property in ["min-width", "max-width", "max-height"] ->
-        put_size(style, length_property(property), value)
-
-      "border" ->
-        with {:ok, border_widths, border_color, border_styles} <-
-               parse_border(value, Map.fetch!(style, :color)) do
-          style =
-            style
-            |> Map.put(:border_widths, border_widths)
-            |> Map.put(:border_color, border_color)
-            |> Map.put(:border_colors, edges(border_color))
-            |> Map.put(:border_styles, border_styles)
-
-          {:ok, style}
-        end
-
-      "font-size" ->
-        with {:ok, properties} <- MathLayoutValidator.parse_property("font-size", value, style),
-             do: {:ok, Map.merge(style, properties)}
-
-      property when property in ["math-style", "math-shift", "math-depth"] ->
-        with {:ok, properties} <- MathLayoutValidator.parse_property(property, value, style),
-             do: {:ok, Map.merge(style, properties)}
-
-      "line-height" ->
-        case parse_line_height(value) do
-          {:ok, {:multiplier, multiplier}} ->
-            {:ok,
-             style
-             |> Map.put(:line_height_multiplier, multiplier)
-             |> Map.delete(:line_height_normal)
-             |> Map.put(:line_height_explicit, true)}
-
-          {:ok, :normal} ->
-            {:ok,
-             style
-             |> Map.put(:line_height_normal, true)
-             |> Map.delete(:line_height_multiplier)
-             |> Map.put(:line_height_explicit, true)}
-
-          {:ok, line_height} ->
-            {:ok,
-             style
-             |> Map.put(:line_height, line_height)
-             |> Map.delete(:line_height_multiplier)
-             |> Map.delete(:line_height_normal)
-             |> Map.put(:line_height_explicit, true)}
-
-          :error ->
-            :error
-        end
-
-      "font-weight" ->
-        put_font_weight(style, value)
-
-      "font-style" ->
-        put_font_style(style, value)
-
-      "font-family" ->
-        put_font_family(style, value, cache)
-
-      property
-      when property in ~w(text-decoration text-decoration-line text-decoration-color text-decoration-thickness text-decoration-style) ->
-        case HtmlValidator.parse_css_text_decoration(
-               property,
-               value,
-               style.font_size,
-               style.color
-             ) do
-          {:ok, properties} -> {:ok, Map.merge(style, properties)}
-          :error -> {:error, :invalid_document}
-        end
-
-      "display" ->
-        put_display(style, value)
-
-      property when property in ~w(list-style list-style-type list-style-position) ->
-        case HtmlValidator.parse_css_list_style(property, value) do
-          {:ok, properties} -> {:ok, Map.merge(style, properties)}
-          :error -> {:error, :invalid_document}
-        end
-
-      property when property in ["width", "height"] ->
-        put_size(style, length_property(property), value)
-
-      "position" ->
-        put_position(style, value)
-
-      property when property in ["top", "right", "bottom", "left"] ->
-        put_position_offset(style, property, value)
-
-      "z-index" ->
-        put_z_index(style, value)
-
-      "object-fit" ->
-        put_object_fit(style, value)
-
-      "object-position" ->
-        put_two_axis_position(style, :object_position, value)
-
-      "overflow" ->
-        put_overflow(style, value)
-
-      "aspect-ratio" ->
-        with {:ok, aspect_ratio} <- HtmlValidator.parse_aspect_ratio(value),
-             do: {:ok, Map.put(style, :aspect_ratio, aspect_ratio)}
-
-      "border-collapse" ->
-        put_border_collapse(style, value)
-
-      "border-spacing" ->
-        with {:ok, horizontal, vertical} <- parse_border_spacing(value) do
-          {:ok, Map.put(style, :border_spacing, {horizontal, vertical})}
-        end
-
-      "table-layout" ->
-        put_table_layout(style, value)
-
-      "flex-direction" ->
-        put_flex_direction(style, value)
-
-      "flex-wrap" ->
-        put_flex_wrap(style, value)
-
-      "gap" ->
-        with {:ok, row_gap, column_gap} <- parse_gap(value) do
-          {:ok, style |> Map.put(:row_gap, row_gap) |> Map.put(:column_gap, column_gap)}
-        end
-
-      property when property in ["row-gap", "column-gap"] ->
-        with {:ok, length} <- parse_length(value),
-             do: {:ok, Map.put(style, gap_property(property), length)}
-
-      "justify-content" ->
-        put_justify_content(style, value)
-
-      "align-items" ->
-        put_align_items(style, value)
-
-      "align-self" ->
-        put_align_self(style, value)
-
-      "justify-self" ->
-        put_grid_alignment(style, :justify_self, value)
-
-      "order" ->
-        put_order(style, value)
-
-      "flex-grow" ->
-        put_nonnegative_number(style, :flex_grow, value)
-
-      "flex-shrink" ->
-        put_nonnegative_number(style, :flex_shrink, value)
-
-      "flex-basis" ->
-        put_flex_basis(style, value)
-
-      "flex" ->
-        put_flex(style, value)
-
-      property when property in ["grid-template-columns", "grid-template-rows"] ->
-        with {:ok, tracks} <- parse_grid_tracks(value) do
-          {:ok, Map.put(style, grid_template_property(property), tracks)}
-        end
-
-      property when property in ["grid-auto-columns", "grid-auto-rows"] ->
-        with {:ok, track} <- parse_grid_track(value) do
-          {:ok, Map.put(style, grid_auto_property(property), track)}
-        end
-
-      property
-      when property in [
-             "grid-column",
-             "grid-row",
-             "grid-column-start",
-             "grid-column-end",
-             "grid-row-start",
-             "grid-row-end",
-             "grid-area"
-           ] ->
-        put_grid_placement(style, property, value)
-
-      "justify-items" ->
-        put_grid_alignment(style, :justify_items, value)
-
-      "align-content" ->
-        put_justify_content(style, value, :align_content)
-
-      _ ->
-        {:error, :invalid_document}
-    end
-  end
-
-  defp put_display(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      value when value in ["math", "inline math", "block math"] ->
-        with {:ok, properties} <- MathLayoutValidator.parse_property("display", value, style),
-             do: {:ok, Map.merge(style, properties)}
-
-      "block" ->
-        style =
-          if Map.has_key?(style, :_math_context),
-            do: Map.merge(style, %{_math_display: :block, _math_formatting: false}),
-            else: style
-
-        {:ok, style |> ensure_box_style() |> Map.put(:display, :block)}
-
-      "inline" ->
-        style =
-          if Map.has_key?(style, :_math_context),
-            do: Map.merge(style, %{_math_display: :inline, _math_formatting: false}),
-            else: style
-
-        {:ok, Map.put(style, :display, :inline)}
-
-      "inline-block" ->
-        style =
-          if Map.has_key?(style, :_math_context),
-            do: Map.merge(style, %{_math_display: :inline, _math_formatting: false}),
-            else: style
-
-        {:ok, style |> ensure_box_style() |> Map.put(:display, :inline_block)}
-
-      "none" ->
-        {:ok, Map.put(style, :display, :none)}
-
-      "flex" ->
-        {:ok,
-         style |> ensure_box_style() |> flex_container_defaults() |> Map.put(:display, :flex)}
-
-      "inline-flex" ->
-        {:ok,
-         style
-         |> ensure_box_style()
-         |> flex_container_defaults()
-         |> Map.put(:display, :inline_flex)}
-
-      "grid" ->
-        {:ok,
-         style |> ensure_box_style() |> grid_container_defaults() |> Map.put(:display, :grid)}
-
-      "inline-grid" ->
-        {:ok,
-         style
-         |> ensure_box_style()
-         |> grid_container_defaults()
-         |> Map.put(:display, :inline_grid)}
-
-      _ ->
-        {:error, :invalid_document}
-    end
-  end
-
-  defp ensure_box_style(style) do
-    style
-    |> Map.put_new(:background_color, nil)
-    |> Map.put_new(:background_image, nil)
-    |> Map.put_new(:background_position, {{:percent, 0.0}, {:percent, 0.0}})
-    |> Map.put_new(:background_repeat, :repeat)
-    |> Map.put_new(:background_size, {:auto, :auto})
-    |> Map.put_new(:border_color, :current_color)
-    |> Map.put_new(:border_colors, edges(Map.get(style, :border_color, :current_color)))
-    |> Map.put_new(:border_radius, 0.0)
-    |> Map.put_new(:border_styles, edges(:none))
-    |> Map.put_new(:border_widths, edges(@medium_border_width))
-    |> Map.put_new(:box_sizing, :content_box)
-    |> Map.put_new(:margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
-    |> Map.put_new(:margin_after, 0.0)
-    |> Map.put_new(:padding, edges(0.0))
-    |> Map.put_new(:position, :static)
-    |> Map.put_new(:offsets, edges(:auto))
-    |> Map.put_new(:z_index, :auto)
-  end
-
-  defp put_size(style, property, value) do
-    with {:ok, size} <- HtmlValidator.parse_css_size(value, property),
-         do: {:ok, Map.put(style, property, size)}
-  end
-
-  defp put_background(style, value) do
-    style =
-      style
-      |> Map.put(:background_color, nil)
-      |> Map.put(:background_image, nil)
-      |> Map.delete(:background_image_source)
-      |> Map.put(:background_position, {{:percent, 0.0}, {:percent, 0.0}})
-      |> Map.put(:background_repeat, :repeat)
-      |> Map.put(:background_size, {:auto, :auto})
-
-    with {:ok, color} <-
-           HtmlValidator.parse_css_background_color(value, Map.fetch!(style, :color)) do
-      {:ok, Map.put(style, :background_color, transparent_color_to_nil(color))}
-    end
-  end
-
-  defp put_background_image(style, value) do
-    case HtmlValidator.parse_background_image_reference(value) do
-      {:ok, nil} ->
-        {:ok, style |> Map.put(:background_image, nil) |> Map.delete(:background_image_source)}
-
-      {:ok, source} ->
-        {:ok, Map.put(style, :background_image_source, source)}
-
-      error ->
-        error
-    end
-  end
-
-  defp put_background_size(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "contain" ->
-        {:ok, Map.put(style, :background_size, :contain)}
-
-      "cover" ->
-        {:ok, Map.put(style, :background_size, :cover)}
-
-      value ->
-        parts = HtmlValidator.split_css_tokens(value)
-
-        parsed =
-          Enum.map(parts, fn part ->
-            case part do
-              "auto" -> {:ok, :auto}
-              part -> parse_size(part)
-            end
-          end)
-
-        case parsed do
-          [{:ok, size}] ->
-            {:ok, Map.put(style, :background_size, {size, :auto})}
-
-          [{:ok, width}, {:ok, height}] ->
-            {:ok, Map.put(style, :background_size, {width, height})}
-
-          _ ->
-            {:error, :invalid_document}
-        end
-    end
-  end
-
-  defp put_background_repeat(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "repeat" -> {:ok, Map.put(style, :background_repeat, :repeat)}
-      "no-repeat" -> {:ok, Map.put(style, :background_repeat, :no_repeat)}
-      "repeat-x" -> {:ok, Map.put(style, :background_repeat, :repeat_x)}
-      "repeat-y" -> {:ok, Map.put(style, :background_repeat, :repeat_y)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_position(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "static" -> {:ok, Map.put(style, :position, :static)}
-      "relative" -> {:ok, Map.put(style, :position, :relative)}
-      "absolute" -> {:ok, Map.put(style, :position, :absolute)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_position_offset(style, property, value) do
-    parsed =
-      case value |> String.trim() |> String.downcase() do
-        "auto" -> {:ok, :auto}
-        value -> parse_position_component(value)
-      end
-
-    with {:ok, offset} <- parsed do
-      side = String.to_existing_atom(property)
-      offsets = style |> Map.get(:offsets, edges(:auto)) |> Map.put(side, offset)
-      {:ok, Map.put(style, :offsets, offsets)}
-    end
-  end
-
-  defp put_z_index(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "auto" ->
-        {:ok, Map.put(style, :z_index, :auto)}
-
-      value ->
-        case Integer.parse(value) do
-          {z_index, ""} -> {:ok, Map.put(style, :z_index, z_index)}
-          _ -> {:error, :invalid_document}
-        end
-    end
-  end
-
-  defp put_object_fit(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "fill" -> {:ok, Map.put(style, :object_fit, :fill)}
-      "contain" -> {:ok, Map.put(style, :object_fit, :contain)}
-      "cover" -> {:ok, Map.put(style, :object_fit, :cover)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_two_axis_position(style, property, value) do
-    with {:ok, position} <- parse_two_axis_position(value) do
-      {:ok, Map.put(style, property, position)}
-    end
-  end
-
-  defp put_overflow(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "visible" -> {:ok, Map.put(style, :overflow, :visible)}
-      "hidden" -> {:ok, Map.put(style, :overflow, :hidden)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_border_style(style, property, value) do
-    case property do
-      "border-style" ->
-        with {:ok, border_styles} <- parse_border_styles(value) do
-          {:ok, Map.put(style, :border_styles, border_styles)}
-        end
-
-      _ ->
-        with {:ok, border_style} <- parse_border_style(value) do
-          {:ok, put_border_edge_style(style, border_edge_property(property), border_style)}
-        end
-    end
+    )
   end
 
   defp apply_border_styles(style) do
-    border_styles = Map.get(style, :border_styles, edges(:none))
+    border_styles = Map.get(style, :border_styles, CssValueValidator.edges(:none))
 
     border_widths =
       style
-      |> Map.get(:border_widths, edges(@medium_border_width))
+      |> Map.get(:border_widths, CssValueValidator.edges(@medium_border_width))
       |> Enum.map(fn {side, width} ->
         case Map.fetch!(border_styles, side) in [:none, :hidden] do
           true ->
@@ -3934,150 +3409,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp put_box_sizing(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "border-box" -> {:ok, Map.put(style, :box_sizing, :border_box)}
-      "content-box" -> {:ok, Map.put(style, :box_sizing, :content_box)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_text_transform(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "math-auto" ->
-        with {:ok, properties} <-
-               MathLayoutValidator.parse_property("text-transform", value, style),
-             do: {:ok, Map.merge(style, properties)}
-
-      "none" ->
-        {:ok, Map.put(style, :text_transform, :none)}
-
-      "uppercase" ->
-        {:ok, Map.put(style, :text_transform, :uppercase)}
-
-      "lowercase" ->
-        {:ok, Map.put(style, :text_transform, :lowercase)}
-
-      "capitalize" ->
-        {:ok, Map.put(style, :text_transform, :capitalize)}
-
-      _ ->
-        {:error, :invalid_document}
-    end
-  end
-
-  defp put_generated_content(style, value) do
-    normalized = String.trim(value)
-
-    case String.downcase(normalized) do
-      keyword when keyword in ["none", "normal"] ->
-        {:ok, Map.put(style, :content, :none)}
-
-      _ ->
-        token_regex =
-          ~r/\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|attr\(\s*[a-zA-Z_][a-zA-Z0-9_:-]*\s*\)|counter\(\s*[a-zA-Z_][a-zA-Z0-9_-]*\s*\))/u
-
-        tokens = Regex.scan(token_regex, normalized)
-        parsed_source = Enum.map_join(tokens, "", &List.first/1) |> String.trim()
-
-        case tokens != [] and parsed_source == normalized do
-          true ->
-            parts =
-              Enum.map(tokens, fn [_, token] ->
-                cond do
-                  String.starts_with?(token, ["\"", "'"]) ->
-                    text = String.slice(token, 1, String.length(token) - 2)
-                    {:string, String.replace(text, ~r/\\([\\"'])/u, "\\1")}
-
-                  String.starts_with?(token, "attr(") ->
-                    [_, name] = Regex.run(~r/^attr\(\s*([a-zA-Z_][a-zA-Z0-9_:-]*)\s*\)$/u, token)
-                    {:attr, String.downcase(name)}
-
-                  String.starts_with?(token, "counter(") ->
-                    [_, name] =
-                      Regex.run(~r/^counter\(\s*([a-zA-Z_][a-zA-Z0-9_-]*)\s*\)$/u, token)
-
-                    {:counter, name}
-                end
-              end)
-
-            {:ok, Map.put(style, :content, parts)}
-
-          false ->
-            {:error, :invalid_document}
-        end
-    end
-  end
-
-  defp put_counter_values(style, property, value, default_value) do
-    tokens = value |> String.trim() |> String.split(~r/\s+/u, trim: true)
-
-    case tokens do
-      ["none"] ->
-        {:ok, Map.put(style, property, [])}
-
-      tokens ->
-        result =
-          Enum.reduce_while(tokens, {:ok, [], false}, fn token, {:ok, values, integer_allowed?} ->
-            identifier? =
-              token != "none" and Regex.match?(~r/^[a-zA-Z_][a-zA-Z0-9_-]*$/u, token)
-
-            cond do
-              identifier? ->
-                {:cont, {:ok, values ++ [{token, default_value}], true}}
-
-              integer_allowed? ->
-                case Integer.parse(token) do
-                  {integer, ""} ->
-                    {name, _old_value} = List.last(values)
-                    {:cont, {:ok, List.replace_at(values, -1, {name, integer}), false}}
-
-                  _ ->
-                    {:halt, :error}
-                end
-
-              true ->
-                {:halt, :error}
-            end
-          end)
-
-        case result do
-          {:ok, values, _integer_allowed?} -> {:ok, Map.put(style, property, values)}
-          :error -> {:error, :invalid_document}
-        end
-    end
-  end
-
-  defp put_letter_spacing(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "normal" ->
-        {:ok, Map.put(style, :letter_spacing, 0.0)}
-
-      value ->
-        with {:ok, length} <-
-               HtmlValidator.parse_css_length(value, :margin, Map.fetch!(style, :font_size)) do
-          {:ok, Map.put(style, :letter_spacing, length)}
-        else
-          :error -> {:error, :invalid_document}
-        end
-    end
-  end
-
-  defp put_text_wrapping(style, property, value) do
-    case HtmlValidator.parse_css_text_wrapping(property, value) do
-      {:ok, key, value} -> {:ok, Map.put(style, key, value)}
-      :error -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_break_inside(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "auto" -> {:ok, Map.put(style, :break_inside, :auto)}
-      "avoid" -> {:ok, Map.put(style, :break_inside, :avoid)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
   defp transform_text(text, transform) do
     HtmlValidator.reserve_render_resource(:max_rendered_text_bytes, byte_size(text), :style)
 
@@ -4100,521 +3431,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp css_budget(cache) do
-    case cache do
-      nil -> HtmlValidator.new_css_budget()
-      cache -> RenderCache.fetch(cache, :css_variable_budget, &HtmlValidator.new_css_budget/0)
-    end
-  end
-
-  defp resolved_css_value(style, value, cache) do
-    custom_properties = Map.get(style, :_custom_properties, %{})
-    HtmlValidator.resolve_css_variables(value, custom_properties, %{}, css_budget(cache))
-  end
-
-  defp flex_container_defaults(style) do
-    style
-    |> Map.put_new(:flex_direction, :row)
-    |> Map.put_new(:flex_wrap, :nowrap)
-    |> Map.put_new(:row_gap, 0.0)
-    |> Map.put_new(:column_gap, 0.0)
-    |> Map.put_new(:justify_content, :flex_start)
-    |> Map.put_new(:align_items, :stretch)
-  end
-
-  defp grid_container_defaults(style) do
-    style
-    |> Map.put_new(:grid_template_columns, [])
-    |> Map.put_new(:grid_template_rows, [])
-    |> Map.put_new(:grid_auto_columns, :auto)
-    |> Map.put_new(:grid_auto_rows, :auto)
-    |> Map.put_new(:row_gap, 0.0)
-    |> Map.put_new(:column_gap, 0.0)
-    |> Map.put_new(:justify_items, :stretch)
-    |> Map.put_new(:align_items, :stretch)
-    |> Map.put_new(:justify_content, :flex_start)
-    |> Map.put_new(:align_content, :stretch)
-  end
-
-  defp put_flex_direction(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "row" -> {:ok, Map.put(style, :flex_direction, :row)}
-      "row-reverse" -> {:ok, Map.put(style, :flex_direction, :row_reverse)}
-      "column" -> {:ok, Map.put(style, :flex_direction, :column)}
-      "column-reverse" -> {:ok, Map.put(style, :flex_direction, :column_reverse)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_flex_wrap(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "nowrap" -> {:ok, Map.put(style, :flex_wrap, :nowrap)}
-      "wrap" -> {:ok, Map.put(style, :flex_wrap, :wrap)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_justify_content(style, value) do
-    put_justify_content(style, value, :justify_content)
-  end
-
-  defp put_justify_content(style, value, property) do
-    case value |> String.trim() |> String.downcase() do
-      value when value in ["start", "flex-start"] -> {:ok, Map.put(style, property, :flex_start)}
-      value when value in ["end", "flex-end"] -> {:ok, Map.put(style, property, :flex_end)}
-      "center" -> {:ok, Map.put(style, property, :center)}
-      "stretch" -> {:ok, Map.put(style, property, :stretch)}
-      "space-between" -> {:ok, Map.put(style, property, :space_between)}
-      "space-around" -> {:ok, Map.put(style, property, :space_around)}
-      "space-evenly" -> {:ok, Map.put(style, property, :space_evenly)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_align_items(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "stretch" ->
-        {:ok, Map.put(style, :align_items, :stretch)}
-
-      value when value in ["start", "flex-start"] ->
-        {:ok, Map.put(style, :align_items, :flex_start)}
-
-      value when value in ["end", "flex-end"] ->
-        {:ok, Map.put(style, :align_items, :flex_end)}
-
-      "center" ->
-        {:ok, Map.put(style, :align_items, :center)}
-
-      _ ->
-        {:error, :invalid_document}
-    end
-  end
-
-  defp put_align_self(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "auto" ->
-        {:ok, Map.put(style, :align_self, :auto)}
-
-      "stretch" ->
-        {:ok, Map.put(style, :align_self, :stretch)}
-
-      value when value in ["start", "flex-start"] ->
-        {:ok, Map.put(style, :align_self, :flex_start)}
-
-      value when value in ["end", "flex-end"] ->
-        {:ok, Map.put(style, :align_self, :flex_end)}
-
-      "center" ->
-        {:ok, Map.put(style, :align_self, :center)}
-
-      _ ->
-        {:error, :invalid_document}
-    end
-  end
-
-  defp put_grid_alignment(style, property, value) do
-    case value |> String.trim() |> String.downcase() do
-      "stretch" -> {:ok, Map.put(style, property, :stretch)}
-      value when value in ["start", "flex-start"] -> {:ok, Map.put(style, property, :flex_start)}
-      value when value in ["end", "flex-end"] -> {:ok, Map.put(style, property, :flex_end)}
-      "center" -> {:ok, Map.put(style, property, :center)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_border_collapse(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "collapse" -> {:ok, Map.put(style, :border_collapse, :collapse)}
-      "separate" -> {:ok, Map.put(style, :border_collapse, :separate)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_table_layout(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "auto" -> {:ok, Map.put(style, :table_layout, :auto)}
-      "fixed" -> {:ok, Map.put(style, :table_layout, :fixed)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_order(style, value) do
-    case Integer.parse(String.trim(value)) do
-      {order, ""} -> {:ok, Map.put(style, :order, order)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_nonnegative_number(style, key, value) do
-    case parse_nonnegative_number(value) do
-      {:ok, number} -> {:ok, Map.put(style, key, number)}
-      :error -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_flex_basis(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "auto" ->
-        {:ok, Map.put(style, :flex_basis, :auto)}
-
-      _ ->
-        with {:ok, length} <- parse_length(value), do: {:ok, Map.put(style, :flex_basis, length)}
-    end
-  end
-
-  defp put_flex(style, value) do
-    tokens = value |> String.trim() |> String.downcase() |> String.split(~r/\s+/u, trim: true)
-
-    case tokens do
-      ["none"] ->
-        {:ok,
-         style
-         |> Map.put(:flex_grow, 0.0)
-         |> Map.put(:flex_shrink, 0.0)
-         |> Map.put(:flex_basis, :auto)}
-
-      ["auto"] ->
-        {:ok,
-         style
-         |> Map.put(:flex_grow, 1.0)
-         |> Map.put(:flex_shrink, 1.0)
-         |> Map.put(:flex_basis, :auto)}
-
-      ["initial"] ->
-        {:ok,
-         style
-         |> Map.put(:flex_grow, 0.0)
-         |> Map.put(:flex_shrink, 1.0)
-         |> Map.put(:flex_basis, :auto)}
-
-      [grow] ->
-        with {:ok, grow} <- parse_nonnegative_number(grow) do
-          {:ok,
-           style
-           |> Map.put(:flex_grow, grow)
-           |> Map.put_new(:flex_shrink, 1.0)
-           |> Map.put_new(:flex_basis, 0.0)}
-        end
-
-      [grow, shrink] ->
-        with {:ok, grow} <- parse_nonnegative_number(grow),
-             {:ok, shrink} <- parse_nonnegative_number(shrink) do
-          {:ok,
-           style
-           |> Map.put(:flex_grow, grow)
-           |> Map.put(:flex_shrink, shrink)
-           |> Map.put_new(:flex_basis, 0.0)}
-        end
-
-      [grow, shrink, basis] ->
-        with {:ok, grow} <- parse_nonnegative_number(grow),
-             {:ok, shrink} <- parse_nonnegative_number(shrink),
-             {:ok, basis} <- flex_basis_value(basis) do
-          {:ok,
-           style
-           |> Map.put(:flex_grow, grow)
-           |> Map.put(:flex_shrink, shrink)
-           |> Map.put(:flex_basis, basis)}
-        end
-
-      _ ->
-        {:error, :invalid_document}
-    end
-  end
-
-  defp length_property(property) do
-    case property do
-      "width" -> :width
-      "height" -> :height
-      "min-width" -> :min_width
-      "max-width" -> :max_width
-      "max-height" -> :max_height
-    end
-  end
-
-  defp gap_property(property) do
-    case property do
-      "row-gap" -> :row_gap
-      "column-gap" -> :column_gap
-    end
-  end
-
-  defp flex_basis_value(value) do
-    case value do
-      "auto" -> {:ok, :auto}
-      value -> parse_length(value)
-    end
-  end
-
-  defp parse_grid_tracks(value) do
-    result =
-      value
-      |> String.trim()
-      |> String.downcase()
-      |> HtmlValidator.split_css_tokens()
-      |> Enum.reduce_while({:ok, [], 0}, fn source, {:ok, chunks, track_count} ->
-        case parse_grid_track_source(source) do
-          {:ok, tracks} ->
-            track_count = track_count + length(tracks)
-
-            case HtmlValidator.validate_layout_cardinality(:grid_tracks, track_count) do
-              :ok -> {:cont, {:ok, [tracks | chunks], track_count}}
-              {:error, {_reason, _diagnostic}} = error -> {:halt, error}
-            end
-
-          :error ->
-            {:halt, :error}
-
-          {:error, {_reason, _diagnostic}} = error ->
-            {:halt, error}
-        end
-      end)
-
-    case result do
-      {:ok, chunks, _track_count} -> {:ok, chunks |> Enum.reverse() |> List.flatten()}
-      result -> result
-    end
-  end
-
-  defp parse_grid_track_source(value) do
-    normalized = value |> String.trim() |> String.downcase()
-
-    case Regex.named_captures(~r/^repeat\((?<count>[1-9]\d*)\s*,\s*(?<track>.+)\)$/u, normalized) do
-      %{"count" => count, "track" => track} ->
-        with {count, ""} <- Integer.parse(count),
-             :ok <- HtmlValidator.validate_layout_cardinality(:grid_tracks, count),
-             {:ok, parsed_track} <- parse_grid_track(track) do
-          {:ok, List.duplicate(parsed_track, count)}
-        else
-          {:error, {_reason, _diagnostic}} = error -> error
-          _ -> :error
-        end
-
-      _ ->
-        with {:ok, track} <- parse_grid_track(normalized), do: {:ok, [track]}
-    end
-  end
-
-  defp parse_grid_track(value) do
-    normalized = value |> String.trim() |> String.downcase()
-
-    cond do
-      String.starts_with?(normalized, "minmax(") ->
-        parse_minmax_grid_track(normalized)
-
-      normalized == "auto" ->
-        {:ok, :auto}
-
-      Regex.match?(~r/^\d+(?:\.\d+)?fr$/u, normalized) ->
-        with {number, "fr"} <- HtmlValidator.parse_css_number(normalized),
-             do: {:ok, {:fr, number}}
-
-      true ->
-        with {:ok, length} <- parse_length(normalized), do: {:ok, {:length, length}}
-    end
-  end
-
-  defp parse_minmax_grid_track(value) do
-    case Regex.named_captures(~r/^minmax\((?<min>.+)\s*,\s*(?<max>.+)\)$/u, value) do
-      %{"min" => min_track, "max" => max_track} ->
-        with {:ok, minimum} <- parse_grid_track(min_track),
-             {:ok, maximum} <- parse_grid_track(max_track) do
-          minimum_valid = minimum == :auto or match?({:length, _length}, minimum)
-
-          maximum_valid =
-            maximum == :auto or
-              match?({:length, _length}, maximum) or
-              match?({:fr, _fraction}, maximum)
-
-          case minimum_valid and maximum_valid do
-            true -> {:ok, {:minmax, minimum, maximum}}
-            false -> :error
-          end
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp put_grid_placement(style, property, value) do
-    case property do
-      property when property in ["grid-column-start", "grid-column-end"] ->
-        with {:ok, placement} <- parse_grid_line(value) do
-          {:ok, Map.put(style, grid_line_property(property), placement)}
-        end
-
-      property when property in ["grid-row-start", "grid-row-end"] ->
-        with {:ok, placement} <- parse_grid_line(value) do
-          {:ok, Map.put(style, grid_line_property(property), placement)}
-        end
-
-      "grid-column" ->
-        with {:ok, start_line, end_line} <- parse_grid_axis(value) do
-          {:ok,
-           style
-           |> Map.put(:grid_column_start, start_line)
-           |> Map.put(:grid_column_end, end_line)}
-        end
-
-      "grid-row" ->
-        with {:ok, start_line, end_line} <- parse_grid_axis(value) do
-          {:ok,
-           style
-           |> Map.put(:grid_row_start, start_line)
-           |> Map.put(:grid_row_end, end_line)}
-        end
-
-      "grid-area" ->
-        with {:ok, row_start, column_start, row_end, column_end} <- parse_grid_area(value) do
-          {:ok,
-           style
-           |> Map.put(:grid_row_start, row_start)
-           |> Map.put(:grid_column_start, column_start)
-           |> Map.put(:grid_row_end, row_end)
-           |> Map.put(:grid_column_end, column_end)}
-        end
-    end
-  end
-
-  defp parse_grid_axis(value) do
-    case value |> String.trim() |> String.downcase() |> String.split("/", trim: true) do
-      [start_line] ->
-        with {:ok, start_line} <- parse_grid_line(start_line), do: {:ok, start_line, :auto}
-
-      [start_line, end_line] ->
-        with {:ok, start_line} <- parse_grid_line(start_line),
-             {:ok, end_line} <- parse_grid_line(end_line) do
-          {:ok, start_line, end_line}
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp parse_grid_area(value) do
-    case value |> String.trim() |> String.downcase() |> String.split("/", trim: true) do
-      [row_start, column_start, row_end, column_end] ->
-        with {:ok, row_start} <- parse_grid_line(row_start),
-             {:ok, column_start} <- parse_grid_line(column_start),
-             {:ok, row_end} <- parse_grid_line(row_end),
-             {:ok, column_end} <- parse_grid_line(column_end) do
-          {:ok, row_start, column_start, row_end, column_end}
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp parse_grid_line(value) do
-    normalized = value |> String.trim() |> String.downcase()
-
-    case normalized do
-      "auto" ->
-        {:ok, :auto}
-
-      _ ->
-        parse_grid_number_or_span(normalized)
-    end
-  end
-
-  defp parse_grid_number_or_span(value) do
-    cond do
-      Regex.match?(~r/^span\s+[1-9]\d*$/u, value) ->
-        ["span", count] = String.split(value, ~r/\s+/u, trim: true)
-        {count, ""} = Integer.parse(count)
-
-        with :ok <- HtmlValidator.validate_layout_cardinality(:grid_placement, count) do
-          {:ok, {:span, count}}
-        end
-
-      Regex.match?(~r/^[1-9]\d*$/u, value) ->
-        {line, ""} = Integer.parse(value)
-
-        with :ok <- HtmlValidator.validate_layout_cardinality(:grid_placement, line) do
-          {:ok, line}
-        end
-
-      true ->
-        :error
-    end
-  end
-
-  defp grid_template_property(property) do
-    case property do
-      "grid-template-columns" -> :grid_template_columns
-      "grid-template-rows" -> :grid_template_rows
-    end
-  end
-
-  defp grid_auto_property(property) do
-    case property do
-      "grid-auto-columns" -> :grid_auto_columns
-      "grid-auto-rows" -> :grid_auto_rows
-    end
-  end
-
-  defp grid_line_property(property) do
-    case property do
-      "grid-column-start" -> :grid_column_start
-      "grid-column-end" -> :grid_column_end
-      "grid-row-start" -> :grid_row_start
-      "grid-row-end" -> :grid_row_end
-    end
-  end
-
-  defp put_text_align(style, value) do
-    case String.downcase(String.trim(value)) do
-      "left" -> {:ok, Map.put(style, :text_align, :left)}
-      "center" -> {:ok, Map.put(style, :text_align, :center)}
-      "right" -> {:ok, Map.put(style, :text_align, :right)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_font_weight(style, value) do
-    normalized = value |> String.trim() |> String.downcase()
-
-    cond do
-      normalized == "normal" ->
-        {:ok, Map.put(style, :font_weight, 400)}
-
-      normalized == "bold" ->
-        {:ok, Map.put(style, :font_weight, 700)}
-
-      Regex.match?(~r/^[1-9]00$/u, normalized) ->
-        {weight, ""} = Integer.parse(normalized)
-        {:ok, Map.put(style, :font_weight, weight)}
-
-      true ->
-        {:error, :invalid_document}
-    end
-  end
-
-  defp put_font_style(style, value) do
-    case String.downcase(String.trim(value)) do
-      "normal" -> {:ok, Map.put(style, :font_style, :normal)}
-      "italic" -> {:ok, Map.put(style, :font_style, :italic)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_font_family(style, value, cache) do
-    with {:ok, families, font_face} <-
-           resolve_font(
-             value,
-             Map.fetch!(style, :font_weight),
-             Map.fetch!(style, :font_style),
-             Map.fetch!(style, :_font_registry),
-             cache
-           ) do
-      {:ok,
-       style
-       |> Map.put(:font_families, families)
-       |> Map.put(:font_family, font_face.family)
-       |> Map.put(:font_face, font_face)}
-    end
+    RenderCache.fetch(cache, :css_variable_budget, &HtmlValidator.new_css_budget/0)
   end
 
   defp put_font_face(style, cache) do
@@ -4631,162 +3448,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
        |> Map.put(:font_families, families)
        |> Map.put(:font_family, font_face.family)
        |> Map.put(:font_face, font_face)}
-    end
-  end
-
-  defp parse_box_lengths(value) do
-    parse_box_lengths(value, :nonnegative)
-  end
-
-  defp parse_box_lengths(value, length_context) do
-    HtmlValidator.parse_css_box_lengths(value, length_context)
-  end
-
-  defp parse_gap(value) do
-    gaps =
-      value
-      |> String.split(~r/\s+/u, trim: true)
-      |> Enum.map(&parse_length/1)
-
-    case gaps do
-      [{:ok, both}] -> {:ok, both, both}
-      [{:ok, row_gap}, {:ok, column_gap}] -> {:ok, row_gap, column_gap}
-      _ -> :error
-    end
-  end
-
-  defp parse_border_spacing(value) do
-    lengths =
-      value
-      |> String.split(~r/\s+/u, trim: true)
-      |> Enum.map(&parse_length/1)
-
-    case lengths do
-      [{:ok, both}] -> {:ok, both, both}
-      [{:ok, horizontal}, {:ok, vertical}] -> {:ok, horizontal, vertical}
-      _ -> :error
-    end
-  end
-
-  defp parse_length(value) do
-    parse_length(value, :nonnegative)
-  end
-
-  defp parse_size(value) do
-    HtmlValidator.parse_css_size(value)
-  end
-
-  defp parse_position_component(value) do
-    normalized = String.trim(value)
-
-    case Regex.run(~r/^(-?\d+(?:\.\d+)?)%$/u, normalized) do
-      [_, percentage] ->
-        with {number, ""} <- HtmlValidator.parse_css_number(percentage),
-             do: {:ok, {:percent, number / 100.0}}
-
-      _ ->
-        parse_length(normalized, :margin)
-    end
-  end
-
-  defp parse_two_axis_position(value) do
-    tokens = value |> String.trim() |> String.downcase() |> String.split(~r/\s+/u, trim: true)
-
-    case tokens do
-      [token] ->
-        case position_token(token) do
-          {:ok, :horizontal, component} -> {:ok, {component, {:percent, 0.5}}}
-          {:ok, :vertical, component} -> {:ok, {{:percent, 0.5}, component}}
-          {:ok, :both, component} -> {:ok, {component, component}}
-          {:ok, :component, component} -> {:ok, {component, {:percent, 0.5}}}
-          _ -> :error
-        end
-
-      [first, second] ->
-        with {:ok, first_axis, first_component} <- position_token(first),
-             {:ok, second_axis, second_component} <- position_token(second),
-             {:ok, position} <-
-               order_position_components(
-                 first_axis,
-                 first_component,
-                 second_axis,
-                 second_component
-               ) do
-          {:ok, position}
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp position_token(token) do
-    case token do
-      "left" ->
-        {:ok, :horizontal, {:percent, 0.0}}
-
-      "right" ->
-        {:ok, :horizontal, {:percent, 1.0}}
-
-      "top" ->
-        {:ok, :vertical, {:percent, 0.0}}
-
-      "bottom" ->
-        {:ok, :vertical, {:percent, 1.0}}
-
-      "center" ->
-        {:ok, :both, {:percent, 0.5}}
-
-      token ->
-        case parse_position_component(token) do
-          {:ok, component} -> {:ok, :component, component}
-          _ -> :error
-        end
-    end
-  end
-
-  defp order_position_components(first_axis, first, second_axis, second) do
-    cond do
-      first_axis == :vertical and second_axis in [:horizontal, :component, :both] ->
-        {:ok, {second, first}}
-
-      first_axis in [:horizontal, :component, :both] and
-          second_axis in [:vertical, :component, :both] ->
-        {:ok, {first, second}}
-
-      first_axis == :both and second_axis == :horizontal ->
-        {:ok, {second, first}}
-
-      true ->
-        :error
-    end
-  end
-
-  defp parse_length(value, length_context) do
-    HtmlValidator.parse_css_length(value, length_context)
-  end
-
-  defp parse_line_height(value) do
-    normalized = value |> String.trim() |> String.downcase()
-
-    cond do
-      normalized == "normal" ->
-        {:ok, :normal}
-
-      match?({:ok, _length}, parse_length(normalized)) ->
-        parse_length(normalized)
-
-      true ->
-        with {:ok, multiplier} <- parse_nonnegative_number(normalized) do
-          {:ok, {:multiplier, multiplier}}
-        end
-    end
-  end
-
-  defp parse_nonnegative_number(value) do
-    case HtmlValidator.parse_css_number(String.trim(value)) do
-      {number, ""} when number >= 0 -> {:ok, number}
-      _ -> :error
     end
   end
 
@@ -4808,246 +3469,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       _ ->
         style
-    end
-  end
-
-  defp put_box_lengths(style, property, lengths) do
-    case property do
-      "margin" ->
-        style
-        |> Map.put(:margin, lengths)
-        |> Map.put(:margin_after, lengths.bottom)
-        |> Map.delete(:_margin_before_em)
-        |> Map.delete(:_margin_after_em)
-
-      "padding" ->
-        Map.put(style, :padding, lengths)
-
-      "border-width" ->
-        Map.put(style, :border_widths, lengths)
-    end
-  end
-
-  defp put_edge_length(style, property, length) do
-    [box_property, edge] = String.split(property, "-", parts: 2)
-    key = String.to_existing_atom(edge)
-    map_key = String.to_existing_atom(box_property)
-    lengths = style |> Map.fetch!(map_key) |> Map.put(key, length)
-    style = Map.put(style, map_key, lengths)
-
-    case property do
-      "margin-top" ->
-        Map.delete(style, :_margin_before_em)
-
-      "margin-bottom" ->
-        style
-        |> Map.put(:margin_after, length)
-        |> Map.delete(:_margin_after_em)
-
-      _ ->
-        style
-    end
-  end
-
-  defp put_border_edge_width(style, property, width) do
-    edge =
-      property
-      |> String.replace_prefix("border-", "")
-      |> String.to_existing_atom()
-
-    Map.update!(style, :border_widths, &Map.put(&1, edge, width))
-  end
-
-  defp put_border_edge_color(style, property, color) do
-    edge =
-      property
-      |> String.replace_prefix("border-", "")
-      |> String.to_existing_atom()
-
-    Map.update(
-      style,
-      :border_colors,
-      edges(Map.get(style, :border_color, :current_color)),
-      &Map.put(&1, edge, color)
-    )
-  end
-
-  defp put_border_edge_style(style, property, border_style) do
-    edge =
-      property
-      |> String.replace_prefix("border-", "")
-      |> String.to_existing_atom()
-
-    Map.update(style, :border_styles, edges(:none), &Map.put(&1, edge, border_style))
-  end
-
-  defp border_edge_property(property) do
-    property
-    |> String.replace_suffix("-width", "")
-    |> String.replace_suffix("-color", "")
-    |> String.replace_suffix("-style", "")
-  end
-
-  defp parse_border(value, current_color) do
-    tokens = HtmlValidator.split_css_tokens(value)
-
-    parsed =
-      Enum.reduce_while(tokens, %{width: nil, style: nil, color: nil}, fn token, acc ->
-        cond do
-          is_nil(acc.style) and match?({:ok, _}, parse_border_style(token)) ->
-            {:ok, border_style} = parse_border_style(token)
-            {:cont, %{acc | style: border_style}}
-
-          is_nil(acc.width) and match?({:ok, _}, parse_border_width(token)) ->
-            {:ok, width} = parse_border_width(token)
-            {:cont, %{acc | width: width}}
-
-          is_nil(acc.color) and
-              match?({:ok, _}, HtmlValidator.parse_css_color(token, current_color)) ->
-            {:ok, color} = HtmlValidator.parse_css_color(token, current_color)
-            {:cont, %{acc | color: transparent_color_to_nil(color)}}
-
-          true ->
-            {:halt, :error}
-        end
-      end)
-
-    case parsed do
-      %{width: width, style: border_style, color: color} ->
-        width = width || @medium_border_width
-        border_style = border_style || :none
-
-        color =
-          if is_nil(color) and not Enum.any?(tokens, &transparent_token?/1),
-            do: current_color,
-            else: color
-
-        {:ok, edges(width), color, edges(border_style)}
-
-      :error ->
-        :error
-    end
-  end
-
-  defp parse_border_edge(value, current_color) do
-    with {:ok, border_widths, border_color, border_styles} <-
-           parse_border(value, current_color) do
-      {:ok, border_widths.top, border_color, border_styles.top}
-    end
-  end
-
-  defp parse_border_styles(value) do
-    styles =
-      value
-      |> String.split(~r/\s+/u, trim: true)
-      |> Enum.map(&parse_border_style/1)
-
-    case styles do
-      [{:ok, all}] ->
-        {:ok, edges(all)}
-
-      [{:ok, vertical}, {:ok, horizontal}] ->
-        {:ok, edges(vertical, horizontal, vertical, horizontal)}
-
-      [{:ok, top}, {:ok, horizontal}, {:ok, bottom}] ->
-        {:ok, edges(top, horizontal, bottom, horizontal)}
-
-      [{:ok, top}, {:ok, right}, {:ok, bottom}, {:ok, left}] ->
-        {:ok, edges(top, right, bottom, left)}
-
-      _ ->
-        :error
-    end
-  end
-
-  defp parse_border_colors(value, current_color) do
-    colors =
-      value
-      |> HtmlValidator.split_css_tokens()
-      |> Enum.map(fn color ->
-        case HtmlValidator.parse_css_color(color, current_color) do
-          {:ok, color} -> {:ok, transparent_color_to_nil(color)}
-          :error -> :error
-        end
-      end)
-
-    case colors do
-      [{:ok, all}] ->
-        {:ok, edges(all)}
-
-      [{:ok, vertical}, {:ok, horizontal}] ->
-        {:ok, edges(vertical, horizontal, vertical, horizontal)}
-
-      [{:ok, top}, {:ok, horizontal}, {:ok, bottom}] ->
-        {:ok, edges(top, horizontal, bottom, horizontal)}
-
-      [{:ok, top}, {:ok, right}, {:ok, bottom}, {:ok, left}] ->
-        {:ok, edges(top, right, bottom, left)}
-
-      _ ->
-        :error
-    end
-  end
-
-  defp parse_border_style(value) do
-    normalized = value |> String.trim() |> String.downcase()
-
-    case Enum.find(@border_styles, &(Atom.to_string(&1) == normalized)) do
-      nil -> :error
-      border_style -> {:ok, border_style}
-    end
-  end
-
-  defp parse_border_widths(value) do
-    widths =
-      value
-      |> String.split(~r/\s+/u, trim: true)
-      |> Enum.map(&parse_border_width/1)
-
-    case widths do
-      [{:ok, all}] ->
-        {:ok, edges(all)}
-
-      [{:ok, vertical}, {:ok, horizontal}] ->
-        {:ok, edges(vertical, horizontal, vertical, horizontal)}
-
-      [{:ok, top}, {:ok, horizontal}, {:ok, bottom}] ->
-        {:ok, edges(top, horizontal, bottom, horizontal)}
-
-      [{:ok, top}, {:ok, right}, {:ok, bottom}, {:ok, left}] ->
-        {:ok, edges(top, right, bottom, left)}
-
-      _ ->
-        :error
-    end
-  end
-
-  defp parse_border_width(value) do
-    case value |> String.trim() |> String.downcase() do
-      "thin" -> {:ok, 0.75}
-      "medium" -> {:ok, @medium_border_width}
-      "thick" -> {:ok, 3.75}
-      value -> parse_length(value)
-    end
-  end
-
-  defp transparent_token?(token) do
-    String.downcase(String.trim(token)) == "transparent"
-  end
-
-  defp transparent_color_to_nil(color) do
-    case color do
-      :transparent -> nil
-      color -> color
-    end
-  end
-
-  defp page_break_value(value) do
-    case String.downcase(String.trim(value)) do
-      "auto" -> {:ok, :auto}
-      "always" -> {:ok, :page}
-      "page" -> {:ok, :page}
-      _ -> :error
     end
   end
 
