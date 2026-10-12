@@ -1,9 +1,9 @@
 defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
   @moduledoc """
-  Print environment and media predicates shared by responsive images and future
-  stylesheet selection. Viewport lengths are CSS pixels, independent of raster
-  resolution. Defaults use the effective page area and a selection density of 1.
-  This module does not change the existing stylesheet media cascade.
+  Media predicates share one bounded grammar. Lengths are CSS pixels.
+  Stylesheet media dimensions describe the requested page box before CSS @page
+  size. The legacy responsive source-size context uses the effective printable
+  area. Embedded media dimensions include gutters; client layout is separate.
   """
 
   alias NativeElixirPdfUtilities.Diagnostics
@@ -13,6 +13,21 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
   @forward_range ~r/\A(width|height|resolution|aspect-ratio)\s*(<=|>=|<|>|=)\s*(.+)\z/s
   @reverse_range ~r/\A(.+?)\s*(<=|>=|<|>|=)\s*(width|height|resolution|aspect-ratio)(?:\s*(<=|>=|<|>)\s*(.+))?\z/s
 
+  @media_start Regex.compile!(
+                 "#{HtmlValidator.css_opaque_pattern()}(*SKIP)(*F)|@media\\b[ \\t\\r\\n\\f]*(?<query>[^{};]*)\\{",
+                 "ui"
+               )
+  @media_candidate Regex.compile!(
+                     "#{HtmlValidator.css_opaque_pattern()}(*SKIP)(*F)|@media\\b",
+                     "ui"
+                   )
+  @brace_token Regex.compile!("#{HtmlValidator.css_opaque_pattern()}(*SKIP)(*F)|[{}]", "u")
+
+  @page_candidate Regex.compile!(
+                    "#{HtmlValidator.css_opaque_pattern()}(*SKIP)(*F)|@page\\b",
+                    "ui"
+                  )
+
   @type context :: %{width: float(), height: float(), density: float(), type: :print}
 
   @doc "Validates explicit print viewport and deterministic image density options."
@@ -20,6 +35,13 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
   def validate_options(opts) do
     viewport = Keyword.get(opts, :print_viewport)
     density = Keyword.get(opts, :image_selection_density, 1)
+
+    dimensions =
+      if is_tuple(viewport) and tuple_size(viewport) == 2, do: Tuple.to_list(viewport), else: []
+
+    for value <- [density | dimensions], is_number(value) and value > 0 do
+      HtmlValidator.check_render_resource(:max_css_numeric_magnitude, value, :options)
+    end
 
     valid_viewport? =
       case viewport do
@@ -51,17 +73,18 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
             with {:ok, {width, height}} <-
                    PageGeometry.normalize_page_size(Keyword.get(opts, :page_size, :a4)),
                  {:ok, margins} <- PageGeometry.normalize_margins(Keyword.get(opts, :margin, 0)),
-                 true <-
-                   width > margins.left + margins.right and height > margins.top + margins.bottom do
+                 :ok <- HtmlValidator.validate_page_size({width, height}),
+                 :ok <- HtmlValidator.validate_margins(margins),
+                 :ok <- HtmlValidator.validate_printable_area({width, height}, margins) do
               {:ok,
                {(width - margins.left - margins.right) / 0.75,
                 (height - margins.top - margins.bottom) / 0.75}}
             else
-              _ ->
+              {:error, _reason} ->
                 Diagnostics.error(
                   :options,
                   :invalid_options,
-                  "responsive image selection requires a positive printable page area",
+                  "print media selection requires a positive printable page area",
                   module: __MODULE__
                 )
             end
@@ -82,8 +105,141 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
     end
   end
 
+  @doc "Returns stylesheet media context from the requested page box before CSS @page size."
+  @spec renderer_context(keyword()) :: {:ok, context()} | {:error, {atom(), map()}}
+  def renderer_context(opts) do
+    with :ok <- validate_options(opts) do
+      viewport =
+        case Keyword.get(opts, :print_viewport) do
+          nil ->
+            with {:ok, {width, height}} <-
+                   PageGeometry.normalize_page_size(Keyword.get(opts, :page_size, :a4)),
+                 :ok <- HtmlValidator.validate_page_size({width, height}),
+                 do: {:ok, {width / 0.75, height / 0.75}}
+
+          viewport ->
+            {:ok, viewport}
+        end
+
+      case viewport do
+        {:ok, {width, height}} ->
+          {:ok,
+           %{
+             width: width * 1.0,
+             height: height * 1.0,
+             density: Keyword.get(opts, :image_selection_density, 1) * 1.0,
+             type: :print
+           }}
+
+        {:error, reason} ->
+          Diagnostics.error(:layout, reason, "layout failed: #{reason}", module: __MODULE__)
+      end
+    end
+  end
+
+  @doc "Builds media context from a nonnegative child viewport in points, including scrollbar gutters."
+  @spec client_context(keyword(), {number(), number()}) ::
+          {:ok, context()} | {:error, {atom(), map()}}
+  def client_context(opts, {width, height}) do
+    with :ok <- validate_options(opts),
+         {:ok, {width, height}} <- HtmlValidator.prepare_viewport_dimensions(width, height) do
+      {:ok,
+       %{
+         width: width / 0.75,
+         height: height / 0.75,
+         density: Keyword.get(opts, :image_selection_density, 1) * 1.0,
+         type: :print
+       }}
+    end
+  end
+
+  @doc "Returns the environment part of a stylesheet cache key, omitting invariant media types."
+  @spec cache_context(String.t(), context() | nil | :unpositioned) ::
+          context() | nil | :unpositioned | :print
+  def cache_context(css, context) do
+    if Enum.any?(Regex.scan(@media_start, css, capture: ["query"]), fn [query] ->
+         String.contains?(query, "(")
+       end), do: context, else: :print
+  end
+
+  @doc "Checks stylesheet applicability and diagnoses viewport-qualified page defaults during page preparation."
+  @spec matches_stylesheet?(
+          String.t(),
+          String.t(),
+          context() | nil | :unpositioned
+        ) :: boolean()
+  def matches_stylesheet?(query, css, context) do
+    if String.contains?(query, "(") and
+         Regex.match?(@page_candidate, css) do
+      throw(
+        {:render_resource_limit,
+         Diagnostics.error(
+           :style,
+           :not_implemented,
+           "viewport-qualified @page defaults require page/media negotiation that is not implemented; keep page size and margins outside viewport conditions",
+           module: __MODULE__,
+           source: query
+         )}
+      )
+    end
+
+    matches?(query, context)
+  end
+
+  @doc "Selects bounded nested media blocks without changing their source order. Nil retains the legacy media-type-only API."
+  @spec select_rules(String.t(), context() | nil | :unpositioned) ::
+          {:ok, String.t()} | {:error, :invalid_css}
+  def select_rules(css, context) do
+    select_media(css, context, 0)
+  end
+
+  defp select_media(css, context, depth) do
+    HtmlValidator.check_render_resource(:max_media_query_depth, depth, :css)
+    HtmlValidator.reserve_render_resource(:max_css_work, byte_size(css), :css)
+
+    case Regex.run(@media_start, css, return: :index) do
+      [{offset, size}, {query_offset, query_size}] ->
+        prefix = binary_part(css, 0, offset)
+        query = binary_part(css, query_offset, query_size)
+        tail = binary_part(css, offset + size, byte_size(css) - offset - size)
+
+        closing =
+          @brace_token
+          |> Regex.scan(tail, return: :index)
+          |> Enum.reduce_while(1, fn [{index, _}], level ->
+            next = if binary_part(tail, index, 1) == "{", do: level + 1, else: level - 1
+            if next == 0, do: {:halt, {:closed, index}}, else: {:cont, next}
+          end)
+
+        case closing do
+          {:closed, index} ->
+            body = binary_part(tail, 0, index)
+            rest = binary_part(tail, index + 1, byte_size(tail) - index - 1)
+
+            with true <- HtmlValidator.trim_css_whitespace(query) != "",
+                 false <- Regex.match?(@media_candidate, prefix),
+                 {:ok, selected} <-
+                   if(matches_stylesheet?(query, body, context),
+                     do: select_media(body, context, depth + 1),
+                     else: {:ok, ""}
+                   ),
+                 {:ok, remaining} <- select_media(rest, context, depth) do
+              {:ok, prefix <> selected <> remaining}
+            else
+              _ -> {:error, :invalid_css}
+            end
+
+          _ ->
+            {:error, :invalid_css}
+        end
+
+      nil ->
+        if Regex.match?(@media_candidate, css), do: {:error, :invalid_css}, else: {:ok, css}
+    end
+  end
+
   @doc "Evaluates a media query list against a validated print context. Unknown features do not match."
-  @spec matches?(String.t(), context()) :: boolean()
+  @spec matches?(String.t(), context() | nil | :unpositioned) :: boolean()
   def matches?(query, context) do
     query =
       query
@@ -91,7 +247,24 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
       |> HtmlValidator.trim_css_whitespace()
       |> String.downcase(:ascii)
 
-    query == "" or Enum.any?(HtmlValidator.split_css_comma(query), &condition(&1, context, 0))
+    if context in [nil, :unpositioned] do
+      if context == :unpositioned and String.contains?(query, "(") do
+        throw(
+          {:render_resource_limit,
+           Diagnostics.error(
+             :style,
+             :not_implemented,
+             "viewport-dependent child styles require prepare_iframe_document and style_viewport with an explicit client viewport",
+             module: __MODULE__,
+             source: query
+           )}
+        )
+      end
+
+      query in ["", "print", "only print", "all", "only all"]
+    else
+      query == "" or Enum.any?(HtmlValidator.split_css_comma(query), &condition(&1, context, 0))
+    end
   end
 
   @doc "Resolves a nonnegative CSS source-size length to CSS pixels, or returns :error."
@@ -294,7 +467,13 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
             end
 
           _ ->
-            value in ~w(width height resolution aspect-ratio color)
+            case value do
+              "width" -> context.width > 0
+              "height" -> context.height > 0
+              "aspect-ratio" -> context.width > 0 and context.height > 0
+              name when name in ~w(resolution color) -> true
+              _ -> false
+            end
         end
     end
   end
@@ -321,7 +500,7 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
             :error
         end
 
-      "aspect-ratio" ->
+      "aspect-ratio" when context.height > 0 ->
         case String.split(expected, "/")
              |> Enum.map(&HtmlValidator.parse_css_number(String.trim(&1))) do
           [{numerator, ""}, {denominator, ""}] when numerator >= 0 and denominator > 0 ->

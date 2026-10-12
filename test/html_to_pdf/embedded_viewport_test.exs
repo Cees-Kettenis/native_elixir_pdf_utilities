@@ -364,15 +364,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewportTest do
     "<iframe #{attrs} srcdoc=\"#{encoded}\"></iframe>"
   end
 
-  test "required automatic iframe scrollbars diagnose until client-area geometry is supported" do
+  test "automatic iframe overflow uses a reduced client area while authored hidden overflow clips" do
     for child <- [
           "<body style='margin:0'><div style='height:100pt'>Tall</div></body>",
           "<body style='margin:0'><div style='width:120pt'>Wide</div></body>"
         ] do
-      assert {:error, {:not_implemented, diagnostic}} = HtmlToPdf.render(iframe(child))
-      assert diagnostic.stage == :layout and diagnostic.source == "iframe"
-      assert diagnostic.message =~ "automatic scrollbars"
-      assert diagnostic.message =~ "reduced client area"
+      assert {:ok, pdf} = HtmlToPdf.render(iframe(child))
+      assert pdf =~ " re W n"
+      assert pdf =~ "0.9882 0.9882 0.9882 rg"
     end
 
     for child <- [

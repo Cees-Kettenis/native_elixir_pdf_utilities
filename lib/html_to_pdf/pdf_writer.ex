@@ -17,6 +17,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.WriterValidator
+  alias NativeElixirPdfUtilities.Validators.SvgFormValidator
 
   # CSS defines one pixel as 1/96 inch, which is a fixed 0.75 PDF points.
   @css_pixel_points 0.75
@@ -1250,14 +1251,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp rect_path(box) do
-    radius = min(box.border_radius, min(box.width, box.height) / 2)
+    case Map.get(box, :shape, :rectangle) do
+      {:triangle, direction} ->
+        left = box.x
+        right = box.x + box.width
+        bottom = box.y
+        top = box.y + box.height
 
-    case radius > 0 do
-      true ->
-        rounded_rect_path(box.x, box.y, box.width, box.height, radius)
+        [{x, y} | points] =
+          case direction do
+            :up -> [{left, bottom}, {right, bottom}, {(left + right) / 2, top}]
+            :down -> [{left, top}, {right, top}, {(left + right) / 2, bottom}]
+            :left -> [{right, bottom}, {right, top}, {left, (bottom + top) / 2}]
+            :right -> [{left, bottom}, {left, top}, {right, (bottom + top) / 2}]
+          end
 
-      false ->
-        "#{format_number(box.x)} #{format_number(box.y)} #{format_number(box.width)} #{format_number(box.height)} re"
+        Enum.join(
+          [
+            "#{format_number(x)} #{format_number(y)} m"
+            | Enum.map(points, fn {x, y} -> "#{format_number(x)} #{format_number(y)} l" end)
+          ] ++ ["h"],
+          " "
+        )
+
+      :rectangle ->
+        radius = min(box.border_radius, min(box.width, box.height) / 2)
+
+        if radius > 0,
+          do: rounded_rect_path(box.x, box.y, box.width, box.height, radius),
+          else:
+            "#{format_number(box.x)} #{format_number(box.y)} #{format_number(box.width)} #{format_number(box.height)} re"
     end
   end
 
@@ -2091,20 +2114,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     |> Enum.uniq_by(& &1.image_resource_key)
     |> Enum.reduce({%{}, first_object_id, 1}, fn %{image: image, image_resource_key: key},
                                                  {resources, object_id, index} ->
-      mask_object_id = if Map.has_key?(image, :alpha_data), do: object_id + 1
-      base_object_count = if is_nil(mask_object_id), do: 1, else: 2
-      tint_object_id = if image.color_space == :device_cmyk, do: object_id + base_object_count
-      object_count = base_object_count + if(is_nil(tint_object_id), do: 0, else: 1)
+      resource =
+        case image.format do
+          :pdf_form ->
+            {:ok, form} = SvgFormValidator.prepare_source(image.data)
 
-      resource = %{
-        name: "Im#{index}",
-        object_id: object_id,
-        mask_object_id: mask_object_id,
-        tint_object_id: tint_object_id,
-        image: image
-      }
+            %{
+              name: "Im#{index}",
+              object_id: object_id,
+              object_count: 1 + map_size(form.objects),
+              image: image,
+              form: form
+            }
 
-      {Map.put(resources, key, resource), object_id + object_count, index + 1}
+          _ ->
+            mask_object_id = if Map.has_key?(image, :alpha_data), do: object_id + 1
+            base_object_count = if is_nil(mask_object_id), do: 1, else: 2
+
+            tint_object_id =
+              if image.color_space == :device_cmyk, do: object_id + base_object_count
+
+            object_count = base_object_count + if(is_nil(tint_object_id), do: 0, else: 1)
+
+            %{
+              name: "Im#{index}",
+              object_id: object_id,
+              object_count: object_count,
+              mask_object_id: mask_object_id,
+              tint_object_id: tint_object_id,
+              image: image
+            }
+        end
+
+      {Map.put(resources, key, resource), object_id + resource.object_count, index + 1}
     end)
     |> elem(0)
   end
@@ -2112,10 +2154,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp image_object_count(image_resources) do
     image_resources
     |> Map.values()
-    |> Enum.reduce(0, fn resource, count ->
-      count + 1 + if(is_nil(resource.mask_object_id), do: 0, else: 1) +
-        if(is_nil(resource.tint_object_id), do: 0, else: 1)
-    end)
+    |> Enum.reduce(0, fn resource, count -> count + resource.object_count end)
   end
 
   defp image_objects(image_resources) do
@@ -2127,32 +2166,94 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp image_objects_for_resource(resource) do
-    image_object = {resource.object_id, image_object(resource)}
+    if resource.image.format == :pdf_form do
+      form = resource.form
 
-    objects =
-      case resource.mask_object_id do
-        nil -> [image_object]
-        mask_object_id -> [image_object, {mask_object_id, image_mask_object(resource.image)}]
+      source_objects =
+        Enum.sort_by(form.objects, fn {{id, generation}, _object} -> {id, generation} end)
+
+      mapping =
+        source_objects
+        |> Enum.with_index(resource.object_id + 1)
+        |> Map.new(fn {{ref, _object}, id} -> {ref, id} end)
+
+      form_dictionary =
+        form.content_dictionary
+        |> Map.delete("Length")
+        |> Map.merge(%{
+          "Type" => {:name, "XObject"},
+          "Subtype" => {:name, "Form"},
+          "BBox" => [0, 0, form.width, form.height],
+          "Matrix" => [1 / form.width, 0, 0, 1 / form.height, 0, 0],
+          "Resources" => form.resources
+        })
+        |> then(fn dictionary ->
+          if is_nil(form.group), do: dictionary, else: Map.put(dictionary, "Group", form.group)
+        end)
+
+      objects =
+        Enum.map(source_objects, fn {ref, object} ->
+          {Map.fetch!(mapping, ref), svg_form_object(object.value, object.stream, mapping)}
+        end)
+
+      [{resource.object_id, svg_form_object(form_dictionary, form.stream, mapping)} | objects]
+    else
+      image_object = {resource.object_id, image_object(resource)}
+
+      objects =
+        case resource.mask_object_id do
+          nil -> [image_object]
+          mask_object_id -> [image_object, {mask_object_id, image_mask_object(resource.image)}]
+        end
+
+      case resource.tint_object_id do
+        nil ->
+          objects
+
+        object_id ->
+          # Multilinear interpolation reproduces the unprofiled JPEG conversion
+          # R=(1-C)*(1-K), G=(1-M)*(1-K), B=(1-Y)*(1-K).
+          samples =
+            for black <- 0..1, yellow <- 0..1, magenta <- 0..1, cyan <- 0..1, into: <<>> do
+              <<255 * (1 - cyan) * (1 - black), 255 * (1 - magenta) * (1 - black),
+                255 * (1 - yellow) * (1 - black)>>
+            end
+
+          tint =
+            "<< /FunctionType 0 /Domain [0 1 0 1 0 1 0 1] /Range [0 1 0 1 0 1] /Size [2 2 2 2] /BitsPerSample 8 /Length 48 >>\nstream\n" <>
+              samples <> "\nendstream"
+
+          objects ++ [{object_id, tint}]
       end
+    end
+  end
 
-    case resource.tint_object_id do
-      nil ->
-        objects
+  defp svg_form_object(value, stream, mapping) do
+    value = remap_svg_form_refs(value, mapping)
 
-      object_id ->
-        # Multilinear interpolation reproduces the unprofiled JPEG conversion
-        # R=(1-C)*(1-K), G=(1-M)*(1-K), B=(1-Y)*(1-K).
-        samples =
-          for black <- 0..1, yellow <- 0..1, magenta <- 0..1, cyan <- 0..1, into: <<>> do
-            <<255 * (1 - cyan) * (1 - black), 255 * (1 - magenta) * (1 - black),
-              255 * (1 - yellow) * (1 - black)>>
-          end
+    if is_binary(stream) do
+      value = Map.put(value, "Length", byte_size(stream))
+      {:ok, serialized} = InfoCodec.serialize_value(value)
+      IO.iodata_to_binary([serialized, "\nstream\n", stream, "\nendstream"])
+    else
+      {:ok, serialized} = InfoCodec.serialize_value(value)
+      IO.iodata_to_binary(serialized)
+    end
+  end
 
-        tint =
-          "<< /FunctionType 0 /Domain [0 1 0 1 0 1 0 1] /Range [0 1 0 1 0 1] /Size [2 2 2 2] /BitsPerSample 8 /Length 48 >>\nstream\n" <>
-            samples <> "\nendstream"
+  defp remap_svg_form_refs(value, mapping) do
+    case value do
+      {:ref, ref} ->
+        {:ref, {Map.fetch!(mapping, ref), 0}}
 
-        objects ++ [{object_id, tint}]
+      values when is_list(values) ->
+        Enum.map(values, &remap_svg_form_refs(&1, mapping))
+
+      values when is_map(values) ->
+        Map.new(values, fn {key, entry} -> {key, remap_svg_form_refs(entry, mapping)} end)
+
+      value ->
+        value
     end
   end
 
@@ -2247,16 +2348,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp image_key(image) do
-    :crypto.hash(:sha256, [
-      :erlang.term_to_binary(
-        {image.format, image.width_px, image.height_px, image.color_space,
-         image.bits_per_component, Map.get(image, :color_transform),
-         Map.get(image, :inverted_cmyk, false)}
-      ),
-      image.data,
-      Map.get(image, :alpha_data, "")
-    ])
-    |> Base.encode16(case: :lower)
+    if image.format == :pdf_form do
+      :crypto.hash(:sha256, image.data) |> Base.encode16(case: :lower)
+    else
+      :crypto.hash(:sha256, [
+        :erlang.term_to_binary(
+          {image.format, image.width_px, image.height_px, image.color_space,
+           image.bits_per_component, Map.get(image, :color_transform),
+           Map.get(image, :inverted_cmyk, false)}
+        ),
+        image.data,
+        Map.get(image, :alpha_data, "")
+      ])
+      |> Base.encode16(case: :lower)
+    end
   end
 
   defp pdf_color_space(color_space) do
@@ -2291,6 +2396,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp objects_to_pdf(objects, info_object_id) do
+    HtmlValidator.check_render_resource(:max_pdf_objects, length(objects), :writer)
     header = "%PDF-1.4\n%\xFF\xFF\xFF\xFF\n"
 
     {body, offsets, position} =

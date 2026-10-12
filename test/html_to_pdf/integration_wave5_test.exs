@@ -218,11 +218,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
     end
   end
 
-  test "unsupported MathML HTML children and inline SVG diagnose while child destinations serialize" do
-    for content <- [
-          "<math><mtext><span style='background:red'>Painted</span></mtext></math>",
-          "<svg><text>SVG text</text></svg>"
-        ] do
+  test "MathML child painting succeeds while unsupported SVG text diagnoses and child destinations serialize" do
+    child = "<math><mtext><span style='background:red'>Painted</span></mtext></math>"
+
+    assert {:ok, painted} =
+             HtmlToPdf.render(
+               "<iframe srcdoc='#{escape("<body style=\"overflow:hidden\">" <> child <> "</body>")}'></iframe>",
+               forms: :static
+             )
+
+    assert {:ok, text} = Text.extract(painted, layout: false)
+    assert text =~ "Painted"
+
+    for content <- ["<svg><text>SVG text</text></svg>"] do
       html =
         "<iframe srcdoc='#{escape("<body style=\"overflow:hidden\">" <> content <> "</body>")}'></iframe>"
 

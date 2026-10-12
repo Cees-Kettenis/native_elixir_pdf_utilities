@@ -2173,7 +2173,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     image = %{
       type: :element,
       tag: "img",
-      style: %{display: :image, position: :absolute},
+      style: %{display: :image, position: :absolute, image: %{width: 1.0, height: 1.0}},
       children: []
     }
 
@@ -3872,6 +3872,32 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
       assert diagnostic.source == tag
       assert diagnostic.message =~ "picture"
     end
+  end
+
+  test "SVG preparation validation cannot authorize rendering in the same budget" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
+    assert {:ok, dom} = HtmlParser.parse_detailed("<svg><text>Prepared only</text></svg>")
+    options = Font.normalize_options([])
+
+    assert :ok ==
+             HtmlValidator.with_render_budget(fn ->
+               assert {:ok, false} =
+                        HtmlValidator.prepare_style_input(dom, [], options, :prepare_svg)
+
+               assert {:error, {:unsupported_html, diagnostic}} =
+                        HtmlValidator.prepare_style_input(dom, [], options, :render)
+
+               assert diagnostic.source == "text"
+               assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgSceneValidator
+
+               assert {:ok, false} =
+                        HtmlValidator.prepare_style_input(dom, [], options, :prepare_svg)
+
+               assert {:error, {:invalid_document, _}} =
+                        HtmlValidator.prepare_style_input(dom, [], options, :unknown)
+
+               :ok
+             end)
   end
 
   test "validated DOM reuse rejects changed contents and options with retained canonical IDs" do

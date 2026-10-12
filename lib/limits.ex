@@ -23,7 +23,6 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_css_source_bytes: 1_000_000,
     max_html_nodes: 25_000,
     max_responsive_image_candidates: 1_000,
-    max_media_query_depth: 32,
     max_html_depth: 128,
     max_embedded_documents: 256,
     max_embedded_document_depth: 16,
@@ -32,6 +31,7 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_html_numeric_token_bytes: 1_024,
     max_css_rules: 10_000,
     max_css_work: 5_000_000,
+    max_media_query_depth: 32,
     max_layout_boxes: 100_000,
     max_drawing_group_depth: 128,
     max_rendered_text_bytes: 10_000_000,
@@ -71,6 +71,10 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_svg_resource_bytes: 10_000_000,
     max_aggregate_svg_resource_bytes: 50_000_000,
     max_svg_nodes: 25_000,
+    max_svg_transform_operations: 1_000,
+    max_svg_path_segments: 100_000,
+    max_svg_stroke_work: 1_000_000,
+    svg_raster_scale: 2,
     max_svg_depth: 128,
     max_svg_path_bytes: 1_000_000,
     max_svg_filter_primitives: 256,
@@ -164,7 +168,6 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_html_source_bytes
           | :max_css_source_bytes
           | :max_responsive_image_candidates
-          | :max_media_query_depth
           | :max_html_nodes
           | :max_html_depth
           | :max_embedded_documents
@@ -173,6 +176,7 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_text_decoration_layers
           | :max_html_numeric_token_bytes
           | :max_css_rules
+          | :max_media_query_depth
           | :max_css_work
           | :max_layout_boxes
           | :max_drawing_group_depth
@@ -212,6 +216,10 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_svg_resource_bytes
           | :max_aggregate_svg_resource_bytes
           | :max_svg_nodes
+          | :max_svg_transform_operations
+          | :max_svg_path_segments
+          | :max_svg_stroke_work
+          | :svg_raster_scale
           | :max_svg_depth
           | :max_svg_path_bytes
           | :max_svg_filter_primitives

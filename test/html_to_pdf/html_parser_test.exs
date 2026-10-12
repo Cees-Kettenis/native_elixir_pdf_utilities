@@ -5,6 +5,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
 
+  test "XML PI getter preserves tokenizer data, original authored bytes and canonical identities" do
+    alias NativeElixirPdfUtilities.Validators.ProcessingInstructionValidator, as: PI
+
+    token = "<?marker name='A&amp;B' Name='&amp;lt;'\r\nspace=' \t\r\nCafé'?>"
+    html = "\uFEFF<p>e\u0301</p>\r\n  " <> token <> "<?marker name='A' name='B'?>"
+    assert {:ok, %{children: [_, marker, malformed]}} = HtmlParser.parse_detailed(html)
+    assert marker.source == %{text: token, line: 2, column: 3}
+    assert marker.data == "name='A&amp;B' Name='&amp;lt;'\nspace=' \t\nCafé'"
+
+    assert {:ok, %{"name" => "A&B", "Name" => "&lt;", "space" => " \t\nCafé"}} =
+             PI.attributes(marker)
+
+    assert {:ok, nil} = PI.attribute(malformed, "name")
+    assert marker.node_id != malformed.node_id
+    assert marker.document_id == malformed.document_id
+    assert marker.tree_scope_id == malformed.tree_scope_id
+    assert marker.parent_id == malformed.parent_id
+    assert marker.source.text == token
+    refute Map.has_key?(marker, :attributes)
+    refute Map.has_key?(marker, :patch_state)
+  end
+
   test "processing instructions retain case-sensitive targets, literal data and original source identity" do
     html = "<?_Mark-2 \tname='A&amp;B' ? literal\r\nCafé?>\r<p><?marker>Text<?end ?></p>"
     assert {:ok, %{children: [first, paragraph]}} = HtmlParser.parse_detailed(html)
@@ -2646,6 +2668,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     end
 
     assert {:error, {:invalid_encoding, _diagnostic}} = HtmlParser.parse_fragment(<<255>>, "p")
+  end
+
+  test "wrapper-free optional groups and document sections retain their strict legacy contexts" do
+    for html <- [
+          "<title>T</title></head><p>B</body></html>",
+          "<table><col><?column><col></colgroup><tr><td>A</tbody></table>",
+          "<table><tr><td>A</td></tr><script type=application/json>{}</script><template></template></tbody></table>"
+        ] do
+      assert {:ok, _document} = HtmlParser.parse_detailed(html)
+    end
+
+    assert {:ok, %{children: [%{tag: "html", children: [head, body]}]}} =
+             HtmlParser.parse_document_detailed("Body <p>Next</p>")
+
+    assert head.children == []
+    assert hd(body.children).text == "Body "
+
+    for html <- [
+          "<head>Visible</head>",
+          "<head></head><style>p{color:red}</style><p>Body</p>",
+          "<head></head><template><p>Inert</p></template><p>Body</p>"
+        ] do
+      assert {:error, {:unsupported_html, diagnostic}} = HtmlParser.parse_document_detailed(html)
+      assert diagnostic.stage == :html and diagnostic.reason == :unsupported_html
+    end
+
+    assert {:ok, %{children: [%{tag: "html", children: [_, %{children: [%{tag: "noscript"}]}]}]}} =
+             HtmlParser.parse_document_detailed("<noscript><span>Visible</span></noscript>")
   end
 
   test "complete document parsing constructs document and table ancestry" do

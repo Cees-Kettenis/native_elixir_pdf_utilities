@@ -82,7 +82,131 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     assert {:ok, "xy1x2x3"} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
   end
 
+  test "fraction reference preserves tree and authored geometry while selecting source-derived script artwork" do
+    html = File.read!(Path.join(@fixtures_dir, "mathml_fractions.html"))
+
+    manifest =
+      :json.decode(
+        File.read!(Path.join(@fixtures_dir, "assets/math-fraction-script-reference.json"))
+      )
+
+    adjusted = math_fraction_script_reference(html)
+    assert manifest["layout_adjustments"] == []
+    assert manifest["tokens"]["nested-n"]["computed_depth"] == 2
+    assert manifest["tokens"]["small-n"]["computed_depth"] == 1
+    assert manifest["tokens"]["small-d"]["source_gids"] == [4277]
+    assert manifest["tokens"]["small-d"]["advances"] == [564]
+    assert adjusted =~ ~s(<mn style="font-size:12pt;math-depth:0">89</mn>)
+    assert adjusted =~ ~s(<mfrac style="width:54pt;padding:0;color:blue" linethickness="1px">)
+    assert adjusted =~ ~s(<a href="https://fraction.test/">Link</a>)
+    assert length(Regex.scan(~r/<mfrac\b/, adjusted)) == length(Regex.scan(~r/<mfrac\b/, html))
+    assert length(Regex.scan(~r/<mo\b/, adjusted)) == length(Regex.scan(~r/<mo\b/, html))
+
+    for key <- [
+          "font-size:",
+          "line-height:",
+          "width:",
+          "height:",
+          "margin:",
+          "padding:",
+          "transform:"
+        ] do
+      assert length(Regex.scan(Regex.compile!(Regex.escape(key)), adjusted)) ==
+               length(Regex.scan(Regex.compile!(Regex.escape(key)), html))
+    end
+
+    authored = ~s(<mn data-script-reference="small-n" style="color:red">123</mn>)
+
+    assert math_fraction_script_reference(authored) =~
+             ~s(style="color:red;font-family:&quot;Math Fraction Script Reference&quot;")
+  end
+
+  @tag :math_fraction_reference
+  test "approved fraction CSS reference is reversible and keeps source and outer transport separate" do
+    html = File.read!(Path.join(@fixtures_dir, "mathml_fractions.html"))
+
+    manifest =
+      :json.decode(
+        File.read!(Path.join(@fixtures_dir, "assets/math-fraction-core-reference.json"))
+      )
+
+    adjusted = math_fraction_core_reference(html)
+    assert manifest["replaced_top_fractions"] == 8
+    assert manifest["empirical_offsets"] == []
+    assert manifest["native_or_browser_geometry_inputs"] == false
+
+    assert manifest["unchanged_thresholds"] == %{
+             "max_changed_ratio" => 0.01,
+             "max_average_delta" => 0.01,
+             "pixel_channel_tolerance" => 12,
+             "dpi" => 72
+           }
+
+    assert length(Regex.scan(~r/<math\b/, adjusted)) == 6
+    assert adjusted =~ ~s(<mtext><span><a href="https://fraction.test/">Link</a></span></mtext>)
+
+    restored =
+      Regex.replace(
+        ~r/<style data-core-reference-fonts="source-pinned">.*?<\/style>/s,
+        adjusted,
+        ""
+      )
+
+    package = manifest["browser_packaging"]
+
+    restored =
+      String.replace(
+        restored,
+        package["artwork_only_reference"],
+        package["artwork_only_original"],
+        global: false
+      )
+
+    restored =
+      Enum.reduce(manifest["records"], restored, fn {_key, record}, document ->
+        assert record["outer_css_transport"]["baseline_witness_height"] ==
+                 record["outer_css_transport"]["ascent"]
+
+        assert record["original_sha256"] ==
+                 Base.encode16(:crypto.hash(:sha256, record["original_fragment"]), case: :lower)
+
+        String.replace(document, record["reference_fragment"], record["original_fragment"],
+          global: false
+        )
+      end)
+
+    assert restored == html
+    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html)
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
+    assert text =~ "1234+5"
+    assert text =~ "11Link"
+  end
+
   @fixture_thresholds [
+    {"html_svg_stylesheet_cascade.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_fractions.html",
+     chromium_transform: &__MODULE__.math_fraction_core_reference/1,
+     max_changed_ratio: 0.01,
+     max_average_delta: 0.01},
+    {"mathml_fractions_ordinary.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_html_children.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"inline_svg_geometry.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"inline_svg_opacity_groups.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"inline_svg_atomic_pages.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_stylesheet_selection.html",
+     native_renderer: &__MODULE__.render_stylesheet_fixture/2,
+     max_changed_ratio: 0.01,
+     max_average_delta: 0.01},
+    {"html_iframe_media_selection.html",
+     native_renderer: &__MODULE__.render_stylesheet_fixture/2,
+     chromium_transform: &__MODULE__.local_iframe_reference/1,
+     max_changed_ratio: 0.01,
+     max_average_delta: 0.01},
+    {"html_iframe_scrollbars.html",
+     native_renderer: &__MODULE__.render_embedded_fixture/2,
+     chromium_transform: &__MODULE__.local_iframe_reference/1,
+     max_changed_ratio: 0.01,
+     max_average_delta: 0.01},
     {"html_child_fragment_destinations.html",
      native_renderer: &__MODULE__.render_embedded_fixture/2,
      chromium_transform: &__MODULE__.local_iframe_reference/1,
@@ -382,6 +506,90 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     |> String.replace("sizes=\"(min-width:600px) calc(50vw / 5), 100px\"", "sizes=\"64px\"")
   end
 
+  @doc "Uses the approved source-derived CSS reference for eight fraction interiors."
+  @spec math_fraction_core_reference(String.t()) :: String.t()
+  def math_fraction_core_reference(html) do
+    manifest =
+      :json.decode(
+        File.read!(Path.join(@fixtures_dir, "assets/math-fraction-core-reference.json"))
+      )
+
+    true =
+      Base.encode16(:crypto.hash(:sha256, html), case: :lower) ==
+        manifest["inputs"]["test/fixtures/html_to_pdf/browser_parity/mathml_fractions.html"]
+
+    html =
+      Enum.reduce(manifest["records"], html, fn {_key, record}, document ->
+        String.replace(document, record["original_fragment"], record["reference_fragment"],
+          global: false
+        )
+      end)
+
+    package = manifest["browser_packaging"]
+
+    html =
+      String.replace(html, package["artwork_only_original"], package["artwork_only_reference"],
+        global: false
+      )
+
+    css =
+      Enum.reduce(package["faces"], package["font_stylesheet"], fn face, css ->
+        path = Path.expand(face["path"], File.cwd!())
+
+        true =
+          Base.encode16(:crypto.hash(:sha256, File.read!(path)), case: :lower) == face["sha256"]
+
+        String.replace(css, "../../../" <> face["path"], "file://" <> path)
+      end)
+
+    String.replace(html, "</head>", css <> "</head>", global: false)
+  end
+
+  @doc "Replaces only explicitly marked script glyph artwork with the approved source-font aliases."
+  @spec math_fraction_script_reference(String.t()) :: String.t()
+  def math_fraction_script_reference(html) do
+    manifest =
+      :json.decode(
+        File.read!(Path.join(@fixtures_dir, "assets/math-fraction-script-reference.json"))
+      )
+
+    font_path = Path.join(@fixtures_dir, "assets/math-fraction-script-reference.ttf")
+
+    true =
+      Base.encode16(:crypto.hash(:sha256, File.read!(font_path)), case: :lower) ==
+        manifest["reference_sha256"]
+
+    html =
+      Regex.replace(
+        ~r/<(mn|mo)([^>]*data-script-reference="([^"]+)"[^>]*)>([^<]*)<\/\1>/u,
+        html,
+        fn _, tag, attributes, key, text ->
+          record = Map.fetch!(manifest["tokens"], key)
+          true = record["text"] == text
+
+          attributes =
+            append_reference_style(attributes, "font-family:&quot;#{manifest["family"]}&quot;")
+
+          "<#{tag}#{attributes}>#{record["alias_text"]}</#{tag}>"
+        end
+      )
+
+    css =
+      "<style>@font-face{font-family:'#{manifest["family"]}';src:url('file://#{font_path}') format('truetype');font-weight:400;font-style:normal}</style>"
+
+    String.replace(html, "</head>", css <> "</head>", global: false)
+  end
+
+  defp append_reference_style(attributes, declaration) do
+    if Regex.match?(~r/\bstyle=["']/, attributes) do
+      Regex.replace(~r/\bstyle=(["'])(.*?)\1/, attributes, fn _, quote, css ->
+        "style=#{quote}#{css};#{declaration}#{quote}"
+      end)
+    else
+      "#{attributes} style='#{declaration}'"
+    end
+  end
+
   @doc "Replaces explicitly marked tall operators with independently generated Core artwork."
   @spec math_operator_core_reference(String.t()) :: String.t()
   def math_operator_core_reference(html) do
@@ -542,6 +750,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
         )
       end
     )
+  end
+
+  @doc "Renders authored page CSS without duplicating it as caller media options."
+  @spec render_stylesheet_fixture(String.t(), keyword()) :: {:ok, binary()} | {:error, term()}
+  def render_stylesheet_fixture(html, opts) do
+    render_embedded_fixture(html, Keyword.drop(opts, [:page_size, :margin]))
   end
 
   @doc false
@@ -918,12 +1132,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   for {fixture_name, thresholds} <- @fixture_thresholds do
     @fixture_name fixture_name
     @thresholds thresholds
+    if fixture_name in ["mathml_fractions.html", "mathml_fractions_ordinary.html"],
+      do: @tag(:math_fractions)
+
+    if fixture_name == "mathml_fractions_ordinary.html", do: @tag(:math_fraction_ordinary)
+
+    if fixture_name == "mathml_html_children.html", do: @tag(:math_html_children)
     @tag math_tokens: fixture_name in ["mathml_token_defaults.html", "mathml_tokens_rows.html"]
     @tag math_operators:
            fixture_name in ["mathml_operators.html", "mathml_operators_ordinary.html"]
 
     if fixture_name in ["html_responsive_images.html", "html_inline_images.html"],
       do: @tag(:responsive_images)
+
+    if fixture_name in ["html_stylesheet_selection.html", "html_iframe_media_selection.html"],
+      do: @tag(:stylesheet_selection)
 
     if fixture_name in [
          "html_child_fragment_destinations.html",
@@ -945,6 +1168,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
 
     if fixture_name in ["html_fragment_destinations.html", "html_base_relative_links.html"],
       do: @tag(:destinations)
+
+    if fixture_name in [
+         "inline_svg_geometry.html",
+         "inline_svg_atomic_pages.html",
+         "inline_svg_opacity_groups.html",
+         "html_svg_stylesheet_cascade.html"
+       ],
+       do: @tag(:inline_svg)
 
     test "matches Chromium for #{@fixture_name}" do
       fixture_path = Path.join(@fixtures_dir, @fixture_name)
@@ -969,7 +1200,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
       assert String.starts_with?(chromium_version, "Chromium ")
       assert String.starts_with?(rasterizer_version, "pdftoppm version ")
 
-      assert length(font_sources) in [4, 5, 6, 8]
+      if @fixture_name in ["mathml_fractions.html", "mathml_fractions_ordinary.html"] do
+        assert page_count == 1
+
+        for name <- ["native.pdf", "chromium.pdf"] do
+          assert {:ok, text} =
+                   NativeElixirPdfUtilities.Text.extract(
+                     File.read!(Path.join(artifact_dir, name)),
+                     layout: false
+                   )
+
+          compact = String.replace(text, ~r/\s/u, "")
+
+          captions =
+            if @fixture_name == "mathml_fractions_ordinary.html",
+              do: ["Small", "Medium", "Large"],
+              else: ["Small", "Medium", "Large", "Authored", "Linked", "Link", "Afterfractions."]
+
+          for caption <- captions, do: assert(compact =~ caption)
+        end
+      end
+
+      if @fixture_name == "mathml_html_children.html",
+        do: assert(length(font_sources) == 9),
+        else: assert(length(font_sources) in [4, 5, 6, 8])
 
       assert Enum.all?(font_sources, &String.match?(&1.sha256, ~r/\A[0-9a-f]{64}\z/))
       assert File.dir?(artifact_dir)
@@ -1229,6 +1483,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
         end
       end
 
+      if @fixture_name in ["html_stylesheet_selection.html", "html_iframe_media_selection.html"] do
+        for name <- ["native.pdf", "chromium.pdf"] do
+          pdf = File.read!(Path.join(artifact_dir, name))
+          assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+
+          if @fixture_name == "html_stylesheet_selection.html" do
+            for caption <- ["Selected print styles", "Source order", "After selection"],
+                do: assert(text =~ caption)
+
+            refute text =~ "Screen only"
+          else
+            refute text =~ "Wide child"
+          end
+        end
+      end
+
       if @fixture_name == "html_legacy_raw_text.html" do
         source = File.read!(fixture_path)
         assert source =~ "Café &amp; &#13;\r\n"
@@ -1403,6 +1673,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
             ] do
           node = Enum.find(nodes, &(get_in(&1, [:attributes, "id"]) == id))
           assert node._html_translate == expected
+
+          if @fixture_name == "mathml_html_children.html" do
+            assert page_count == 2
+
+            for name <- ["native.pdf", "chromium.pdf"] do
+              pdf = File.read!(Path.join(artifact_dir, name))
+              assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
+
+              for caption <- [
+                    "Small",
+                    "Medium",
+                    "Large",
+                    "Painted",
+                    "Ink",
+                    "First",
+                    "Last",
+                    "Override",
+                    "Alpha",
+                    "Beta"
+                  ],
+                  do: assert(String.replace(text, ~r/\s/u, "") =~ caption)
+            end
+          end
         end
       end
 
@@ -1638,6 +1931,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
         end
       end
 
+      if @fixture_name == "mathml_operators.html" do
+        assert page_count == 1
+
+        for name <- ["native.pdf", "chromium.pdf"] do
+          assert {:ok, text} =
+                   NativeElixirPdfUtilities.Text.extract(
+                     File.read!(Path.join(artifact_dir, name)),
+                     layout: false
+                   )
+
+          compact = String.replace(text, ~r/\s/u, "")
+
+          for expected <- [
+                "Small",
+                "Medium",
+                "Large",
+                "Fences",
+                "Assembly",
+                "1+2=3",
+                "∑1",
+                "→"
+              ],
+              do: assert(compact =~ expected)
+        end
+
+        assert {:ok, native} =
+                 NativeElixirPdfUtilities.Text.extract(
+                   File.read!(Path.join(artifact_dir, "native.pdf")),
+                   layout: false
+                 )
+
+        assert native =~ "1\u20622"
+      end
+
       if @fixture_name == "html_mixed_link_button_content.html" do
         assert page_count == 1
 
@@ -1736,6 +2063,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
                 "After combined child"
               ]
 
+            "html_iframe_media_selection.html" ->
+              [
+                "Parent print context",
+                "Narrow child",
+                "Child jump",
+                "Target",
+                "After media client"
+              ]
+
+            "html_iframe_scrollbars.html" ->
+              ["Scrollbars", "Vertical", "Horizontal", "Coupled", "After clients"]
+
             "html_iframe_viewports.html" ->
               [
                 "Parent before",
@@ -1786,6 +2125,84 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
                    right > left and top > bottom
                  end)
         end
+      end
+
+      if @fixture_name == "html_svg_stylesheet_cascade.html" do
+        assert page_count == 1
+
+        for name <- ["native.pdf", "chromium.pdf"] do
+          pdf = File.read!(Path.join(artifact_dir, name))
+          assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+
+          for caption <- ["Before SVG stylesheet", "Shared document styles", "After sibling SVG"],
+              do: assert(text =~ caption)
+
+          assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+          assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+
+          refute Enum.any?(document.objects, fn {_ref, %{value: value}} ->
+                   is_map(value) and value["Subtype"] == {:name, "Link"}
+                 end)
+        end
+
+        assert File.read!(Path.join(artifact_dir, "native.pdf")) =~ "/Subtype /Form"
+      end
+
+      if @fixture_name in ["inline_svg_geometry.html", "inline_svg_atomic_pages.html"] do
+        expected_pages = if @fixture_name == "inline_svg_geometry.html", do: 1, else: 2
+        assert page_count == expected_pages
+
+        captions =
+          if @fixture_name == "inline_svg_geometry.html",
+            do: [
+              "Inline baseline Ω",
+              "café after",
+              "Shapes and host cascade",
+              "Paths, strokes and affine artwork",
+              "Nested viewports, slice and percentages",
+              "Percentage host survived",
+              "Zero area survived",
+              "End of geometry"
+            ],
+            else: [
+              "First atomic scene Ω",
+              "Second atomic scene café",
+              "Both atomic scenes survived"
+            ]
+
+        for name <- ["native.pdf", "chromium.pdf"] do
+          pdf = File.read!(Path.join(artifact_dir, name))
+          assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+          for caption <- captions, do: assert(text =~ caption)
+          assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+          assert {:ok, context} = NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf)
+          assert length(context.pages) == expected_pages
+          assert pdf =~ "/Font"
+
+          if @fixture_name == "inline_svg_atomic_pages.html" do
+            assert pdf =~ "https://example.test/svg-first"
+            assert pdf =~ "https://example.test/svg-second"
+            assert pdf =~ "/Subtype /Link"
+          end
+        end
+
+        native = File.read!(Path.join(artifact_dir, "native.pdf"))
+        assert native =~ "/Subtype /Form"
+      end
+
+      if @fixture_name == "inline_svg_opacity_groups.html" do
+        assert page_count == 1
+
+        for name <- ["native.pdf", "chromium.pdf"] do
+          pdf = File.read!(Path.join(artifact_dir, name))
+          assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+          assert text =~ "Sibling opacity Ω café"
+          assert text =~ "Every group survived"
+          assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+          assert pdf =~ "/Font"
+        end
+
+        assert File.read!(Path.join(artifact_dir, "native.pdf")) =~ "/Subtype /Form"
       end
 
       if @fixture_name == "drawing_group_viewports.html" do

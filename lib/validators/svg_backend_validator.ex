@@ -13,6 +13,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
     with {:ok, summary} <- SvgValidator.validate_processing(source, context),
          context = summary.context,
          :ok <- validate_capabilities(summary, context),
+         :ok <- validate_inline_geometry(summary),
+         :ok <- validate_stroke_work(source, context.mode),
          {:ok, fonts} <- validate_fonts(context.fonts, summary.text),
          {:ok, resources} <- validate_resources(context.resources, image_budget, summary),
          {:ok, dimensions} <-
@@ -23,7 +25,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
          :ok <-
            HtmlValidator.reserve_render_resource(
              :max_aggregate_svg_surface_pixels,
-             75 * dimensions[:width] * dimensions[:height] * summary.expanded_work,
+             dimensions[:width] * dimensions[:height] *
+               if(context.mode == :inline,
+                 do: 1 + 25 * summary.opacity_layers + 75 * summary.nested_viewports,
+                 else: 75 * summary.expanded_work
+               ),
              :layout
            ) do
       {:ok,
@@ -45,6 +51,57 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
           module: __MODULE__,
           operation: :prepare
         )}}
+  end
+
+  @doc false
+  @spec prepare_vector(term(), term(), term(), HtmlValidator.image_budget() | nil) ::
+          {:ok, map()} | {:error, {atom(), map()}}
+  def prepare_vector(source, options, context, image_budget) do
+    with {:ok, request} <- prepare(source, options, context, image_budget) do
+      if request.mode == :inline and request.fonts == [] and map_size(request.resources) == 0,
+        do: {:ok, request},
+        else:
+          unsupported(
+            "SVG vector output requires an inline shape scene without fonts or image resources",
+            :vectorize
+          )
+    end
+  end
+
+  defp validate_stroke_work(source, mode) do
+    if mode == :inline do
+      with :ok <- native_load_result(NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.load_native()) do
+        case NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.validate_shape_work(
+               source,
+               Limits.get(:max_svg_stroke_work)
+             ) do
+          {:ok, work} ->
+            HtmlValidator.reserve_render_resource(:max_svg_stroke_work, work, :layout)
+
+          {:error, "max_svg_stroke_work"} ->
+            Diagnostics.error(
+              :limits,
+              :resource_limit_exceeded,
+              "SVG stroke expansion exceeds max_svg_stroke_work",
+              source: "SVG",
+              module: __MODULE__,
+              operation: :prepare
+            )
+
+          {:error, message} ->
+            Diagnostics.error(
+              :layout,
+              :invalid_document,
+              "SVG shape preparation failed: " <> message,
+              source: "SVG",
+              module: __MODULE__,
+              operation: :prepare
+            )
+        end
+      end
+    else
+      :ok
+    end
   end
 
   @doc false
@@ -73,9 +130,13 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
       ~w(svg g defs symbol use path rect circle ellipse line polyline polygon linearGradient radialGradient stop text tspan textPath image title desc a)
 
     cond do
-      context.mode == :inline ->
+      context.mode == :inline and
+          Enum.any?(summary.elements, fn {namespace, tag} ->
+            namespace != :svg or
+                tag not in ~w(svg g path rect circle ellipse line polyline polygon title desc)
+          end) ->
         unsupported(
-          "inline SVG requires host cascade, viewport layout and scene composition; this adapter does not enable inline rendering"
+          "inline SVG geometry cannot omit text, references, images, effects or native HTML; their complete scenes remain pending"
         )
 
       MapSet.member?(summary.elements, {:svg, "foreignObject"}) ->
@@ -119,6 +180,15 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
       true ->
         :ok
     end
+  end
+
+  defp validate_inline_geometry(summary) do
+    Enum.reduce_while(summary.geometry, :ok, fn node, :ok ->
+      case NativeElixirPdfUtilities.Validators.SvgSceneValidator.validate_node(node) do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
   end
 
   defp validate_fonts(fonts, text) do
@@ -270,10 +340,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
     end)
   end
 
-  defp unsupported(message) do
+  defp unsupported(message, operation \\ :rasterize) do
     Diagnostics.error(:layout, :unsupported_html, message,
       source: "SVG",
-      operation: :rasterize,
+      operation: operation,
       module: __MODULE__
     )
   end

@@ -411,7 +411,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
                    style: Map.put(style, :width, -1)
                })
 
-      assert {:error, {:unsupported_html, _}} =
+      assert {:error, {_, diagnostic}} =
                MathLayout.measure(%{
                  token
                  | children: [
@@ -423,6 +423,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
                      }
                    ]
                })
+
+      assert diagnostic.message != ""
 
       hidden = %{type: :element, tag: "span", style: %{display: :none}, children: []}
       assert {:ok, empty} = MathLayout.measure(%{token | children: [hidden]})
@@ -645,7 +647,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       assert {:ok, measured} = MathLayout.measure(token)
       assert measured.actual_text == "12"
       assert measured.ink_ascent == measured.ascent
-      assert Enum.map(measured.drawing_items, &Map.delete(&1, :kind)) == measured.glyphs
+
+      assert Enum.map(
+               measured.drawing_items,
+               &Map.drop(&1, [:kind, :logical_group, :logical_text])
+             ) == measured.glyphs
+
       assert_in_delta measured.width, 19.8, 0.0001
 
       for node <- [
@@ -1879,6 +1886,94 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
         ] do
       assert {:ok, %{underline: nil, strike: nil}} =
                FontValidator.prepare_text_metrics(%{font | data: ttf_fixture(tables)})
+    end
+  end
+
+  test "fractions resolve caller MATH constants and diagnose unsupported variation values" do
+    constants = replace_bytes(default_constants(), 12, <<250::signed-16>>)
+    constants = replace_bytes(constants, 144, <<40::signed-16>>)
+
+    for {records, expected} <- [
+          {constants, {:ok, 5.0, 0.8}},
+          {replace_bytes(constants, 14, <<214::16>>) <> <<5::16, 8::16, 0x8000::16>>, :variation},
+          {nil, :missing}
+        ] do
+      tables =
+        if records, do: Map.put(valid_tables(), "MATH", math_table(records)), else: valid_tables()
+
+      data = ttf_fixture(tables)
+      assert {:ok, registry} = Font.load_registry(fonts: [%{family: "STIX Two Math", data: data}])
+      assert {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
+
+      style = %{
+        display: :block,
+        font_face: font,
+        font_size: 20,
+        line_height: 24,
+        color: {0, 0, 0},
+        math_style: :compact
+      }
+
+      space = %{
+        type: :element,
+        namespace: :mathml,
+        tag: "mspace",
+        style: style,
+        children: [],
+        attributes: %{"width" => "3pt"}
+      }
+
+      node = %{
+        type: :element,
+        namespace: :mathml,
+        tag: "mfrac",
+        style: style,
+        children: [space, space],
+        attributes: %{}
+      }
+
+      result = MathLayoutValidator.prepare_element(node, %{})
+
+      case expected do
+        {:ok, axis, thickness} ->
+          assert {:ok, prepared} = result
+          assert prepared.axis == axis
+          assert prepared.rule_thickness == thickness
+          assert {:ok, measured} = MathLayout.measure(node)
+          assert measured.ascent >= axis
+
+          assert {:error, {_, diagnostic}} =
+                   MathLayoutValidator.prepare_element(
+                     %{node | attributes: %{"linethickness" => "1ex"}},
+                     %{}
+                   )
+
+          assert diagnostic.stage == :font and diagnostic.operation == :measure_math
+
+        failure ->
+          assert {:error, {_, diagnostic}} = result
+          assert diagnostic.operation == :measure_math
+          assert diagnostic.stage in [:font, :layout]
+
+          assert {:error, {_, public_diagnostic}} =
+                   NativeElixirPdfUtilities.HtmlToPdf.render(
+                     "<math><mfrac><mspace width='3pt'/><mspace width='3pt'/></mfrac></math>",
+                     fonts: [%{family: "STIX Two Math", data: data}],
+                     system_font_discovery: false
+                   )
+
+          assert public_diagnostic.operation ==
+                   if(failure == :missing, do: :math_metrics, else: :measure_math)
+
+          assert public_diagnostic.stage in [:font, :layout]
+
+          assert public_diagnostic.message =~
+                   if(failure == :variation, do: "variation", else: "MATH")
+
+          if failure == :variation,
+            do: assert(diagnostic.message =~ "variation"),
+            else: assert(diagnostic.message =~ "MATH")
+      end
     end
   end
 

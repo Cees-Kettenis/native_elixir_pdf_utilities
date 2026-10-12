@@ -589,8 +589,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert CssParser.parse("@media print and (color) { p { color: red; } }") ==
              {:ok, []}
 
-    assert CssParser.parse("@media print { @media print { p { color: red; } } }") ==
-             {:error, :invalid_css}
+    assert {:ok, [nested_rule]} =
+             CssParser.parse("@media print { @media print { p { color: red; } } }")
+
+    assert nested_rule.declarations == [{"color", "red"}]
   end
 
   test "font_faces extracts supported local TrueType and OpenType sources" do
@@ -684,7 +686,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert CssParser.font_faces(:not_css) == {:error, :invalid_css}
 
     assert CssParser.font_faces("@media print { @media print { p { color: red; } } }") ==
-             {:error, :invalid_css}
+             {:ok, []}
 
     assert {:error,
             {:invalid_css,

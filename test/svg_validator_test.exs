@@ -361,7 +361,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
     assert message =~ "processing instructions"
   end
 
-  test "namespace integration validates flow and phrasing content without enabling inline artwork" do
+  test "namespace integration validates flow and phrasing content while incomplete scenes diagnose" do
     html = "xmlns=\"http://www.w3.org/1999/xhtml\""
 
     for content <- [
@@ -373,7 +373,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
       assert {:error, {:unsupported_html, %{stage: :layout, message: message}}} =
                SvgBackend.rasterize(svg(content), [], %{mode: :inline})
 
-      assert message =~ "host cascade"
+      assert message =~ "complete scenes remain pending"
     end
 
     for content <- [
@@ -391,7 +391,8 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
              SvgBackend.rasterize(svg("<foreignObject/>"), [], %{mode: :image})
 
     assert message =~ "usvg 0.47.0 has no foreignObject"
-    assert {:error, {:unsupported_html, %{stage: :layout}}} = HtmlToPdf.render("<svg></svg>")
+    assert {:ok, pdf} = HtmlToPdf.render("<svg></svg>")
+    refute pdf =~ "/Subtype /Image"
   end
 
   test "internal reference graph bounds cycles, missing targets, duplicate IDs and repeated expansion",

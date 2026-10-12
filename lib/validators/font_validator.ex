@@ -653,6 +653,95 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   end
 
   @doc false
+  @spec prepare_text_ink_bounds(term()) ::
+          {:ok, {number(), number()} | nil} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_text_ink_bounds(box) do
+    with_budget(fn ->
+      case box do
+        %{
+          text: text,
+          font_face: %{type: :embedded, units_per_em: units, cmap: cmap} = font,
+          font_size: size,
+          y: baseline
+        }
+        when is_binary(text) and is_integer(units) and units > 0 and is_map(cmap) and
+               is_number(size) and size >= 0 and is_number(baseline) ->
+          check(:max_rendered_text_bytes, byte_size(text))
+          reserve(:max_font_math_work, byte_size(text))
+
+          with true <- String.valid?(text),
+               {:ok, bounds} <- prepare_glyph_bounds(font) do
+            selected_text =
+              if Map.has_key?(box, :glyph_ids),
+                do: text,
+                else:
+                  NativeElixirPdfUtilities.HtmlToPdf.Font.shape_ligatures(
+                    text,
+                    font,
+                    Map.get(box, :letter_spacing, 0.0)
+                  )
+
+            ids =
+              Map.get(
+                box,
+                :glyph_ids,
+                Enum.map(String.to_charlist(selected_text), &Map.get(cmap, &1, 0))
+              )
+
+            if is_list(ids), do: reserve(:max_font_math_work, length(ids))
+
+            valid? =
+              is_list(ids) and length(ids) == length(String.codepoints(selected_text)) and
+                Enum.all?(ids, &(is_integer(&1) and &1 > 0 and &1 < tuple_size(bounds))) and
+                size <= Limits.get(:max_css_numeric_magnitude) and
+                abs(baseline) <= Limits.get(:max_pdf_numeric_magnitude)
+
+            if valid? do
+              ink = ids |> Enum.map(&elem(bounds, &1)) |> Enum.reject(&(&1 == {0, 0, 0, 0}))
+
+              case ink do
+                [] ->
+                  {:ok, nil}
+
+                _ ->
+                  minimum = Enum.min(Enum.map(ink, &elem(&1, 1))) * size / units + baseline
+                  maximum = Enum.max(Enum.map(ink, &elem(&1, 3))) * size / units + baseline
+                  {:ok, {maximum, minimum}}
+              end
+            else
+              Diagnostics.error(
+                :font,
+                :invalid_document,
+                "text ink measurement requires valid selected glyph IDs and bounded point geometry",
+                operation: :measure_child,
+                module: __MODULE__,
+                source: text
+              )
+            end
+          else
+            false ->
+              Diagnostics.error(:font, :invalid_encoding, "text ink requires valid UTF-8",
+                operation: :measure_child,
+                module: __MODULE__
+              )
+
+            error ->
+              error
+          end
+
+        _ ->
+          Diagnostics.error(
+            :font,
+            :invalid_document,
+            "text ink measurement requires an embedded font and prepared text geometry",
+            operation: :measure_child,
+            module: __MODULE__
+          )
+      end
+    end)
+  end
+
+  @doc false
   @spec prepare_glyph_bounds(term()) ::
           {:ok, tuple()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_glyph_bounds(font) do

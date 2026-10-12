@@ -70,6 +70,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
           source: %{text: String.t(), line: pos_integer(), column: pos_integer()},
           children: [text_node() | element_node() | processing_instruction_node()]
         }
+  @type fragment_tree :: %{
+          type: :document_fragment,
+          node_id: reference(),
+          document_id: reference(),
+          tree_scope_id: reference(),
+          parent_id: nil,
+          source: %{text: String.t(), line: pos_integer(), column: pos_integer()},
+          children: [text_node() | element_node() | processing_instruction_node()]
+        }
 
   @doc """
   Parses an HTML binary into a renderer DOM tree.
@@ -139,25 +148,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   end
 
   @doc """
+  Parses a canonical fragment with live insertion parents in the supplied context.
+
+  The root is a `document_fragment` with its own tree scope. Omitted `tbody`
+  and `colgroup` parents exist before their authored children are parsed, both
+  in a table context and in nested tables. HTML, SVG and MathML contexts use
+  the same strict validation and tokenizer rules as `parse_fragment_detailed/2`.
+  Original source bytes and authored logical identities are retained. This
+  operation grants no resource permissions and does not enable template patches.
+  The existing fragment API retains its wrapper-free document projection.
+  """
+  @spec parse_fragment_tree_detailed(term(), term()) ::
+          {:ok, fragment_tree()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def parse_fragment_tree_detailed(html, context) do
+    HtmlValidator.with_render_budget(fn ->
+      with {:ok, context} <- HtmlValidator.validate_html_fragment_context(context) do
+        parse_input(html, {:fragment_tree, context})
+      end
+    end)
+  end
+
+  @doc """
   Parses a complete rendering document, constructing omitted document and table groups.
 
   Returns an `html` element containing `head` and `body`, and constructs `tbody`
-  and `colgroup` elements around authored rows and columns. `parse_detailed/1`
+  and `colgroup` elements before their authored children are parsed, so live
+  insertion locations include these implied parents. `parse_detailed/1`
   retains its existing wrapper-free tree representation.
   """
   @spec parse_document_detailed(term()) ::
           {:ok, dom_tree()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def parse_document_detailed(html) do
     HtmlValidator.with_render_budget(fn ->
-      with {:ok, dom} <- parse_input(html, :render_document) do
-        with {:ok, constructed} <- HtmlValidator.construct_html_document(dom) do
-          if constructed == dom do
-            {:ok, dom}
-          else
-            tree = HtmlTree.from_document(constructed)
-            {:ok, HtmlTree.fetch(tree, tree.root)}
-          end
-        end
+      with {:ok, dom} <- parse_input(html, :render_document),
+           :ok <- HtmlValidator.validate_constructed_html_document(dom) do
+        {:ok, dom}
       end
     end)
   end
@@ -245,7 +270,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   end
 
   defp parse_document(html, context, source_context) do
-    tree = HtmlTree.new(%{text: source_context.original, line: 1, column: 1})
+    {context, root_type, ancestors} =
+      case context do
+        {:fragment_tree, context} -> {context, :document_fragment, [:fragment_tree]}
+        :render_document -> {:document, :document, [:render_document]}
+        context -> {context, :document, []}
+      end
+
+    tree = HtmlTree.new(%{text: source_context.original, line: 1, column: 1}, root_type)
 
     case HtmlValidator.html_text_mode(context) != :data do
       true ->
@@ -273,9 +305,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         {:ok, HtmlTree.fetch(tree, tree.root)}
 
       false ->
-        {context, ancestors} =
-          if context == :render_document, do: {:document, [:render_document]}, else: {context, []}
-
         html =
           case html do
             <<239, 187, 191, remaining::binary>> -> remaining
@@ -437,11 +466,76 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   end
 
   defp parse_children(tokens, context, closing_tag, ancestors, source_context, tree, parent) do
-    case next_token(tokens, context) do
-      :eof when is_nil(closing_tag) ->
+    next = next_token(tokens, context)
+
+    action =
+      if (context in [:document, :after_doctype, "html", "head", "table"] and
+            :render_document in ancestors) or
+           (context == "table" and :fragment_tree in ancestors) do
+        token =
+          case next do
+            {:ok, token, _remaining} -> token
+            _ -> :eof
+          end
+
+        previous =
+          if context in [:document, :after_doctype, "html"],
+            do: HtmlTree.last_element_tag(tree, parent),
+            else: nil
+
+        HtmlValidator.html_insertion_action(
+          context,
+          token,
+          previous,
+          tree.nodes[parent].source.text == ""
+        )
+      else
+        :process
+      end
+
+    case {action, next} do
+      {{:error, {reason, diagnostic}}, {:ok, token, remaining}} ->
+        {:error,
+         {:html_diagnostic, reason, diagnostic, byte_size(stream_source(remaining)), token}}
+
+      {{:imply, tag}, next} when next == :eof or elem(next, 0) == :ok ->
+        pending =
+          case next do
+            :eof -> {:source, ""}
+            {:ok, token, remaining} -> {:pending, token, remaining}
+          end
+
+        group =
+          HtmlValidator.construct_html_group(tag, [])
+          |> Map.put(:source, %{text: "", line: 1, column: 1})
+
+        {tree, id} = HtmlTree.insert(tree, parent, group)
+
+        # The implied parent exists before reprocessing the authored token.
+        # Recursion tracks its insertion mode, while HtmlTree owns its address.
+        with {:ok, tree, rest} <-
+               HtmlValidator.within_html_element(fn ->
+                 parse_children(
+                   pending,
+                   tag,
+                   tag,
+                   [context | ancestors],
+                   source_context,
+                   tree,
+                   id
+                 )
+               end) do
+          {tree, _node} = HtmlTree.close(tree, id)
+          parse_children(rest, context, closing_tag, ancestors, source_context, tree, parent)
+        end
+
+      {:close, {:ok, token, remaining}} ->
+        {:ok, tree, {:pending, token, remaining}}
+
+      {_, :eof} when is_nil(closing_tag) ->
         {:ok, tree, {:source, ""}}
 
-      :eof ->
+      {_, :eof} ->
         case HtmlValidator.html_eof_end_tag_allowed?(
                context,
                closing_tag,
@@ -452,7 +546,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
           false -> {:error, :unsupported_html}
         end
 
-      {:ok, token, remaining} ->
+      {_, {:ok, token, remaining}} ->
         parse_child(
           token,
           remaining,
@@ -464,7 +558,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
           parent
         )
 
-      {:error, _reason} = error ->
+      {_, {:error, _reason} = error} ->
         error
     end
   end
@@ -695,11 +789,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
                 element_children,
                 stream_source(remaining)
               )
-
-            normalized =
-              if tag == "table" and :render_document in ancestors,
-                do: HtmlValidator.construct_html_table_groups(normalized),
-                else: normalized
 
             tree =
               if normalized == element_children,

@@ -13,13 +13,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTree do
   defstruct [:root, nodes: %{}, hosts: %{}]
 
   @doc false
-  @spec new(map()) :: t()
-  def new(source) do
+  @spec new(map(), :document | :document_fragment) :: t()
+  def new(source, type \\ :document) do
     id = make_ref()
     document = make_ref()
 
     root = %{
-      type: :document,
+      type: type,
       node_id: id,
       document_id: document,
       tree_scope_id: id,
@@ -141,6 +141,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTree do
     |> Map.fetch!(:children)
     |> Enum.reverse()
     |> Enum.map(&fetch(tree, &1))
+  end
+
+  @doc false
+  @spec last_element_tag(t(), reference()) :: String.t() | nil
+  def last_element_tag(tree, parent) do
+    tree.nodes
+    |> Map.fetch!(parent)
+    |> Map.fetch!(:children)
+    |> Enum.reduce_while(nil, fn id, _tag ->
+      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+
+      case Map.fetch!(tree.nodes, id) do
+        %{type: :element, tag: tag} -> {:halt, tag}
+        _ -> {:cont, nil}
+      end
+    end)
   end
 
   @doc false

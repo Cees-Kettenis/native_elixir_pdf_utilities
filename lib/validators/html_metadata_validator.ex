@@ -14,6 +14,107 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
+  @doc "Selects initially enabled HTML style blocks in authored tree order without fetching resources."
+  @spec selected_style_nodes(
+          [map()],
+          NativeElixirPdfUtilities.Validators.PrintMediaValidator.context()
+          | nil
+          | :unpositioned
+        ) :: [map()]
+  def selected_style_nodes(nodes, media_context) do
+    select_stylesheets(nodes, media_context, [:html])
+  end
+
+  @doc "Selects initially enabled HTML and SVG style blocks in one authored document light tree."
+  @spec selected_document_style_nodes([map()], map() | nil | :unpositioned) :: [map()]
+  def selected_document_style_nodes(nodes, media_context) do
+    select_stylesheets(nodes, media_context, [:html, :svg])
+  end
+
+  defp select_stylesheets(nodes, media_context, namespaces) do
+    scope =
+      Enum.find_value(nodes, {nil, nil}, fn node ->
+        if Map.has_key?(node, :document_id) and Map.has_key?(node, :tree_scope_id),
+          do: {node.document_id, node.tree_scope_id}
+      end)
+
+    sources = stylesheet_nodes(nodes, scope, namespaces)
+
+    preferred =
+      Enum.reduce(sources, "", fn node, preferred ->
+        attrs = node.attributes
+
+        cond do
+          node.tag == "meta" and
+            String.downcase(Map.get(attrs, "http-equiv", ""), :ascii) == "default-style" and
+              Map.get(attrs, "content", "") != "" ->
+            attrs["content"]
+
+          node.tag == "style" and stylesheet_type?(attrs) and preferred == "" ->
+            Map.get(attrs, "title", "")
+
+          true ->
+            preferred
+        end
+      end)
+
+    Enum.filter(sources, fn node ->
+      attrs = node.attributes
+
+      node.tag == "style" and stylesheet_type?(attrs) and
+        Map.get(attrs, "title", "") in ["", preferred] and
+        NativeElixirPdfUtilities.Validators.PrintMediaValidator.matches_stylesheet?(
+          Map.get(attrs, "media", "all"),
+          Enum.map_join(node.children, "", fn child -> Map.get(child, :text, "") end),
+          media_context
+        )
+    end)
+  end
+
+  defp stylesheet_nodes(nodes, {document, tree} = scope, namespaces) do
+    Enum.flat_map(nodes, fn node ->
+      case node do
+        %{type: :element, tag: tag, attributes: attrs, children: children} ->
+          if {Map.get(node, :document_id, document), Map.get(node, :tree_scope_id, tree)} == scope do
+            namespace = Map.get(node, :namespace, :html)
+            stylesheet? = namespace in namespaces and tag == "style"
+            metadata? = namespace == :html and tag == "meta"
+
+            if stylesheet? or metadata?,
+              do: HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+
+            own =
+              if stylesheet? or metadata?,
+                do: [
+                  %{
+                    node
+                    | attributes:
+                        Map.reject(attrs, fn {name, _} ->
+                          not is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), name))
+                        end)
+                  }
+                ],
+                else: []
+
+            if tag in ["template", "style"],
+              do: own,
+              else: own ++ stylesheet_nodes(children, scope, namespaces)
+          else
+            []
+          end
+
+        _ ->
+          []
+      end
+    end)
+  end
+
+  # HTML's style type is an exact ASCII-insensitive value, not a MIME essence.
+  # A content attribute named disabled does not set the CSSOM disabled flag.
+  defp stylesheet_type?(attrs) do
+    String.downcase(Map.get(attrs, "type", ""), :ascii) in ["", "text/css"]
+  end
+
   @doc "Validates applicable, unnamespaced HTML microdata attribute syntax."
   @spec validate_attributes(map(), String.t() | nil) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}

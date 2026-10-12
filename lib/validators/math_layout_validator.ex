@@ -8,7 +8,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.MathOperatorValidator
 
-  @rendered_elements ~w(math mi mn mo mtext ms mspace mrow)
+  @rendered_elements ~w(math mi mn mo mtext ms mspace mrow mfrac)
 
   @doc false
   @spec validate_flow_geometry([term()], number(), number()) ::
@@ -70,7 +70,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           drawing_glyphs =
             items
             |> Enum.filter(&(is_map(&1) and Map.get(&1, :kind) == :glyph))
-            |> Enum.map(&Map.delete(&1, :kind))
+            |> Enum.map(&Map.drop(&1, [:kind, :logical_group, :logical_text]))
 
           String.valid?(text) and is_number(width) and width >= 0 and
             Enum.all?([minimum, maximum, ink_ascent, ink_descent], &is_number/1) and
@@ -80,6 +80,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
               case item do
                 %{kind: :glyph} ->
                   true
+
+                %{kind: :logical, actual_text: text, x: x, y: y} ->
+                  is_number(x) and is_number(y) and is_binary(text) and String.valid?(text)
+
+                %{kind: :native, box: box, x: x, y: y} ->
+                  is_number(x) and is_number(y) and
+                    HtmlValidator.validate_measured_child_paint([box], %{}) == :ok
 
                 %{kind: :background, x: x, y: y, width: width, height: height, style: style} ->
                   Enum.all?([x, y, width, height], &is_number/1) and width >= 0 and height >= 0 and
@@ -148,6 +155,11 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
       }
     }
     |> then(fn defaults ->
+      defaults =
+        if node.tag == "mfrac",
+          do: Map.put(defaults, :padding, %{top: 0.0, right: 0.75, bottom: 0.0, left: 0.75}),
+          else: defaults
+
       if root? do
         Map.merge(defaults, %{
           font_families: ["math"],
@@ -164,6 +176,31 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
         defaults
       end
     end)
+  end
+
+  @doc false
+  @spec schema_child_defaults(map(), map(), [map()]) :: map()
+  def schema_child_defaults(node, inherited, ancestors) do
+    case ancestors do
+      [%{namespace: :mathml, tag: "mfrac", children: children} | _] ->
+        elements = Enum.filter(children, &(Map.get(&1, :type) == :element))
+        second = Enum.at(elements, 1)
+
+        defaults = %{
+          math_depth:
+            Map.get(inherited, :math_depth, 0) +
+              if(Map.get(inherited, :math_style, :normal) == :compact, do: 1, else: 0),
+          math_style: :compact
+        }
+
+        if second != nil and Map.has_key?(node, :_selector_id) and
+             Map.get(second, :_selector_id) == Map.get(node, :_selector_id),
+           do: Map.put(defaults, :math_shift, :compact),
+           else: defaults
+
+      _ ->
+        %{}
+    end
   end
 
   @doc false
@@ -538,7 +575,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                             style: style,
                             actual_text: operator.text
                           }},
-                       else: prepare_token_content(children, style, runs)
+                       else: prepare_token_content(children, style, runs, context)
                      ) do
                 source =
                   case content do
@@ -563,78 +600,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
             tag in ~w(mi mn mtext ms) ->
               with {:ok, runs} <- token_runs(children, true),
-                   do: prepare_token_content(children, style, runs)
+                   do: prepare_token_content(children, style, runs, context)
 
             true ->
-              in_flow =
-                Enum.reject(children, fn child ->
-                  Map.get(child, :style, %{}) |> Map.get(:display) == :none or
-                    (Map.get(child, :type) == :text and
-                       Regex.match?(~r/^[ \t\n\r\f]*$/u, child.text))
-                end)
-
-              count = Enum.count(in_flow, &(not space_like?(&1)))
-              embellished? = embellished?(node)
-
-              in_flow
-              |> Enum.with_index()
-              |> Enum.reduce_while({:ok, [], 0}, fn {child, child_index},
-                                                    {:ok, prepared, index} ->
-                operator_context =
-                  if embellished? and tag != "math" do
-                    Map.get(context, :operator_context, %{})
-                  else
-                    %{parent: tag, index: index, count: count, child_index: child_index}
-                  end
-
-                child_context = Map.put(context, :operator_context, operator_context)
-
-                result =
-                  case child do
-                    %{type: :text} ->
-                      prepare_node(
-                        %{
-                          type: :element,
-                          namespace: :mathml,
-                          tag: "mtext",
-                          attributes: %{},
-                          style: style,
-                          children: [child]
-                        },
-                        child_context
-                      )
-
-                    _ ->
-                      prepare_node(child, child_context)
-                  end
-
-                case result do
-                  {:ok, result} ->
-                    {:cont,
-                     {:ok, [result | prepared], index + if(space_like?(child), do: 0, else: 1)}}
-
-                  error ->
-                    {:halt, error}
-                end
-              end)
-              |> case do
-                {:ok, prepared, _index} ->
-                  children = Enum.reverse(prepared)
-
-                  core =
-                    if embellished?, do: Enum.find_value(children, &Map.get(&1, :core_operator))
-
-                  {:ok,
-                   %{
-                     kind: :row,
-                     children: children,
-                     style: style,
-                     core_operator: core,
-                     add_operator_space: tag == "math" or not embellished?
-                   }}
-
-                error ->
-                  error
+              with {:ok, row} <- prepare_row_children(node, context) do
+                if tag == "mfrac" and length(row.children) == 2,
+                  do: prepare_fraction(row, attributes),
+                  else: {:ok, row}
               end
           end
         end
@@ -646,68 +618,394 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     end
   end
 
+  defp prepare_row_children(node, context) do
+    %{tag: tag, children: children, style: style} = node
+
+    in_flow =
+      Enum.reject(children, fn child ->
+        Map.get(child, :style, %{}) |> Map.get(:display) == :none or
+          (Map.get(child, :type) == :text and
+             Regex.match?(~r/^[ \t\n\r\f]*$/u, child.text))
+      end)
+
+    count = Enum.count(in_flow, &(not space_like?(&1)))
+    embellished? = embellished?(node)
+
+    in_flow
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, [], 0}, fn {child, child_index}, {:ok, prepared, index} ->
+      operator_context =
+        if embellished? and tag != "math" do
+          Map.get(context, :operator_context, %{})
+        else
+          %{parent: tag, index: index, count: count, child_index: child_index}
+        end
+
+      child_context = Map.put(context, :operator_context, operator_context)
+
+      result =
+        case child do
+          %{type: :text} ->
+            prepare_node(
+              %{
+                type: :element,
+                namespace: :mathml,
+                tag: "mtext",
+                attributes: %{},
+                style: style,
+                children: [child]
+              },
+              child_context
+            )
+
+          _ ->
+            prepare_node(child, child_context)
+        end
+
+      case result do
+        {:ok, result} ->
+          {:cont, {:ok, [result | prepared], index + if(space_like?(child), do: 0, else: 1)}}
+
+        error ->
+          {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, prepared, _index} ->
+        children = Enum.reverse(prepared)
+
+        core =
+          if embellished?, do: Enum.find_value(children, &Map.get(&1, :core_operator))
+
+        {:ok,
+         %{
+           kind: :row,
+           children: children,
+           style: style,
+           core_operator: core,
+           add_operator_space: tag == "math" or not embellished?
+         }}
+
+      error ->
+        error
+    end
+  end
+
+  # Core 3.3.2 resolves font values and authored thickness before measurement.
+  defp prepare_fraction(row, attributes) do
+    style = row.style
+    math_style = Map.get(style, :math_style, :normal)
+
+    if math_style in [:normal, :compact] and is_number(style.font_size) and
+         style.font_size <= Limits.get(:max_css_numeric_magnitude) do
+      with {:ok, metrics} <- Font.math_metrics(style.font_face) do
+        names =
+          if math_style == :compact do
+            [
+              :axis_height,
+              :fraction_rule_thickness,
+              :fraction_numerator_shift_up,
+              :fraction_numerator_gap_min,
+              :fraction_denominator_shift_down,
+              :fraction_denominator_gap_min,
+              :stack_top_shift_up,
+              :stack_bottom_shift_down,
+              :stack_gap_min
+            ]
+          else
+            [
+              :axis_height,
+              :fraction_rule_thickness,
+              :fraction_numerator_display_style_shift_up,
+              :fraction_num_display_style_gap_min,
+              :fraction_denominator_display_style_shift_down,
+              :fraction_denom_display_style_gap_min,
+              :stack_top_display_style_shift_up,
+              :stack_bottom_display_style_shift_down,
+              :stack_display_style_gap_min
+            ]
+          end
+
+        FontValidator.reserve(:max_font_math_work, length(names))
+
+        values =
+          Enum.reduce_while(names, {:ok, []}, fn name, {:ok, values} ->
+            case prepare_value(Map.fetch!(metrics.constants, name), style.font_size) do
+              {:ok, {value, pixels}} ->
+                {:cont,
+                 {:ok, values ++ [value * style.font_size / metrics.units_per_em + pixels]}}
+
+              error ->
+                {:halt, error}
+            end
+          end)
+
+        with {:ok,
+              [
+                axis,
+                default,
+                numerator_shift,
+                numerator_gap,
+                denominator_shift,
+                denominator_gap,
+                stack_top,
+                stack_bottom,
+                stack_gap
+              ]} <- values do
+          default = max(default, 0.0)
+
+          thickness =
+            case Map.get(attributes, "linethickness") do
+              nil ->
+                {:ok, default}
+
+              value ->
+                case HtmlValidator.parse_css_number(value) do
+                  {number, "%"} ->
+                    {:ok, number * default / 100}
+
+                  _ ->
+                    case math_length(value, style) do
+                      {:ok, {:rem, ratio}} ->
+                        {:ok, ratio * Map.get(style, :_root_font_size, style.font_size)}
+
+                      {:ok, number} when is_number(number) ->
+                        {:ok, number}
+
+                      {:error, {_reason, _diagnostic}} = error ->
+                        error
+
+                      _ ->
+                        {:ok, default}
+                    end
+                end
+            end
+
+          with {:ok, thickness} <- thickness do
+            if thickness > 0,
+              do: HtmlValidator.reserve_render_resource(:max_layout_boxes, 1, :layout)
+
+            {:ok,
+             row
+             |> Map.put(:kind, :fraction)
+             |> Map.put(:axis, axis)
+             |> Map.put(:rule_thickness, max(thickness, 0.0))
+             |> Map.put(:numerator_shift, numerator_shift)
+             |> Map.put(:numerator_gap, numerator_gap)
+             |> Map.put(:denominator_shift, denominator_shift)
+             |> Map.put(:denominator_gap, denominator_gap)
+             |> Map.put(:stack_top, stack_top)
+             |> Map.put(:stack_bottom, stack_bottom)
+             |> Map.put(:stack_gap, stack_gap)}
+          end
+        end
+      end
+    else
+      failure("fractions require a bounded font size and normal or compact math-style")
+    end
+  end
+
   # Core's multi-character operator fallback is the same text/HTML flow as
   # the other tokens, including blockification of original direct child boxes.
-  defp prepare_token_content(children, style, runs) do
-    with :ok <- validate_token_text(runs) do
+  defp prepare_token_content(children, style, runs, context) do
+    native? = Enum.any?(children, &native_token_child?(&1, style.font_face))
+
+    with :ok <- validate_token_text(runs, native?) do
       math_formatting? =
         Map.get(style, :_math_formatting, style.display != :inline_block)
 
-      if not math_formatting? or Enum.any?(children, &(Map.get(&1, :type) == :element)) do
-        # Math formatting blockifies direct child boxes. An authored
-        # flow display instead retains ordinary HTML inline flow.
-        lines =
-          if not math_formatting?,
-            do: [children],
-            else: Enum.map(children, &[&1])
-
-        Enum.reduce_while(lines, {:ok, []}, fn line, {:ok, prepared} ->
-          with {:ok, runs} <- token_runs(line, true),
-               {:ok, glyphs, text} <- prepare_token_glyphs(runs) do
-            if glyphs == [] do
-              {:cont, {:ok, prepared}}
-            else
-              {:cont,
-               {:ok,
-                [
-                  %{kind: :token, children: glyphs, style: style, actual_text: text}
-                  | prepared
-                ]}}
-            end
-          else
-            error -> {:halt, error}
-          end
-        end)
-        |> case do
-          {:ok, prepared} ->
-            {:ok,
-             %{
-               kind: :flow,
-               children: Enum.reverse(prepared),
-               style: style,
-               actual_text: runs |> token_characters() |> Enum.map_join(& &1.text),
-               baseline_depth:
-                 if(prepared == [],
-                   do: 0.0,
-                   else: HtmlValidator.text_baseline_depth(style)
-                 ),
-               line_height: style.line_height
-             }}
-
-          error ->
-            error
-        end
+      if native? do
+        prepare_native_token(children, style, runs, context, math_formatting?)
       else
-        with {:ok, glyphs, actual_text} <- prepare_token_glyphs(runs),
-             do:
-               {:ok,
-                %{
-                  kind: :token,
-                  children: glyphs,
-                  style: style,
-                  actual_text: actual_text
-                }}
+        if not math_formatting? or Enum.any?(children, &(Map.get(&1, :type) == :element)) do
+          # Math formatting blockifies direct child boxes. An authored
+          # flow display instead retains ordinary HTML inline flow.
+          lines =
+            if not math_formatting?,
+              do: [children],
+              else: Enum.map(children, &[&1])
+
+          Enum.reduce_while(lines, {:ok, []}, fn line, {:ok, prepared} ->
+            with {:ok, runs} <- token_runs(line, true),
+                 {:ok, glyphs, text} <- prepare_token_glyphs(runs) do
+              if glyphs == [] do
+                {:cont, {:ok, prepared}}
+              else
+                {:cont,
+                 {:ok,
+                  [
+                    %{kind: :token, children: glyphs, style: style, actual_text: text}
+                    | prepared
+                  ]}}
+              end
+            else
+              error -> {:halt, error}
+            end
+          end)
+          |> case do
+            {:ok, prepared} ->
+              {:ok,
+               %{
+                 kind: :flow,
+                 children: Enum.reverse(prepared),
+                 style: style,
+                 actual_text: runs |> token_characters() |> Enum.map_join(& &1.text),
+                 baseline_depth:
+                   if(prepared == [],
+                     do: 0.0,
+                     else: HtmlValidator.text_baseline_depth(style)
+                   ),
+                 line_height: style.line_height
+               }}
+
+            error ->
+              error
+          end
+        else
+          with {:ok, glyphs, actual_text} <- prepare_token_glyphs(runs),
+               do:
+                 {:ok,
+                  %{
+                    kind: :token,
+                    children: glyphs,
+                    style: style,
+                    actual_text: actual_text
+                  }}
+        end
       end
+    end
+  end
+
+  # Transparent phrasing retains the existing selected-math-glyph path. Native
+  # layout owns boxes with artwork, links, decorations, breaks or atomic sizing.
+  defp native_token_child?(node, parent_font) do
+    case node do
+      %{type: :text} ->
+        false
+
+      %{style: %{display: :none}} ->
+        false
+
+      %{type: :element, style: style, children: children} ->
+        (is_map(Map.get(style, :font_face)) and style.font_face != parent_font) or
+          Map.get(style, :display) != :inline or
+          Map.get(style, :position, :static) != :static or
+          Map.get(style, :background_color) not in [nil, :transparent] or
+          Enum.any?(
+            [
+              :background_image,
+              :link_url,
+              :image,
+              :svg_image,
+              :form_kind,
+              :width,
+              :height,
+              :min_width,
+              :max_width,
+              :min_height,
+              :max_height
+            ],
+            &(Map.get(style, &1) != nil)
+          ) or
+          Map.get(style, :_text_decorations, []) != [] or
+          Enum.any?([:margin, :padding, :border_widths], fn property ->
+            case Map.get(style, property, %{}) do
+              edges when is_map(edges) -> Enum.any?(Map.values(edges), &(&1 != 0))
+              _ -> true
+            end
+          end) or Enum.any?(children, &native_token_child?(&1, parent_font))
+    end
+  end
+
+  defp prepare_native_token(children, style, runs, context, math_formatting?) do
+    children = Enum.map(children, &prepare_native_text(&1, true))
+
+    boxes =
+      if math_formatting? do
+        Enum.reject(children, &(Map.get(&1.style, :display) == :none))
+      else
+        [
+          %{
+            type: :element,
+            tag: "span",
+            style: Map.put(style, :display, :inline),
+            children: children
+          }
+        ]
+      end
+
+    constraints = %{unsupported_glyphs: Map.get(context, :unsupported_glyphs, :replace)}
+
+    Enum.reduce_while(boxes, {:ok, []}, fn node, {:ok, measured} ->
+      case NativeElixirPdfUtilities.HtmlToPdf.Layout.measure_child(
+             node,
+             Map.get(context, :resource_context),
+             constraints
+           ) do
+        {:ok, child} ->
+          child =
+            if math_formatting? do
+              first = child.first_alphabetic_baseline
+
+              child
+              |> Map.put(:ascent, child.ascent - first)
+              |> Map.put(:descent, child.descent + first)
+              |> Map.put(:ink_ascent, child.ink_ascent - first)
+              |> Map.put(:ink_descent, child.ink_descent + first)
+              |> Map.put(:baseline_offset, -first)
+            else
+              Map.put(child, :baseline_offset, 0.0)
+            end
+
+          {:cont, {:ok, [child | measured]}}
+
+        error ->
+          {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, measured} ->
+        {:ok,
+         %{
+           kind: :native_flow,
+           children: Enum.reverse(measured),
+           style: style,
+           actual_text: runs |> token_characters() |> Enum.map_join(& &1.text)
+         }}
+
+      error ->
+        error
+    end
+  end
+
+  # Apply math-auto to each original node before ordinary shaping. A fragment
+  # map preserves original Unicode when the native line helper splits its text.
+  defp prepare_native_text(node, math_text?) do
+    case node do
+      %{style: %{display: :none}} ->
+        node
+
+      %{type: :text, text: text, style: style} ->
+        FontValidator.check(:max_rendered_text_bytes, byte_size(text))
+        FontValidator.reserve(:max_font_math_work, byte_size(text))
+
+        displayed =
+          if Map.get(style, :text_transform) == :math_auto, do: math_auto_text(text), else: text
+
+        style = if math_text?, do: Map.put(style, :white_space, :nowrap), else: style
+
+        style =
+          style
+          |> Map.put(:_math_native_group, make_ref())
+          |> Map.put(
+            :_math_original_characters,
+            Map.new(Enum.zip(String.codepoints(displayed), String.codepoints(text)))
+          )
+
+        %{node | text: displayed, style: style}
+
+      %{children: children} ->
+        %{node | children: Enum.map(children, &prepare_native_text(&1, false))}
     end
   end
 
@@ -723,8 +1021,10 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           Map.get(child, :style, %{}) |> Map.get(:display) == :none or space_like?(child)
         end)
 
-      %{type: :text, text: text} ->
-        Regex.match?(~r/^[ \t\n\r\f]*$/u, text)
+      %{type: :text} ->
+        # Straight row text is prepared as anonymous mtext below; classify that
+        # prescribed result before computing the outer operator's form.
+        true
 
       _ ->
         false
@@ -735,6 +1035,15 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     case node do
       %{namespace: :mathml, tag: "mo"} ->
         true
+
+      %{namespace: :mathml, tag: "mfrac", children: children} ->
+        case Enum.reject(children, fn child ->
+               Map.get(child, :style, %{}) |> Map.get(:display) == :none or
+                 (Map.get(child, :type) == :text and Regex.match?(~r/^[ \t\n\r\f]*$/u, child.text))
+             end) do
+          [first | _] -> embellished?(first)
+          [] -> false
+        end
 
       %{namespace: :mathml, tag: tag, children: children} when tag in ["math", "mrow"] ->
         case Enum.reject(children, fn child ->
@@ -931,7 +1240,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
   defp validate_box_style(tag, style) do
     unsupported? =
-      (tag in ["math", "mrow", "mspace"] and not Map.get(style, :_math_formatting, true)) or
+      (tag in ["math", "mrow", "mspace", "mfrac"] and not Map.get(style, :_math_formatting, true)) or
         Map.get(style, :link_url) != nil or Map.get(style, :link_destination) != nil or
         (tag != "math" and Map.get(style, :html_target) != nil) or
         Map.get(style, :position, :static) != :static or
@@ -939,7 +1248,10 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
         Map.get(style, :box_sizing, :content_box) != :content_box or
         Enum.any?([:width, :height], fn property ->
           value = Map.get(style, property)
-          value != nil and not is_number(value)
+
+          value != nil and
+            (not is_number(value) or
+               (tag == "mfrac" and (value < 0 or value > Limits.get(:max_css_numeric_magnitude))))
         end) or
         Enum.any?(
           [:min_width, :max_width, :min_height, :max_height],
@@ -965,16 +1277,16 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     end
   end
 
-  defp validate_token_text(runs) do
+  defp validate_token_text(runs, native?) do
     unsupported =
       Enum.find(runs, fn run ->
-        (Map.get(run.style, :white_space) in [:pre, :pre_wrap, :break_spaces] and
+        (not native? and Map.get(run.style, :white_space) in [:pre, :pre_wrap, :break_spaces] and
            Regex.match?(~r/[\t\n\r\f]/u, run.text)) or
           Regex.match?(~r/\p{M}/u, run.text) or
           (String.length(run.text) > 1 and
              Regex.match?(~r/[\x{0590}-\x{08FF}\x{FB1D}-\x{FDFF}\x{FE70}-\x{FEFF}]/u, run.text)) or
-          Map.get(run.style, :_text_decorations, []) != [] or
-          Map.get(run.style, :letter_spacing, 0.0) != 0 or
+          (not native? and Map.get(run.style, :_text_decorations, []) != []) or
+          (not native? and Map.get(run.style, :letter_spacing, 0.0) != 0) or
           Map.get(run.style, :direction, :ltr) != :ltr
       end)
 
@@ -1027,60 +1339,11 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           %{type: :element, namespace: :mathml} ->
             failure("nested MathML in a token needs the later HTML-child composition batch")
 
-          %{type: :element, style: %{display: :inline} = style, children: nested} = child ->
-            tag = Map.get(child, :tag, "")
-
-            independent_box? =
-              Map.get(style, :position, :static) != :static or
-                Map.get(style, :background_color) not in [nil, :transparent] or
-                Enum.any?(
-                  [
-                    :background_image,
-                    :link_url,
-                    :link_destination,
-                    :html_target,
-                    :image,
-                    :svg_image,
-                    :form_kind,
-                    :width,
-                    :height,
-                    :min_width,
-                    :max_width,
-                    :min_height,
-                    :max_height
-                  ],
-                  &(Map.get(style, &1) != nil)
-                ) or
-                Enum.any?([:margin, :padding, :border_widths], fn property ->
-                  case Map.get(style, property, %{}) do
-                    edges when is_map(edges) -> Enum.any?(Map.values(edges), &(&1 != 0))
-                    _ -> true
-                  end
-                end)
-
-            if independent_box? or not HtmlValidator.valid_html_child?("span", tag) or
-                 HtmlValidator.html_void_tag?(tag) do
-              Diagnostics.error(
-                :layout,
-                :unsupported_html,
-                "MathML token HTML children with independent painting, boxes or links require HTML-child measurement",
-                operation: :render,
-                module: __MODULE__,
-                source: "math token"
-              )
-            else
-              token_runs(nested)
-            end
+          %{type: :element, children: nested} when is_list(nested) ->
+            token_runs(nested)
 
           _ ->
-            Diagnostics.error(
-              :layout,
-              :unsupported_html,
-              "MathML token children with breaks or atomic content require HTML-child measurement",
-              operation: :render,
-              module: __MODULE__,
-              source: "math token"
-            )
+            failure("math token children require validated styled text or element nodes")
         end
 
       case result do

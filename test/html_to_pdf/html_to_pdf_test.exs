@@ -8,6 +8,84 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   alias NativeElixirPdfUtilities.Split
   alias NativeElixirPdfUtilities.Text
 
+  test "token HTML children retain independent box painting and placement" do
+    for style <- [
+          "background-color:red",
+          "padding:2pt",
+          "border:1pt solid red",
+          "position:relative;left:2pt",
+          "width:30pt"
+        ] do
+      assert {:ok, pdf} =
+               HtmlToPdf.render(
+                 "<math><mtext><span style='#{style}'>Visible</span></mtext></math>"
+               )
+
+      assert {:ok, "Visible"} = Text.extract(pdf, layout: false)
+    end
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<math><mn>12</mn><mo>+</mo><mo>⁢</mo><mtext><a href='https://example.test/'>Link</a></mtext><mo>=</mo><mn>34</mn></math>"
+             )
+
+    assert {:ok, "12+⁢Link=34"} = Text.extract(pdf, layout: false)
+    assert pdf =~ "/URI"
+    assert pdf =~ "https://example.test/"
+  end
+
+  test "native token children omit hidden boxes and diagnose unavailable required text" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<math><mtext><span style='background:yellow'>Shown</span><span style='display:none'>Hidden</span></mtext></math>"
+             )
+
+    assert {:ok, "Shown"} = Text.extract(pdf, layout: false)
+
+    assert {:error, {:unsupported_glyph, diagnostic}} =
+             HtmlToPdf.render(
+               "<math><mtext><span style='background:yellow'>𐍈</span></mtext></math>",
+               unsupported_glyphs: :error,
+               system_font_discovery: false
+             )
+
+    assert diagnostic.message =~ "glyph" and diagnostic.stage == :font
+  end
+
+  test "same-document math child controls retain their form owner and native geometry" do
+    html =
+      "<form id='owner'><math><mtext><input name='math_child' value='Value'></mtext></math></form>"
+
+    assert {:ok, static} = HtmlToPdf.render(html, forms: :static)
+    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(static)
+    assert {:ok, "Value"} = Text.extract(static, layout: false)
+    assert {:ok, interactive} = HtmlToPdf.render(html)
+    assert {:ok, [field]} = NativeElixirPdfUtilities.Forms.fields(interactive)
+    assert field.name == "math_child" and field.value == "Value"
+  end
+
+  test "HTML token children use their selected ordinary font without requiring MATH data" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<math><mtext><span style='font-family:DejaVu Sans Mono'>Override</span></mtext></math>"
+             )
+
+    assert {:ok, "Override"} = Text.extract(pdf, layout: false)
+    assert pdf =~ "DejaVuSansMono"
+  end
+
+  test "painted mi HTML descendants retain original-node math-auto and extraction" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<math><mi style='display:inline-block'>f<span style='background:yellow'>i</span></mi></math>"
+             )
+
+    assert {:ok, "fi"} = Text.extract(pdf, layout: false)
+    assert {:ok, pdf} = HtmlToPdf.render("<math><mtext><span>Alpha<br>Beta</span></mtext></math>")
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    assert String.replace(text, "\n", "") == "AlphaBeta"
+  end
+
   test "processing instructions preserve combined gauge table metadata and first-base output" do
     html = """
     <?marker href=unused.png?><html><head><?marker data=Invisible?>
@@ -114,6 +192,83 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert diagnostic.stage == :html and diagnostic.reason == :unsupported_html
     assert diagnostic.operation == :compute and diagnostic.source == "div"
     assert diagnostic.message =~ "same authored tree"
+  end
+
+  test "XML PI getter prerequisite leaves public rendering and template-for diagnostics unchanged" do
+    html =
+      "<?marker name='A&amp;B' src='missing.png' onclick='run()'?>" <>
+        "<p>Visible</p><?start name='A' name='B'?>" <>
+        "<template><?marker name='inert'?><img src=unused.png></template><?end?>"
+
+    for mode <- [:static, :interactive] do
+      options = [
+        forms: mode,
+        system_font_discovery: false,
+        asset_resolver: fn request -> flunk("PI/inert resource fetched #{inspect(request)}") end
+      ]
+
+      assert {:ok, actual} = HtmlToPdf.render(html, options)
+      assert {:ok, expected} = HtmlToPdf.render("<p>Visible</p>", options)
+      assert actual == expected
+      assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(actual)
+    end
+
+    token = "<template for='A&amp;B'>"
+    source = "<?marker name='A&amp;B'?>\r\n  " <> token <> "<p>Replacement</p></template>"
+    assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(source)
+    assert diagnostic.stage == :html and diagnostic.reason == :unsupported_html
+    assert diagnostic.operation == :render and diagnostic.source == token
+    assert diagnostic.line == 2 and diagnostic.column == 3
+    assert diagnostic.message =~ "template"
+  end
+
+  test "token-time omitted document and table parents preserve the public PDF result" do
+    implied =
+      "<title>Metadata</title><?head></head><p>Opening<table><col><col></colgroup>" <>
+        "<tr><td>First<td>Second<?cell></tbody><tr><td>Third<td>Fourth</table>" <>
+        "<template><img src=unused.png><p>Inert</p></template>"
+
+    explicit =
+      "<html><head><title>Metadata</title><?head></head><body><p>Opening</p>" <>
+        "<table><colgroup><col><col></colgroup><tbody><tr><td>First</td>" <>
+        "<td>Second<?cell></td></tr></tbody><tbody><tr><td>Third</td>" <>
+        "<td>Fourth</td></tr></tbody></table>" <>
+        "<template><img src=unused.png><p>Inert</p></template></body></html>"
+
+    for mode <- [:static, :interactive] do
+      options = [
+        forms: mode,
+        system_font_discovery: false,
+        compress_streams: false,
+        asset_resolver: fn request -> flunk("inert resource fetched #{inspect(request)}") end
+      ]
+
+      assert {:ok, actual} = HtmlToPdf.render(implied, options)
+      assert {:ok, expected} = HtmlToPdf.render(explicit, options)
+      assert actual == expected
+      assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(actual)
+      assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(actual)
+      assert_pdf_text(actual, ["Opening", "First", "Second", "Third", "Fourth"])
+      assert {:ok, text} = Text.extract(actual)
+      refute text =~ "Inert"
+    end
+  end
+
+  test "token-time implied parents preserve strict public diagnostics and original locations" do
+    for {source, token, line, column} <- [
+          {"<title>T</title>\r\n<head></head>", "<head>", 2, 1},
+          {"<body></body>\r<head></head>", "<head>", 2, 1},
+          {"<p>e\u0301</p>\r\n  <template for=missing><p>Inert</p></template>",
+           "<template for=missing>", 2, 3},
+          {"<table><tr><td>A</table>\r\n  <script>run()</script>", "<script>", 2, 3}
+        ] do
+      assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(source)
+      assert diagnostic.reason == :unsupported_html
+      assert diagnostic.stage == :html and diagnostic.operation == :render
+      assert diagnostic.source == token
+      assert diagnostic.line == line and diagnostic.column == column
+      assert is_binary(diagnostic.message) and diagnostic.message != ""
+    end
   end
 
   test "processing instruction data creates no resources, boxes or PDF fields" do
@@ -316,8 +471,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       assert {:error, {:unsupported_html, diagnostic}} =
                HtmlToPdf.render("<svg><#{tag}><path/></#{tag}></svg>")
 
-      assert diagnostic.stage == :layout and diagnostic.operation == :render
-      assert diagnostic.message =~ "renderer is not implemented"
+      assert diagnostic.stage == :layout and diagnostic.operation == :prepare
+      assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgSceneValidator
+      assert diagnostic.source == tag
+      assert diagnostic.message =~ "implementation"
     end
   end
 
@@ -903,7 +1060,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
 
     for tag <-
-          ~w(mfrac msqrt mroot msup msub msubsup mover munder munderover mmultiscripts mstyle merror mpadded mphantom mtable semantics annotation annotation-xml maction unknown-math) do
+          ~w(msqrt mroot msup msub msubsup mover munder munderover mmultiscripts mstyle merror mpadded mphantom mtable semantics annotation annotation-xml maction unknown-math) do
       assert {:error, {:unsupported_html, diagnostic}} =
                HtmlToPdf.render("<math><#{tag}/></math>")
 
@@ -916,11 +1073,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     end
 
     for content <- ["<br/>", "<span style='display:inline-block'>atomic</span>"] do
-      assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render("<math><mtext>before#{content}after</mtext></math>")
+      assert {:ok, pdf} = HtmlToPdf.render("<math><mtext>before#{content}after</mtext></math>")
+      assert {:ok, text} = Text.extract(pdf, layout: false)
 
-      assert diagnostic.source == "math token"
-      assert diagnostic.message =~ "HTML-child measurement"
+      assert text ==
+               "before" <>
+                 if(String.contains?(content, "atomic"), do: "atomic", else: "") <> "after"
     end
 
     assert {:error, {_, %{message: message}}} =
@@ -984,7 +1142,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert {:ok, "𝑥"} = Text.extract(pdf, layout: false)
   end
 
-  test "token HTML children diagnose independent box painting and placement" do
+  test "original independently painted MathML child cases retain successful content and links" do
     for style <- [
           "background-color:red",
           "padding:2pt",
@@ -992,19 +1150,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
           "position:relative;left:2pt",
           "width:30pt"
         ] do
-      assert {:error, {:unsupported_html, diagnostic}} =
+      assert {:ok, pdf} =
                HtmlToPdf.render(
                  "<math><mtext><span style='#{style}'>Visible</span></mtext></math>"
                )
 
-      assert diagnostic.stage == :layout
-      assert diagnostic.message =~ "HTML-child measurement"
+      assert {:ok, "Visible"} = Text.extract(pdf, layout: false)
+      assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
     end
 
-    assert {:error, {:unsupported_html, _}} =
+    assert {:ok, pdf} =
              HtmlToPdf.render(
                "<math><mtext><a href='https://example.test/' style='text-decoration:none'>Link</a></mtext></math>"
              )
+
+    assert {:ok, "Link"} = Text.extract(pdf, layout: false)
+    assert pdf =~ "https://example.test/"
   end
 
   test "math font overrides must supply mathematical glyphs and usable metrics" do
@@ -1684,6 +1845,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       assert diagnostic.stage == :style and diagnostic.operation == :render
       assert is_binary(diagnostic.message) and byte_size(diagnostic.message) > 0
     end
+
+    assert {:ok, file_link_pdf} =
+             HtmlToPdf.render("<a href='file:///tmp/private'>Link</a>", opts)
+
+    assert_pdf_text(file_link_pdf, "Link")
+    assert file_link_pdf =~ "/URI (file:///tmp/private)"
+    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(file_link_pdf)
+
+    assert {:ok, fragment_pdf} = HtmlToPdf.render("<a href='#fragment'>Link</a>", opts)
+    assert_pdf_text(fragment_pdf, "Link")
+    refute fragment_pdf =~ "/Subtype /Link"
+    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(fragment_pdf)
   end
 
   test "static semantic inline defaults preserve complete reference PDFs and active fields" do
@@ -2278,21 +2451,82 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert text_message =~ "max_rendered_text_bytes"
   end
 
-  test "foreign content returns a renderer diagnostic until its layout is available" do
-    for {html, namespace} <- [
-          {"<svg><path d='M0 0'/></svg>", "svg"},
-          {"<div contenteditable><svg contenteditable=false><text>Foreign</text></svg></div>",
-           "svg"}
-        ] do
-      assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html)
-      assert diagnostic.stage == :layout
-      assert diagnostic.reason == :unsupported_html
-      assert diagnostic.operation == :render
-      assert diagnostic.module == NativeElixirPdfUtilities.Validators.ForeignContentValidator
-      assert diagnostic.message =~ namespace
-      assert diagnostic.message =~ "renderer"
-      assert diagnostic.source in ["math", "svg"]
+  test "unsupported SVG logical content returns a renderer diagnostic" do
+    assert {:error, {:unsupported_html, diagnostic}} =
+             HtmlToPdf.render(
+               "<div contenteditable><svg contenteditable=false><text>Foreign</text></svg></div>"
+             )
+
+    assert diagnostic.stage == :layout
+    assert diagnostic.reason == :unsupported_html
+    assert diagnostic.operation == :prepare
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgSceneValidator
+    assert diagnostic.message =~ "SVG text"
+    assert diagnostic.message =~ "implementation"
+    assert diagnostic.source == "text"
+  end
+
+  test "supported inline SVG geometry renders through the public API" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<svg width=20 height=20><path d='M0 0 H20 V20 Z' fill=red /></svg>"
+             )
+
+    assert pdf =~ "/Subtype /Form"
+  end
+
+  test "previously unsupported SVG path and MathML token inputs retain successful output" do
+    assert {:ok, empty_path_pdf} = HtmlToPdf.render("<svg><path d='M0 0'/></svg>")
+    assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(empty_path_pdf)
+    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(empty_path_pdf)
+    refute empty_path_pdf =~ "/Subtype /Image"
+
+    assert {:ok, math_pdf} = HtmlToPdf.render("<math><mi>x</mi></math>")
+    assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(math_pdf)
+    assert {:ok, "x"} = Text.extract(math_pdf, layout: false)
+    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(math_pdf)
+  end
+
+  test "original anonymous inline image inputs retain image and ancestor artwork" do
+    image = "data:image/png;base64,#{Base.encode64(png_fixture(1, 1))}"
+
+    for tag <- ["span", "noscript"] do
+      assert {:ok, pdf} =
+               HtmlToPdf.render(
+                 "<body><#{tag} style='background:red'><img src='#{image}'></#{tag}></body>",
+                 compress_streams: false
+               )
+
+      assert pdf =~ "/Subtype /Image"
+      assert pdf =~ "1 0 0 rg"
+      assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(pdf)
+      assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
     end
+  end
+
+  test "HTML fragment links and targets survive inline SVG composition" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<p><a href=#scene>Scene</a> <a href=#target><svg id=scene width=20 height=20><path d='M0 0 H20 V20 Z' fill=red /></svg></a></p><p id=target>Target</p>"
+             )
+
+    assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+
+    destinations =
+      for {_ref, %{value: %{"Subtype" => {:name, "Link"}, "Dest" => destination}}} <-
+            document.objects,
+          do: destination
+
+    assert length(destinations) == 2
+
+    assert Enum.all?(destinations, fn [{:ref, page}, {:name, "XYZ"}, x, y, nil] ->
+             page == hd(document.pages).ref and x >= 0 and y >= 0
+           end)
+
+    assert pdf =~ "/Subtype /Form"
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    assert text =~ "Target" and text =~ "Scene"
+    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
   end
 
   test "supplementary Unicode glyphs survive subsetting and PDF text extraction" do
@@ -3399,7 +3633,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "render returns diagnostics for malformed embedded media rules" do
-    html = "<style>@media print { @media print { p { color: red; } } }</style><p>x</p>"
+    html = "<style>@media print { @media print { p { color: red; } }</style><p>x</p>"
 
     assert {:error,
             {:invalid_css,

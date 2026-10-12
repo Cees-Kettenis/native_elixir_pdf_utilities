@@ -8,7 +8,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
   alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
 
   @doc """
-  Measures a styled MathML token, operator or row tree after validator preparation.
+  Measures styled MathML tokens, operators, rows and fractions after preparation.
 
   Coordinates are points relative to the alphabetic baseline, with positive y
   upwards. Layout and ink extents are separate. Drawing items retain the selected
@@ -38,6 +38,102 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             italic_correction: 0.0,
             top_accent_attachment: nil,
             glyphs: []
+          }
+
+        %{kind: :fraction, children: [numerator, denominator]} ->
+          numerator = measure_prepared(numerator, constraint)
+          denominator = measure_prepared(denominator)
+          thickness = prepared.rule_thickness
+
+          {up, down} =
+            if thickness > 0 do
+              {
+                max(
+                  prepared.numerator_shift,
+                  prepared.axis + thickness / 2 + prepared.numerator_gap + numerator.ink_descent
+                ),
+                max(
+                  prepared.denominator_shift,
+                  thickness / 2 + prepared.denominator_gap + denominator.ink_ascent -
+                    prepared.axis
+                )
+              }
+            else
+              gap =
+                prepared.stack_bottom - denominator.ink_ascent +
+                  prepared.stack_top - numerator.ink_descent
+
+              deficit = max(prepared.stack_gap - gap, 0.0)
+              {prepared.stack_top + deficit / 2, prepared.stack_bottom + deficit / 2}
+            end
+
+          width = Map.get(prepared.style, :width) || max(numerator.width, denominator.width)
+
+          offsets = [
+            {numerator, (width - numerator.width) / 2, up},
+            {denominator, (width - denominator.width) / 2, -down}
+          ]
+
+          rule =
+            if thickness > 0 and width > 0 do
+              [
+                %{
+                  kind: :native,
+                  x: 0.0,
+                  y: 0.0,
+                  box: %{
+                    type: :rect,
+                    x: 0.0,
+                    y: prepared.axis - thickness / 2,
+                    width: width,
+                    height: thickness,
+                    fill_color: prepared.style.color,
+                    stroke_color: nil,
+                    stroke_width: 0.0,
+                    border_radius: 0.0,
+                    snap_to_css_pixel_grid: false
+                  }
+                }
+              ]
+            else
+              []
+            end
+
+          positioned = fn field ->
+            Enum.flat_map(offsets, fn {child, x, y} ->
+              Enum.map(Map.fetch!(child, field), &%{&1 | x: &1.x + x, y: &1.y + y})
+            end)
+          end
+
+          ascent = max(up + numerator.ascent, -down + denominator.ascent)
+          ink_ascent = max(up + numerator.ink_ascent, -down + denominator.ink_ascent)
+          descent = max(max(-up + numerator.descent, down + denominator.descent), 0.0)
+          ink_descent = max(-up + numerator.ink_descent, down + denominator.ink_descent)
+
+          {ascent, descent, ink_ascent, ink_descent} =
+            if thickness > 0 do
+              top = prepared.axis + thickness / 2
+              bottom = thickness / 2 - prepared.axis
+
+              {max(ascent, top), max(descent, bottom), max(ink_ascent, top),
+               max(ink_descent, bottom)}
+            else
+              {ascent, descent, ink_ascent, ink_descent}
+            end
+
+          %{
+            width: width,
+            min_content_width: max(numerator.min_content_width, denominator.min_content_width),
+            max_content_width: max(numerator.max_content_width, denominator.max_content_width),
+            ascent: ascent,
+            descent: descent,
+            ink_ascent: ink_ascent,
+            ink_descent: ink_descent,
+            italic_correction: 0.0,
+            top_accent_attachment: nil,
+            glyphs: positioned.(:glyphs),
+            drawing_items: rule ++ positioned.(:drawing_items),
+            actual_text: numerator.actual_text <> denominator.actual_text
           }
 
         %{kind: :operator} ->
@@ -77,6 +173,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             {:error, _} = error ->
               throw({:math_layout_error, error})
           end
+
+        %{kind: :native_flow, children: children} ->
+          # Preparation retains at least one visible native child or flow wrapper.
+          [first | _] = children
+          ascent = first.ascent
+
+          {items, ink, total} =
+            Enum.reduce(children, {[], [], 0.0}, fn child, {items, ink, height} ->
+              offset = ascent - height - child.ascent
+
+              positioned =
+                Enum.map(child.boxes, fn box ->
+                  %{kind: :native, box: box, x: 0.0, y: offset + child.baseline_offset}
+                end)
+
+              {items ++ positioned,
+               [{child.ink_ascent + offset, offset - child.ink_descent} | ink],
+               height + child.ascent + child.descent}
+            end)
+
+          %{
+            width: Enum.max(Enum.map(children, & &1.width)),
+            min_content_width: Enum.max(Enum.map(children, & &1.min_content_width)),
+            max_content_width: Enum.max(Enum.map(children, & &1.max_content_width)),
+            ascent: ascent,
+            descent: total - ascent,
+            ink_ascent: Enum.max(Enum.map(ink, &elem(&1, 0))),
+            ink_descent: Enum.max(Enum.map(ink, &(-elem(&1, 1)))),
+            italic_correction: 0.0,
+            top_accent_attachment: nil,
+            glyphs: [],
+            drawing_items: items
+          }
 
         %{kind: :flow, children: children, baseline_depth: baseline, line_height: height} ->
           children = Enum.map(children, &measure_prepared/1)
@@ -208,6 +337,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
           Map.get(measured, :actual_text, Enum.map_join(measured.glyphs, & &1.text))
         )
       )
+
+    measured =
+      if Map.get(prepared, :kind) in [:token, :operator] do
+        group = make_ref()
+        logical = %{logical_group: group, logical_text: measured.actual_text}
+
+        measured
+        |> Map.update!(:drawing_items, fn items ->
+          Enum.map(items, fn item ->
+            if item.kind == :glyph, do: Map.merge(item, logical), else: item
+          end)
+        end)
+      else
+        measured
+      end
+
+    measured =
+      if match?(%{invisible: true}, Map.get(prepared, :core_operator)) and
+           measured.drawing_items == [] and measured.actual_text != "" do
+        Map.put(measured, :drawing_items, [
+          %{kind: :logical, actual_text: measured.actual_text, x: 0.0, y: 0.0}
+        ])
+      else
+        measured
+      end
 
     if Map.get(prepared, :root, false),
       do: measured,
@@ -503,6 +657,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
           Font.with_measurement_cache(fn -> FontValidator.with_budget(fun) end)
         catch
           {:math_layout_error, error} -> error
+          {:font_resource_limit, error} -> error
+          {:render_resource_limit, error} -> error
         end
       end)
 

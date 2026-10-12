@@ -613,32 +613,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
           %{type: :glyph_group, boxes: children} ->
             %{box | boxes: shift_boxes(children, delta_y)}
 
-          %{type: :drawing_group, transform: {a, b, c, d, e, f}} ->
-            %{box | transform: {a, b, c, d, e, f + delta_y}}
-
           _ ->
             box
         end
 
-      box =
-        case Map.get(box, :y) do
-          y when is_number(y) -> Map.put(box, :y, y + delta_y)
-          _ -> box
-        end
-
-      box =
-        case Map.get(box, :clip) do
-          %{y: clip_y} = clip when box.type != :drawing_group ->
-            Map.put(box, :clip, %{clip | y: clip_y + delta_y})
-
-          _ ->
-            box
-        end
-
-      case Map.get(box, :link_rect) do
-        %{y: region_y} = region -> Map.put(box, :link_rect, %{region | y: region_y + delta_y})
-        _ -> box
-      end
+      NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.translate_box(box, 0, delta_y)
     end)
   end
 

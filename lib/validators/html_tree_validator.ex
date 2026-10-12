@@ -2,6 +2,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.HtmlToPdf.HtmlTree
+  alias NativeElixirPdfUtilities.Validators.ProcessingInstructionValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @identity_keys [:node_id, :document_id, :tree_scope_id, :parent_id]
@@ -62,7 +64,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
   def validate_transport(dom) do
     HtmlValidator.with_render_budget(fn ->
       case dom do
-        %{type: :document, children: children} when is_list(children) ->
+        %{type: type, children: children}
+        when type in [:document, :document_fragment] and is_list(children) ->
           canonical? = Map.has_key?(dom, :document_id)
           document = Map.get(dom, :document_id)
           scope = Map.get(dom, :node_id)
@@ -76,6 +79,128 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
           :ok
       end
     end)
+  end
+
+  # This result is an internal plan over the parser's live address table. It is
+  # neither caller transport, permission nor evidence of removed-source policy.
+  @type content_patch_target :: %{
+          scope: reference(),
+          parent: reference(),
+          start: reference(),
+          end: reference() | nil,
+          removed: [reference()]
+        }
+
+  @doc false
+  @spec prepare_content_patch(HtmlTree.t(), reference(), String.t()) ::
+          {:ok, content_patch_target() | nil} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_content_patch(tree, insertion_parent, name) do
+    HtmlValidator.with_render_budget(fn ->
+      if name == "" do
+        {:ok, nil}
+      else
+        HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+        owner = Map.fetch!(tree.nodes, insertion_parent)
+
+        scope =
+          case {Map.get(owner, :namespace, :html), owner} do
+            {:html, %{type: :element, tag: "template", content: content}} ->
+              content
+
+            {:html, %{type: :element, tag: "body", parent_id: parent}} when not is_nil(parent) ->
+              HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+
+              case Map.fetch!(tree.nodes, parent) do
+                %{type: :element, tag: "html"} -> parent
+                _ -> insertion_parent
+              end
+
+            _ ->
+              insertion_parent
+          end
+
+        with {:ok, start} <- find_patch_marker(tree, scope, name) do
+          case start do
+            nil ->
+              {:ok, nil}
+
+            start ->
+              marker = Map.fetch!(tree.nodes, start)
+              parent = marker.parent_id
+
+              {end_marker, removed} =
+                if marker.target == "marker" do
+                  {start, []}
+                else
+                  patch_range(tree, parent, start)
+                end
+
+              {:ok,
+               %{scope: scope, parent: parent, start: start, end: end_marker, removed: removed}}
+          end
+        end
+      end
+    end)
+  end
+
+  # Children are stored backwards. Search only ordinary descendants in authored
+  # tree order; template content is a different tree, never a light descendant.
+  defp find_patch_marker(tree, parent, name) do
+    children = Map.fetch!(tree.nodes, parent) |> Map.get(:children, [])
+    HtmlValidator.reserve_render_resource(:max_html_tree_work, length(children), :html)
+
+    children
+    |> Enum.reverse()
+    |> Enum.reduce_while({:ok, nil}, fn id, _result ->
+      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      node = Map.fetch!(tree.nodes, id)
+
+      result =
+        case node do
+          %{type: :processing_instruction, target: target} when target in ["marker", "start"] ->
+            with {:ok, marker_name} <-
+                   ProcessingInstructionValidator.attribute(Map.delete(node, :projection), "name") do
+              {:ok, if(marker_name == name, do: id, else: nil)}
+            end
+
+          _ ->
+            find_patch_marker(tree, id, name)
+        end
+
+      case result do
+        {:ok, nil} -> {:cont, result}
+        _ -> {:halt, result}
+      end
+    end)
+  end
+
+  # Range matching uses siblings only. Every start target increments nesting,
+  # irrespective of its name or whether its pseudo-attribute data is malformed.
+  defp patch_range(tree, parent, start) do
+    siblings = Map.fetch!(tree.nodes, parent).children
+    HtmlValidator.reserve_render_resource(:max_html_tree_work, 3 * length(siblings), :html)
+    {later, [^start | _earlier]} = Enum.split_while(siblings, &(&1 != start))
+
+    later
+    |> Enum.reverse()
+    |> Enum.reduce_while({nil, [], 0}, fn id, {nil, removed, nesting} ->
+      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+
+      case Map.fetch!(tree.nodes, id) do
+        %{type: :processing_instruction, target: "end"} when nesting == 0 ->
+          {:halt, {id, removed, nesting}}
+
+        %{type: :processing_instruction, target: "end"} ->
+          {:cont, {nil, [id | removed], nesting - 1}}
+
+        %{type: :processing_instruction, target: "start"} ->
+          {:cont, {nil, [id | removed], nesting + 1}}
+
+        _ ->
+          {:cont, {nil, [id | removed], nesting}}
+      end
+    end)
+    |> then(fn {end_marker, removed, _nesting} -> {end_marker, Enum.reverse(removed)} end)
   end
 
   defp walk(node, canonical?, document, scope, parent, seen, depth) do

@@ -11,6 +11,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
   @css_pixel_points 0.75
   @raster_boundary_bias 0.0001
 
+  @doc "Translates validated artwork and annotations while keeping drawing-group children and clips local."
+  @spec translate_box(map(), number(), number()) :: map()
+  def translate_box(box, delta_x, delta_y) do
+    box =
+      case box do
+        %{type: :drawing_group, transform: {a, b, c, d, e, f}} ->
+          %{box | transform: {a, b, c, d, e + delta_x, f + delta_y}}
+
+        _ ->
+          box
+      end
+
+    box =
+      Enum.reduce([{:x, delta_x}, {:y, delta_y}], box, fn {key, delta}, shifted ->
+        case Map.get(shifted, key) do
+          value when is_number(value) -> Map.put(shifted, key, value + delta)
+          _ -> shifted
+        end
+      end)
+
+    box =
+      case Map.get(box, :clip) do
+        %{x: x, y: y} = clip when box.type != :drawing_group ->
+          Map.put(box, :clip, %{clip | x: x + delta_x, y: y + delta_y})
+
+        _ ->
+          box
+      end
+
+    case Map.get(box, :link_rect) do
+      %{x: x, y: y} = region ->
+        Map.put(box, :link_rect, %{region | x: x + delta_x, y: y + delta_y})
+
+      _ ->
+        box
+    end
+  end
+
   @doc false
   @spec text_position(map(), number()) :: {number(), number()}
   def text_position(box, height) do
@@ -42,18 +80,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
     end
   end
 
-  @doc false
-  @spec snap_css_pixel(number()) :: float()
-  def snap_css_pixel(value) do
-    Float.floor(value / @css_pixel_points + 0.5) * @css_pixel_points
-  end
-
-  @doc false
+  @doc "Returns the effective local clip, including the existing zero-area group rule."
   @spec local_clip(map()) :: map() | nil
   def local_clip(group) do
     if group.width == 0 or group.height == 0,
       do: %{x: 0, y: 0, width: 0, height: 0},
       else: Map.get(group, :clip)
+  end
+
+  @doc false
+  @spec snap_css_pixel(number()) :: float()
+  def snap_css_pixel(value) do
+    Float.floor(value / @css_pixel_points + 0.5) * @css_pixel_points
   end
 
   @doc false

@@ -1,4 +1,6 @@
 //! Byte-only backend. Caller policy and resource budgets live in Elixir validators.
+mod vector;
+mod vector_validator;
 use rustler::{Binary, Encoder, Env, NifResult, OwnedBinary, Term};
 use std::{collections::HashMap, sync::Arc};
 
@@ -14,8 +16,9 @@ fn render<'a>(
     height: u32,
     fonts: Vec<Binary<'a>>,
     resources: HashMap<String, Binary<'a>>,
+    authored_hints: bool,
 ) -> NifResult<Term<'a>> {
-    let result = render_bytes(&source, width, height, fonts, resources);
+    let result = render_bytes(&source, width, height, fonts, resources, authored_hints);
     match result {
         Ok(png) => {
             let mut binary = OwnedBinary::new(png.len()).ok_or(rustler::Error::BadArg)?;
@@ -26,12 +29,66 @@ fn render<'a>(
     }
 }
 
+#[rustler::nif(schedule = "DirtyCpu")]
+fn vectorize<'a>(
+    env: Env<'a>,
+    source: String,
+    fonts: Vec<Binary<'a>>,
+    resources: HashMap<String, Binary<'a>>,
+) -> NifResult<Term<'a>> {
+    let result = vector_bytes(&source, fonts, resources);
+    match result {
+        Ok(pdf) => {
+            let mut binary = OwnedBinary::new(pdf.len()).ok_or(rustler::Error::BadArg)?;
+            binary.as_mut_slice().copy_from_slice(&pdf);
+            Ok((atoms::ok(), binary.release(env)).encode(env))
+        }
+        Err(message) => Ok((atoms::error(), message).encode(env)),
+    }
+}
+
+fn vector_bytes(
+    source: &str,
+    fonts: Vec<Binary>,
+    resources: HashMap<String, Binary>,
+) -> Result<Vec<u8>, String> {
+    if !fonts.is_empty() || !resources.is_empty() {
+        return Err(
+            "SVG vector output requires selected font and resource embedding support".to_string(),
+        );
+    }
+
+    vector::convert(&shape_tree(source)?)
+}
+
+fn shape_tree(source: &str) -> Result<usvg::Tree, String> {
+    let xml = usvg::roxmltree::Document::parse_with_options(
+        source,
+        usvg::roxmltree::ParsingOptions {
+            allow_dtd: false,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let options = usvg::Options {
+        resources_dir: None,
+        fontdb: Arc::new(usvg::fontdb::Database::new()),
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_data: Box::new(|_, _, _| None),
+            resolve_string: Box::new(|_, _| None),
+        },
+        ..Default::default()
+    };
+    usvg::Tree::from_xmltree(&xml, &options).map_err(|error| error.to_string())
+}
+
 fn render_bytes(
     source: &str,
     width: u32,
     height: u32,
     fonts: Vec<Binary>,
     resources: HashMap<String, Binary>,
+    authored_hints: bool,
 ) -> Result<Vec<u8>, String> {
     let xml = usvg::roxmltree::Document::parse_with_options(
         source,
@@ -82,9 +139,21 @@ fn render_bytes(
             }),
         },
         // Preserve the restricted asset converter's default hints in this contract batch.
-        shape_rendering: usvg::ShapeRendering::OptimizeSpeed,
-        text_rendering: usvg::TextRendering::OptimizeSpeed,
-        image_rendering: usvg::ImageRendering::OptimizeSpeed,
+        shape_rendering: if authored_hints {
+            usvg::ShapeRendering::default()
+        } else {
+            usvg::ShapeRendering::OptimizeSpeed
+        },
+        text_rendering: if authored_hints {
+            usvg::TextRendering::default()
+        } else {
+            usvg::TextRendering::OptimizeSpeed
+        },
+        image_rendering: if authored_hints {
+            usvg::ImageRendering::default()
+        } else {
+            usvg::ImageRendering::OptimizeSpeed
+        },
         ..Default::default()
     };
     let tree = usvg::Tree::from_xmltree(&xml, &options).map_err(|error| error.to_string())?;
@@ -98,7 +167,87 @@ fn render_bytes(
     pixmap.encode_png().map_err(|error| error.to_string())
 }
 
+#[rustler::nif(schedule = "DirtyCpu")]
+fn validate_shape_work<'a>(env: Env<'a>, source: String, ceiling: u64) -> Term<'a> {
+    match shape_tree(&source).and_then(|tree| vector_validator::work(tree.root(), ceiling)) {
+        Ok(work) => (atoms::ok(), work).encode(env),
+        Err(message) => (atoms::error(), message).encode(env),
+    }
+}
+
+// Called only by the Elixir geometry validator. usvg otherwise drops malformed
+// paths; validation must diagnose them before visible rendering can succeed.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn validate_path<'a>(
+    env: Env<'a>,
+    source: String,
+    max_segments: u64,
+    max_coordinate: f64,
+) -> Term<'a> {
+    let mut count = 0u64;
+    for segment in svgtypes::PathParser::from(source.as_str()) {
+        match segment {
+            Ok(segment) => {
+                if count == 0 && !matches!(segment, svgtypes::PathSegment::MoveTo { .. }) {
+                    return (atoms::error(), "SVG path must begin with moveto").encode(env);
+                }
+                let values = match segment {
+                    svgtypes::PathSegment::MoveTo { x, y, .. }
+                    | svgtypes::PathSegment::LineTo { x, y, .. }
+                    | svgtypes::PathSegment::SmoothQuadratic { x, y, .. } => {
+                        [x, y, 0.0, 0.0, 0.0, 0.0]
+                    }
+                    svgtypes::PathSegment::HorizontalLineTo { x, .. } => {
+                        [x, 0.0, 0.0, 0.0, 0.0, 0.0]
+                    }
+                    svgtypes::PathSegment::VerticalLineTo { y, .. } => [y, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    svgtypes::PathSegment::CurveTo {
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        x,
+                        y,
+                        ..
+                    } => [x1, y1, x2, y2, x, y],
+                    svgtypes::PathSegment::SmoothCurveTo { x2, y2, x, y, .. } => {
+                        [x2, y2, x, y, 0.0, 0.0]
+                    }
+                    svgtypes::PathSegment::Quadratic { x1, y1, x, y, .. } => {
+                        [x1, y1, x, y, 0.0, 0.0]
+                    }
+                    svgtypes::PathSegment::EllipticalArc {
+                        rx,
+                        ry,
+                        x_axis_rotation,
+                        x,
+                        y,
+                        ..
+                    } => [rx, ry, x_axis_rotation, x, y, 0.0],
+                    svgtypes::PathSegment::ClosePath { .. } => [0.0; 6],
+                };
+                if values
+                    .iter()
+                    .any(|value| !value.is_finite() || value.abs() > max_coordinate)
+                {
+                    return (
+                        atoms::error(),
+                        "SVG path coordinates exceed the configured numeric range",
+                    )
+                        .encode(env);
+                }
+                count += 1;
+                if count > max_segments {
+                    return (atoms::error(), "max_svg_path_segments").encode(env);
+                }
+            }
+            Err(error) => return (atoms::error(), error.to_string()).encode(env),
+        }
+    }
+    (atoms::ok(), count).encode(env)
+}
+
 rustler::init!(
     "Elixir.NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes",
-    [render]
+    [render, vectorize, validate_path, validate_shape_work]
 );

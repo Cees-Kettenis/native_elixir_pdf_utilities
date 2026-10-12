@@ -206,7 +206,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
       path_costs: %{},
       text_costs: %{},
       hrefs: [],
-      text: []
+      text: [],
+      geometry: [],
+      opacity_layers: 0,
+      nested_viewports: 0
     }
 
     result =
@@ -409,6 +412,28 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
           state
           | stack: [%{namespace: namespace, name: name, index: index} | state.stack],
             elements: MapSet.put(state.elements, {namespace, name}),
+            geometry:
+              if(state.context.mode == :inline and namespace == :svg,
+                do: [
+                  %{type: :element, namespace: :svg, tag: name, attributes: attrs, children: []}
+                  | state.geometry
+                ],
+                else: state.geometry
+              ),
+            opacity_layers:
+              state.opacity_layers +
+                if(
+                  namespace == :svg and
+                    case HtmlValidator.parse_css_number(Map.get(attrs, "opacity", "1")) do
+                      {value, ""} -> value > 0 and value < 1
+                      _ -> false
+                    end,
+                  do: 1,
+                  else: 0
+                ),
+            nested_viewports:
+              state.nested_viewports +
+                if(namespace == :svg and name == "svg" and state.root != nil, do: 1, else: 0),
             images: state.images + if(name == "image", do: 1, else: 0),
             ids: if(id == nil, do: state.ids, else: Map.put(state.ids, id, index)),
             graph: graph,
@@ -598,27 +623,17 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         Diagnostics.error(
           :style,
           :invalid_document,
-          "SVG source must contain valid intrinsic dimensions or a viewBox"
+          "SVG source must contain valid intrinsic dimensions or a viewBox within the supported numeric range",
+          source: "SVG"
         )
     end
   end
 
   defp svg_view_box(value) do
-    case value do
-      nil ->
-        {:ok, nil}
-
-      value when is_binary(value) ->
-        parts = String.split(value, ~r/[\s,]+/u, trim: true)
-
-        case Enum.map(parts, &parse_svg_number/1) do
-          [{:ok, _min_x}, {:ok, _min_y}, {:ok, width}, {:ok, height}]
-          when width > 0 and height > 0 ->
-            {:ok, {width, height}}
-
-          _ ->
-            :error
-        end
+    case NativeElixirPdfUtilities.Validators.SvgViewportValidator.view_box(value) do
+      {:ok, nil} -> {:ok, nil}
+      {:ok, {_x, _y, width, height}} when width > 0 and height > 0 -> {:ok, {width, height}}
+      _ -> :error
     end
   end
 

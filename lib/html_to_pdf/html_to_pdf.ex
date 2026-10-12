@@ -38,6 +38,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Pdf.OutlineDetector
   alias NativeElixirPdfUtilities.Validators.FontValidator
+  alias NativeElixirPdfUtilities.Validators.PrintMediaValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type page_size :: PageGeometry.page_size_input()
@@ -103,6 +104,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | {:assets, %{optional(String.t()) => asset_source()}}
           | {:asset_resolver, asset_resolver() | nil}
           | {:stylesheets, [stylesheet_source()]}
+          | {:print_viewport, {number(), number()}}
+          | {:image_selection_density, number()}
           | {:default_font, String.t() | [String.t()]}
           | {:fonts, [map() | keyword() | {String.t(), String.t()}]}
           | {:system_font_discovery, boolean()}
@@ -202,9 +205,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   read or cache lookup, and never invoke the asset resolver. `forms: :static`
   preserves child control artwork; interactive child widgets return an
   `:unsupported_form` diagnostic pending transformed widget support. Child HTML
-  that requires automatic scrollbars returns `:not_implemented` until client-area
-  geometry is supported. Author `html` or `body` with `overflow:hidden` for a
-  static clipped viewport.
+  overflow selects classic scrollbars and reflows within their reduced client
+  area. The PDF captures the initial scroll position. Cyclic percentage sizing
+  that cannot settle on a client area returns an actionable `:not_implemented`
+  diagnostic. Author `html` or `body` with `overflow:hidden` for a static clipped
+  viewport.
 
   `:base_url` is also the authorization root for local iframe documents and
   document-selected local image and `@font-face` paths. Relative paths and absolute paths beneath that root
@@ -213,6 +218,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   configuration at the top level. Child documents authorize explicit font and
   stylesheet file paths beneath the same immutable root; supplied inline bytes
   remain permitted.
+  Stylesheet media queries use the requested page box in CSS pixels, including
+  margins, before authored @page size rules. Set
+  `:print_viewport` to an explicit positive `{width, height}` or
+  `:image_selection_density` to a positive deterministic density. Child iframe
+  styles use their own media viewport including scrollbars. Client dimensions
+  govern their layout.
+
   """
   @spec render(String.t(), [render_option()]) ::
           {:ok, binary()} | {:error, detailed_error_reason()}
@@ -352,13 +364,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   end
 
   defp effective_render_options_detailed(dom, opts) do
-    with {:ok, stylesheet_entries} <- Style.prepare_stylesheets(dom, opts) do
+    with {:ok, media_context} <- PrintMediaValidator.renderer_context(opts),
+         {:ok, stylesheet_entries} <- Style.prepare_stylesheets(dom, opts) do
       page_options =
         Enum.reduce(stylesheet_entries, [], fn entry, acc ->
           PageGeometry.merge_page_options(acc, entry.prepared.page_options)
         end)
 
       effective_opts = Keyword.merge(page_options, opts)
+
+      effective_opts =
+        Keyword.put_new(
+          effective_opts,
+          :print_viewport,
+          {media_context.width, media_context.height}
+        )
+
       {:ok, HtmlValidator.document_metadata_options(dom, effective_opts)}
     else
       {:error, :invalid_document} ->

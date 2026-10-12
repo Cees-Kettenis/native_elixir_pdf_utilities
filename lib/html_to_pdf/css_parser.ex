@@ -16,6 +16,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.PrintMediaValidator
 
   @type declaration :: {String.t(), String.t()} | {String.t(), String.t(), :important}
   @type selector_part :: %{
@@ -176,11 +177,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                           "#{@css_opaque_pattern}(*SKIP)(*F)|@font-face\\s*\\{(?<declarations>(?:#{@css_opaque_pattern}|[^{}])*)\\}",
                           "ui"
                         )
-  @media_rule_regex Regex.compile!(
-                      "#{@css_opaque_pattern}(*SKIP)(*F)|@media\\s+(?<query>[^{}]+)\\{(?<body>(?:#{@css_opaque_pattern}|[^{}]|\\{(?:#{@css_opaque_pattern}|[^{}])*\\})*)\\}",
-                      "ui"
-                    )
-  @media_candidate_regex Regex.compile!("#{@css_opaque_pattern}(*SKIP)(*F)|@media\\b", "ui")
   @css_block_regex Regex.compile!(
                      "#{@css_opaque_pattern}(*SKIP)(*F)|\\{(?:#{@css_opaque_pattern}|[^{}])*\\}",
                      "u"
@@ -190,7 +186,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   Parses a CSS stylesheet into strict renderer rules.
   """
   @spec parse(String.t()) ::
-          {:ok, stylesheet()} | {:error, :invalid_css | :resource_limit_exceeded}
+          {:ok, stylesheet()}
+          | {:error, :invalid_css | :not_implemented | :resource_limit_exceeded}
   def parse(css) do
     case parse_detailed(css) do
       {:ok, stylesheet} -> {:ok, stylesheet}
@@ -202,7 +199,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   Parses a CSS stylesheet and returns source-location details when parsing fails.
   """
   @spec parse_detailed(String.t()) ::
-          {:ok, stylesheet()} | {:error, {:invalid_css | :resource_limit_exceeded, map()}}
+          {:ok, stylesheet()}
+          | {:error, {:invalid_css | :not_implemented | :resource_limit_exceeded, map()}}
   def parse_detailed(css) do
     with {:ok, prepared} <- prepare_stylesheet(css), do: {:ok, prepared.rules}
   end
@@ -215,10 +213,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         }
 
   @doc false
-  @spec prepare_stylesheet(String.t()) ::
+  @spec prepare_stylesheet(
+          String.t(),
+          PrintMediaValidator.context() | nil | :unpositioned
+        ) ::
           {:ok, prepared_stylesheet()}
-          | {:error, {:invalid_css | :resource_limit_exceeded, map()}}
-  def prepare_stylesheet(css) do
+          | {:error, {:invalid_css | :not_implemented | :resource_limit_exceeded, map()}}
+  def prepare_stylesheet(css, media_context \\ nil) do
     HtmlValidator.with_render_budget(fn ->
       case HtmlValidator.validate_css_source(css) do
         {:ok, css} ->
@@ -229,9 +230,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           )
 
           RenderCache.fetch_stylesheet(
-            {:parsed, css},
+            {:parsed, css, PrintMediaValidator.cache_context(css, media_context)},
             fn ->
-              with {:ok, active_css} <- css |> strip_comments() |> active_media_rules(),
+              with {:ok, active_css} <-
+                     css |> strip_comments() |> PrintMediaValidator.select_rules(media_context),
                    {:ok, font_faces} <- parse_font_faces(active_css, css),
                    {:ok, page_options} <- parse_page_rules(active_css, css) do
                 parsed_css = active_css |> strip_font_face_rules() |> strip_page_rules()
@@ -296,7 +298,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
             :css
           )
 
-          case css |> strip_comments() |> active_media_rules() do
+          case css |> strip_comments() |> PrintMediaValidator.select_rules(nil) do
             {:ok, active_css} ->
               case parse_font_faces(active_css, active_css) do
                 {:ok, font_faces} -> {:ok, font_faces}
@@ -338,7 +340,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
             :css
           )
 
-          with {:ok, active_css} <- css |> strip_comments() |> active_media_rules() do
+          with {:ok, active_css} <-
+                 css |> strip_comments() |> PrintMediaValidator.select_rules(nil) do
             case parse_page_rules(active_css, css) do
               {:ok, page_options} -> {:ok, page_options}
               {:error, {reason, _detail}} -> {:error, reason}
@@ -357,7 +360,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   This is used for both stylesheet blocks and inline `style` attributes.
   """
   @spec parse_declarations(String.t()) ::
-          {:ok, [declaration()]} | {:error, :invalid_css | :resource_limit_exceeded}
+          {:ok, [declaration()]}
+          | {:error, :invalid_css | :not_implemented | :resource_limit_exceeded}
   def parse_declarations(css) do
     case parse_declarations_detailed(css) do
       {:ok, declarations} -> {:ok, declarations}
@@ -369,7 +373,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   Parses a CSS declaration block and returns source-location details on failure.
   """
   @spec parse_declarations_detailed(String.t()) ::
-          {:ok, [declaration()]} | {:error, {:invalid_css | :resource_limit_exceeded, map()}}
+          {:ok, [declaration()]}
+          | {:error, {:invalid_css | :not_implemented | :resource_limit_exceeded, map()}}
   def parse_declarations_detailed(css) do
     HtmlValidator.with_render_budget(fn ->
       case HtmlValidator.validate_css_source(css, :declarations) do
@@ -398,7 +403,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end)
   end
 
-  @doc false
+  @doc "Removes CSS comments while preserving quoted strings and escapes."
   @spec strip_comments(String.t()) :: String.t()
   def strip_comments(css) do
     strip_comments(css, nil, false, [])
@@ -444,25 +449,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   defp strip_font_face_rules(css) do
     Regex.replace(@font_face_rule_regex, css, "")
-  end
-
-  defp active_media_rules(css) do
-    HtmlValidator.reserve_render_resource(:max_css_work, byte_size(css), :css)
-
-    active_css =
-      Regex.replace(@media_rule_regex, css, fn _rule, query, body ->
-        query = query |> String.trim() |> String.downcase()
-
-        case query in ["print", "only print", "all", "only all"] do
-          true -> body
-          false -> ""
-        end
-      end)
-
-    case Regex.match?(@media_candidate_regex, active_css) do
-      true -> {:error, :invalid_css}
-      false -> {:ok, active_css}
-    end
   end
 
   defp parse_font_faces(css, diagnostic_css) do

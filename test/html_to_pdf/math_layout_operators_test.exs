@@ -73,6 +73,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
     assert first.core_operator.lspace == 20 * 4 / 18
   end
 
+  test "straight row text has anonymous mtext space-like semantics before form inference", %{
+    node: n,
+    row: r,
+    style: style
+  } do
+    text = %{type: :text, text: "words", style: style}
+    plus = n.("mo", "+", %{})
+    assert {:ok, prepared} = MathLayoutValidator.prepare_element(r.([plus, text]), %{})
+    assert prepared.core_operator.form == :infix
+
+    assert {:ok, outer} =
+             MathLayoutValidator.prepare_element(r.([r.([text, plus]), n.("mn", "1", %{})]), %{})
+
+    [wrapped, _] = outer.children
+    assert wrapped.core_operator.form == :prefix
+    assert {:ok, measured} = MathLayout.measure(r.([plus, text]))
+    assert measured.actual_text == "+words"
+  end
+
   test "only the outer non-embellished row adds core spacing", %{node: n, row: r, font: font} do
     plus = n.("mo", "+", %{"lspace" => "3pt", "rspace" => "7pt"})
     assert {:ok, bare} = MathLayout.measure(plus)
@@ -401,6 +420,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
              HtmlToPdf.render("<math><mo minsize='100pc'>(</mo></math>")
 
     assert diagnostic.reason == :resource_limit_exceeded
+
+    # A bounded explicit media context also reaches the operator's own limit,
+    # rather than stopping at the derived page viewport's numeric reservation.
+    assert {:error, {:resource_limit_exceeded, operator_diagnostic}} =
+             HtmlToPdf.render("<math><mo minsize='100pc'>(</mo></math>", print_viewport: {80, 80})
+
+    assert operator_diagnostic.message =~ "max_css_numeric_magnitude"
   end
 
   test "public operators use caller font bytes and diagnose missing glyphs or MATH data" do

@@ -63,6 +63,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     :assets,
     :asset_resolver,
     :stylesheets,
+    :print_viewport,
+    :image_selection_density,
     :default_font,
     :fonts,
     :system_font_discovery,
@@ -2234,6 +2236,103 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec html_insertion_action(term(), String.t() | :eof, String.t() | nil, boolean()) ::
+          :process | :close | {:imply, String.t()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def html_insertion_action(context, token, previous, implied?) do
+    # This describes strict, valid-input insertion modes. Recovery, foster
+    # parenting and duplicate structural tags remain validator diagnostics.
+    next =
+      case token do
+        :eof ->
+          :eof
+
+        token ->
+          # Classification and ASCII tag folding can each scan the token.
+          reserve_render_resource(:max_html_tree_work, 2 * byte_size(token), :html)
+
+          cond do
+            String.starts_with?(token, "<?") or String.starts_with?(token, "<!") ->
+              :metadata
+
+            Regex.match?(~r/\A[ \t\n\f\r]*\z/, token) ->
+              :whitespace
+
+            true ->
+              case Regex.run(~r/\A<(\/?)([a-zA-Z][^ \t\n\f\r\x00\/>]*)/, token) do
+                [_, "", tag] -> {:start, String.downcase(tag, :ascii)}
+                [_, "/", tag] -> {:end, String.downcase(tag, :ascii)}
+                _ -> :text
+              end
+          end
+      end
+
+    cond do
+      next in [:metadata, :whitespace] ->
+        :process
+
+      context in [:document, :after_doctype] and previous == nil and
+          next != {:start, "html"} ->
+        {:imply, "html"}
+
+      context == "html" and previous == nil and next != {:start, "head"} ->
+        {:imply, "head"}
+
+      context == "html" and
+          ((previous == "head" and next != {:start, "noscript"} and
+              next in [{:start, "head"} | @head_starts]) or
+             (previous == "body" and
+                next in [{:start, "head"}, {:start, "body"}, {:start, "title"}])) ->
+        Diagnostics.error(
+          :html,
+          :unsupported_html,
+          "document head and body must occur once in order; place title in the head and printed content in the body",
+          module: __MODULE__,
+          source: token
+        )
+
+      context == "html" and previous == "head" and next != {:start, "body"} ->
+        {:imply, "body"}
+
+      context == "head" and implied? and next in [:text, {:start, "noscript"}] ->
+        # Keep the established wrapper-free root noscript body selection. An
+        # authored head still gives noscript its strict metadata-only context.
+        :close
+
+      context == "table" and next == {:start, "col"} ->
+        {:imply, "colgroup"}
+
+      context == "table" and next == {:start, "tr"} ->
+        {:imply, "tbody"}
+
+      true ->
+        :process
+    end
+  end
+
+  @doc false
+  @spec validate_constructed_html_document(map()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_constructed_html_document(document) do
+    # Construction is the shared source of document-section rules. A parser
+    # whose parents already exist must return its canonical tree unchanged.
+    case construct_html_document(document) do
+      {:ok, ^document} ->
+        :ok
+
+      {:ok, _changed} ->
+        Diagnostics.error(
+          :html,
+          :unsupported_html,
+          "document head and body must occur once in order; place title in the head and printed content in the body",
+          module: __MODULE__
+        )
+
+      error ->
+        error
+    end
+  end
+
+  @doc false
   @spec construct_html_document(map()) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def construct_html_document(dom) do
@@ -2999,6 +3098,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           {:cont, {:ok, Map.put(acc, name, value)}}
 
         {name, "details", false} when name in ~w(open name) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "style", false} when name in ~w(type media blocking nonce disabled) ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
         {name, "meta", false} when name in ~w(charset content http-equiv name property) ->
@@ -4353,11 +4455,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
-  @spec prepare_style_input(term(), term(), term()) ::
+  @spec prepare_style_input(term(), term(), term(), :render | :prepare_svg) ::
           {:ok, boolean()} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def prepare_style_input(dom, opts, font_options_result) do
+  def prepare_style_input(dom, opts, font_options_result, mode \\ :render) do
     with_render_budget(fn ->
-      with {:ok, initial_controls?} <- validate_dom(dom),
+      with {:ok, initial_controls?} <- validate_dom(dom, mode),
+           :ok <-
+             if(mode == :render,
+               do:
+                 NativeElixirPdfUtilities.Validators.SvgSceneValidator.validate_document_svg(
+                   dom.children
+                 ),
+               else: :ok
+             ),
            :ok <- validate_style_options(opts, font_options_result) do
         {:ok, initial_controls?}
       else
@@ -4370,6 +4480,30 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
         {:error, {_reason, _diagnostic}} = error ->
           error
+      end
+    end)
+  end
+
+  @doc false
+  @spec prepare_viewport_dimensions(term(), term()) ::
+          {:ok, {number(), number()}} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_viewport_dimensions(width, height) do
+    with_render_budget(fn ->
+      case {width, height} do
+        {width, height}
+        when is_number(width) and width >= 0 and is_number(height) and height >= 0 ->
+          check_render_resource(:max_css_numeric_magnitude, width, :layout)
+          check_render_resource(:max_css_numeric_magnitude, height, :layout)
+          {:ok, {width, height}}
+
+        _ ->
+          Diagnostics.error(
+            :layout,
+            :invalid_layout,
+            "viewport dimensions must be nonnegative finite point values",
+            operation: :layout_viewport,
+            module: __MODULE__
+          )
       end
     end)
   end
@@ -4420,6 +4554,142 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           {:error, :invalid_layout}
       end
     end)
+  end
+
+  @doc false
+  @spec prepare_measured_child(term(), term(), term()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_measured_child(node, context, constraints) do
+    with :ok <- NativeElixirPdfUtilities.Validators.ResourceValidator.validate_context(context) do
+      case {node, constraints} do
+        {%{
+           type: type,
+           style:
+             %{font_face: font, font_size: size, line_height: line_height, color: color} = style
+         }, constraints}
+        when type in [:text, :element] and is_map(font) and is_number(size) and size >= 0 and
+               is_number(line_height) and line_height >= 0 and is_tuple(color) and
+               is_map(constraints) ->
+          allowed = [:available_width, :available_height, :unsupported_glyphs]
+          dimensions = Enum.map([:available_width, :available_height], &Map.get(constraints, &1))
+          display = Map.get(style, :display, :inline)
+
+          valid? =
+            Enum.all?(Map.keys(constraints), &(&1 in allowed)) and
+              Enum.all?([size, line_height], &(&1 <= Limits.get(:max_css_numeric_magnitude))) and
+              Enum.all?(
+                dimensions,
+                &(is_nil(&1) or
+                    (is_number(&1) and &1 >= 0 and &1 <= Limits.get(:max_css_numeric_magnitude)))
+              )
+
+          cond do
+            not valid? ->
+              measured_child_failure(
+                "child measurement requires bounded nonnegative available dimensions",
+                node
+              )
+
+            display not in [
+              :inline,
+              :block,
+              :inline_block,
+              :flex,
+              :inline_flex,
+              :grid,
+              :inline_grid,
+              :image,
+              :line_break,
+              :soft_break,
+              :none
+            ] ->
+              Diagnostics.error(
+                :layout,
+                :unsupported_html,
+                "intrinsic measurement of #{display} HTML children requires its shared layout adapter",
+                operation: :measure_child,
+                module: __MODULE__,
+                source: Map.get(node, :tag, "text")
+              )
+
+            true ->
+              with :ok <-
+                     validate_unsupported_glyphs(
+                       Map.get(constraints, :unsupported_glyphs, :replace)
+                     ) do
+                case validate_layout_nodes([node]) do
+                  :ok ->
+                    {:ok,
+                     %{
+                       node: node,
+                       unsupported_glyphs: Map.get(constraints, :unsupported_glyphs, :replace),
+                       context: context,
+                       available_width: Map.get(constraints, :available_width),
+                       available_height: Map.get(constraints, :available_height),
+                       atomic:
+                         display in [
+                           :block,
+                           :inline_block,
+                           :flex,
+                           :inline_flex,
+                           :grid,
+                           :inline_grid
+                         ]
+                     }}
+
+                  {:error, {_reason, _diagnostic}} = error ->
+                    error
+
+                  _ ->
+                    measured_child_failure(
+                      "child measurement requires a validated styled node",
+                      node
+                    )
+                end
+              end
+          end
+
+        _ ->
+          measured_child_failure(
+            "child measurement requires a styled node and supported constraints",
+            node
+          )
+      end
+    end
+  end
+
+  @doc false
+  @spec validate_measured_child_paint(term(), term()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_measured_child_paint(boxes, node) do
+    cond do
+      not is_list(boxes) ->
+        measured_child_failure("child layout did not return ordered native boxes", node)
+
+      Enum.any?(boxes, &(not is_map(&1) or Map.get(&1, :type) == :layout_error)) ->
+        measured_child_failure("child content could not be laid out", node)
+
+      true ->
+        case NativeElixirPdfUtilities.Validators.WriterValidator.validate_native_boxes(boxes) do
+          :ok ->
+            :ok
+
+          {:error, {reason, diagnostic}} ->
+            Diagnostics.error(:layout, reason, diagnostic.message,
+              operation: :measure_child,
+              module: diagnostic.module,
+              source: if(is_map(node), do: Map.get(node, :tag, "HTML child"), else: "HTML child")
+            )
+        end
+    end
+  end
+
+  defp measured_child_failure(message, node) do
+    Diagnostics.error(:layout, :invalid_layout, message,
+      operation: :measure_child,
+      module: __MODULE__,
+      source: if(is_map(node), do: Map.get(node, :tag, "text"), else: "HTML child")
+    )
   end
 
   @doc false
@@ -5142,48 +5412,42 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end
   end
 
-  defp validate_dom(node) do
+  defp validate_dom(node, mode) do
     key = {__MODULE__, :validated_dom}
     limits = Limits.effective()
 
     case Process.get(key) do
-      {^node, ^limits, result} ->
+      {^node, ^limits, ^mode, result} ->
         result
 
       _ ->
         result =
-          case node do
-            %{type: :document, children: children} when is_list(children) ->
+          case {node, mode} do
+            {%{type: :document, children: children}, mode}
+            when is_list(children) and mode in [:render, :prepare_svg] ->
               validate_render_tree(children)
 
               with :ok <-
                      NativeElixirPdfUtilities.Validators.HtmlTreeValidator.validate_transport(
                        node
                      ),
-                   do: validate_dom_nodes(children)
+                   do: validate_dom_nodes(children, false, nil, [], nil, :html, mode)
 
             _ ->
               :invalid_document
           end
 
-        # Page-rule preparation and final styling share one immutable DOM.
-        # Reuse only exact successful input under the same current limits; options
-        # and all resource authorization remain independently validated.
+        # Only exact successful input under identical limits and processing mode
+        # can be reused. SVG preparation does not authorize rendering its content.
+        # Options and resource authorization remain independently validated.
         if match?({:ok, _}, result) and Process.get({__MODULE__, :render_budget}) != nil,
-          do: Process.put(key, {node, limits, result})
+          do: Process.put(key, {node, limits, mode, result})
 
         result
     end
   end
 
-  defp validate_dom_nodes(
-         nodes,
-         inert? \\ false,
-         parent \\ nil,
-         ancestors \\ [],
-         tree \\ nil,
-         parent_namespace \\ :html
-       ) do
+  defp validate_dom_nodes(nodes, inert?, parent, ancestors, tree, parent_namespace, mode) do
     tree = tree || nodes
 
     Enum.reduce_while(nodes, {:ok, false}, fn node, {:ok, initial_controls?} ->
@@ -5250,7 +5514,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                      :ok <-
                        NativeElixirPdfUtilities.Validators.ForeignContentValidator.validate_render_support(
                          node,
-                         not inert?
+                         not inert?,
+                         mode
                        ),
                      :ok <-
                        (if tag in ["base", "script", "template"] do
@@ -5280,10 +5545,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                            validate_dom_nodes(
                              children,
                              inert?,
-                             tag,
+                             if(Map.get(node, :namespace, :html) == :html,
+                               do: tag,
+                               else:
+                                 NativeElixirPdfUtilities.Validators.ForeignContentValidator.child_context(
+                                   node
+                                 )
+                             ),
                              if(is_nil(parent), do: ancestors, else: [parent | ancestors]),
                              tree,
-                             Map.get(node, :namespace, :html)
+                             Map.get(node, :namespace, :html),
+                             mode
                            )
                        ) do
                   semantic_attribute =
@@ -5420,7 +5692,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             source: node.tag
           )
 
-        node.tag in ~w(iframe xmp plaintext noembed) and
+        node.tag in ~w(style title iframe xmp plaintext noembed) and
             not valid_html_element?(node.tag, node.attributes, node.children) ->
           Diagnostics.error(
             :style,
@@ -5550,7 +5822,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     case node do
       %{children: [], content: %{type: :document_fragment, children: children}}
       when is_list(children) ->
-        case validate_dom_nodes(children, true) do
+        case validate_dom_nodes(children, true, nil, [], nil, :html, :render) do
           {:ok, _initial_controls?} -> :ok
           error -> error
         end
@@ -5573,6 +5845,24 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         with :ok <- validate_layout_metadata(node),
              :ok <- validate_auto_margin_context(node, parent_display) do
           case node do
+            %{type: :element, style: %{svg_scene: scene} = style} ->
+              cond do
+                parent_display in [:flex, :inline_flex, :grid, :inline_grid] ->
+                  Diagnostics.error(
+                    :layout,
+                    :unsupported_html,
+                    "SVG flex/grid intrinsic scene integration remains pending",
+                    source: "svg",
+                    module: __MODULE__
+                  )
+
+                not valid_layout_style?(style) ->
+                  :invalid_layout
+
+                true ->
+                  NativeElixirPdfUtilities.Validators.SvgSceneValidator.validate_prepared(scene)
+              end
+
             %{type: :text, text: text, style: style} ->
               if is_binary(text) and String.valid?(text) and valid_layout_style?(style),
                 do: :ok,
@@ -5610,6 +5900,32 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
               )
 
             %{type: :element, style: %{display: :image} = style} ->
+              maximum = Limits.get(:max_css_numeric_magnitude)
+
+              image =
+                case Map.get(style, :image) do
+                  image when is_map(image) -> image
+                  _ -> %{}
+                end
+
+              pixels? =
+                match?(
+                  %{width_px: width, height_px: height}
+                  when is_integer(width) and width > 0 and width <= maximum and
+                         is_integer(height) and height > 0 and height <= maximum,
+                  image
+                )
+
+              points? =
+                match?(
+                  %{width: width, height: height}
+                  when is_number(width) and width > 0 and width <= maximum and
+                         is_number(height) and height > 0 and height <= maximum,
+                  image
+                )
+
+              pixel_metadata? = Map.has_key?(image, :width_px) or Map.has_key?(image, :height_px)
+
               cond do
                 not valid_layout_style?(style) ->
                   :invalid_layout
@@ -5619,6 +5935,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                     :layout,
                     :invalid_layout,
                     "image_display must be inline or block",
+                    operation: :layout,
+                    module: __MODULE__,
+                    source: Map.get(node, :tag, "img")
+                  )
+
+                not ((pixels? or points?) and (not pixel_metadata? or pixels?) and
+                         Enum.all?([:width, :height], fn dimension ->
+                           value = Map.get(image, dimension)
+                           is_nil(value) or (is_number(value) and value >= 0 and value <= maximum)
+                         end)) ->
+                  Diagnostics.error(
+                    :layout,
+                    :invalid_layout,
+                    "image layout requires bounded positive pixel or natural point dimensions; optional natural dimensions may be zero",
                     operation: :layout,
                     module: __MODULE__,
                     source: Map.get(node, :tag, "img")
@@ -6375,6 +6705,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       true ->
         :error
+    end
+  end
+
+  @doc false
+  @spec parse_css_color_declaration(String.t(), term()) :: {:ok, term()} | :error
+  def parse_css_color_declaration(value, inherited_color) do
+    case value |> trim_ascii_whitespace() |> downcase_ascii() do
+      "inherit" -> {:ok, inherited_color}
+      "unset" -> {:ok, inherited_color}
+      "initial" -> {:ok, {0, 0, 0}}
+      _ -> parse_css_color(value, inherited_color)
     end
   end
 

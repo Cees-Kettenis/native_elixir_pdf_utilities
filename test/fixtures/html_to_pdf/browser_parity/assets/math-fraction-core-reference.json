@@ -1,0 +1,2154 @@
+{
+  "activation": false,
+  "inputs": {
+    "priv/fonts/stix/STIXTwoMath-Regular.ttf": "49b22767985171bce579307b21d98f4d35012fa39e316acc4ffcab8644dfb69b",
+    "tmp/references/mathml-core.html": "f61ebea74ba54c489646e6969983ef977f448c26602edff75ec4e3ba77216373",
+    "test/fixtures/html_to_pdf/browser_parity/mathml_fractions.html": "f661e98a620b999f1c1cc0b8e99c4d948c487b43f6d75e233cea365a8b8603ea",
+    "test/fixtures/html_to_pdf/browser_parity/assets/math-fraction-script-reference.ttf": "b1eed6017e8ac0976744ddb108c995747bb19d49bfb24fc51ee472922e6e0217",
+    "test/fixtures/html_to_pdf/browser_parity/assets/math-fraction-script-reference.json": "fedc0dcf1b34aa794b7991c8fb2c906ae243489863a29b59d873eff5974e7214"
+  },
+  "source_url": "https://www.w3.org/TR/2025/CR-mathml-core-20250624/",
+  "fonttools_version": "4.60.1",
+  "algorithm": "Core 3.3.1 / 3.3.2; UA depth/style; B.1 dictionary; original selected outlines/MATH/GSUB",
+  "outer_transport_separate": true,
+  "empirical_offsets": [],
+  "native_or_browser_geometry_inputs": false,
+  "original_input_reproduced_byte_exactly": true,
+  "unchanged_linked_fraction": "<mfrac><mn data-script-reference=\"linked-n\">11</mn><mtext><span><a href=\"https://fraction.test/\">Link</a></span></mtext></mfrac>",
+  "unchanged_stylesheet_sha256": "ad0a6ffe2737e7307fd9178f3d0bdf04ed7a1fab63e337b96dc69cbea812a2ee",
+  "original_mfrac_count": 10,
+  "replaced_top_fractions": 8,
+  "retained_linked_fraction_count": 1,
+  "selected_source_pair_advances": [
+    {
+      "left": 4274,
+      "right": 4275,
+      "script": "latn",
+      "design_advance": 0
+    },
+    {
+      "left": 4275,
+      "right": 4276,
+      "script": "latn",
+      "design_advance": 0
+    },
+    {
+      "left": 4279,
+      "right": 4280,
+      "script": "latn",
+      "design_advance": 0
+    },
+    {
+      "left": 4274,
+      "right": 4275,
+      "script": "latn",
+      "design_advance": 0
+    },
+    {
+      "left": 4278,
+      "right": 4279,
+      "script": "latn",
+      "design_advance": 0
+    },
+    {
+      "left": 4276,
+      "right": 4277,
+      "script": "latn",
+      "design_advance": 0
+    },
+    {
+      "left": 1138,
+      "right": 1139,
+      "script": "latn",
+      "design_advance": 0
+    },
+    {
+      "left": 1141,
+      "right": 1142,
+      "script": "latn",
+      "design_advance": 0
+    },
+    {
+      "left": 1145,
+      "right": 1146,
+      "script": "latn",
+      "design_advance": 0
+    },
+    {
+      "left": 4274,
+      "right": 4273,
+      "script": "latn",
+      "design_advance": 0
+    }
+  ],
+  "original_source_and_native_path_unchanged": true,
+  "unchanged_thresholds": {
+    "max_changed_ratio": 0.01,
+    "max_average_delta": 0.01,
+    "pixel_channel_tolerance": 12,
+    "dpi": 72
+  },
+  "records": {
+    "fraction-01": {
+      "original_fragment": "<mfrac><mn data-script-reference=\"small-n\">123</mn><mn data-script-reference=\"small-d\">4</mn></mfrac>",
+      "original_sha256": "85d04f03ef0e7f135a39964800412804595c4ada179eb4f13d2f1b986083a638",
+      "original_text": "1234",
+      "original_opening": "<mfrac>",
+      "original_attributes": {},
+      "interior": {
+        "glyphs": [
+          {
+            "text": "1",
+            "name": "one.ssty",
+            "gid": 4274,
+            "size": {
+              "numerator": 42,
+              "denominator": 5,
+              "points": 8.4
+            },
+            "x": {
+              "numerator": 3,
+              "denominator": 4,
+              "points": 0.75
+            },
+            "y": {
+              "numerator": 351,
+              "denominator": 50,
+              "points": 7.02
+            },
+            "width": {
+              "numerator": 10689,
+              "denominator": 2500,
+              "points": 4.2756
+            },
+            "ascent": {
+              "numerator": 14007,
+              "denominator": 2500,
+              "points": 5.6028
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 27,
+              "denominator": 4,
+              "points": 6.75
+            }
+          },
+          {
+            "text": "2",
+            "name": "two.ssty",
+            "gid": 4275,
+            "size": {
+              "numerator": 42,
+              "denominator": 5,
+              "points": 8.4
+            },
+            "x": {
+              "numerator": 3141,
+              "denominator": 625,
+              "points": 5.0256
+            },
+            "y": {
+              "numerator": 351,
+              "denominator": 50,
+              "points": 7.02
+            },
+            "width": {
+              "numerator": 2751,
+              "denominator": 625,
+              "points": 4.4016
+            },
+            "ascent": {
+              "numerator": 14091,
+              "denominator": 2500,
+              "points": 5.6364
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 27,
+              "denominator": 4,
+              "points": 6.75
+            }
+          },
+          {
+            "text": "3",
+            "name": "three.ssty",
+            "gid": 4276,
+            "size": {
+              "numerator": 42,
+              "denominator": 5,
+              "points": 8.4
+            },
+            "x": {
+              "numerator": 5892,
+              "denominator": 625,
+              "points": 9.4272
+            },
+            "y": {
+              "numerator": 351,
+              "denominator": 50,
+              "points": 7.02
+            },
+            "width": {
+              "numerator": 2751,
+              "denominator": 625,
+              "points": 4.4016
+            },
+            "ascent": {
+              "numerator": 14091,
+              "denominator": 2500,
+              "points": 5.6364
+            },
+            "descent": {
+              "numerator": 273,
+              "denominator": 2500,
+              "points": 0.1092
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 27,
+              "denominator": 4,
+              "points": 6.75
+            }
+          },
+          {
+            "text": "4",
+            "name": "four.ssty",
+            "gid": 4277,
+            "size": {
+              "numerator": 42,
+              "denominator": 5,
+              "points": 8.4
+            },
+            "x": {
+              "numerator": 24603,
+              "denominator": 5000,
+              "points": 4.9206
+            },
+            "y": {
+              "numerator": -351,
+              "denominator": 50,
+              "points": -7.02
+            },
+            "width": {
+              "numerator": 2961,
+              "denominator": 625,
+              "points": 4.7376
+            },
+            "ascent": {
+              "numerator": 1407,
+              "denominator": 250,
+              "points": 5.628
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 27,
+              "denominator": 4,
+              "points": 6.75
+            }
+          }
+        ],
+        "rules": [
+          {
+            "x": {
+              "numerator": 3,
+              "denominator": 4,
+              "points": 0.75
+            },
+            "y": {
+              "numerator": 336,
+              "denominator": 125,
+              "points": 2.688
+            },
+            "width": {
+              "numerator": 32697,
+              "denominator": 2500,
+              "points": 13.0788
+            },
+            "height": {
+              "numerator": 102,
+              "denominator": 125,
+              "points": 0.816
+            },
+            "color": "black"
+          }
+        ],
+        "algorithm": {
+          "up": {
+            "numerator": 351,
+            "denominator": 50,
+            "points": 7.02
+          },
+          "down": {
+            "numerator": 351,
+            "denominator": 50,
+            "points": 7.02
+          },
+          "axis": {
+            "numerator": 387,
+            "denominator": 125,
+            "points": 3.096
+          },
+          "rule_thickness": {
+            "numerator": 102,
+            "denominator": 125,
+            "points": 0.816
+          }
+        }
+      },
+      "outer_css_transport": {
+        "content_width": {
+          "numerator": 32697,
+          "denominator": 2500,
+          "points": 13.0788
+        },
+        "padding": {
+          "numerator": 3,
+          "denominator": 4,
+          "points": 0.75
+        },
+        "ascent": {
+          "numerator": 31641,
+          "denominator": 2500,
+          "points": 12.6564
+        },
+        "descent": {
+          "numerator": 351,
+          "denominator": 50,
+          "points": 7.02
+        },
+        "height": {
+          "numerator": 49191,
+          "denominator": 2500,
+          "points": 19.6764
+        },
+        "baseline_witness_height": {
+          "numerator": 31641,
+          "denominator": 2500,
+          "points": 12.6564
+        },
+        "html_content_origin_x": {
+          "numerator": 3,
+          "denominator": 4,
+          "points": 0.75
+        },
+        "css_containing_block": "HTML span inside mtext integration point"
+      },
+      "reference_fragment": "<mfrac style=\"display:inline-block;width:13.0788pt;height:19.6764pt;line-height:0;font-size:0\" data-core-fraction-reference=\"fraction-01\"><mtext data-core-html-host=\"fraction-01\" style=\"display:inline-block;line-height:0;font-size:0\"><span data-core-content-box=\"fraction-01\" style=\"display:inline-block;position:relative;width:13.0788pt;height:19.6764pt;line-height:0;font-size:0\"><span data-core-baseline=\"fraction-01\" style=\"display:inline-block;width:0;height:12.6564pt;line-height:0;font-size:0\"></span><span data-core-text=\"1\" style=\"position:absolute;left:0pt;top:-1.1136pt;font-family:'Math Fraction Script Reference';font-size:8.4pt;line-height:8.4pt;color:black;white-space:nowrap\">\ue301</span><span data-core-text=\"2\" style=\"position:absolute;left:4.2756pt;top:-1.1136pt;font-family:'Math Fraction Script Reference';font-size:8.4pt;line-height:8.4pt;color:black;white-space:nowrap\">\ue302</span><span data-core-text=\"3\" style=\"position:absolute;left:8.6772pt;top:-1.1136pt;font-family:'Math Fraction Script Reference';font-size:8.4pt;line-height:8.4pt;color:black;white-space:nowrap\">\ue303</span><span data-core-text=\"4\" style=\"position:absolute;left:4.1706pt;top:12.9264pt;font-family:'Math Fraction Script Reference';font-size:8.4pt;line-height:8.4pt;color:black;white-space:nowrap\">\ue304</span><span data-core-rule=\"fraction-01\" style=\"position:absolute;left:0pt;top:9.1524pt;width:13.0788pt;height:0.816pt;background:black\"></span></span></mtext></mfrac>"
+    },
+    "fraction-02": {
+      "original_fragment": "<mfrac linethickness=\"0\"><mn data-script-reference=\"small-zero-n\">5</mn><mn data-script-reference=\"small-zero-d\">67</mn></mfrac>",
+      "original_sha256": "12914ae95526237711ad14afb2821a3c23ce49f6c32bbd7bd2940b9c9eec17cf",
+      "original_text": "567",
+      "original_opening": "<mfrac linethickness=\"0\">",
+      "original_attributes": {
+        "linethickness": "0"
+      },
+      "interior": {
+        "glyphs": [
+          {
+            "text": "5",
+            "name": "five.ssty",
+            "gid": 4278,
+            "size": {
+              "numerator": 42,
+              "denominator": 5,
+              "points": 8.4
+            },
+            "x": {
+              "numerator": 3081,
+              "denominator": 1000,
+              "points": 3.081
+            },
+            "y": {
+              "numerator": 141,
+              "denominator": 25,
+              "points": 5.64
+            },
+            "width": {
+              "numerator": 5271,
+              "denominator": 1250,
+              "points": 4.2168
+            },
+            "ascent": {
+              "numerator": 3444,
+              "denominator": 625,
+              "points": 5.5104
+            },
+            "descent": {
+              "numerator": 273,
+              "denominator": 2500,
+              "points": 0.1092
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 27,
+              "denominator": 4,
+              "points": 6.75
+            }
+          },
+          {
+            "text": "6",
+            "name": "six.ssty",
+            "gid": 4279,
+            "size": {
+              "numerator": 42,
+              "denominator": 5,
+              "points": 8.4
+            },
+            "x": {
+              "numerator": 3,
+              "denominator": 4,
+              "points": 0.75
+            },
+            "y": {
+              "numerator": -231,
+              "denominator": 50,
+              "points": -4.62
+            },
+            "width": {
+              "numerator": 2856,
+              "denominator": 625,
+              "points": 4.5696
+            },
+            "ascent": {
+              "numerator": 3528,
+              "denominator": 625,
+              "points": 5.6448
+            },
+            "descent": {
+              "numerator": 147,
+              "denominator": 1250,
+              "points": 0.1176
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 27,
+              "denominator": 4,
+              "points": 6.75
+            }
+          },
+          {
+            "text": "7",
+            "name": "seven.ssty",
+            "gid": 4280,
+            "size": {
+              "numerator": 42,
+              "denominator": 5,
+              "points": 8.4
+            },
+            "x": {
+              "numerator": 13299,
+              "denominator": 2500,
+              "points": 5.3196
+            },
+            "y": {
+              "numerator": -231,
+              "denominator": 50,
+              "points": -4.62
+            },
+            "width": {
+              "numerator": 10773,
+              "denominator": 2500,
+              "points": 4.3092
+            },
+            "ascent": {
+              "numerator": 3444,
+              "denominator": 625,
+              "points": 5.5104
+            },
+            "descent": {
+              "numerator": 42,
+              "denominator": 625,
+              "points": 0.0672
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 27,
+              "denominator": 4,
+              "points": 6.75
+            }
+          }
+        ],
+        "rules": [],
+        "algorithm": {
+          "up": {
+            "numerator": 141,
+            "denominator": 25,
+            "points": 5.64
+          },
+          "down": {
+            "numerator": 231,
+            "denominator": 50,
+            "points": 4.62
+          },
+          "axis": {
+            "numerator": 387,
+            "denominator": 125,
+            "points": 3.096
+          },
+          "rule_thickness": {
+            "numerator": 0,
+            "denominator": 1,
+            "points": 0.0
+          }
+        }
+      },
+      "outer_css_transport": {
+        "content_width": {
+          "numerator": 22197,
+          "denominator": 2500,
+          "points": 8.8788
+        },
+        "padding": {
+          "numerator": 3,
+          "denominator": 4,
+          "points": 0.75
+        },
+        "ascent": {
+          "numerator": 6969,
+          "denominator": 625,
+          "points": 11.1504
+        },
+        "descent": {
+          "numerator": 2961,
+          "denominator": 625,
+          "points": 4.7376
+        },
+        "height": {
+          "numerator": 1986,
+          "denominator": 125,
+          "points": 15.888
+        },
+        "baseline_witness_height": {
+          "numerator": 6969,
+          "denominator": 625,
+          "points": 11.1504
+        },
+        "html_content_origin_x": {
+          "numerator": 3,
+          "denominator": 4,
+          "points": 0.75
+        },
+        "css_containing_block": "HTML span inside mtext integration point"
+      },
+      "reference_fragment": "<mfrac linethickness=\"0\" style=\"display:inline-block;width:8.8788pt;height:15.888pt;line-height:0;font-size:0\" data-core-fraction-reference=\"fraction-02\"><mtext data-core-html-host=\"fraction-02\" style=\"display:inline-block;line-height:0;font-size:0\"><span data-core-content-box=\"fraction-02\" style=\"display:inline-block;position:relative;width:8.8788pt;height:15.888pt;line-height:0;font-size:0\"><span data-core-baseline=\"fraction-02\" style=\"display:inline-block;width:0;height:11.1504pt;line-height:0;font-size:0\"></span><span data-core-text=\"5\" style=\"position:absolute;left:2.331pt;top:-1.2396pt;font-family:'Math Fraction Script Reference';font-size:8.4pt;line-height:8.4pt;color:black;white-space:nowrap\">\ue305</span><span data-core-text=\"6\" style=\"position:absolute;left:0pt;top:9.0204pt;font-family:'Math Fraction Script Reference';font-size:8.4pt;line-height:8.4pt;color:black;white-space:nowrap\">\ue306</span><span data-core-text=\"7\" style=\"position:absolute;left:4.5696pt;top:9.0204pt;font-family:'Math Fraction Script Reference';font-size:8.4pt;line-height:8.4pt;color:black;white-space:nowrap\">\ue307</span></span></mtext></mfrac>"
+    },
+    "fraction-03": {
+      "original_fragment": "<mfrac linethickness=\"200%\" mathcolor=\"red\"><mn data-script-reference=\"medium-n\">12</mn><mn data-script-reference=\"medium-d\">3</mn></mfrac>",
+      "original_sha256": "524a89ea841bf03f31090f9f4fbf32f572876d4e0b5b3dc9b08a4b337944196f",
+      "original_text": "123",
+      "original_opening": "<mfrac linethickness=\"200%\" mathcolor=\"red\">",
+      "original_attributes": {
+        "linethickness": "200%",
+        "mathcolor": "red"
+      },
+      "interior": {
+        "glyphs": [
+          {
+            "text": "1",
+            "name": "one.ssty",
+            "gid": 4274,
+            "size": {
+              "numerator": 63,
+              "denominator": 5,
+              "points": 12.6
+            },
+            "x": {
+              "numerator": 3,
+              "denominator": 4,
+              "points": 0.75
+            },
+            "y": {
+              "numerator": 1053,
+              "denominator": 100,
+              "points": 10.53
+            },
+            "width": {
+              "numerator": 32067,
+              "denominator": 5000,
+              "points": 6.4134
+            },
+            "ascent": {
+              "numerator": 42021,
+              "denominator": 5000,
+              "points": 8.4042
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "color": "red",
+            "css_transport_ascent": {
+              "numerator": 39,
+              "denominator": 4,
+              "points": 9.75
+            }
+          },
+          {
+            "text": "2",
+            "name": "two.ssty",
+            "gid": 4275,
+            "size": {
+              "numerator": 63,
+              "denominator": 5,
+              "points": 12.6
+            },
+            "x": {
+              "numerator": 35817,
+              "denominator": 5000,
+              "points": 7.1634
+            },
+            "y": {
+              "numerator": 1053,
+              "denominator": 100,
+              "points": 10.53
+            },
+            "width": {
+              "numerator": 8253,
+              "denominator": 1250,
+              "points": 6.6024
+            },
+            "ascent": {
+              "numerator": 42273,
+              "denominator": 5000,
+              "points": 8.4546
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "color": "red",
+            "css_transport_ascent": {
+              "numerator": 39,
+              "denominator": 4,
+              "points": 9.75
+            }
+          },
+          {
+            "text": "3",
+            "name": "three.ssty",
+            "gid": 4276,
+            "size": {
+              "numerator": 63,
+              "denominator": 5,
+              "points": 12.6
+            },
+            "x": {
+              "numerator": 39567,
+              "denominator": 10000,
+              "points": 3.9567
+            },
+            "y": {
+              "numerator": -1053,
+              "denominator": 100,
+              "points": -10.53
+            },
+            "width": {
+              "numerator": 8253,
+              "denominator": 1250,
+              "points": 6.6024
+            },
+            "ascent": {
+              "numerator": 42273,
+              "denominator": 5000,
+              "points": 8.4546
+            },
+            "descent": {
+              "numerator": 819,
+              "denominator": 5000,
+              "points": 0.1638
+            },
+            "color": "red",
+            "css_transport_ascent": {
+              "numerator": 39,
+              "denominator": 4,
+              "points": 9.75
+            }
+          }
+        ],
+        "rules": [
+          {
+            "x": {
+              "numerator": 3,
+              "denominator": 4,
+              "points": 0.75
+            },
+            "y": {
+              "numerator": 171,
+              "denominator": 50,
+              "points": 3.42
+            },
+            "width": {
+              "numerator": 65079,
+              "denominator": 5000,
+              "points": 13.0158
+            },
+            "height": {
+              "numerator": 306,
+              "denominator": 125,
+              "points": 2.448
+            },
+            "color": "red"
+          }
+        ],
+        "algorithm": {
+          "up": {
+            "numerator": 1053,
+            "denominator": 100,
+            "points": 10.53
+          },
+          "down": {
+            "numerator": 1053,
+            "denominator": 100,
+            "points": 10.53
+          },
+          "axis": {
+            "numerator": 1161,
+            "denominator": 250,
+            "points": 4.644
+          },
+          "rule_thickness": {
+            "numerator": 306,
+            "denominator": 125,
+            "points": 2.448
+          }
+        }
+      },
+      "outer_css_transport": {
+        "content_width": {
+          "numerator": 65079,
+          "denominator": 5000,
+          "points": 13.0158
+        },
+        "padding": {
+          "numerator": 3,
+          "denominator": 4,
+          "points": 0.75
+        },
+        "ascent": {
+          "numerator": 94923,
+          "denominator": 5000,
+          "points": 18.9846
+        },
+        "descent": {
+          "numerator": 53469,
+          "denominator": 5000,
+          "points": 10.6938
+        },
+        "height": {
+          "numerator": 18549,
+          "denominator": 625,
+          "points": 29.6784
+        },
+        "baseline_witness_height": {
+          "numerator": 94923,
+          "denominator": 5000,
+          "points": 18.9846
+        },
+        "html_content_origin_x": {
+          "numerator": 3,
+          "denominator": 4,
+          "points": 0.75
+        },
+        "css_containing_block": "HTML span inside mtext integration point"
+      },
+      "reference_fragment": "<mfrac linethickness=\"200%\" mathcolor=\"red\" style=\"display:inline-block;width:13.0158pt;height:29.6784pt;line-height:0;font-size:0\" data-core-fraction-reference=\"fraction-03\"><mtext data-core-html-host=\"fraction-03\" style=\"display:inline-block;line-height:0;font-size:0\"><span data-core-content-box=\"fraction-03\" style=\"display:inline-block;position:relative;width:13.0158pt;height:29.6784pt;line-height:0;font-size:0\"><span data-core-baseline=\"fraction-03\" style=\"display:inline-block;width:0;height:18.9846pt;line-height:0;font-size:0\"></span><span data-core-text=\"1\" style=\"position:absolute;left:0pt;top:-1.2954pt;font-family:'Math Fraction Script Reference';font-size:12.6pt;line-height:12.6pt;color:red;white-space:nowrap\">\ue301</span><span data-core-text=\"2\" style=\"position:absolute;left:6.4134pt;top:-1.2954pt;font-family:'Math Fraction Script Reference';font-size:12.6pt;line-height:12.6pt;color:red;white-space:nowrap\">\ue302</span><span data-core-text=\"3\" style=\"position:absolute;left:3.2067pt;top:19.7646pt;font-family:'Math Fraction Script Reference';font-size:12.6pt;line-height:12.6pt;color:red;white-space:nowrap\">\ue303</span><span data-core-rule=\"fraction-03\" style=\"position:absolute;left:0pt;top:13.1166pt;width:13.0158pt;height:2.448pt;background:red\"></span></span></mtext></mfrac>"
+    },
+    "fraction-04": {
+      "original_fragment": "<mfrac linethickness=\"-2px\"><mn data-script-reference=\"medium-zero-n\">4</mn><mn data-script-reference=\"medium-zero-d\">56</mn></mfrac>",
+      "original_sha256": "d83ba7b035e21e7884af60ed8a668385be6e8f3ca010ee8071b66012c7bbb764",
+      "original_text": "456",
+      "original_opening": "<mfrac linethickness=\"-2px\">",
+      "original_attributes": {
+        "linethickness": "-2px"
+      },
+      "interior": {
+        "glyphs": [
+          {
+            "text": "4",
+            "name": "four.ssty",
+            "gid": 4277,
+            "size": {
+              "numerator": 63,
+              "denominator": 5,
+              "points": 12.6
+            },
+            "x": {
+              "numerator": 18933,
+              "denominator": 5000,
+              "points": 3.7866
+            },
+            "y": {
+              "numerator": 423,
+              "denominator": 50,
+              "points": 8.46
+            },
+            "width": {
+              "numerator": 8883,
+              "denominator": 1250,
+              "points": 7.1064
+            },
+            "ascent": {
+              "numerator": 4221,
+              "denominator": 500,
+              "points": 8.442
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 39,
+              "denominator": 4,
+              "points": 9.75
+            }
+          },
+          {
+            "text": "5",
+            "name": "five.ssty",
+            "gid": 4278,
+            "size": {
+              "numerator": 63,
+              "denominator": 5,
+              "points": 12.6
+            },
+            "x": {
+              "numerator": 3,
+              "denominator": 4,
+              "points": 0.75
+            },
+            "y": {
+              "numerator": -693,
+              "denominator": 100,
+              "points": -6.93
+            },
+            "width": {
+              "numerator": 15813,
+              "denominator": 2500,
+              "points": 6.3252
+            },
+            "ascent": {
+              "numerator": 5166,
+              "denominator": 625,
+              "points": 8.2656
+            },
+            "descent": {
+              "numerator": 819,
+              "denominator": 5000,
+              "points": 0.1638
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 39,
+              "denominator": 4,
+              "points": 9.75
+            }
+          },
+          {
+            "text": "6",
+            "name": "six.ssty",
+            "gid": 4279,
+            "size": {
+              "numerator": 63,
+              "denominator": 5,
+              "points": 12.6
+            },
+            "x": {
+              "numerator": 4422,
+              "denominator": 625,
+              "points": 7.0752
+            },
+            "y": {
+              "numerator": -693,
+              "denominator": 100,
+              "points": -6.93
+            },
+            "width": {
+              "numerator": 4284,
+              "denominator": 625,
+              "points": 6.8544
+            },
+            "ascent": {
+              "numerator": 5292,
+              "denominator": 625,
+              "points": 8.4672
+            },
+            "descent": {
+              "numerator": 441,
+              "denominator": 2500,
+              "points": 0.1764
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 39,
+              "denominator": 4,
+              "points": 9.75
+            }
+          }
+        ],
+        "rules": [],
+        "algorithm": {
+          "up": {
+            "numerator": 423,
+            "denominator": 50,
+            "points": 8.46
+          },
+          "down": {
+            "numerator": 693,
+            "denominator": 100,
+            "points": 6.93
+          },
+          "axis": {
+            "numerator": 1161,
+            "denominator": 250,
+            "points": 4.644
+          },
+          "rule_thickness": {
+            "numerator": 0,
+            "denominator": 1,
+            "points": 0.0
+          }
+        }
+      },
+      "outer_css_transport": {
+        "content_width": {
+          "numerator": 32949,
+          "denominator": 2500,
+          "points": 13.1796
+        },
+        "padding": {
+          "numerator": 3,
+          "denominator": 4,
+          "points": 0.75
+        },
+        "ascent": {
+          "numerator": 8451,
+          "denominator": 500,
+          "points": 16.902
+        },
+        "descent": {
+          "numerator": 8883,
+          "denominator": 1250,
+          "points": 7.1064
+        },
+        "height": {
+          "numerator": 60021,
+          "denominator": 2500,
+          "points": 24.0084
+        },
+        "baseline_witness_height": {
+          "numerator": 8451,
+          "denominator": 500,
+          "points": 16.902
+        },
+        "html_content_origin_x": {
+          "numerator": 3,
+          "denominator": 4,
+          "points": 0.75
+        },
+        "css_containing_block": "HTML span inside mtext integration point"
+      },
+      "reference_fragment": "<mfrac linethickness=\"-2px\" style=\"display:inline-block;width:13.1796pt;height:24.0084pt;line-height:0;font-size:0\" data-core-fraction-reference=\"fraction-04\"><mtext data-core-html-host=\"fraction-04\" style=\"display:inline-block;line-height:0;font-size:0\"><span data-core-content-box=\"fraction-04\" style=\"display:inline-block;position:relative;width:13.1796pt;height:24.0084pt;line-height:0;font-size:0\"><span data-core-baseline=\"fraction-04\" style=\"display:inline-block;width:0;height:16.902pt;line-height:0;font-size:0\"></span><span data-core-text=\"4\" style=\"position:absolute;left:3.0366pt;top:-1.308pt;font-family:'Math Fraction Script Reference';font-size:12.6pt;line-height:12.6pt;color:black;white-space:nowrap\">\ue304</span><span data-core-text=\"5\" style=\"position:absolute;left:0pt;top:14.082pt;font-family:'Math Fraction Script Reference';font-size:12.6pt;line-height:12.6pt;color:black;white-space:nowrap\">\ue305</span><span data-core-text=\"6\" style=\"position:absolute;left:6.3252pt;top:14.082pt;font-family:'Math Fraction Script Reference';font-size:12.6pt;line-height:12.6pt;color:black;white-space:nowrap\">\ue306</span></span></mtext></mfrac>"
+    },
+    "fraction-05": {
+      "original_fragment": "<mfrac><mfrac><mn data-script-reference=\"nested-n\">1</mn><mn data-script-reference=\"nested-d\">2</mn></mfrac><mrow><mn data-script-reference=\"large-d1\">34</mn><mo data-script-reference=\"large-op\">+</mo><mn data-script-reference=\"large-d2\">5</mn></mrow></mfrac>",
+      "original_sha256": "5e1aacf659e2346a2fc766b392061e9c01aabc209a4c32754e5c8c0128c61cb4",
+      "original_text": "1234+5",
+      "original_opening": "<mfrac>",
+      "original_attributes": {},
+      "interior": {
+        "glyphs": [
+          {
+            "text": "1",
+            "name": "one.ssty2",
+            "gid": 4523,
+            "size": {
+              "numerator": 66,
+              "denominator": 5,
+              "points": 13.2
+            },
+            "x": {
+              "numerator": 309323,
+              "denominator": 15000,
+              "points": 20.621533333333332
+            },
+            "y": {
+              "numerator": 3537,
+              "denominator": 125,
+              "points": 28.296
+            },
+            "width": {
+              "numerator": 18513,
+              "denominator": 2500,
+              "points": 7.4052
+            },
+            "ascent": {
+              "numerator": 22737,
+              "denominator": 2500,
+              "points": 9.0948
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 39,
+              "denominator": 4,
+              "points": 9.75
+            }
+          },
+          {
+            "text": "2",
+            "name": "two.ssty2",
+            "gid": 4524,
+            "size": {
+              "numerator": 66,
+              "denominator": 5,
+              "points": 13.2
+            },
+            "x": {
+              "numerator": 309521,
+              "denominator": 15000,
+              "points": 20.634733333333333
+            },
+            "y": {
+              "numerator": 216,
+              "denominator": 25,
+              "points": 8.64
+            },
+            "width": {
+              "numerator": 18447,
+              "denominator": 2500,
+              "points": 7.3788
+            },
+            "ascent": {
+              "numerator": 22869,
+              "denominator": 2500,
+              "points": 9.1476
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 39,
+              "denominator": 4,
+              "points": 9.75
+            }
+          },
+          {
+            "text": "3",
+            "name": "three.ssty",
+            "gid": 4276,
+            "size": {
+              "numerator": 84,
+              "denominator": 5,
+              "points": 16.8
+            },
+            "x": {
+              "numerator": 3,
+              "denominator": 4,
+              "points": 0.75
+            },
+            "y": {
+              "numerator": -351,
+              "denominator": 25,
+              "points": -14.04
+            },
+            "width": {
+              "numerator": 5502,
+              "denominator": 625,
+              "points": 8.8032
+            },
+            "ascent": {
+              "numerator": 14091,
+              "denominator": 1250,
+              "points": 11.2728
+            },
+            "descent": {
+              "numerator": 273,
+              "denominator": 1250,
+              "points": 0.2184
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 51,
+              "denominator": 4,
+              "points": 12.75
+            }
+          },
+          {
+            "text": "4",
+            "name": "four.ssty",
+            "gid": 4277,
+            "size": {
+              "numerator": 84,
+              "denominator": 5,
+              "points": 16.8
+            },
+            "x": {
+              "numerator": 23883,
+              "denominator": 2500,
+              "points": 9.5532
+            },
+            "y": {
+              "numerator": -351,
+              "denominator": 25,
+              "points": -14.04
+            },
+            "width": {
+              "numerator": 5922,
+              "denominator": 625,
+              "points": 9.4752
+            },
+            "ascent": {
+              "numerator": 1407,
+              "denominator": 125,
+              "points": 11.256
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 51,
+              "denominator": 4,
+              "points": 12.75
+            }
+          },
+          {
+            "text": "+",
+            "name": "plus.ssty",
+            "gid": 4283,
+            "size": {
+              "numerator": 84,
+              "denominator": 5,
+              "points": 16.8
+            },
+            "x": {
+              "numerator": 170713,
+              "denominator": 7500,
+              "points": 22.761733333333332
+            },
+            "y": {
+              "numerator": -351,
+              "denominator": 25,
+              "points": -14.04
+            },
+            "width": {
+              "numerator": 8106,
+              "denominator": 625,
+              "points": 12.9696
+            },
+            "ascent": {
+              "numerator": 12159,
+              "denominator": 1250,
+              "points": 9.7272
+            },
+            "descent": {
+              "numerator": 483,
+              "denominator": 625,
+              "points": 0.7728
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 51,
+              "denominator": 4,
+              "points": 12.75
+            }
+          },
+          {
+            "text": "5",
+            "name": "five.ssty",
+            "gid": 4278,
+            "size": {
+              "numerator": 84,
+              "denominator": 5,
+              "points": 16.8
+            },
+            "x": {
+              "numerator": 59197,
+              "denominator": 1500,
+              "points": 39.464666666666666
+            },
+            "y": {
+              "numerator": -351,
+              "denominator": 25,
+              "points": -14.04
+            },
+            "width": {
+              "numerator": 5271,
+              "denominator": 625,
+              "points": 8.4336
+            },
+            "ascent": {
+              "numerator": 6888,
+              "denominator": 625,
+              "points": 11.0208
+            },
+            "descent": {
+              "numerator": 273,
+              "denominator": 1250,
+              "points": 0.2184
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 51,
+              "denominator": 4,
+              "points": 12.75
+            }
+          }
+        ],
+        "rules": [
+          {
+            "x": {
+              "numerator": 309323,
+              "denominator": 15000,
+              "points": 20.621533333333332
+            },
+            "y": {
+              "numerator": 27789,
+              "denominator": 1250,
+              "points": 22.2312
+            },
+            "width": {
+              "numerator": 18513,
+              "denominator": 2500,
+              "points": 7.4052
+            },
+            "height": {
+              "numerator": 714,
+              "denominator": 625,
+              "points": 1.1424
+            },
+            "color": "black"
+          },
+          {
+            "x": {
+              "numerator": 3,
+              "denominator": 4,
+              "points": 0.75
+            },
+            "y": {
+              "numerator": 672,
+              "denominator": 125,
+              "points": 5.376
+            },
+            "width": {
+              "numerator": 88403,
+              "denominator": 1875,
+              "points": 47.148266666666665
+            },
+            "height": {
+              "numerator": 204,
+              "denominator": 125,
+              "points": 1.632
+            },
+            "color": "black"
+          }
+        ],
+        "algorithm": {
+          "up": {
+            "numerator": 4617,
+            "denominator": 250,
+            "points": 18.468
+          },
+          "down": {
+            "numerator": 351,
+            "denominator": 25,
+            "points": 14.04
+          },
+          "axis": {
+            "numerator": 774,
+            "denominator": 125,
+            "points": 6.192
+          },
+          "rule_thickness": {
+            "numerator": 204,
+            "denominator": 125,
+            "points": 1.632
+          }
+        }
+      },
+      "outer_css_transport": {
+        "content_width": {
+          "numerator": 88403,
+          "denominator": 1875,
+          "points": 47.148266666666665
+        },
+        "padding": {
+          "numerator": 3,
+          "denominator": 4,
+          "points": 0.75
+        },
+        "ascent": {
+          "numerator": 93477,
+          "denominator": 2500,
+          "points": 37.3908
+        },
+        "descent": {
+          "numerator": 9258,
+          "denominator": 625,
+          "points": 14.8128
+        },
+        "height": {
+          "numerator": 130509,
+          "denominator": 2500,
+          "points": 52.2036
+        },
+        "baseline_witness_height": {
+          "numerator": 93477,
+          "denominator": 2500,
+          "points": 37.3908
+        },
+        "html_content_origin_x": {
+          "numerator": 3,
+          "denominator": 4,
+          "points": 0.75
+        },
+        "css_containing_block": "HTML span inside mtext integration point"
+      },
+      "reference_fragment": "<mfrac style=\"display:inline-block;width:47.148266666667pt;height:52.2036pt;line-height:0;font-size:0\" data-core-fraction-reference=\"fraction-05\"><mtext data-core-html-host=\"fraction-05\" style=\"display:inline-block;line-height:0;font-size:0\"><span data-core-content-box=\"fraction-05\" style=\"display:inline-block;position:relative;width:47.148266666667pt;height:52.2036pt;line-height:0;font-size:0\"><span data-core-baseline=\"fraction-05\" style=\"display:inline-block;width:0;height:37.3908pt;line-height:0;font-size:0\"></span><span data-core-text=\"1\" style=\"position:absolute;left:19.871533333333pt;top:-0.6552pt;font-family:'Math Fraction Script Reference';font-size:13.2pt;line-height:13.2pt;color:black;white-space:nowrap\">\ue30c</span><span data-core-text=\"2\" style=\"position:absolute;left:19.884733333333pt;top:19.0008pt;font-family:'Math Fraction Script Reference';font-size:13.2pt;line-height:13.2pt;color:black;white-space:nowrap\">\ue30d</span><span data-core-text=\"3\" style=\"position:absolute;left:0pt;top:38.6808pt;font-family:'Math Fraction Script Reference';font-size:16.8pt;line-height:16.8pt;color:black;white-space:nowrap\">\ue303</span><span data-core-text=\"4\" style=\"position:absolute;left:8.8032pt;top:38.6808pt;font-family:'Math Fraction Script Reference';font-size:16.8pt;line-height:16.8pt;color:black;white-space:nowrap\">\ue304</span><span data-core-text=\"+\" style=\"position:absolute;left:22.011733333333pt;top:38.6808pt;font-family:'Math Fraction Script Reference';font-size:16.8pt;line-height:16.8pt;color:black;white-space:nowrap\">\ue30a</span><span data-core-text=\"5\" style=\"position:absolute;left:38.714666666667pt;top:38.6808pt;font-family:'Math Fraction Script Reference';font-size:16.8pt;line-height:16.8pt;color:black;white-space:nowrap\">\ue305</span><span data-core-rule=\"fraction-05\" style=\"position:absolute;left:19.871533333333pt;top:14.0172pt;width:7.4052pt;height:1.1424pt;background:black\"></span><span data-core-rule=\"fraction-05\" style=\"position:absolute;left:0pt;top:30.3828pt;width:47.148266666667pt;height:1.632pt;background:black\"></span></span></mtext></mfrac>"
+    },
+    "fraction-06": {
+      "original_fragment": "<mfrac><mrow><mn>12</mn><mo>+</mo><mn>3</mn></mrow><mn>45</mn></mfrac>",
+      "original_sha256": "05afc33f62058c6e7bf68078d71d2a02536351c591eaa9cd480a45ccc3eb7191",
+      "original_text": "12+345",
+      "original_opening": "<mfrac>",
+      "original_attributes": {},
+      "interior": {
+        "glyphs": [
+          {
+            "text": "1",
+            "name": "one",
+            "gid": 1138,
+            "size": {
+              "numerator": 24,
+              "denominator": 1,
+              "points": 24.0
+            },
+            "x": {
+              "numerator": 3,
+              "denominator": 4,
+              "points": 0.75
+            },
+            "y": {
+              "numerator": 384,
+              "denominator": 25,
+              "points": 15.36
+            },
+            "width": {
+              "numerator": 297,
+              "denominator": 25,
+              "points": 11.88
+            },
+            "ascent": {
+              "numerator": 1917,
+              "denominator": 125,
+              "points": 15.336
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 18,
+              "denominator": 1,
+              "points": 18.0
+            }
+          },
+          {
+            "text": "2",
+            "name": "two",
+            "gid": 1139,
+            "size": {
+              "numerator": 24,
+              "denominator": 1,
+              "points": 24.0
+            },
+            "x": {
+              "numerator": 1263,
+              "denominator": 100,
+              "points": 12.63
+            },
+            "y": {
+              "numerator": 384,
+              "denominator": 25,
+              "points": 15.36
+            },
+            "width": {
+              "numerator": 297,
+              "denominator": 25,
+              "points": 11.88
+            },
+            "ascent": {
+              "numerator": 1932,
+              "denominator": 125,
+              "points": 15.456
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 18,
+              "denominator": 1,
+              "points": 18.0
+            }
+          },
+          {
+            "text": "+",
+            "name": "plus",
+            "gid": 1196,
+            "size": {
+              "numerator": 24,
+              "denominator": 1,
+              "points": 24.0
+            },
+            "x": {
+              "numerator": 8953,
+              "denominator": 300,
+              "points": 29.843333333333334
+            },
+            "y": {
+              "numerator": 384,
+              "denominator": 25,
+              "points": 15.36
+            },
+            "width": {
+              "numerator": 432,
+              "denominator": 25,
+              "points": 17.28
+            },
+            "ascent": {
+              "numerator": 1674,
+              "denominator": 125,
+              "points": 13.392
+            },
+            "descent": {
+              "numerator": 24,
+              "denominator": 25,
+              "points": 0.96
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 18,
+              "denominator": 1,
+              "points": 18.0
+            }
+          },
+          {
+            "text": "3",
+            "name": "three",
+            "gid": 1140,
+            "size": {
+              "numerator": 24,
+              "denominator": 1,
+              "points": 24.0
+            },
+            "x": {
+              "numerator": 15737,
+              "denominator": 300,
+              "points": 52.45666666666666
+            },
+            "y": {
+              "numerator": 384,
+              "denominator": 25,
+              "points": 15.36
+            },
+            "width": {
+              "numerator": 297,
+              "denominator": 25,
+              "points": 11.88
+            },
+            "ascent": {
+              "numerator": 1932,
+              "denominator": 125,
+              "points": 15.456
+            },
+            "descent": {
+              "numerator": 39,
+              "denominator": 125,
+              "points": 0.312
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 18,
+              "denominator": 1,
+              "points": 18.0
+            }
+          },
+          {
+            "text": "4",
+            "name": "four",
+            "gid": 1141,
+            "size": {
+              "numerator": 24,
+              "denominator": 1,
+              "points": 24.0
+            },
+            "x": {
+              "numerator": 6199,
+              "denominator": 300,
+              "points": 20.663333333333334
+            },
+            "y": {
+              "numerator": -384,
+              "denominator": 25,
+              "points": -15.36
+            },
+            "width": {
+              "numerator": 297,
+              "denominator": 25,
+              "points": 11.88
+            },
+            "ascent": {
+              "numerator": 387,
+              "denominator": 25,
+              "points": 15.48
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 18,
+              "denominator": 1,
+              "points": 18.0
+            }
+          },
+          {
+            "text": "5",
+            "name": "five",
+            "gid": 1142,
+            "size": {
+              "numerator": 24,
+              "denominator": 1,
+              "points": 24.0
+            },
+            "x": {
+              "numerator": 9763,
+              "denominator": 300,
+              "points": 32.54333333333334
+            },
+            "y": {
+              "numerator": -384,
+              "denominator": 25,
+              "points": -15.36
+            },
+            "width": {
+              "numerator": 297,
+              "denominator": 25,
+              "points": 11.88
+            },
+            "ascent": {
+              "numerator": 378,
+              "denominator": 25,
+              "points": 15.12
+            },
+            "descent": {
+              "numerator": 39,
+              "denominator": 125,
+              "points": 0.312
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 18,
+              "denominator": 1,
+              "points": 18.0
+            }
+          }
+        ],
+        "rules": [
+          {
+            "x": {
+              "numerator": 3,
+              "denominator": 4,
+              "points": 0.75
+            },
+            "y": {
+              "numerator": 672,
+              "denominator": 125,
+              "points": 5.376
+            },
+            "width": {
+              "numerator": 4769,
+              "denominator": 75,
+              "points": 63.586666666666666
+            },
+            "height": {
+              "numerator": 204,
+              "denominator": 125,
+              "points": 1.632
+            },
+            "color": "black"
+          }
+        ],
+        "algorithm": {
+          "up": {
+            "numerator": 384,
+            "denominator": 25,
+            "points": 15.36
+          },
+          "down": {
+            "numerator": 384,
+            "denominator": 25,
+            "points": 15.36
+          },
+          "axis": {
+            "numerator": 774,
+            "denominator": 125,
+            "points": 6.192
+          },
+          "rule_thickness": {
+            "numerator": 204,
+            "denominator": 125,
+            "points": 1.632
+          }
+        }
+      },
+      "outer_css_transport": {
+        "content_width": {
+          "numerator": 4769,
+          "denominator": 75,
+          "points": 63.586666666666666
+        },
+        "padding": {
+          "numerator": 3,
+          "denominator": 4,
+          "points": 0.75
+        },
+        "ascent": {
+          "numerator": 3852,
+          "denominator": 125,
+          "points": 30.816
+        },
+        "descent": {
+          "numerator": 1959,
+          "denominator": 125,
+          "points": 15.672
+        },
+        "height": {
+          "numerator": 5811,
+          "denominator": 125,
+          "points": 46.488
+        },
+        "baseline_witness_height": {
+          "numerator": 3852,
+          "denominator": 125,
+          "points": 30.816
+        },
+        "html_content_origin_x": {
+          "numerator": 3,
+          "denominator": 4,
+          "points": 0.75
+        },
+        "css_containing_block": "HTML span inside mtext integration point"
+      },
+      "reference_fragment": "<mfrac style=\"display:inline-block;width:63.586666666667pt;height:46.488pt;line-height:0;font-size:0\" data-core-fraction-reference=\"fraction-06\"><mtext data-core-html-host=\"fraction-06\" style=\"display:inline-block;line-height:0;font-size:0\"><span data-core-content-box=\"fraction-06\" style=\"display:inline-block;position:relative;width:63.586666666667pt;height:46.488pt;line-height:0;font-size:0\"><span data-core-baseline=\"fraction-06\" style=\"display:inline-block;width:0;height:30.816pt;line-height:0;font-size:0\"></span><span data-core-text=\"1\" style=\"position:absolute;left:0pt;top:-2.544pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">1</span><span data-core-text=\"2\" style=\"position:absolute;left:11.88pt;top:-2.544pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">2</span><span data-core-text=\"+\" style=\"position:absolute;left:29.093333333333pt;top:-2.544pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">+</span><span data-core-text=\"3\" style=\"position:absolute;left:51.706666666667pt;top:-2.544pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">3</span><span data-core-text=\"4\" style=\"position:absolute;left:19.913333333333pt;top:28.176pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">4</span><span data-core-text=\"5\" style=\"position:absolute;left:31.793333333333pt;top:28.176pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">5</span><span data-core-rule=\"fraction-06\" style=\"position:absolute;left:0pt;top:23.808pt;width:63.586666666667pt;height:1.632pt;background:black\"></span></span></mtext></mfrac>"
+    },
+    "fraction-07": {
+      "original_fragment": "<mfrac linethickness=\"0\"><mn>6</mn><mn>7</mn></mfrac>",
+      "original_sha256": "b81cfb9adbb270175a38a874729eda745e38e67e09f66471c19106a9527b49cf",
+      "original_text": "67",
+      "original_opening": "<mfrac linethickness=\"0\">",
+      "original_attributes": {
+        "linethickness": "0"
+      },
+      "interior": {
+        "glyphs": [
+          {
+            "text": "6",
+            "name": "six",
+            "gid": 1143,
+            "size": {
+              "numerator": 24,
+              "denominator": 1,
+              "points": 24.0
+            },
+            "x": {
+              "numerator": 3,
+              "denominator": 4,
+              "points": 0.75
+            },
+            "y": {
+              "numerator": 468,
+              "denominator": 25,
+              "points": 18.72
+            },
+            "width": {
+              "numerator": 297,
+              "denominator": 25,
+              "points": 11.88
+            },
+            "ascent": {
+              "numerator": 1938,
+              "denominator": 125,
+              "points": 15.504
+            },
+            "descent": {
+              "numerator": 36,
+              "denominator": 125,
+              "points": 0.288
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 18,
+              "denominator": 1,
+              "points": 18.0
+            }
+          },
+          {
+            "text": "7",
+            "name": "seven",
+            "gid": 1144,
+            "size": {
+              "numerator": 24,
+              "denominator": 1,
+              "points": 24.0
+            },
+            "x": {
+              "numerator": 3,
+              "denominator": 4,
+              "points": 0.75
+            },
+            "y": {
+              "numerator": -414,
+              "denominator": 25,
+              "points": -16.56
+            },
+            "width": {
+              "numerator": 297,
+              "denominator": 25,
+              "points": 11.88
+            },
+            "ascent": {
+              "numerator": 378,
+              "denominator": 25,
+              "points": 15.12
+            },
+            "descent": {
+              "numerator": 24,
+              "denominator": 125,
+              "points": 0.192
+            },
+            "color": "black",
+            "css_transport_ascent": {
+              "numerator": 18,
+              "denominator": 1,
+              "points": 18.0
+            }
+          }
+        ],
+        "rules": [],
+        "algorithm": {
+          "up": {
+            "numerator": 468,
+            "denominator": 25,
+            "points": 18.72
+          },
+          "down": {
+            "numerator": 414,
+            "denominator": 25,
+            "points": 16.56
+          },
+          "axis": {
+            "numerator": 774,
+            "denominator": 125,
+            "points": 6.192
+          },
+          "rule_thickness": {
+            "numerator": 0,
+            "denominator": 1,
+            "points": 0.0
+          }
+        }
+      },
+      "outer_css_transport": {
+        "content_width": {
+          "numerator": 297,
+          "denominator": 25,
+          "points": 11.88
+        },
+        "padding": {
+          "numerator": 3,
+          "denominator": 4,
+          "points": 0.75
+        },
+        "ascent": {
+          "numerator": 4278,
+          "denominator": 125,
+          "points": 34.224
+        },
+        "descent": {
+          "numerator": 2094,
+          "denominator": 125,
+          "points": 16.752
+        },
+        "height": {
+          "numerator": 6372,
+          "denominator": 125,
+          "points": 50.976
+        },
+        "baseline_witness_height": {
+          "numerator": 4278,
+          "denominator": 125,
+          "points": 34.224
+        },
+        "html_content_origin_x": {
+          "numerator": 3,
+          "denominator": 4,
+          "points": 0.75
+        },
+        "css_containing_block": "HTML span inside mtext integration point"
+      },
+      "reference_fragment": "<mfrac linethickness=\"0\" style=\"display:inline-block;width:11.88pt;height:50.976pt;line-height:0;font-size:0\" data-core-fraction-reference=\"fraction-07\"><mtext data-core-html-host=\"fraction-07\" style=\"display:inline-block;line-height:0;font-size:0\"><span data-core-content-box=\"fraction-07\" style=\"display:inline-block;position:relative;width:11.88pt;height:50.976pt;line-height:0;font-size:0\"><span data-core-baseline=\"fraction-07\" style=\"display:inline-block;width:0;height:34.224pt;line-height:0;font-size:0\"></span><span data-core-text=\"6\" style=\"position:absolute;left:0pt;top:-2.496pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">6</span><span data-core-text=\"7\" style=\"position:absolute;left:0pt;top:32.784pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">7</span></span></mtext></mfrac>"
+    },
+    "fraction-08": {
+      "original_fragment": "<mfrac style=\"width:54pt;padding:0;color:blue\" linethickness=\"1px\"><mn style=\"font-size:12pt;math-depth:0\">89</mn><mn data-script-reference=\"authored-d\">10</mn></mfrac>",
+      "original_sha256": "3f8e4270a59d56ebf91f1c474c26e9a546c9d681d228eab8db63deaad4da83f5",
+      "original_text": "8910",
+      "original_opening": "<mfrac style=\"width:54pt;padding:0;color:blue\" linethickness=\"1px\">",
+      "original_attributes": {
+        "style": "width:54pt;padding:0;color:blue",
+        "linethickness": "1px"
+      },
+      "interior": {
+        "glyphs": [
+          {
+            "text": "8",
+            "name": "eight",
+            "gid": 1145,
+            "size": {
+              "numerator": 12,
+              "denominator": 1,
+              "points": 12.0
+            },
+            "x": {
+              "numerator": 1053,
+              "denominator": 50,
+              "points": 21.06
+            },
+            "y": {
+              "numerator": 1053,
+              "denominator": 100,
+              "points": 10.53
+            },
+            "width": {
+              "numerator": 297,
+              "denominator": 50,
+              "points": 5.94
+            },
+            "ascent": {
+              "numerator": 1941,
+              "denominator": 250,
+              "points": 7.764
+            },
+            "descent": {
+              "numerator": 18,
+              "denominator": 125,
+              "points": 0.144
+            },
+            "color": "blue",
+            "css_transport_ascent": {
+              "numerator": 9,
+              "denominator": 1,
+              "points": 9.0
+            }
+          },
+          {
+            "text": "9",
+            "name": "nine",
+            "gid": 1146,
+            "size": {
+              "numerator": 12,
+              "denominator": 1,
+              "points": 12.0
+            },
+            "x": {
+              "numerator": 27,
+              "denominator": 1,
+              "points": 27.0
+            },
+            "y": {
+              "numerator": 1053,
+              "denominator": 100,
+              "points": 10.53
+            },
+            "width": {
+              "numerator": 297,
+              "denominator": 50,
+              "points": 5.94
+            },
+            "ascent": {
+              "numerator": 969,
+              "denominator": 125,
+              "points": 7.752
+            },
+            "descent": {
+              "numerator": 39,
+              "denominator": 250,
+              "points": 0.156
+            },
+            "color": "blue",
+            "css_transport_ascent": {
+              "numerator": 9,
+              "denominator": 1,
+              "points": 9.0
+            }
+          },
+          {
+            "text": "1",
+            "name": "one.ssty",
+            "gid": 4274,
+            "size": {
+              "numerator": 63,
+              "denominator": 5,
+              "points": 12.6
+            },
+            "x": {
+              "numerator": 201393,
+              "denominator": 10000,
+              "points": 20.1393
+            },
+            "y": {
+              "numerator": -1053,
+              "denominator": 100,
+              "points": -10.53
+            },
+            "width": {
+              "numerator": 32067,
+              "denominator": 5000,
+              "points": 6.4134
+            },
+            "ascent": {
+              "numerator": 42021,
+              "denominator": 5000,
+              "points": 8.4042
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "color": "blue",
+            "css_transport_ascent": {
+              "numerator": 39,
+              "denominator": 4,
+              "points": 9.75
+            }
+          },
+          {
+            "text": "0",
+            "name": "zero.ssty",
+            "gid": 4273,
+            "size": {
+              "numerator": 63,
+              "denominator": 5,
+              "points": 12.6
+            },
+            "x": {
+              "numerator": 265527,
+              "denominator": 10000,
+              "points": 26.5527
+            },
+            "y": {
+              "numerator": -1053,
+              "denominator": 100,
+              "points": -10.53
+            },
+            "width": {
+              "numerator": 1827,
+              "denominator": 250,
+              "points": 7.308
+            },
+            "ascent": {
+              "numerator": 42147,
+              "denominator": 5000,
+              "points": 8.4294
+            },
+            "descent": {
+              "numerator": 819,
+              "denominator": 5000,
+              "points": 0.1638
+            },
+            "color": "blue",
+            "css_transport_ascent": {
+              "numerator": 39,
+              "denominator": 4,
+              "points": 9.75
+            }
+          }
+        ],
+        "rules": [
+          {
+            "x": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "y": {
+              "numerator": 4269,
+              "denominator": 1000,
+              "points": 4.269
+            },
+            "width": {
+              "numerator": 54,
+              "denominator": 1,
+              "points": 54.0
+            },
+            "height": {
+              "numerator": 3,
+              "denominator": 4,
+              "points": 0.75
+            },
+            "color": "blue"
+          }
+        ],
+        "algorithm": {
+          "up": {
+            "numerator": 1053,
+            "denominator": 100,
+            "points": 10.53
+          },
+          "down": {
+            "numerator": 1053,
+            "denominator": 100,
+            "points": 10.53
+          },
+          "axis": {
+            "numerator": 1161,
+            "denominator": 250,
+            "points": 4.644
+          },
+          "rule_thickness": {
+            "numerator": 3,
+            "denominator": 4,
+            "points": 0.75
+          }
+        }
+      },
+      "outer_css_transport": {
+        "content_width": {
+          "numerator": 54,
+          "denominator": 1,
+          "points": 54.0
+        },
+        "padding": {
+          "numerator": 0,
+          "denominator": 1,
+          "points": 0.0
+        },
+        "ascent": {
+          "numerator": 9147,
+          "denominator": 500,
+          "points": 18.294
+        },
+        "descent": {
+          "numerator": 53469,
+          "denominator": 5000,
+          "points": 10.6938
+        },
+        "height": {
+          "numerator": 144939,
+          "denominator": 5000,
+          "points": 28.9878
+        },
+        "baseline_witness_height": {
+          "numerator": 9147,
+          "denominator": 500,
+          "points": 18.294
+        },
+        "html_content_origin_x": {
+          "numerator": 0,
+          "denominator": 1,
+          "points": 0.0
+        },
+        "css_containing_block": "HTML span inside mtext integration point"
+      },
+      "reference_fragment": "<mfrac style=\"width:54pt;padding:0;color:blue;display:inline-block;width:54pt;height:28.9878pt;line-height:0;font-size:0\" linethickness=\"1px\" data-core-fraction-reference=\"fraction-08\"><mtext data-core-html-host=\"fraction-08\" style=\"display:inline-block;line-height:0;font-size:0\"><span data-core-content-box=\"fraction-08\" style=\"display:inline-block;position:relative;width:54pt;height:28.9878pt;line-height:0;font-size:0\"><span data-core-baseline=\"fraction-08\" style=\"display:inline-block;width:0;height:18.294pt;line-height:0;font-size:0\"></span><span data-core-text=\"8\" style=\"position:absolute;left:21.06pt;top:-1.236pt;font-family:'STIX Two Math';font-size:12pt;line-height:12pt;color:blue;white-space:nowrap\">8</span><span data-core-text=\"9\" style=\"position:absolute;left:27pt;top:-1.236pt;font-family:'STIX Two Math';font-size:12pt;line-height:12pt;color:blue;white-space:nowrap\">9</span><span data-core-text=\"1\" style=\"position:absolute;left:20.1393pt;top:19.074pt;font-family:'Math Fraction Script Reference';font-size:12.6pt;line-height:12.6pt;color:blue;white-space:nowrap\">\ue301</span><span data-core-text=\"0\" style=\"position:absolute;left:26.5527pt;top:19.074pt;font-family:'Math Fraction Script Reference';font-size:12.6pt;line-height:12.6pt;color:blue;white-space:nowrap\">\ue300</span><span data-core-rule=\"fraction-08\" style=\"position:absolute;left:0pt;top:13.275pt;width:54pt;height:0.75pt;background:blue\"></span></span></mtext></mfrac>"
+    }
+  },
+  "browser_packaging": {
+    "font_stylesheet": "<style data-core-reference-fonts=\"source-pinned\">@font-face{font-family:'DejaVu Sans';src:url('../../../priv/fonts/dejavu/DejaVuSans.ttf') format('truetype');font-weight:400;font-style:normal}@font-face{font-family:'DejaVu Sans';src:url('../../../priv/fonts/dejavu/DejaVuSans-Bold.ttf') format('truetype');font-weight:700;font-style:normal}@font-face{font-family:'DejaVu Sans';src:url('../../../priv/fonts/dejavu/DejaVuSans-Oblique.ttf') format('truetype');font-weight:400;font-style:italic}@font-face{font-family:'DejaVu Sans';src:url('../../../priv/fonts/dejavu/DejaVuSans-BoldOblique.ttf') format('truetype');font-weight:700;font-style:italic}@font-face{font-family:'STIX Two Math';src:url('../../../priv/fonts/stix/STIXTwoMath-Regular.ttf') format('truetype');font-weight:400;font-style:normal}@font-face{font-family:'Math Fraction Script Reference';src:url('../../../test/fixtures/html_to_pdf/browser_parity/assets/math-fraction-script-reference.ttf') format('truetype');font-weight:400;font-style:normal}</style>",
+    "faces": [
+      {
+        "family": "DejaVu Sans",
+        "path": "priv/fonts/dejavu/DejaVuSans.ttf",
+        "weight": 400,
+        "style": "normal",
+        "sha256": "57f73e11f51999432bf7ab22ce55b6f945d5eca1bf824404cfa9ec2e3718c84e"
+      },
+      {
+        "family": "DejaVu Sans",
+        "path": "priv/fonts/dejavu/DejaVuSans-Bold.ttf",
+        "weight": 700,
+        "style": "normal",
+        "sha256": "a4c5bc453ca281d90ea079e596da7ae0dfeb5777497c29ec254e76d97ff6f890"
+      },
+      {
+        "family": "DejaVu Sans",
+        "path": "priv/fonts/dejavu/DejaVuSans-Oblique.ttf",
+        "weight": 400,
+        "style": "italic",
+        "sha256": "e2f09289f4276309a36b9a93e5a0ac64957ef3eb7158151b243d41f667151ee4"
+      },
+      {
+        "family": "DejaVu Sans",
+        "path": "priv/fonts/dejavu/DejaVuSans-BoldOblique.ttf",
+        "weight": 700,
+        "style": "italic",
+        "sha256": "c35383d5e56add5cc9cdc9f4e4a899f9e540f7c7e49f1901074c2d03af194eff"
+      },
+      {
+        "family": "STIX Two Math",
+        "path": "priv/fonts/stix/STIXTwoMath-Regular.ttf",
+        "weight": 400,
+        "style": "normal",
+        "sha256": "49b22767985171bce579307b21d98f4d35012fa39e316acc4ffcab8644dfb69b"
+      },
+      {
+        "family": "Math Fraction Script Reference",
+        "path": "test/fixtures/html_to_pdf/browser_parity/assets/math-fraction-script-reference.ttf",
+        "weight": 400,
+        "style": "normal",
+        "sha256": "b1eed6017e8ac0976744ddb108c995747bb19d49bfb24fc51ee472922e6e0217"
+      }
+    ],
+    "artwork_only_original": "<mn data-script-reference=\"linked-n\">11</mn>",
+    "artwork_only_reference": "<mn data-script-reference=\"linked-n\" style=\"font-family:&quot;Math Fraction Script Reference&quot;\">\ue301\ue301</mn>",
+    "no_layout_change_to_linked_tree": true,
+    "complete_reference_byte_reversible": true
+  }
+}

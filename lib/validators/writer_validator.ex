@@ -14,6 +14,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.InfoValidator
   alias NativeElixirPdfUtilities.Validators.OutlineValidator
+  alias NativeElixirPdfUtilities.Validators.SvgFormValidator
 
   @border_styles [
     :none,
@@ -351,6 +352,33 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     end)
   end
 
+  @doc "Validates native paint boxes using the same geometry and annotation rules as PDF writing."
+  @spec validate_native_boxes(term()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_native_boxes(boxes) do
+    HtmlValidator.with_render_budget(fn ->
+      case boxes do
+        boxes when is_list(boxes) ->
+          HtmlValidator.check_render_resource(:max_layout_boxes, length(boxes), :writer)
+
+          Enum.reduce_while(boxes, :ok, fn box, :ok ->
+            case valid_box?(box) do
+              true ->
+                {:cont, :ok}
+
+              false ->
+                {:halt, drawing_group_error("native paint requires valid existing writer boxes")}
+
+              error ->
+                {:halt, error}
+            end
+          end)
+
+        _ ->
+          drawing_group_error("native paint requires an ordered list of writer boxes")
+      end
+    end)
+  end
+
   defp valid_box?(box, parent_height \\ nil) do
     case box do
       %{drawing_annotation_rect: _} ->
@@ -411,7 +439,14 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       when is_number(x) and is_number(y) and is_number(width) and is_number(height) and
              width > 0 and height > 0 and is_number(stroke_width) and stroke_width >= 0 and
              is_number(border_radius) and border_radius >= 0 ->
-        valid_optional_color?(fill_color) and valid_optional_color?(stroke_color) and
+        Map.get(box, :shape, :rectangle) in [
+          :rectangle,
+          {:triangle, :up},
+          {:triangle, :down},
+          {:triangle, :left},
+          {:triangle, :right}
+        ] and
+          valid_optional_color?(fill_color) and valid_optional_color?(stroke_color) and
           case box do
             %{text_baseline_offset: offset} -> is_number(offset)
             _ -> true
@@ -782,6 +817,11 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
 
   defp valid_image?(image) do
     case image do
+      %{format: :pdf_form, data: source, width_px: width_px, height_px: height_px}
+      when is_binary(source) and is_integer(width_px) and width_px > 0 and
+             is_integer(height_px) and height_px > 0 ->
+        match?({:ok, _}, SvgFormValidator.prepare_source(source))
+
       %{
         format: format,
         data: data,

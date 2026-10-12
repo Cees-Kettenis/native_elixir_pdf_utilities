@@ -6535,7 +6535,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                  message: "style options must be a keyword list"
                }}}
 
-    assert Style.load_stylesheets(:not_a_document, []) == {:error, :invalid_document}
+    assert {:error,
+            {:invalid_document, %{stage: :style, reason: :invalid_document, message: message}}} =
+             Style.load_stylesheets(:not_a_document, [])
+
+    assert message =~ "document tree"
 
     assert Style.compute(%{type: :document, children: []}, fonts: :bad) ==
              {:error, :invalid_document}

@@ -318,26 +318,17 @@ defmodule NativeElixirPdfUtilities.Validators.ForeignContentValidator do
   end
 
   @doc false
-  @spec validate_render_support(map(), boolean()) ::
+  @spec validate_render_support(map(), boolean(), :render | :prepare_svg) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
-  def validate_render_support(node, active?) do
+  def validate_render_support(node, active?, mode \\ :render) do
     case node do
       %{namespace: :mathml} when active? ->
         NativeElixirPdfUtilities.Validators.MathLayoutValidator.validate_element_support(node)
 
-      %{namespace: namespace, tag: tag} when namespace in [:mathml, :svg] ->
-        if active? do
-          Diagnostics.error(
-            :layout,
-            :unsupported_html,
-            "#{namespace} #{tag} parses in its own namespace, but its renderer is not implemented yet",
-            module: __MODULE__,
-            operation: :render,
-            source: tag
-          )
-        else
-          validate_inert_element(node)
-        end
+      %{namespace: namespace, tag: _tag} when namespace in [:mathml, :svg] ->
+        if active? and namespace == :svg and mode == :render,
+          do: NativeElixirPdfUtilities.Validators.SvgSceneValidator.validate_node(node),
+          else: validate_inert_element(node)
 
       %{tag: "template"} ->
         validate_inert_element(node)

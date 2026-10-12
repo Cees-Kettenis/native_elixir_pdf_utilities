@@ -16,7 +16,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend do
             request.width,
             request.height,
             request.fonts,
-            request.resources
+            request.resources,
+            request.mode == :inline
           )
           |> SvgValidator.conversion_result()
         end
@@ -30,6 +31,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend do
             source: "SVG",
             module: __MODULE__,
             operation: :rasterize
+          )}}
+
+      result ->
+        result
+    end
+  end
+
+  @doc "Converts a validated inline SVG scene to a bounded vector PDF source using supplied bytes only."
+  @spec vectorize(term(), term(), term(), HtmlValidator.image_budget() | nil) ::
+          {:ok, binary()} | {:error, {atom(), map()}}
+  def vectorize(source, options, context, image_budget \\ nil) do
+    result =
+      HtmlValidator.with_render_budget(fn ->
+        with {:ok, request} <-
+               SvgBackendValidator.prepare_vector(source, options, context, image_budget),
+             :ok <- SvgBackendValidator.native_load_result(load_native()) do
+          NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize(
+            request.source,
+            request.fonts,
+            request.resources
+          )
+          |> SvgValidator.conversion_result()
+        end
+      end)
+
+    case result do
+      {:error, {reason, diagnostic}} ->
+        {:error,
+         {reason,
+          Diagnostics.with_context(diagnostic,
+            source: "SVG",
+            module: __MODULE__,
+            operation: :vectorize
           )}}
 
       result ->

@@ -7,6 +7,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Text
 
+  test "rejects malformed vector form image bytes through the writer diagnostic contract" do
+    image = %{format: :pdf_form, data: "not a PDF", width_px: 2, height_px: 2}
+    box = %{type: :image, x: 1, y: 1, width: 2, height: 2, image: image}
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             PdfWriter.render([%{size: {10, 10}, boxes: [box]}])
+
+    assert diagnostic.stage == :pdf
+    assert diagnostic.reason == :invalid_pdf_input
+    assert diagnostic.operation == :write_pdf
+    assert diagnostic.module == PdfWriter
+    assert diagnostic.message =~ "valid pages"
+  end
+
   defp glyph_text_box(font, text) do
     %{
       type: :text,
