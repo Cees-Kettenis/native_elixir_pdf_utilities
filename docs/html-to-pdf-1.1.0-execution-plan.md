@@ -2,7 +2,7 @@
 
 Prepared on 2026-10-12 from the previous agent's handoff and seven independent area audits. The milestone plan in `tmp/1.1.0-plan.md` remains authoritative.
 
-Work began from verified batch55, preserving the previous agent's unfinished batch56. Five combined waves have passed their required gates and are copied into the original checkout. The latest verified integration is `38333b9235899696e86052f80915d0c6b37bfe3c`. Both supported runtimes passed 1,642 unit tests at 100% coverage and 154 browser comparisons; performance, Dialyzer and exact host parity also passed. Wave 6 is being prepared separately. The milestone is unfinished.
+Work began from verified batch55, preserving the previous agent's unfinished batch56. Six combined waves have passed their required gates and are copied into the original checkout. The latest verified integration is `e8fa7bdda2cb8d4b7df4d59fe0d42fc208b26237`. Both supported runtimes passed 1,722 unit tests at 100% coverage and 161 browser comparisons; performance, Dialyzer and exact host parity also passed. The next wave combines accepted scrollbar, SVG, parser and measured HTML-child work. The milestone is unfinished.
 
 ## Checkpoint estimate
 

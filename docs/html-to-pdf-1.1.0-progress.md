@@ -5,11 +5,34 @@ resources, controls and composition, inline SVG, embedded documents, and MathML.
 This file records delivered batches and remaining work. The full milestone is
 not complete.
 
-The earlier batch 55 handoff was resumed on 2026-10-12. Five combined integration
+The earlier batch 55 handoff was resumed on 2026-10-12. Six combined integration
 waves now pass the required gates. The latest copied integration is
-`38333b9235899696e86052f80915d0c6b37bfe3c`. Later accepted lane checkpoints are
-being combined in Wave 6. Historical batch entries below retain their original
+`e8fa7bdda2cb8d4b7df4d59fe0d42fc208b26237`. Later accepted lane checkpoints are
+being combined in the next wave. Historical batch entries below retain their original
 acceptance evidence and remaining scope. The milestone remains unfinished.
+
+## Combined integration checkpoint 6
+
+The copied source adds validated fieldset disabling and legend layout, initial
+text-control dimensions and clipping, scoped child fragment destinations,
+ordinary block captions, all-node parser identities and source locations, and
+native MathML operator preparation. Parser identities remain separate from
+resource permissions. Table ID lookup uses the shared scoped first-ID authority.
+Rendering reuses exact successful tree validation within one render budget and
+avoids redundant table walks while retaining semantic checks and work ceilings.
+
+Both Elixir 1.19 and 1.20 passed 1,722 unit tests with 100% coverage, all 19 fixed
+performance workloads, Dialyzer and 161 browser comparisons. The exact host
+browser command also passed 161 comparisons. Each performance report matches
+100 library and 20 input hashes and retains 12 schedulers. The first matrix's
+reduction failures and the host dependency-setup failure are preserved locally.
+Only the host command was retried after dependency setup; source stayed unchanged.
+Fresh PLT creation emitted 31 third-party OTP `xmerl_ucs` missing-spec advisories
+per runtime; project analysis had no warnings and matrix entries had no `WARN`.
+
+This checkpoint does not close control selection modes, parser-time replacement,
+shadow/selected-content composition, full SVG or MathML, or the remaining table
+and embedded-document work. The final cumulative idle 10% audit remains open.
 
 ## Batch 1: comments and attribute syntax
 
