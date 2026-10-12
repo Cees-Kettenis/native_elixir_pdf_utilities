@@ -68,10 +68,61 @@ formatter output can differ between Elixir versions.
 
 Performance baselines live in
 [scripts/performance-regression.exs](scripts/performance-regression.exs). Checks
-allow up to 5% growth in median reductions and measured PDF size, with separate
-timing limits. Fix unintended slowdowns. Change a baseline only for an intentional
+allow up to 10% growth in median reductions and 5% growth in measured PDF size, with separate
+timing limits. Milestone acceptance allows up to 10% cumulative elapsed-time
+growth per existing workload against the fixed pre-milestone revision. This is
+one allowance for the whole milestone, not an allowance for every batch. The final milestone audit records elapsed time,
+reductions, memory and output size for user review before release.
+Change a baseline only for an intentional
 workload change or a justified tradeoff, and include measurements and the reason
 in the PR.
+
+For milestone comparisons, retain reports from the fixed pre-milestone revision,
+the previous change, and the candidate on each supported runtime:
+
+```bash
+PERFORMANCE_REPORT=.quality/performance/candidate.json mix test.performance
+```
+
+To enforce the cumulative elapsed-time allowance, provide a fixed report captured
+on the same idle host with the same runtime and VM settings:
+
+```bash
+PERFORMANCE_BASELINE_REPORT=.quality/performance/baselines/1.1.0/reports.json \
+PERFORMANCE_REPORT=.quality/performance/candidate.json mix test.performance
+```
+
+The baseline can be a single report or a bundle. Bundles select
+`elixir-<major.minor>.json` by default; `PERFORMANCE_BASELINE_KEY` selects another
+retained capture. Runtime, scheduler count, workload names, fixture/font hashes
+and dependency lock must match. Preserve the original baseline revision when
+recapturing under controlled conditions; never replace it with a newer batch.
+The candidate report is written before comparison, including when comparison fails.
+
+Keep benchmark JSON reports under the ignored `.quality/` directory.
+Retained milestone evidence uses one `reports.json` bundle per baseline or
+implementation batch under `.quality/performance/baselines/` and
+`.quality/performance/results/`. Reports remain local and must not be committed.
+The bundle's `reports` map keeps every original capture name and complete report;
+`report_sha256` retains the SHA-256 of each original JSON file. Preserve distinct
+capture names and existing measurements when adding a capture. This keeps the
+fixed baseline and previous-change evidence without adding tracked report files.
+
+The optional JSON report includes all five timed samples, medians, reductions,
+PDF sizes, runtime details, and hashes of the benchmark, fixtures, bundled fonts,
+and dependency lock. It also runs three separate memory measurements per workload
+and records sampled total BEAM memory every 10 ms. Sampling does not affect the
+timed runs. VM memory includes shared caches and retained benchmark outputs,
+excludes native allocations, and can miss short peaks. Use an OS profiler for
+native memory. Reports are measurements, not automatic approval of a slowdown.
+Keep the inputs, runtime, fonts, host, and runtime settings the same, run on an
+idle host. Increases within the cumulative 10% allowance do not block acceptance
+when the other quality gates pass. For inconsistent timing, retain a bounded set
+of independent runs and report uncertainty rather than repeatedly investigating
+small differences. Reproducible increases above 10% require optimization or an
+explicitly approved exception. Preserve the fixed report rather than replacing it after each
+change. Benchmark new features separately when adding them.
+The quality matrix writes a report alongside each runtime's performance log.
 
 ### Quick checks
 

@@ -127,7 +127,9 @@ for entry in "${runtime_entries[@]}"; do
   version="$(jq -r '.elixir' <<<"${entry}")"
   source_image="$(jq -r '.image' <<<"${entry}")"
   canonical="$(jq -r '.canonical' <<<"${entry}")"
-  local_image="native-elixir-pdf-utilities-quality:elixir-${version}"
+  # Concurrent worktrees may require different native toolchains. Keep each
+  # run's image stable across stages rather than sharing a mutable global tag.
+  local_image="native-elixir-pdf-utilities-quality:elixir-${version}-${run_id}"
   runtime_root="${repository_root}/.quality/elixir-${version}"
   runtime_versions+=("${version}")
 
@@ -160,6 +162,15 @@ for entry in "${runtime_entries[@]}"; do
     --env "EXPECTED_ELIXIR=${version}"
     "${local_image}"
   )
+
+  # Optional milestone timing comparison. Baseline files remain local under
+  # .quality; their paths must be accessible from the container's /workspace.
+  if [[ -n "${PERFORMANCE_BASELINE_REPORT:-}" ]]; then
+    docker_command=("${docker_command[@]:0:${#docker_command[@]}-1}"
+      --env "PERFORMANCE_BASELINE_REPORT=${PERFORMANCE_BASELINE_REPORT}"
+      --env "PERFORMANCE_BASELINE_KEY=${PERFORMANCE_BASELINE_KEY:-elixir-${version}.json}"
+      "${local_image}")
+  fi
 
   if ! run_logged "${version}" runtime "${docker_command[@]}" sh -c \
     'elixir --version && elixir --version | grep -F "Elixir ${EXPECTED_ELIXIR}."'; then
@@ -199,6 +210,7 @@ for entry in "${runtime_entries[@]}"; do
   fi
 
   if ! run_logged "${version}" performance "${docker_command[@]}" \
+    env "PERFORMANCE_REPORT=/workspace/.quality/logs/${run_id}/elixir-${version}/performance.json" \
     mix test.performance; then
     mark_remaining_skipped "${version}" performance
     continue

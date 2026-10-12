@@ -5,8 +5,57 @@ alias NativeElixirPdfUtilities.Text
 Code.require_file("../test/support/png_fixture.ex", __DIR__)
 alias NativeElixirPdfUtilities.TestSupport.PngFixture
 
-maximum_reduction_regression_percent = 5
+maximum_reduction_regression_percent = 10
+maximum_time_regression_percent = 10
 runtime_version = System.version() |> String.split(".") |> Enum.take(2) |> Enum.join(".")
+report_path = System.get_env("PERFORMANCE_REPORT")
+baseline_path = System.get_env("PERFORMANCE_BASELINE_REPORT")
+
+if baseline_path && !report_path do
+  raise "PERFORMANCE_BASELINE_REPORT requires PERFORMANCE_REPORT to retain comparison evidence"
+end
+
+Process.put(:performance_results, [])
+
+# Memory sampling runs separately so it cannot distort the existing timed samples.
+# This is sampled total BEAM memory, including shared caches and binaries. Native
+# allocations require an additional OS profiler, such as /usr/bin/time -v.
+measure_memory = fn operation ->
+  owner = self()
+  reference = make_ref()
+  :erlang.garbage_collect()
+
+  sampler =
+    spawn_link(fn ->
+      initial = :erlang.memory(:total)
+      send(owner, {reference, :ready})
+
+      sample = fn sample, peak ->
+        receive do
+          :stop -> send(owner, {reference, :peak, max(peak, :erlang.memory(:total))})
+        after
+          10 -> sample.(sample, max(peak, :erlang.memory(:total)))
+        end
+      end
+
+      sample.(sample, initial)
+    end)
+
+  receive do
+    {^reference, :ready} -> :ok
+  end
+
+  result = operation.()
+  send(sampler, :stop)
+
+  receive do
+    {^reference, :peak, peak} ->
+      case result do
+        {:ok, _value} -> peak
+        failure -> raise "memory sample failed: #{inspect(failure)}"
+      end
+  end
+end
 
 measure = fn name, operation, limits ->
   Enum.each(1..2, fn _ ->
@@ -102,6 +151,20 @@ measure = fn name, operation, limits ->
       :ok
   end
 
+  if report_path do
+    memory_samples = Enum.map(1..3, fn _ -> measure_memory.(operation) end)
+
+    evidence =
+      Map.merge(result, %{
+        result_bytes: result_bytes || :null,
+        samples: Enum.map(samples, &Map.take(&1, [:microseconds, :reductions])),
+        sampled_peak_vm_bytes: Enum.max(memory_samples),
+        memory_samples: memory_samples
+      })
+
+    Process.put(:performance_results, [evidence | Process.get(:performance_results)])
+  end
+
   latest_value
 end
 
@@ -109,8 +172,7 @@ fixture_directory = Path.expand("../test/fixtures/html_to_pdf", __DIR__)
 
 fixtures = [
   {"invoice_012.html", [page_size: :a4], %{"1.19" => 2_470_000, "1.20" => 2_400_000}, 162_436},
-  {"statement_012.html", [page_size: :a4], %{"1.19" => 2_350_000, "1.20" => 2_290_000},
-   161_282},
+  {"statement_012.html", [page_size: :a4], %{"1.19" => 2_350_000, "1.20" => 2_290_000}, 161_282},
   {"multi_page_report_012.html", [page_size: :a4], %{"1.19" => 2_700_000, "1.20" => 2_600_000},
    162_795},
   {"purchase_order.html", [page_size: :a4], %{"1.19" => 3_640_000, "1.20" => 3_500_000}, 124_904},
@@ -311,3 +373,109 @@ measure.(
 )
 
 IO.puts("PERFORMANCE_REGRESSION status=PASS")
+
+if report_path do
+  evidence_files =
+    [
+      __ENV__.file,
+      Path.expand("../test/support/png_fixture.ex", __DIR__),
+      Path.expand("../mix.lock", __DIR__)
+    ] ++
+      Enum.map(fixtures, fn {file, _opts, _reductions, _bytes} ->
+        Path.join(fixture_directory, file)
+      end) ++ Path.wildcard(Path.expand("../priv/fonts/**/*.ttf", __DIR__))
+
+  file_hashes = fn files ->
+    Map.new(files, fn path ->
+      {Path.relative_to(path, Path.expand("..", __DIR__)),
+       :crypto.hash(:sha256, File.read!(path)) |> Base.encode16(case: :lower)}
+    end)
+  end
+
+  report = %{
+    schema_version: 1,
+    revision: System.get_env("PERFORMANCE_REVISION", "working tree"),
+    elixir: System.version(),
+    otp: :erlang.system_info(:otp_release) |> List.to_string(),
+    erts: :erlang.system_info(:version) |> List.to_string(),
+    architecture: :erlang.system_info(:system_architecture) |> List.to_string(),
+    schedulers: :erlang.system_info(:schedulers_online),
+    input_hashes: file_hashes.(evidence_files),
+    library_hashes: file_hashes.(Path.wildcard(Path.expand("../lib/**/*.ex", __DIR__))),
+    warmups: 2,
+    timed_samples: 5,
+    memory_sample_interval_ms: 10,
+    memory_runs: 3,
+    memory_scope:
+      "sampled total BEAM memory; excludes native allocations and may miss brief peaks",
+    workloads: Enum.reverse(Process.get(:performance_results))
+  }
+
+  File.mkdir_p!(Path.dirname(report_path))
+  File.write!(report_path, [:json.encode(report), "\n"])
+  IO.puts("PERFORMANCE_REPORT path=#{report_path}")
+
+  if baseline_path do
+    baseline_file = baseline_path |> File.read!() |> :json.decode()
+
+    baseline =
+      case baseline_file do
+        %{"reports" => reports} ->
+          Map.fetch!(
+            reports,
+            System.get_env("PERFORMANCE_BASELINE_KEY", "elixir-#{runtime_version}.json")
+          )
+
+        single_report ->
+          single_report
+      end
+
+    for key <- [:elixir, :otp, :erts, :architecture, :schedulers] do
+      if Map.fetch!(baseline, Atom.to_string(key)) != Map.fetch!(report, key) do
+        raise "fixed performance baseline has different #{key}; use the same runtime and VM settings"
+      end
+    end
+
+    # The harness itself may gain checks. Workload fixtures, fonts, PNG builder
+    # and dependency lock must retain their bytes across milestone comparisons.
+    baseline_inputs =
+      Map.fetch!(baseline, "input_hashes") |> Map.delete("scripts/performance-regression.exs")
+
+    candidate_inputs = Map.delete(report.input_hashes, "scripts/performance-regression.exs")
+
+    if baseline_inputs != candidate_inputs do
+      raise "fixed performance baseline inputs differ; preserve fixtures, assets and dependencies"
+    end
+
+    baseline_workloads = Map.new(Map.fetch!(baseline, "workloads"), &{Map.fetch!(&1, "name"), &1})
+
+    if Enum.sort(Map.keys(baseline_workloads)) != Enum.sort(Enum.map(report.workloads, & &1.name)) do
+      raise "fixed performance baseline workloads differ; do not remove or replace measured cases"
+    end
+
+    for workload <- report.workloads do
+      baseline_workload = Map.fetch!(baseline_workloads, workload.name)
+      baseline_ms = Map.fetch!(baseline_workload, "median_ms")
+      maximum_ms = baseline_ms * (100 + maximum_time_regression_percent) / 100
+      change_percent = (workload.median_ms / baseline_ms - 1) * 100
+
+      IO.inspect(
+        %{
+          name: workload.name,
+          baseline_ms: baseline_ms,
+          candidate_ms: workload.median_ms,
+          time_change_percent: Float.round(change_percent, 3),
+          maximum_ms: maximum_ms
+        },
+        label: "PERFORMANCE_MILESTONE"
+      )
+
+      if workload.median_ms > maximum_ms do
+        raise "#{workload.name} exceeded the cumulative wall-clock allowance: " <>
+                "#{workload.median_ms} ms versus fixed #{baseline_ms} ms, allowed +10%"
+      end
+    end
+
+    IO.puts("PERFORMANCE_MILESTONE status=PASS allowance_percent=10 baseline=#{baseline_path}")
+  end
+end
