@@ -5,11 +5,42 @@ resources, controls and composition, inline SVG, embedded documents, and MathML.
 This file records delivered batches and remaining work. The full milestone is
 not complete.
 
-The earlier batch 55 handoff was resumed on 2026-10-12. Six combined integration
+The earlier batch 55 handoff was resumed on 2026-10-12. Seven combined integration
 waves now pass the required gates. The latest copied integration is
-`e8fa7bdda2cb8d4b7df4d59fe0d42fc208b26237`. Later accepted lane checkpoints are
-being combined in the next wave. Historical batch entries below retain their original
-acceptance evidence and remaining scope. The milestone remains unfinished.
+`e9074a1d71ca4b67d162934c9d6eaeb24094b72e`. Historical entries retain their original
+acceptance evidence and remaining scope. Later lane work is still being combined;
+the milestone remains unfinished.
+
+## Combined integration checkpoint 7
+
+This checkpoint adds native PDF Form artwork for the supported inline SVG shape
+subset, bounded iframe scrollbar client areas, and root and child stylesheet
+selection using separate media and layout dimensions. SVG style blocks share the
+authored document cascade, including HTML content and sibling SVG scenes.
+MathML tokens can compose native same-document HTML children with backgrounds,
+images, links and form metadata. Fractions retain selected glyphs and logical text.
+The child adapter preserves first and last baselines and issued resource scopes.
+
+Canonical standalone fragment parsing, XML processing-instruction attributes and
+live earlier-node patch-range planning are included. Planning does not activate
+template replacement. Logical parser identities remain separate from permissions.
+
+Both Elixir 1.19 and 1.20 passed 1,862 unit tests with 100% coverage on every
+module and total, all 19 unchanged performance workloads, Dialyzer and 173 parity
+tests. Exact host parity passed 173 tests. Each performance report matches 109
+library and 20 input hashes with 12 schedulers. All 575 guarded files match the
+committed candidate after validation; the external runner exited zero. Fresh PLT
+creation emitted 31 third-party OTP `xmerl_ucs` missing-spec advisories per runtime;
+project analysis had zero errors, and all matrix events had zero warnings.
+
+The direct ordinary fraction fixture remains unchanged. The compact fraction
+comparison uses the reviewed source-derived reference for eight interiors; the
+original Chromium disagreements remain preserved failures. The new direct SVG
+stylesheet fixture passed at 0.5044% changed pixels under the unchanged 1% limit.
+
+Full SVG and MathML, template replacement, shadow and selected-content composition,
+remaining control and table behavior, and broader media/device handling remain
+open. The fixed-baseline cumulative idle 10% timing audit also remains open.
 
 ## Combined integration checkpoint 6
 
