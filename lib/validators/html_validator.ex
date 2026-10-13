@@ -1144,6 +1144,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec validate_document_render_options(term(), term()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_document_render_options(opts, font_options_result) do
+    validate_render_options(opts, font_options_result)
+  end
+
+  @doc false
   @spec validate_pdf_output_options(keyword()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_pdf_output_options(opts) do
@@ -1549,6 +1556,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       _ ->
         :error
+    end
+  end
+
+  @doc "Parses a legacy browser attribute using its fixed signed 32-bit conversion invariant."
+  @spec parse_html_legacy_int32(term()) :: {:ok, integer()} | :error
+  def parse_html_legacy_int32(value) do
+    case parse_html_integer(value) do
+      {:ok, integer} when integer >= -2_147_483_648 and integer <= 2_147_483_647 -> {:ok, integer}
+      _ -> :error
     end
   end
 
@@ -3227,6 +3243,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                   binary_part(name, 0, min(byte_size(name), 5)) == "aria-") ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
+        {"xmlns", _, false} ->
+          if value == "http://www.w3.org/1999/xhtml",
+            do: {:cont, {:ok, Map.put(acc, name, value)}},
+            else: {:halt, {:error, :unsupported_html}}
+
         {name, _, false} when name in ["lang", "xml:lang"] ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
@@ -3267,7 +3288,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         when name in ~w(href target download ping rel rev hreflang type referrerpolicy name charset coords shape) ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
-        {name, "iframe", false} when name in ~w(src srcdoc width height name) ->
+        {name, "iframe", false}
+        when name in ~w(src srcdoc width height name frameborder marginwidth marginheight scrolling) ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
         {name, "frame", false}
@@ -3289,7 +3311,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         {"alt", "img", false} ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
-        {name, "img", false} when name in ~w(width height srcset sizes) ->
+        {name, "img", false}
+        when name in ~w(width height srcset sizes loading decoding fetchpriority) ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
         {name, "source", false} when name in ~w(srcset sizes media type width height) ->
@@ -3531,6 +3554,153 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def image_dimension_hints(attributes) do
     html_dimension_hints(attributes, [{"width", :width}, {"height", :height}], "image")
+  end
+
+  @doc "Prepares iframe dimensions and legacy border suppression before author CSS."
+  @spec iframe_hints(term()) :: {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def iframe_hints(attributes) do
+    case attributes do
+      attributes when is_map(attributes) ->
+        with {:ok, hints} <-
+               html_dimension_hints(
+                 attributes,
+                 [{"width", :width}, {"height", :height}],
+                 "iframe"
+               ),
+             {:ok, gray} <- parse_css_color("#eeeeee", nil) do
+          # Chromium's iframe UA border paints a fixed light-gray theme even
+          # though computed currentColor is black. Author border colors override it.
+          hints =
+            hints
+            |> Map.put(:border_color, gray)
+            |> Map.put(
+              :border_colors,
+              NativeElixirPdfUtilities.Validators.CssValueValidator.edges(gray)
+            )
+            |> Map.put(:_iframe_border, true)
+
+          case Map.fetch(attributes, "frameborder") do
+            :error ->
+              {:ok, hints}
+
+            {:ok, value} when is_binary(value) ->
+              {:ok,
+               if(parse_html_legacy_int32(value) in [:error, {:ok, 0}],
+                 do:
+                   Map.put(
+                     hints,
+                     :border_widths,
+                     NativeElixirPdfUtilities.Validators.CssValueValidator.edges(0.0)
+                   ),
+                 else: hints
+               )}
+
+            _ ->
+              Diagnostics.error(
+                :style,
+                :invalid_document,
+                "iframe frameborder requires a legacy string value",
+                module: __MODULE__,
+                source: "iframe",
+                operation: :prepare_hints
+              )
+          end
+        end
+
+      _ ->
+        Diagnostics.error(:style, :invalid_document, "iframe hints require an attribute map",
+          module: __MODULE__,
+          source: "iframe",
+          operation: :prepare_hints
+        )
+    end
+  catch
+    {:render_resource_limit, error} -> error
+  end
+
+  @typedoc "Canonical document canvas decision from computed root/body styles."
+  @type document_canvas :: %{style: map(), body_background_propagated: boolean()}
+
+  @doc "Internal canvas selection from computed CSS styles; a painted root keeps body paint on its own box."
+  @spec prepare_document_canvas(map() | nil, map() | nil) :: document_canvas()
+  def prepare_document_canvas(root_style, body_style) do
+    root_style = root_style || %{}
+    body_style = body_style || %{}
+    root_color = Map.get(root_style, :background_color)
+
+    root_paints =
+      Map.get(root_style, :background_image) != nil or
+        case root_color do
+          nil -> false
+          {_, _, _, alpha} when alpha == 0 -> false
+          _ -> true
+        end
+
+    %{
+      style:
+        Map.take(if(root_paints, do: root_style, else: body_style), [
+          :background_color,
+          :background_image,
+          :background_position,
+          :background_repeat,
+          :background_size
+        ]),
+      body_background_propagated: not root_paints
+    }
+  end
+
+  @doc "Internal resolution of an already validated styled tree's canvas plan or legacy body-only canvas before allocation."
+  @spec layout_canvas(NativeElixirPdfUtilities.HtmlToPdf.Style.styled_tree()) ::
+          {:ok, document_canvas()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def layout_canvas(tree) do
+    case Map.fetch(tree, :document_canvas) do
+      :error ->
+        body_style =
+          Enum.find_value(tree.children, fn node ->
+            case node do
+              %{tag: "body", style: style} -> style
+              _ -> nil
+            end
+          end)
+
+        {:ok, prepare_document_canvas(nil, body_style)}
+
+      {:ok, %{style: style, body_background_propagated: propagated} = plan}
+      when is_map(style) and is_boolean(propagated) and map_size(plan) == 2 ->
+        if Enum.all?(
+             Map.keys(style),
+             &(&1 in [
+                 :background_color,
+                 :background_image,
+                 :background_position,
+                 :background_repeat,
+                 :background_size
+               ])
+           ) and
+             (style[:background_color] == nil or
+                NativeElixirPdfUtilities.Validators.WriterValidator.valid_color?(
+                  style[:background_color]
+                )) do
+          {:ok, plan}
+        else
+          Diagnostics.error(
+            :layout,
+            :invalid_document,
+            "document canvas requires canonical background properties",
+            module: __MODULE__,
+            operation: :layout_document_canvas
+          )
+        end
+
+      _ ->
+        Diagnostics.error(
+          :layout,
+          :invalid_document,
+          "document canvas requires a prepared background style and body propagation flag",
+          module: __MODULE__,
+          operation: :layout_document_canvas
+        )
+    end
   end
 
   @doc false
@@ -5124,7 +5294,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                         :error ->
                           :ok
                       end) do
-                case validate_layout_nodes([node]) do
+                # The measured subtree has a real unfragmented owner supplied by
+                # this validated entry, even when its external Math/inline owner
+                # is absent from the isolated subtree. Flow intent still requires
+                # an actual inline-block node in validate_atomic_context/2.
+                case validate_layout_nodes([node], nil, true) do
                   :ok ->
                     {:ok,
                      %{
@@ -5177,7 +5351,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         measured_child_failure("child content could not be laid out", node)
 
       true ->
-        case NativeElixirPdfUtilities.Validators.WriterValidator.validate_native_boxes(boxes) do
+        result =
+          with {:ok, measured} <-
+                 NativeElixirPdfUtilities.Validators.ResponsiveImageValidator.measurement_boxes(
+                   boxes
+                 ),
+               do:
+                 NativeElixirPdfUtilities.Validators.WriterValidator.validate_native_boxes(
+                   measured
+                 )
+
+        case result do
           :ok ->
             :ok
 
@@ -6588,11 +6772,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                     source: Map.get(node, :tag, "img")
                   )
 
-                not ((pixels? or points?) and (not pixel_metadata? or pixels?) and
-                         Enum.all?([:width, :height], fn dimension ->
-                           value = Map.get(image, dimension)
-                           is_nil(value) or (is_number(value) and value >= 0 and value <= maximum)
-                         end)) ->
+                not (NativeElixirPdfUtilities.Validators.ResponsiveImageValidator.valid_request?(
+                       Map.get(style, :_responsive_image)
+                     ) or
+                         ((pixels? or points?) and (not pixel_metadata? or pixels?) and
+                            Enum.all?([:width, :height], fn dimension ->
+                              value = Map.get(image, dimension)
+
+                              is_nil(value) or
+                                  (is_number(value) and value >= 0 and value <= maximum)
+                            end))) ->
                   Diagnostics.error(
                     :layout,
                     :invalid_layout,

@@ -760,7 +760,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
   test "valid unsupported sizes and infinite arithmetic diagnose rather than silently choosing 100vw" do
     alias NativeElixirPdfUtilities.HtmlToPdf
 
-    for sizes <- ["1ch", "calc(sqrt(4)*1px)", "calc(abs(-1px))", "abs(-1px)"] do
+    for sizes <- ["calc(sqrt(4)*1px)", "calc(abs(-1px))", "abs(-1px)"] do
       assert {:error, {:unsupported_html, diagnostic}} =
                HtmlToPdf.render("<img srcset='a 20w' sizes='#{sizes}'>")
 
@@ -3874,13 +3874,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
   end
 
   test "SVG preparation validation cannot authorize rendering in the same budget" do
-    alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
+    alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
-    assert {:ok, dom} =
-             HtmlParser.parse_detailed(
-               "<svg><foreignObject><p>Prepared only</p></foreignObject></svg>"
-             )
+    original = "<svg><foreignObject><p>Prepared only</p></foreignObject></svg>"
+    assert {:ok, dom} = HtmlParser.parse_detailed(original)
+    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(original)
+    assert {:error, {:no_extractable_text, _}} = NativeElixirPdfUtilities.Text.extract(pdf)
 
+    filtered =
+      "<svg><defs><filter id='f'><feGaussianBlur stdDeviation='1'/></filter></defs><g filter='url(#f)'><foreignObject width='100' height='30'><p>Real HTML input</p></foreignObject></g></svg>"
+
+    assert {:ok, filtered_dom} = HtmlParser.parse_detailed(filtered)
     options = Font.normalize_options([])
 
     assert :ok ==
@@ -3888,17 +3892,23 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
                assert {:ok, false} =
                         HtmlValidator.prepare_style_input(dom, [], options, :prepare_svg)
 
-               assert {:error, {:unsupported_html, diagnostic}} =
-                        HtmlValidator.prepare_style_input(dom, [], options, :render)
-
-               assert diagnostic.source == "foreignObject"
-               assert diagnostic.stage == :layout and diagnostic.operation == :prepare
-               assert diagnostic.reason == :unsupported_html
-               assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgSceneValidator
-               assert diagnostic.message =~ "complete scene"
+               assert {:ok, false} = HtmlValidator.prepare_style_input(dom, [], options, :render)
 
                assert {:ok, false} =
-                        HtmlValidator.prepare_style_input(dom, [], options, :prepare_svg)
+                        HtmlValidator.prepare_style_input(filtered_dom, [], options, :prepare_svg)
+
+               # Structural preparation cannot bypass the final styled scene's
+               # requirement for genuine HTML SourceGraphic before filtering.
+               assert {:error, {:unsupported_html, diagnostic}} =
+                        Style.compute_detailed(filtered_dom, [])
+
+               assert diagnostic.source == "g"
+               assert diagnostic.stage == :layout and diagnostic.operation == :prepare
+               assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgFilterValidator
+               assert diagnostic.message =~ "actual issued surface"
+
+               assert {:ok, false} =
+                        HtmlValidator.prepare_style_input(filtered_dom, [], options, :prepare_svg)
 
                assert {:error, {:invalid_document, _}} =
                         HtmlValidator.prepare_style_input(dom, [], options, :unknown)

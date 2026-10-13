@@ -8,6 +8,125 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   @initial_context {__MODULE__, :initial_context}
 
   @doc false
+  @spec prepare_composed_initial_nodes(map(), map(), [map()], map()) :: [map()]
+  def prepare_composed_initial_nodes(logical, roots, projection, clone_logical_nodes) do
+    if map_size(roots) == 0 and map_size(clone_logical_nodes) == 0 do
+      prepare_initial_nodes(projection)
+    else
+      root_children =
+        roots
+        |> Enum.sort_by(fn {_scope, root} -> root.order end)
+        |> Enum.flat_map(fn {_scope, root} -> root.children end)
+
+      # The clone registry contains actual logical children, not distributed
+      # slot children. Prefer its latest record when a selectedcontent changes.
+      extra_roots =
+        clone_logical_nodes
+        |> Map.values()
+        |> Enum.filter(fn node ->
+          not Map.has_key?(clone_logical_nodes, Map.get(node, :parent_id))
+        end)
+        |> Enum.sort_by(&Map.get(&1, :_document_order, []))
+
+      {forest, _seen} =
+        logical_form_forest(
+          logical.children ++ root_children ++ extra_roots,
+          clone_logical_nodes,
+          MapSet.new(),
+          0
+        )
+
+      prepared = prepare_initial_nodes(forest)
+      facts = initial_node_facts(prepared, %{})
+      transfer_initial_node_facts(HtmlValidator.assign_render_metadata(projection), facts)
+    end
+  end
+
+  # A node may appear in both a root's child list and the clone registry. Walk
+  # each real logical identity once, charging the shared traversal budget.
+  defp logical_form_forest(nodes, registry, seen, depth) do
+    HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
+
+    {reversed, seen} =
+      Enum.reduce(nodes, {[], seen}, fn source, {output, seen} ->
+        HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+        id = Map.get(source, :node_id)
+
+        if id != nil and MapSet.member?(seen, id) do
+          {output, seen}
+        else
+          node = Map.get(registry, id, source)
+          seen = if id == nil, do: seen, else: MapSet.put(seen, id)
+
+          case node do
+            %{children: children} ->
+              {children, seen} = logical_form_forest(children, registry, seen, depth + 1)
+              {[%{node | children: children} | output], seen}
+
+            _ ->
+              {[node | output], seen}
+          end
+        end
+      end)
+
+    {Enum.reverse(reversed), seen}
+  end
+
+  defp initial_node_facts(nodes, facts) do
+    Enum.reduce(nodes, facts, fn node, facts ->
+      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+
+      facts =
+        case Map.get(node, :node_id) do
+          nil -> facts
+          id -> Map.put(facts, id, node)
+        end
+
+      initial_node_facts(Map.get(node, :children, []), facts)
+    end)
+  end
+
+  # Keep composed inertness, translation, headings and painting order. Only
+  # logical identities and the form validator's own initial facts are copied.
+  defp transfer_initial_node_facts(nodes, facts) do
+    Enum.map(nodes, fn node ->
+      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+
+      node =
+        case Map.get(facts, Map.get(node, :node_id)) do
+          nil ->
+            node
+
+          logical ->
+            keys = [
+              :_selector_id,
+              :_initial_form_state,
+              :_initial_gauge_state,
+              :_initial_legend_form_owner,
+              :_initial_label_control,
+              :_initial_selected,
+              :_initial_option_label,
+              :_initial_option_disabled
+            ]
+
+            node = node |> Map.drop(keys) |> Map.merge(Map.take(logical, keys))
+
+            if Map.has_key?(logical, :_initial_form_state),
+              do: Map.put(node, :_initial_form_children, logical.children),
+              else: node
+        end
+
+      case node do
+        %{children: children} ->
+          %{node | children: transfer_initial_node_facts(children, facts)}
+
+        _ ->
+          node
+      end
+    end)
+  end
+
+  @doc false
   @spec prepare_initial_nodes([map()]) :: [map()]
   def prepare_initial_nodes(children) do
     previous = Process.get(@initial_context)
@@ -1016,12 +1135,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
          nodes,
          form_owner \\ nil,
          label_ref \\ nil,
-         ancestor_disabled? \\ false
+         ancestor_disabled? \\ false,
+         parent_scope \\ nil
        ) do
     Enum.each(nodes, fn node ->
       case node do
         %{type: :element, children: children} ->
           html? = Map.get(node, :namespace, :html) == :html
+          scope = {Map.get(node, :document_id), Map.get(node, :tree_scope_id)}
+
+          {form_owner, label_ref, ancestor_disabled?} =
+            if parent_scope != nil and scope != parent_scope,
+              do: {nil, nil, false},
+              else: {form_owner, label_ref, ancestor_disabled?}
 
           if node.tag in ~w(input select textarea button label fieldset progress meter output datalist) or
                Map.has_key?(node.attributes, "id") do
@@ -1053,11 +1179,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                 [child],
                 next_owner,
                 next_label,
-                ancestor_disabled? or not exempt?
+                ancestor_disabled? or not exempt?,
+                scope
               )
             end)
           else
-            collect_initial_metadata(children, next_owner, next_label, ancestor_disabled?)
+            collect_initial_metadata(children, next_owner, next_label, ancestor_disabled?, scope)
           end
 
         _ ->

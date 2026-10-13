@@ -365,6 +365,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
             |> Map.put(:client_rect, client_rect)
             |> Map.put(:scroll_offset, %{x: 0.0, y: 0.0})
 
+          metadata =
+            if surface.host == :iframe,
+              do: Map.put(metadata, :role, :iframe_viewport),
+              else: metadata
+
           if not geometry.horizontal and not geometry.vertical and
                geometry.client_height == height do
             {:ok, drawing_group(width, height, boxes, {1, 0, 0, 1, 0, 0}) |> Map.merge(metadata)}

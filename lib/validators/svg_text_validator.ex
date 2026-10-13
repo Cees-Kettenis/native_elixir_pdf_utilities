@@ -134,8 +134,25 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
                     node.tag
                   )
 
+                Map.has_key?(node.attributes, "textLength") and
+                    Enum.any?(node.children, &(Map.get(&1, :tag) == "tspan")) ->
+                  unsupported(
+                    "SVG textLength over nested spans requires complete ancestral length distribution",
+                    node.tag
+                  )
+
                 true ->
-                  SvgTextPositionValidator.prepare(node)
+                  with {:ok, plan} <- SvgTextPositionValidator.prepare(node) do
+                    if Map.has_key?(plan.lengths, "textLength") and
+                         Enum.any?(~w(x y), &(length(Map.get(plan.lengths, &1, [])) > 1)) do
+                      unsupported(
+                        "SVG textLength across absolute-position chunks requires complete chunk length distribution",
+                        node.tag
+                      )
+                    else
+                      {:ok, plan}
+                    end
+                  end
               end
 
             true ->
@@ -230,11 +247,16 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
                    node.tag <> " " <> property
                  )
 
-          property in ~w(textLength lengthAdjust) or
-              (property == "rotate" and node.tag not in ~w(text tspan)) ->
+          property in ~w(rotate textLength lengthAdjust) and node.tag not in ~w(text tspan) ->
             unsupported(
               "SVG inherited advanced text positioning requires a complete text adapter",
               node.tag
+            )
+
+          property == "lengthAdjust" and value not in ~w(spacing spacingAndGlyphs) ->
+            invalid(
+              "SVG lengthAdjust requires spacing or spacingAndGlyphs",
+              node.tag <> " lengthAdjust"
             )
 
           property in ~w(font-stretch font-variant font-feature-settings font-variation-settings font-optical-sizing font-kerning kerning word-spacing baseline-shift alignment-baseline dominant-baseline writing-mode direction unicode-bidi text-decoration) and

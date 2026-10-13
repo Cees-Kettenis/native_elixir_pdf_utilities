@@ -155,3 +155,67 @@ red at 1.449% changed pixels, with 0.206% average delta. The changed pixels occu
 mainly at mask-region and artwork edges. Focused mask/pattern/reuse/text tests
 pass44/44. This provides actual mask behavior, while mask parity, filters and
 native foreignObject composition remain open.
+
+## Native HTML Form slots
+
+Inline foreignObject preparation retains its original host-styled HTML subtree,
+source identities, namespace, selected faces and issued document resource scope.
+An execution projection replaces each viewport with a validator-issued local
+rectangle identifier. Native vector export intercepts only those identifiers and
+emits an empty Form slot at the original scene position under the same affine
+transforms, clips, opacity and vector masks. Slot metadata supplies the actual
+resolved viewport size and full root-PDF affine placement. Hidden geometry does
+not issue a painted slot.
+
+SvgFormComposition lays out the original styled children through the bounded
+native HTML viewport and uses PdfWriter.appearance_objects to build real drawing
+Forms, then replaces the slots through the shared incremental PDF writer. This
+preserves real selected-font text and backgrounds without a bitmap or invisible
+text surrogate. HTML navigation hrefs use the existing URL authority rather than
+SVG resource-fetch authorization. Namespace declarations on HTML accept only the
+fixed XHTML namespace, and serialization respects HTML's implicit namespace on
+ordinary descendants. Annotation-only link_region boxes carry genuine URI link
+bounds through the writer's existing clipping and page-placement contracts.
+
+Focused SVG/slot/writer/selected-text tests pass155/155 on published base
+1cbc7ab, with one preexisting excluded test.
+The original foreignObject fixture now renders, but its fixed 1% Chromium check
+is red at 1.638% changed pixels and 0.196% average delta. Both its earlier namespace
+failure and its rendered comparison remain saved. Fragment target transport,
+exact HTML ink accounting and arbitrary clip-path/rotated annotation polygons
+remain open. Filters must receive the actual composed HTML effect input before
+being enabled; an empty slot cannot stand in for that input.
+
+## Static filter graphs
+
+SvgFilterValidator owns local graph inputs and result names, operation nesting,
+units, finite numeric parameters, matrix/kernel dimensions, channel transfer
+functions and lighting inputs before usvg can normalize malformed input. Inline
+filter references render their actual resolved group once through pinned resvg,
+then embed the resulting RGB image and alpha mask at the original local paint
+position. Ancestor transforms and clips remain in the PDF paint sequence, while
+unaffected siblings retain native vector and selected-CID text output. Required
+static operation families have focused rendering coverage. feImage resource
+inputs and filtered HTML surfaces remain unfinished and cannot be evaluated as
+an empty HTML Form slot. filterRes and kernelUnitLength remain diagnosed.
+
+The native effect validator reserves cumulative temporary canvas/result pixels
+and parameter-dependent convolution, morphology, turbulence, blur and lighting
+work before allocation. max_svg_filter_work, max_svg_filter_kernel_values and
+max_svg_filter_octaves belong to Limits alongside the shared cumulative surface
+ceiling. Graph work includes nested masks, patterns and filter groups.
+
+Effect-image replacement text uses only the original issued selected visible
+clusters belonging to that effect group. Empty rendered effects and hidden or
+viewport-excluded text emit no replacement. PDF 1.7 section10.8.3 permits Span
+ActualText for graphics representing characters. Standard Text extraction now
+handles actual Image Do replacement geometry, reports font_resource nil and an
+image_resource, and keeps text/font validation for genuine text operands.
+Effect-image spans describe the image region, never individual glyph positions.
+Original selected glyph plans stay intact for selection and link integration.
+
+Focused filters, masks, patterns, foreignObject, Text and SVG authority checks
+pass161/161 with one preexisting exclusion. The new original inline_svg_filters
+fixture passes its unchanged 1% Chromium gates at0.638% changed pixels and0.099%
+average delta. The older pattern/mask/foreignObject red cases remain preserved.
+This batch does not complete real HTML effect inputs or filter link geometry.

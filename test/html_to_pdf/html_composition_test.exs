@@ -120,6 +120,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlCompositionTest do
     end
   end
 
+  test "unassigned light hosts still register actual roots for logical form and ID preparation" do
+    html =
+      "<div><template shadowrootmode=open><slot name=shown></slot></template><span slot=hidden><template shadowrootmode=closed><input id=hidden-control></template></span><span slot=shown>Visible</span></div>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, projection} = HtmlComposition.compose(dom)
+    assert map_size(projection.roots) == 2
+
+    hidden_root =
+      Enum.find_value(projection.roots, fn {_id, root} -> if root.mode == "closed", do: root end)
+
+    assert [%{tag: "input", attributes: %{"id" => "hidden-control"}}] = hidden_root.children
+    assert projection.logical == dom
+
+    assert NativeElixirPdfUtilities.Validators.HtmlValidator.descendant_text_content(
+             projection.composed.children
+           ) == "Visible"
+  end
+
   test "outer normal declarations beat shadow declarations and inner important declarations beat outer important" do
     for {outer, inner, expected} <- [
           {"span{color:red}", "slot::slotted(.chosen){color:green}", {1, 0, 0}},

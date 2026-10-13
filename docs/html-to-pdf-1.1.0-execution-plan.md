@@ -118,4 +118,19 @@ Only passing batches count as accepted. Preserve user changes and prior evidence
 - `tmp/1.1.0-audits/`: independent area and shared-contract audits.
 - `docs/html-to-pdf-1.1.0-progress.md`: accepted work and handoff history.
 
-Current status: checkpoint 9 and its performance correction are published and verified. Wave 10 expanded-v4 qualified locally. Wave 11 corrections passed focused tests after its full unit run exposed one duplicate SVG condition. The user now requests ten implementation workers, focused checks in each lane, combined wave pushes and immediate next-wave implementation. Validator roles and expensive full checks are deferred until all feature work is implemented. A final reviewer will verify 100 percent coverage, the full acceptance matrix and unchanged baseline performance. Published implementation waves remain distinct from final milestone qualification.
+Current implementation status: waves 10, 11 and 12 are pushed on
+`milestone1-1-0`; the latest publication is
+`1cbc7ab4a5876e31a902081cef533af83c0ebcd1`. Wave 12 combined 164 changed paths and
+passed 597 integration-focused tests plus 34 native tests after Rust formatting.
+All ten implementation workers continue in isolated lanes. Both validator
+workers are stopped. Wave 13 follows immediately.
+
+The user's current workflow supersedes the per-wave full-gate schedule above.
+Workers run focused tests and original targeted browser fixtures. The
+coordinator combines and pushes larger implementation waves without waiting for
+full acceptance. After every included feature is implemented, a final reviewer
+must close the complete matrix, browser/content acceptance,100 percent coverage
+and fixed-baseline performance requirements. Publication is separate from final
+qualification; failed original fixtures and unchanged thresholds remain evidence.
+Wave 11 hosted units and coverage passed, but 100-row reduction limits failed on
+both supported runtimes. Final performance restoration remains required.

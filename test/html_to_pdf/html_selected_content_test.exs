@@ -121,6 +121,133 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlSelectedContentTest do
     assert projection.logical == dom
   end
 
+  test "unclonable shadow hosts copy actual light children and omit shadow contents" do
+    html =
+      "<select><button><selectedcontent></selectedcontent></button><option><span><template shadowrootmode=open><strong>Shadow</strong></template><em>Light</em></span></option></select>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, projection} = HtmlSelectedContent.compose(dom)
+    [select] = projection.composed.children
+    [button, _option] = select.children
+    [content] = button.children
+    [host] = content.children
+    refute Map.has_key?(host, :shadow_root_id)
+    assert [%{tag: "em", children: [%{text: "Light"}]}] = host.children
+    assert map_size(projection.roots) == 1
+  end
+
+  test "clonable roots receive fresh scopes, slot assignment and scoped stylesheet owners" do
+    html =
+      "<style>select::picker-icon{display:none}</style><select style='appearance:base-select'><button><selectedcontent></selectedcontent></button><option><span><template shadowrootmode=closed shadowrootclonable><style>::slotted(em){color:blue}</style><slot></slot></template><em>Light</em></span></option></select>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, projection} = HtmlSelectedContent.compose(dom)
+    [select] = Enum.reject(projection.composed.children, &(Map.get(&1, :tag) == "style"))
+    [button, option] = select.children
+    [content] = button.children
+    [clone] = content.children
+    [original] = option.children
+    assert clone.shadow_root_id != original.shadow_root_id
+    assert map_size(projection.roots) == 2
+    root = projection.roots[clone.shadow_root_id]
+    assert root.host_id == clone.node_id
+    assert root.host_tree_scope_id == clone.tree_scope_id
+    assert root.cloned_from_node_id == original.shadow_root_id
+    assert root.tree_scope_id == root.node_id
+    [_style, slot] = clone.children
+    [assigned] = slot.children
+    assert assigned.parent_id == clone.node_id
+    assert assigned.assigned_shadow_scope_id == root.node_id
+    assert assigned.node_id in projection.assignments[slot.node_id]
+    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    [select] = styled.children
+    [content] = select.children
+    [clone] = content.children
+    assert hd(clone.children).style.color == {0, 0, 1}
+  end
+
+  test "slotted clone positional selectors use actual logical light siblings" do
+    html =
+      "<style>select::picker-icon{display:none}</style><select style='appearance:base-select'><button><selectedcontent></selectedcontent></button><option><span><template shadowrootmode=open shadowrootclonable><style>::slotted(em:first-child){color:red}</style><slot name=second></slot><slot name=first></slot></template><em slot=first>First</em><em slot=second>Second</em></span></option></select>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    [select] = styled.children
+    [content] = select.children
+    [host] = content.children
+    [second, first] = host.children
+    assert hd(second.children).text == "Second"
+    assert hd(first.children).text == "First"
+    assert second.style.color == {0, 0, 0}
+    assert first.style.color == {1, 0, 0}
+  end
+
+  test "writer validates logical option children while painting actual cloned shadow children" do
+    html =
+      "<style>select::picker-icon{display:none}</style><select style='appearance:base-select'><button><selectedcontent></selectedcontent></button><option><span><template shadowrootmode=open shadowrootclonable><style>strong{color:blue}</style><strong>Shadow</strong></template>Light</span></option></select>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, projection} = HtmlSelectedContent.compose(dom)
+    select = Enum.find(projection.composed.children, &(Map.get(&1, :tag) == "select"))
+    [_button, option] = select._initial_form_children
+    [host] = option.children
+    assert hd(host.children).tag == "template"
+
+    assert {:ok, pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(html,
+               forms: :static,
+               system_font_discovery: false
+             )
+
+    assert String.starts_with?(pdf, "%PDF-")
+  end
+
+  test "a cloned shadow root initializes its own nested select content within the new scope" do
+    html =
+      "<select><button><selectedcontent></selectedcontent></button><option><span><template shadowrootmode=open shadowrootclonable><select><button><selectedcontent></selectedcontent></button><option selected><strong>Inner choice</strong></option></select></template>Outer light</span></option></select>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, projection} = HtmlSelectedContent.compose(dom)
+    [outer] = projection.composed.children
+    [button, _option] = outer.children
+    [content] = button.children
+    [host] = content.children
+    [inner] = host.children
+    [inner_button, _inner_option] = inner.children
+    [inner_content] = inner_button.children
+    refute inner_content._selected_content_disabled
+    assert [%{tag: "strong", children: [%{text: "Inner choice"}]}] = inner_content.children
+    assert inner_content.tree_scope_id == host.shadow_root_id
+  end
+
+  test "metadata-free clones retain unbound transport and exact source-copy validation diagnoses changes" do
+    content = %{type: :element, tag: "selectedcontent", attributes: %{}, children: []}
+    button = %{type: :element, tag: "button", attributes: %{}, children: [content]}
+    source = %{type: :text, text: "Legacy"}
+    option = %{type: :element, tag: "option", attributes: %{}, children: [source]}
+    select = %{type: :element, tag: "select", attributes: %{}, children: [button, option]}
+    assert {:ok, projection} = HtmlSelectedContent.compose(%{type: :document, children: [select]})
+
+    assert :ok =
+             NativeElixirPdfUtilities.Validators.HtmlTreeValidator.validate_transport(
+               projection.composed
+             )
+
+    clone = hd(hd(hd(hd(projection.composed.children).children).children).children)
+    assert clone.text == "Legacy"
+    refute Map.has_key?(clone, :document_id)
+    refute Map.has_key?(clone, :node_id)
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator.validate_clone_origin(
+               %{clone | text: "Changed"},
+               source
+             )
+
+    assert diagnostic.operation == :clone_selected_content
+    assert diagnostic.message =~ "exact original"
+  end
+
   test "rich option text skips scripts while descendant DOM text preserves them" do
     assert {:ok, dom} =
              HtmlParser.parse_detailed(

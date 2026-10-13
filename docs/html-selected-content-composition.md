@@ -28,7 +28,18 @@ composition step can consume the validated updated tree. No clone grants resourc
 permissions. The source observer still requires an exact validator-owned clone
 origin bridge before fresh clone IDs can contribute original-source evidence.
 
-Cloning a selected child that itself hosts a shadow root still requires completion
-of clonable-root handling. Unclonable roots must omit their shadow children;
-clonable roots need fresh identities, scopes, slot assignment and stylesheet
-registration. That integration and scoped duplicate-font lookup remain in progress.
+A selected child with an unclonable shadow root copies its actual light children
+and omits the shadow contents. A clonable root receives a fresh fragment identity,
+new scope and host association, fresh descendants, initial slot distribution and
+scoped stylesheet registration. Selects within cloned roots initialize their own
+selected content after attachment. Ordinary cloned template fragments stay inert.
+The clone registry keeps actual logical light/root children and updated destination
+records separately from composed placement, so form facts and positional selectors
+can resolve the latest node by identity.
+
+Form initialization uses the unchanged logical document, all active roots and
+actual clone records. Unassigned light controls still participate in their logical
+radio groups and ID associations. Composed inheritance and inertness remain on the
+rendering projection. PDF control validation receives the validator-owned logical
+children while painting uses the actual composed surface. Scoped duplicate-font
+lookup and the original-source observer bridge remain coordinated follow-up work.

@@ -1,12 +1,13 @@
 //! Byte-only backend. Caller policy and resource budgets live in Elixir validators.
 mod effects_validator;
+mod text_source_validator;
 mod vector;
 mod vector_validator;
 use rustler::{Binary, Encoder, Env, NifResult, OwnedBinary, Term};
 use std::{collections::HashMap, sync::Arc};
 
 mod atoms {
-    rustler::atoms! { ok, error }
+    rustler::atoms! { ok, error, prepare_text }
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -94,6 +95,25 @@ fn vectorize<'a>(
     }
 }
 
+#[rustler::nif(schedule = "DirtyCpu")]
+fn vectorize_slots<'a>(
+    env: Env<'a>,
+    source: String,
+    fonts: Vec<Binary<'a>>,
+    slots: Vec<String>,
+) -> NifResult<Term<'a>> {
+    let result = shape_tree(&source, fonts)
+        .and_then(|tree| vector::convert_with_slots(&tree, slots.into_iter().collect()));
+    match result {
+        Ok(pdf) => {
+            let mut binary = OwnedBinary::new(pdf.len()).ok_or(rustler::Error::BadArg)?;
+            binary.as_mut_slice().copy_from_slice(&pdf);
+            Ok((atoms::ok(), binary.release(env)).encode(env))
+        }
+        Err(message) => Ok((atoms::error(), message).encode(env)),
+    }
+}
+
 fn vector_bytes(
     source: &str,
     fonts: Vec<Binary>,
@@ -107,6 +127,11 @@ fn vector_bytes(
 }
 
 fn shape_tree(source: &str, fonts: Vec<Binary>) -> Result<usvg::Tree, String> {
+    let options = shape_options(fonts)?;
+    parse_shape_tree(source, &options)
+}
+
+fn parse_shape_tree(source: &str, options: &usvg::Options) -> Result<usvg::Tree, String> {
     let xml = usvg::roxmltree::Document::parse_with_options(
         source,
         usvg::roxmltree::ParsingOptions {
@@ -115,8 +140,12 @@ fn shape_tree(source: &str, fonts: Vec<Binary>) -> Result<usvg::Tree, String> {
         },
     )
     .map_err(|error| error.to_string())?;
+    usvg::Tree::from_xmltree(&xml, options).map_err(|error| error.to_string())
+}
+
+fn shape_options(fonts: Vec<Binary>) -> Result<usvg::Options<'static>, String> {
     let (fontdb, resolver) = selected_fonts(fonts, true)?;
-    let options = usvg::Options {
+    Ok(usvg::Options {
         resources_dir: None,
         fontdb: Arc::new(fontdb),
         font_resolver: resolver,
@@ -125,8 +154,7 @@ fn shape_tree(source: &str, fonts: Vec<Binary>) -> Result<usvg::Tree, String> {
             resolve_string: Box::new(|_, _| None),
         },
         ..Default::default()
-    };
-    usvg::Tree::from_xmltree(&xml, &options).map_err(|error| error.to_string())
+    })
 }
 
 // This database is constructed exclusively from authorized binary sources.
@@ -245,6 +273,92 @@ fn render_bytes(
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn validate_shape_work<'a>(env: Env<'a>, source: String, ceilings: Term<'a>) -> Term<'a> {
+    // New source preparation is explicitly tagged. Old scalar/tuple results
+    // remain unchanged for loaded bindings and the byte-only public contracts.
+    if let Ok((tag, (strokes, gradients, bytes, expansion, expanded_source, nodes), fonts)) =
+        ceilings.decode::<(
+            rustler::Atom,
+            (u64, u64, usize, u64, u64, usize),
+            Vec<Binary>,
+        )>()
+    {
+        if tag != atoms::prepare_text() {
+            return (
+                atoms::error(),
+                "invalid internal SVG source preparation tag",
+            )
+                .encode(env);
+        }
+        let result: Result<(u64, u64, String, u64, u64, u64), String> = (|| {
+            let identified = text_source_validator::identify(&source, bytes)?;
+            let options = shape_options(fonts)?;
+            let initial = parse_shape_tree(&identified.source, &options)?;
+            let initial_strokes = vector_validator::work(initial.root(), strokes)?;
+            let initial_gradients = vector_validator::gradient_work(initial.root(), gradients)?;
+            let prepared = text_source_validator::prepare(&identified.source, &initial, bytes)?;
+            let final_nodes = usvg::roxmltree::Document::parse_with_options(
+                &prepared.source,
+                usvg::roxmltree::ParsingOptions {
+                    allow_dtd: false,
+                    ..Default::default()
+                },
+            )
+            .map_err(|error| error.to_string())?
+            .descendants()
+            .filter(|node| node.is_element())
+            .count();
+            if final_nodes > nodes {
+                return Err("max_svg_nodes".into());
+            }
+            let work = identified
+                .work
+                .checked_add(prepared.work)
+                .and_then(|work| {
+                    work.checked_add(if prepared.source != identified.source {
+                        expanded_source + prepared.extra_nodes
+                    } else {
+                        0
+                    })
+                })
+                .ok_or("max_svg_expansion_work")?;
+            if work > expansion {
+                return Err("max_svg_expansion_work".into());
+            }
+            let (strokes_used, gradients_used) = if prepared.source != identified.source {
+                let final_tree = parse_shape_tree(&prepared.source, &options)?;
+                vector_validator::text(final_tree.root(), final_tree.fontdb())?;
+                (
+                    initial_strokes
+                        + vector_validator::work(
+                            final_tree.root(),
+                            strokes.saturating_sub(initial_strokes),
+                        )?,
+                    initial_gradients
+                        + vector_validator::gradient_work(
+                            final_tree.root(),
+                            gradients.saturating_sub(initial_gradients),
+                        )?,
+                )
+            } else {
+                vector_validator::text(initial.root(), initial.fontdb())?;
+                (initial_strokes, initial_gradients)
+            };
+            // Issued string copies plus the returned binary are accounted.
+            let source_bytes = identified.source.len() as u64 + 2 * prepared.source.len() as u64;
+            Ok((
+                strokes_used,
+                gradients_used,
+                prepared.source,
+                source_bytes,
+                work,
+                prepared.extra_nodes,
+            ))
+        })();
+        return match result {
+            Ok(result) => (atoms::ok(), result).encode(env),
+            Err(message) => (atoms::error(), message).encode(env),
+        };
+    }
     // Retain the old scalar request/result for already-loaded older bindings.
     // New validated callers issue both shared work ceilings in one request.
     if let Ok(ceiling) = ceilings.decode::<u64>() {
@@ -299,6 +413,60 @@ fn validate_pattern_work<'a>(
     match result {
         Ok(pixels) => (atoms::ok(), pixels).encode(env),
         Err(message) => (atoms::error(), message).encode(env),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn validate_filter_work<'a>(
+    env: Env<'a>,
+    source: String,
+    width: u32,
+    height: u32,
+    ceilings: (u64, u64),
+    fonts: Vec<Binary<'a>>,
+) -> Term<'a> {
+    let result = shape_tree(&source, fonts).and_then(|tree| {
+        effects_validator::filter_work(
+            tree.root(),
+            (
+                width as f32 / tree.size().width(),
+                height as f32 / tree.size().height(),
+            ),
+            ceilings.0,
+            ceilings.1,
+        )
+    });
+    match result {
+        Ok(work) => (atoms::ok(), work).encode(env),
+        Err(message) => (atoms::error(), message).encode(env),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn vectorize_effects<'a>(
+    env: Env<'a>,
+    source: String,
+    fonts: Vec<Binary<'a>>,
+    slots: Vec<String>,
+    dimensions: (u32, u32),
+) -> NifResult<Term<'a>> {
+    let result = shape_tree(&source, fonts).and_then(|tree| {
+        vector::convert_with_effects(
+            &tree,
+            slots.into_iter().collect(),
+            (
+                dimensions.0 as f32 / tree.size().width(),
+                dimensions.1 as f32 / tree.size().height(),
+            ),
+        )
+    });
+    match result {
+        Ok(pdf) => {
+            let mut binary = OwnedBinary::new(pdf.len()).ok_or(rustler::Error::BadArg)?;
+            binary.as_mut_slice().copy_from_slice(&pdf);
+            Ok((atoms::ok(), binary.release(env)).encode(env))
+        }
+        Err(message) => Ok((atoms::error(), message).encode(env)),
     }
 }
 
@@ -380,8 +548,11 @@ rustler::init!(
         render,
         render_document,
         vectorize,
+        vectorize_slots,
         validate_path,
         validate_shape_work,
-        validate_pattern_work
+        validate_pattern_work,
+        validate_filter_work,
+        vectorize_effects
     ]
 );

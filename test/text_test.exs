@@ -7,6 +7,50 @@ defmodule NativeElixirPdfUtilities.TextTest do
   alias NativeElixirPdfUtilities.Validators.TextResourceValidator
   alias NativeElixirPdfUtilities.Validators.TextValidator
 
+  test "graphics ActualText replaces an actual image Do with its transformed region" do
+    image = fn content, width ->
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /Ink 5 0 R >> >> /Contents 4 0 R >>"},
+        {4, stream_object("", content)},
+        {5,
+         stream_object(
+           "/Type /XObject /Subtype /Image /Width #{width} /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8",
+           <<255, 0, 0>>
+         )}
+      ])
+    end
+
+    source =
+      image.(
+        "q 40 0 0 20 10 30 cm /Span << /ActualText <FEFF00630061006600E9> >> BDC /Ink Do EMC Q",
+        1
+      )
+
+    assert {:ok, "café"} = Text.extract(source, layout: false)
+    assert {:ok, %{pages: [%{spans: [span]}]}} = Text.extract_spans(source)
+    assert span.image_resource == "Ink"
+    assert span.font_resource == nil
+    assert span.x == 10.0 and span.y == 170.0
+    assert span.end_x == 50.0 and span.end_y == 170.0
+    assert span.font_size == 20.0
+
+    for content <- [
+          "/Ink Do",
+          "/Span << /ActualText () >> BDC /Ink Do EMC",
+          "q 0 0 0 0 10 30 cm /Span << /ActualText (Hidden) >> BDC /Ink Do EMC Q"
+        ] do
+      assert {:error, {:no_extractable_text, _}} = Text.extract(image.(content, 1))
+    end
+
+    assert {:error, {:invalid_pdf_input, %{stage: :content, message: message}}} =
+             Text.extract(image.("/Span << /ActualText (Invalid) >> BDC /Ink Do EMC", 0))
+
+    assert message =~ "positive integer Width and Height"
+  end
+
   test "ActualText replaces glyph pieces once and preserves their advance" do
     source =
       page_pdf(

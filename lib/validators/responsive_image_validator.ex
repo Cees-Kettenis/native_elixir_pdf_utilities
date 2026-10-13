@@ -19,6 +19,141 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
           source: String.t()
         }
 
+  alias NativeElixirPdfUtilities.HtmlToPdf.ResourceContext
+
+  @doc "Whether an authored img permits automatic source sizing under the HTML lazy-loading rule."
+  @spec allows_auto?(map()) :: boolean()
+  def allows_auto?(node) do
+    attributes = Map.get(node, :attributes, %{})
+    loading = String.downcase(Map.get(attributes, "loading", ""), :ascii)
+    sizes = String.downcase(Map.get(attributes, "sizes", ""), :ascii)
+
+    Map.get(node, :tag) == "img" and loading == "lazy" and
+      (sizes == "auto" or String.starts_with?(sizes, "auto,"))
+  end
+
+  @doc false
+  @spec prepare_deferred(map(), [map()], keyword()) ::
+          :eager | {:ok, map(), map()} | {:error, {atom(), map()}}
+  def prepare_deferred(node, ancestors, opts) do
+    if allows_auto?(node) do
+      case ResourceContext.current() do
+        %ResourceContext{} = owner ->
+          with {:ok, selected} <- select_candidate(node, ancestors, opts, 300.0, :dimensions) do
+            reference = make_ref()
+            key = {ResourceContext, owner.scope}
+            scope = Process.get(key)
+            request = %{reference: reference, scope: owner.scope}
+            issued = {owner, node, ancestors, opts}
+
+            Process.put(
+              key,
+              Map.update(
+                scope,
+                :responsive_images,
+                %{reference => issued},
+                &Map.put(&1, reference, issued)
+              )
+            )
+
+            {:ok, request, selected.dimensions}
+          end
+
+        _ ->
+          Diagnostics.error(
+            :style,
+            :invalid_document,
+            "automatic lazy image sizing requires an active rendering resource scope; use HtmlToPdf.render",
+            module: __MODULE__,
+            source: "img"
+          )
+      end
+    else
+      :eager
+    end
+  end
+
+  @doc false
+  @spec valid_request?(term()) :: boolean()
+  def valid_request?(request) do
+    case request do
+      %{reference: reference, scope: scope}
+      when is_reference(reference) and is_reference(scope) ->
+        case Process.get({ResourceContext, scope}) do
+          %{responsive_images: issued} -> Map.has_key?(issued, reference)
+          _ -> false
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  @doc "Resolves an issued lazy request at its final used CSS-pixel width in its original document scope."
+  @spec resolve_request(term(), number(), (selection(), keyword() -> term())) :: term()
+  def resolve_request(request, width, fun) do
+    if valid_request?(request) and is_function(fun, 2) and
+         match?({:ok, _}, HtmlValidator.normalize_geometry_number(width)) and width >= 0 do
+      {owner, node, ancestors, opts} =
+        Process.get({ResourceContext, request.scope}).responsive_images[request.reference]
+
+      ResourceContext.with_document(owner, fn ->
+        with {:ok, selected} <- select(node, ancestors, opts, width), do: fun.(selected, opts)
+      end)
+    else
+      Diagnostics.error(
+        :layout,
+        :invalid_layout,
+        "lazy image request is not issued by the active rendering resource scope",
+        module: __MODULE__,
+        source: "img"
+      )
+    end
+  end
+
+  @doc false
+  @spec measurement_boxes([map()]) :: {:ok, [map()]} | {:error, {atom(), map()}}
+  def measurement_boxes(boxes) do
+    Enum.reduce_while(boxes, {:ok, []}, fn box, {:ok, result} ->
+      prepared =
+        case box do
+          %{type: :responsive_image, responsive_style: style} ->
+            if valid_request?(Map.get(style, :_responsive_image)) and
+                 Enum.all?(
+                   [:x, :y, :width, :height],
+                   &match?({:ok, _}, HtmlValidator.normalize_geometry_number(Map.get(box, &1)))
+                 ) and
+                 box.width >= 0 and box.height >= 0 do
+              {:ok, %{type: :flow_marker, x: box.x, y: box.y, width: 0.0, height: box.height}}
+            else
+              Diagnostics.error(
+                :layout,
+                :invalid_layout,
+                "measurement requires an issued responsive image and bounded geometry",
+                module: __MODULE__,
+                source: "img"
+              )
+            end
+
+          %{boxes: children} ->
+            with {:ok, children} <- measurement_boxes(children),
+                 do: {:ok, %{box | boxes: children}}
+
+          _ ->
+            {:ok, box}
+        end
+
+      case prepared do
+        {:ok, box} -> {:cont, {:ok, [box | result]}}
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, boxes} -> {:ok, Enum.reverse(boxes)}
+      error -> error
+    end
+  end
+
   @doc "Checks the canonical picture content model, including script-supporting elements."
   @spec valid_picture_children?([map()]) :: boolean()
   def valid_picture_children?(children) do
@@ -52,8 +187,8 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
   end
 
   @doc "Resolves sizes in a validated print environment. Invalid entries and eager auto are skipped."
-  @spec source_size(String.t(), PrintMediaValidator.context()) :: float()
-  def source_size(sizes, context) do
+  @spec source_size(String.t(), PrintMediaValidator.context(), number() | nil) :: float()
+  def source_size(sizes, context, auto_width \\ nil) do
     sizes
     |> NativeElixirPdfUtilities.HtmlToPdf.CssParser.strip_comments()
     |> HtmlValidator.split_css_comma()
@@ -61,7 +196,12 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
       # The last component is a length or math function, not a percentage.
       case Regex.run(~r/\A(?:(.*?)\s+)?([a-zA-Z_-]+\(.*\)|[^\s()]+)\z/s, entry) do
         [_, media, length] ->
-          case PrintMediaValidator.source_length(length, context) do
+          result =
+            if String.downcase(length, :ascii) == "auto" and is_number(auto_width),
+              do: {:ok, auto_width},
+              else: PrintMediaValidator.source_length(length, context)
+
+          case result do
             {:ok, value} ->
               if PrintMediaValidator.matches?(media, context),
                 do: {:halt, value},
@@ -78,8 +218,13 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
   end
 
   @doc "Selects the img resource using its direct picture parent, without loading unselected URLs."
-  @spec select(map(), [map()], keyword()) :: {:ok, selection()} | {:error, {atom(), map()}}
-  def select(node, ancestors, opts) do
+  @spec select(map(), [map()], keyword(), number() | nil) ::
+          {:ok, selection()} | {:error, {atom(), map()}}
+  def select(node, ancestors, opts, auto_width \\ nil) do
+    select_candidate(node, ancestors, opts, auto_width, :resource)
+  end
+
+  defp select_candidate(node, ancestors, opts, auto_width, mode) do
     HtmlValidator.with_render_budget(fn ->
       if not Map.has_key?(node.attributes, "srcset") and
            not match?([%{tag: "picture"} | _], ancestors) do
@@ -88,18 +233,42 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
             HtmlValidator.trim_css_whitespace(Map.get(node.attributes, "src", "")),
             1.0,
             node.attributes,
-            "img"
+            "img",
+            mode
           )
         end
       else
-        with {:ok, context} <- PrintMediaValidator.context(opts) do
-          select_responsive(node, ancestors, context)
+        values = [
+          Map.get(node.attributes, "sizes", "")
+          | Enum.flat_map(ancestors, fn ancestor ->
+              if ancestor.tag == "picture",
+                do:
+                  Enum.flat_map(ancestor.children, fn child ->
+                    if Map.get(child, :tag) == "source",
+                      do: [
+                        Map.get(child.attributes, "sizes", ""),
+                        Map.get(child.attributes, "media", "")
+                      ],
+                      else: []
+                  end),
+                else: []
+            end)
+        ]
+
+        with {:ok, context} <- PrintMediaValidator.context(opts),
+             {:ok, context} <-
+               NativeElixirPdfUtilities.Validators.SourceSizeValidator.prepare_context(
+                 context,
+                 values,
+                 opts
+               ) do
+          select_responsive(node, ancestors, context, auto_width, mode)
         end
       end
     end)
   end
 
-  defp select_responsive(node, ancestors, context) do
+  defp select_responsive(node, ancestors, context, auto_width, mode) do
     sources =
       case ancestors do
         [%{tag: "picture", children: children} | _] ->
@@ -150,7 +319,14 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
         candidates
       end
 
-    size = source_size(Map.get(attributes, "sizes", ""), context)
+    sizes =
+      Map.get(
+        attributes,
+        "sizes",
+        if(source == "source" and allows_auto?(node), do: "auto", else: "")
+      )
+
+    size = source_size(sizes, context, if(allows_auto?(node), do: auto_width))
 
     candidates =
       candidates
@@ -188,14 +364,18 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
          else: node.attributes
 
     if is_nil(chosen) do
-      prepare_selection("", 1.0, dimensions, source)
+      prepare_selection("", 1.0, dimensions, source, mode)
     else
-      prepare_selection(chosen.url, chosen.density, dimensions, source)
+      prepare_selection(chosen.url, chosen.density, dimensions, source, mode)
     end
   end
 
-  defp prepare_selection(url, density, dimensions, source) do
+  defp prepare_selection(url, density, dimensions, source, mode) do
     cond do
+      mode == :dimensions ->
+        with {:ok, hints} <- HtmlValidator.image_dimension_hints(dimensions),
+             do: {:ok, %{url: url, density: density, dimensions: hints, source: source}}
+
       url == "" ->
         Diagnostics.error(
           :style,

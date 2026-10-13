@@ -7,6 +7,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
   @inherited %{
     svg_text_anchor: "start",
     svg_color_interpolation: "sRGB",
+    svg_color_interpolation_filters: "linearRGB",
     svg_fill: {:color, {0, 0, 0}},
     svg_stroke: :none,
     svg_fill_rule: :nonzero,
@@ -62,7 +63,12 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
     "marker-mid" => :svg_marker_mid,
     "marker-end" => :svg_marker_end,
     "mask" => :svg_mask,
-    "mask-type" => :svg_mask_type
+    "mask-type" => :svg_mask_type,
+    "filter" => :svg_filter,
+    "color-interpolation-filters" => :svg_color_interpolation_filters,
+    "flood-color" => :svg_flood_color,
+    "flood-opacity" => :svg_flood_opacity,
+    "lighting-color" => :svg_lighting_color
   }
   @geometry ~w(x y cx cy r rx ry width height)
   @geometry_elements %{
@@ -92,6 +98,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
       svg_opacity: 1.0,
       svg_clip_path: :none,
       svg_mask: :none,
+      svg_filter: :none,
+      svg_flood_color: {:color, {0, 0, 0}},
+      svg_flood_opacity: 1.0,
+      svg_lighting_color: {:color, {255, 255, 255}},
       svg_mask_type: "luminance",
       svg_width: :auto,
       svg_height: :auto,
@@ -213,14 +223,16 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
       {"text-anchor", value} ->
         if value in ~w(start middle end), do: {:ok, value}, else: :error
 
-      {"color-interpolation", value} ->
+      {property, value} when property in ~w(color-interpolation color-interpolation-filters) ->
         if value in ~w(sRGB auto linearRGB), do: {:ok, value}, else: :error
 
-      {property, "none"} when property in ~w(clip-path mask marker-start marker-mid marker-end) ->
+      {property, "none"}
+      when property in ~w(clip-path mask filter marker-start marker-mid marker-end) ->
         {:ok, :none}
 
       {property, value}
-      when property in ~w(clip-path mask marker-start marker-mid marker-end) and is_binary(value) ->
+      when property in ~w(clip-path mask filter marker-start marker-mid marker-end) and
+             is_binary(value) ->
         case Regex.run(
                ~r/\Aurl\(\s*(#[A-Za-z_][A-Za-z0-9_.:-]*|"#[A-Za-z_][A-Za-z0-9_.:-]*"|'#[A-Za-z_][A-Za-z0-9_.:-]*')\s*\)\z/,
                value
@@ -294,7 +306,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
       {"transform", value} ->
         NativeElixirPdfUtilities.Validators.SvgTransformValidator.parse(value)
 
-      {property, value} when property in ~w(fill stroke stop-color) and is_binary(value) ->
+      {property, value}
+      when property in ~w(fill stroke stop-color flood-color lighting-color) and is_binary(value) ->
         case String.downcase(value, :ascii) do
           "none" ->
             {:ok, :none}
@@ -324,7 +337,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
           _ -> :error
         end
 
-      {property, value} when property in ~w(opacity fill-opacity stroke-opacity stop-opacity) ->
+      {property, value}
+      when property in ~w(opacity fill-opacity stroke-opacity stop-opacity flood-opacity) ->
         case HtmlValidator.parse_css_number(value) do
           {number, ""} -> {:ok, max(0.0, min(number, 1.0))}
           {number, "%"} -> {:ok, max(0.0, min(number / 100, 1.0))}

@@ -55,6 +55,9 @@ struct Writer<'a> {
     database: &'a usvg::fontdb::Database,
     transform: usvg::Transform,
     luminance: bool,
+    effect_scale: (f32, f32),
+    slots: std::collections::HashSet<String>,
+    clip: Option<[f32; 4]>,
     fonts: HashMap<usvg::fontdb::ID, (String, Ref, u16)>,
     mappings: HashMap<usvg::fontdb::ID, std::collections::BTreeMap<u16, String>>,
     clusters: HashMap<usize, Vec<crate::vector_validator::Cluster<'a>>>,
@@ -86,7 +89,27 @@ impl Writer<'_> {
         content.save_state();
         let t = group.transform();
         let previous = self.transform;
+        let previous_clip = self.clip;
         self.transform = previous.pre_concat(t);
+        if let Some(clip) = group.clip_path() {
+            if let Some(bounds) = clip
+                .root()
+                .bounding_box()
+                .transform(clip.transform())
+                .and_then(|bounds| bounds.transform(self.transform))
+            {
+                let bounds = [bounds.left(), bounds.top(), bounds.right(), bounds.bottom()];
+                self.clip = Some(match previous_clip {
+                    Some(parent) => [
+                        parent[0].max(bounds[0]),
+                        parent[1].max(bounds[1]),
+                        parent[2].min(bounds[2]),
+                        parent[3].min(bounds[3]),
+                    ],
+                    None => bounds,
+                });
+            }
+        }
         content.transform([t.sx, t.ky, t.kx, t.sy, t.tx, t.ty]);
         // Validators admit one authored geometry child, or a generated viewport clip.
         if let Some(clip) = group.clip_path() {
@@ -100,7 +123,9 @@ impl Writer<'_> {
             };
             content.end_path();
         }
-        if group.opacity().get() != 1.0 || group.mask().is_some() {
+        if !group.filters().is_empty() {
+            self.filtered_group(group, content, resources)?;
+        } else if group.opacity().get() != 1.0 || group.mask().is_some() {
             let mut body = Content::new();
             let mut child_resources = Resources::default();
             self.children(group, &mut body, &mut child_resources)?;
@@ -128,8 +153,189 @@ impl Writer<'_> {
             self.children(group, content, resources)?;
         }
         self.transform = previous;
+        self.clip = previous_clip;
         content.restore_state();
         Ok(())
+    }
+
+    fn filtered_group(
+        &mut self,
+        group: &usvg::Group,
+        content: &mut Content,
+        resources: &mut Resources,
+    ) -> Result<(), String> {
+        let bbox = group.layer_bounding_box();
+        let (sx, sy) = crate::effects_validator::filter_scale(group, self.effect_scale);
+        let width = (bbox.width() * sx).ceil() as u32;
+        let height = (bbox.height() * sy).ceil() as u32;
+        let mut pixmap =
+            tiny_skia::Pixmap::new(width, height).ok_or("SVG effect canvas allocation failed")?;
+        // render_node offsets the absolute layer bbox itself and applies the
+        // node's local transform. Cancel only those two bookkeeping transforms
+        // so the true group renders once in its original local coordinates.
+        let absolute = group.abs_layer_bounding_box();
+        let transform = usvg::Transform::from_scale(sx, sy)
+            .pre_translate(-bbox.x(), -bbox.y())
+            .pre_concat(
+                group
+                    .transform()
+                    .invert()
+                    .ok_or("SVG effect transform is singular")?,
+            )
+            .pre_translate(absolute.x(), absolute.y());
+        resvg::render_node(
+            &usvg::Node::Group(Box::new(group.clone())),
+            transform,
+            &mut pixmap.as_mut(),
+        )
+        .ok_or("SVG effect group has no renderable region")?;
+        if !pixmap.pixels().iter().any(|pixel| pixel.alpha() != 0) {
+            return Ok(());
+        }
+        let mut rgb = Vec::with_capacity(width as usize * height as usize * 3);
+        let mut alpha = Vec::with_capacity(width as usize * height as usize);
+        for pixel in pixmap.pixels() {
+            let color = pixel.demultiply();
+            if self.luminance {
+                let gray = (color.red() as f32 * 0.2126
+                    + color.green() as f32 * 0.7152
+                    + color.blue() as f32 * 0.0722)
+                    .round() as u8;
+                rgb.extend_from_slice(&[gray; 3]);
+            } else {
+                rgb.extend_from_slice(&[color.red(), color.green(), color.blue()]);
+            }
+            alpha.push(color.alpha());
+        }
+        let mask = self.reference();
+        let mut image = self.pdf.image_xobject(mask, &alpha);
+        image
+            .width(width as i32)
+            .height(height as i32)
+            .bits_per_component(8);
+        image.color_space().device_gray();
+        image.finish();
+        let id = self.reference();
+        let mut image = self.pdf.image_xobject(id, &rgb);
+        image
+            .width(width as i32)
+            .height(height as i32)
+            .bits_per_component(8)
+            .s_mask(mask);
+        image.color_space().device_rgb();
+        image.finish();
+        let name = format!("E{}", id.get());
+        resources.forms.push((name.clone(), id));
+        content.save_state();
+        content.transform([
+            width as f32 / sx,
+            0.0,
+            0.0,
+            -(height as f32 / sy),
+            bbox.x(),
+            bbox.y() + height as f32 / sy,
+        ]);
+        let logical = self.effect_text(group, usvg::Transform::identity(), bbox)?;
+        if !logical.is_empty() {
+            content
+                .begin_marked_content_with_properties(Name(b"Span"))
+                .properties()
+                .actual_text(TextStr(&logical));
+        }
+        content.x_object(Name(name.as_bytes()));
+        if !logical.is_empty() {
+            content.end_marked_content();
+        }
+        content.restore_state();
+        Ok(())
+    }
+
+    // Original issued clusters remain the authority for effect replacement
+    // text. The image's region never substitutes for selected glyph geometry.
+    fn effect_text(
+        &self,
+        group: &usvg::Group,
+        transform: usvg::Transform,
+        region: usvg::NonZeroRect,
+    ) -> Result<String, String> {
+        let mut logical = String::new();
+        for node in group.children() {
+            match node {
+                usvg::Node::Group(child) if child.opacity().get() != 0.0 => {
+                    logical.push_str(&self.effect_text(
+                        child,
+                        transform.pre_concat(child.transform()),
+                        region,
+                    )?);
+                }
+                usvg::Node::Text(text) => {
+                    for span in text.layouted().iter().filter(|span| {
+                        span.visible
+                            && span
+                                .fill
+                                .as_ref()
+                                .is_some_and(|fill| fill.opacity().get() != 0.0)
+                    }) {
+                        let clusters = self
+                            .clusters
+                            .get(&(span as *const usvg::layout::Span as usize))
+                            .ok_or("internal SVG effect lost its issued text clusters")?;
+                        for cluster in clusters {
+                            let mut paints = false;
+                            for glyph in cluster.glyphs {
+                                let bounds = self
+                                    .database
+                                    .with_face_data(glyph.font, |data, index| {
+                                        ttf_parser::Face::parse(data, index)
+                                            .ok()
+                                            .and_then(|face| face.glyph_bounding_box(glyph.id))
+                                    })
+                                    .flatten();
+                                if let Some(bounds) = bounds {
+                                    let bounds = usvg::Rect::from_ltrb(
+                                        bounds.x_min as f32,
+                                        bounds.y_min as f32,
+                                        bounds.x_max as f32,
+                                        bounds.y_max as f32,
+                                    )
+                                    .and_then(|rect| {
+                                        rect.transform(
+                                            transform.pre_concat(glyph.outline_transform()),
+                                        )
+                                    });
+                                    if let Some(bounds) = bounds {
+                                        let inside_region = bounds.right() > region.left()
+                                            && bounds.left() < region.right()
+                                            && bounds.bottom() > region.top()
+                                            && bounds.top() < region.bottom();
+                                        let inside_clip =
+                                            match (self.clip, bounds.transform(self.transform)) {
+                                                (Some(clip), Some(bounds)) => {
+                                                    bounds.right() > clip[0]
+                                                        && bounds.left() < clip[2]
+                                                        && bounds.bottom() > clip[1]
+                                                        && bounds.top() < clip[3]
+                                                }
+                                                (None, _) => true,
+                                                _ => false,
+                                            };
+                                        paints |= inside_region && inside_clip;
+                                    }
+                                }
+                            }
+                            if paints || cluster.text.chars().all(char::is_whitespace) {
+                                logical.push_str(cluster.text);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if logical.chars().all(char::is_whitespace) {
+            logical.clear();
+        }
+        Ok(logical)
     }
 
     fn mask(
@@ -208,6 +414,9 @@ impl Writer<'_> {
         for node in group.children() {
             match node {
                 usvg::Node::Group(group) => self.group(group, content, resources)?,
+                usvg::Node::Path(path) if self.slots.contains(path.id()) && path.is_visible() => {
+                    self.html_slot(path, content, resources);
+                }
                 usvg::Node::Path(path) if path.is_visible() => {
                     let stroke_first = path.paint_order() == usvg::PaintOrder::StrokeAndFill;
                     for stroke in [stroke_first, !stroke_first] {
@@ -279,6 +488,38 @@ impl Writer<'_> {
             }
         }
         Ok(())
+    }
+
+    fn html_slot(&mut self, path: &usvg::Path, content: &mut Content, resources: &mut Resources) {
+        let bbox = path.bounding_box();
+        let local =
+            usvg::Transform::from_row(1.0 / 0.75, 0.0, 0.0, -1.0 / 0.75, bbox.x(), bbox.bottom());
+        let t = self.transform.pre_concat(local);
+        let id = self.reference();
+        let mut form = self.pdf.form_xobject(id, &[]);
+        form.bbox(Rect::new(
+            0.0,
+            0.0,
+            bbox.width() * 0.75,
+            bbox.height() * 0.75,
+        ));
+        form.pair(Name(b"NativeHtmlSlot"), Str(path.id().as_bytes()));
+        form.pair(Name(b"NativeHtmlWidth"), bbox.width() * 0.75);
+        form.pair(Name(b"NativeHtmlHeight"), bbox.height() * 0.75);
+        form.insert(Name(b"NativeHtmlTransform"))
+            .array()
+            .items([t.sx, t.ky, t.kx, t.sy, t.tx, t.ty]);
+        if let Some(clip) = self.clip {
+            form.insert(Name(b"NativeHtmlClip")).array().items(clip);
+        }
+        form.resources().finish();
+        form.finish();
+        let name = format!("H{}", id.get());
+        resources.forms.push((name.clone(), id));
+        content.save_state();
+        content.transform([local.sx, local.ky, local.kx, local.sy, local.tx, local.ty]);
+        content.x_object(Name(name.as_bytes()));
+        content.restore_state();
     }
 
     // ActualText starts only after this genuine text object has its selected
@@ -637,6 +878,21 @@ fn draw_path(path: &Path, content: &mut Content) {
 }
 
 pub fn convert(tree: &usvg::Tree) -> Result<Vec<u8>, String> {
+    convert_with_slots(tree, std::collections::HashSet::new())
+}
+
+pub fn convert_with_slots(
+    tree: &usvg::Tree,
+    slots: std::collections::HashSet<String>,
+) -> Result<Vec<u8>, String> {
+    convert_with_effects(tree, slots, (1.0, 1.0))
+}
+
+pub fn convert_with_effects(
+    tree: &usvg::Tree,
+    slots: std::collections::HashSet<String>,
+    effect_scale: (f32, f32),
+) -> Result<Vec<u8>, String> {
     let prepared = crate::vector_validator::text(tree.root(), tree.fontdb())?;
     let mut writer = Writer {
         pdf: Pdf::new(),
@@ -654,6 +910,14 @@ pub fn convert(tree: &usvg::Tree) -> Result<Vec<u8>, String> {
             tree.size().height() * 0.75,
         ),
         luminance: false,
+        effect_scale,
+        slots,
+        clip: Some([
+            0.0,
+            0.0,
+            tree.size().width() * 0.75,
+            tree.size().height() * 0.75,
+        ]),
     };
     let mut content = Content::new();
     let mut resources = Resources::default();

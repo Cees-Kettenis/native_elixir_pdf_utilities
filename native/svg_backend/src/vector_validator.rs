@@ -194,6 +194,48 @@ pub fn text<'a>(
                     }
                     prepared.clusters.insert(span as *const usvg::layout::Span as usize, clusters);
                 }
+                // Verify requested lengths against actual selected glyphs.
+                // Bind every authored byte range to its corresponding native
+                // layout span before accepting independent tspan adjustments.
+                let has_lengths = text_node.chunks().iter().flat_map(|chunk| chunk.spans()).any(|span| span.text_length().is_some());
+                if has_lengths {
+                    let source_count: usize = text_node.chunks().iter().map(|chunk| chunk.spans().len()).sum();
+                    if source_count != text_node.layouted().len() || text_node.rotate().iter().any(|angle| *angle != 0.0) {
+                        return Err("SVG textLength requires complete rotated or unmatched span length distribution for this scene".into());
+                    }
+                    let mut layout_index = 0;
+                    for chunk in text_node.chunks() {
+                        for source in chunk.spans() {
+                            let layout = &text_node.layouted()[layout_index];
+                            layout_index += 1;
+                            let Some(target) = source.text_length() else { continue };
+                            if !matches!(chunk.text_flow(), usvg::TextFlow::Linear) {
+                                return Err("SVG path textLength requires complete curved length distribution".into());
+                            }
+                            if source.length_adjust() == usvg::LengthAdjust::SpacingAndGlyphs && chunk.spans().len() > 1 {
+                                return Err("SVG scaled independent spans require complete prefix and following-cursor distribution".into());
+                            }
+                            let original = chunk.text().get(source.start()..source.end()).ok_or("SVG length span lost its original UTF-8 range")?;
+                            let glyphs = &layout.positioned_glyphs;
+                            let shaped: String = glyphs.iter().map(|glyph| glyph.text.as_str()).collect();
+                            if original != shaped {
+                                return Err("SVG textLength span does not preserve its original Unicode range".into());
+                            }
+                            if let (Some(first), Some(last)) = (glyphs.first(), glyphs.last()) {
+                                let a = first.outline_transform();
+                                let actual = glyph_end(last, database)? - a.tx;
+                                // A single original scalar has no inter-character
+                                // gap for spacing adjustment. Its glyph stays exact.
+                                let no_gap = source.length_adjust() == usvg::LengthAdjust::Spacing && original.chars().count() == 1;
+                                // Fixed f32 precision invariant, not a work ceiling.
+                                let tolerance = f32::EPSILON * target.abs().max(actual.abs()).max(1.0) * 16.0;
+                                if !actual.is_finite() || (!no_gap && (actual - target).abs() > tolerance) {
+                                    return Err("SVG textLength requested advance is not preserved by selected native glyph geometry; complete length adjustment is required".into());
+                                }
+                            }
+                        }
+                    }
+                }
                 let logical: String = text_node.chunks().iter().map(|chunk| chunk.text()).collect();
                 let shaped: String = text_node.layouted().iter().flat_map(|span| &span.positioned_glyphs).map(|glyph| glyph.text.as_str()).collect();
                 if logical != shaped {
@@ -252,6 +294,23 @@ pub fn text<'a>(
         }
     }
     Ok(prepared)
+}
+
+/// Actual selected face advance at this glyph's issued matrix.
+pub(crate) fn glyph_end(
+    glyph: &usvg::layout::PositionedGlyph,
+    database: &usvg::fontdb::Database,
+) -> Result<f32, String> {
+    let advance = database
+        .with_face_data(glyph.font, |data, index| {
+            ttf_parser::Face::parse(data, index)
+                .ok()
+                .and_then(|face| face.glyph_hor_advance(glyph.id))
+        })
+        .flatten()
+        .ok_or("selected SVG glyph lost its actual font advance")? as f32;
+    let t = glyph.outline_transform();
+    Ok(t.tx + t.sx * advance)
 }
 
 /// One original shaping cluster and all real glyphs that paint it.

@@ -338,7 +338,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
              )
   end
 
-  test "ordinary print and unresolved allocation dependencies remain explicit shared diagnostics" do
+  test "ordinary print is admitted while atomic allocation dependencies remain explicit" do
     for content <- ["<div style='height:50%'>Percent</div>"] do
       html =
         "<div style='display:inline-block'><table style='width:120pt'><tr><td style='vertical-align:baseline'>#{content}</td></tr></table></div>"
@@ -351,12 +351,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
       assert diagnostic.message =~ "vertical-align:top"
     end
 
-    assert {:error, {:unsupported_html, diagnostic}} =
+    assert {:ok, _pdf} =
              HtmlToPdf.render(
                "<table><tr><td style='vertical-align:baseline'>Ordinary</td></tr></table>"
              )
-
-    assert diagnostic.stage == :style
   end
 
   test "nested table baselines use their first row and exclude captions" do
@@ -495,8 +493,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
 
     assert {:ok, %{children: [atomic]} = styled} = Style.compute_detailed(dom)
     altered = %{styled | children: atomic.children}
-    assert {:error, {:unsupported_html, diagnostic}} = Layout.layout(altered)
-    assert diagnostic.stage == :layout and diagnostic.message =~ "row baseline geometry"
+    assert {:error, {:invalid_layout, diagnostic}} = Layout.layout(altered)
+    assert diagnostic.stage == :layout
+    assert diagnostic.message =~ "actual inline-block ancestor"
 
     assert {:ok, dom} =
              HtmlParser.parse_detailed(

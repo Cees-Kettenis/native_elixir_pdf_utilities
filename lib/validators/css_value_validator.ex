@@ -857,6 +857,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_display(style, value) do
+    style = Map.delete(style, :_ruby_annotation)
+
     case value |> String.trim() |> String.downcase() do
       value when value in ["math", "inline math", "block math"] ->
         with {:ok, properties} <- MathLayoutValidator.parse_property("display", value, style),
@@ -1074,7 +1076,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_two_axis_position(style, property, value) do
-    with {:ok, position} <- parse_two_axis_position(value) do
+    with {:ok, position} <-
+           parse_two_axis_position(value, style.font_size, property == :background_position) do
       {:ok, Map.put(style, property, position)}
     end
   end
@@ -1786,25 +1789,25 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     HtmlValidator.parse_css_size(value)
   end
 
-  defp parse_position_component(value) do
+  defp parse_position_component(value, font_size \\ nil) do
     normalized = String.trim(value)
 
-    case Regex.run(~r/^(-?\d+(?:\.\d+)?)%$/u, normalized) do
-      [_, percentage] ->
-        with {number, ""} <- HtmlValidator.parse_css_number(percentage),
-             do: {:ok, {:percent, number / 100.0}}
-
-      _ ->
-        parse_length(normalized, :margin)
+    case HtmlValidator.parse_css_number(normalized) do
+      {number, "%"} -> {:ok, {:percent, number / 100.0}}
+      _ -> HtmlValidator.parse_css_length(normalized, :margin, font_size)
     end
   end
 
-  defp parse_two_axis_position(value) do
-    tokens = value |> String.trim() |> String.downcase() |> String.split(~r/\s+/u, trim: true)
+  defp parse_two_axis_position(value, font_size, three_values?) do
+    tokens =
+      value
+      |> String.trim()
+      |> String.downcase(:ascii)
+      |> String.split(~r/[ \t\n\r\f]+/, trim: true)
 
     case tokens do
       [token] ->
-        case position_token(token) do
+        case position_token(token, font_size) do
           {:ok, :horizontal, component} -> {:ok, {component, {:percent, 0.5}}}
           {:ok, :vertical, component} -> {:ok, {{:percent, 0.5}, component}}
           {:ok, :both, component} -> {:ok, {component, component}}
@@ -1813,16 +1816,48 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
         end
 
       [first, second] ->
-        with {:ok, first_axis, first_component} <- position_token(first),
-             {:ok, second_axis, second_component} <- position_token(second),
-             {:ok, position} <-
+        with {:ok, first_axis, first_component} <- position_token(first, font_size),
+             {:ok, second_axis, second_component} <- position_token(second, font_size),
+             do:
                order_position_components(
                  first_axis,
                  first_component,
                  second_axis,
                  second_component
-               ) do
-          {:ok, position}
+               )
+
+      [first, first_offset, second, second_offset] ->
+        with {:ok, first_axis, first_component} <- edge_position(first, first_offset, font_size),
+             {:ok, second_axis, second_component} <-
+               edge_position(second, second_offset, font_size),
+             do:
+               order_position_components(
+                 first_axis,
+                 first_component,
+                 second_axis,
+                 second_component
+               )
+
+      [first, second, third] when three_values? ->
+        case {position_token(second, font_size), position_token(third, font_size)} do
+          {{:ok, :component, _}, {:ok, axis, component}} when axis != :component ->
+            with {:ok, first_axis, first_component} <- edge_position(first, second, font_size),
+                 do: order_position_components(first_axis, first_component, axis, component)
+
+          {{:ok, axis, _}, {:ok, :component, _}} when axis != :component ->
+            with {:ok, first_axis, first_component} <- position_token(first, font_size),
+                 true <- first_axis != :component,
+                 {:ok, second_axis, second_component} <- edge_position(second, third, font_size),
+                 do:
+                   order_position_components(
+                     first_axis,
+                     first_component,
+                     second_axis,
+                     second_component
+                   )
+
+          _ ->
+            :error
         end
 
       _ ->
@@ -1830,7 +1865,20 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     end
   end
 
-  defp position_token(token) do
+  defp edge_position(edge, offset, font_size) do
+    with {:ok, axis, _} <- position_token(edge, font_size),
+         true <- axis in [:horizontal, :vertical],
+         {:ok, component} <- parse_position_component(offset, font_size) do
+      component =
+        if edge in ["right", "bottom"], do: {:end, component}, else: component
+
+      {:ok, axis, component}
+    else
+      _ -> :error
+    end
+  end
+
+  defp position_token(token, font_size) do
     case token do
       "left" ->
         {:ok, :horizontal, {:percent, 0.0}}
@@ -1848,7 +1896,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
         {:ok, :both, {:percent, 0.5}}
 
       token ->
-        case parse_position_component(token) do
+        case parse_position_component(token, font_size) do
           {:ok, component} -> {:ok, :component, component}
           _ -> :error
         end

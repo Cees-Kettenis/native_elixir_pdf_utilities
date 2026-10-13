@@ -61,7 +61,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgClipValidator do
           node.tag == "defs" and
               Enum.any?(
                 geometry,
-                &(&1.tag not in ~w(clipPath pattern marker mask symbol use svg g path rect circle ellipse line polyline polygon linearGradient radialGradient))
+                &(&1.tag not in ~w(clipPath pattern marker mask filter symbol use svg g path rect circle ellipse line polyline polygon linearGradient radialGradient))
               ) ->
             unsupported(
               "SVG defs requires supported static geometry, symbols or bounded paint/clip definitions",

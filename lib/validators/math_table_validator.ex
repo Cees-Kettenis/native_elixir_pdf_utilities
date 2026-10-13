@@ -227,10 +227,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
             cell = placement.cell
             # Core mtd owns an anonymous mrow. Its CSS cell padding is placed once
             # by the matrix; authored children retain their complete final styles.
-            row_style =
-              cell.style
-              |> Map.drop([:width, :height, :margin, :padding, :border_widths, :background_color])
-              |> Map.put(:display, :block)
+            row_style = MathLayoutValidator.anonymous_box_style(cell.style)
 
             anonymous = %{cell | tag: "mrow", style: row_style}
 

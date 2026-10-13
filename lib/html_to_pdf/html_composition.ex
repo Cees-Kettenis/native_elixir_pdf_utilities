@@ -25,7 +25,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlComposition do
     # entry avoids a second full identity/semantic pass during normal styling.
     with {:ok, children, state} <-
            if(HtmlCompositionValidator.composition_required?(dom.children),
-             do: compose_nodes(dom.children, %{roots: %{}, assignments: %{}}, nil, 0),
+             do:
+               compose_nodes(
+                 dom.children,
+                 collect_initial_roots(dom.children, %{roots: %{}, assignments: %{}}, 0),
+                 nil,
+                 0
+               ),
              else: {:ok, dom.children, %{roots: %{}, assignments: %{}}}
            ) do
       {:ok,
@@ -38,9 +44,53 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlComposition do
     end
   end
 
+  # Attachment precedes flat projection. Unassigned light descendants still
+  # have real shadow roots and logical form/ID associations of their own.
+  defp collect_initial_roots(nodes, state, depth) do
+    HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
+
+    Enum.reduce(nodes, state, fn node, state ->
+      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+
+      case node do
+        %{type: :element, tag: "template"} ->
+          state
+
+        %{type: :element, children: children} ->
+          case HtmlCompositionValidator.initial_shadow_root(node) do
+            nil ->
+              collect_initial_roots(children, state, depth + 1)
+
+            {template, configuration} ->
+              root =
+                Map.merge(template.content, configuration)
+                |> Map.put(:host_id, Map.get(node, :node_id))
+                |> Map.put(:host_tree_scope_id, Map.get(node, :tree_scope_id))
+                |> Map.put(:depth, depth + 1)
+                |> Map.put(:order, map_size(state.roots))
+
+              state = %{state | roots: Map.put(state.roots, Map.get(root, :node_id), root)}
+
+              state =
+                collect_initial_roots(Enum.reject(children, &(&1 == template)), state, depth + 1)
+
+              collect_initial_roots(root.children, state, depth + 1)
+          end
+
+        _ ->
+          state
+      end
+    end)
+  end
+
   # Each branch is a different rendering tree. Ordinary inert template content
   # is never visited here, and nested hosts start their own assignment search.
-  defp compose_nodes(nodes, state, parent, depth) do
+  @doc false
+  @spec compose_generated_roots([map()], map()) ::
+          {:ok, [map()], map()} | {:error, {atom(), map()}}
+  def compose_generated_roots(nodes, state), do: compose_nodes(nodes, state, nil, 0, :generated)
+
+  defp compose_nodes(nodes, state, parent, depth, mode \\ :authored) do
     HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
 
     Enum.reduce_while(nodes, {:ok, [], state}, fn node, {:ok, output, state} ->
@@ -51,33 +101,62 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlComposition do
         case node do
           %{type: :element, children: children} ->
             shadow =
-              Enum.find_value(children, fn child ->
-                case HtmlCompositionValidator.shadow_configuration(node, child) do
-                  nil -> nil
-                  configuration -> {child, configuration}
-                end
-              end)
+              case {mode, Map.get(state, :generated_hosts, %{})[Map.get(node, :node_id)]} do
+                {:generated, root} when is_map(root) ->
+                  {:generated, root,
+                   Map.take(root, [
+                     :mode,
+                     :slot_assignment,
+                     :delegates_focus,
+                     :clonable,
+                     :serializable
+                   ])}
+
+                {:generated, _} ->
+                  nil
+
+                {:authored, _} ->
+                  case HtmlCompositionValidator.initial_shadow_root(node) do
+                    nil -> nil
+                    {child, configuration} -> {:authored, child.content, configuration, child}
+                  end
+              end
 
             case shadow do
               nil ->
                 with {:ok, children, state} <-
-                       compose_nodes(children, state, Map.get(node, :node_id), depth + 1) do
+                       compose_nodes(children, state, Map.get(node, :node_id), depth + 1, mode) do
                   {:ok, %{node | children: children}, state}
                 end
 
-              {template, configuration} ->
-                root = template.content
+              shadow ->
+                {root, configuration, light} =
+                  case shadow do
+                    {:authored, root, configuration, template} ->
+                      {root, configuration, Enum.reject(children, &(&1 == template))}
+
+                    {:generated, root, configuration} ->
+                      {root, configuration, children}
+                  end
+
                 host_id = Map.get(node, :node_id)
                 root_id = Map.get(root, :node_id)
+
+                root = Map.get(state.roots, root_id, root)
 
                 root =
                   Map.merge(root, configuration)
                   |> Map.put(:host_id, host_id)
+                  |> Map.put(:host_tree_scope_id, Map.get(node, :tree_scope_id))
                   |> Map.put(:depth, depth + 1)
-                  |> Map.put(:order, map_size(state.roots))
+                  |> Map.put_new(:order, map_size(state.roots))
 
                 state = %{state | roots: Map.put(state.roots, root_id, root)}
-                light = Enum.reject(children, &(&1 == template))
+
+                state =
+                  if mode == :generated,
+                    do: Map.update!(state, :generated_hosts, &Map.delete(&1, host_id)),
+                    else: state
 
                 with {distributed, state, _claimed} <-
                        distribute(
@@ -92,7 +171,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlComposition do
                        ),
                      :ok <- HtmlCompositionValidator.validate_active_children(distributed),
                      {:ok, children, state} <-
-                       compose_nodes(distributed, state, host_id, depth + 1) do
+                       compose_nodes(distributed, state, host_id, depth + 1, mode) do
                   {:ok, node |> Map.put(:children, children) |> Map.put(:shadow_root_id, root_id),
                    state}
                 end
@@ -120,8 +199,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlComposition do
       HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
 
       {node, state, claimed} =
-        case node do
-          %{type: :element, tag: "slot", attributes: attributes, children: fallback} ->
+        case {HtmlCompositionValidator.slot_element?(node), node} do
+          {_, %{tree_scope_id: node_scope}} when node_scope != scope ->
+            {node, state, claimed}
+
+          {true, %{type: :element, tag: "slot", attributes: attributes, children: fallback}} ->
             name = Map.get(attributes, "name", "")
             first? = not MapSet.member?(claimed, name)
             claimed = MapSet.put(claimed, name)
@@ -178,10 +260,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlComposition do
 
             {%{node | children: children}, state, claimed}
 
-          %{type: :element, tag: "template"} ->
+          {_, %{type: :element, tag: "template"}} ->
             {node, state, claimed}
 
-          %{type: :element, children: children} ->
+          {_, %{type: :element, children: children}} ->
             {children, state, claimed} =
               distribute(children, light, assignment, state, claimed, scope, host, depth + 1)
 
@@ -191,7 +273,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlComposition do
             {node, state, claimed}
         end
 
-      node = node |> Map.put(:shadow_scope_id, scope) |> Map.put(:shadow_host_id, host)
+      node =
+        if not Map.has_key?(node, :tree_scope_id) or node.tree_scope_id == scope,
+          do: node |> Map.put(:shadow_scope_id, scope) |> Map.put(:shadow_host_id, host),
+          else: node
+
       {[node | output], state, claimed}
     end)
     |> then(fn {output, state, claimed} -> {Enum.reverse(output), state, claimed} end)

@@ -355,6 +355,56 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
     end
   end
 
+  @doc "Runs validated layout in its actual paginated or unfragmented child-surface context, restoring the parent afterward."
+  @spec with_layout_context(:paginated | :surface, (-> term())) :: term()
+  def with_layout_context(context, callback) do
+    case {context, callback} do
+      {context, callback} when context in [:paginated, :surface] and is_function(callback, 0) ->
+        key = {__MODULE__, :layout_context}
+        previous = Process.get(key)
+        Process.put(key, context)
+
+        try do
+          callback.()
+        after
+          if previous == nil, do: Process.delete(key), else: Process.put(key, previous)
+        end
+
+      _ ->
+        Diagnostics.error(
+          :layout,
+          :invalid_layout,
+          "table layout context requires paginated PDF flow or an unfragmented child surface and a layout callback",
+          module: __MODULE__,
+          operation: :prepare_baseline_geometry
+        )
+    end
+  end
+
+  @doc "Issues the actual table baseline alignment policy for the current validated layout context and atomic ancestry."
+  @spec baseline_policy(term()) ::
+          :aligned | :fragmented_start | {:error, Diagnostics.detailed_error()}
+  def baseline_policy(atomic_context) do
+    case atomic_context do
+      true ->
+        :aligned
+
+      false ->
+        if Process.get({__MODULE__, :layout_context}, :paginated) == :paginated,
+          do: :fragmented_start,
+          else: :aligned
+
+      _ ->
+        Diagnostics.error(
+          :layout,
+          :invalid_layout,
+          "table baseline policy requires validated boolean atomic ancestry",
+          module: __MODULE__,
+          operation: :prepare_baseline_geometry
+        )
+    end
+  end
+
   @doc "Prepares the inherited atomic table context before validating effective presentation."
   @spec prepare_presentation_style(map(), map()) ::
           {:ok, map()} | {:error, Diagnostics.detailed_error()}
@@ -373,33 +423,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
           :ok | {:error, Diagnostics.detailed_error()}
   @spec validate_presentation_style(map(), map(), :style | :layout, boolean() | nil) ::
           :ok | {:error, Diagnostics.detailed_error()}
-  def validate_presentation_style(node, style, stage \\ :style, atomic_context \\ nil) do
+  def validate_presentation_style(node, style, stage \\ :style, _atomic_context \\ nil) do
     case style do
       %{display: :table_cell, vertical_align: :baseline} ->
-        atomic =
-          if atomic_context == nil,
-            do: Map.get(style, :_table_atomic_context, false),
-            else: atomic_context
-
-        if Map.get(node, :namespace, :html) == :html and not atomic do
-          opts =
-            Keyword.merge(source_context(node),
-              operation: if(stage == :layout, do: :layout, else: :compute_style),
-              module: __MODULE__,
-              source: Map.get(node, :tag, "table cell") <> " effective vertical-align=baseline"
-            )
-
-          Diagnostics.error(
-            stage,
-            :unsupported_html,
-            "table-cell baseline alignment in fragmented print requires row baseline geometry and fragmentation policy, which is not implemented; use authored vertical-align:top, middle or bottom",
-            opts
-          )
-        else
-          if stage == :layout and Map.get(node, :namespace, :html) == :html,
-            do: validate_baseline_cell(node),
-            else: :ok
-        end
+        if stage == :layout and Map.get(node, :namespace, :html) == :html,
+          do: validate_baseline_cell(node),
+          else: :ok
 
       %{text_align: :justify} ->
         tag = Map.get(node, :tag, "table cell")
@@ -657,7 +686,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   @doc "Validates measured table cells and prepares baseline row heights and canonical offsets."
   @spec prepare_baseline_geometry(term(), term(), term()) ::
           {:ok, map()} | {:error, Diagnostics.detailed_error()}
-  def prepare_baseline_geometry(rows, metrics, vertical_spacing) do
+  @spec prepare_baseline_geometry(term(), term(), term(), :aligned | :fragmented_start) ::
+          {:ok, map()} | {:error, Diagnostics.detailed_error()}
+  def prepare_baseline_geometry(rows, metrics, vertical_spacing, policy \\ :aligned) do
     HtmlValidator.with_render_budget(fn ->
       {proper_rows, row_count} =
         case table_collection_size(rows) do
@@ -714,7 +745,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
           else: []
 
       valid =
-        valid_rows and is_map(metrics) and is_number(vertical_spacing) and
+        policy in [:aligned, :fragmented_start] and valid_rows and is_map(metrics) and
+          is_number(vertical_spacing) and
           vertical_spacing >= 0 and
           map_size(metrics) == length(placements) and
           Enum.all?(placements, fn {key, _placement} ->
@@ -760,6 +792,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
             Enum.with_index(rows, fn row, index ->
               cells = Enum.map(row.cells, &{&1, Map.fetch!(metrics, {index, &1.column})})
 
+              # Fragmentation suppresses the cell alignment offset, while the
+              # table grid still reserves its measured baseline ascent/descent.
               eligible =
                 Enum.filter(cells, fn {placement, metric} ->
                   Map.get(placement.cell.style, :vertical_align, :middle) == :baseline and
@@ -814,7 +848,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
               metric = Map.fetch!(metrics, key)
 
               offset =
-                if Map.get(placement.cell.style, :vertical_align, :middle) == :baseline and
+                if policy == :aligned and
+                     Map.get(placement.cell.style, :vertical_align, :middle) == :baseline and
                      metric.has_flow,
                    do: Map.fetch!(geometry_by_row, index).baseline - metric.baseline,
                    else: 0.0
@@ -949,8 +984,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
         case table_collection_size(children) do
           {:ok, _count} ->
             case node do
-              %{style: %{height: {:percent, _}}} -> "percentage-height descendant"
-              _ -> Enum.find_value(children, &baseline_dependency/1)
+              %{style: %{height: {:percent, _}}} ->
+                "percentage-height descendant"
+
+              _ ->
+                Enum.find_value(children, &baseline_dependency/1)
             end
 
           :error ->

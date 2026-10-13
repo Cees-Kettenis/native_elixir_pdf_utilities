@@ -11,6 +11,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
     SvgReferenceValidator,
     SvgPaintValidator,
     SvgEffectsValidator,
+    SvgFilterValidator,
     SvgTextValidator,
     SvgDocumentViewportValidator,
     ResourceValidator
@@ -33,10 +34,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
          :ok <- SvgClipValidator.validate_summary(summary),
          :ok <- SvgPaintValidator.validate_summary(summary),
          :ok <- SvgEffectsValidator.validate_summary(summary),
+         :ok <- SvgFilterValidator.validate_summary(summary),
          :ok <- SvgReferenceValidator.validate_summary(summary),
          :ok <- SvgTextValidator.validate_summary(summary),
          {:ok, fonts} <- validate_fonts(context.fonts, summary),
-         :ok <- validate_stroke_work(source, context.mode, fonts),
+         {:ok, prepared_source} <- validate_stroke_work(source, context.mode, fonts, summary),
          {:ok, resources} <- validate_resources(context.resources, image_budget, summary),
          {:ok, dimensions} <-
            if(raster? == :document,
@@ -48,6 +50,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
              raster? == true and
                Enum.any?(~w(pattern mask marker), &MapSet.member?(summary.elements, {:svg, &1})),
              do: validate_pattern_surfaces(source, dimensions, fonts),
+             else: :ok
+           ),
+         :ok <-
+           if(MapSet.member?(summary.elements, {:svg, "filter"}),
+             do: validate_filter_surfaces(source, dimensions, fonts),
              else: :ok
            ),
          # Pinned resvg's actual max_bbox is five canvas widths/heights (25× area).
@@ -69,13 +76,15 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
            ) do
       {:ok,
        %{
-         source: source,
+         source: prepared_source,
          root: summary.root,
          width: dimensions[:width],
          height: dimensions[:height],
          mode: context.mode,
          fonts: fonts,
          resources: resources,
+         effects?: MapSet.member?(summary.elements, {:svg, "filter"}),
+         effect_dimensions: {dimensions[:width], dimensions[:height]},
          document_viewport: if(raster? == :document, do: dimensions, else: nil)
        }}
     end
@@ -185,6 +194,48 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
     end
   end
 
+  defp validate_filter_surfaces(source, dimensions, fonts) do
+    with :ok <- native_load_result(NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.load_native()) do
+      case NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.validate_filter_work(
+             source,
+             dimensions[:width],
+             dimensions[:height],
+             {Limits.get(:max_aggregate_svg_surface_pixels), Limits.get(:max_svg_filter_work)},
+             fonts
+           ) do
+        {:ok, {pixels, work}} ->
+          HtmlValidator.reserve_render_resource(
+            :max_aggregate_svg_surface_pixels,
+            pixels,
+            :layout
+          )
+
+          HtmlValidator.reserve_render_resource(:max_svg_filter_work, work, :layout)
+
+        {:error, limit}
+        when limit in ["max_aggregate_svg_surface_pixels", "max_svg_filter_work"] ->
+          Diagnostics.error(
+            :limits,
+            :resource_limit_exceeded,
+            "SVG filter evaluation exceeds " <> limit,
+            source: "SVG filters",
+            module: __MODULE__,
+            operation: :prepare
+          )
+
+        {:error, message} ->
+          Diagnostics.error(
+            :layout,
+            :invalid_document,
+            "SVG filter preparation failed: " <> message,
+            source: "SVG filters",
+            module: __MODULE__,
+            operation: :prepare
+          )
+      end
+    end
+  end
+
   defp validate_pattern_surfaces(source, dimensions, fonts) do
     with :ok <- native_load_result(NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.load_native()) do
       case NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.validate_pattern_work(
@@ -224,18 +275,50 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
     end
   end
 
-  defp validate_stroke_work(source, mode, fonts) do
+  defp validate_stroke_work(source, mode, fonts, summary) do
     if mode == :inline do
       with :ok <- native_load_result(NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.load_native()) do
+        request =
+          if Enum.any?(summary.geometry, &Map.has_key?(&1.attributes, "textLength")) do
+            {:prepare_text,
+             {Limits.get(:max_svg_stroke_work), Limits.get(:max_svg_gradient_work),
+              Limits.get(:max_svg_bytes), Limits.get(:max_svg_expansion_work),
+              summary.expanded_work, Limits.get(:max_svg_nodes)}, fonts}
+          else
+            {Limits.get(:max_svg_stroke_work), Limits.get(:max_svg_gradient_work), fonts}
+          end
+
         case NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.validate_shape_work(
                source,
-               {Limits.get(:max_svg_stroke_work), Limits.get(:max_svg_gradient_work), fonts}
+               request
              ) do
-          {:ok, {strokes, gradients}} ->
+          {:ok, {strokes, gradients, prepared_source, source_bytes, plan_work, extra_nodes}} ->
             HtmlValidator.reserve_render_resource(:max_svg_stroke_work, strokes, :layout)
             HtmlValidator.reserve_render_resource(:max_svg_gradient_work, gradients, :layout)
 
-          {:error, limit} when limit in ["max_svg_stroke_work", "max_svg_gradient_work"] ->
+            HtmlValidator.reserve_render_resource(
+              :max_aggregate_svg_source_bytes,
+              source_bytes,
+              :layout
+            )
+
+            HtmlValidator.reserve_render_resource(:max_svg_expansion_work, plan_work, :layout)
+            HtmlValidator.reserve_render_resource(:max_aggregate_svg_nodes, extra_nodes, :layout)
+            {:ok, prepared_source}
+
+          {:ok, {strokes, gradients}} ->
+            HtmlValidator.reserve_render_resource(:max_svg_stroke_work, strokes, :layout)
+            HtmlValidator.reserve_render_resource(:max_svg_gradient_work, gradients, :layout)
+            {:ok, source}
+
+          {:error, limit}
+          when limit in [
+                 "max_svg_stroke_work",
+                 "max_svg_gradient_work",
+                 "max_svg_bytes",
+                 "max_svg_expansion_work",
+                 "max_svg_nodes"
+               ] ->
             Diagnostics.error(
               :limits,
               :resource_limit_exceeded,
@@ -257,7 +340,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
         end
       end
     else
-      :ok
+      {:ok, source}
     end
   end
 
@@ -284,13 +367,15 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
   @spec validate_capabilities(map(), map()) :: :ok | {:error, {atom(), map()}}
   def validate_capabilities(summary, context) do
     supported =
-      ~w(svg g defs clipPath symbol use pattern marker mask path rect circle ellipse line polyline polygon linearGradient radialGradient stop text tspan textPath image title desc a)
+      ~w(svg g defs clipPath symbol use pattern marker mask path rect circle ellipse line polyline polygon linearGradient radialGradient stop text tspan textPath image title desc a) ++
+        SvgFilterValidator.tags()
 
     cond do
       context.mode == :inline and
           Enum.any?(summary.elements, fn {namespace, tag} ->
             namespace != :svg or
-                tag not in ~w(svg g defs symbol use pattern marker mask linearGradient radialGradient stop clipPath path rect circle ellipse line polyline polygon text tspan title desc)
+                tag not in (~w(svg g defs symbol use pattern marker mask linearGradient radialGradient stop clipPath path rect circle ellipse line polyline polygon text tspan title desc) ++
+                              SvgFilterValidator.tags())
           end) ->
         unsupported(
           "inline SVG geometry cannot omit text, references, images, effects or native HTML; their complete scenes remain pending"
@@ -305,7 +390,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
         )
 
       Enum.any?(summary.elements, fn {namespace, tag} ->
-        namespace == :html or tag == "filter" or
+        namespace == :html or (context.mode != :inline and tag in SvgFilterValidator.tags()) or
             (context.mode != :inline and tag in ~w(pattern marker mask))
       end) ->
         unsupported(

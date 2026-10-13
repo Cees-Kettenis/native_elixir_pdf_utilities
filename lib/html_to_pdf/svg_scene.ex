@@ -9,6 +9,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
     SvgReferenceValidator,
     SvgPaintValidator,
     SvgEffectsValidator,
+    SvgFilterValidator,
+    SvgForeignObjectValidator,
     SvgTextValidator,
     SvgTextPositionValidator,
     SvgSceneValidator,
@@ -21,7 +23,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
   @spec authored_source(map()) :: binary()
   def authored_source(node) do
     namespace =
-      if Map.get(node, :namespace) == :html,
+      if Map.get(node, :namespace, :html) == :html,
         do: "http://www.w3.org/1999/xhtml",
         else: "http://www.w3.org/2000/svg"
 
@@ -49,18 +51,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
 
   @doc false
   @spec prepare(map(), HtmlValidator.image_budget()) :: {:ok, map()} | {:error, {atom(), map()}}
-  def prepare(node, budget) do
+  @spec prepare(map(), HtmlValidator.image_budget(), keyword()) ::
+          {:ok, map()} | {:error, {atom(), map()}}
+  def prepare(node, budget, options \\ []) do
     with :ok <- SvgSceneValidator.validate_paint_style(node.style),
          :ok <- SvgClipValidator.validate_tree(node),
          :ok <- SvgReferenceValidator.validate_tree(node),
          :ok <- SvgPaintValidator.validate_tree(node),
          :ok <- SvgEffectsValidator.validate_tree(node),
-         {:ok, text} <- SvgTextValidator.prepare_tree(node) do
-      source = serialize(node, true, nil, false, text.aliases, text.positions)
+         :ok <- SvgFilterValidator.validate_tree(node),
+         {:ok, text} <- SvgTextValidator.prepare_tree(node),
+         {:ok, projected, slots} <- SvgForeignObjectValidator.prepare_tree(node, options) do
+      source = serialize(projected, true, nil, false, text.aliases, text.positions)
 
       {:ok,
        %{
          source: source,
+         original_tree: node,
+         foreign_slots: slots,
          attributes: node.attributes,
          style: node.style,
          budget: budget,
@@ -92,50 +100,92 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
         dimensions = " width=\"#{viewport.width / 0.75}\" height=\"#{viewport.height / 0.75}\""
         source = String.replace(scene.source, "<svg ", "<svg#{dimensions} ", global: false)
 
-        with {:ok, png} <-
-               SvgBackend.rasterize(
-                 source,
-                 [width: raster_width, height: raster_height],
-                 %{mode: :inline, fonts: scene.selected_fonts},
-                 scene.budget
-               ),
-             {:ok, image} <- PngDecoder.decode(png, scene.budget, false) do
-          ink_extent = ink_extent(image, viewport)
-
-          vector_image =
-            if is_nil(ink_extent) do
-              {:ok, nil}
-            else
-              with {:ok, pdf} <-
-                     SvgBackend.vectorize(
-                       source,
-                       [width: raster_width, height: raster_height],
-                       %{mode: :inline, fonts: scene.selected_fonts},
-                       scene.budget
-                     ),
-                   {:ok, _form} <- SvgFormValidator.prepare_source(pdf) do
-                {:ok,
-                 %{
-                   format: :pdf_form,
-                   data: pdf,
-                   width_px: image.width_px,
-                   height_px: image.height_px
-                 }}
-              end
-            end
-
-          with {:ok, vector_image} <- vector_image do
+        if map_size(Map.get(scene, :foreign_slots, %{})) > 0 do
+          with {:ok, skeleton} <-
+                 SvgBackend.vectorize_slots(
+                   source,
+                   [width: raster_width, height: raster_height],
+                   %{mode: :inline, fonts: scene.selected_fonts},
+                   scene.foreign_slots,
+                   scene.budget
+                 ),
+               {:ok, pdf, placements} <-
+                 NativeElixirPdfUtilities.HtmlToPdf.SvgFormComposition.compose(
+                   skeleton,
+                   scene.foreign_slots,
+                   &SvgForeignObjectValidator.layout_slot/1
+                 ),
+               {:ok, _form} <- SvgFormValidator.prepare_source(pdf),
+               {:ok, html_links} <-
+                 NativeElixirPdfUtilities.Validators.SvgFormSlotValidator.prepare_links(
+                   placements,
+                   viewport.width,
+                   viewport.height
+                 ) do
             {:ok,
              %{
                viewport: viewport,
-               image: vector_image,
-               ink_extent: ink_extent,
+               image: %{
+                 format: :pdf_form,
+                 data: pdf,
+                 width_px: raster_width,
+                 height_px: raster_height
+               },
+               ink_extent: viewport.layout_extent,
                layout_extent: viewport.layout_extent,
                baseline: viewport.baseline,
                logical_text: scene.logical_text,
-               links: scene.links,
-               selected_fonts: scene.selected_fonts
+               links: scene.links ++ html_links,
+               selected_fonts: scene.selected_fonts,
+               html_placements: placements
              }}
+          end
+        else
+          with {:ok, png} <-
+                 SvgBackend.rasterize(
+                   source,
+                   [width: raster_width, height: raster_height],
+                   %{mode: :inline, fonts: scene.selected_fonts},
+                   scene.budget
+                 ),
+               {:ok, image} <- PngDecoder.decode(png, scene.budget, false) do
+            ink_extent = ink_extent(image, viewport)
+
+            vector_image =
+              if is_nil(ink_extent) do
+                {:ok, nil}
+              else
+                with {:ok, pdf} <-
+                       SvgBackend.vectorize(
+                         source,
+                         [width: raster_width, height: raster_height],
+                         %{mode: :inline, fonts: scene.selected_fonts},
+                         scene.budget
+                       ),
+                     {:ok, _form} <- SvgFormValidator.prepare_source(pdf) do
+                  {:ok,
+                   %{
+                     format: :pdf_form,
+                     data: pdf,
+                     width_px: image.width_px,
+                     height_px: image.height_px
+                   }}
+                end
+              end
+
+            with {:ok, vector_image} <- vector_image do
+              {:ok,
+               %{
+                 viewport: viewport,
+                 image: vector_image,
+                 ink_extent: ink_extent,
+                 layout_extent: viewport.layout_extent,
+                 baseline: viewport.baseline,
+                 logical_text: scene.logical_text,
+                 links: scene.links,
+                 selected_fonts: scene.selected_fonts
+               }}
+            end
           end
         end
       else

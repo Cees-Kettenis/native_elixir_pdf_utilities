@@ -121,6 +121,28 @@ defmodule NativeElixirPdfUtilities.Validators.ResourceValidator do
     end
   end
 
+  @doc "Validates that document preparation shares the current issued image budget."
+  @spec validate_preparation_budget(term()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_preparation_budget(image_budget) do
+    context = ResourceContext.current()
+
+    with :ok <- validate_context(context) do
+      if image_budget == context.image_budget do
+        :ok
+      else
+        Diagnostics.error(
+          :options,
+          :invalid_options,
+          "document preparation must use the current issued image budget",
+          operation: :prepare_document,
+          module: __MODULE__,
+          source: "image_budget"
+        )
+      end
+    end
+  end
+
   @doc false
   @spec rebase(ResourceContext.t(), term()) ::
           {:ok, ResourceContext.t()} | {:error, {atom(), Diagnostics.diagnostic()}}

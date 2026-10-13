@@ -28,7 +28,14 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
                     "ui"
                   )
 
-  @type context :: %{width: float(), height: float(), density: float(), type: :print}
+  @type context :: %{
+          required(:width) => float(),
+          required(:height) => float(),
+          required(:density) => float(),
+          required(:type) => :print,
+          optional(:source_font_options) => keyword(),
+          optional(:source_metrics) => map()
+        }
 
   @doc "Validates explicit print viewport and deterministic image density options."
   @spec validate_options(keyword()) :: :ok | {:error, {atom(), map()}}
@@ -99,7 +106,9 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
            width: width * 1.0,
            height: height * 1.0,
            density: Keyword.get(opts, :image_selection_density, 1) * 1.0,
-           type: :print
+           type: :print,
+           source_font_options:
+             Keyword.take(opts, [:default_font, :fonts, :system_font_discovery])
          }}
       end
     end
@@ -128,7 +137,9 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
              width: width * 1.0,
              height: height * 1.0,
              density: Keyword.get(opts, :image_selection_density, 1) * 1.0,
-             type: :print
+             type: :print,
+             source_font_options:
+               Keyword.take(opts, [:default_font, :fonts, :system_font_discovery])
            }}
 
         {:error, reason} ->
@@ -148,7 +159,8 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
          width: width / 0.75,
          height: height / 0.75,
          density: Keyword.get(opts, :image_selection_density, 1) * 1.0,
-         type: :print
+         type: :print,
+         source_font_options: Keyword.take(opts, [:default_font, :fonts, :system_font_discovery])
        }}
     end
   end
@@ -294,10 +306,14 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
   @doc "Resolves a nonnegative CSS source-size length to CSS pixels, or returns :error."
   @spec source_length(String.t(), context()) :: {:ok, float()} | :error
   def source_length(value, context) do
+    evaluated_length(value, context, :nonnegative)
+  end
+
+  defp evaluated_length(value, context, sign_policy) do
     value = String.downcase(HtmlValidator.trim_css_whitespace(value), :ascii)
 
     if Regex.match?(
-         ~r/(?:[0-9](?:ex|ch|cap|ic|lh|rlh)\b)|\b(?:sin|cos|tan|asin|acos|atan|atan2|pow|sqrt|hypot|log|exp|abs|sign|round|mod|rem)\(/,
+         ~r/\b(?:sin|cos|tan|asin|acos|atan|atan2|pow|sqrt|hypot|log|exp|abs|sign|round|mod|rem)\(/,
          value
        ) do
       throw(
@@ -305,12 +321,22 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
          Diagnostics.error(
            :style,
            :unsupported_html,
-           "source-size font metrics or advanced math are not implemented; use absolute lengths, viewport units, em/rem, calc/min/max/clamp",
+           "source-size advanced math is not implemented; use absolute lengths, viewport units, em/rem, calc/min/max/clamp",
            module: __MODULE__,
            source: value
          )}
       )
     end
+
+    context =
+      case NativeElixirPdfUtilities.Validators.SourceSizeValidator.prepare_context(
+             context,
+             [value],
+             []
+           ) do
+        {:ok, measured} -> measured
+        {:error, _} = error -> throw({:render_resource_limit, error})
+      end
 
     parsed =
       try do
@@ -332,8 +358,8 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
       end
 
     case parsed do
-      {:ok, value} when value >= 0 ->
-        HtmlValidator.check_render_resource(:max_css_numeric_magnitude, value, :style)
+      {:ok, value} when value >= 0 or sign_policy == :signed ->
+        HtmlValidator.check_render_resource(:max_css_numeric_magnitude, abs(value), :style)
         HtmlValidator.normalize_geometry_number(value)
 
       _ ->
@@ -348,60 +374,16 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
     end
   end
 
-  defp condition(query, context, depth) do
-    HtmlValidator.check_render_resource(:max_media_query_depth, depth, :style)
-    query = HtmlValidator.trim_css_whitespace(query)
-    terms = top_level_terms(query)
-
-    cond do
-      String.starts_with?(query, "not ") and
-          not String.starts_with?(String.slice(query, 4..-1//1), "(") ->
-        rest = String.slice(query, 4..-1//1)
-
-        Regex.match?(~r/\A[-a-z]+(?:\s+and\s+\(.*\))?\z/s, rest) and
-          not condition(rest, context, depth + 1)
-
-      length(terms) > 1 and "or" in terms ->
-        terms
-        |> Enum.chunk_by(&(&1 == "or"))
-        |> Enum.reject(&(&1 == ["or"]))
-        |> Enum.any?(&condition(Enum.join(&1, " "), context, depth + 1))
-
-      length(terms) > 1 and "and" in terms ->
-        terms
-        |> Enum.chunk_by(&(&1 == "and"))
-        |> Enum.reject(&(&1 == ["and"]))
-        |> Enum.all?(&condition(Enum.join(&1, " "), context, depth + 1))
-
-      String.starts_with?(query, "not ") ->
-        not condition(String.slice(query, 4..-1//1), context, depth + 1)
-
-      String.starts_with?(query, "only ") ->
-        rest = String.slice(query, 5..-1//1)
-
-        Regex.match?(~r/\A[-a-z]+(?:\s+and\s+\(.*\))?\z/s, rest) and
-          condition(rest, context, depth + 1)
-
-      query in ~w(all print) ->
-        true
-
-      query in ~w(screen speech) ->
-        false
-
-      String.starts_with?(query, "(") and String.ends_with?(query, ")") ->
-        inside = String.slice(query, 1, String.length(query) - 2)
-
-        if String.starts_with?(inside, "(") or String.starts_with?(inside, "not "),
-          do: condition(inside, context, depth + 1),
-          else: feature(inside, context)
-
-      true ->
-        false
-    end
+  defp condition(query, context, _depth) do
+    NativeElixirPdfUtilities.Validators.MediaConditionValidator.evaluate(
+      query,
+      context,
+      &feature/2
+    )
   end
 
   # Spaces inside parenthesized components are retained for media conditions and math.
-  defp top_level_terms(value, math? \\ false) do
+  defp top_level_terms(value, math?) do
     {terms, current, _depth} =
       value
       |> String.codepoints()
@@ -505,7 +487,7 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
   defp feature_values(name, expected, context) do
     case name do
       name when name in ~w(width height) ->
-        with {:ok, expected} <- source_length(expected, context),
+        with {:ok, expected} <- evaluated_length(expected, context, :signed),
              do: {:ok, Map.fetch!(context, String.to_existing_atom(name)), expected}
 
       "resolution" ->
@@ -647,6 +629,10 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
 
                       unit when unit in ~w(em rem) ->
                         16.0
+
+                      unit when unit in ~w(ex rex ch rch cap rcap ic ric lh rlh) ->
+                        key = unit |> String.trim_leading("r") |> String.to_existing_atom()
+                        get_in(context, [:source_metrics, key])
 
                       "px" ->
                         1.0

@@ -232,7 +232,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   end
 
   @fixture_thresholds [
+    {"html_selected_content_slot_order.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_selected_content_clones.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_selected_content_shadow_clones.html",
+     max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_declarative_shadow_slots.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_native_date_time_controls.html",
      render_opts: [
@@ -524,6 +527,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
      max_average_delta: 0.01},
     {"mathml_html_children.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_semantics_annotations.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_unknown_rows.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_anonymous_row_boxes.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_matrix_cell_boxes.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_matrix_row_backgrounds.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_matrix_integer_spacing_ordinary.html",
@@ -574,12 +579,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
      ]},
     {"inline_svg_text_font_attributes.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_text_coordinate_lists.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"inline_svg_text_lengths.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_text_rotations_canonical.html",
      max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_reuse.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_gradients.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_patterns_markers.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_masks.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"inline_svg_foreign_object.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"inline_svg_filters.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_path_clips_scoped.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_geometry.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_opacity_groups.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
@@ -927,6 +935,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     {"flex_grid_alignment.html", max_changed_ratio: 0.01, max_average_delta: 0.03},
     {"flex_direction_and_justification.html", max_changed_ratio: 0.01, max_average_delta: 0.035},
     {"grid_tracks_and_placement.html", max_changed_ratio: 0.01, max_average_delta: 0.035},
+    {"ruby_inline_contexts.html", max_changed_ratio: 0.01, max_average_delta: 0.045},
+    {"ruby_optional_tags.html", max_changed_ratio: 0.01, max_average_delta: 0.045},
+    {"ruby_wrapping_pagination.html", max_changed_ratio: 0.01, max_average_delta: 0.045},
     {"ruby_canonical_groups.html", max_changed_ratio: 0.01, max_average_delta: 0.045},
     {"ruby_horizontal.html", max_changed_ratio: 0.01, max_average_delta: 0.045},
     {"list_marker_images.html", max_changed_ratio: 0.01, max_average_delta: 0.045},
@@ -1709,6 +1720,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
 
   for {fixture_name, thresholds} <- @fixture_thresholds do
     if fixture_name == "html_selected_content_clones.html", do: @tag(:selected_content)
+    if fixture_name == "html_selected_content_shadow_clones.html", do: @tag(:clone_shadows)
+    if fixture_name == "html_selected_content_slot_order.html", do: @tag(:clone_slot_order)
     if fixture_name == "html_declarative_shadow_slots.html", do: @tag(:shadow_slots)
     @fixture_name fixture_name
     @thresholds thresholds
@@ -1780,6 +1793,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
 
     if fixture_name == "mathml_html_children.html", do: @tag(:math_html_children)
     if fixture_name == "mathml_semantics_annotations.html", do: @tag(:math_semantics)
+    if fixture_name == "mathml_unknown_rows.html", do: @tag(:math_unknown_rows)
+    if fixture_name == "mathml_anonymous_row_boxes.html", do: @tag(:math_anonymous_rows)
     if fixture_name == "mathml_phantoms.html", do: @tag(:math_phantoms)
     if fixture_name == "mathml_basic_matrices.html", do: @tag(:math_matrices)
     if fixture_name == "mathml_matrix_cell_boxes.html", do: @tag(:math_matrix_cells)
@@ -1857,7 +1872,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
        ],
        do: @tag(:table_formation)
 
+    if fixture_name == "ruby_inline_contexts.html", do: @tag(:ruby_contexts)
+
     if fixture_name in [
+         "ruby_optional_tags.html",
+         "ruby_wrapping_pagination.html",
          "ruby_canonical_groups.html",
          "ruby_horizontal.html",
          "list_marker_images.html",
@@ -1898,6 +1917,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     if fixture_name in ["html_fragment_destinations.html", "html_base_relative_links.html"],
       do: @tag(:destinations)
 
+    if fixture_name == "inline_svg_text_lengths.html", do: @tag(:inline_svg_text_lengths)
+
     if fixture_name == "inline_svg_text_rotations_canonical.html",
       do: @tag(:inline_svg_text_rotations)
 
@@ -1909,12 +1930,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
 
     if fixture_name == "inline_svg_patterns_markers.html", do: @tag(:svg_patterns_markers)
     if fixture_name == "inline_svg_masks.html", do: @tag(:svg_masks)
+    if fixture_name == "inline_svg_foreign_object.html", do: @tag(:svg_foreign_object)
+    if fixture_name == "inline_svg_filters.html", do: @tag(:svg_filters)
 
     if fixture_name in [
          "inline_svg_text_selected.html",
          "inline_svg_text_font_attributes.html",
          "inline_svg_text_coordinate_lists.html",
          "inline_svg_text_rotations_canonical.html",
+         "inline_svg_text_lengths.html",
          "inline_svg_reuse.html",
          "inline_svg_gradients.html",
          "inline_svg_path_clips_scoped.html",

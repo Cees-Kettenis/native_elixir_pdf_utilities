@@ -53,8 +53,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes do
   def vectorize(_source, _fonts, _resources), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc false
-  @spec validate_shape_work(binary(), {pos_integer(), pos_integer(), [binary()]}) ::
-          {:ok, {non_neg_integer(), non_neg_integer()}} | {:error, binary()}
+  @spec vectorize_slots(binary(), [binary()], [binary()]) :: {:ok, binary()} | {:error, binary()}
+  def vectorize_slots(_source, _fonts, _slots), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc false
+  @spec validate_shape_work(
+          binary(),
+          {pos_integer(), pos_integer(), [binary()]}
+          | {:prepare_text,
+             {pos_integer(), pos_integer(), pos_integer(), pos_integer(), non_neg_integer(),
+              pos_integer()}, [binary()]}
+        ) ::
+          {:ok, {non_neg_integer(), non_neg_integer()}}
+          | {:ok,
+             {non_neg_integer(), non_neg_integer(), binary(), non_neg_integer(),
+              non_neg_integer(), non_neg_integer()}}
+          | {:error, binary()}
   def validate_shape_work(_source, _ceilings), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc false
@@ -62,6 +76,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes do
           {:ok, non_neg_integer()} | {:error, binary()}
   def validate_pattern_work(_source, _width, _height, _ceiling, _fonts),
     do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc false
+  @spec validate_filter_work(
+          binary(),
+          pos_integer(),
+          pos_integer(),
+          {pos_integer(), pos_integer()},
+          [binary()]
+        ) :: {:ok, {non_neg_integer(), non_neg_integer()}} | {:error, binary()}
+  def validate_filter_work(_source, _width, _height, _ceilings, _fonts),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc false
+  @spec vectorize_effects(binary(), [binary()], [binary()], {number(), number()}) ::
+          {:ok, binary()} | {:error, binary()}
+  def vectorize_effects(_source, _fonts, _slots, _scale), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc false
   @spec validate_path(binary(), pos_integer(), float()) ::

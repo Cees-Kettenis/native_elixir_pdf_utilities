@@ -85,6 +85,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
   end
 
   test "zero and hidden scenes validate their contents, preserve flow and paint no artwork" do
+    assert {:ok, empty_foreign} =
+             HtmlToPdf.render(
+               "<svg width=20 height=20><foreignObject><div>HTML</div></foreignObject></svg>"
+             )
+
+    assert {:error, {:no_extractable_text, _}} =
+             NativeElixirPdfUtilities.Text.extract(empty_foreign)
+
     for attrs <- [
           "width=0 height=20",
           "width=20 height=0",
@@ -112,7 +120,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
     for content <- [
           "<text><textPath>Ω</textPath></text>",
           "<tspan>text</tspan>",
-          "<foreignObject><div>HTML</div></foreignObject>",
           "<defs><linearGradient id='g' /></defs>",
           "<image href='https://example.test/private.png' />",
           "<a href='https://example.test/'><rect width=10 height=10 /></a>",
@@ -125,9 +132,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
       assert is_binary(diagnostic.message) and diagnostic.message != ""
     end
 
+    assert {:error, {:invalid_document, %{source: "rect mask"}}} =
+             HtmlToPdf.render(
+               "<svg width=20 height=20><rect width=10 height=10 mask='url(#m)' /></svg>"
+             )
+
+    assert {:error, {:invalid_document, %{source: "rect filter"}}} =
+             HtmlToPdf.render(
+               "<svg width=20 height=20><rect width=10 height=10 filter='url(#f)' /></svg>"
+             )
+
     for attrs <- [
-          "filter='url(#f)'",
-          "mask='url(#m)'",
           "vector-effect='non-scaling-stroke'",
           "pathLength='20'"
         ] do
@@ -340,7 +355,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
     assert {:ok, dom} =
              HtmlParser.parse_detailed("<svg width=20 height=20><foreignObject/></svg>")
 
-    assert {:error, {:unsupported_html, _}} = Style.load_stylesheets(dom, [])
+    assert {:ok, []} = Style.load_stylesheets(dom, [])
 
     assert {:error, {:invalid_document, _}} =
              SvgBackend.rasterize("<svg width='0' height='20'/>", [width: 20, height: 20], %{

@@ -112,6 +112,113 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
     end
   end
 
+  @doc "Validates the shared legacy frame/iframe margin and initial scrollbar policy."
+  @spec prepare_initialization(term(), term()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_initialization(attributes, host) do
+    case {attributes, host} do
+      {attributes, host} when is_map(attributes) and host in [:iframe, :frame] ->
+        with {:ok, horizontal} <- legacy_margin(Map.get(attributes, "marginwidth"), host),
+             {:ok, vertical} <- legacy_margin(Map.get(attributes, "marginheight"), host) do
+          case Map.get(attributes, "scrolling", "auto") do
+            scrolling when is_binary(scrolling) ->
+              {:ok,
+               %{
+                 margins: %{horizontal: horizontal, vertical: vertical},
+                 scrollbars:
+                   if(String.downcase(scrolling, :ascii) in ["no", "off", "noscroll"],
+                     do: :none,
+                     else: :auto
+                   )
+               }}
+
+            _ ->
+              invalid_initialization(
+                "#{host} scrolling requires a legacy string value",
+                Atom.to_string(host)
+              )
+          end
+        end
+
+      _ ->
+        invalid_initialization(
+          "initial child hints require an attribute map and frame/iframe host",
+          "embedded document"
+        )
+    end
+  catch
+    {:render_resource_limit, error} -> error
+  end
+
+  defp legacy_margin(value, host) do
+    if is_nil(value) do
+      {:ok, nil}
+    else
+      case HtmlValidator.parse_html_legacy_int32(value) do
+        {:ok, number} when number < 0 ->
+          {:ok, nil}
+
+        {:ok, number} ->
+          case HtmlValidator.parse_css_number(Integer.to_string(number), 0.75) do
+            {points, ""} ->
+              {:ok, points}
+
+            _ ->
+              invalid_initialization(
+                "#{host} margin exceeds the supported numeric range",
+                Atom.to_string(host)
+              )
+          end
+
+        :error ->
+          {:ok, 0.0}
+      end
+    end
+  end
+
+  @doc "Validates initial child body margin defaults before author CSS can override them."
+  @spec prepare_body_margins(term()) ::
+          {:ok, nil | map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_body_margins(value) do
+    case value do
+      nil ->
+        {:ok, nil}
+
+      %{horizontal: horizontal, vertical: vertical} = margins when map_size(margins) == 2 ->
+        if Enum.all?([horizontal, vertical], fn number ->
+             is_nil(number) or
+               (match?({:ok, _}, HtmlValidator.normalize_geometry_number(number)) and number >= 0)
+           end) do
+          {:ok,
+           %{
+             top: vertical || 6.0,
+             bottom: vertical || 6.0,
+             left: horizontal || 6.0,
+             right: horizontal || 6.0
+           }}
+        else
+          invalid_initialization(
+            "frame margins require bounded nonnegative points or absent hints",
+            "embedded document"
+          )
+        end
+
+      _ ->
+        invalid_initialization(
+          "frame margins require horizontal and vertical hints",
+          "embedded document"
+        )
+    end
+  end
+
+  defp invalid_initialization(message, source) do
+    Diagnostics.error(:layout, :invalid_document, message,
+      module: __MODULE__,
+      operation: :initialize_child_viewport,
+      source: source
+    )
+  end
+
   @doc false
   @spec prepare_iframe_style(map()) :: map()
   def prepare_iframe_style(style) do
@@ -259,7 +366,8 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
     enabled? =
       surface.host in [:iframe, :object, :embed, :frame] and width > 0 and height > 0 and
         overflow != :hidden and
-        (surface.host != :frame or Map.get(surface, :frame_scrollbars, :auto) != :none)
+        (surface.host not in [:iframe, :frame] or
+           Map.get(surface, :frame_scrollbars, :auto) != :none)
 
     # There are four scrollbar-presence states. Track states rather than inventing a pass
     # ceiling; percentage sizing may also remove an axis after reflow.
@@ -343,7 +451,8 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
       when host in [:surface, :iframe, :object, :embed, :frame] ->
         with :ok <- ResourceValidator.validate_context(context),
              true <-
-               host != :frame or Map.get(surface, :frame_scrollbars, :auto) in [:auto, :none],
+               host not in [:iframe, :frame] or
+                 Map.get(surface, :frame_scrollbars, :auto) in [:auto, :none],
              {:ok, {width, height}} <- HtmlValidator.prepare_viewport_dimensions(width, height) do
           # Zero-area surfaces still validate and account for their entire tree.
           size = {if(width == 0, do: 0.75, else: width), if(height == 0, do: 0.75, else: height)}
@@ -355,7 +464,7 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
             Diagnostics.error(
               :layout,
               :invalid_layout,
-              "frame viewport requires a validated initial scrollbar policy",
+              "frame/iframe viewport requires a validated initial scrollbar policy",
               module: __MODULE__,
               operation: :layout_embedded_viewport
             )

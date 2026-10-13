@@ -309,7 +309,14 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
               end
 
             false ->
-              {:ok, nil, preparation_context}
+              if name?(Map.get(xobject, "Subtype"), "Image") do
+                with {:ok, width} <- Reader.resolve(document, Map.get(xobject, "Width")),
+                     {:ok, height} <- Reader.resolve(document, Map.get(xobject, "Height")) do
+                  {:ok, %{image: name, width: width, height: height}, preparation_context}
+                end
+              else
+                {:ok, nil, preparation_context}
+              end
           end
         end
     end

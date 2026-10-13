@@ -589,6 +589,37 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     )
   end
 
+  @doc false
+  @spec image_span_geometry(map(), map(), pos_integer()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def image_span_geometry(state, image, page) do
+    if is_integer(image.width) and image.width > 0 and is_integer(image.height) and
+         image.height > 0 do
+      geometry_result(
+        fn ->
+          [_, _, _, _, x, y] = multiply([1.0, 0.0, 0.0, 1.0, 0.0, 0.0], state.ctm)
+          [_, _, _, _, end_x, end_y] = multiply([1.0, 0.0, 0.0, 1.0, 1.0, 0.0], state.ctm)
+          {x, y} = display_position(x, y, state.page)
+          {end_x, end_y} = display_position(end_x, end_y, state.page)
+          [a, b, c, d, _, _] = state.ctm
+
+          %{
+            x: x,
+            y: y,
+            end_x: end_x,
+            end_y: end_y,
+            height: :math.sqrt(c * c + d * d),
+            paints?: a * d - b * c != 0
+          }
+        end,
+        page,
+        "Do Image positioning"
+      )
+    else
+      content_error("ActualText image requires positive integer Width and Height", page)
+    end
+  end
+
   defp geometry_result(calculate, page, operator) do
     {:ok, calculate.()}
   rescue

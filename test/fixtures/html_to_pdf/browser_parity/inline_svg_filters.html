@@ -1,0 +1,19 @@
+<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0}svg{display:block}text{font-family:DejaVu Sans;font-size:16px}</style></head><body>
+<svg width="520" height="280" viewBox="0 0 520 280">
+<defs>
+<filter id="shadow" x="-30%" y="-50%" width="160%" height="200%" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceAlpha" stdDeviation="2" result="blur"/><feOffset in="blur" dx="4" dy="4" result="offset"/><feFlood flood-color="#273b5a" flood-opacity=".65" result="color"/><feComposite in="color" in2="offset" operator="in" result="shadow"/><feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+<filter id="matrix"><feColorMatrix type="matrix" values="0 0 1 0 0  1 0 0 0 0  0 1 0 0 0  0 0 0 1 0"/><feComponentTransfer><feFuncR type="linear" slope=".8" intercept=".1"/><feFuncA type="gamma" amplitude="1" exponent="1" offset="0"/></feComponentTransfer></filter>
+<filter id="morph" color-interpolation-filters="sRGB"><feMorphology operator="dilate" radius="2 1"/><feGaussianBlur stdDeviation=".6"/></filter>
+<filter id="blend"><feFlood flood-color="#58c6d8" flood-opacity=".65"/><feBlend in2="SourceGraphic" mode="multiply"/></filter>
+<filter id="kernel"><feConvolveMatrix order="3" kernelMatrix="0 -1 0 -1 5 -1 0 -1 0" preserveAlpha="true"/></filter>
+<filter id="drop" x="-30%" y="-50%" width="160%" height="200%"><feDropShadow dx="3" dy="3" stdDeviation="1.5" flood-color="#314c62"/></filter>
+</defs>
+<rect width="520" height="280" fill="white"/>
+<g filter="url(#shadow)"><rect x="20" y="18" width="200" height="54" rx="6" fill="#f1ba48"/><text x="30" y="51">Filtered café Ω</text></g>
+<g transform="translate(250 18) rotate(8 70 25)" filter="url(#matrix)"><rect width="140" height="50" fill="#de6338"/><circle cx="60" cy="25" r="18" fill="#59a33c"/></g>
+<g filter="url(#morph)"><path d="M25 100H100V152H25Z M120 100L185 152L205 100Z" fill="#365fc6"/></g>
+<g filter="url(#blend)"><rect x="250" y="100" width="140" height="50" fill="#db774d"/></g>
+<g filter="url(#kernel)"><circle cx="65" cy="205" r="27" fill="#49a193"/></g>
+<g filter="url(#drop)"><path d="M150 178L205 205L150 232Z" fill="#cf4b64"/></g>
+<text x="250" y="212">Plain selected text</text>
+</svg></body></html>

@@ -408,8 +408,14 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
               to_string(key) == "href",
               do: String.trim(to_string(value))
 
+        resource_hrefs =
+          if namespace == :html and name == "a" and state.context.mode == :inline and
+               state.context.external_resources?,
+             do: Enum.reject(hrefs, &HtmlValidator.valid_link_url?/1),
+             else: hrefs
+
         if (name in ["image", "feImage"] and not state.context.external_resources?) or
-             Enum.any?(hrefs, fn value ->
+             Enum.any?(resource_hrefs, fn value ->
                not String.starts_with?(value, "#") and
                  (not state.context.external_resources? or
                     not Map.has_key?(state.context.resources, value))
@@ -439,7 +445,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         end)
 
         if Enum.any?(
-             hrefs,
+             resource_hrefs,
              &Regex.match?(~r/^(?:javascript|vbscript|data|file|https?):|^\/\//i, &1)
            ),
            do:

@@ -135,12 +135,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend do
         with {:ok, request} <-
                SvgBackendValidator.prepare_vector(source, options, context, image_budget),
              :ok <- SvgBackendValidator.native_load_result(load_native()) do
-          NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize(
-            request.source,
-            request.fonts,
-            request.resources
-          )
-          |> SvgValidator.conversion_result()
+          result =
+            if request.effects? do
+              NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize_effects(
+                request.source,
+                request.fonts,
+                [],
+                request.effect_dimensions
+              )
+            else
+              NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize(
+                request.source,
+                request.fonts,
+                request.resources
+              )
+            end
+
+          SvgValidator.conversion_result(result)
         end
       end)
 
@@ -156,6 +167,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend do
 
       result ->
         result
+    end
+  end
+
+  @doc false
+  @spec vectorize_slots(term(), term(), term(), map(), HtmlValidator.image_budget() | nil) ::
+          {:ok, binary()} | {:error, {atom(), map()}}
+  def vectorize_slots(source, options, context, slots, budget) do
+    with {:ok, ids} <-
+           NativeElixirPdfUtilities.Validators.SvgForeignObjectValidator.validate_slots(slots),
+         {:ok, request} <- SvgBackendValidator.prepare_vector(source, options, context, budget),
+         :ok <- SvgBackendValidator.native_load_result(load_native()) do
+      result =
+        if request.effects? do
+          NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize_effects(
+            request.source,
+            request.fonts,
+            ids,
+            request.effect_dimensions
+          )
+        else
+          NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize_slots(
+            request.source,
+            request.fonts,
+            ids
+          )
+        end
+
+      SvgValidator.conversion_result(result)
     end
   end
 

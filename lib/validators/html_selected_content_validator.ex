@@ -1,7 +1,61 @@
 defmodule NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator do
   @moduledoc false
 
-  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Validators.{HtmlCompositionValidator, HtmlValidator}
+
+  @doc false
+  @spec clone_shadow_plan(map(), map(), boolean()) :: map()
+  def clone_shadow_plan(node, logical, inert?) do
+    original = Map.get(logical, Map.get(node, :node_id), node)
+
+    shadow = if not inert?, do: HtmlCompositionValidator.initial_shadow_root(original)
+
+    case shadow do
+      {template, configuration} ->
+        %{
+          children: Enum.reject(original.children, &(&1 == template)),
+          root: if(configuration.clonable, do: Map.merge(template.content, configuration))
+        }
+
+      _ ->
+        %{children: Map.get(node, :children, []), root: nil}
+    end
+  end
+
+  @doc false
+  @spec validate_clone_origin(map(), map()) :: :ok | {:error, {atom(), map()}}
+  def validate_clone_origin(clone, original) do
+    fields = [
+      :type,
+      :tag,
+      :namespace,
+      :attributes,
+      :attribute_namespaces,
+      :source,
+      :text,
+      :target,
+      :data
+    ]
+
+    if Map.take(clone, fields) == Map.take(original, fields) and
+         Map.get(clone, :cloned_from_node_id) == Map.get(original, :node_id) do
+      :ok
+    else
+      source = Map.get(original, :source, %{})
+
+      Diagnostics.error(
+        :html,
+        :invalid_document,
+        "selected-content clone must retain the exact original node payload and source span",
+        module: __MODULE__,
+        operation: :clone_selected_content,
+        source: Map.get(source, :text),
+        line: Map.get(source, :line),
+        column: Map.get(source, :column)
+      )
+    end
+  end
 
   @doc false
   @spec prepare_select_defaults(map(), [tuple()]) :: map()
@@ -174,6 +228,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator do
       end
 
     %{
+      select_id: if(select, do: Map.get(select, :node_id, Map.get(select, :_selector_id))),
       disabled: disabled?,
       update: not disabled? and not is_nil(selection) and not selection.multiple,
       option: option

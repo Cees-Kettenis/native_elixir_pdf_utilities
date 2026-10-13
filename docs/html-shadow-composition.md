@@ -11,7 +11,9 @@ Named and default slots assign direct light children to the first matching slot.
 Text belongs to the default slot. Missing assignments render fallback children;
 a second slot with the same name renders its fallback. Manual initial assignment
 has no assigned nodes because no `assign()` call has executed. Nested hosts create
-independent roots. Ineligible hosts and invalid mode values retain ordinary inert
+independent roots, including hosts inside unassigned light children. The active
+root registry retains these roots even when their surface is not painted.
+Ineligible hosts and invalid mode values retain ordinary inert
 templates.
 
 Shadow sheets apply within their defining root. `:host`, `:host(compound)` and

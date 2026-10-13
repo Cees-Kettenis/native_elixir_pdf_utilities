@@ -210,9 +210,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     with :ok <- ResourceValidator.validate_context(ResourceContext.current()),
          {:ok, client, media} <- EmbeddedViewportValidator.prepare_media_viewport(client, media),
          {:ok, frame_margins} <-
-           NativeElixirPdfUtilities.Validators.FramesetValidator.prepare_body_margins(
-             frame_margins
-           ) do
+           EmbeddedViewportValidator.prepare_body_margins(frame_margins) do
       compute_styles(
         dom,
         opts,
@@ -286,13 +284,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                    children <-
                      if(initial_controls? or map_size(composition.roots) > 0,
                        do:
-                         NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare_initial_nodes(
-                           children
+                         NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare_composed_initial_nodes(
+                           dom,
+                           composition.roots,
+                           children,
+                           %{}
                          ),
                        else: HtmlValidator.assign_render_metadata(children)
                      ),
-                   {:ok, children} <-
-                     NativeElixirPdfUtilities.HtmlToPdf.HtmlSelectedContent.populate_validated(
+                   {:ok, composition, children} <-
+                     NativeElixirPdfUtilities.HtmlToPdf.HtmlSelectedContent.populate_composition_validated(
+                       composition,
                        children,
                        dom
                      ),
@@ -390,7 +392,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                       document -> document.tree_scope_id
                     end
 
-                  context = %{rules: compiled_rules, cache: cache, root_selector_id: root_id}
+                  context = %{
+                    rules: compiled_rules,
+                    cache: cache,
+                    root_selector_id: root_id,
+                    root_canvas_key: make_ref()
+                  }
 
                   context =
                     if Map.get(compiled_rules.selectors, :positional_dependent, false) do
@@ -400,8 +407,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                         do:
                           Map.merge(context, %{
                             logical_nodes:
-                              NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator.logical_index(
-                                dom
+                              Map.merge(
+                                NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator.logical_index(
+                                  dom
+                                ),
+                                Map.get(composition, :clone_logical_nodes, %{})
                               ),
                             consumed_shadow_roots: composition.roots
                           }),
@@ -427,8 +437,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                                [],
                                []
                              ) do
+                        root_canvas_style =
+                          RenderCache.fetch(cache, {:root_canvas, context.root_canvas_key}, fn ->
+                            nil
+                          end)
+
+                        body_style =
+                          Enum.find_value(styled_children, fn node ->
+                            case node do
+                              %{tag: "body", style: style} -> style
+                              _ -> nil
+                            end
+                          end)
+
+                        canvas =
+                          HtmlValidator.prepare_document_canvas(root_canvas_style, body_style)
+
                         {:ok,
-                         %{type: :document, children: styled_children}
+                         %{type: :document, children: styled_children, document_canvas: canvas}
                          |> Map.merge(link_metadata)
                          |> Map.merge(
                            if MapSet.size(link_context.selected) == 0,
@@ -956,7 +982,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             with {:ok, scene} <-
                    NativeElixirPdfUtilities.HtmlToPdf.SvgScene.prepare(
                      prepared,
-                     Keyword.fetch!(opts, :__image_budget__)
+                     Keyword.fetch!(opts, :__image_budget__),
+                     opts
                    ) do
               style = CssValueValidator.ensure_box_style(style)
 
@@ -1065,6 +1092,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                   {:ok, [], counters, counters}
 
                 _ ->
+                  if tag == "html" and ancestors == [] do
+                    RenderCache.fetch(rules.cache, {:root_canvas, rules.root_canvas_key}, fn ->
+                      element_style
+                    end)
+                  end
+
                   element_counters =
                     apply_counter_operations(
                       element_style,
@@ -1183,8 +1216,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                              Map.get(inherited_style, :_frameset_parent)
                            ),
                          else:
-                           {:ok,
-                            %{source: ResourceValidator.iframe_source(attributes), margins: nil}}
+                           with {:ok, initial} <-
+                                  EmbeddedViewportValidator.prepare_initialization(
+                                    attributes,
+                                    :iframe
+                                  ) do
+                             {:ok,
+                              Map.put(
+                                initial,
+                                :source,
+                                ResourceValidator.iframe_source(attributes)
+                              )}
+                           end
                        ),
                      {:ok, child_parent} <-
                        ResourceContext.rebase(
@@ -1200,7 +1243,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                          :__link_context__,
                          :__render_cache__,
                          :__document_url_context__,
-                         :__client_css_viewport__
+                         :__client_css_viewport__,
+                         :__frame_body_margins__
                        ]),
                      {:ok, viewport} <-
                        RenderCache.fetch(
@@ -1240,7 +1284,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                     else
                       style
                       |> EmbeddedViewportValidator.prepare_iframe_style()
-                      |> Map.put(:embedded_document, viewport)
+                      |> Map.put(
+                        :embedded_document,
+                        Map.merge(viewport, %{
+                          frame_scrollbars: frame_request.scrollbars,
+                          frame_margins: frame_request.margins
+                        })
+                      )
                     end
 
                   {:ok, [%{type: :element, tag: tag, style: style, children: []}], counters,
@@ -1331,7 +1381,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                       control = %{
                         tag: tag,
                         attributes: attributes,
-                        children: children,
+                        children: Map.get(node, :_initial_form_children, children),
                         id: node._selector_id,
                         order: node._document_order,
                         initial_state: Map.fetch!(node, :_initial_form_state)
@@ -1725,7 +1775,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                 :__link_context__,
                 :__render_cache__,
                 :__document_url_context__,
-                :__client_css_viewport__
+                :__client_css_viewport__,
+                :__frame_body_margins__
               ])
 
             with {:ok, prepared} <-
@@ -2210,7 +2261,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
           "rt" ->
             if match?([%{tag: "ruby"} | _], ancestors) do
-              %{display: :inline, font_size: inherited_font_size * 0.5, line_height_normal: true}
+              %{
+                display: :inline,
+                font_size: inherited_font_size * 0.5,
+                line_height_normal: true,
+                _ruby_annotation: true
+              }
             else
               %{display: :inline}
             end
@@ -2435,12 +2491,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             end
 
           "iframe" ->
-            with {:ok, hints} <-
-                   HtmlValidator.html_dimension_hints(
-                     attributes,
-                     [{"width", :width}, {"height", :height}],
-                     "iframe"
-                   ) do
+            with {:ok, hints} <- HtmlValidator.iframe_hints(attributes) do
               block_defaults(inherited_font_size, 400, 0.0)
               |> Map.merge(%{
                 display: :inline_block,
@@ -3364,13 +3415,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp image_defaults(node, ancestors, opts, font_size) do
-    with {:ok, selected} <-
-           NativeElixirPdfUtilities.Validators.ResponsiveImageValidator.select(
-             node,
-             ancestors,
-             opts
-           ),
-         {:ok, image_style} <-
+    validator = NativeElixirPdfUtilities.Validators.ResponsiveImageValidator
+
+    case validator.prepare_deferred(node, ancestors, opts) do
+      {:ok, request, dimensions} ->
+        {:ok,
+         image_box_style(font_size)
+         |> Map.merge(dimensions)
+         |> Map.put(:_responsive_image, request)}
+
+      :eager ->
+        with {:ok, selected} <- validator.select(node, ancestors, opts),
+             {:ok, image_style} <- selected_image_style(selected, opts) do
+          {:ok,
+           image_box_style(font_size) |> Map.merge(image_style) |> Map.merge(selected.dimensions)}
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc false
+  @spec resolve_image(map(), number()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def resolve_image(style, width) do
+    NativeElixirPdfUtilities.Validators.ResponsiveImageValidator.resolve_request(
+      style._responsive_image,
+      width / 0.75,
+      fn selected, opts ->
+        with {:ok, resource} <- selected_image_style(selected, opts) do
+          style = style |> Map.delete(:_responsive_image) |> Map.merge(resource)
+          finalize_image_style(style, Keyword.fetch!(opts, :__image_budget__), opts)
+        end
+      end
+    )
+  end
+
+  defp selected_image_style(selected, opts) do
+    with {:ok, image_style} <-
            (case load_image_style(selected.url, opts, :image) do
               :error ->
                 Diagnostics.error(
@@ -3403,10 +3485,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         end
 
       with {:ok, image_style} <- corrected do
-        {:ok,
-         image_box_style(font_size)
-         |> Map.merge(image_style)
-         |> Map.merge(selected.dimensions)}
+        {:ok, image_style}
       end
     else
       {:error, {_reason, _diagnostic}} = error -> error
@@ -4704,7 +4783,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp selector_positions(ancestors, context, node) do
     parent =
       case Map.get(context, :logical_nodes, %{})[Map.get(node, :parent_id)] do
-        parent when is_map(parent) and not is_map_key(node, :cloned_from_node_id) ->
+        parent when is_map(parent) ->
           parent
 
         _ ->

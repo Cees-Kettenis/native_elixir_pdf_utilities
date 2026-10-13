@@ -534,7 +534,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextTest do
     for attrs <- [
           "x='1 bad'",
           "rotate='20deg'",
-          "textLength='30'",
+          "textLength='-30'",
           "direction='rtl'",
           "writing-mode='vertical-rl'",
           "xml:space='preserve'",

@@ -52,6 +52,24 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCompositionValidator do
   end
 
   @doc false
+  @spec initial_shadow_root(map()) :: {map(), map()} | nil
+  def initial_shadow_root(host) do
+    Enum.find_value(Map.get(host, :children, []), fn child ->
+      case shadow_configuration(host, child) do
+        nil -> nil
+        configuration -> {child, configuration}
+      end
+    end)
+  end
+
+  @doc false
+  @spec slot_element?(map()) :: boolean()
+  def slot_element?(node) do
+    Map.get(node, :type) == :element and Map.get(node, :tag) == "slot" and
+      Map.get(node, :namespace, :html) == :html
+  end
+
+  @doc false
   @spec composition_required?([map()]) :: boolean()
   def composition_required?(children) do
     Enum.any?(children, fn node ->

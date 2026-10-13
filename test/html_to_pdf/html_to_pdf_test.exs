@@ -1064,17 +1064,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     refute text =~ "Hidden"
   end
 
+  test "native MathML selection, annotation text and unknown rows retain public logical content" do
+    for tag <- ~w(semantics maction unknown-math) do
+      assert {:ok, pdf} = HtmlToPdf.render("<math><#{tag}><mn>12</mn></#{tag}></math>")
+      assert {:ok, "12"} = Text.extract(pdf, layout: false)
+    end
+
+    for tag <- ~w(annotation annotation-xml) do
+      assert {:ok, pdf} = HtmlToPdf.render("<math><#{tag}>α</#{tag}></math>")
+      assert {:ok, "α"} = Text.extract(pdf, layout: false)
+    end
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<math><semantics><mn>12</mn><annotation>Hidden</annotation><annotation-xml><unknown-math>Hidden</unknown-math></annotation-xml></semantics></math>"
+             )
+
+    assert {:ok, "12"} = Text.extract(pdf, layout: false)
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<math><annotation-xml encoding='text/html'><a href='https://annotation.test/'>α</a></annotation-xml></math>"
+             )
+
+    assert {:ok, "α"} = Text.extract(pdf, layout: false)
+    assert pdf =~ "https://annotation.test/"
+  end
+
   test "MathML still diagnoses later features and unsupported token composition" do
     alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
 
     for tag <-
-          ~w(msup msub msubsup mover munder munderover mmultiscripts mstyle merror mpadded semantics annotation annotation-xml maction unknown-math) do
+          ~w(msup msub msubsup mover munder munderover mmultiscripts mstyle merror mpadded) do
       assert {:error, {:unsupported_html, diagnostic}} =
                HtmlToPdf.render("<math><#{tag}/></math>")
 
       assert diagnostic.stage == :layout
       assert diagnostic.reason == :unsupported_html
-      assert diagnostic.operation == :render
+      assert diagnostic.operation == :measure_math
       assert diagnostic.module == MathLayoutValidator
       assert diagnostic.source == tag
       assert diagnostic.message =~ "cannot be rendered"
@@ -2471,19 +2498,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert text_message =~ "max_rendered_text_bytes"
   end
 
-  test "unsupported SVG logical content returns a renderer diagnostic" do
-    assert {:error, {:unsupported_html, diagnostic}} =
+  test "zero-size foreignObject retains its original source without paint or logical leakage" do
+    assert {:ok, pdf} =
              HtmlToPdf.render(
                "<div contenteditable><svg contenteditable=false><foreignObject><p>Foreign</p></foreignObject></svg></div>"
              )
 
-    assert diagnostic.stage == :layout
-    assert diagnostic.reason == :unsupported_html
-    assert diagnostic.operation == :prepare
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgSceneValidator
-    assert diagnostic.message =~ "SVG foreignObject"
-    assert diagnostic.message =~ "implementation"
-    assert diagnostic.source == "foreignObject"
+    assert {:error, {:no_extractable_text, %{stage: :text_extraction}}} =
+             Text.extract(pdf, layout: false)
+
+    refute pdf =~ "/NativeHtmlSurface"
+    refute pdf =~ "/Subtype /Image"
+  end
+
+  test "bounded foreignObject paints native selected HTML text through the public API" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<svg width='200' height='50'><foreignObject width='200' height='50'><p style='font-family:DejaVu Sans;font-size:14px'>Foreign café Ω</p></foreignObject></svg>"
+             )
+
+    assert {:ok, "Foreign café Ω"} = Text.extract(pdf, layout: false)
+    assert pdf =~ "/NativeHtmlSurface"
+    assert pdf =~ "/FontFile2"
+    refute pdf =~ "/Subtype /Image"
   end
 
   test "supported inline SVG geometry renders through the public API" do
@@ -4251,16 +4288,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                message: "footer page furniture height 14.25pt exceeds the 0.0pt page margin"
              }}} =
              HtmlToPdf.render("<p>Hello</p>", page_furniture: [footer: "Page {{page}}"])
+  end
 
-    assert {:error,
-            {:invalid_layout,
-             %{
-               stage: :layout,
-               reason: :invalid_layout,
-               operation: :decorate_pages,
-               module: NativeElixirPdfUtilities.HtmlToPdf.PageFurniture,
-               message: "header page furniture layout failed: invalid_layout"
-             }}} =
+  test "page furniture renders a supported flex list header" do
+    assert {:ok, pdf} =
              HtmlToPdf.render("<p>Hello</p>",
                page_size: {200, 100},
                margin: 20,
@@ -4268,6 +4299,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                  header: ~s(<div style="display: flex"><ul><li>Invalid layout</li></ul></div>)
                ]
              )
+
+    assert_pdf_text(pdf, ["Hello", "Invalid layout"])
   end
 
   test "render honors an empty manual page break element" do

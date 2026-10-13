@@ -1,0 +1,12 @@
+<!doctype html><html><head><style>
+@page { size: 360pt 240pt; margin: 18pt; }
+body { margin: 0; font-family: 'DejaVu Sans'; font-size: 12pt; }
+p { margin: 0 0 18pt; line-height: 24pt; }
+.shift { position: relative; left: 8pt; top: 3pt; }
+.absolute { position: absolute; left: 0; top: 18pt; font-size: 6pt; }
+</style></head><body>
+<p>Before <ruby class="shift">Base<rt>Reading</rt><span class="absolute">ABS</span></ruby> after.</p>
+<p>Inline <ruby>Base<rt style="display:inline">Reading</rt></ruby> fallback.</p>
+<p>Visible <ruby>Base<rp style="display:inline">(</rp><rt>Reading</rt><rp style="display:inline">)</rp></ruby> fallback.</p>
+<p>Linked <a href="https://example.org/"><ruby class="shift">Alpha<rt>first</rt>Beta<rt>second</rt></ruby></a> end.</p>
+</body></html>

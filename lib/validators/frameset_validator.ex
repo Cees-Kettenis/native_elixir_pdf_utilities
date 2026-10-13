@@ -108,26 +108,19 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
   def prepare_frame(attributes, inherited) do
     if is_map(attributes) do
       with {:ok, enabled, _width} <- border(attributes, inherited, :frame),
-           {:ok, horizontal} <- margin(Map.get(attributes, "marginwidth")),
-           {:ok, vertical} <- margin(Map.get(attributes, "marginheight")) do
-        scrolling = Map.get(attributes, "scrolling", "auto")
-
-        if is_binary(scrolling) do
-          {:ok,
-           %{
-             source: ResourceValidator.iframe_source(Map.delete(attributes, "srcdoc")),
-             border_enabled: enabled,
-             scrollbars:
-               if(String.downcase(scrolling, :ascii) in ["no", "off", "noscroll"],
-                 do: :none,
-                 else: :auto
-               ),
-             name: Map.get(attributes, "name"),
-             margins: %{horizontal: horizontal, vertical: vertical}
-           }}
-        else
-          invalid("frame scrolling requires a legacy string value")
-        end
+           {:ok, initial} <-
+             NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator.prepare_initialization(
+               attributes,
+               :frame
+             ) do
+        {:ok,
+         %{
+           source: ResourceValidator.iframe_source(Map.delete(attributes, "srcdoc")),
+           border_enabled: enabled,
+           scrollbars: initial.scrollbars,
+           name: Map.get(attributes, "name"),
+           margins: initial.margins
+         }}
       end
     else
       invalid("frame requires an attribute map")
@@ -136,52 +129,10 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
     {:render_resource_limit, error} -> error
   end
 
-  defp margin(value) do
-    if is_nil(value) do
-      {:ok, nil}
-    else
-      case legacy_integer(value) do
-        {:ok, number} when number < 0 ->
-          {:ok, nil}
-
-        {:ok, number} ->
-          case HtmlValidator.parse_css_number(Integer.to_string(number), 0.75) do
-            {points, ""} -> {:ok, points}
-            _ -> invalid("frame margin exceeds the supported numeric range")
-          end
-
-        :error ->
-          {:ok, 0.0}
-      end
-    end
-  end
-
   @doc "Validates frame body defaults, which author CSS can subsequently override."
   @spec prepare_body_margins(term()) :: {:ok, nil | map()} | {:error, {atom(), map()}}
   def prepare_body_margins(value) do
-    case value do
-      nil ->
-        {:ok, nil}
-
-      %{horizontal: horizontal, vertical: vertical} = margins when map_size(margins) == 2 ->
-        if Enum.all?([horizontal, vertical], fn number ->
-             is_nil(number) or
-               (match?({:ok, _}, HtmlValidator.normalize_geometry_number(number)) and number >= 0)
-           end) do
-          {:ok,
-           %{
-             top: vertical || 6.0,
-             bottom: vertical || 6.0,
-             left: horizontal || 6.0,
-             right: horizontal || 6.0
-           }}
-        else
-          invalid("frame margins require bounded nonnegative points or absent hints")
-        end
-
-      _ ->
-        invalid("frame margins require horizontal and vertical hints")
-    end
+    NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator.prepare_body_margins(value)
   end
 
   defp border(attributes, inherited, kind) do
@@ -204,7 +155,7 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
         case Map.fetch(attributes, "frameborder") do
           {:ok, value} when is_binary(value) ->
             if kind == :frame do
-              case legacy_integer(value) do
+              case HtmlValidator.parse_html_legacy_int32(value) do
                 {:ok, number} -> number != 0
                 :error -> false
               end
@@ -230,7 +181,7 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
               0.0
 
             kind == :frameset and Map.has_key?(attributes, "border") ->
-              case legacy_integer(attributes["border"]) do
+              case HtmlValidator.parse_html_legacy_int32(attributes["border"]) do
                 {:ok, 0} ->
                   0.0
 
@@ -255,15 +206,6 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
       else
         invalid("frameborder requires a legacy string value")
       end
-    end
-  end
-
-  # Blink stores these legacy frame attributes as signed 32-bit integers.
-  # This is a fixed browser conversion invariant, not a resource ceiling.
-  defp legacy_integer(value) do
-    case HtmlValidator.parse_html_integer(value) do
-      {:ok, integer} when integer >= -2_147_483_648 and integer <= 2_147_483_647 -> {:ok, integer}
-      _ -> :error
     end
   end
 

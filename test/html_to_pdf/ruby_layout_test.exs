@@ -3,6 +3,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyLayoutTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, RubyLayout, Style}
 
+  test "relative ruby shifts base and annotation together and retains positioned children" do
+    boxes = fn position ->
+      html =
+        "<p><ruby style='position:#{position};left:8pt;top:3pt'>Base<rt>Reading</rt><span style='position:absolute;left:0;top:0'>ABS</span></ruby> tail</p>"
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      assert {:ok, layout} = Layout.layout(styled)
+      layout.boxes
+    end
+
+    ordinary = boxes.("static")
+    shifted = boxes.("relative")
+
+    for text <- ["Base", "Reading"] do
+      before = Enum.find(ordinary, &(Map.get(&1, :text) == text))
+      after_box = Enum.find(shifted, &(Map.get(&1, :text) == text))
+      assert_in_delta after_box.x - before.x, 8, 0.001
+      assert_in_delta after_box.y - before.y, -3, 0.001
+    end
+
+    assert Enum.any?(shifted, &(Map.get(&1, :text) == "ABS"))
+  end
+
+  test "an authored annotation display override uses ordinary inline fallback" do
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<p><ruby>Base<rt style='display:inline'>Reading</rt></ruby></p>"
+             )
+
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled)
+    base = Enum.find(layout.boxes, &(Map.get(&1, :text) == "Base"))
+    reading = Enum.find(layout.boxes, &(Map.get(&1, :text) == "Reading"))
+    assert_in_delta base.y, reading.y, 0.001
+    assert reading.font_size == base.font_size / 2
+  end
+
   test "ruby bases and annotations retain text style and suppress fallback parentheses" do
     html = "<p>Before <ruby>Base<rp>(</rp><rt>Reading</rt><rp>)</rp></ruby> After</p>"
     assert {:ok, dom} = HtmlParser.parse_detailed(html)
@@ -187,5 +225,89 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyLayoutTest do
       end
 
     assert Enum.at(geometries, 0) == Enum.at(geometries, 1)
+  end
+
+  test "Ruby optional tag parsing produces the same native base and reading boxes" do
+    for {omitted, explicit} <- [
+          {"<ruby><rb>A<rb>B<rt>a<rt>b</ruby>",
+           "<ruby><rb>A</rb><rb>B</rb><rt>a</rt><rt>b</rt></ruby>"},
+          {"<ruby>A<rp>(<rt>a<rp>)</ruby>", "<ruby>A<rp>(</rp><rt>a</rt><rp>)</rp></ruby>"},
+          {"<ruby><rb>A<rtc><rt>a<rt>b<rtc>other</ruby>",
+           "<ruby><rb>A</rb><rtc><rt>a</rt><rt>b</rt></rtc><rtc>other</rtc></ruby>"}
+        ] do
+      boxes =
+        for html <- [omitted, explicit] do
+          assert {:ok, dom} = HtmlParser.parse_detailed("<p>#{html}</p>")
+          assert {:ok, styled} = Style.compute_detailed(dom)
+          assert {:ok, layout} = Layout.layout(styled)
+
+          layout.boxes
+          |> Enum.filter(&(&1.type == :text))
+          |> Enum.map(&Map.take(&1, [:text, :x, :y, :annotation_width, :font_size]))
+        end
+
+      assert Enum.at(boxes, 0) == Enum.at(boxes, 1)
+    end
+  end
+
+  test "anywhere wrapping partitions base and reading text without losing glyph content" do
+    html =
+      "<p style='margin:0;width:70pt;line-height:30pt;line-break:anywhere'><ruby>Alpha<rt>first</rt>Beta<rt>second</rt>Gamma<rt>third</rt>Delta<rt>fourth</rt></ruby></p>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {100, 100}, margin: 10)
+    text = Enum.filter(layout.boxes, &(&1.type == :text))
+    bases = Enum.filter(text, &(&1.font_size == 12.0))
+    readings = Enum.filter(text, &(&1.font_size == 6.0))
+    assert Enum.map_join(bases, & &1.text) == "AlphaBetaGammaDelta"
+    assert Enum.map_join(readings, & &1.text) == "firstsecondthirdfourth"
+    assert Enum.any?(bases, &(&1.text == "Del"))
+    assert Enum.any?(readings, &(&1.text == "four"))
+    assert Enum.any?(bases, &(&1.text == "ta"))
+    assert Enum.any?(readings, &(&1.text == "th"))
+    assert {:ok, pages} = NativeElixirPdfUtilities.HtmlToPdf.Pagination.paginate(layout)
+
+    for page <- pages do
+      assert Enum.any?(page.boxes, &(Map.get(&1, :role) == :ruby_line))
+    end
+  end
+
+  test "unconstrained inherited anywhere measurement preserves an annotation word on one line" do
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<ruby style='line-break:anywhere'>Gamma<rt>third</rt></ruby>"
+             )
+
+    assert {:ok, %{children: [ruby]}} = Style.compute_detailed(dom)
+    assert {:ok, [measured]} = RubyLayout.measure(ruby, nil)
+    readings = Enum.filter(measured.boxes, &(Map.get(&1, :font_size) == 6.0))
+    assert Enum.map(readings, & &1.text) == ["third"]
+  end
+
+  test "Ruby caller input and internal clearance metadata fail through validators" do
+    assert {:ok, dom} = HtmlParser.parse_detailed("<ruby>Base<rt>Reading</rt></ruby>")
+    assert {:ok, %{children: [ruby]} = styled} = Style.compute_detailed(dom)
+    broken = %{ruby | children: [%{type: :text, text: <<255>>, style: ruby.style}]}
+    assert {:error, {:invalid_layout, diagnostic}} = RubyLayout.measure(broken, nil)
+    assert diagnostic.stage == :layout and diagnostic.reason == :invalid_layout
+    injected = %{ruby | style: Map.put(ruby.style, :_ruby_clearance, :invalid)}
+
+    assert {:error, {:invalid_layout, diagnostic}} =
+             Layout.layout(%{styled | children: [injected]})
+
+    assert diagnostic.message =~ "internal inline state"
+  end
+
+  test "zero-size ruby remains unsplittable without division by zero" do
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<ruby style='font-size:0;line-break:anywhere'>Letters<rt>reading</rt></ruby>"
+             )
+
+    assert {:ok, %{children: [ruby]}} = Style.compute_detailed(dom)
+    assert {:ok, [measured]} = RubyLayout.measure(ruby, nil)
+    assert measured.width == 0
+    assert {:ok, nil} = RubyLayout.split(measured, 0)
   end
 end

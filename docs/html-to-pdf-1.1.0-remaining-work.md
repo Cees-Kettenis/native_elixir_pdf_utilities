@@ -56,3 +56,33 @@ Inventory counts measure retained specification obligations rather than effort
 or verified compatibility. See the [execution plan](html-to-pdf-1.1.0-execution-plan.md)
 for named scopes and the [progress record](html-to-pdf-1.1.0-progress.md) for
 accepted evidence.
+
+## Rolling implementation update
+
+Waves 10 to 12 are now published, with the latest implementation source
+`1cbc7ab4a5876e31a902081cef533af83c0ebcd1`. The earlier statement that Wave 10
+was unpublished is historical. The last complete 38 to 46 batch estimate above
+predates these publications and must not be read as a refreshed schedule.
+Ten implementation workers now run focused checks; full acceptance and
+performance review wait until all features are implemented, as requested.
+
+The current queue still contains template replacement and original-source
+completion, scoped font lookup and shadow clones, constraint state and remaining
+input applicability, genuine table/cell continuation, remaining replaced sizing,
+Ruby wrapping/pagination, responsive sizing/lazy-auto, positioning/image maps,
+legacy iframe canvas/child composition, SVG text lengths/paths/nested images,
+native foreignObject placement and filters, and remaining MathML operators,
+fractions/roots/scripts/grouping/matrices/equation flow. Delivered infrastructure
+and an unsupported diagnostic do not close an included behavior.
+
+The table/layout owner currently identifies four coherent implementation packets
+plus remaining table-model diagnostics; the image owner identifies three further
+packets after metrics/media. Other owners are reporting their remaining scopes
+while continuing implementation. Their reports will update the planning range
+without turning source inventory counts into effort estimates.
+
+Known original pattern/mask edges and MathML annotation/unknown-row browser
+comparisons remain unresolved. Wave 11 hosted coverage reached100 percent, then
+performance limits failed; Wave 12 full qualification remains deferred. Final
+review must restore the fixed performance baseline and100 percent coverage on
+both supported runtimes and reconcile every original specification obligation.

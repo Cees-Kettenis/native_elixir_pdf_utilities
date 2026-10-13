@@ -348,8 +348,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           start = %{type: :drawing_group_start, transform: transform, clip: local_clip}
 
           start =
-            if(Map.get(box, :role) == :frameset_viewport,
-              do: Map.put(start, :role, :frameset_viewport),
+            if(Map.get(box, :role) in [:frameset_viewport, :iframe_viewport],
+              do: Map.put(start, :role, box.role),
               else: start
             )
 
@@ -450,6 +450,17 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           ],
           &(Map.get(box, &1) == nil)
         )
+
+      %{type: :link_region, x: x, y: y, width: width, height: height}
+      when is_number(x) and is_number(y) and is_number(width) and is_number(height) and width > 0 and
+             height > 0 ->
+        Enum.all?([x, y, width, height, x + width, y + height], &bounded_number?/1) and
+          Enum.all?(
+            [:text, :image, :font_face, :glyph_ids, :form_control, :fill_color, :stroke_color],
+            &(Map.get(box, &1) == nil)
+          ) and
+          (Map.get(box, :link_url) != nil or Map.get(box, :link_destination) != nil) and
+          valid_clip_rectangle?(Map.get(box, :clip), true) and valid_link_box?(box)
 
       %{type: :text, text: text, x: x, y: y, font_size: font_size, font: font, color: color}
       when is_binary(text) and is_number(x) and is_number(y) and is_number(font_size) and
@@ -696,11 +707,18 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                           )
 
                         (child[:type] == :flow_marker and Map.get(child, :html_targets, []) == []) or
-                          child[:type] not in [:text, :rect, :image, :glyph_group, :flow_marker] or
+                          child[:type] not in [
+                            :text,
+                            :rect,
+                            :image,
+                            :link_region,
+                            :glyph_group,
+                            :flow_marker
+                          ] or
                           not is_boolean(Map.get(child, :snap_to_css_pixel_grid, false)) or
                             not valid_box?(child) ->
                           drawing_group_error(
-                            "drawing_group children must contain valid text, rectangle, image, glyph_group or drawing_group boxes"
+                            "drawing_group children must contain valid text, rectangle, image, link_region, glyph_group or drawing_group boxes"
                           )
 
                         not Enum.all?(pieces, &valid_group_geometry?(&1, transform, height)) ->
@@ -879,8 +897,9 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           do: Map.put(box, :drawing_annotation_rect, {left, bottom, right, top}),
           else: Map.drop(box, [:link_url, :link_destination])
 
-      {{_sx, _sy, _tx, _ty, clip, _height}, %{type: :image} = linked}
-      when is_map_key(linked, :link_url) or is_map_key(linked, :link_destination) ->
+      {{_sx, _sy, _tx, _ty, clip, _height}, %{type: type} = linked}
+      when type in [:image, :link_region] and
+             (is_map_key(linked, :link_url) or is_map_key(linked, :link_destination)) ->
         {sx, sy, tx, ty, _clip, _height} = composition
         region = Map.get(box, :link_rect, Map.take(box, [:x, :y, :width, :height]))
         rect = DrawingGeometry.transform_clip(region, {sx, sy, tx, ty})
@@ -1179,7 +1198,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           height =
             case box.type do
               :text -> Map.get(box, :line_height, box.font_size * 1.2)
-              :image -> box.height
+              type when type in [:image, :link_region] -> box.height
             end
 
           is_number(width) and width > 0 and is_number(height) and height > 0 and

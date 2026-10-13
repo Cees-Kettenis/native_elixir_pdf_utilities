@@ -7,30 +7,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FlexEmbeddedBrowserParityTest do
   @moduletag :flex_embedded_surfaces
   @fixtures Path.expand("../fixtures/html_to_pdf/browser_parity", __DIR__)
 
-  setup_all do
-    font_dir = Path.expand("../../priv/fonts/dejavu", __DIR__)
-    directory = Path.expand("tmp/flex-embedded-fontconfig")
-    File.mkdir_p!(directory)
-    configuration = Path.join(directory, "fonts.conf")
-
-    File.write!(configuration, """
-    <?xml version="1.0"?>
-    <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
-    <fontconfig><include>/etc/fonts/fonts.conf</include><dir>#{font_dir}</dir><cachedir>#{directory}/cache</cachedir></fontconfig>
-    """)
-
-    previous = System.get_env("FONTCONFIG_FILE")
-    System.put_env("FONTCONFIG_FILE", configuration)
-
-    on_exit(fn ->
-      if previous,
-        do: System.put_env("FONTCONFIG_FILE", previous),
-        else: System.delete_env("FONTCONFIG_FILE")
-    end)
-
-    :ok
-  end
-
   for fixture <- [
         "html_flex_embedded_surfaces.html",
         "html_embedded_intrinsic_css_auto.html",
@@ -41,14 +17,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FlexEmbeddedBrowserParityTest do
       path = Path.join(@fixtures, @fixture)
 
       stats =
-        PdfVisualCompare.assert_browser_match!(path,
-          render_opts: [fonts: []],
-          native_renderer: fn html, opts ->
-            PdfVisualCompare.render_embedded_font_bytes(html, opts, path)
-          end,
-          max_changed_ratio: 0.01,
-          max_average_delta: 0.01
-        )
+        PdfVisualCompare.with_embedded_font_configuration(path, fn ->
+          PdfVisualCompare.assert_browser_match!(path,
+            render_opts: [fonts: []],
+            native_renderer: fn html, opts ->
+              PdfVisualCompare.render_embedded_font_bytes(html, opts, path)
+            end,
+            max_changed_ratio: 0.01,
+            max_average_delta: 0.01
+          )
+        end)
 
       assert stats.page_count == 1
       assert stats.embedded_fonts.chromium =~ "DejaVuSans"

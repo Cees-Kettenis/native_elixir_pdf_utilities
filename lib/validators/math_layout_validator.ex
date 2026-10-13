@@ -10,6 +10,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   alias NativeElixirPdfUtilities.Validators.MathTableValidator
 
   @grouping_elements ~w(math mrow mphantom semantics maction)
+  @core_elements ~w(annotation annotation-xml maction math merror mfrac mi mn mmultiscripts mo mover mpadded mphantom mprescripts mroot mrow ms mspace msqrt mstyle msub msubsup msup mtable mtd mtext mtr munder munderover semantics)
   @rendered_elements @grouping_elements ++
                        ~w(mi mn mo mtext ms annotation annotation-xml mspace mfrac msqrt mroot mtable mtr mtd)
 
@@ -136,25 +137,33 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   @doc false
   @spec validate_element_support(map()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_element_support(node) do
-    if node.tag in @rendered_elements and
-         (node.tag != "mspace" or
-            Enum.all?(node.children, fn child ->
-              case child do
-                %{type: :text, text: text} -> Regex.match?(~r/^[ \t\n\r\f]*$/u, text)
-                %{type: :processing_instruction} -> true
-                _ -> false
-              end
-            end)) do
-      :ok
-    else
-      Diagnostics.error(
-        :layout,
-        :unsupported_html,
-        "MathML #{node.tag} or its content model requires a later math layout batch; its visible content cannot be rendered yet",
-        operation: :render,
-        module: __MODULE__,
-        source: node.tag
-      )
+    cond do
+      not (is_binary(node.tag) and String.valid?(node.tag) and
+               Regex.match?(~r/\A[a-zA-Z][^ \t\n\f\r\x00\/>]*\z/u, node.tag)) ->
+        failure(
+          "MathML tag names require the nonempty ASCII-letter-led names produced by HTML tokenization"
+        )
+
+      (node.tag in @rendered_elements or grouping_element?(node.tag)) and
+          (node.tag != "mspace" or
+             Enum.all?(node.children, fn child ->
+               case child do
+                 %{type: :text, text: text} -> Regex.match?(~r/^[ \t\n\r\f]*$/u, text)
+                 %{type: :processing_instruction} -> true
+                 _ -> false
+               end
+             end)) ->
+        :ok
+
+      true ->
+        Diagnostics.error(
+          :layout,
+          :unsupported_html,
+          "MathML #{node.tag} or its content model requires a later math layout batch; its visible content cannot be rendered yet",
+          operation: :render,
+          module: __MODULE__,
+          source: node.tag
+        )
     end
   end
 
@@ -287,6 +296,16 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
       _ ->
         %{}
     end
+  end
+
+  # Anonymous Math boxes do not receive their owner's CSS box geometry.
+  # Final inherited font/text values remain available to the ordinary measurer.
+  @doc false
+  @spec anonymous_box_style(map()) :: map()
+  def anonymous_box_style(style) do
+    style
+    |> Map.drop([:width, :height, :margin, :padding, :border_widths, :background_color])
+    |> Map.put(:display, :block)
   end
 
   @doc false
@@ -847,7 +866,12 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
         if embellished? and tag != "math" do
           Map.get(context, :operator_context, %{})
         else
-          %{parent: tag, index: index, count: count, child_index: child_index}
+          %{
+            parent: if(tag in @core_elements, do: tag, else: :grouping),
+            index: index,
+            count: count,
+            child_index: child_index
+          }
         end
 
       child_context = Map.put(context, :operator_context, operator_context)
@@ -861,7 +885,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                 namespace: :mathml,
                 tag: "mtext",
                 attributes: %{},
-                style: style,
+                style: anonymous_box_style(style),
                 children: [child]
               },
               child_context
@@ -1220,15 +1244,21 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
   # Core 3.2.4.1 and 3.2.5.1 classify original in-flow structure, before
   # preparation adds anonymous token boxes. This determines the outer form.
+  # Core 2.1 and 4.1 give unknown MathML elements the mrow algorithm.
+  # A known Core schema must still pass its own implemented content model.
+  defp grouping_element?(tag),
+    do: is_binary(tag) and (tag in @grouping_elements or tag not in @core_elements)
+
   defp space_like?(node) do
     case node do
       %{namespace: :mathml, tag: tag} when tag in ~w(mtext mspace annotation annotation-xml) ->
         true
 
-      %{namespace: :mathml, tag: tag, children: children} when tag in @grouping_elements ->
-        Enum.all?(children, fn child ->
-          Map.get(child, :style, %{}) |> Map.get(:display) == :none or space_like?(child)
-        end)
+      %{namespace: :mathml, tag: tag, children: children} ->
+        grouping_element?(tag) and
+          Enum.all?(children, fn child ->
+            Map.get(child, :style, %{}) |> Map.get(:display) == :none or space_like?(child)
+          end)
 
       %{type: :text} ->
         # Straight row text is prepared as anonymous mtext below; classify that
@@ -1254,12 +1284,16 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           [] -> false
         end
 
-      %{namespace: :mathml, tag: tag, children: children} when tag in @grouping_elements ->
-        case Enum.reject(children, fn child ->
-               Map.get(child, :style, %{}) |> Map.get(:display) == :none or space_like?(child)
-             end) do
-          [child] -> embellished?(child)
-          _ -> false
+      %{namespace: :mathml, tag: tag, children: children} ->
+        if grouping_element?(tag) do
+          case Enum.reject(children, fn child ->
+                 Map.get(child, :style, %{}) |> Map.get(:display) == :none or space_like?(child)
+               end) do
+            [child] -> embellished?(child)
+            _ -> false
+          end
+        else
+          false
         end
 
       _ ->
@@ -1457,7 +1491,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
   defp validate_box_style(tag, style) do
     unsupported? =
-      ((tag in @grouping_elements or tag in ~w(mspace mfrac msqrt mroot)) and
+      ((grouping_element?(tag) or tag in ~w(mspace mfrac msqrt mroot)) and
          not Map.get(style, :_math_formatting, true)) or
         Map.get(style, :link_url) != nil or Map.get(style, :link_destination) != nil or
         (tag != "math" and Map.get(style, :html_target) != nil) or

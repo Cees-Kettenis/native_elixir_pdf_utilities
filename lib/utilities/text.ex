@@ -7,7 +7,9 @@ defmodule NativeElixirPdfUtilities.Text do
   every shown text string has a reliable Unicode mapping; it never guesses from
   an embedded font program or merges CMaps from unrelated fonts.
 
-  Marked-content `ActualText` replaces the enclosed decoded text operands once.
+  Marked-content `ActualText` replaces enclosed decoded text operands or painted
+  image graphics once. Image replacements use their actual image transform and
+  region geometry; they do not recover per-glyph coordinates or a font resource.
   Nested replacements use the outermost string, and empty replacements suppress
   their pieces. Physical operands still undergo font and geometry validation.
 
@@ -75,7 +77,10 @@ defmodule NativeElixirPdfUtilities.Text do
   or PostScript name. `font_size` is the `Tf` text-space size, not a calculated
   display-space height.
 
-  `paints_text?` and `adds_to_clip_path?` are derived only from `render_mode`.
+  For text operands, `paints_text?` and `adds_to_clip_path?` are derived from `render_mode`.
+  Image replacements use the image Do transform, with `font_resource: nil` and
+  `font_size` equal to the image-region height. `image_resource` identifies that
+  image, and the image region cannot claim the original glyph coordinates.
   They describe the requested PDF text rendering operation; they do not claim
   that the text is visually visible or clipped. `joins_previous?` identifies a
   text-showing operand that immediately continues the preceding operand without
@@ -90,7 +95,7 @@ defmodule NativeElixirPdfUtilities.Text do
           y: float(),
           end_x: float(),
           end_y: float(),
-          font_resource: String.t(),
+          font_resource: String.t() | nil,
           font_size: float(),
           text_matrix: matrix(),
           ctm: matrix(),
@@ -616,6 +621,53 @@ defmodule NativeElixirPdfUtilities.Text do
     case form do
       nil ->
         {:ok, state, spans}
+
+      %{image: image_name} = image ->
+        case state.replacement do
+          nil ->
+            {:ok, state, spans}
+
+          %{text: ""} ->
+            {:ok, state, spans}
+
+          replacement ->
+            if state.shown_span_count >= Limits.get(:max_text_spans) do
+              error(:limits, :resource_limit_exceeded, "text span count exceeds the limit",
+                page: page
+              )
+            else
+              with {:ok, geometry} <- TextValidator.image_span_geometry(state, image, page) do
+                if geometry.paints? do
+                  span = %{
+                    text: replacement.text,
+                    source_index: state.next_source_index,
+                    x: geometry.x,
+                    y: geometry.y,
+                    end_x: geometry.end_x,
+                    end_y: geometry.end_y,
+                    font_resource: nil,
+                    font_size: geometry.height,
+                    text_matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                    ctm: state.ctm,
+                    render_mode: 0,
+                    paints_text?: true,
+                    adds_to_clip_path?: false,
+                    joins_previous?: false,
+                    image_resource: image_name
+                  }
+
+                  {:ok,
+                   %{
+                     state
+                     | replacement: %{replacement | first: replacement.first || span, last: span},
+                       shown_span_count: state.shown_span_count + 1
+                   }, spans}
+                else
+                  {:ok, state, spans}
+                end
+              end
+            end
+        end
 
       form ->
         with {:ok, ctm} <-

@@ -57,6 +57,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   explicit PDF destination using the actual page object reference. Prepared HTML
   target identities must first pass through pagination; they are not writer inputs.
 
+  A `:link_region` has positive point dimensions and a URI or explicit destination.
+  It creates an annotation over real content already painted by a Form and emits no drawing instructions.
+
   A `:drawing_group` contains non-negative local `:width` and `:height`, a
   six-value `:transform` tuple, optional `:baseline` within its height, optional
   rectangular `:clip`, and child `:boxes`. Coordinates are PDF points measured
@@ -370,6 +373,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             type
             when type in [
                    :rect,
+                   :link_region,
                    :actual_text_start,
                    :actual_text_end,
                    :drawing_group_start,
@@ -564,12 +568,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
         :drawing_group_start ->
           transform =
-            if Map.get(box, :role) == :frameset_viewport do
+            if Map.get(box, :role) in [:frameset_viewport, :iframe_viewport] do
               {a, b, c, d, x, y} = box.transform
-              # Keep horizontal clipping below Chromium's print-matrix raster ties.
-              # Text and rectangle paint retain their existing vertical bias.
+              # Original Chromium clips use .23999999 * 3.125 rather than an
+              # exact .75 scale. Keep only paint below those half-pixel ties.
+              # Iframe client clipping needs the vertical tie adjustment too.
               # Layout and transported annotation geometry retain their real bounds.
-              {a, b, c, d, x - @raster_boundary_bias, y}
+              {a, b, c, d, x - @raster_boundary_bias,
+               if(Map.get(box, :role) == :iframe_viewport, do: y + @raster_boundary_bias, else: y)}
             else
               box.transform
             end
@@ -587,6 +593,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
           "q " <> matrix <> " cm " <> clip
 
+        :link_region ->
+          ""
+
         :drawing_group_end ->
           "Q"
       end
@@ -598,7 +607,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
     page.boxes
     |> Enum.filter(
-      &(&1.type in [:text, :image] and
+      &(&1.type in [:text, :image, :link_region] and
           (is_binary(Map.get(&1, :link_url)) or Map.get(&1, :link_destination) != nil))
     )
     |> Enum.flat_map(fn box ->
@@ -608,7 +617,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             {Map.get(box, :annotation_width, Map.get(box, :width)),
              Map.get(box, :line_height, box.font_size * 1.2)}
 
-          :image ->
+          type when type in [:image, :link_region] ->
             {box.width, box.height}
         end
 
@@ -1016,7 +1025,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         :frameset_canvas ->
           %{box | y: box.y + @raster_boundary_bias}
 
-        role when role in [:inline_background, :frameset_border] ->
+        role when role in [:inline_background, :frameset_border, :scrollbar] ->
           # Match Chromium's print-matrix ties at the left and top raster edges.
           %{box | x: box.x - @raster_boundary_bias, y: box.y + @raster_boundary_bias}
 
@@ -1700,6 +1709,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
     if Map.get(box, :role) in [
          :fieldset,
+         :iframe_border,
          :table_border,
          :table_cell_background,
          :table_separate_background
@@ -1815,7 +1825,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     # Chromium's current table relief rule gives very dark borders contrast
     # by lightening once for the shadow and twice for the lighter edge.
     adjusted =
-      if role in [:table_cell_background, :table_separate_background, :table_border] do
+      if role in [
+           :iframe_border,
+           :table_cell_background,
+           :table_separate_background,
+           :table_border
+         ] do
         relative_luminance = luminance.(color)
 
         cond do
@@ -1959,6 +1974,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       type
       when type in [
              :image,
+             :link_region,
              :actual_text_start,
              :actual_text_end,
              :drawing_group_start,

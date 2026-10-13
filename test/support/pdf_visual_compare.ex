@@ -82,6 +82,34 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     HtmlToPdf.render(html, Keyword.put(opts, :fonts, fonts))
   end
 
+  @doc "Runs a browser comparison with the exact bundled font directory and the existing host font-rendering policy, restoring the caller environment."
+  @spec with_embedded_font_configuration(String.t(), (-> term())) :: term()
+  def with_embedded_font_configuration(fixture_path, callback) do
+    fonts = Keyword.fetch!(default_render_opts(fixture_path), :fonts)
+    directory = Path.expand("tmp/embedded-document-fontconfig")
+    File.mkdir_p!(directory)
+    configuration = Path.join(directory, "fonts.conf")
+    font_directories = fonts |> Enum.map(&Path.dirname(&1.path)) |> Enum.uniq()
+    declarations = Enum.map_join(font_directories, &"<dir>#{&1}</dir>")
+
+    File.write!(configuration, """
+    <?xml version="1.0"?>
+    <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+    <fontconfig><include>/etc/fonts/fonts.conf</include>#{declarations}<cachedir>#{directory}/cache</cachedir></fontconfig>
+    """)
+
+    previous = System.get_env("FONTCONFIG_FILE")
+    System.put_env("FONTCONFIG_FILE", configuration)
+
+    try do
+      callback.()
+    after
+      if previous,
+        do: System.put_env("FONTCONFIG_FILE", previous),
+        else: System.delete_env("FONTCONFIG_FILE")
+    end
+  end
+
   @doc false
   @spec assert_browser_match!(String.t(), keyword()) :: comparison_stats()
   def assert_browser_match!(fixture_path, opts \\ []) do

@@ -312,22 +312,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           image_budget,
           fn _context ->
             with {:ok, dom} <- HtmlParser.parse_document_detailed(html),
-                 {:ok, effective_opts} <- effective_render_options_detailed(dom, opts),
-                 {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts, image_budget),
-                 {:ok, styled_tree} <-
-                   FontFallback.resolve(
-                     styled_tree,
-                     Keyword.get(effective_opts, :unsupported_glyphs, :replace)
-                   ),
-                 {:ok, layout_tree} <-
-                   Font.with_measurement_cache(fn ->
-                     layout_document(styled_tree, effective_opts)
-                   end),
-                 {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
-                 effective_opts <- prepared_outline_options(pages, effective_opts),
-                 {:ok, pages} <-
-                   PageFurniture.decorate(pages, layout_tree, effective_opts, image_budget),
-                 {:ok, pdf_binary} <- PdfWriter.render(pages, effective_opts) do
+                 {:ok, prepared} <- prepare_document(dom, opts, image_budget),
+                 {:ok, pdf_binary} <- PdfWriter.render(prepared.pages, prepared.options) do
               {:ok, pdf_binary}
             end
           end
@@ -335,6 +321,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
 
       {:error, {_reason, _diagnostic}} = error ->
         error
+    end
+  end
+
+  @doc false
+  @spec prepare_document(term(), term(), HtmlValidator.image_budget()) ::
+          {:ok, map()} | {:error, detailed_error_reason()}
+  def prepare_document(dom, opts, image_budget) do
+    font_options = Font.normalize_options(opts)
+
+    with :ok <- HtmlValidator.validate_document_render_options(opts, font_options),
+         :ok <- ResourceValidator.validate_preparation_budget(image_budget),
+         {:ok, opts} <- font_options,
+         {:ok, effective_opts} <- effective_render_options_detailed(dom, opts),
+         {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts, image_budget),
+         {:ok, styled_tree} <-
+           FontFallback.resolve(
+             styled_tree,
+             Keyword.get(effective_opts, :unsupported_glyphs, :replace)
+           ),
+         {:ok, layout_tree} <-
+           Font.with_measurement_cache(fn -> layout_document(styled_tree, effective_opts) end),
+         {:ok, layout_tree} <- Layout.resolve_images(layout_tree),
+         {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
+         effective_opts <- prepared_outline_options(pages, effective_opts),
+         {:ok, pages} <- PageFurniture.decorate(pages, layout_tree, effective_opts, image_budget) do
+      {:ok,
+       %{
+         styled_tree: styled_tree,
+         layout_tree: layout_tree,
+         pages: pages,
+         options: effective_opts
+       }}
     end
   end
 
