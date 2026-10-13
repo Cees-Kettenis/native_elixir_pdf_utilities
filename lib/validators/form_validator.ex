@@ -11,6 +11,30 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   @typep walk_state :: %{fields: [map()], nodes: map(), seen: map(), widgets: map()}
 
   @doc false
+  @spec initial_choice_field(map()) :: %{
+          flags: non_neg_integer(),
+          value: binary() | [binary()] | nil,
+          indices: [non_neg_integer()],
+          listbox: boolean()
+        }
+  def initial_choice_field(selection) do
+    # PDF Combo and MultiSelect bits are fixed format invariants.
+    %{
+      flags:
+        if(selection.listbox, do: 0, else: 131_072) +
+          if(selection.multiple, do: 2_097_152, else: 0),
+      value:
+        cond do
+          selection.multiple -> selection.values
+          selection.selected_ids == [] -> nil
+          true -> selection.value
+        end,
+      indices: selection.selected_indices,
+      listbox: selection.listbox
+    }
+  end
+
+  @doc false
   @spec password_display_text(String.t(), :style | :forms) ::
           {:ok, String.t()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def password_display_text(value, stage \\ :forms) do

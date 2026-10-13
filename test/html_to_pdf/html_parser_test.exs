@@ -5,6 +5,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
 
+  test "original CSS token spans are independent of decoded declaration provenance" do
+    html = "\uFEFF<style>/*é🙂*/\r\np{width:3pt}</style>\r<p STYLE='width&colon;3pt'>Good</p>"
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    [%{children: [head, body]}] = dom.children
+    [style] = head.children
+    [text] = style.children
+    [paragraph] = body.children
+    assert style.source == %{text: "<style>", line: 1, column: 2}
+    assert text.source == %{text: "/*é🙂*/\r\np{width:3pt}", line: 1, column: 9}
+    assert text.text == "/*é🙂*/\np{width:3pt}"
+    assert paragraph.source == %{text: "<p STYLE='width&colon;3pt'>", line: 3, column: 1}
+    assert paragraph.attributes["style"] == "width:3pt"
+    assert text.parent_id == style.node_id
+    assert style.document_id == paragraph.document_id
+    assert text.tree_scope_id == paragraph.tree_scope_id
+    assert map_size(text.source) == 3 and map_size(paragraph.source) == 3
+  end
+
   test "XML PI getter preserves tokenizer data, original authored bytes and canonical identities" do
     alias NativeElixirPdfUtilities.Validators.ProcessingInstructionValidator, as: PI
 
@@ -1983,7 +2001,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
 
   test "parse rejects invalid static form structures and attributes" do
     invalid_html = [
-      ~s(<div><input type="number" value="a@example.test"></div>),
+      ~s(<div><input type="range" value="a@example.test"></div>),
       ~s(<div><input type="text" checked></div>),
       ~s(<div><input type="hidden" checked></div>),
       ~s(<div><input type="search" checked></div>),
@@ -2893,7 +2911,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     end
   end
 
-  test "multiple applies by boolean presence only to supported email inputs" do
+  test "multiple applies by boolean presence to supported email inputs and selects" do
     for type <- ["email", "EMAIL"],
         attribute <- ["multiple", ~s(multiple=""), ~s(MULTIPLE="false")] do
       assert {:ok, %{children: [node]}} =
@@ -2905,12 +2923,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
       assert node.attributes["value"] == " a@example.com ,\n b@example.com "
     end
 
+    for attribute <- ["multiple", ~s(multiple=""), ~s(MULTIPLE="false")] do
+      assert {:ok, %{children: [node]}} =
+               HtmlParser.parse("<select #{attribute}><option>A</option></select>")
+
+      assert Map.has_key?(node.attributes, "multiple")
+    end
+
     for html <- [
           "<input multiple>",
           "<input type='text' multiple>",
           "<input type='tel' multiple>",
           "<input type='url' multiple>",
-          "<select multiple><option>A</option></select>",
           "<textarea multiple>A</textarea>",
           "<input type='email' multiple checked>"
         ] do
@@ -2928,7 +2952,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
       assert {:error, :unsupported_html} = HtmlParser.parse(~s(<input type="#{type}" checked>))
     end
 
-    for type <- ["FILE", "number", "date", "image"] do
+    for type <- ["FILE", "range", "date", "image"] do
       assert {:error, :unsupported_html} =
                HtmlParser.parse(~s(<input type="#{type}" value="Initial">))
     end

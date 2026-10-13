@@ -177,7 +177,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarViewportTest do
                  [
                    %{
                      size: {30, 30},
-                     boxes: [Map.put(hd(box.boxes), :shape, {:triangle, :invalid})]
+                     boxes: [Map.put(box, :shape, {:triangle, :invalid})]
                    }
                  ],
                  []
@@ -227,7 +227,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarViewportTest do
 
     assert diagnostic.operation == :layout_embedded_viewport
     assert diagnostic.source == "iframe" and diagnostic.message =~ "cycles"
-    assert EmbeddedViewportValidator.prepare_scrollbar_parts(initial) == []
+    assert EmbeddedViewportValidator.prepare_scrollbar_parts(initial) == {:ok, []}
     assert ScrollbarPainter.paint([]) == []
   end
 end

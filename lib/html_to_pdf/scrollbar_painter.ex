@@ -34,17 +34,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarPainter do
       if part.kind == :track do
         box
       else
-        clip = Map.get(part, :paint_clip, Map.take(box, [:x, :y, :width, :height]))
-
-        %{
-          type: HtmlValidator.reserve_layout_box(:drawing_group),
-          width: clip.width,
-          height: clip.height,
-          transform: {1, 0, 0, 1, clip.x, clip.y},
-          clip: %{x: 0.0, y: 0.0, width: clip.width, height: clip.height},
-          role: :scrollbar,
-          boxes: [%{box | x: box.x - clip.x, y: box.y - clip.y}]
-        }
+        Map.put(box, :clip, Map.get(part, :paint_clip, Map.take(box, [:x, :y, :width, :height])))
       end
     end)
   end

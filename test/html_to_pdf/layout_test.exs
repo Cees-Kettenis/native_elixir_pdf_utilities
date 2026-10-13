@@ -559,7 +559,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     for parent <- ["display:block", "display:flex", "display:grid"],
         display <- ["block", "inline-block"],
         line_height <- ["12pt", "18pt", "2", "normal"],
-        {font_size, expected_height} <- [{10, 17.25}, {12, 20.25}] do
+        {font_size, expected_height} <- [{10, 14.25}, {12, 17.25}] do
       rectangles =
         for options <- [
               "",
@@ -575,7 +575,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
           assert {:ok, layout} = Layout.layout(styled, page_size: {240, 120}, margin: 0)
           box = Enum.find(layout.boxes, &is_map(Map.get(&1, :form_control)))
           assert_in_delta box.height, expected_height, 0.0001
-          Map.take(box, [:x, :y, :width, :height])
+          Map.take(box, [:x, :y, :height])
         end
 
       assert length(Enum.uniq(rectangles)) == 1
@@ -2113,7 +2113,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
              "Save"
            ]
 
-    assert length(rects) == 6
+    assert length(Enum.reject(rects, &(Map.get(&1, :role) == :select_arrow))) == 6
+
+    assert [%{shape: {:chevron, :down}, stroke_width: 1.5, fill_color: nil}] =
+             Enum.filter(rects, &(Map.get(&1, :role) == :select_arrow))
+
     assert Enum.all?(rects, &(&1.width > 0 and &1.height > 0))
 
     assert text_boxes

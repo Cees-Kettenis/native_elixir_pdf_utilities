@@ -889,6 +889,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             content_width + border_widths.left + padding.left + padding.right +
               border_widths.right
 
+          content_width =
+            if Map.get(style, :form_kind) == :listbox,
+              do: max(content_width - 11.25, 0.0),
+              else: content_width
+
           box_x =
             case Map.get(style, :margin_inline_auto) do
               %{left: true, right: true} ->
@@ -6251,17 +6256,157 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   # Block and atomic inline controls share one viewport. Offscreen artwork
   # must not enlarge a control's page allocation, while fields keep their value.
   defp clip_control_contents(boxes, style, clip) do
-    if Map.get(style, :form_kind) in [:text, :textarea] do
-      if clip.width > 0 and clip.height > 0 do
-        Enum.flat_map(boxes, fn box ->
-          {top, bottom} = PageGeometry.box_vertical_bounds(box)
+    if Map.get(style, :form_kind) in [:text, :textarea, :select, :listbox] do
+      # A number's invisible initial spin button still occupies its fixed
+      # native 15px width in the inner editor. Keep it outside the text clip.
+      {boxes, clip} =
+        if Map.has_key?(style, :_number_state) do
+          offset =
+            NativeElixirPdfUtilities.Validators.HtmlFormValidator.initial_number_content_offset(
+              style,
+              clip.height
+            )
 
-          if top > clip.y and bottom < clip.y + clip.height do
-            [box |> Map.put(:clip, clip) |> Map.put(:out_of_flow, true)]
-          else
-            []
-          end
-        end)
+          {shift_layout_boxes(boxes, 0.0, -offset), %{clip | width: max(clip.width - 11.25, 0.0)}}
+        else
+          {boxes, clip}
+        end
+
+      {boxes, scrollbar_boxes} =
+        if Map.get(style, :form_kind) == :listbox do
+          id = style._select_state.id
+
+          selected =
+            Enum.filter(boxes, &(Map.get(&1, :initial_option_id) == id and not is_nil(id)))
+
+          selected_bottom =
+            Enum.reduce(selected, clip.y + clip.height, fn box, acc ->
+              {_top, bottom} = PageGeometry.box_vertical_bounds(box)
+              min(acc, bottom)
+            end)
+
+          bottom =
+            Enum.reduce(boxes, clip.y, fn box, acc ->
+              {_top, bottom} = PageGeometry.box_vertical_bounds(box)
+              min(acc, bottom)
+            end)
+
+          padding = style.padding
+          viewport_height = clip.height + padding.top + padding.bottom
+
+          scroll_height =
+            max(viewport_height, clip.y + clip.height + padding.top - bottom + padding.bottom)
+
+          offset =
+            min(
+              # ScrollIntoView compares the option border box to the padding
+              # scrollport, then ToRoundedVector2d rounds the CSS-pixel offset.
+              round(max(clip.y - padding.bottom - selected_bottom, 0.0) / @css_pixel_points) *
+                @css_pixel_points,
+              max(scroll_height - viewport_height, 0.0)
+            )
+
+          geometry = %{
+            vertical: true,
+            horizontal: false,
+            viewport_width: clip.width + padding.left + padding.right + 11.25,
+            viewport_height: viewport_height,
+            client_width: clip.width + padding.left + padding.right,
+            client_height: viewport_height,
+            scroll_width: clip.width + padding.left + padding.right,
+            scroll_height: scroll_height,
+            scroll_offset: %{x: 0.0, y: offset}
+          }
+
+          parts =
+            case NativeElixirPdfUtilities.Validators.ScrollbarValidator.prepare(geometry) do
+              {:ok, parts} -> parts
+              {:error, _} = error -> throw({:render_resource_limit, error})
+            end
+
+          artwork = NativeElixirPdfUtilities.HtmlToPdf.ScrollbarPainter.paint(parts)
+          artwork = shift_layout_boxes(artwork, clip.x - padding.left, clip.y - padding.bottom)
+          # Blink supplies pixel-snapped scrollbar frames to the native theme.
+          # Snap only after ordinary placement supplies final page coordinates.
+          artwork =
+            Enum.map(artwork, fn box ->
+              box
+              |> Map.put(:form_owner, Map.get(style, :_form_owner))
+              |> Map.put(:snap_to_css_pixel_grid, true)
+            end)
+
+          {shift_layout_boxes(boxes, 0.0, offset), artwork}
+        else
+          {boxes, []}
+        end
+
+      # Chromium's rounded inner-border clip is separate from the client
+      # overflow clip. Overflow controls deliberately bypass this rounded clip.
+      padding_clip =
+        if Map.get(style, :form_kind) == :listbox do
+          padding = style.padding
+
+          %{
+            x: clip.x - padding.left,
+            y: clip.y - padding.bottom,
+            width: clip.width + padding.left + padding.right + 11.25,
+            height: clip.height + padding.top + padding.bottom,
+            border_radius:
+              max(style.border_radius - Enum.max(Map.values(style.border_widths)), 0.0)
+          }
+        else
+          nil
+        end
+
+      # OverflowClipRect contracts border outsets, then excludes the scrollbar.
+      # Authored padding remains inside the scrolling client viewport.
+      clip =
+        if padding_clip do
+          %{padding_clip | width: padding_clip.width - 11.25}
+          |> Map.delete(:border_radius)
+        else
+          clip
+        end
+
+      client_background =
+        if Map.get(style, :form_kind) == :listbox and style.background_color != nil and
+             Map.get(style, :background_image) == nil and clip.width > 0 and clip.height > 0 do
+          # A scroll container paints its field background in the scrolling
+          # contents layer, inside the client clip, after the native border.
+          client = clip
+
+          [
+            %{
+              type: HtmlValidator.reserve_layout_box(:rect),
+              x: client.x - style.border_widths.left,
+              y: client.y - style.border_widths.bottom,
+              width: client.width + style.border_widths.left + style.border_widths.right,
+              height: client.height + style.border_widths.top + style.border_widths.bottom,
+              clip: Map.put(client, :inner_clip, padding_clip),
+              snap_to_css_pixel_grid: true,
+              fill_color: style.background_color,
+              stroke_color: nil,
+              stroke_width: 0.0,
+              border_radius: 0.0,
+              form_owner: Map.get(style, :_form_owner)
+            }
+          ]
+        else
+          []
+        end
+
+      if clip.width > 0 and clip.height > 0 do
+        client_background ++
+          Enum.flat_map(boxes, fn box ->
+            {top, bottom} = PageGeometry.box_vertical_bounds(box)
+
+            if top > clip.y and bottom < clip.y + clip.height do
+              clip = if padding_clip, do: Map.put(clip, :inner_clip, padding_clip), else: clip
+              [box |> Map.put(:clip, clip) |> Map.put(:out_of_flow, true)]
+            else
+              []
+            end
+          end) ++ scrollbar_boxes
       else
         []
       end
@@ -6498,6 +6643,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             end
 
           box_x = x + margin.left
+
+          content_width =
+            if Map.get(style, :form_kind) == :listbox,
+              do: max(content_width - 11.25, 0.0),
+              else: content_width
+
           content_x = box_x + border_widths.left + padding.left
           content_top = box_top - border_widths.top - padding.top
 
@@ -7688,6 +7839,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         style =
           Map.put(style, :_containing_height, Map.get(parent_style, :_inline_available_height))
 
+        style =
+          if Map.get(style, :vertical_align) == :text_bottom do
+            font = text_font_face(parent_style)
+
+            descent =
+              round(
+                -font.descent / font.units_per_em * parent_style.font_size / @css_pixel_points
+              ) * @css_pixel_points
+
+            Map.put(style, :vertical_align, -descent)
+          else
+            style
+          end
+
         inline_children =
           if display == :inline_block and not Map.get(style, :_fieldset, false) do
             inline_runs(
@@ -8018,7 +8183,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     padding = Map.get(style, :padding, edges(0.0))
     border = Map.get(style, :border_widths, edges(0.0))
 
-    bottom_baseline = baseline == nil or Map.get(style, :overflow, :visible) != :visible
+    # TextField controls propagate their inner editor baseline. Their clipping
+    # does not trigger ordinary inline-block bottom-edge synthesis.
+    baseline =
+      if Map.has_key?(style, :_number_state) and baseline != nil,
+        do:
+          baseline +
+            NativeElixirPdfUtilities.Validators.HtmlFormValidator.initial_number_content_offset(
+              style,
+              content_height
+            ),
+        else: baseline
+
+    bottom_baseline =
+      baseline == nil or
+        (Map.get(style, :overflow, :visible) != :visible and
+           not Map.has_key?(style, :_number_state))
 
     first_baseline =
       if bottom_baseline,
@@ -8189,6 +8369,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       box
       |> Map.put(:form_owner, Map.get(style, :_form_owner))
       |> Map.merge(Map.take(style, [:link_destination]))
+      |> Map.put(:initial_option_id, Map.get(style, :_initial_option_id))
 
     case Map.get(style, :link_url) do
       link_url when is_binary(link_url) -> Map.put(box, :link_url, link_url)
@@ -8200,6 +8381,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   # grid and positioned layout. The state is canonical validator output.
   defp background_box(style, x, y, width, height) do
     background = css_background_box(style, x, y, width, height)
+
+    background =
+      if Map.get(style, :form_kind) == :select and width > 0 and height > 0 do
+        # NativeThemeBase::PaintMenuList and ThemePainterDefault::SetupMenuListArrow:
+        # an open 8px by 4px chevron stroked at 2px in the fixed 16px arrow area.
+        arrow = %{
+          type: HtmlValidator.reserve_layout_box(:rect),
+          x: x + width - style.border_widths.right - 9.0,
+          y: y + height / 2 - 1.5,
+          width: 6.0,
+          height: 3.0,
+          border_radius: 0.0,
+          fill_color: nil,
+          stroke_color:
+            if(get_in(style, [:_form_control, :initial_state, :disabled]),
+              do: {128 / 255, 128 / 255, 128 / 255},
+              else: {0, 0, 0}
+            ),
+          stroke_width: 1.5,
+          shape: {:chevron, :down},
+          clip: %{x: x, y: y, width: width, height: height},
+          form_owner: Map.get(style, :_form_owner),
+          role: :select_arrow
+        }
+
+        background ++ [arrow]
+      else
+        background
+      end
 
     case Map.get(style, :_gauge) do
       nil ->
@@ -8264,6 +8474,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       rect
       |> Map.put(:form_control, Map.get(style, :_form_control))
       |> Map.put(:form_owner, Map.get(style, :_form_owner))
+      |> Map.put(:initial_option_id, Map.get(style, :_initial_option_id))
+      |> then(fn rect ->
+        cond do
+          Map.get(style, :form_kind) == :listbox ->
+            Map.put(rect, :role, :native_listbox)
+
+          Map.get(style, :_native_menu, false) and style.border_radius == 0 ->
+            # NativeThemeBase paints a 2px radius on a half-border inset.
+            # The native 1px non-AA stroke passes through ScopedRasterFlags
+            # at the fixed 0.75 CSS-to-point scale: hairline, alpha *= 0.75.
+            alpha =
+              if Map.has_key?(style, :_number_state) and
+                   get_in(style, [:_form_control, :initial_state, :disabled]),
+                 do: 0.3 * @css_pixel_points,
+                 else: @css_pixel_points
+
+            color = {118 / 255, 118 / 255, 118 / 255, alpha}
+
+            %{
+              rect
+              | border_radius: 1.5 + @css_pixel_points / 2,
+                fill_color: if(fill_color, do: {1.0, 1.0, 1.0}, else: nil),
+                stroke_width: if(border_visible?, do: @css_pixel_points, else: 0.0),
+                stroke_color: color,
+                border_colors: edges(color)
+            }
+            |> Map.put(:role, :native_menu)
+
+          Map.get(style, :form_kind) == :select ->
+            Map.put(rect, :role, :css_menu)
+
+          true ->
+            rect
+        end
+      end)
 
     case {width > 0 and height > 0, Map.get(style, :background_image)} do
       {false, _image} ->
@@ -8271,8 +8516,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       {true, nil} ->
         case {fill_color, border_visible?} do
-          {nil, false} -> if Map.get(style, :_form_control), do: [rect], else: []
-          _ -> [rect]
+          {nil, false} ->
+            cond do
+              Map.get(style, :_form_control) ->
+                [rect]
+
+              Map.has_key?(style, :_initial_option_id) ->
+                [%{rect | fill_color: {0.0, 0.0, 0.0, 0.0}}]
+
+              true ->
+                []
+            end
+
+          _ ->
+            [rect]
         end
 
       {true, image} ->

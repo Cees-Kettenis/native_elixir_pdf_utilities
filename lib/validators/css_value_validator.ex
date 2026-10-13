@@ -24,6 +24,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   @spec custom_property_declaration?(term()) :: boolean()
   def custom_property_declaration?(declaration) do
     case declaration do
+      %{declaration: declaration} -> custom_property_declaration?(declaration)
       {"--" <> _custom_property, _value} -> true
       {"--" <> _custom_property, _value, :important} -> true
       _ -> false
@@ -40,6 +41,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   @spec validate_declaration(map(), term(), :atomics.atomics_ref()) ::
           {:ok, map()} | {:error, atom() | {atom(), Diagnostics.diagnostic()}}
   def validate_declaration(style, declaration, budget) do
+    declaration =
+      case declaration do
+        %{declaration: declaration} -> declaration
+        declaration -> declaration
+      end
+
     normalized =
       case declaration do
         {property, value} when is_binary(property) and is_binary(value) ->
@@ -77,9 +84,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   @doc false
-  @spec important_declaration?(CssParser.declaration()) :: boolean()
+  @spec important_declaration?(term()) :: boolean()
   def important_declaration?(declaration) do
     case declaration do
+      %{declaration: declaration} -> important_declaration?(declaration)
       {_property, _value, :important} -> true
       _ -> false
     end
@@ -190,6 +198,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
     {foundational_declarations, dependent_declarations} =
       Enum.split_with(ordinary_declarations, fn declaration ->
+        declaration =
+          case declaration do
+            %{declaration: tuple} -> tuple
+            tuple -> tuple
+          end
+
         case declaration do
           {property, _value} -> property in ["color", "font-size"]
           {property, _value, :important} -> property in ["color", "font-size"]
@@ -230,7 +244,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   @doc false
-  @spec validate_source_cascade(map(), [CssParser.declaration()], :atomics.atomics_ref(), map()) ::
+  @spec validate_source_cascade(
+          map(),
+          [CssParser.declaration() | map()],
+          :atomics.atomics_ref(),
+          map()
+        ) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_source_cascade(context, declarations, budget, original_node) do
     validate_cascade_steps(
@@ -240,8 +259,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
       fn _declaration, validated -> {:ok, validated} end,
       fn error, declaration ->
         case error do
-          {:error, {_reason, _diagnostic}} -> error
-          _ -> HtmlValidator.source_style_error(original_node, declaration)
+          {:error, {_reason, _diagnostic}} when not is_map(declaration) -> error
+          _ -> HtmlValidator.source_style_error(original_node, declaration, error)
         end
       end
     )
@@ -256,6 +275,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
         error -> {:halt, failure.(error, declaration)}
       end
     end)
+  end
+
+  @doc false
+  @spec validate_source_reference(String.t()) ::
+          {:ok, String.t() | nil} | {:error, atom() | {atom(), Diagnostics.diagnostic()}}
+  def validate_source_reference(url) do
+    HtmlValidator.parse_background_image_reference(url)
   end
 
   @doc false

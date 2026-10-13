@@ -4956,7 +4956,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       {:error, :not_found}
     end
 
-    for type <- ["FILE", "number", "date", "image"],
+    for type <- ["FILE", "range", "date", "image"],
         forms <- [:static, :interactive] do
       html = ~s(<input type="#{type}" value="/path/not-to-read">)
 

@@ -305,7 +305,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
      chromium_transform: &PdfVisualCompare.gauge_reference/1,
      max_changed_ratio: 0.01,
      max_average_delta: 0.01},
+    {"html_number_height_controls.html",
+     render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_initial_number_controls.html",
+     render_opts: [forms: :static],
+     native_renderer: &PdfVisualCompare.render_initial_numbers/2,
+     max_changed_ratio: 0.01,
+     max_average_delta: 0.01},
+    {"html_authored_number_controls.html",
+     render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_initial_text_controls.html",
+     render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_initial_select_controls.html",
+     render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_authored_select_controls.html",
      render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_fieldset_fragmentation.html",
      render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01},
@@ -1201,6 +1214,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   for {fixture_name, thresholds} <- @fixture_thresholds do
     @fixture_name fixture_name
     @thresholds thresholds
+    if fixture_name in [
+         "html_initial_select_controls.html",
+         "html_authored_select_controls.html",
+         "html_number_height_controls.html",
+         "html_initial_number_controls.html",
+         "html_authored_number_controls.html",
+         "drawing_group_viewports.html",
+         "html_iframe_math_gauges.html",
+         "html_iframe_scrollbars.html",
+         "html_iframe_media_selection.html",
+         "html_child_fragment_destinations.html"
+       ],
+       do: @tag(:wave9_affected)
+
     if fixture_name in ["mathml_fractions.html", "mathml_fractions_ordinary.html"],
       do: @tag(:math_fractions)
 
@@ -1270,6 +1297,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
       assert length(pages) == page_count
       assert String.starts_with?(chromium_version, "Chromium ")
       assert String.starts_with?(rasterizer_version, "pdftoppm version ")
+
+      if @fixture_name in [
+           "html_initial_select_controls.html",
+           "html_authored_select_controls.html"
+         ] do
+        assert_select_contents(artifact_dir, :static, @fixture_name)
+      end
+
+      if @fixture_name in [
+           "html_initial_number_controls.html",
+           "html_authored_number_controls.html"
+         ] do
+        assert page_count == 2
+        assert_number_contents(artifact_dir, :static, @fixture_name)
+      end
+
+      if @fixture_name == "html_number_height_controls.html" do
+        assert page_count == 1
+        assert_number_height_contents(artifact_dir, :static)
+      end
 
       if @fixture_name in ["mathml_fractions.html", "mathml_fractions_ordinary.html"] do
         assert page_count == 1
@@ -2646,10 +2693,303 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
              )
   end
 
+  @tag wave9_affected: true
+  test "interactive initial number heights match Chromium" do
+    stats =
+      PdfVisualCompare.assert_browser_match!(
+        Path.join(@fixtures_dir, "html_number_height_controls.html"),
+        render_opts: [forms: :interactive],
+        artifact_dir: "tmp/browser_parity/html_number_height_controls-interactive",
+        max_changed_ratio: 0.01,
+        max_average_delta: 0.01
+      )
+
+    assert stats.scripting == :disabled and stats.page_count == 1
+    assert_number_height_contents(stats.artifact_dir, :interactive)
+  end
+
+  defp assert_number_height_contents(directory, mode) do
+    alias NativeElixirPdfUtilities.{Forms, Text, Info}
+    alias NativeElixirPdfUtilities.Pdf.Reader
+    native = File.read!(Path.join(directory, "native.pdf"))
+    assert {:ok, fields} = Forms.fields(native)
+
+    if mode == :interactive do
+      assert Enum.map(fields, &{&1.name, &1.value}) == [{"tall", "42.5"}, {"short", "123"}]
+      assert Enum.all?(fields, &(&1.type == :text))
+
+      assert Enum.all?(fields, fn field ->
+               Enum.all?(field.widgets, fn widget ->
+                 [left, bottom, right, top] = widget.rect
+
+                 left >= 0 and bottom >= 0 and right <= 320 and top <= 240 and right > left and
+                   top > bottom
+               end)
+             end)
+    else
+      assert fields == []
+    end
+
+    for name <- ["native.pdf", "chromium.pdf"] do
+      pdf = File.read!(Path.join(directory, name))
+      assert {:ok, 1} = Info.page_count(pdf)
+      assert {:ok, flat} = Forms.flatten(pdf)
+      assert {:ok, []} = Forms.fields(flat)
+      assert {:ok, text} = Text.extract(flat)
+
+      for caption <- ["Tall authored number", "After tall number", "After short number", "42.5"],
+          do: assert(text =~ caption)
+
+      assert {:ok, document} = Reader.read_validated(flat)
+      assert Enum.all?(document.pages, &is_map(&1.resources["Font"]))
+      assert Enum.all?(document.pages, &(Map.get(&1.dictionary, "Annots", []) == []))
+    end
+  end
+
+  for fixture <- ["html_initial_number_controls.html", "html_authored_number_controls.html"] do
+    @number_fixture fixture
+    @tag wave9_affected: true
+    test "interactive initial numbers match Chromium for #{@number_fixture}" do
+      stats =
+        PdfVisualCompare.assert_browser_match!(Path.join(@fixtures_dir, @number_fixture),
+          render_opts: [forms: :interactive],
+          artifact_dir: "tmp/browser_parity/#{Path.rootname(@number_fixture)}-interactive",
+          native_renderer:
+            if(@number_fixture == "html_initial_number_controls.html",
+              do: &PdfVisualCompare.render_initial_numbers/2,
+              else: &NativeElixirPdfUtilities.HtmlToPdf.render/2
+            ),
+          max_changed_ratio: 0.01,
+          max_average_delta: 0.01
+        )
+
+      assert stats.scripting == :disabled and stats.page_count == 2
+      assert_number_contents(stats.artifact_dir, :interactive, @number_fixture)
+    end
+  end
+
+  defp assert_number_contents(directory, mode, fixture) do
+    alias NativeElixirPdfUtilities.{Forms, Info, Text}
+    alias NativeElixirPdfUtilities.Pdf.Reader
+    alias NativeElixirPdfUtilities.Validators.FormValidator
+    native = File.read!(Path.join(directory, "native.pdf"))
+    assert {:ok, context} = Reader.read_validated(native)
+    assert {:ok, %{fields: fields}} = FormValidator.inspect_document(context)
+
+    if mode == :static do
+      assert fields == []
+    else
+      expected =
+        [
+          {"empty", ""},
+          {"decimal", "01.25"},
+          {"scientific", "1e+2"},
+          {"invalid", ""},
+          {"bounded", "42.5"},
+          {"any", "5.5"},
+          {"underflow", "8"},
+          {"overflow", "12"},
+          {"small", "123"},
+          {"large", "-25.5"},
+          {"readonly", "7.25"},
+          {"legend", "3"},
+          {"disabled", "9"}
+        ] ++
+          if(fixture == "html_authored_number_controls.html",
+            do: [{"clipped", "12345678901234567890"}],
+            else: []
+          )
+
+      assert Enum.map(fields, &{&1.name, &1.value}) == expected
+      assert Enum.all?(fields, &(&1.type == :text))
+      mapped = Map.new(fields, &{&1.name, &1})
+      assert mapped["readonly"].read_only and mapped["disabled"].read_only
+      refute mapped["legend"].read_only
+      assert Bitwise.band(mapped["legend"].flags, 2) == 2
+      assert Bitwise.band(mapped["readonly"].flags, 2) == 0
+
+      assert Enum.all?(fields, fn field ->
+               Enum.all?(field.widgets, fn widget ->
+                 [left, bottom, right, top] = widget.rect
+
+                 right > left and top > bottom and left >= 0 and bottom >= 0 and right <= 340 and
+                   top <= 420
+               end)
+             end)
+    end
+
+    for name <- ["native.pdf", "chromium.pdf"] do
+      pdf = File.read!(Path.join(directory, name))
+      assert {:ok, 2} = Info.page_count(pdf)
+      assert {:ok, flat} = Forms.flatten(pdf)
+      assert {:ok, []} = Forms.fields(flat)
+      assert {:ok, text} = Text.extract(flat)
+      text = String.replace(text, ~r/\s+/u, " ")
+
+      for caption <- [
+            "Default empty number",
+            "Authored decimal value",
+            "Scientific lexical value",
+            "Invalid value becomes empty",
+            "Number hint",
+            "Bounded decimal width",
+            "Any step keeps default width",
+            "Constraint underflow remains visible",
+            "Constraint overflow remains visible",
+            "After first page numbers",
+            "Small chosen font",
+            "Large chosen font",
+            "Read only required number",
+            "First legend number",
+            "Disabled fieldset number",
+            "After second page numbers",
+            "Number evidence link",
+            "01.25",
+            "1e+2",
+            "42.5",
+            "5.5",
+            "123",
+            "-25.5",
+            "7.25"
+          ],
+          do: assert(text =~ caption)
+
+      refute text =~ "invalid-number"
+
+      if fixture == "html_authored_number_controls.html",
+        do: assert(text =~ "Clipped full scalar export")
+
+      assert {:ok, document} = Reader.read_validated(flat)
+
+      assert Enum.all?(document.pages, fn page ->
+               is_map(page.resources) or match?({:ref, _}, page.resources)
+             end)
+
+      links =
+        Enum.flat_map(document.pages, fn page ->
+          Enum.flat_map(Map.get(page.dictionary, "Annots", []), fn ref ->
+            {:ok, annotation} = Reader.resolve(document.document, ref)
+            if annotation["Subtype"] == {:name, "Link"}, do: [annotation], else: []
+          end)
+        end)
+
+      assert [%{"Rect" => [left, bottom, right, top]} = link] = links
+      assert link["A"]["URI"] == {:string, "https://example.test/number-evidence"}
+
+      assert right > left and top > bottom and left >= 0 and bottom >= 0 and right <= 340 and
+               top <= 420
+    end
+  end
+
+  for fixture <- ["html_initial_select_controls.html", "html_authored_select_controls.html"] do
+    @select_fixture fixture
+    @tag wave9_affected: true
+    test "interactive initial choices match Chromium for #{@select_fixture}" do
+      stats =
+        PdfVisualCompare.assert_browser_match!(Path.join(@fixtures_dir, @select_fixture),
+          render_opts: [forms: :interactive],
+          artifact_dir: "tmp/browser_parity/#{Path.rootname(@select_fixture)}-interactive",
+          max_changed_ratio: 0.01,
+          max_average_delta: 0.01
+        )
+
+      assert stats.scripting == :disabled and stats.page_count == 2
+      assert_select_contents(stats.artifact_dir, :interactive, @select_fixture)
+    end
+  end
+
+  # Both appearances and ordinary page painting retain the same selected
+  # content. PDF exports and indices remain independent of clipped captions.
+  defp assert_select_contents(directory, mode, fixture) do
+    alias NativeElixirPdfUtilities.{Forms, Info, Text}
+    alias NativeElixirPdfUtilities.Pdf.Reader
+    alias NativeElixirPdfUtilities.Validators.FormValidator
+    native = File.read!(Path.join(directory, "native.pdf"))
+    assert {:ok, context} = Reader.read_validated(native)
+    assert {:ok, %{fields: fields}} = FormValidator.inspect_document(context)
+
+    if mode == :static do
+      assert fields == []
+    else
+      assert length(fields) == 10
+      fields = Map.new(fields, &{&1.name, &1})
+      assert fields["empty"].value == nil
+      assert fields["multi"].value == ["a", "b", "d"]
+      assert fields["multi"].dictionary["I"] == [0, 1, 3]
+      assert fields["scrolled"].value == "Current row"
+      assert fields["scrolled"].dictionary["I"] == [2]
+
+      # /TI addresses the first partially visible option, not the selected one.
+      assert fields["scrolled"].dictionary["TI"] ==
+               if(fixture == "html_initial_select_controls.html", do: 1, else: 0)
+
+      assert Enum.map(fields["grouped"].choices, & &1.value) == [
+               "g",
+               "h",
+               "Hidden row",
+               "CSS hidden row",
+               "Tail row"
+             ]
+
+      assert fields["grouped"].dictionary["I"] == [0]
+      assert fields["count"].value == ["A", "B"]
+      assert fields["default"].value == []
+      assert fields["zero"].value == "Zero selected"
+    end
+
+    for name <- ["native.pdf", "chromium.pdf"] do
+      pdf = File.read!(Path.join(directory, name))
+      assert {:ok, 2} = Info.page_count(pdf)
+      assert {:ok, flat} = Forms.flatten(pdf)
+      assert {:ok, []} = Forms.fields(flat)
+      assert {:ok, text} = Text.extract(flat)
+      text = String.replace(text, ~r/\s+/u, " ")
+
+      for caption <- [
+            "Apple",
+            "Berry",
+            "Cherry",
+            "Alpha",
+            "Beta",
+            "Charlie",
+            "Current row",
+            "Group heading",
+            "Display label",
+            "Disabled row",
+            "Tail row",
+            "After first page controls",
+            "First row",
+            "Second row",
+            "Prefix row",
+            "Zero selected",
+            "2 selected",
+            "Inline first",
+            "Inline selected",
+            "Following inline caption",
+            "After second page controls",
+            "Offscreen bounded row"
+          ] do
+        assert text =~ caption
+      end
+
+      omitted =
+        ["Hidden row", "CSS hidden row", "Export text"] ++
+          if(fixture == "html_initial_select_controls.html",
+            do: ["Before scroll", "Inline hidden"],
+            else: []
+          )
+
+      # Authored padding can expose part of an adjacent row. Keep its clipped
+      # artwork and extraction instead of deleting a row to match ink culling.
+      for omitted <- omitted do
+        refute text =~ omitted
+      end
+    end
+  end
+
   for {fixture_name, thresholds} <- @real_document_fixture_thresholds do
     @fixture_name fixture_name
     @thresholds thresholds
-
     test "matches Chromium for real document #{@fixture_name}" do
       fixture_path = Path.join(@real_fixtures_dir, @fixture_name)
 

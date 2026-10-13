@@ -61,16 +61,26 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
             first.flags +
               case first.type do
                 :radio -> 32768
-                :choice -> 131_072
                 _ -> 0
               end
 
           value =
             case first.type do
-              :checkbox -> {:name, if(first.value, do: "Yes", else: "Off")}
-              :radio -> {:name, Enum.find_value(controls, "Off", & &1.value)}
-              :choice -> if is_nil(first.value), do: nil, else: InfoCodec.encode_text(first.value)
-              _ -> InfoCodec.encode_text(first.value)
+              :checkbox ->
+                {:name, if(first.value, do: "Yes", else: "Off")}
+
+              :radio ->
+                {:name, Enum.find_value(controls, "Off", & &1.value)}
+
+              :choice ->
+                case first.value do
+                  nil -> nil
+                  values when is_list(values) -> Enum.map(values, &InfoCodec.encode_text/1)
+                  value -> InfoCodec.encode_text(value)
+                end
+
+              _ ->
+                InfoCodec.encode_text(first.value)
             end
 
           ft =
@@ -104,7 +114,13 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
                     first.choices,
                     &[InfoCodec.encode_text(&1.value), InfoCodec.encode_text(&1.label)]
                   )
-                ),
+                )
+                |> Map.put("I", first.selected_indices),
+              else: dictionary
+
+          dictionary =
+            if first.type == :choice and first.choice_listbox,
+              do: Map.put(dictionary, "TI", first.top_index),
               else: dictionary
 
           {widgets, annots} =

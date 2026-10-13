@@ -21,7 +21,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @form_control_tags ~w(input select textarea button)
   @text_input_types ~w(text search tel url email password)
   @button_input_types ~w(button reset submit)
-  @input_types @text_input_types ++ @button_input_types ++ ~w(checkbox radio hidden)
+  @input_types @text_input_types ++ @button_input_types ++ ~w(checkbox radio hidden number)
   # Fixed HTML enumerated keywords, including recognized states still unsupported.
   @input_type_keywords Map.new(
                          ~w(hidden text search tel url email password date month week time datetime-local number range color checkbox radio file submit image reset button),
@@ -1432,11 +1432,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
-  @spec parse_html_integer(term()) :: {:ok, integer()} | :error
-  def parse_html_integer(value) do
+  @spec parse_html_integer(term(), :signed | :nonnegative) :: {:ok, integer()} | :error
+  def parse_html_integer(value, kind \\ :signed) do
     case value do
       value when is_binary(value) ->
-        case Regex.run(~r/^[ \t\n\f\r]*([+-]?[0-9]+)/, value, capture: :all_but_first) do
+        regex =
+          if kind == :nonnegative,
+            do: ~r/^[ \t\n\f\r]*([+]?[0-9]+)/,
+            else: ~r/^[ \t\n\f\r]*([+-]?[0-9]+)/
+
+        case Regex.run(regex, value, capture: :all_but_first) do
           [digits] ->
             try do
               check_render_resource(:max_html_numeric_token_bytes, byte_size(digits), :html)
@@ -2941,6 +2946,22 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec preprocess_html(String.t()) :: String.t()
+  def preprocess_html(html) do
+    if String.contains?(html, "\r"), do: String.replace(html, ~r/\r\n?/, "\n"), else: html
+  end
+
+  @doc false
+  @spec html_attribute_captures(String.t(), keyword()) :: list()
+  def html_attribute_captures(attributes, options \\ []) do
+    Regex.scan(
+      ~r/[ \t\n\f\r]+([^ \t\n\f\r\x00\/="'<>]+)(?:[ \t\n\f\r]*=[ \t\n\f\r]*("[^"]*"|'[^']*'|[^ \t\n\f\r"'`=<>]+))?/u,
+      attributes,
+      options
+    )
+  end
+
+  @doc false
   @spec validate_html_attributes(String.t(), String.t(), :html | :mathml | :svg) ::
           {:ok, map(), boolean()} | {:error, :unsupported_html}
   def validate_html_attributes(attributes, tag, namespace \\ :html) do
@@ -2950,10 +2971,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       attributes ->
         captures =
-          Regex.scan(
-            ~r/[ \t\n\f\r]+([^ \t\n\f\r\x00\/="'<>]+)(?:[ \t\n\f\r]*=[ \t\n\f\r]*("[^"]*"|'[^']*'|[^ \t\n\f\r"'`=<>]+))?/u,
-            attributes
-          )
+          html_attribute_captures(attributes)
 
         parsed_source = Enum.map_join(captures, "", &List.first/1)
 
@@ -3825,7 +3843,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     html? = Map.get(node, :namespace, :html) == :html
     attributes = Map.get(node, :attributes, %{})
     namespaces = Map.get(node, :attribute_namespaces, %{})
-    readonly? = Map.has_key?(attributes, "readonly") and is_nil(Map.get(namespaces, "readonly"))
+
+    readonly? =
+      Map.get(
+        Map.get(node, :_initial_form_state, %{}),
+        :readonly,
+        Map.has_key?(attributes, "readonly") and is_nil(Map.get(namespaces, "readonly"))
+      )
 
     disabled? =
       Map.get(
@@ -3842,7 +3866,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
               do: Map.get(attributes, "type", "text"),
               else: "text"
 
-          text_input_type?(input_type(type)) and not readonly? and
+          readonly_input_type?(input_type(type)) and not readonly? and
             not disabled?
 
         {true, "textarea"} ->
@@ -3933,13 +3957,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         applicable? and if(state == :enabled, do: not disabled?, else: disabled?)
 
       state when state in [:required, :optional] ->
-        required? = Map.has_key?(attributes, "required")
+        required? =
+          Map.get(
+            Map.get(node, :_initial_form_state, Map.get(node, :initial_state, %{})),
+            :required,
+            Map.has_key?(attributes, "required")
+          )
 
         if(state == :required, do: required?, else: not required?) and html? and
           case Map.get(node, :tag) do
             "input" ->
               type = input_type(Map.get(attributes, "type", "text"))
-              text_input_type?(type) or type in ["checkbox", "radio"]
+              readonly_input_type?(type) or type in ["checkbox", "radio"]
 
             tag when tag in ["select", "textarea"] ->
               true
@@ -3974,7 +4003,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       {"input", name} when name in ["checked", "disabled", "readonly", "multiple", "required"] ->
         true
 
-      {"select", name} when name in ["disabled", "required"] ->
+      {"select", name} when name in ["disabled", "required", "multiple"] ->
         true
 
       {"option", name} when name in ["selected", "disabled"] ->
@@ -4030,11 +4059,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              "multiple",
              "required",
              "size",
-             "placeholder"
+             "placeholder",
+             "min",
+             "max",
+             "step"
            ] ->
         true
 
-      {"select", name, _value} when name in ["name", "disabled", "required"] ->
+      {"select", name, _value}
+      when name in ["name", "disabled", "required", "multiple", "size"] ->
         true
 
       {"option", name, _value} when name in ["value", "label", "selected", "disabled"] ->
@@ -4081,6 +4114,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec text_input_type?(String.t()) :: boolean()
   def text_input_type?(type), do: type in @text_input_types
+
+  @doc false
+  @spec readonly_input_type?(String.t()) :: boolean()
+  defdelegate readonly_input_type?(type),
+    to: NativeElixirPdfUtilities.Validators.HtmlFormValidator
 
   @doc false
   @spec button_input_type?(String.t()) :: boolean()
@@ -4146,12 +4184,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       "input" ->
         type = input_type(Map.get(attributes, "type", "text"))
 
-        children == [] and type in @input_types and
-          (not Map.has_key?(attributes, "checked") or type in ["checkbox", "radio"]) and
-          (not Map.has_key?(attributes, "readonly") or type in @text_input_types) and
-          (not Map.has_key?(attributes, "multiple") or type == "email") and
-          (not Map.has_key?(attributes, "size") or type in @text_input_types) and
-          (not Map.has_key?(attributes, "placeholder") or type in @text_input_types)
+        type in @input_types and
+          NativeElixirPdfUtilities.Validators.HtmlFormValidator.valid_initial_input?(
+            type,
+            attributes,
+            children
+          )
 
       "select" ->
         Enum.all?(children, fn child ->
@@ -4547,13 +4585,28 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
   @doc false
   @spec source_style_error(map(), term()) :: {:error, {atom(), Diagnostics.diagnostic()}}
-  def source_style_error(node, declaration) do
-    source = Map.get(node, :source, %{text: Map.get(node.attributes, "style", node.tag)})
+  @spec source_style_error(map(), term(), term()) :: {:error, {atom(), Diagnostics.diagnostic()}}
+  def source_style_error(node, declaration, failure \\ nil) do
+    source =
+      case declaration do
+        %{source: source} -> source
+        _ -> Map.get(node, :source, %{text: Map.get(node.attributes, "style", node.tag)})
+      end
+
+    {reason, message} =
+      case failure do
+        {:error, {reason, diagnostic}} ->
+          {reason, diagnostic.message}
+
+        _ ->
+          {:invalid_css,
+           "declaration/context policy failed for #{inspect(declaration)}; font metrics and resource policy have not been checked"}
+      end
 
     Diagnostics.error(
       :css,
-      :invalid_css,
-      "declaration/context policy failed for #{inspect(declaration)}; font metrics and resource policy have not been checked",
+      reason,
+      message,
       module: __MODULE__,
       operation: :source_style_contexts,
       source: source.text,
@@ -4978,8 +5031,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
-  @spec parse_html_float(term()) :: {:ok, float()} | :error
-  def parse_html_float(value) do
+  @spec parse_html_float(term(), :float | :decimal) :: {:ok, float() | map()} | :error
+  def parse_html_float(value, representation \\ :float) do
     # HTML's UA grammar accepts a numeric prefix, unlike author conformance and CSS.
     # Finite IEEE double precision is a format invariant, not a geometry ceiling.
     case is_binary(value) &&
@@ -4989,6 +5042,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
            ) do
       [token, sign, significand | exponent] ->
         check_render_resource(:max_html_numeric_token_bytes, byte_size(token), :html)
+
+        original_significand = significand
 
         significand =
           if String.starts_with?(significand, "."), do: "0" <> significand, else: significand
@@ -5000,8 +5055,46 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           if String.contains?(significand, "."), do: significand, else: significand <> ".0"
 
         case Float.parse(sign <> significand <> Enum.join(exponent)) do
-          {number, ""} -> {:ok, if(number == 0, do: 0.0, else: number)}
-          _ -> :error
+          {number, ""} ->
+            number = if number == 0, do: 0.0, else: number
+
+            case representation do
+              :float ->
+                {:ok, number}
+
+              :decimal ->
+                # Chromium Decimal uses a fixed 18-digit coefficient and decimal
+                # exponent range -1023..1023. These are source format invariants,
+                # not configurable processing ceilings. Reuse the parsed token.
+                [integer | fraction] = String.split(original_significand, ".")
+                integer = String.trim_leading(integer, "0")
+                fraction = Enum.join(fraction)
+                integer_digits = byte_size(integer)
+                fraction_digits = min(byte_size(fraction), max(18 - integer_digits, 0))
+                coefficient = String.slice(integer <> fraction, 0, 18)
+                coefficient = String.trim_leading(coefficient, "0")
+                digits = max(byte_size(coefficient), 1)
+
+                exponent =
+                  case exponent do
+                    [] -> 0
+                    [value] -> value |> String.slice(1..-1//1) |> String.to_integer()
+                  end
+
+                exponent = exponent - fraction_digits + max(integer_digits - 18, 0)
+                zero? = coefficient == "" or exponent < -1023
+
+                {:ok,
+                 %{
+                   value: number,
+                   negative: sign == "-" and not zero?,
+                   coefficient_digits: if(zero?, do: 1, else: digits),
+                   exponent: if(zero?, do: 0, else: exponent)
+                 }}
+            end
+
+          _ ->
+            :error
         end
 
       _ ->
@@ -5712,7 +5805,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                           "multiple requires a valid email input"
 
                         "readonly" ->
-                          "readonly requires a valid text/search/tel/url/email/password input or textarea"
+                          "readonly requires a valid text/search/tel/url/email/password/number input or textarea"
                       end
 
                     Diagnostics.error(
@@ -6194,7 +6287,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           :ok
       end
 
-    with :ok <- gauge_result, :ok <- heading_result do
+    with :ok <- gauge_result,
+         :ok <- heading_result,
+         :ok <-
+           NativeElixirPdfUtilities.Validators.HtmlFormValidator.validate_initial_number_layout(
+             node
+           ) do
       case node do
         %{style: style}
         when is_map(style) and not is_map_key(style, :line_break) and

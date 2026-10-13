@@ -9,6 +9,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry
+  alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
@@ -109,7 +110,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                 {:ok, outlines} ->
                   validity =
                     Enum.reduce_while(pages, :ok, fn page, validity ->
-                      case valid_page?(page) do
+                      case valid_page?(page, kind) do
                         {:error, _} = error -> {:halt, error}
                         false -> {:halt, false}
                         :box_normalization -> {:cont, :box_normalization}
@@ -187,7 +188,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                       Diagnostics.error(
                         :pdf,
                         :invalid_pdf_input,
-                        "PDF writer requires non-empty valid pages; flow_marker requires zero width, non-negative height and no link/field; baseline_snap_depth must be non-negative numeric when supplied; rectangle text_baseline_offset must be numeric when supplied; clip requires numeric x/y and positive width/height when supplied; border_cutout requires numeric offsets and positive dimensions when supplied; glyph_group requires valid UTF-8 actual_text and text-only boxes; explicit glyph_ids require an embedded font and one positive 16-bit glyph ID per Unicode scalar",
+                        "PDF writer requires non-empty valid pages; rectangle shape must be :rectangle, {:triangle, direction} with up/down/left/right direction, or {:chevron, :down}; select_arrow requires a chevron and clip rectangle; flow_marker requires zero width, non-negative height and no link/field; baseline_snap_depth must be non-negative numeric when supplied; rectangle text_baseline_offset must be numeric when supplied; paint_frame requires a finite bounded rectangle supplying the original page paint origin and height; clip requires numeric finite bounded x/y and nonnegative width/height, optional nonnegative border_radius and at most one inner_clip rectangle when supplied; border_cutout requires numeric offsets and positive dimensions when supplied; glyph_group requires valid UTF-8 actual_text and text-only boxes; explicit glyph_ids require an embedded font and one positive 16-bit glyph ID per Unicode scalar",
                         operation: :write_pdf,
                         module: __MODULE__
                       )
@@ -265,30 +266,52 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     end)
   end
 
-  defp valid_page?(page) do
+  defp valid_page?(page, kind) do
     case page do
       %{size: {width, height}, boxes: boxes}
       when is_number(width) and is_number(height) and width > 0 and height > 0 and is_list(boxes) ->
-        Enum.reduce_while(boxes, true, fn box, validity ->
-          result =
-            is_map(box) and is_boolean(Map.get(box, :snap_to_css_pixel_grid, false)) and
-              valid_box?(box, height)
+        frame_valid? =
+          case Map.fetch(page, :paint_frame) do
+            :error ->
+              true
 
-          case result do
-            {:error, _} = error ->
-              {:halt, error}
-
-            true ->
-              {:cont,
-               if(box.type in [:drawing_group, :glyph_group, :flow_marker],
-                 do: :box_normalization,
-                 else: validity
-               )}
-
-            false ->
-              {:halt, false}
+            {:ok, origin} ->
+              kind == :appearances and is_map(origin) and map_size(origin) == 4 and
+                valid_clip_rectangle?(origin)
           end
-        end)
+
+        if frame_valid? and bounded_number?(width) and bounded_number?(height) do
+          page_height = Map.get(page, :paint_frame, %{height: height}).height
+
+          Enum.reduce_while(boxes, true, fn box, validity ->
+            result =
+              is_map(box) and is_boolean(Map.get(box, :snap_to_css_pixel_grid, false)) and
+                valid_box?(box, page_height)
+
+            case result do
+              {:error, _} = error ->
+                {:halt, error}
+
+              true ->
+                if valid_prepared_box_clips?(box, page_height) do
+                  {:cont,
+                   if(
+                     box.type in [:drawing_group, :glyph_group, :flow_marker] or
+                       is_map(Map.get(box, :clip)),
+                     do: :box_normalization,
+                     else: validity
+                   )}
+                else
+                  {:halt, false}
+                end
+
+              false ->
+                {:halt, false}
+            end
+          end)
+        else
+          false
+        end
 
       _ ->
         false
@@ -298,7 +321,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   defp normalize_layout_boxes(pages) do
     {pages, _count} =
       Enum.map_reduce(pages, 0, fn page, count ->
-        {boxes, count} = normalize_boxes(page.boxes, count, nil, elem(page.size, 1))
+        page_height = Map.get(page, :paint_frame, %{height: elem(page.size, 1)}).height
+        {boxes, count} = normalize_boxes(page.boxes, count, nil, page_height)
 
         {%{page | boxes: List.flatten(boxes)}, count}
       end)
@@ -339,7 +363,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             :writer
           )
 
-          children = Enum.map(children, &normalize_group_annotation(&1, composition))
+          children =
+            Enum.map(children, &normalize_group_annotation(&1, composition, parent_height))
 
           {[%{type: :actual_text_start, text: text}] ++
              children ++ [%{type: :actual_text_end}], count}
@@ -347,7 +372,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
         box ->
           count = count + 1
           HtmlValidator.check_render_resource(:max_layout_boxes, count, :writer)
-          {[normalize_group_annotation(box, composition)], count}
+          {[normalize_group_annotation(box, composition, parent_height)], count}
       end
     end)
   end
@@ -423,7 +448,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       when is_binary(text) and is_number(x) and is_number(y) and is_number(font_size) and
              font_size >= 0 and is_binary(font) ->
         valid_baseline_depth?(box) and valid_color?(color) and valid_font_box?(box) and
-          valid_clip_rectangle?(Map.get(box, :clip)) and valid_link_box?(box)
+          valid_clip_rectangle?(Map.get(box, :clip), true) and valid_link_box?(box)
 
       %{
         type: :rect,
@@ -444,8 +469,11 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           {:triangle, :up},
           {:triangle, :down},
           {:triangle, :left},
-          {:triangle, :right}
+          {:triangle, :right},
+          {:chevron, :down}
         ] and
+          (Map.get(box, :role) != :select_arrow or
+             (Map.get(box, :shape) == {:chevron, :down} and is_map(Map.get(box, :clip)))) and
           valid_optional_color?(fill_color) and valid_optional_color?(stroke_color) and
           case box do
             %{text_baseline_offset: offset} -> is_number(offset)
@@ -469,7 +497,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                   is_tuple(color) and tuple_size(color) == 3 and valid_color?(color)
                 end)
           end and
-          valid_clip_rectangle?(Map.get(box, :clip)) and
+          valid_clip_rectangle?(Map.get(box, :clip), true) and
           valid_clip_rectangle?(Map.get(box, :border_cutout)) and
           valid_border_widths?(Map.get(box, :border_widths)) and
           valid_border_colors?(Map.get(box, :border_colors)) and
@@ -479,7 +507,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       %{type: :image, x: x, y: y, width: width, height: height, image: image}
       when is_number(x) and is_number(y) and is_number(width) and is_number(height) and
              width > 0 and height > 0 ->
-        valid_image?(image) and valid_clip_rectangle?(Map.get(box, :clip)) and
+        valid_image?(image) and valid_clip_rectangle?(Map.get(box, :clip), true) and
           valid_baseline_depth?(box) and valid_link_box?(box)
 
       _ ->
@@ -741,23 +769,57 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             &bounded_number?/1
           )
       end and
-      valid_group_clip?(Map.get(box, :clip)) and
+      valid_prepared_box_clips?(box, page_height) and
       valid_group_clip?(Map.get(box, :link_rect)) and
-      case DrawingGeometry.transform_clip(Map.get(box, :link_rect), transform) do
-        nil -> true
-        {left, bottom, right, top} -> Enum.all?([left, bottom, right, top], &bounded_number?/1)
-      end and
-      case DrawingGeometry.transform_clip(Map.get(box, :clip), transform) do
-        nil -> true
-        {left, bottom, right, top} -> Enum.all?([left, bottom, right, top], &bounded_number?/1)
-      end
+      Enum.all?(
+        [Map.get(box, :link_rect)] ++
+          case Map.get(box, :clip) do
+            nil ->
+              []
+
+            clip ->
+              prepared =
+                normalize_clip_rectangle(
+                  clip,
+                  page_height,
+                  Map.get(box, :snap_to_css_pixel_grid, false) and Map.has_key?(clip, :inner_clip)
+                )
+
+              [prepared, Map.get(prepared, :inner_clip)]
+          end,
+        fn clip ->
+          case DrawingGeometry.transform_clip(clip, transform) do
+            nil -> true
+            bounds -> Enum.all?(Tuple.to_list(bounds), &bounded_number?/1)
+          end
+        end
+      )
   end
 
   defp drawing_group_error(message, reason \\ :invalid_pdf_input) do
     Diagnostics.error(:pdf, reason, message, operation: :write_pdf, module: __MODULE__)
   end
 
-  defp normalize_group_annotation(box, composition) do
+  defp normalize_group_annotation(box, composition, parent_height) do
+    page_height = if composition == nil, do: parent_height, else: elem(composition, 5)
+
+    box =
+      case Map.get(box, :clip) do
+        nil ->
+          box
+
+        clip ->
+          Map.put(
+            box,
+            :clip,
+            normalize_clip_rectangle(
+              clip,
+              page_height,
+              Map.get(box, :snap_to_css_pixel_grid, false) and Map.has_key?(clip, :inner_clip)
+            )
+          )
+      end
+
     box =
       case composition do
         nil -> box
@@ -773,6 +835,12 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
         {x, y} = DrawingGeometry.text_position(box, page_height)
         [x, y] = Enum.map([x, y], &Float.round(&1 * 1.0, 4))
         rect = {sx * x + tx, sy * y + ty, sx * (x + width) + tx, sy * (y + height) + ty}
+
+        rect =
+          DrawingGeometry.intersect_clip(
+            rect,
+            DrawingGeometry.transform_box_clip(Map.get(box, :clip), {sx, sy, tx, ty})
+          )
 
         {left, bottom, right, top} = DrawingGeometry.intersect_clip(rect, clip)
 
@@ -793,8 +861,24 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             else:
               DrawingGeometry.intersect_clip(
                 rect,
-                DrawingGeometry.transform_clip(Map.get(box, :clip), {sx, sy, tx, ty})
+                DrawingGeometry.transform_box_clip(Map.get(box, :clip), {sx, sy, tx, ty})
               )
+
+        rect =
+          case Map.get(box, :clip) do
+            content_clip when is_map(content_clip) ->
+              if Map.has_key?(content_clip, :inner_clip) or
+                   Map.has_key?(content_clip, :border_radius),
+                 do:
+                   DrawingGeometry.intersect_clip(
+                     rect,
+                     DrawingGeometry.transform_box_clip(content_clip, {sx, sy, tx, ty})
+                   ),
+                 else: rect
+
+            _ ->
+              rect
+          end
 
         {left, bottom, right, top} = DrawingGeometry.intersect_clip(rect, clip)
 
@@ -875,18 +959,110 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     end
   end
 
-  defp valid_clip_rectangle?(clip) do
+  defp valid_clip_rectangle?(clip, rounded? \\ false, inner? \\ false) do
     case clip do
       nil ->
         true
 
-      %{x: x, y: y, width: width, height: height}
-      when map_size(clip) == 4 and is_number(x) and is_number(y) and is_number(width) and
-             width > 0 and is_number(height) and height > 0 ->
-        true
+      %{x: x, y: y, width: width, height: height} ->
+        allowed =
+          if rounded?,
+            do: [:x, :y, :width, :height, :border_radius, :inner_clip],
+            else: [:x, :y, :width, :height]
+
+        radius = Map.get(clip, :border_radius, 0.0)
+
+        new_clip? =
+          rounded? and
+            (inner? or Map.has_key?(clip, :border_radius) or Map.has_key?(clip, :inner_clip))
+
+        Enum.all?(Map.keys(clip), &(&1 in allowed)) and
+          Enum.all?(
+            [x, y, width, height, radius],
+            &match?({:ok, _}, HtmlValidator.normalize_geometry_number(&1))
+          ) and
+          width >= 0 and height >= 0 and radius >= 0 and
+          (new_clip? or (width > 0 and height > 0)) and
+          Enum.all?(
+            [x + width, y + height],
+            &match?({:ok, _}, HtmlValidator.normalize_geometry_number(&1))
+          ) and
+          case Map.fetch(clip, :inner_clip) do
+            :error ->
+              true
+
+            {:ok, inner} ->
+              is_map(inner) and not Map.has_key?(inner, :inner_clip) and
+                valid_clip_rectangle?(inner, true, true)
+          end
 
       _ ->
         false
+    end
+  end
+
+  defp valid_prepared_box_clips?(box, page_height) do
+    case box do
+      %{type: :glyph_group, boxes: children} ->
+        Enum.all?(children, &valid_prepared_box_clips?(&1, page_height))
+
+      %{type: :drawing_group} ->
+        true
+
+      _ ->
+        case Map.get(box, :clip) do
+          nil ->
+            true
+
+          clip ->
+            valid_clip_rectangle?(
+              normalize_clip_rectangle(
+                clip,
+                page_height,
+                Map.get(box, :snap_to_css_pixel_grid, false) and Map.has_key?(clip, :inner_clip)
+              ),
+              true
+            )
+        end
+    end
+  end
+
+  # Validation above bounds the single optional inner clip. Normalize radii
+  # centrally so every byte-writer path consumes the same prepared geometry.
+  defp normalize_clip_rectangle(clip, page_height, snap?) do
+    clip =
+      if snap? do
+        snapped =
+          PageGeometry.snap_box_to_css_pixel_grid(
+            Map.put(
+              %{clip | y: page_height - clip.y - clip.height},
+              :snap_to_css_pixel_grid,
+              true
+            )
+          )
+
+        %{
+          clip
+          | x: snapped.x,
+            y: page_height - snapped.y - snapped.height,
+            width: snapped.width,
+            height: snapped.height
+        }
+      else
+        clip
+      end
+
+    clip =
+      if Map.has_key?(clip, :border_radius),
+        do: Map.update!(clip, :border_radius, &min(&1, min(clip.width, clip.height) / 2)),
+        else: clip
+
+    case Map.fetch(clip, :inner_clip) do
+      {:ok, inner} ->
+        Map.put(clip, :inner_clip, normalize_clip_rectangle(inner, page_height, snap?))
+
+      :error ->
+        clip
     end
   end
 

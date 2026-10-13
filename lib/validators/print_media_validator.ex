@@ -190,10 +190,18 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
   @spec select_rules(String.t(), context() | nil | :unpositioned) ::
           {:ok, String.t()} | {:error, :invalid_css}
   def select_rules(css, context) do
-    select_media(css, context, 0)
+    with {:ok, selected, _records} <- select_media(css, context, 0, :active, 0),
+         do: {:ok, selected}
   end
 
-  defp select_media(css, context, depth) do
+  @doc false
+  @spec project_source_rules(String.t(), context() | nil | :unpositioned) ::
+          {:ok, String.t(), [map()]} | {:error, :invalid_css}
+  def project_source_rules(css, context) do
+    select_media(css, context, 0, :source, 0)
+  end
+
+  defp select_media(css, context, depth, mode, origin) do
     HtmlValidator.check_render_resource(:max_media_query_depth, depth, :css)
     HtmlValidator.reserve_render_resource(:max_css_work, byte_size(css), :css)
 
@@ -215,16 +223,32 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
           {:closed, index} ->
             body = binary_part(tail, 0, index)
             rest = binary_part(tail, index + 1, byte_size(tail) - index - 1)
+            active = matches_stylesheet?(query, body, context)
 
             with true <- HtmlValidator.trim_css_whitespace(query) != "",
                  false <- Regex.match?(@media_candidate, prefix),
-                 {:ok, selected} <-
-                   if(matches_stylesheet?(query, body, context),
-                     do: select_media(body, context, depth + 1),
-                     else: {:ok, ""}
+                 {:ok, selected, children} <-
+                   if(active or mode == :source,
+                     do: select_media(body, context, depth + 1, mode, origin + offset + size),
+                     else: {:ok, "", []}
                    ),
-                 {:ok, remaining} <- select_media(rest, context, depth) do
-              {:ok, prefix <> selected <> remaining}
+                 {:ok, remaining, siblings} <-
+                   select_media(rest, context, depth, mode, origin + offset + size + index + 1) do
+              if mode == :source do
+                record = %{
+                  offset: origin + offset,
+                  length: size + index + 1,
+                  query: query,
+                  active: active,
+                  body_offset: origin + offset + size,
+                  body_length: index
+                }
+
+                projected = prefix <> String.duplicate(" ", size) <> selected <> " " <> remaining
+                {:ok, projected, [record | children] ++ siblings}
+              else
+                {:ok, prefix <> selected <> remaining, []}
+              end
             else
               _ -> {:error, :invalid_css}
             end
@@ -234,7 +258,7 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
         end
 
       nil ->
-        if Regex.match?(@media_candidate, css), do: {:error, :invalid_css}, else: {:ok, css}
+        if Regex.match?(@media_candidate, css), do: {:error, :invalid_css}, else: {:ok, css, []}
     end
   end
 

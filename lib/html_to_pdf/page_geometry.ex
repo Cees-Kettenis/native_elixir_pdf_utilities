@@ -9,6 +9,61 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
 
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
+  # Fixed CSS length invariant: one pixel is 1/96 inch, or 0.75 PDF points.
+  @css_pixel_points 0.75
+
+  @doc false
+  @spec snap_box_to_css_pixel_grid(map()) :: map()
+  def snap_box_to_css_pixel_grid(box) do
+    case Map.get(box, :snap_to_css_pixel_grid, false) do
+      true ->
+        left = snap_css_pixel(box.x)
+        bottom = snap_css_pixel(box.y)
+        right = snap_css_pixel(box.x + box.width)
+        top = snap_css_pixel(box.y + box.height)
+
+        %{box | x: left, y: bottom, width: max(right - left, 0.0), height: max(top - bottom, 0.0)}
+
+      false ->
+        box
+    end
+  end
+
+  @doc false
+  @spec snap_css_pixel(number()) :: float()
+  def snap_css_pixel(value) do
+    Float.floor(value / @css_pixel_points + 0.5) * @css_pixel_points
+  end
+
+  @doc false
+  @spec rounded_border_contours(map(), number()) :: [map()] | nil
+  def rounded_border_contours(box, page_height) do
+    solid? =
+      case Map.get(box, :border_styles) do
+        nil -> true
+        styles -> Enum.all?(Map.values(styles), &(&1 == :solid))
+      end
+
+    if Map.get(box, :role) in [:native_listbox, :css_menu] and box.border_radius > 0 and
+         solid? do
+      inner = %{
+        box
+        | x: box.x + box.stroke_width,
+          y: box.y + box.stroke_width,
+          width: max(box.width - 2 * box.stroke_width, 0.0),
+          height: max(box.height - 2 * box.stroke_width, 0.0),
+          border_radius: max(box.border_radius - box.stroke_width, 0.0)
+      }
+
+      snapped = snap_box_to_css_pixel_grid(%{inner | y: page_height - inner.y - inner.height})
+      inner = %{snapped | y: page_height - snapped.y - snapped.height}
+
+      # Preserve the writer's existing print-matrix edge-tie adjustment.
+      # Appearance bounds include precisely the same painted outer contour.
+      Enum.map([box, inner], &%{&1 | x: &1.x - 0.0001, y: &1.y + 0.0001})
+    end
+  end
+
   @type page_size_name ::
           :a5 | :a4 | :a3 | :b5 | :b4 | :jis_b5 | :jis_b4 | :letter | :legal | :ledger
   @type orientation :: :portrait | :landscape

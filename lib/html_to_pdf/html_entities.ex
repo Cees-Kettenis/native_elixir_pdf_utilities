@@ -42,6 +42,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlEntities do
     end
   end
 
+  @doc false
+  @spec decode_with_spans(String.t(), :text | :attribute) :: {String.t(), [tuple()]}
+  def decode_with_spans(text, context) do
+    decode_spans(text, context, 0, 0, [], [])
+  end
+
+  defp decode_spans(text, context, input_offset, output_offset, decoded, spans) do
+    case text do
+      "" ->
+        {decoded |> Enum.reverse() |> IO.iodata_to_binary(), Enum.reverse(spans)}
+
+      text ->
+        {characters, remaining} =
+          case text do
+            <<"&", rest::binary>> ->
+              case decode_reference(rest, context) do
+                {:ok, characters, remaining} -> {characters, remaining}
+                :not_found -> {"&", rest}
+              end
+
+            <<byte, rest::binary>> ->
+              {<<byte>>, rest}
+          end
+
+        input_length = byte_size(text) - byte_size(remaining)
+        output_length = byte_size(characters)
+
+        decode_spans(
+          remaining,
+          context,
+          input_offset + input_length,
+          output_offset + output_length,
+          [characters | decoded],
+          [{output_offset, output_length, input_offset, input_length} | spans]
+        )
+    end
+  end
+
   defp decode_text(text, context, decoded) do
     case text do
       "" ->

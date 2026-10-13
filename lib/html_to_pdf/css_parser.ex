@@ -15,8 +15,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
+  alias NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.PrintMediaValidator
+  alias NativeElixirPdfUtilities.Validators.CssFontFaceValidator
 
   @type declaration :: {String.t(), String.t()} | {String.t(), String.t(), :important}
   @type selector_part :: %{
@@ -274,6 +276,509 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end)
   end
 
+  @doc false
+  @spec prepare_source_stylesheet(
+          String.t(),
+          map() | nil,
+          PrintMediaValidator.context() | nil | :unpositioned
+        ) ::
+          {:ok, map()} | {:error, {atom(), map()}}
+  def prepare_source_stylesheet(css, descriptor \\ nil, media_context \\ nil) do
+    HtmlValidator.with_render_budget(fn ->
+      with {:ok, css} <- HtmlValidator.validate_css_source(css),
+           :ok <-
+             if(is_nil(descriptor),
+               do: :ok,
+               else: HtmlCssSourceValidator.validate_descriptor(css, descriptor)
+             ) do
+        HtmlValidator.reserve_render_resource(
+          :max_aggregate_css_source_bytes,
+          byte_size(css),
+          :css
+        )
+
+        HtmlValidator.reserve_render_resource(:max_css_work, byte_size(css), :css)
+        projection = source_projection(css) |> Map.put(:descriptor, descriptor)
+
+        with {:ok, projected, media} <- source_media_projection(projection, media_context),
+             {:ok, fonts} <- source_font_records(projected, projection, media),
+             {:ok, pages} <- source_page_records(projected, projection, media),
+             rules_css = mask_source_blocks(projected, @font_face_rule_regex),
+             rules_css = mask_source_blocks(rules_css, @page_rule_regex),
+             {:ok, sources} <- rule_sources(rules_css),
+             {:ok, rules} <- source_rules(sources, rules_css, projection, media) do
+          active_rules =
+            rules
+            |> Enum.filter(& &1.active)
+            |> Enum.with_index()
+            |> Enum.map(fn {rule, order} -> %{rule | order: order} end)
+
+          {:ok,
+           %{
+             rules: active_rules,
+             font_faces: fonts |> Enum.filter(& &1.active) |> Enum.map(& &1.face),
+             page_options:
+               Enum.reduce(pages, [], fn page, options ->
+                 if page.active,
+                   do: PageGeometry.merge_page_options(options, page.options),
+                   else: options
+               end),
+             authored_rules: rules,
+             authored_fonts: fonts,
+             authored_pages: pages,
+             authored_media: media,
+             media_provider: PrintMediaValidator,
+             media_policy: :unresolved_provider_context
+           }}
+        else
+          {:error, {reason, detail}} ->
+            {:error, {reason, detail}}
+
+          {:error, _} ->
+            source_parse_failure(
+              projection,
+              projection.text,
+              0,
+              :invalid_css,
+              css_error_detail(css, projection.text)
+            )
+        end
+      end
+    end)
+  end
+
+  # Only the parser scans comments. Offset runs retain exact authored spans even
+  # when the established parser joins identifiers across a removed comment.
+  defp source_projection(css) do
+    comments =
+      Regex.scan(
+        Regex.compile!("#{@css_opaque_pattern}(*SKIP)(*F)|/\\*.*?\\*/", "su"),
+        css,
+        return: :index
+      )
+
+    {parts, gaps, cursor, _removed} =
+      Enum.reduce(comments, {[], [], 0, 0}, fn [{offset, length}],
+                                               {parts, gaps, cursor, removed} ->
+        part = binary_part(css, cursor, offset - cursor)
+        {[part | parts], [{offset - removed, length} | gaps], offset + length, removed + length}
+      end)
+
+    tail = binary_part(css, cursor, byte_size(css) - cursor)
+
+    %{
+      original: css,
+      text: IO.iodata_to_binary(Enum.reverse([tail | parts])),
+      gaps: Enum.reverse(gaps)
+    }
+  end
+
+  defp source_record(projection, offset, length) do
+    HtmlValidator.reserve_render_resource(
+      :max_css_work,
+      length(projection.gaps) + offset + length,
+      :css
+    )
+
+    original_offset =
+      offset +
+        Enum.reduce(projection.gaps, 0, fn {at, bytes}, total ->
+          if at <= offset, do: total + bytes, else: total
+        end)
+
+    finish = offset + length
+
+    original_finish =
+      finish +
+        Enum.reduce(projection.gaps, 0, fn {at, bytes}, total ->
+          if at < finish, do: total + bytes, else: total
+        end)
+
+    case Map.get(projection, :descriptor) do
+      nil ->
+        prefix = binary_part(projection.original, 0, original_offset)
+        lines = String.split(prefix, "\n", trim: false)
+
+        %{
+          text:
+            binary_part(projection.original, original_offset, original_finish - original_offset),
+          offset: original_offset,
+          length: original_finish - original_offset,
+          line: length(lines),
+          column: String.length(List.last(lines)) + 1,
+          provenance: :unbound,
+          owner: nil
+        }
+
+      descriptor ->
+        HtmlCssSourceValidator.map_span(
+          descriptor,
+          original_offset,
+          original_finish - original_offset
+        )
+    end
+  end
+
+  @doc false
+  @spec prepare_source_declarations(String.t(), map()) ::
+          {:ok, [map()]} | {:error, {atom(), map()}}
+  def prepare_source_declarations(css, descriptor) do
+    HtmlValidator.with_render_budget(fn ->
+      projection = %{original: css, text: css, gaps: [], descriptor: descriptor}
+
+      with :ok <- HtmlCssSourceValidator.validate_descriptor(css, descriptor) do
+        case parse_declarations_input(css, true) do
+          {:ok, declarations} ->
+            {:ok, source_declarations(css, declarations, 0, projection, false)}
+
+          {:error, {reason, detail, offset}} ->
+            source_parse_failure(projection, css, 0, reason, detail, offset)
+
+          {:error, _} = error ->
+            error
+        end
+      end
+    end)
+  end
+
+  defp source_media_projection(projection, media_context) do
+    with {:ok, projected, media} <-
+           PrintMediaValidator.project_source_rules(projection.text, media_context) do
+      records =
+        Enum.map(media, fn record ->
+          record
+          |> Map.put(:source, source_record(projection, record.offset, record.length))
+          |> Map.delete(:offset)
+          |> Map.delete(:length)
+          |> Map.put(:policy, :unresolved_provider_context)
+          |> Map.put(:provider, PrintMediaValidator)
+        end)
+
+      {:ok, projected, records}
+    end
+  end
+
+  defp source_active?(offset, media) do
+    Enum.all?(media, fn record ->
+      offset < record.body_offset or offset >= record.body_offset + record.body_length or
+        record.active
+    end)
+  end
+
+  defp mask_source_blocks(css, regex) do
+    Regex.replace(regex, css, fn block, _body -> String.duplicate(" ", byte_size(block)) end)
+  end
+
+  defp source_declarations(block, declarations, base, projection, references? \\ true) do
+    declaration_spans(block)
+    |> Enum.zip(declarations)
+    |> Enum.map(fn {%{text: snippet, offset: offset, length: length}, declaration} ->
+      %{
+        declaration: declaration,
+        projected_offset: base + offset,
+        projected_length: length,
+        source: source_record(projection, base + offset, length),
+        context_policy: :requires_applicable_original_context,
+        references:
+          if(references?,
+            do: source_reference_records(snippet, base + offset, projection),
+            else: []
+          )
+      }
+    end)
+  end
+
+  defp source_reference_records(snippet, base, projection) do
+    regex =
+      Regex.compile!(
+        "#{@css_opaque_pattern}(*SKIP)(*F)|\\burl\\s*\\((?:#{@css_opaque_pattern}|[^)])*\\)",
+        "ui"
+      )
+
+    Regex.scan(regex, snippet, return: :index)
+    |> Enum.map(fn [{offset, length}] ->
+      url = binary_part(snippet, offset, length)
+      source = source_record(projection, base + offset, length)
+
+      case NativeElixirPdfUtilities.Validators.CssValueValidator.validate_source_reference(url) do
+        {:ok, reference} ->
+          %{
+            source: source,
+            reference: reference,
+            policy: :static_url_syntax_only,
+            authorization: :unresolved,
+            contents: :unresolved
+          }
+
+        {:error, {reason, diagnostic}} ->
+          throw(
+            {:render_resource_limit,
+             {:error,
+              {reason,
+               Map.merge(diagnostic, %{
+                 source: source.text,
+                 line: source.line,
+                 column: source.column
+               })}}}
+          )
+
+        {:error, reason} ->
+          throw(
+            {:render_resource_limit,
+             NativeElixirPdfUtilities.Diagnostics.error(
+               :css,
+               reason,
+               "authored CSS URL syntax is invalid",
+               source: source.text,
+               line: source.line,
+               column: source.column,
+               module: __MODULE__
+             )}
+          )
+      end
+    end)
+  end
+
+  defp source_rules(sources, rules_css, projection, media) do
+    sources
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, [], 0}, fn {source, order}, {:ok, rules, cursor} ->
+      {offset, length} =
+        :binary.match(rules_css, source.source,
+          scope: {cursor, byte_size(projection.text) - cursor}
+        )
+
+      case parse_rule(source, order, true) do
+        {:ok, rule} ->
+          base = offset + byte_size(source.selectors) + 1
+          records = source_declarations(source.declarations, rule.declarations, base, projection)
+          selector = HtmlValidator.trim_css_whitespace(source.selectors)
+
+          selector_offset =
+            offset + byte_size(source.selectors) -
+              byte_size(String.trim_leading(source.selectors))
+
+          rule =
+            rule
+            |> Map.put(:source_declarations, records)
+            |> Map.put(:source, source_record(projection, selector_offset, byte_size(selector)))
+            |> Map.put(:active, source_active?(base, media))
+
+          {:cont, {:ok, [rule | rules], offset + length}}
+
+        {:error, {reason, detail, declaration_offset}} ->
+          {:halt,
+           source_parse_failure(
+             projection,
+             source.declarations,
+             offset + byte_size(source.selectors) + 1,
+             reason,
+             detail,
+             declaration_offset
+           )}
+
+        {:error, _} ->
+          {:halt,
+           source_parse_failure(
+             projection,
+             source.source,
+             offset,
+             :invalid_css,
+             css_error_detail(source.source, source.source)
+           )}
+      end
+    end)
+    |> case do
+      {:ok, rules, _cursor} -> {:ok, Enum.reverse(rules)}
+      error -> error
+    end
+  end
+
+  defp source_parse_failure(projection, block, base, reason, detail, exact_offset \\ nil) do
+    {offset, length} =
+      if is_nil(exact_offset),
+        do: :binary.match(block, detail.source),
+        else: {exact_offset, byte_size(detail.source)}
+
+    source = source_record(projection, base + offset, length)
+
+    HtmlValidator.reserve_render_resource(:max_css_work, byte_size(detail.message), :css)
+
+    message =
+      if source.provenance == :original_html,
+        do: String.replace(detail.message, ~r/\Aline [0-9]+:/, "line #{source.line}:"),
+        else: detail.message
+
+    NativeElixirPdfUtilities.Diagnostics.error(:css, reason, message,
+      module: __MODULE__,
+      source: source.text,
+      line: source.line,
+      column: source.column
+    )
+  end
+
+  defp source_font_records(projected, projection, media) do
+    @font_face_rule_regex
+    |> Regex.scan(projected, return: :index)
+    |> Enum.reduce_while({:ok, []}, fn [{offset, length}, {base, bytes}], {:ok, fonts} ->
+      block = binary_part(projected, base, bytes)
+
+      case parse_declarations_input(block, true) do
+        {:ok, declarations} ->
+          records = source_declarations(block, declarations, base, projection, false)
+
+          case CssFontFaceValidator.validate(declarations) do
+            {:ok, face} ->
+              font = %{
+                source: source_record(projection, offset, length),
+                declarations: records,
+                candidates: source_font_candidates(records, block, base, projection),
+                face: face,
+                active: source_active?(offset, media),
+                policy: :descriptor_selection_only,
+                runtime: [:authorization, :font_bytes, :font_metrics]
+              }
+
+              {:cont, {:ok, [font | fonts]}}
+
+            {:error, %{property: property, index: index}} ->
+              record = if is_nil(index), do: nil, else: Enum.at(records, index)
+
+              source =
+                if record, do: record.source, else: source_record(projection, offset, length)
+
+              message =
+                if record,
+                  do: "@font-face declaration is invalid or unsupported",
+                  else: "@font-face is missing required #{inspect(property)} descriptor"
+
+              {:halt,
+               NativeElixirPdfUtilities.Diagnostics.error(:css, :invalid_css, message,
+                 module: __MODULE__,
+                 source: source.text,
+                 line: source.line,
+                 column: source.column
+               )}
+          end
+
+        {:error, {reason, detail, offset}} ->
+          {:halt, source_parse_failure(projection, block, base, reason, detail, offset)}
+      end
+    end)
+    |> case do
+      {:ok, fonts} -> {:ok, Enum.reverse(fonts)}
+      error -> error
+    end
+  end
+
+  defp source_font_candidates(records, block, base, projection) do
+    selected_src =
+      records
+      |> Enum.with_index()
+      |> Enum.reduce(nil, fn {record, index}, selected ->
+        if elem(record.declaration, 0) == "src", do: index, else: selected
+      end)
+
+    {candidates, _cursor} =
+      records
+      |> Enum.with_index()
+      |> Enum.reduce({[], 0}, fn {record, index}, {acc, cursor} ->
+        {property, value} = record.declaration
+
+        if property == "src" do
+          cursor = record.projected_offset - base
+          finish = cursor + record.projected_length
+
+          {items, cursor} =
+            CssFontFaceValidator.source_candidates(value)
+            |> Enum.with_index()
+            |> Enum.reduce({[], cursor}, fn {candidate, candidate_index}, {items, cursor} ->
+              {at, bytes} =
+                :binary.match(block, candidate, scope: {cursor, finish - cursor})
+
+              original = source_record(projection, base + at, bytes)
+
+              info =
+                case CssFontFaceValidator.validate_source_candidate(candidate) do
+                  {:ok, info} ->
+                    info
+
+                  {:error, {reason, diagnostic}} ->
+                    throw(
+                      {:render_resource_limit,
+                       {:error,
+                        {reason,
+                         Map.merge(diagnostic, %{
+                           source: original.text,
+                           line: original.line,
+                           column: original.column
+                         })}}}
+                    )
+                end
+
+              role =
+                cond do
+                  index != selected_src -> :superseded
+                  not info.supported -> :unsupported
+                  candidate_index == 0 -> :first_candidate
+                  true -> :fallback_candidate
+                end
+
+              item =
+                Map.merge(info, %{
+                  source: original,
+                  declaration_source: record.source,
+                  role: role,
+                  authorization: :unresolved,
+                  contents: :unresolved
+                })
+
+              {[item | items], at + bytes}
+            end)
+
+          {acc ++ Enum.reverse(items), cursor}
+        else
+          {acc, cursor}
+        end
+      end)
+
+    candidates
+  end
+
+  defp source_page_records(projected, projection, media) do
+    @page_rule_regex
+    |> Regex.scan(projected, return: :index)
+    |> Enum.reduce_while({:ok, []}, fn [{offset, length}, {base, bytes}], {:ok, pages} ->
+      block = binary_part(projected, base, bytes)
+
+      case page_options_from(block) do
+        {:ok, options} ->
+          page = %{
+            source: source_record(projection, offset, length),
+            options: options,
+            active: source_active?(offset, media),
+            policy: :unresolved_page_policy_ownership
+          }
+
+          {:cont, {:ok, [page | pages]}}
+
+        {:error, snippet} ->
+          {:halt,
+           source_parse_failure(
+             projection,
+             block,
+             base,
+             :invalid_css,
+             declaration_error_detail(block, snippet)
+           )}
+      end
+    end)
+    |> case do
+      {:ok, pages} -> {:ok, Enum.reverse(pages)}
+      error -> error
+    end
+  end
+
   @doc """
   Extracts active local font declarations from `@font-face` rules.
 
@@ -376,6 +881,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           {:ok, [declaration()]}
           | {:error, {:invalid_css | :not_implemented | :resource_limit_exceeded, map()}}
   def parse_declarations_detailed(css) do
+    case parse_declarations_input(css, false) do
+      {:error, {reason, detail, _offset}} -> {:error, {reason, detail}}
+      result -> result
+    end
+  end
+
+  defp parse_declarations_input(css, source?) do
     HtmlValidator.with_render_budget(fn ->
       case HtmlValidator.validate_css_source(css, :declarations) do
         {:ok, css} ->
@@ -385,15 +897,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
             :css
           )
 
-          declarations = declaration_sources(css)
+          sources = if source?, do: declaration_spans(css), else: declaration_sources(css)
 
-          Enum.reduce_while(declarations, {:ok, []}, fn declaration, {:ok, acc} ->
+          Enum.reduce_while(sources, {:ok, []}, fn source, {:ok, acc} ->
+            {declaration, offset} =
+              case source do
+                %{text: text, offset: offset} -> {text, offset}
+                text -> {text, nil}
+              end
+
             case HtmlValidator.validate_css_declaration(declaration) do
               {:ok, parsed} ->
                 {:cont, {:ok, acc ++ [parsed]}}
 
               {:error, :invalid_css} ->
-                {:halt, {:error, {:invalid_css, declaration_error_detail(css, declaration)}}}
+                {:halt,
+                 {:error,
+                  {:invalid_css, declaration_error_detail(css, declaration, offset), offset}}}
             end
           end)
 
@@ -470,38 +990,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   defp parse_font_face(block) do
     case parse_declarations_detailed(block) do
       {:ok, declarations} ->
-        case Enum.find(declarations, &(not supported_font_descriptor?(&1))) do
-          nil ->
-            family = font_family_descriptor(declarations)
-            sources = font_source_descriptor(declarations)
-            weight = font_weight_descriptor(declarations)
-            style = font_style_descriptor(declarations)
+        case CssFontFaceValidator.validate(declarations) do
+          {:ok, face} ->
+            {:ok, face}
 
-            case {family, sources, weight, style} do
-              {{:ok, family}, {:ok, sources}, {:ok, weight}, {:ok, style}} ->
-                {:ok, %{family: family, sources: sources, weight: weight, style: style}}
-
-              _ ->
-                error =
-                  [
-                    {"font-family", family},
-                    {"src", sources},
-                    {"font-weight", weight},
-                    {"font-style", style}
-                  ]
-                  |> Enum.find_value(fn {property, result} ->
-                    case result do
-                      {:error, :invalid_css} -> font_face_descriptor_error(block, property)
-                      _ -> nil
-                    end
-                  end)
-
-                {:error, error}
-            end
-
-          declaration ->
-            property = elem(declaration, 0)
-            {:error, font_face_descriptor_error(block, property)}
+          {:error, %{property: property, index: index}} ->
+            {:error, font_face_descriptor_error(block, property, index)}
         end
 
       {:error, {:invalid_css, detail}} ->
@@ -511,11 +1005,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end
   end
 
-  defp font_face_descriptor_error(block, property) do
-    source =
-      block
-      |> declaration_sources()
-      |> Enum.find(&Regex.match?(~r/^#{Regex.escape(property)}\s*:/iu, &1))
+  defp font_face_descriptor_error(block, property, index) do
+    source = if is_nil(index), do: nil, else: Enum.at(declaration_sources(block), index)
 
     case source do
       nil ->
@@ -537,160 +1028,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       column: column,
       source: source
     }
-  end
-
-  defp supported_font_descriptor?(declaration) do
-    case declaration do
-      {property, _value} when property in ["font-family", "src", "font-weight", "font-style"] ->
-        true
-
-      {"font-display", value} ->
-        String.downcase(value) in ["auto", "block", "swap", "fallback", "optional"]
-
-      _ ->
-        false
-    end
-  end
-
-  defp font_family_descriptor(declarations) do
-    case declarations |> Enum.reverse() |> List.keyfind("font-family", 0) do
-      {"font-family", value} ->
-        family = value |> String.trim() |> String.trim("\"") |> String.trim("'")
-        if family == "", do: {:error, :invalid_css}, else: {:ok, family}
-
-      _ ->
-        {:error, :invalid_css}
-    end
-  end
-
-  defp font_source_descriptor(declarations) do
-    case declarations |> Enum.reverse() |> List.keyfind("src", 0) do
-      {"src", value} ->
-        sources =
-          value
-          |> font_source_candidates()
-          |> Enum.flat_map(fn candidate ->
-            captures =
-              Regex.named_captures(
-                ~r/^url\(\s*(?:"(?<double>[^"]+)"|'(?<single>[^']+)'|(?<bare>[^)'"\s]+))\s*\)(?:\s+format\(\s*(?:"(?<format_double>[^"]+)"|'(?<format_single>[^']+)'|(?<format_bare>[^)'"\s]+))\s*\))?$/ui,
-                candidate
-              )
-
-            case captures do
-              captures when is_map(captures) ->
-                source = first_capture(captures, ["double", "single", "bare"])
-
-                format =
-                  first_capture(captures, ["format_double", "format_single", "format_bare"])
-
-                if supported_font_source?(source, format), do: [source], else: []
-
-              _ ->
-                []
-            end
-          end)
-
-        case sources do
-          [] -> {:error, :invalid_css}
-          sources -> {:ok, sources}
-        end
-
-      _ ->
-        {:error, :invalid_css}
-    end
-  end
-
-  defp font_source_candidates(value) do
-    {candidates, current, _quote, _depth} =
-      value
-      |> String.graphemes()
-      |> Enum.reduce({[], [], nil, 0}, fn character, {candidates, current, quote, depth} ->
-        cond do
-          character in ["\"", "'"] and is_nil(quote) ->
-            {candidates, [character | current], character, depth}
-
-          character == quote ->
-            {candidates, [character | current], nil, depth}
-
-          is_nil(quote) and character == "(" ->
-            {candidates, [character | current], quote, depth + 1}
-
-          is_nil(quote) and character == ")" ->
-            {candidates, [character | current], quote, max(depth - 1, 0)}
-
-          is_nil(quote) and depth == 0 and character == "," ->
-            candidate = current |> Enum.reverse() |> Enum.join() |> String.trim()
-            {[candidate | candidates], [], quote, depth}
-
-          true ->
-            {candidates, [character | current], quote, depth}
-        end
-      end)
-
-    final_candidate = current |> Enum.reverse() |> Enum.join() |> String.trim()
-
-    [final_candidate | candidates]
-    |> Enum.reverse()
-    |> Enum.reject(&(&1 == ""))
-  end
-
-  defp supported_font_source?(source, format) do
-    normalized_format = String.downcase(format)
-    extension = source |> Path.extname() |> String.downcase()
-
-    supported_reference? = source != "" and not String.contains?(source, "\0")
-
-    format_supported? =
-      case normalized_format do
-        "" -> true
-        format -> format in ["truetype", "opentype"]
-      end
-
-    supported_reference? and extension in [".ttf", ".otf"] and format_supported?
-  end
-
-  defp first_capture(captures, names) do
-    Enum.find_value(names, "", fn name ->
-      case Map.get(captures, name) do
-        value when is_binary(value) and value != "" -> value
-        _ -> nil
-      end
-    end)
-  end
-
-  defp font_weight_descriptor(declarations) do
-    case declarations |> Enum.reverse() |> List.keyfind("font-weight", 0) do
-      nil ->
-        {:ok, 400}
-
-      {"font-weight", value} ->
-        case String.downcase(String.trim(value)) do
-          "normal" -> {:ok, 400}
-          "bold" -> {:ok, 700}
-          value -> parsed_font_weight(Integer.parse(value))
-        end
-    end
-  end
-
-  defp parsed_font_weight(parsed) do
-    case parsed do
-      {weight, ""} when weight >= 100 and weight <= 900 -> {:ok, weight}
-      _ -> {:error, :invalid_css}
-    end
-  end
-
-  defp font_style_descriptor(declarations) do
-    case declarations |> Enum.reverse() |> List.keyfind("font-style", 0) do
-      nil ->
-        {:ok, :normal}
-
-      {"font-style", value} ->
-        case String.downcase(String.trim(value)) do
-          "normal" -> {:ok, :normal}
-          "italic" -> {:ok, :italic}
-          _ -> {:error, :invalid_css}
-        end
-    end
   end
 
   defp page_rule_blocks(css) do
@@ -1056,14 +1393,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   defp parse_rule(
          %{selectors: selector_source, declarations: declaration_source},
-         order
+         order,
+         source? \\ false
        ) do
     with {:ok, selectors} <- parse_selectors(selector_source),
          true <- selectors != [],
-         {:ok, declarations} <- parse_declarations(declaration_source),
+         {:ok, declarations} <-
+           if(source?,
+             do: parse_declarations_input(declaration_source, true),
+             else: parse_declarations(declaration_source)
+           ),
          true <- declarations != [] do
       {:ok, %{selectors: selectors, declarations: declarations, order: order}}
     else
+      {:error, {_, _, _}} = error -> error
       _ -> {:error, :invalid_css}
     end
   end
@@ -1461,6 +1804,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   @doc false
   @spec declaration_sources(String.t()) :: [String.t()]
   def declaration_sources(source) do
+    source
+    |> declaration_parts()
+    |> Enum.map(&HtmlValidator.trim_css_whitespace/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp declaration_spans(source) do
+    {spans, _cursor} =
+      source
+      |> declaration_parts()
+      |> Enum.reduce({[], 0}, fn part, {spans, cursor} ->
+        text = HtmlValidator.trim_css_whitespace(part)
+
+        spans =
+          if text == "",
+            do: spans,
+            else:
+              then(:binary.match(part, text), fn {at, bytes} ->
+                [%{text: text, offset: cursor + at, length: bytes} | spans]
+              end)
+
+        {spans, cursor + byte_size(part) + 1}
+      end)
+
+    Enum.reverse(spans)
+  end
+
+  defp declaration_parts(source) do
     {parts, current, _quote, _depth, _escaped?} =
       source
       |> HtmlValidator.css_syntax_units()
@@ -1492,8 +1863,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
     [final | parts]
     |> Enum.reverse()
-    |> Enum.map(&HtmlValidator.trim_css_whitespace/1)
-    |> Enum.reject(&(&1 == ""))
   end
 
   defp css_issue_to_detail({kind, source}, css) do
@@ -1518,9 +1887,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end
   end
 
-  defp declaration_error_detail(css, declaration) do
+  defp declaration_error_detail(css, declaration, offset \\ nil) do
     source = HtmlValidator.trim_css_whitespace(declaration)
-    {line, column} = source_location(css, source)
+    {line, column} = source_location(css, source, offset)
 
     %{
       stage: :css,
@@ -1546,13 +1915,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     }
   end
 
-  defp source_location(source, snippet) do
+  defp source_location(source, snippet, offset \\ nil) do
     case snippet == "" do
       true ->
         {1, 1}
 
       false ->
-        case :binary.match(source, snippet) do
+        case if(is_nil(offset),
+               do: :binary.match(source, snippet),
+               else: {offset, byte_size(snippet)}
+             ) do
           {index, _length} ->
             prefix = binary_part(source, 0, index)
             lines = String.split(prefix, "\n", trim: false)

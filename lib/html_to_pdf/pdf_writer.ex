@@ -9,6 +9,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry
+  alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubset
   alias NativeElixirPdfUtilities.Diagnostics
@@ -78,8 +79,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   and pagination. It cannot carry text, painting, links or form controls. The
   validator counts it toward layout limits and removes it before serialization.
 
+  Rectangles may supply `:shape` as `:rectangle` or `{:triangle, direction}`, with
+  `direction` one of `:up`, `:down`, `:left` or `:right`. `{:chevron, :down}`
+  supplies an open down chevron for native menu strokes.
+
   Text, rectangle and image boxes may carry an absolute `:clip` rectangle with
-  numeric `x`/`y` and positive `width`/`height`. Each clip is scoped to its box.
+  finite bounded `x`/`y` and positive `width`/`height`. It may supply a
+  nonnegative `border_radius` and one `inner_clip` rectangle with the same numeric
+  fields and optional radius. Radii are normalized to half the smaller dimension;
+  only rounded or nested clips may have zero area, which paints nothing.
+  Each intersected clip is scoped to its box.
 
   Gauge rectangles can carry a validator-checked `:gauge_fraction`, boolean
   `:gauge_quantize_value` and `:gauge_clip_track` paint flags, and a
@@ -131,7 +140,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end)
   end
 
-  @doc false
+  @doc """
+  Builds appearance Form objects from validated drawing frames.
+
+  A frame normally paints in local coordinates. Its optional `:paint_frame`
+  must have exactly finite bounded `:x`, `:y`, `:width` and `:height`, with
+  positive dimensions. The origin is the widget's absolute page paint origin;
+  width and height retain the original page dimensions. Boxes and clips then
+  stay absolute, snap using that page height and translate into the Form once.
+  Ordinary page rendering does not accept this appearance-only transport.
+  """
   @spec appearance_objects(term(), term()) ::
           {:ok, [NativeElixirPdfUtilities.Pdf.IncrementalWriter.object_entry()],
            [NativeElixirPdfUtilities.Pdf.Reader.value()], pos_integer()}
@@ -151,7 +169,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           Enum.map_reduce(frames, first_form_id, fn frame, id ->
             {fonts, images, states} = page_resources(frame, fonts, images, states)
             {width, height} = frame.size
-            content = content_stream(frame.boxes, height, fonts, images, states)
+
+            content =
+              case Map.get(frame, :paint_frame) do
+                nil ->
+                  content_stream(frame.boxes, height, fonts, images, states)
+
+                origin ->
+                  "q 1 0 0 1 #{format_number(-origin.x)} #{format_number(-origin.y)} cm\n" <>
+                    content_stream(frame.boxes, origin.height, fonts, images, states) <> "\nQ"
+              end
 
             dictionary =
               "<< /Type /XObject /Subtype /Form /BBox [0 0 #{format_number(width)} #{format_number(height)}] /Resources << /Font << #{font_resource_dictionary(fonts)} >>#{xobject_resource_dictionary(images)}#{graphics_state_resource_dictionary(states)}#{gauge_gradient_dictionary(frame.boxes)} >> /Length #{byte_size(content)} >>"
@@ -570,8 +597,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
       {region, clip} =
         case Map.get(box, :link_rect) do
-          nil -> {%{x: box.x, y: box.y, width: width, height: height}, Map.get(box, :clip)}
-          region -> {region, nil}
+          nil ->
+            {%{x: box.x, y: box.y, width: width, height: height}, Map.get(box, :clip)}
+
+          region ->
+            clip = Map.get(box, :clip)
+
+            content_clip =
+              if is_map(clip) and
+                   (Map.has_key?(clip, :inner_clip) or Map.has_key?(clip, :border_radius)),
+                 do: clip,
+                 else: nil
+
+            {region, content_clip}
         end
 
       {left, bottom, right, top} =
@@ -580,14 +618,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             prepared
 
           :error ->
-            case clip do
-              %{x: x, y: y, width: clip_width, height: clip_height} ->
-                {max(region.x, x), max(region.y, y), min(region.x + region.width, x + clip_width),
-                 min(region.y + region.height, y + clip_height)}
-
-              _ ->
-                {region.x, region.y, region.x + region.width, region.y + region.height}
-            end
+            DrawingGeometry.intersect_clip(
+              {region.x, region.y, region.x + region.width, region.y + region.height},
+              DrawingGeometry.box_clip_bounds(clip)
+            )
         end
 
       left = max(0, left)
@@ -676,8 +710,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           end
 
         case Map.get(box, :clip) do
-          nil -> text
-          clip -> ["q ", clip_rectangle_stream(clip), text, " Q"]
+          nil ->
+            text
+
+          clip ->
+            [
+              "q ",
+              clip_rectangle_stream(clip),
+              text,
+              " Q"
+            ]
         end
     end
   end
@@ -832,27 +874,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       {dx, dy, frame_width, frame_height} ->
         frame_x = box.x - dx
         frame_y = box.y - dy
-        left = DrawingGeometry.snap_css_pixel(frame_x)
-        right = DrawingGeometry.snap_css_pixel(frame_x + frame_width)
+        left = PageGeometry.snap_css_pixel(frame_x)
+        right = PageGeometry.snap_css_pixel(frame_x + frame_width)
 
         {bottom, top} =
           if box.gauge_state.kind == :progress do
-            bottom = page_height - DrawingGeometry.snap_css_pixel(page_height - frame_y)
-
-            top =
-              page_height - DrawingGeometry.snap_css_pixel(page_height - frame_y - frame_height)
-
+            bottom = page_height - PageGeometry.snap_css_pixel(page_height - frame_y)
+            top = page_height - PageGeometry.snap_css_pixel(page_height - frame_y - frame_height)
             track_height = (top - bottom) / 2
             track_y = bottom + track_height / 2
             {track_y, track_y + track_height}
           else
             bottom =
-              page_height -
-                DrawingGeometry.snap_css_pixel(page_height - frame_y - frame_height / 4)
+              page_height - PageGeometry.snap_css_pixel(page_height - frame_y - frame_height / 4)
 
             top =
               page_height -
-                DrawingGeometry.snap_css_pixel(page_height - frame_y - frame_height * 3 / 4)
+                PageGeometry.snap_css_pixel(page_height - frame_y - frame_height * 3 / 4)
 
             {bottom, top}
           end
@@ -922,7 +960,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                 DrawingGeometry.text_baseline(box.y - offset, page_height, depth)
 
               _ ->
-                page_height - DrawingGeometry.snap_css_pixel(page_height - box.y + offset)
+                page_height - PageGeometry.snap_css_pixel(page_height - box.y + offset)
             end
 
           %{box | y: baseline + offset}
@@ -934,7 +972,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     box =
       case Map.get(box, :snap_to_css_pixel_grid, false) do
         true ->
-          snapped = snap_box_to_css_pixel_grid(%{box | y: page_height - box.y - box.height})
+          snapped =
+            PageGeometry.snap_box_to_css_pixel_grid(%{box | y: page_height - box.y - box.height})
+
           %{snapped | y: page_height - snapped.y - snapped.height}
 
         false ->
@@ -973,6 +1013,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           box
       end
 
+    box =
+      if Map.get(box, :role) == :select_arrow do
+        # SetupMenuListArrow receives a rounded integer-CSS-pixel paint rect
+        # and computes its vertical center with integer division.
+        parent =
+          box.clip
+          |> Map.put(:snap_to_css_pixel_grid, true)
+          |> Map.update!(:y, &(page_height - &1 - box.clip.height))
+          |> PageGeometry.snap_box_to_css_pixel_grid()
+
+        %{
+          box
+          | x: PageGeometry.snap_css_pixel(box.x),
+            y:
+              page_height - parent.y -
+                Float.floor(parent.height / @css_pixel_points / 2) * @css_pixel_points -
+                box.height / 2
+        }
+      else
+        box
+      end
+
     border_style = uniform_border_style(box)
 
     case side_specific_border?(box) or
@@ -1008,7 +1070,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
                     extent =
                       if Map.get(box, :gauge_quantize_value, false),
-                        do: DrawingGeometry.snap_css_pixel(extent),
+                        do: PageGeometry.snap_css_pixel(extent),
                         else: extent
 
                     [
@@ -1045,11 +1107,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         stroke_stream =
           case WriterValidator.visible_border?(box) and border_style not in [:none, :hidden] do
             true ->
-              stroke_box = inset_stroke_box(box)
+              stroke_box =
+                if Map.get(box, :shape) == {:chevron, :down},
+                  do: box,
+                  else: inset_stroke_box(box)
 
               stroke_box =
                 if Map.get(box, :snap_to_css_pixel_grid, false) and border_style == :solid and
-                     box.border_radius == 0 and color_alpha(box.stroke_color) == 1.0 and
+                     (box.border_radius == 0 or
+                        Map.get(box, :role) in [:native_listbox, :native_menu, :css_menu]) and
+                     color_alpha(box.stroke_color) == 1.0 and
                      (is_nil(Map.get(box, :form_control)) or
                         not is_nil(Map.get(box, :form_owner))) do
                   # Chromium's 0.23999999 print matrix places edge ties just
@@ -1075,34 +1142,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                   border_radius: stroke_box.border_radius / scale
               }
 
-              (["q"] ++
-                 if(Map.get(box, :gauge_clip_track, false), do: [rect_path(box), "W n"], else: []) ++
-                 ["#{format_number(scale)} 0 0 #{format_number(scale)} 0 0 cm"])
-              |> put_opacity(box.stroke_color, :stroke, graphics_state_resources)
-              |> put_stroke_color(box.stroke_color, box.stroke_width / scale)
-              |> put_stroke_pattern(border_style, box.stroke_width / scale, nil)
-              |> Kernel.++([rect_path(stroke_box), "S", "Q"])
+              contours = PageGeometry.rounded_border_contours(box, page_height)
+
+              if contours do
+                # CSS BoxBorderPainter's rounded solid fast path fills the
+                # independently snapped outer and inner contours (drawDRRect).
+                paths =
+                  Enum.map(contours, fn contour ->
+                    contour
+                    |> Map.update!(:x, &(&1 / scale))
+                    |> Map.update!(:y, &(&1 / scale))
+                    |> Map.update!(:width, &(&1 / scale))
+                    |> Map.update!(:height, &(&1 / scale))
+                    |> Map.update!(:border_radius, &(&1 / scale))
+                    |> rect_path()
+                  end)
+
+                ["q", "#{format_number(scale)} 0 0 #{format_number(scale)} 0 0 cm"]
+                |> put_opacity(box.stroke_color, :fill, graphics_state_resources)
+                |> put_fill_color(box.stroke_color)
+                |> Kernel.++(paths ++ ["f*", "Q"])
+              else
+                (["q"] ++
+                   if(Map.get(box, :gauge_clip_track, false),
+                     do: [rect_path(box), "W n"],
+                     else: []
+                   ) ++
+                   ["#{format_number(scale)} 0 0 #{format_number(scale)} 0 0 cm"])
+                |> put_opacity(box.stroke_color, :stroke, graphics_state_resources)
+                |> put_stroke_color(
+                  box.stroke_color,
+                  if(Map.get(box, :role) == :native_menu, do: 0.0, else: box.stroke_width / scale)
+                )
+                |> put_stroke_pattern(border_style, box.stroke_width / scale, nil)
+                |> Kernel.++([rect_path(stroke_box), "S", "Q"])
+              end
 
             false ->
               []
           end
 
         Enum.join(fill_stream ++ border_cutout_stream(stroke_stream, box), " ")
-    end
-  end
-
-  defp snap_box_to_css_pixel_grid(box) do
-    case Map.get(box, :snap_to_css_pixel_grid, false) do
-      true ->
-        left = DrawingGeometry.snap_css_pixel(box.x)
-        bottom = DrawingGeometry.snap_css_pixel(box.y)
-        right = DrawingGeometry.snap_css_pixel(box.x + box.width)
-        top = DrawingGeometry.snap_css_pixel(box.y + box.height)
-
-        %{box | x: left, y: bottom, width: max(right - left, 0.0), height: max(top - bottom, 0.0)}
-
-      false ->
-        box
     end
   end
 
@@ -1119,21 +1199,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     }
   end
 
-  defp clip_rectangle_stream(%{x: x, y: y, width: width, height: height}) do
-    [
-      format_number(x),
-      " ",
-      format_number(y),
-      " ",
-      format_number(width),
-      " ",
-      format_number(height),
-      " re W n "
-    ]
+  defp clip_rectangle_stream(clip) do
+    path =
+      if Map.get(clip, :border_radius, 0.0) > 0 do
+        [
+          rounded_rect_path(
+            clip.x,
+            clip.y,
+            clip.width,
+            clip.height,
+            clip.border_radius
+          ),
+          " W n "
+        ]
+      else
+        [
+          format_number(clip.x),
+          " ",
+          format_number(clip.y),
+          " ",
+          format_number(clip.width),
+          " ",
+          format_number(clip.height),
+          " re W n "
+        ]
+      end
+
+    case Map.get(clip, :inner_clip) do
+      nil -> path
+      inner -> [path, clip_rectangle_stream(inner)]
+    end
   end
 
   defp image_stream(box, image_resources) do
-    box = snap_box_to_css_pixel_grid(box)
+    box = PageGeometry.snap_box_to_css_pixel_grid(box)
 
     box =
       case Map.get(box, :snap_to_css_pixel_grid, false) do
@@ -1155,8 +1254,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
     clip =
       case Map.get(box, :clip) do
-        nil -> []
-        clip -> clip_rectangle_stream(clip)
+        nil ->
+          []
+
+        clip ->
+          clip_rectangle_stream(clip)
       end
 
     [
@@ -1252,6 +1354,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   defp rect_path(box) do
     case Map.get(box, :shape, :rectangle) do
+      {:chevron, :down} ->
+        "#{format_number(box.x)} #{format_number(box.y + box.height)} m " <>
+          "#{format_number(box.x + box.width / 2)} #{format_number(box.y)} l " <>
+          "#{format_number(box.x + box.width)} #{format_number(box.y + box.height)} l"
+
       {:triangle, direction} ->
         left = box.x
         right = box.x + box.width

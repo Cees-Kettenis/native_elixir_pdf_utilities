@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @initial_context {__MODULE__, :initial_context}
@@ -68,9 +69,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           end)
 
         {states, selected_options, disabled_options} =
-          Enum.reduce(controls, {%{}, MapSet.new(), MapSet.new()}, fn item,
-                                                                      {states, selected_options,
-                                                                       disabled_options} ->
+          Enum.reduce(controls, {%{}, %{}, MapSet.new()}, fn item,
+                                                             {states, selected_options,
+                                                              disabled_options} ->
             name = Map.get(item.attributes, "name")
 
             checked =
@@ -133,6 +134,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                     placeholder_shown: value == "" and placeholder != ""
                   })
 
+                {"input", "number"} ->
+                  Map.merge(state, prepare_initial_number(item.attributes))
+
                 {"input", type} when type in ~w(button reset submit) ->
                   prepared = HtmlValidator.prepare_input_attributes(item.attributes)
                   Map.put(state, :value, Map.fetch!(prepared, "value"))
@@ -155,12 +159,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
             {state, selected_options, disabled_options} =
               if item.tag == "select" do
-                selection = initial_selection(item.options)
+                selection = initial_selection(item.options, item.attributes)
 
                 selected_options =
-                  if is_nil(selection.id),
-                    do: selected_options,
-                    else: MapSet.put(selected_options, selection.id)
+                  Enum.reduce(selection.choices, selected_options, &Map.put(&2, &1.id, &1))
 
                 disabled_options =
                   Enum.reduce(selection.disabled_ids, disabled_options, &MapSet.put(&2, &1))
@@ -197,6 +199,217 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
         do: Process.delete(@initial_context),
         else: Process.put(@initial_context, previous)
     end
+  end
+
+  @doc false
+  @spec prepare_initial_number(map()) :: map()
+  def prepare_initial_number(attributes) do
+    authored = Map.get(attributes, "value", "")
+    value = if HtmlValidator.valid_html_float?(authored), do: authored, else: ""
+
+    numbers =
+      Map.new(~w(value min max step), fn name ->
+        number =
+          case HtmlValidator.parse_html_float(Map.get(attributes, name)) do
+            {:ok, number} -> number
+            :error -> nil
+          end
+
+        {name, number}
+      end)
+
+    step =
+      cond do
+        String.downcase(Map.get(attributes, "step", ""), :ascii) == "any" -> :any
+        is_number(numbers["step"]) and numbers["step"] > 0 -> numbers["step"]
+        true -> 1.0
+      end
+
+    decoration? =
+      step != :any and
+        Enum.all?(~w(min max), &HtmlValidator.valid_html_float?(Map.get(attributes, &1)))
+
+    columns =
+      if decoration? do
+        dimensions =
+          Enum.map(~w(min max step), fn name ->
+            source = Map.get(attributes, name, "1")
+            source = if HtmlValidator.valid_html_float?(source), do: source, else: "1"
+            {:ok, number} = HtmlValidator.parse_html_float(source, :decimal)
+            digits = number.coefficient_digits
+            sign = if number.negative, do: 1, else: 0
+
+            cond do
+              number.exponent >= 0 ->
+                {sign + digits, 0}
+
+              number.exponent + digits > 0 ->
+                {sign + number.exponent + digits, -number.exponent}
+
+              true ->
+                {sign + 1, -number.exponent}
+            end
+          end)
+
+        {before, after_decimal} =
+          Enum.reduce(dimensions, {0, 0}, fn {before, after_decimal}, {max_before, max_after} ->
+            {max(before, max_before), max(after_decimal, max_after)}
+          end)
+
+        before + after_decimal + if(after_decimal > 0, do: 1, else: 0)
+      else
+        20
+      end
+
+    placeholder =
+      :binary.replace(Map.get(attributes, "placeholder", ""), ["\r", "\n"], "", [:global])
+
+    numeric_value = if value == "", do: nil, else: numbers["value"]
+
+    %{
+      value: value,
+      display: value,
+      placeholder: placeholder,
+      placeholder_shown: value == "" and placeholder != "",
+      readonly: Map.has_key?(attributes, "readonly"),
+      required: Map.has_key?(attributes, "required"),
+      number: %{
+        value: numeric_value,
+        min: numbers["min"],
+        max: numbers["max"],
+        step: step,
+        step_base: numbers["min"] || numbers["value"] || 0.0,
+        range_underflow:
+          not is_nil(numeric_value) and not is_nil(numbers["min"]) and
+            numeric_value < numbers["min"],
+        range_overflow:
+          not is_nil(numeric_value) and not is_nil(numbers["max"]) and
+            numeric_value > numbers["max"],
+        columns: columns,
+        decoration: decoration?
+      }
+    }
+  end
+
+  @doc false
+  @spec valid_initial_number?(term(), term()) :: boolean()
+  def valid_initial_number?(state, attributes) do
+    is_map(state) and is_map(attributes) and
+      Enum.all?(attributes, fn {key, value} ->
+        is_binary(key) and String.valid?(key) and is_binary(value) and String.valid?(value)
+      end) and
+      Map.take(state, [
+        :value,
+        :display,
+        :placeholder,
+        :placeholder_shown,
+        :readonly,
+        :required,
+        :number
+      ]) ==
+        prepare_initial_number(attributes)
+  end
+
+  @doc false
+  @spec validate_initial_number_layout(map()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_initial_number_layout(node) do
+    case node do
+      %{style: %{display: :none}} ->
+        # Initial DOM preparation still validates/sanitizes hidden controls.
+        # No painting or field transport consumes their styled metadata.
+        :ok
+
+      %{style: %{_number_state: number} = style} ->
+        valid? =
+          case Map.get(style, :_form_control) do
+            %{tag: "input", attributes: attributes, initial_state: state} ->
+              valid_initial_number?(state, attributes) and
+                HtmlValidator.input_type(Map.get(attributes, "type", "text")) == "number" and
+                is_boolean(Map.get(style, :_native_menu)) and Map.get(state, :number) == number
+
+            _ ->
+              false
+          end
+
+        if valid?,
+          do: :ok,
+          else:
+            Diagnostics.error(
+              :layout,
+              :invalid_layout,
+              "number layout requires canonical initial number state and prepared appearance; compute styles before layout",
+              module: __MODULE__,
+              operation: :layout,
+              source: "number"
+            )
+
+      _ ->
+        :ok
+    end
+  end
+
+  @doc false
+  @spec prepare_initial_number_style(map(), [{String.t(), term()}]) :: map()
+  def prepare_initial_number_style(style, declarations) do
+    native? =
+      style.appearance == :auto and
+        not Enum.any?(declarations, fn {property, _value} ->
+          property in ["background", "background-color", "background-image", "box-shadow"] or
+            (String.starts_with?(property, "border") and property != "border-radius")
+        end)
+
+    # NativeThemeBase TextField and MenuList share this fixed initial rounded
+    # frame and ScopedRasterFlags stroke. Existing rect transport owns its paint.
+    style = Map.put(style, :_native_menu, native?)
+
+    if native?,
+      do:
+        Map.put(
+          style,
+          :border_styles,
+          Map.new(style.border_styles, fn {side, _} -> {side, :solid} end)
+        ),
+      else: style
+  end
+
+  @doc false
+  @spec number_uses_normal_line_height?(map()) :: boolean()
+  def number_uses_normal_line_height?(style) do
+    # TextControlInnerEditorElement compares the host's integer CSS-pixel
+    # computed line height, and resets undersized/taller fixed-height editors.
+    computed = trunc(style.line_height / 0.75) * 0.75
+
+    style.font_size >= computed or
+      case Map.get(style, :height) do
+        {:percent, _} -> true
+        height when is_number(height) -> height > computed
+        _ -> false
+      end
+  end
+
+  @doc false
+  @spec initial_number_content_offset(map(), number()) :: float()
+  def initial_number_content_offset(style, height) do
+    # AlignBlockContent uses unsafe center for input controls. LayoutUnit's
+    # fixed 1/64 CSS-pixel division truncates toward zero, including overflow.
+    trunc((height - style.line_height) / 0.75 * 64 / 2) / 64 * 0.75
+  end
+
+  @doc false
+  @spec readonly_input_type?(String.t()) :: boolean()
+  def readonly_input_type?(type), do: HtmlValidator.text_input_type?(type) or type == "number"
+
+  @doc false
+  @spec valid_initial_input?(String.t(), map(), [term()]) :: boolean()
+  def valid_initial_input?(type, attributes, children) do
+    children == [] and
+      (not Map.has_key?(attributes, "checked") or type in ["checkbox", "radio"]) and
+      (not Map.has_key?(attributes, "readonly") or HtmlValidator.readonly_input_type?(type)) and
+      (not Map.has_key?(attributes, "multiple") or type == "email") and
+      (not Map.has_key?(attributes, "size") or HtmlValidator.text_input_type?(type)) and
+      (not Map.has_key?(attributes, "placeholder") or HtmlValidator.readonly_input_type?(type)) and
+      (not Enum.any?(~w(min max step), &Map.has_key?(attributes, &1)) or type == "number")
   end
 
   defp collect_initial_metadata(
@@ -386,16 +599,45 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     end
   end
 
-  # The single-selection reset algorithm retains the last authored selection.
-  # Without one, a normal dropdown selects its first enabled option.
-  defp initial_selection(options) do
+  # HTML selectedness is independent of whether an option produces a painted row.
+  # PDF indices are zero-based in this complete option list, never the visible rows.
+  defp initial_selection(options, attributes) do
+    multiple? = Map.has_key?(attributes, "multiple")
+
+    display_size =
+      case HtmlValidator.parse_html_integer(Map.get(attributes, "size"), :nonnegative) do
+        {:ok, size} when size >= 0 ->
+          HtmlValidator.check_render_resource(:max_css_numeric_magnitude, size, :html)
+          size
+
+        _ ->
+          if multiple?, do: 4, else: 1
+      end
+
+    authored = Enum.filter(options, &Map.has_key?(&1.attributes, "selected"))
+
     selected =
-      Enum.reduce(options, nil, fn option, selected ->
-        if Map.has_key?(option.attributes, "selected"), do: option, else: selected
-      end) || Enum.find(options, &(not &1._initial_option_disabled))
+      cond do
+        multiple? ->
+          authored
+
+        authored != [] ->
+          [List.last(authored)]
+
+        display_size == 1 ->
+          Enum.take(Enum.filter(options, &(not &1._initial_option_disabled)), 1)
+
+        true ->
+          []
+      end
+
+    selected_ids = Enum.map(selected, & &1._selector_id)
+    selected_set = MapSet.new(selected_ids)
 
     choices =
-      Enum.map(options, fn option ->
+      options
+      |> Enum.with_index()
+      |> Enum.map(fn {option, index} ->
         text =
           option.children
           |> Enum.map_join(&Map.get(&1, :text, ""))
@@ -409,25 +651,38 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           end
 
         %{
+          id: option._selector_id,
+          index: index,
           value: Map.get(option.attributes, "value", text),
           label: label,
-          selected: not is_nil(selected) and option._selector_id == selected._selector_id
+          disabled: option._initial_option_disabled,
+          selected: MapSet.member?(selected_set, option._selector_id)
         }
       end)
 
-    value =
-      Enum.find_value(choices, fn choice -> if choice.selected, do: {:selected, choice.value} end)
+    selected_choices = Enum.filter(choices, & &1.selected)
+    first = List.first(selected_choices)
+    listbox? = if multiple?, do: display_size != 1, else: display_size > 1
 
-    selected_label =
-      Enum.find_value(choices, "", fn choice -> if choice.selected, do: choice.label end)
+    display_label =
+      if multiple? and not listbox? and length(selected_choices) != 1,
+        do: "#{length(selected_choices)} selected",
+        else: if(is_nil(first), do: "", else: first.label)
 
     %{
-      id: if(is_nil(selected), do: nil, else: selected._selector_id),
-      children: [%{type: :text, text: selected_label}],
+      id: if(is_nil(first), do: nil, else: first.id),
+      selected_ids: selected_ids,
+      selected_indices: Enum.map(selected_choices, & &1.index),
+      values: Enum.map(selected_choices, & &1.value),
+      value: if(is_nil(first), do: "", else: first.value),
+      children: [%{type: :text, text: display_label}],
       choices: choices,
       disabled_ids:
         for(option <- options, option._initial_option_disabled, do: option._selector_id),
-      value: if(is_nil(value), do: nil, else: elem(value, 1))
+      multiple: multiple?,
+      display_size: display_size,
+      listbox: listbox?,
+      rows: if(display_size == 0, do: 4, else: display_size)
     }
   end
 
@@ -480,7 +735,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           node =
             if node.tag == "option" and Map.get(node, :namespace, :html) == :html do
               node
-              |> Map.put(:_initial_selected, MapSet.member?(selected_options, node._selector_id))
+              |> Map.put(
+                :_initial_selected,
+                Map.get(selected_options, node._selector_id, %{selected: false}).selected
+              )
+              |> Map.put(
+                :_initial_option_label,
+                Map.get(selected_options, node._selector_id, %{label: nil}).label
+              )
               |> Map.put(
                 :_initial_option_disabled,
                 MapSet.member?(disabled_options, node._selector_id)
@@ -508,6 +770,68 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     end)
   end
 
+  # Transport may be supplied directly to PdfWriter. Verify the canonical identities
+  # and values agree, without consulting authored attributes or painted rows.
+  defp valid_initial_selection?(selection) do
+    case selection do
+      %{
+        choices: choices,
+        value: value,
+        values: values,
+        selected_ids: ids,
+        selected_indices: indices,
+        multiple: multiple,
+        listbox: listbox,
+        display_size: display_size,
+        rows: rows,
+        id: id
+      }
+      when is_list(choices) and is_binary(value) and is_list(values) and is_list(ids) and
+             is_list(indices) and is_boolean(multiple) and is_boolean(listbox) and
+             is_integer(display_size) and display_size >= 0 and is_integer(rows) ->
+        valid_choices? =
+          choices
+          |> Enum.with_index()
+          |> Enum.all?(fn
+            {%{
+               id: id,
+               index: index,
+               value: value,
+               label: label,
+               selected: selected,
+               disabled: disabled
+             }, expected_index} ->
+              is_reference(id) and index == expected_index and is_binary(value) and
+                String.valid?(value) and is_binary(label) and String.valid?(label) and
+                is_boolean(selected) and is_boolean(disabled)
+
+            _ ->
+              false
+          end)
+
+        if valid_choices? do
+          selected = Enum.filter(choices, & &1.selected)
+          first = List.first(selected)
+
+          display_size <= NativeElixirPdfUtilities.Limits.get(:max_css_numeric_magnitude) and
+            rows == if(display_size == 0, do: 4, else: display_size) and
+            listbox == if(multiple, do: display_size != 1, else: display_size > 1) and
+            ids == Enum.map(selected, & &1.id) and
+            indices == Enum.map(selected, & &1.index) and
+            values == Enum.map(selected, & &1.value) and
+            value == if(is_nil(first), do: "", else: first.value) and
+            id == if(is_nil(first), do: nil, else: first.id) and
+            (multiple or length(selected) <= 1) and
+            length(Enum.uniq_by(choices, & &1.id)) == length(choices)
+        else
+          false
+        end
+
+      _ ->
+        false
+    end
+  end
+
   @doc false
   @spec prepare([map()], keyword()) :: {:ok, [map()], [map()]} | {:error, {atom(), map()}}
   def prepare(pages, opts) do
@@ -530,7 +854,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                   case control.tag do
                     "input" ->
                       type = HtmlValidator.input_type(Map.get(control.attributes, "type", "text"))
-                      if HtmlValidator.text_input_type?(type), do: "text", else: type
+                      if HtmlValidator.readonly_input_type?(type), do: "text", else: type
 
                     "textarea" ->
                       "text"
@@ -603,6 +927,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                     []
                   end
 
+                choice =
+                  if item.type == "choice",
+                    do:
+                      NativeElixirPdfUtilities.Validators.FormValidator.initial_choice_field(
+                        item.control.initial_state.selection
+                      ),
+                    else: %{flags: 0, value: nil, indices: [], listbox: false}
+
                 value =
                   case item.type do
                     "text" ->
@@ -617,37 +949,101 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                         else: nil
 
                     "choice" ->
-                      item.control.initial_state.selection.value
+                      choice.value
                   end
 
-                box = item.box
                 page = Enum.at(pages, item.page - 1)
+                {page_width, page_height} = page.size
+
+                original_page_appearance? =
+                  item.type == "choice" or
+                    (item.control.tag == "input" and
+                       HtmlValidator.input_type(Map.get(attributes, "type", "text")) == "number")
+
+                box =
+                  if original_page_appearance? do
+                    snapped =
+                      PageGeometry.snap_box_to_css_pixel_grid(%{
+                        item.box
+                        | y: page_height - item.box.y - item.box.height
+                      })
+
+                    snapped = %{snapped | y: page_height - snapped.y - snapped.height}
+
+                    case PageGeometry.rounded_border_contours(snapped, page_height) do
+                      [outer, _inner] -> outer
+                      nil -> snapped
+                    end
+                  else
+                    item.box
+                  end
 
                 appearance_boxes =
                   page.boxes
                   |> Enum.filter(&(Map.get(&1, :form_owner) == item.control.id))
                   |> Enum.map(fn box ->
-                    box
-                    |> Map.put(:x, box.x - item.box.x)
-                    |> Map.put(:y, box.y - item.box.y)
-                    |> Map.delete(:form_owner)
-                    |> then(fn box ->
-                      case Map.get(box, :clip) do
-                        nil ->
-                          box
+                    if original_page_appearance? do
+                      box
+                    else
+                      box
+                      |> Map.put(:x, box.x - item.box.x)
+                      |> Map.put(:y, box.y - item.box.y)
+                      |> Map.delete(:form_owner)
+                      |> then(fn box ->
+                        case Map.get(box, :clip) do
+                          nil ->
+                            box
 
-                        clip ->
-                          Map.put(box, :clip, %{
-                            clip
-                            | x: clip.x - item.box.x,
-                              y: clip.y - item.box.y
-                          })
-                      end
-                    end)
+                          clip ->
+                            clip = %{clip | x: clip.x - item.box.x, y: clip.y - item.box.y}
+
+                            clip =
+                              case Map.get(clip, :inner_clip) do
+                                nil ->
+                                  clip
+
+                                inner ->
+                                  Map.put(clip, :inner_clip, %{
+                                    inner
+                                    | x: inner.x - item.box.x,
+                                      y: inner.y - item.box.y
+                                  })
+                              end
+
+                            Map.put(box, :clip, clip)
+                        end
+                      end)
+                    end
+                  end)
+
+                appearance = %{size: {box.width, box.height}, boxes: appearance_boxes}
+
+                appearance =
+                  if original_page_appearance?,
+                    do:
+                      Map.put(appearance, :paint_frame, %{
+                        x: box.x,
+                        y: box.y,
+                        width: page_width,
+                        height: page_height
+                      }),
+                    else: appearance
+
+                visible_options =
+                  MapSet.new(Enum.map(appearance_boxes, &Map.get(&1, :initial_option_id)))
+
+                top_index =
+                  Enum.find_value(choices, 0, fn choice ->
+                    if MapSet.member?(visible_options, choice.id), do: choice.index
                   end)
 
                 locked? =
-                  item.control.initial_state.disabled or Map.has_key?(attributes, "readonly")
+                  item.control.initial_state.disabled or
+                    Map.get(
+                      item.control.initial_state,
+                      :readonly,
+                      Map.has_key?(attributes, "readonly")
+                    )
 
                 required? =
                   if item.type == "radio" and Map.get(attributes, "name") not in [nil, ""] do
@@ -665,11 +1061,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                   type: String.to_existing_atom(item.type),
                   value: value,
                   choices: choices,
+                  selected_indices: choice.indices,
+                  choice_listbox: choice.listbox,
+                  top_index: top_index,
                   export: Map.get(attributes, "value", "on"),
                   page: item.page,
                   rect: [box.x, box.y, box.x + box.width, box.y + box.height],
                   flags:
-                    if(locked?, do: 1, else: 0) +
+                    choice.flags + if(locked?, do: 1, else: 0) +
                       if(required? and not locked?, do: 2, else: 0) +
                       if(item.control.tag == "textarea", do: 4096, else: 0) +
                       if(
@@ -679,7 +1078,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                         do: 8192,
                         else: 0
                       ),
-                  appearance: %{size: {box.width, box.height}, boxes: appearance_boxes}
+                  appearance: appearance
                 }
 
                 cond do
@@ -729,7 +1128,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
                   field.type == :choice and
                       length(Enum.uniq_by(choices, & &1.value)) != length(choices) ->
-                    {:halt, error(:invalid_form, "select options require unique export values")}
+                    {:halt,
+                     error(
+                       :invalid_form,
+                       "select options require unique export values for interactive PDF choices; use distinct value attributes or forms: :static"
+                     )}
 
                   field.type == :radio and
                       Enum.any?(
@@ -804,32 +1207,23 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
             when tag in ["input", "textarea", "select"] and is_list(order) and is_map(attributes) and
                    is_list(children) ->
               selection_valid? =
-                if tag == "select" do
-                  case Map.get(state, :selection) do
-                    %{choices: choices, value: value} when is_list(choices) ->
-                      (is_nil(value) or (is_binary(value) and String.valid?(value))) and
-                        Enum.all?(choices, fn
-                          %{value: value, label: label, selected: selected} ->
-                            is_binary(value) and String.valid?(value) and is_binary(label) and
-                              String.valid?(label) and is_boolean(selected)
+                tag != "select" or valid_initial_selection?(Map.get(state, :selection))
 
-                          _ ->
-                            false
-                        end)
-
-                    _ ->
-                      false
-                  end
-                else
-                  true
-                end
-
-              not is_boolean(checked) or not is_boolean(disabled) or
-                not (is_nil(owner) or is_reference(owner)) or not selection_valid? or
-                not Enum.all?(attributes, fn {key, value} ->
+              attributes_valid? =
+                Enum.all?(attributes, fn {key, value} ->
                   is_binary(key) and String.valid?(key) and is_binary(value) and
                     String.valid?(value)
-                end) or
+                end)
+
+              number_valid? =
+                attributes_valid? and
+                  (tag != "input" or
+                     HtmlValidator.input_type(Map.get(attributes, "type", "text")) != "number" or
+                     valid_initial_number?(state, attributes))
+
+              not number_valid? or not is_boolean(checked) or not is_boolean(disabled) or
+                not (is_nil(owner) or is_reference(owner)) or not selection_valid? or
+                not attributes_valid? or
                 ((tag == "textarea" or
                     (tag == "input" and
                        HtmlValidator.text_input_type?(

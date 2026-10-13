@@ -43,6 +43,34 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   end
 
   @doc false
+  @spec render_initial_numbers(String.t(), keyword()) :: {:ok, binary()} | {:error, term()}
+  def render_initial_numbers(html, opts) do
+    # Supply the physical caller font which Chromium already selects for the
+    # untouched Arial UA style. Reference fonts and markup remain unchanged.
+    directory = liberation_font_directory("initial Number controls")
+
+    font = %{
+      family: "Arial",
+      path: Path.join(directory, "LiberationSans-Regular.ttf"),
+      weight: 400
+    }
+
+    source_sha256 =
+      font.path
+      |> File.read!()
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.encode16(case: :lower)
+
+    assert source_sha256 in [
+             "bade59d822652f76e6941aa87b40a87c13d1cc70db98ededb5011127efafd1d3",
+             "baccc64becc3eb7d104b7c84d99f5314a0a1f896e2b3ea6c2f22fc08d2003bee"
+           ],
+           "Initial Number Arial source does not match the verified Chromium font: #{font.path} SHA256 #{source_sha256}"
+
+    HtmlToPdf.render(html, Keyword.update!(opts, :fonts, &(&1 ++ [font])))
+  end
+
+  @doc false
   @spec assert_browser_match!(String.t(), keyword()) :: comparison_stats()
   def assert_browser_match!(fixture_path, opts \\ []) do
     fixture_path = Path.expand(fixture_path)
@@ -205,6 +233,19 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     end)
   end
 
+  # Both ordinary explicit-family fixtures and the native-only Number caller
+  # input use the same installed Liberation source directory.
+  defp liberation_font_directory(fixture_path) do
+    directory =
+      ["/usr/share/fonts/liberation", "/usr/share/fonts/truetype/liberation"]
+      |> Enum.find(&File.regular?(Path.join(&1, "LiberationSans-Regular.ttf")))
+
+    assert directory,
+           "Install Liberation Sans to compare #{fixture_path} with identical font files"
+
+    directory
+  end
+
   defp default_render_opts(fixture_path) do
     page_opts =
       fixture_path
@@ -233,12 +274,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     fonts =
       case String.contains?(File.read!(fixture_path), "Liberation Sans") do
         true ->
-          liberation_dir =
-            ["/usr/share/fonts/liberation", "/usr/share/fonts/truetype/liberation"]
-            |> Enum.find(&File.regular?(Path.join(&1, "LiberationSans-Regular.ttf")))
-
-          assert liberation_dir,
-                 "Install Liberation Sans to compare #{fixture_path} with identical font files"
+          liberation_dir = liberation_font_directory(fixture_path)
 
           fonts ++
             [

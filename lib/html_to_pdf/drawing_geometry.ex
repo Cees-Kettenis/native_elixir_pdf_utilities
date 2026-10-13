@@ -11,6 +11,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
   @css_pixel_points 0.75
   @raster_boundary_bias 0.0001
 
+  alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
+
   @doc "Translates validated artwork and annotations while keeping drawing-group children and clips local."
   @spec translate_box(map(), number(), number()) :: map()
   def translate_box(box, delta_x, delta_y) do
@@ -34,7 +36,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
     box =
       case Map.get(box, :clip) do
         %{x: x, y: y} = clip when box.type != :drawing_group ->
-          Map.put(box, :clip, %{clip | x: x + delta_x, y: y + delta_y})
+          clip = %{clip | x: x + delta_x, y: y + delta_y}
+
+          clip =
+            case Map.get(clip, :inner_clip) do
+              nil ->
+                clip
+
+              inner ->
+                Map.put(clip, :inner_clip, %{inner | x: inner.x + delta_x, y: inner.y + delta_y})
+            end
+
+          Map.put(box, :clip, clip)
 
         _ ->
           box
@@ -91,7 +104,45 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
   @doc false
   @spec snap_css_pixel(number()) :: float()
   def snap_css_pixel(value) do
-    Float.floor(value / @css_pixel_points + 0.5) * @css_pixel_points
+    PageGeometry.snap_css_pixel(value)
+  end
+
+  @doc "Returns the intersection of a validated box's outer and optional inner clip rectangles."
+  @spec box_clip_bounds(map() | nil) :: tuple() | nil
+  def box_clip_bounds(clip) do
+    case clip do
+      nil ->
+        nil
+
+      %{x: x, y: y, width: width, height: height} ->
+        outer = {x, y, x + width, y + height}
+
+        case Map.get(clip, :inner_clip) do
+          nil ->
+            outer
+
+          inner ->
+            intersect_clip(
+              outer,
+              {inner.x, inner.y, inner.x + inner.width, inner.y + inner.height}
+            )
+        end
+    end
+  end
+
+  @doc "Transforms each validated box clip boundary before intersecting its outer and inner rectangles."
+  @spec transform_box_clip(map() | nil, tuple()) :: tuple() | nil
+  def transform_box_clip(clip, transform) do
+    case clip do
+      nil ->
+        nil
+
+      clip ->
+        intersect_clip(
+          transform_clip(clip, transform),
+          transform_clip(Map.get(clip, :inner_clip), transform)
+        )
+    end
   end
 
   @doc false

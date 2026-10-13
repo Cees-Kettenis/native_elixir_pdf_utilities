@@ -200,7 +200,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
           # Normalize the input stream before tokenization, not decoded references.
           # Keep the caller's bytes for diagnostics and resource accounting.
           input =
-            if String.contains?(html, "\r"), do: String.replace(html, ~r/\r\n?/, "\n"), else: html
+            HtmlValidator.preprocess_html(html)
 
           HtmlValidator.reserve_render_resource(:max_html_tree_work, 3 * byte_size(html), :html)
           crlf = :binary.matches(html, "\r\n")
@@ -326,6 +326,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
     end
   end
 
+  @doc false
+  @spec read_source_token(String.t(), term(), [term()]) ::
+          {:ok, String.t(), String.t(), term()} | {:error, term()}
+  def read_source_token(html, context, ancestors) do
+    with {:ok, token, {:source, remaining}} <- read_token(html, context) do
+      classification =
+        cond do
+          HtmlValidator.html_text_mode(context) != :data and
+              HtmlValidator.html_text_token_action(context, token) == :text ->
+            {:ok, :text}
+
+          String.starts_with?(token, "</") ->
+            with {:ok, tag} <- parse_closing_tag(token, context, ancestors),
+                 do: {:ok, {:end, tag}}
+
+          is_tuple(context) and String.starts_with?(token, "<![CDATA[") ->
+            {:ok, :text}
+
+          String.starts_with?(token, "<!") or String.starts_with?(token, "<?") ->
+            {:ok, :other}
+
+          String.starts_with?(token, "<") ->
+            with {:ok, prepared} <- parse_opening_tag(token, context),
+                 do: {:ok, {:start, prepared}}
+
+          true ->
+            {:ok, :text}
+        end
+
+      with {:ok, kind} <- classification, do: {:ok, token, remaining, kind}
+    end
+  end
+
   defp next_token(stream, context) do
     case stream do
       {:pending, token, remaining} ->
@@ -335,13 +368,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         :eof
 
       {:source, html} ->
+        HtmlValidator.reserve_render_resource(:max_html_nodes, 1, :html)
         read_token(html, context)
     end
   end
 
   defp read_token(html, context) do
-    HtmlValidator.reserve_render_resource(:max_html_nodes, 1, :html)
-
     cond do
       HtmlValidator.html_text_mode(context) != :data ->
         scan_text_content(html, context)

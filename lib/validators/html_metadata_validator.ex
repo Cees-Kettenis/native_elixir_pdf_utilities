@@ -111,7 +111,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
 
   # HTML's style type is an exact ASCII-insensitive value, not a MIME essence.
   # A content attribute named disabled does not set the CSSOM disabled flag.
-  defp stylesheet_type?(attrs) do
+  @doc false
+  @spec stylesheet_type?(map()) :: boolean()
+  def stylesheet_type?(attrs) do
     String.downcase(Map.get(attrs, "type", ""), :ascii) in ["", "text/css"]
   end
 

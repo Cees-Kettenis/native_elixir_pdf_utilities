@@ -958,9 +958,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     alias NativeElixirPdfUtilities.Validators.{HtmlFormValidator, HtmlValidator}
 
     for {html, expected} <- [
-          {"<select></select>", nil},
+          {"<select></select>", ""},
           {"<select><option disabled>A</option><option>B</option></select>", "B"},
-          {"<select><option disabled>A</option></select>", nil},
+          {"<select><option disabled>A</option></select>", ""},
           {"<select><option disabled selected>A</option><option>B</option></select>", "A"},
           {"<select><template><option selected>Unused</option></template><option></option></select>",
            ""}
@@ -2859,8 +2859,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert Enum.map(empty_radio.children, & &1.text) == ["○"]
     assert Enum.map(selected.children, & &1.text) == ["Approved"]
     assert selected.style.width == 90.0
-    assert selected.style.padding.left == 5.25
-    assert selected.style.padding.right == 14.25
+    assert selected.style.padding.left == 3.0
+    assert selected.style.padding.right == 12.0
     assert Enum.map(first.children, & &1.text) == ["First"]
     assert Enum.map(textarea.children, & &1.text) == ["Line one\nLine two"]
     assert textarea.style.white_space == :pre_wrap
@@ -6935,7 +6935,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     for {attributes, children} <- [
           {%{"type" => "file"}, []},
-          {%{"type" => "number"}, []},
+          {%{"type" => "range"}, []},
           {%{"type" => "unknown", "checked" => ""}, []},
           {%{}, [%{type: :text, text: "Invalid child"}]}
         ] do

@@ -252,20 +252,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
               )
               |> Map.merge(metadata)
 
-            ui =
-              geometry
-              |> EmbeddedViewportValidator.prepare_scrollbar_parts()
-              |> ScrollbarPainter.paint()
+            with {:ok, parts} <- EmbeddedViewportValidator.prepare_scrollbar_parts(geometry) do
+              ui = ScrollbarPainter.paint(parts)
 
-            ui =
-              drawing_group(
-                geometry.viewport_width,
-                geometry.viewport_height,
-                ui,
-                {1, 0, 0, 1, 0, height - geometry.viewport_height}
-              )
+              ui =
+                drawing_group(
+                  geometry.viewport_width,
+                  geometry.viewport_height,
+                  ui,
+                  {1, 0, 0, 1, 0, height - geometry.viewport_height}
+                )
 
-            {:ok, drawing_group(width, height, [content, ui], {1, 0, 0, 1, 0, 0})}
+              {:ok, drawing_group(width, height, [content, ui], {1, 0, 0, 1, 0, 0})}
+            end
           end
         else
           {:error, {reason, diagnostic}} ->
