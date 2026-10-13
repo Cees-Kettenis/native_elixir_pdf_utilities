@@ -19,12 +19,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
           optional(:prepared_dom) => NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.dom_tree(),
           optional(:options) => keyword(),
           optional(:document_url) => String.t() | nil,
+          optional(:source) =>
+            NativeElixirPdfUtilities.Validators.ResourceValidator.document_descriptor(),
           optional(:client_css_viewport) => %{width: number(), height: number()},
           optional(:media_css_viewport) => %{width: number(), height: number()},
           tree: Style.styled_tree(),
           context: ResourceContext.t(),
           forms: :static | :interactive,
-          host: :surface | :iframe | :object | :embed
+          host: :surface | :iframe | :object | :embed | :frame
         }
 
   @typedoc "Authorized child source awaiting its actual layout viewport before styling."
@@ -32,9 +34,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
           prepared_dom: NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.dom_tree(),
           options: keyword(),
           document_url: String.t() | nil,
+          source: NativeElixirPdfUtilities.Validators.ResourceValidator.document_descriptor(),
           context: ResourceContext.t(),
           forms: :static | :interactive,
-          host: :iframe | :object | :embed
+          host: :iframe | :object | :embed | :frame
         }
 
   @doc "Prepares authorized local or srcdoc HTML without a recursive public render or pagination."
@@ -65,6 +68,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
           {:ok,
            %{
              tree: tree,
+             source: document.source,
              context: document.context,
              forms: Keyword.get(opts, :forms, :interactive),
              host: :surface
@@ -106,7 +110,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
     with {:ok, kind, source, mime} <-
            NativeElixirPdfUtilities.Validators.ObjectValidator.prepare_selection(selected, host) do
       if kind == :blank do
-        with {:ok, prepared} <- prepare_iframe_document({:srcdoc, ""}, context, opts),
+        with {:ok, prepared} <-
+               prepare_iframe_document({:blank, source || "about:blank"}, context, opts),
              do: {:ok, {:viewport, %{prepared | host: host}}}
       else
         prepare_file(source, mime, kind, context, opts, host)
@@ -142,6 +147,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
              {:viewport,
               %{
                 prepared_dom: document.dom,
+                source: document.source,
                 options: opts,
                 document_url: urls.fallback_base,
                 context: document.context,
@@ -210,6 +216,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
       {:ok,
        %{
          prepared_dom: document.dom,
+         source: document.source,
          options: opts,
          document_url: urls.fallback_base,
          context: document.context,
@@ -241,7 +248,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
                  prepared.context.image_budget,
                  prepared.document_url,
                  {width, height},
-                 media_viewport
+                 media_viewport,
+                 Map.get(prepared, :frame_margins)
                ),
              {:ok, tree} <-
                FontFallback.resolve(tree, Keyword.get(opts, :unsupported_glyphs, :replace)) do

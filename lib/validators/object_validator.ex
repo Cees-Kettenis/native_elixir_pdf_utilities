@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.Validators.ObjectValidator do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.HtmlUrlValidator
   alias NativeElixirPdfUtilities.Validators.MimeValidator
   alias NativeElixirPdfUtilities.Validators.ResourceValidator
   alias NativeElixirPdfUtilities.Validators.SvgViewportValidator
@@ -35,6 +36,7 @@ defmodule NativeElixirPdfUtilities.Validators.ObjectValidator do
           :fallback
           | :empty
           | :blank
+          | {:blank, String.t()}
           | {:document, String.t(), String.t()}
           | {:image, String.t(), String.t()}
 
@@ -57,20 +59,25 @@ defmodule NativeElixirPdfUtilities.Validators.ObjectValidator do
         MimeValidator.validate(HtmlValidator.trim_ascii_whitespace(supplied))
       end
 
-    case {reference, mime} do
-      {reference, _} when host == :embed and reference in ["", "about:blank"] ->
+    blank = HtmlUrlValidator.blank_document_url(reference)
+
+    case {reference, mime, blank} do
+      {"", _, _} when host == :embed ->
         {:ok, if(Map.has_key?(attributes, "src"), do: :blank, else: :empty)}
 
-      {"", _} ->
+      {reference, _, {:ok, _url}} when host == :embed ->
+        {:ok, {:blank, reference}}
+
+      {"", _, _} ->
         {:ok, inactive}
 
-      {reference, {:ok, mime}} when mime in @document_mimes ->
+      {reference, {:ok, mime}, _} when mime in @document_mimes ->
         {:ok, {:document, reference, mime}}
 
-      {reference, {:ok, mime}} when mime in @image_mimes ->
+      {reference, {:ok, mime}, _} when mime in @image_mimes ->
         {:ok, {:image, reference, mime}}
 
-      {reference, {:ok, "application/pdf"}} ->
+      {reference, {:ok, "application/pdf"}, _} ->
         with {:ok, _path} <- ResourceValidator.authorize_reference(reference, context) do
           Diagnostics.error(
             :resource,
@@ -82,7 +89,7 @@ defmodule NativeElixirPdfUtilities.Validators.ObjectValidator do
           )
         end
 
-      {reference, _} when host == :embed ->
+      {reference, _, _} when host == :embed ->
         with {:ok, _path} <- ResourceValidator.authorize_reference(reference, context) do
           Diagnostics.error(
             :resource,
@@ -107,6 +114,21 @@ defmodule NativeElixirPdfUtilities.Validators.ObjectValidator do
     case {selected, host} do
       {:blank, :embed} ->
         {:ok, :blank, nil, nil}
+
+      {{:blank, url}, :embed} ->
+        case HtmlUrlValidator.blank_document_url(url) do
+          {:ok, _normalized} ->
+            {:ok, :blank, url, nil}
+
+          :not_blank ->
+            Diagnostics.error(
+              :resource,
+              :invalid_document,
+              "embed blank source requires an about:blank URL",
+              operation: :load_embedded_resource,
+              module: __MODULE__
+            )
+        end
 
       {{kind, reference, mime}, host}
       when kind in [:document, :image] and is_binary(reference) and host in [:object, :embed] ->

@@ -60,7 +60,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedResource do
           Diagnostics.with_context(diagnostic,
             operation: :load_embedded_resource,
             module: __MODULE__,
-            source: if(is_binary(source), do: source)
+            source: ResourceValidator.document_source_label(source)
           )}}
 
       {:error, reason} ->
@@ -70,7 +70,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedResource do
           "authorized embedded resource file could not be read: #{reason}",
           operation: :load_embedded_resource,
           module: __MODULE__,
-          source: if(is_binary(source), do: source)
+          source: ResourceValidator.document_source_label(source)
         )
     end
   end
@@ -84,6 +84,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedResource do
          {:ok, html} <-
            (case descriptor do
               {:srcdoc, html} -> {:ok, html}
+              {:blank, _url} -> {:ok, ""}
               {:file, path} -> FileReader.read(path, Limits.get(:max_html_source_bytes))
             end),
          :ok <-
@@ -97,7 +98,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedResource do
           Diagnostics.with_context(diagnostic,
             operation: :load_embedded_resource,
             module: __MODULE__,
-            source: if(is_binary(source), do: source)
+            source: ResourceValidator.document_source_label(source)
           )}}
 
       {:error, reason} ->
@@ -107,7 +108,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedResource do
           "authorized embedded HTML file could not be read: #{reason}",
           operation: :load_embedded_resource,
           module: __MODULE__,
-          source: if(is_binary(source), do: source)
+          source: ResourceValidator.document_source_label(source)
         )
     end
   end

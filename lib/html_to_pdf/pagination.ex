@@ -520,6 +520,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         group.boxes
         |> Enum.chunk_by(&Map.get(&1, :fragment_id))
         |> Enum.map(&flow_group/1)
+        |> then(fn fragments ->
+          first = hd(group.boxes)
+          orphans = Map.get(first, :orphans, 2)
+          widows = Map.get(first, :widows, 2)
+          count = length(fragments)
+
+          # A fitting paragraph shorter than both reservations cannot split
+          # legally. Larger paragraphs reserve their beginning and final lines.
+          fragments
+          |> Enum.with_index()
+          |> Enum.map(fn {fragment, index} ->
+            last_index =
+              cond do
+                index == 0 and count < orphans + widows -> count - 1
+                index == 0 -> min(orphans, count) - 1
+                index == max(count - widows, 0) -> count - 1
+                true -> index
+              end
+
+            # Ordinary lines already carry their extent. Only the first/final
+            # multi-line reservations traverse the list, at most twice per flow.
+            height =
+              if last_index == index,
+                do: fragment.height,
+                else: fragment.top - Enum.at(fragments, last_index).bottom
+
+            # If a reservation exceeds a complete page, CSS break restrictions
+            # must relax to make progress. Ordinary oversized paragraphs still
+            # keep every fitting first/final reservation.
+            if height <= content_height,
+              do: Map.put(fragment, :placement_height, height),
+              else: fragment
+          end)
+        end)
 
       false ->
         [group]

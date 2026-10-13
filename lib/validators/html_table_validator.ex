@@ -9,12 +9,23 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   @spec presentation_attribute?(String.t(), String.t()) :: boolean()
   def presentation_attribute?(tag, name) do
     case tag do
-      "table" -> name in ~w(width height bgcolor cellspacing cellpadding align)
-      "caption" -> name == "align"
-      "col" -> name == "width"
-      tag when tag in ~w(thead tbody tfoot tr) -> name in ~w(height bgcolor align valign)
-      tag when tag in ~w(td th) -> name in ~w(width height bgcolor align valign nowrap)
-      _ -> false
+      "table" ->
+        name in ~w(width height bgcolor cellspacing cellpadding align border bordercolor frame rules)
+
+      "caption" ->
+        name == "align"
+
+      "col" ->
+        name == "width"
+
+      tag when tag in ~w(thead tbody tfoot tr) ->
+        name in ~w(height bgcolor align valign bordercolor)
+
+      tag when tag in ~w(td th) ->
+        name in ~w(width height bgcolor align valign nowrap bordercolor)
+
+      _ ->
+        false
     end
   end
 
@@ -48,7 +59,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                      if(tag == "table", do: attributes, else: table_attributes),
                      "cellpadding",
                      nil
-                   ) do
+                   ),
+                 {:ok, border_hints} <- legacy_border_hints(node, table_attributes, inherited) do
+              hints = Map.merge(hints, border_hints)
+
               hints =
                 Map.reject(hints, fn {property, value} ->
                   value in [0, 0.0, {:percent, 0.0}] and
@@ -163,6 +177,181 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
 
       _ ->
         {:ok, %{}}
+    end
+  end
+
+  # HTML's magic border, frame and rules hints have distinct fallback and cascade
+  # order. Keep this preparation in the table validator before author CSS.
+  defp legacy_border_hints(node, table_attributes, inherited) do
+    tag = node.tag
+    attributes = node.attributes
+    table_attributes = if tag == "table", do: attributes, else: table_attributes
+    rules = String.downcase(Map.get(table_attributes, "rules", ""), :ascii)
+    frame = String.downcase(Map.get(table_attributes, "frame", ""), :ascii)
+    rules? = rules in ~w(none groups rows cols all)
+    frame? = frame in ~w(void above below hsides lhs rhs vsides box border)
+
+    inherited_colors =
+      Map.get(
+        inherited,
+        :_table_border_colors,
+        Map.get(
+          inherited,
+          :border_colors,
+          NativeElixirPdfUtilities.Validators.CssValueValidator.edges(
+            Map.get(inherited, :color, {0, 0, 0})
+          )
+        )
+      )
+
+    with {:ok, border} <- legacy_pixel_attribute(table_attributes, "border", 0.75) do
+      hints =
+        if (tag in ~w(thead tbody tfoot tr) or
+              (tag in ~w(td th) and
+                 ((is_number(border) and border > 0) or rules in ~w(rows cols all)))) and
+             (Map.has_key?(inherited, :_table_border_colors) or
+                Map.has_key?(inherited, :border_colors)),
+           do: %{border_colors: inherited_colors, border_color: inherited_colors.top},
+           else: %{}
+
+      hints =
+        cond do
+          tag == "table" ->
+            styles = if rules?, do: :hidden, else: :none
+            styles = if is_number(border) and border > 0, do: :outset, else: styles
+
+            styles =
+              if Map.get(table_attributes, "bordercolor", "") != "", do: :solid, else: styles
+
+            styles = NativeElixirPdfUtilities.Validators.CssValueValidator.edges(styles)
+
+            styles =
+              case frame do
+                "void" ->
+                  NativeElixirPdfUtilities.Validators.CssValueValidator.edges(:hidden)
+
+                "above" ->
+                  %{top: :solid, right: :hidden, bottom: :hidden, left: :hidden}
+
+                "below" ->
+                  %{top: :hidden, right: :hidden, bottom: :solid, left: :hidden}
+
+                "hsides" ->
+                  %{top: :solid, right: :hidden, bottom: :solid, left: :hidden}
+
+                "lhs" ->
+                  %{top: :hidden, right: :hidden, bottom: :hidden, left: :solid}
+
+                "rhs" ->
+                  %{top: :hidden, right: :solid, bottom: :hidden, left: :hidden}
+
+                "vsides" ->
+                  %{top: :hidden, right: :solid, bottom: :hidden, left: :solid}
+
+                value when value in ["box", "border"] ->
+                  NativeElixirPdfUtilities.Validators.CssValueValidator.edges(:solid)
+
+                _ ->
+                  styles
+              end
+
+            hints = if rules?, do: Map.put(hints, :border_collapse, :collapse), else: hints
+
+            hints =
+              if border != nil,
+                do:
+                  Map.put(
+                    hints,
+                    :border_widths,
+                    NativeElixirPdfUtilities.Validators.CssValueValidator.edges(border)
+                  ),
+                else: hints
+
+            hints =
+              if frame?,
+                do:
+                  Map.put(
+                    hints,
+                    :border_widths,
+                    NativeElixirPdfUtilities.Validators.CssValueValidator.edges(0.75)
+                  ),
+                else: hints
+
+            if rules? or frame? or border != nil or
+                 Map.get(table_attributes, "bordercolor", "") != "",
+               do: Map.put(hints, :border_styles, styles),
+               else: hints
+
+          tag in ~w(td th) ->
+            styles =
+              if is_number(border) and border > 0,
+                do:
+                  if(Map.get(table_attributes, "bordercolor", "") != "", do: :solid, else: :inset),
+                else: :none
+
+            styles = NativeElixirPdfUtilities.Validators.CssValueValidator.edges(styles)
+
+            styles =
+              case rules do
+                "cols" ->
+                  %{top: :none, right: :solid, bottom: :none, left: :solid}
+
+                "all" ->
+                  NativeElixirPdfUtilities.Validators.CssValueValidator.edges(:solid)
+
+                "rows" ->
+                  %{top: :solid, right: :none, bottom: :solid, left: :none}
+
+                value when value in ~w(none groups) ->
+                  NativeElixirPdfUtilities.Validators.CssValueValidator.edges(:none)
+
+                _ ->
+                  styles
+              end
+
+            if rules? or (is_number(border) and border > 0),
+              do:
+                hints
+                |> Map.put(
+                  :border_widths,
+                  NativeElixirPdfUtilities.Validators.CssValueValidator.edges(0.75)
+                )
+                |> Map.put(:border_styles, styles),
+              else: hints
+
+          tag in ~w(thead tbody tfoot) and rules == "groups" ->
+            hints
+            |> Map.put(
+              :border_widths,
+              NativeElixirPdfUtilities.Validators.CssValueValidator.edges(0.75)
+            )
+            |> Map.put(:border_styles, %{top: :solid, right: :none, bottom: :solid, left: :none})
+
+          tag == "colgroup" and rules == "groups" ->
+            hints
+            |> Map.put(
+              :border_widths,
+              NativeElixirPdfUtilities.Validators.CssValueValidator.edges(0.75)
+            )
+            |> Map.put(:border_styles, %{top: :none, right: :solid, bottom: :none, left: :solid})
+
+          true ->
+            hints
+        end
+
+      case HtmlValidator.parse_html_legacy_color(Map.get(attributes, "bordercolor")) do
+        {:ok, color} when tag in ~w(table thead tbody tfoot tr td th) ->
+          {:ok,
+           hints
+           |> Map.put(:border_color, color)
+           |> Map.put(
+             :border_colors,
+             NativeElixirPdfUtilities.Validators.CssValueValidator.edges(color)
+           )}
+
+        _ ->
+          {:ok, hints}
+      end
     end
   end
 
@@ -893,12 +1082,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   end
 
   @doc "Prepares validated visible table rows, column hints and non-overlapping cell placements."
-  @spec form(term()) ::
-          {:ok, %{rows: [map()], columns: [map()]}} | {:error, Diagnostics.detailed_error()}
-  def form(children) do
+  @spec form(term(), map()) ::
+          {:ok,
+           %{
+             rows: [map()],
+             columns: [map()],
+             column_presentation: [map()],
+             collapsed_edges: map()
+           }}
+          | {:error, Diagnostics.detailed_error()}
+  def form(children, table_style \\ %{}) do
     HtmlValidator.with_render_budget(fn ->
-      case children do
-        children when is_list(children) ->
+      case {children, table_style} do
+        {children, table_style} when is_list(children) and is_map(table_style) ->
           result =
             children
             |> Enum.with_index()
@@ -943,7 +1139,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                     visible = Enum.reject(column_nodes, &match?(%{style: %{display: :none}}, &1))
                     nodes = if visible == [], do: [child], else: visible
 
-                    Enum.reduce_while(nodes, {:ok, []}, fn column, {:ok, prepared} ->
+                    nodes
+                    |> Enum.with_index()
+                    |> Enum.reduce_while({:ok, []}, fn {column, column_index}, {:ok, prepared} ->
                       case column do
                         %{style: %{display: display} = column_style}
                         when display == :table_column or column == child ->
@@ -955,7 +1153,29 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                             )
 
                             hint = %{
-                              width: Map.get(column_style, :width) || Map.get(style, :width)
+                              width: Map.get(column_style, :width) || Map.get(style, :width),
+                              presentation: %{
+                                style:
+                                  if(column == child,
+                                    do: %{},
+                                    else:
+                                      Map.take(column_style, [
+                                        :border_widths,
+                                        :border_styles,
+                                        :border_colors,
+                                        :border_color
+                                      ])
+                                  ),
+                                group_style:
+                                  Map.take(style, [
+                                    :border_widths,
+                                    :border_styles,
+                                    :border_colors,
+                                    :border_color
+                                  ]),
+                                group: index,
+                                column: {index, column_index}
+                              }
                             }
 
                             {:cont, {:ok, Enum.reverse(List.duplicate(hint, span), prepared)}}
@@ -996,11 +1216,300 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
 
           with {:ok, rows, columns, _group} <- result,
                {:ok, rows} <- form_grid(Enum.reverse(rows)) do
-            {:ok, %{rows: rows, columns: Enum.reverse(columns)}}
+            columns = Enum.reverse(columns)
+
+            with :ok <- validate_border_grid_support(rows, columns, table_style) do
+              {:ok,
+               %{
+                 rows: rows,
+                 columns: Enum.map(columns, &Map.take(&1, [:width])),
+                 column_presentation: Enum.map(columns, & &1.presentation),
+                 collapsed_edges:
+                   if(Map.get(table_style, :border_collapse) == :collapse,
+                     do:
+                       collapsed_table_edges(
+                         rows,
+                         Enum.map(columns, & &1.presentation),
+                         table_style
+                       ),
+                     else: %{}
+                   )
+               }}
+            end
           end
 
         _ ->
           invalid_table(%{}, "table formation requires a list of styled children")
+      end
+    end)
+  end
+
+  # Table-part borders need a complete authored or span-covered visible grid.
+  # Empty slot formation remains a separate, unsupported formatting prerequisite.
+  defp validate_border_grid_support(rows, columns, table_style) do
+    if Map.get(table_style, :border_collapse) == :collapse do
+      count = max(Enum.reduce(rows, 0, &max(&1.consumed_columns, &2)), length(columns))
+
+      case Enum.find(rows, &(&1.consumed_columns < count)) do
+        nil ->
+          :ok
+
+        incomplete ->
+          styles =
+            Enum.flat_map(rows, &[&1.row.style, &1.group_style || %{}]) ++
+              Enum.flat_map(columns, &[&1.presentation.style, &1.presentation.group_style])
+
+          wide_borders? =
+            Enum.any?(styles, fn style ->
+              widths =
+                Map.get(
+                  style,
+                  :border_widths,
+                  NativeElixirPdfUtilities.Validators.CssValueValidator.edges(0.0)
+                )
+
+              styles =
+                Map.get(
+                  style,
+                  :border_styles,
+                  NativeElixirPdfUtilities.Validators.CssValueValidator.edges(:none)
+                )
+
+              Enum.any?(widths, fn {side, width} ->
+                width > 0 and Map.fetch!(styles, side) not in [:none, :hidden]
+              end)
+            end)
+
+          if wide_borders? do
+            Diagnostics.error(
+              :layout,
+              :unsupported_html,
+              "row, row-group, column or column-group borders over uncovered table slots require anonymous cell formation, which is not implemented; add authored cells covering the missing slots or remove table-part borders",
+              Keyword.merge(source_context(incomplete.row),
+                operation: :layout,
+                module: __MODULE__,
+                source: "tr uncovered table slots"
+              )
+            )
+          else
+            :ok
+          end
+      end
+    else
+      :ok
+    end
+  end
+
+  # CSS2 border conflict order is a fixed rendering rule, not a resource limit.
+  defp collapsed_table_edges(rows, columns, table_style) do
+    no_edges? = fn style ->
+      case Map.get(style, :border_styles) do
+        nil -> true
+        %{top: :none, right: :none, bottom: :none, left: :none} -> true
+        _ -> false
+      end
+    end
+
+    empty? =
+      no_edges?.(table_style) and
+        Enum.all?(rows, fn row ->
+          no_edges?.(row.row.style) and no_edges?.(row.group_style || %{}) and
+            Enum.all?(row.cells, &no_edges?.(&1.cell.style))
+        end) and
+        Enum.all?(columns, &(no_edges?.(&1.style) and no_edges?.(&1.group_style)))
+
+    if empty? do
+      %{}
+    else
+      row_count = length(rows)
+      column_count = max(Enum.reduce(rows, 0, &max(&1.consumed_columns, &2)), length(columns))
+
+      cells =
+        Enum.with_index(rows)
+        |> Enum.reduce(%{}, fn {row, row_index}, edges ->
+          Enum.reduce(row.cells, edges, fn cell, acc ->
+            horizontal = cell.column..(cell.column + cell.colspan - 1)
+            vertical = row_index..(row_index + cell.rowspan - 1)
+
+            keys =
+              Enum.flat_map(
+                horizontal,
+                &[
+                  {{:horizontal, row_index, &1}, :top},
+                  {{:horizontal, row_index + cell.rowspan, &1}, :bottom}
+                ]
+              ) ++
+                Enum.flat_map(
+                  vertical,
+                  &[
+                    {{:vertical, &1, cell.column}, :left},
+                    {{:vertical, &1, cell.column + cell.colspan}, :right}
+                  ]
+                )
+
+            put_collapsed_table_edges(acc, keys, cell.cell.style, 5, row_index, cell.column, true)
+          end)
+        end)
+
+      if row_count == 0 or column_count == 0 do
+        cells
+      else
+        row_entries = Enum.with_index(rows)
+
+        edges =
+          Enum.reduce(row_entries, cells, fn {row, index}, acc ->
+            keys =
+              Enum.flat_map(
+                0..(column_count - 1),
+                &[{{:horizontal, index, &1}, :top}, {{:horizontal, index + 1, &1}, :bottom}]
+              ) ++
+                [{{:vertical, index, 0}, :left}, {{:vertical, index, column_count}, :right}]
+
+            put_collapsed_table_edges(acc, keys, row.row.style, 4, index, 0, false)
+          end)
+
+        edges =
+          Enum.group_by(row_entries, fn {row, _index} -> row.row_group end)
+          |> Enum.reduce(edges, fn {_id, entries}, acc ->
+            {first, top} = hd(entries)
+            {_last, bottom} = List.last(entries)
+
+            keys =
+              Enum.flat_map(
+                0..(column_count - 1),
+                &[{{:horizontal, top, &1}, :top}, {{:horizontal, bottom + 1, &1}, :bottom}]
+              ) ++
+                Enum.flat_map(
+                  top..bottom,
+                  &[{{:vertical, &1, 0}, :left}, {{:vertical, &1, column_count}, :right}]
+                )
+
+            put_collapsed_table_edges(acc, keys, first.group_style || %{}, 3, top, 0, false)
+          end)
+
+        column_entries = Enum.with_index(columns)
+
+        edges =
+          Enum.group_by(column_entries, fn {column, _index} -> column.column end)
+          |> Enum.reduce(edges, fn {_id, entries}, acc ->
+            {first, left} = hd(entries)
+            {_last, right} = List.last(entries)
+
+            keys =
+              Enum.flat_map(
+                0..(row_count - 1),
+                &[{{:vertical, &1, left}, :left}, {{:vertical, &1, right + 1}, :right}]
+              ) ++
+                Enum.flat_map(
+                  left..right,
+                  &[{{:horizontal, 0, &1}, :top}, {{:horizontal, row_count, &1}, :bottom}]
+                )
+
+            put_collapsed_table_edges(acc, keys, first.style, 2, 0, left, false)
+          end)
+
+        edges =
+          Enum.group_by(column_entries, fn {column, _index} -> column.group end)
+          |> Enum.reduce(edges, fn {_id, entries}, acc ->
+            {first, left} = hd(entries)
+            {_last, right} = List.last(entries)
+
+            keys =
+              Enum.flat_map(
+                0..(row_count - 1),
+                &[{{:vertical, &1, left}, :left}, {{:vertical, &1, right + 1}, :right}]
+              ) ++
+                Enum.flat_map(
+                  left..right,
+                  &[{{:horizontal, 0, &1}, :top}, {{:horizontal, row_count, &1}, :bottom}]
+                )
+
+            put_collapsed_table_edges(acc, keys, first.group_style, 1, 0, left, false)
+          end)
+
+        keys =
+          Enum.flat_map(
+            0..(column_count - 1),
+            &[{{:horizontal, 0, &1}, :top}, {{:horizontal, row_count, &1}, :bottom}]
+          ) ++
+            Enum.flat_map(
+              0..(row_count - 1),
+              &[{{:vertical, &1, 0}, :left}, {{:vertical, &1, column_count}, :right}]
+            )
+
+        put_collapsed_table_edges(edges, keys, table_style, 0, 0, 0, false)
+      end
+    end
+  end
+
+  defp put_collapsed_table_edges(edges, keys, style, origin, row, column, cell?) do
+    widths =
+      Map.get(
+        style,
+        :border_widths,
+        NativeElixirPdfUtilities.Validators.CssValueValidator.edges(0.0)
+      )
+
+    styles =
+      Map.get(
+        style,
+        :border_styles,
+        NativeElixirPdfUtilities.Validators.CssValueValidator.edges(:none)
+      )
+
+    colors =
+      Map.get(
+        style,
+        :border_colors,
+        NativeElixirPdfUtilities.Validators.CssValueValidator.edges(
+          Map.get(style, :border_color, Map.get(style, :color, {0, 0, 0}))
+        )
+      )
+
+    HtmlValidator.reserve_render_resource(:max_table_grid_work, length(keys), :layout)
+
+    Enum.reduce(keys, edges, fn {key, side}, acc ->
+      # Row/column borders do not cut through the interior of a spanning cell.
+      if cell? or Map.has_key?(acc, key) do
+        border_style = Map.fetch!(styles, side)
+        width = if border_style in [:none, :hidden], do: 0.0, else: Map.fetch!(widths, side)
+
+        style_order =
+          Enum.find_index(
+            [:none, :inset, :groove, :outset, :ridge, :dotted, :dashed, :solid, :double, :hidden],
+            &(&1 == border_style)
+          ) || 0
+
+        rank = {border_style == :hidden, width, style_order, origin, -row, -column}
+
+        candidate = %{
+          width: width,
+          style: border_style,
+          color: Map.fetch!(colors, side),
+          rank: rank,
+          owner: if(cell?, do: {row, column, side}, else: nil)
+        }
+
+        Map.update(acc, key, candidate, fn current ->
+          winner = if rank > current.rank, do: candidate, else: current
+          # Equal-width shared edges use the following cell's top/left paint
+          # geometry; stronger-width cell edges retain their own geometry.
+          owner =
+            cond do
+              cell? and candidate.width == current.width and side in [:top, :left] ->
+                candidate.owner
+
+              cell? and rank > current.rank ->
+                candidate.owner
+
+              true ->
+                current.owner || candidate.owner
+            end
+
+          Map.put(winner, :owner, owner)
+        end)
+      else
+        acc
       end
     end)
   end

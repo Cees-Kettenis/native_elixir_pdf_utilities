@@ -101,14 +101,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
     end
 
     assert {:error, {:unsupported_html, diagnostic}} =
-             HtmlToPdf.render("<svg width=0 height=0><text>Cannot omit</text></svg>")
+             HtmlToPdf.render(
+               "<svg width=0 height=0><text><textPath>Cannot omit</textPath></text></svg>"
+             )
 
     assert diagnostic.message =~ "cannot omit"
   end
 
   test "missing logical content and effects diagnose before successful artwork" do
     for content <- [
-          "<text>Ω</text>",
+          "<text><textPath>Ω</textPath></text>",
           "<tspan>text</tspan>",
           "<foreignObject><div>HTML</div></foreignObject>",
           "<defs><linearGradient id='g' /></defs>",
@@ -252,7 +254,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
              SvgBackend.vectorize(source, [width: 80, height: 40], %{mode: :image})
 
     assert diagnostic.operation == :vectorize
-    assert diagnostic.message =~ "inline shape scene"
+    assert diagnostic.message =~ "inline shape/text scene"
   end
 
   test "sibling opacity groups retain every form and graphics state" do

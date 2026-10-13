@@ -3875,7 +3875,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
 
   test "SVG preparation validation cannot authorize rendering in the same budget" do
     alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
-    assert {:ok, dom} = HtmlParser.parse_detailed("<svg><text>Prepared only</text></svg>")
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<svg><foreignObject><p>Prepared only</p></foreignObject></svg>"
+             )
+
     options = Font.normalize_options([])
 
     assert :ok ==
@@ -3886,8 +3891,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
                assert {:error, {:unsupported_html, diagnostic}} =
                         HtmlValidator.prepare_style_input(dom, [], options, :render)
 
-               assert diagnostic.source == "text"
+               assert diagnostic.source == "foreignObject"
+               assert diagnostic.stage == :layout and diagnostic.operation == :prepare
+               assert diagnostic.reason == :unsupported_html
                assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgSceneValidator
+               assert diagnostic.message =~ "complete scene"
 
                assert {:ok, false} =
                         HtmlValidator.prepare_style_input(dom, [], options, :prepare_svg)

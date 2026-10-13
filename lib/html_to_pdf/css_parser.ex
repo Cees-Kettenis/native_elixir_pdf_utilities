@@ -333,6 +333,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   end
 
   @doc false
+  @spec style_declaration_records(String.t()) :: {:ok, [map()]} | {:error, {atom(), map()}}
+  @spec style_declaration_records(String.t(), PrintMediaValidator.context() | nil | :unpositioned) ::
+          {:ok, [map()]} | {:error, {atom(), map()}}
+  def style_declaration_records(css, media_context \\ nil) do
+    HtmlValidator.with_render_budget(fn ->
+      with {:ok, css} <- HtmlValidator.validate_css_source(css),
+           projection = source_projection(css),
+           {:ok, projected, media} <- source_media_projection(projection, media_context),
+           rules_css = mask_source_blocks(projected, @font_face_rule_regex),
+           rules_css = mask_source_blocks(rules_css, @page_rule_regex),
+           {:ok, sources} <- rule_sources(rules_css) do
+        {records, _cursor} =
+          Enum.map_reduce(sources, 0, fn rule, cursor ->
+            {offset, length} =
+              :binary.match(rules_css, rule.source,
+                scope: {cursor, byte_size(rules_css) - cursor}
+              )
+
+            base = offset + byte_size(rule.selectors) + 1
+
+            records =
+              if source_active?(base, media) do
+                Enum.map(declaration_spans(rule.declarations), fn span ->
+                  %{source: source_record(projection, base + span.offset, span.length)}
+                end)
+              else
+                []
+              end
+
+            {records, offset + length}
+          end)
+
+        {:ok, List.flatten(records)}
+      else
+        {:error, {_reason, _diagnostic}} = error ->
+          error
+
+        {:error, _source} ->
+          {:error, {:invalid_css, css_error_detail(css, css)}}
+      end
+    end)
+  end
+
+  @doc false
   @spec prepare_source_declarations(String.t(), map()) ::
           {:ok, [map()]} | {:error, {atom(), map()}}
   def prepare_source_declarations(css, descriptor) do

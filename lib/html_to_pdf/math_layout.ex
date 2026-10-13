@@ -6,6 +6,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
+  alias NativeElixirPdfUtilities.Validators.MathTableValidator
 
   @doc """
   Measures styled MathML tokens, operators, rows, fractions and radicals after preparation.
@@ -135,6 +136,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             drawing_items: rule ++ positioned.(:drawing_items),
             actual_text: numerator.actual_text <> denominator.actual_text
           }
+
+        %{kind: :matrix} ->
+          rows =
+            Enum.map(prepared.rows, fn row -> Enum.map(row, &measure_prepared(&1.content)) end)
+
+          placement =
+            case MathTableValidator.prepare_geometry(prepared, rows) do
+              {:ok, geometry} -> geometry
+              {:error, _} = error -> throw({:math_layout_error, error})
+            end
+
+          positioned = fn field ->
+            Enum.flat_map(placement.cells, fn %{measured: child, x: x, y: y} ->
+              Enum.map(Map.fetch!(child, field), &%{&1 | x: &1.x + x, y: &1.y + y})
+            end)
+          end
+
+          placement
+          |> Map.take([
+            :width,
+            :min_content_width,
+            :max_content_width,
+            :ascent,
+            :descent,
+            :ink_ascent,
+            :ink_descent
+          ])
+          |> Map.merge(%{
+            italic_correction: 0.0,
+            top_accent_attachment: nil,
+            glyphs: positioned.(:glyphs),
+            drawing_items: positioned.(:drawing_items),
+            actual_text: Enum.map_join(placement.cells, & &1.measured.actual_text)
+          })
 
         %{kind: :radical} ->
           base = measure_prepared(prepared.base)
@@ -477,9 +512,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
         measured
       end
 
-    if Map.get(prepared, :root, false),
-      do: measured,
-      else: decorate_geometry(measured, prepared.style)
+    measured =
+      if Map.get(prepared, :root, false),
+        do: measured,
+        else: decorate_geometry(measured, prepared.style)
+
+    if Map.get(prepared, :hide_paint, false),
+      do: %{measured | glyphs: [], drawing_items: [], actual_text: ""},
+      else: measured
   end
 
   # Ordinary child ink is known before any operator receives its row target.

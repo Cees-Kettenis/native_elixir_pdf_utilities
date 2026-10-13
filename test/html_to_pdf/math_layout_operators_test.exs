@@ -170,6 +170,80 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
     assert_in_delta resolved.target_ascent + resolved.target_descent, 40 * x_height, 1.0e-8
   end
 
+  @tag :math_operator_unadjusted
+  test "in-range asymmetric targets retain their requested ascent even below the baseline", %{
+    node: n,
+    font: font
+  } do
+    operator =
+      n.("mo", "|", %{
+        "stretchy" => "true",
+        "symmetric" => "false",
+        "minsize" => "0pt",
+        "maxsize" => "24pt"
+      })
+
+    assert {:ok, prepared} = MathLayoutValidator.prepare_element(operator, %{})
+
+    for {ascent, descent} = target <- [{-2, 14}, {0, 12}, {2, 10}, {6, 6}, {-10, 34}] do
+      assert {:ok, resolved} = MathLayoutValidator.prepare_operator_stretch(prepared, target)
+      assert_in_delta resolved.target_ascent, ascent, 1.0e-10
+      assert_in_delta resolved.target_descent, descent, 1.0e-10
+      assert {:ok, measured} = MathLayout.measure(operator, %{block_stretch_size: target})
+      assert {:ok, shape} = MathLayout.stretch("|", font, 20, :vertical, ascent + descent)
+      shift = (ascent - descent - (shape.ascent - shape.descent)) / 2
+      assert Enum.map(measured.glyphs, & &1.glyph_id) == Enum.map(shape.glyphs, & &1.glyph_id)
+
+      for {glyph, shaped} <- Enum.zip(measured.glyphs, shape.glyphs) do
+        assert_in_delta glyph.x, shaped.x, 1.0e-10
+        assert_in_delta glyph.y, shaped.y + shift, 1.0e-10
+        assert glyph.font_face == shaped.font_face and glyph.font_size == shaped.font_size
+      end
+
+      assert measured.actual_text == "|"
+      assert_in_delta measured.width, shape.width, 1.0e-10
+      assert_in_delta measured.ink_ascent - measured.ink_descent, ascent - descent, 1.0e-10
+    end
+  end
+
+  test "operator min/max adjustment keeps its dated Core axis clamp and shared failures", %{
+    node: n,
+    font: font
+  } do
+    {:ok, metrics} = Font.math_metrics(font)
+    axis = metrics.constants.axis_height.value * 20 / font.units_per_em
+
+    for {attributes, target, wanted_total} <- [
+          {%{"minsize" => "24pt", "maxsize" => "30pt"}, {-2, 14}, 24},
+          {%{"minsize" => "0pt", "maxsize" => "8pt"}, {2, 10}, 8},
+          {%{"minsize" => "24pt", "maxsize" => "30pt"}, {0, 0}, 24}
+        ] do
+      operator =
+        n.("mo", "|", Map.merge(attributes, %{"symmetric" => "false", "stretchy" => "true"}))
+
+      assert {:ok, prepared} = MathLayoutValidator.prepare_element(operator, %{})
+      assert {:ok, resolved} = MathLayoutValidator.prepare_operator_stretch(prepared, target)
+      {ascent, descent} = target
+
+      expected =
+        if ascent + descent <= 0,
+          do: wanted_total / 2 + axis,
+          else: max(0, (ascent - axis) * wanted_total / (ascent + descent) + axis)
+
+      assert_in_delta resolved.target_ascent, expected, 1.0e-10
+      assert_in_delta resolved.target_ascent + resolved.target_descent, wanted_total, 1.0e-10
+
+      for invalid <- [{:bad, 2}, {1.0e308, 2}, {-1.0e308, 2}] do
+        assert {:error, {:invalid_document, diagnostic}} =
+                 MathLayoutValidator.prepare_operator_stretch(prepared, invalid)
+
+        assert diagnostic.stage == :layout and diagnostic.reason == :invalid_document
+        assert diagnostic.operation == :measure_math and diagnostic.module == MathLayoutValidator
+        assert diagnostic.message =~ "bounded point extents"
+      end
+    end
+  end
+
   test "asymmetric operators preserve target center; all-stretch rows use zero target", %{
     node: n,
     row: r,

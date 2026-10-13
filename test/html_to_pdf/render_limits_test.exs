@@ -392,7 +392,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsTest do
   test "table grid expansion shares a bounded budget and reports layout diagnostics" do
     table = "<table style='border-collapse:collapse'><tr><td colspan='30'>x</td></tr></table>"
 
-    for maximum <- [1, 50, 110] do
+    for maximum <- [1, 32, 37] do
       Limits.install(%{Limits.effective() | max_table_grid_work: maximum})
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(table)
@@ -412,13 +412,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsTest do
       assert diagnostic.message =~ "max_table_grid_work"
     end
 
-    # The prepared grid is reused by outer-border and track geometry. A
-    # 20-column table fits this budget; real 30-column expansion exceeds it.
-    Limits.install(%{Limits.effective() | max_table_grid_work: 110})
-    assert {:ok, _pdf} = HtmlToPdf.render(String.replace(table, "colspan='30'", "colspan='20'"))
+    # Occupancy and row sizing use columns + 3 work units. The zero-edge
+    # clone pass adds one row map and four maps for its single spanning cell.
+    for {columns, work} <- [{20, 28}, {30, 38}] do
+      expanded = String.replace(table, "colspan='30'", "colspan='#{columns}'")
+      Limits.install(%{Limits.effective() | max_table_grid_work: work - 1})
 
-    Limits.install(%{Limits.effective() | max_table_grid_work: 1_000})
-    assert {:ok, _pdf} = HtmlToPdf.render(table)
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(expanded)
+      assert diagnostic.stage == :layout
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.operation == :render
+      assert diagnostic.message =~ "max_table_grid_work"
+
+      Limits.install(%{Limits.effective() | max_table_grid_work: work})
+      assert {:ok, _pdf} = HtmlToPdf.render(expanded)
+    end
+
+    for maximum <- [50, 110, 1_000] do
+      Limits.install(%{Limits.effective() | max_table_grid_work: maximum})
+      assert {:ok, _pdf} = HtmlToPdf.render(table)
+    end
   end
 
   test "generated boxes and repeated text measurements are charged before allocation" do

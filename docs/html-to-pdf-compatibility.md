@@ -114,7 +114,8 @@ include `namespace` and `attribute_namespaces` fields. Use `"svg"` or `"math"`
 for a root fragment context, or a map such as
 `%{namespace: :mathml, tag: "annotation-xml", attributes: %{"encoding" => "text/html"}}`
 for an integration point. Native rendering supports a bounded SVG shape/path
-profile and MathML tokens, rows, operators, fractions and roots. Complete SVG
+profile, selected-font text and MathML tokens, rows, operators, fractions, roots,
+phantoms and bounded natural-width matrices. Complete SVG
 and MathML remain under implementation; other rendering contexts return
 actionable diagnostics. The separate [SVG](html-to-pdf-svg-1.1.0-checklist.md)
 and [MathML](html-to-pdf-mathml-1.1.0-checklist.md) checklists retain their open
@@ -131,12 +132,29 @@ the clip comparison scopes its sizing rule to the outer SVG roots.
 Same-scene `defs`, `symbol` and `use` support bounded geometry reuse, nested
 instances, transforms, symbol viewports and inherited instance paints. Missing
 or ineligible targets, external references and cycles return diagnostics.
+Explicit inheritance of non-inherited effects within reused targets remains
+diagnosed until complete instance context is supported. Raw inline vector CSS
+requires host cascade preparation before effects and allocation accounting;
+prepared host CSS and the restricted image mode retain their existing paths.
 Symbols currently require a direct `defs` parent. Linear and radial gradients
 produce native PDF shadings for static coordinates, pad spread, sRGB colors and
 constant stop opacity. Stops must increase strictly from zero to one, including
 in the native binary32 representation. Gradient templates, other spread modes,
-variable alpha, patterns and markers return diagnostics. SVG text, foreignObject,
-masks, filters and complete reference behavior remain separate work.
+variable alpha, patterns and markers return diagnostics. SVG text supports
+exact selected static TrueType bytes, solid fills, scalar positioning, text
+anchors and local transforms. Visible PDF CID glyphs retain complete cluster
+logical text and selected font identity. Original font declarations use the
+shared CSS validator even when later CSS overrides them; supported letter spacing
+affects actual glyph advance. Text strokes, gradient text, bidi and advanced
+text-path/coordinate-list behavior remain diagnosed. ForeignObject, masks,
+filters and complete reference behavior remain separate work.
+
+Math phantoms retain intrinsic metrics, selected-font work and operator context
+while omitting paint, links and logical text. Basic `mtable`/`mtr`/`mtd` matrices
+use final selected font padding and MATH-axis centering, natural preferred
+column widths and shared row baselines. Spanning geometry, constrained sizing,
+nonzero spacing, decorated cells and anonymous table repair remain diagnosed.
+`mpadded`, broader scripts and limits remain unfinished.
 
 Iframes accept authorized local HTML or inline `srcdoc` in isolated child
 viewports. Local HTML `object[data]` uses the same immutable permission root,
@@ -151,10 +169,15 @@ intrinsic/viewBox proportions or `preserveAspectRatio="none"`; no-viewBox and
 mismatched-aspect roots diagnose pending document viewport support.
 
 `embed` accepts authorized local HTML, plaintext and those still images. Missing
-`src` suppresses its box; an explicit empty source or exact `about:blank` creates
-a blank viewport. Unsupported plugin MIME types return diagnostics. Caller asset
-mappings and resolvers cannot replace selected local bytes. Framesets remain
-unfinished; embedded PDF rendering is a 1.5.0 dependency. Clipped native
+`src` suppresses its box; an explicit empty source or `about:blank`, including
+query and fragment suffixes, creates a blank viewport. That document retains
+its requested URL separately from its inherited local resolution base.
+Unsupported plugin MIME types return diagnostics. Caller asset mappings and
+resolvers cannot replace selected local bytes. Full-document and nested framesets
+support the explicit zero-border profile with fixed, percentage and star tracks.
+Selected hidden and excess frames still initialize and validate their child
+documents before painting is omitted. Positive/default borders, scrolling and
+named navigation remain diagnosed. Embedded PDF rendering is a 1.5.0 dependency. Clipped native
 child groups retain offscreen logical text in PDF extraction, even when it has
 no visible ink.
 
@@ -187,8 +210,13 @@ interactive ranges can expose a read-only scalar field when their thumb fits
 the widget. Mutable interactive sliders, datalist ticks and overflowing disabled
 widget appearances return diagnostics. Date, month, week, time and local datetime
 inputs prepare canonical initial values, scalar bounds and exact step state.
-Hidden temporal controls retain this state for selectors; visible native pickers
-still return diagnostics. Full validity aggregation remains unfinished.
+Hidden temporal controls retain this state for selectors. Visible date, month,
+week, time and local-datetime controls support the bounded initial artwork
+profile for English/en-US or unspecified locale, actual selected
+font metrics and canonical logical values. Static output paints the initial
+editor and indicator. Readonly/disabled interactive fields retain scalar values;
+mutable interactive editors and unsupported locales remain diagnosed.
+Full validity aggregation remains unfinished.
 Pinned numeric-prefix and reversed-bound rules
 retain documented differences from Chromium.
 
@@ -239,10 +267,11 @@ when the type is omitted. Parsed attributes and CSS selectors retain the authore
 value. Other characters remain in the control value. Textarea line breaks remain
 multiline content. Empty text-entry inputs retain one line of intrinsic height.
 
-Text/search/telephone/URL/email/password/Number inputs and textareas accept `readonly` by boolean presence, including
+Text/search/telephone/URL/email/password/Number and supported temporal inputs,
+plus textareas, accept `readonly` by boolean presence, including
 `readonly="false"`. Interactive fields expose `read_only: true` and reject filling
 with `:read_only_form_field`; flattening remains available. Readonly adds no
-disabled appearance. Static artwork stays identical unless author CSS selects the
+disabled appearance to text controls. Their static artwork stays identical unless author CSS selects the
 attribute. Combined `readonly` and `disabled` set the read-only bit once and keep
 the textarea multiline bit. Other input types and control hosts reject `readonly`.
 Constraints, ownership and complete native widget themes remain unfinished.
@@ -432,8 +461,10 @@ alignment hints have lower priority than authored CSS. Captions support top and
 bottom placement. Row and group background layers preserve separated gaps and
 colspan coverage. Effective baseline cell alignment diagnoses its unfinished
 row-baseline geometry; authored top/middle/bottom alignment can override the
-hint. Complete legacy border conflicts and spanning-cell fragmentation remain
-unfinished.
+hint. Legacy border/frame/rules hints enter below authored CSS. Collapsed edges
+resolve hidden suppression, width, style, origin and positional conflicts across
+cells and spans. All-none grids retain their geometry and background layers
+without computing paint edges. Spanning-cell fragmentation remains unfinished.
 
 Page breaks use measured content height. The printable area is the page height minus its top and bottom margins.
 
@@ -549,6 +580,10 @@ Pages break automatically or at supported CSS page breaks. Use
 `:page_furniture` for running headers, footers, and page numbers. Reserve enough
 margin for the templates; they do not push body content out of the way.
 
+Paragraph line groups honor inherited positive-integer `orphans` and `widows`,
+each defaulting to two. Root auto-height body bottom padding participates in
+pagination; embedded child bodies retain their isolated viewport extent.
+
 Templates can vary on the first, odd, and even pages. A matching `false` or
 `nil` variant hides that template. See [headers and footers](html-to-pdf-examples.md#add-headers-footers-and-page-numbers).
 For PDF viewer bookmarks, see [outlines from headings](html-to-pdf-examples.md#create-bookmarks-from-headings).
@@ -557,7 +592,7 @@ For PDF viewer bookmarks, see [outlines from headings](html-to-pdf-examples.md#c
 
 | Not supported | What to use instead |
 | --- | --- |
-| JavaScript, canvas, video, audio, general embed/framesets | Static HTML, supported images and authorized local HTML child viewports |
+| JavaScript, canvas, video, audio, plugin embeds and general framesets | Static HTML, supported images, authorized local HTML child viewports and bounded zero-border framesets |
 | XFA, JavaScript form actions | Use supported AcroForm fields or static artwork |
 | Floats, fixed positioning, transforms, animations | Block, flex, grid, relative, or absolute layout |
 | Named pages and CSS page-margin boxes | Page options and header/footer templates |

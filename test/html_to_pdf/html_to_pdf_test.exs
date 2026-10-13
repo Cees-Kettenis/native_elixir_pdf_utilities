@@ -217,9 +217,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     source = "<?marker name='A&amp;B'?>\r\n  " <> token <> "<p>Replacement</p></template>"
     assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(source)
     assert diagnostic.stage == :html and diagnostic.reason == :unsupported_html
-    assert diagnostic.operation == :render and diagnostic.source == token
+    assert diagnostic.operation == :parse and diagnostic.source == token
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.TemplatePatchValidator
     assert diagnostic.line == 2 and diagnostic.column == 3
-    assert diagnostic.message =~ "template"
+    assert diagnostic.message =~ "no original source has been discarded"
   end
 
   test "token-time omitted document and table parents preserve the public PDF result" do
@@ -255,16 +256,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "token-time implied parents preserve strict public diagnostics and original locations" do
-    for {source, token, line, column} <- [
-          {"<title>T</title>\r\n<head></head>", "<head>", 2, 1},
-          {"<body></body>\r<head></head>", "<head>", 2, 1},
+    for {source, token, line, column, operation} <- [
+          {"<title>T</title>\r\n<head></head>", "<head>", 2, 1, :render},
+          {"<body></body>\r<head></head>", "<head>", 2, 1, :render},
           {"<p>e\u0301</p>\r\n  <template for=missing><p>Inert</p></template>",
-           "<template for=missing>", 2, 3},
-          {"<table><tr><td>A</table>\r\n  <script>run()</script>", "<script>", 2, 3}
+           "<template for=missing>", 2, 3, :parse},
+          {"<table><tr><td>A</table>\r\n  <script>run()</script>", "<script>", 2, 3, :render}
         ] do
       assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(source)
       assert diagnostic.reason == :unsupported_html
-      assert diagnostic.stage == :html and diagnostic.operation == :render
+      assert diagnostic.stage == :html and diagnostic.operation == operation
+
+      if operation == :parse do
+        assert diagnostic.module == NativeElixirPdfUtilities.Validators.TemplatePatchValidator
+        assert diagnostic.message =~ "inert fallback, no earlier matching marker"
+        assert diagnostic.message =~ "no original source has been discarded"
+      end
+
       assert diagnostic.source == token
       assert diagnostic.line == line and diagnostic.column == column
       assert is_binary(diagnostic.message) and diagnostic.message != ""
@@ -1060,7 +1068,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
 
     for tag <-
-          ~w(msup msub msubsup mover munder munderover mmultiscripts mstyle merror mpadded mphantom mtable semantics annotation annotation-xml maction unknown-math) do
+          ~w(msup msub msubsup mover munder munderover mmultiscripts mstyle merror mpadded semantics annotation annotation-xml maction unknown-math) do
       assert {:error, {:unsupported_html, diagnostic}} =
                HtmlToPdf.render("<math><#{tag}/></math>")
 
@@ -2454,16 +2462,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   test "unsupported SVG logical content returns a renderer diagnostic" do
     assert {:error, {:unsupported_html, diagnostic}} =
              HtmlToPdf.render(
-               "<div contenteditable><svg contenteditable=false><text>Foreign</text></svg></div>"
+               "<div contenteditable><svg contenteditable=false><foreignObject><p>Foreign</p></foreignObject></svg></div>"
              )
 
     assert diagnostic.stage == :layout
     assert diagnostic.reason == :unsupported_html
     assert diagnostic.operation == :prepare
     assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgSceneValidator
-    assert diagnostic.message =~ "SVG text"
+    assert diagnostic.message =~ "SVG foreignObject"
     assert diagnostic.message =~ "implementation"
-    assert diagnostic.source == "text"
+    assert diagnostic.source == "foreignObject"
   end
 
   test "supported inline SVG geometry renders through the public API" do

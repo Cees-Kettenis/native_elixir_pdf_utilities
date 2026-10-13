@@ -1,0 +1,16 @@
+<!doctype html><html lang=en-US><head><style>
+@page {size:300pt 330pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt;}
+body {padding:12pt;} p {margin:0 0 3pt;} .row {margin:0 0 9pt;}
+input {font-family:"DejaVu Sans Mono";}
+</style></head><body>
+<div class=row><p>Readonly date</p><input type=date readonly name=date value=2026-10-13 style=display:block></div>
+<div class=row><p>Disabled leap date</p><input type=date disabled name=leap value=2000-02-29 style=display:block></div>
+<div class=row><p>Readonly fractional time</p><input type=time readonly name=fraction value=13:02:03.100 style=display:block></div>
+<p>Date inline <input type=date readonly name=inline_date value=2026-10-13 style="width:120pt;position:relative;left:3pt;"> tail</p>
+<p>Time inline <input type=time readonly name=inline_time value=13:02 style="width:90pt;"> tail</p>
+<div class=row><p>Small chosen font</p><input type=date readonly name=small value=2026-10-13 style="display:block;font-size:8pt;"></div>
+<div class=row><p>Large chosen font</p><input type=time readonly name=large value=13:02 style="display:block;font-size:18pt;"></div>
+<div class=row><p>Clipped initial date</p><input type=date readonly name=clipped value=2026-10-13 style="display:block;width:30pt;border-radius:3pt;"></div>
+<p>After protected temporal controls</p>
+</body></html>

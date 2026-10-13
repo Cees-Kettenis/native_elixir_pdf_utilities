@@ -675,13 +675,20 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
     assert {:ok, _} = NativeElixirPdfUtilities.Validators.FontValidator.prepare_ttf(font)
 
     assert {:error,
-            {:invalid_document, %{source: "SVG", operation: :rasterize, message: message}}} =
+            {:invalid_document,
+             %{
+               stage: :style,
+               reason: :invalid_document,
+               source: "SVG",
+               operation: :rasterize,
+               message: message
+             }}} =
              SvgBackend.rasterize(svg("<text x='0' y='1'>A</text>"), [], %{
                mode: :image,
                fonts: [%{data: font}]
              })
 
-    assert message =~ "could not be imported" and message =~ "named TrueType face"
+    assert message =~ "selected SVG font bytes must import exactly one named static TrueType face"
   end
 
   test "font parser diagnostics retain their limit explanation", %{limits: old} do

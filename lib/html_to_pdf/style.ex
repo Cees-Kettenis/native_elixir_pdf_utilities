@@ -85,6 +85,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     :svg_image,
     :_text_decorations,
     :embedded_document,
+    :_frameset,
+    :_frameset_parent,
     :_table_model,
     :_table_cell
   ]
@@ -184,13 +186,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           HtmlValidator.image_budget(),
           String.t() | nil,
           term(),
+          term(),
+          term()
+        ) :: {:ok, styled_tree()} | {:error, {atom(), map()}}
+  @spec compute_child_detailed(
+          term(),
+          [render_option()],
+          HtmlValidator.image_budget(),
+          String.t() | nil,
+          term(),
           term()
         ) ::
           {:ok, styled_tree()} | {:error, {atom(), map()}}
-  def compute_child_detailed(dom, opts, image_budget, document_url, client, media) do
+  def compute_child_detailed(
+        dom,
+        opts,
+        image_budget,
+        document_url,
+        client,
+        media,
+        frame_margins \\ nil
+      ) do
     with :ok <- ResourceValidator.validate_context(ResourceContext.current()),
-         {:ok, client, media} <- EmbeddedViewportValidator.prepare_media_viewport(client, media) do
-      compute_styles(dom, opts, image_budget, {:document_viewport, document_url, client, media})
+         {:ok, client, media} <- EmbeddedViewportValidator.prepare_media_viewport(client, media),
+         {:ok, frame_margins} <-
+           NativeElixirPdfUtilities.Validators.FramesetValidator.prepare_body_margins(
+             frame_margins
+           ) do
+      compute_styles(
+        dom,
+        opts,
+        image_budget,
+        {:document_viewport, document_url, client, media},
+        :render,
+        frame_margins
+      )
     end
   end
 
@@ -201,7 +231,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     compute_styles(dom, opts, HtmlValidator.new_image_budget(), :caller, :prepare_svg)
   end
 
-  defp compute_styles(dom, opts, image_budget, document_url, mode \\ :render) do
+  defp compute_styles(
+         dom,
+         opts,
+         image_budget,
+         document_url,
+         mode \\ :render,
+         frame_margins \\ nil
+       ) do
     RenderCache.with_stylesheets(fn ->
       HtmlValidator.with_render_budget(fn ->
         FontValidator.with_budget(fn ->
@@ -210,6 +247,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           case HtmlValidator.prepare_style_input(dom, opts, font_options, mode) do
             {:ok, initial_controls?} ->
               {:ok, opts} = font_options
+
+              opts =
+                if is_nil(frame_margins),
+                  do: opts,
+                  else: Keyword.put(opts, :__frame_body_margins__, frame_margins)
+
               %{type: :document, children: children} = dom
 
               url_context =
@@ -364,13 +407,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                 end
 
                 scoped_compute = fn cache ->
-                  if Map.get(compiled_rules.selectors, :language_dependent, false) do
-                    LanguageValidator.with_document(children, cache, fn ->
-                      compute_styles.(cache)
-                    end)
-                  else
+                  # Native temporal formats also depend on inherited language,
+                  # even when the author stylesheet has no :lang selector.
+                  LanguageValidator.with_document(children, cache, fn ->
                     compute_styles.(cache)
-                  end
+                  end)
                 end
 
                 result =
@@ -910,6 +951,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           "head" ->
             {:ok, [], counters, counters}
 
+          "noframes" ->
+            with {:ok, style} <- element_style(node, inherited_style, rules, ancestors, opts),
+                 :ok <-
+                   NativeElixirPdfUtilities.Validators.FramesetValidator.validate_fallback_style(
+                     style
+                   ),
+                 do: {:ok, [], counters, counters}
+
+          "frameset" ->
+            with {:ok, style} <- element_style(node, inherited_style, rules, ancestors, opts),
+                 {:ok, style} <-
+                   NativeElixirPdfUtilities.Validators.FramesetValidator.prepare_initial_style(
+                     style
+                   ) do
+              with :ok <-
+                     NativeElixirPdfUtilities.Validators.FramesetValidator.validate_style(style),
+                   {:ok, plan} <-
+                     NativeElixirPdfUtilities.Validators.FramesetValidator.prepare(
+                       attributes,
+                       Map.get(inherited_style, :_frameset_parent)
+                     ),
+                   style <- Map.put(style, :_frameset, plan),
+                   {:ok, children, sibling_counters} <-
+                     style_children(
+                       children,
+                       text_style(style),
+                       rules,
+                       [node | ancestors],
+                       opts,
+                       counters,
+                       counters
+                     ) do
+                {:ok, [%{type: :element, tag: tag, style: style, children: children}],
+                 sibling_counters, sibling_counters}
+              end
+            end
+
           tag when tag in ["html", "body"] ->
             with {:ok, element_style} <-
                    element_style(node, inherited_style, rules, ancestors, opts) do
@@ -1006,22 +1084,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               end
             end
 
-          "iframe" ->
-            with {:ok, style} <- element_style(node, inherited_style, rules, ancestors, opts) do
+          tag when tag in ["iframe", "frame"] ->
+            with {:ok, style} <- element_style(node, inherited_style, rules, ancestors, opts),
+                 {:ok, style} <-
+                   if(tag == "frame",
+                     do:
+                       NativeElixirPdfUtilities.Validators.FramesetValidator.prepare_initial_style(
+                         style
+                       ),
+                     else: {:ok, style}
+                   ) do
               if style.display == :none do
                 {:ok, [%{type: :element, tag: tag, style: style, children: []}], counters,
                  counters}
               else
-                with {:ok, child_parent} <-
+                with :ok <-
+                       if(tag == "frame",
+                         do:
+                           NativeElixirPdfUtilities.Validators.FramesetValidator.validate_style(
+                             style
+                           ),
+                         else: :ok
+                       ),
+                     {:ok, frame_request} <-
+                       if(tag == "frame",
+                         do:
+                           NativeElixirPdfUtilities.Validators.FramesetValidator.prepare_frame(
+                             attributes,
+                             Map.get(inherited_style, :_frameset_parent)
+                           ),
+                         else:
+                           {:ok,
+                            %{source: ResourceValidator.iframe_source(attributes), margins: nil}}
+                       ),
+                     {:ok, child_parent} <-
                        ResourceContext.rebase(
                          ResourceContext.current(),
                          {:document_url,
                           Keyword.fetch!(opts, :__document_url_context__).resolution_base}
                        ),
-                     source <- ResourceValidator.iframe_source(attributes),
+                     source <- frame_request.source,
                      child_opts <-
                        Keyword.drop(opts, [
                          :__image_budget__,
+                         :__template_source_owner__,
                          :__link_context__,
                          :__render_cache__,
                          :__document_url_context__,
@@ -1030,8 +1136,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                      {:ok, viewport} <-
                        RenderCache.fetch(
                          child_parent.scope,
-                         {:iframe_document, child_parent.document_id, child_parent.tree_scope_id,
-                          node._document_order, source, child_opts},
+                         {:iframe_document, tag, child_parent.document_id,
+                          child_parent.tree_scope_id, node._document_order, source,
+                          frame_request.margins, child_opts},
                          fn ->
                            EmbeddedViewport.prepare_iframe_document(
                              source,
@@ -1039,11 +1146,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                              child_opts
                            )
                          end
+                       ),
+                     :ok <-
+                       if(tag == "frame",
+                         do:
+                           NativeElixirPdfUtilities.Validators.FramesetValidator.validate_document_navigation(
+                             viewport.prepared_dom
+                           ),
+                         else: :ok
                        ) do
                   style =
-                    style
-                    |> EmbeddedViewportValidator.prepare_iframe_style()
-                    |> Map.put(:embedded_document, viewport)
+                    if tag == "frame" do
+                      Map.put(
+                        style,
+                        :embedded_document,
+                        Map.merge(viewport, %{
+                          host: :frame,
+                          frame_margins: frame_request.margins,
+                          frame_name: frame_request.name
+                        })
+                      )
+                    else
+                      style
+                      |> EmbeddedViewportValidator.prepare_iframe_style()
+                      |> Map.put(:embedded_document, viewport)
+                    end
 
                   {:ok, [%{type: :element, tag: tag, style: style, children: []}], counters,
                    counters}
@@ -1054,10 +1181,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           _ ->
             with {:ok, element_style} <-
                    element_style(node, inherited_style, rules, ancestors, opts),
-                 :ok <-
-                   NativeElixirPdfUtilities.Validators.HtmlTemporalValidator.validate_render_style(
+                 {:ok, element_style} <-
+                   NativeElixirPdfUtilities.Validators.HtmlTemporalValidator.prepare_render_style(
                      node,
-                     element_style
+                     element_style,
+                     ancestors,
+                     opts
+                   ),
+                 {:ok, element_style} <-
+                   if(get_in(element_style, [:_temporal_display, :picker_visible]),
+                     do:
+                       with {:ok, image} <-
+                              rasterize_svg_image(
+                                NativeElixirPdfUtilities.HtmlToPdf.TemporalArtwork.picker_source(
+                                  element_style._temporal_display.kind
+                                ),
+                                [
+                                  width:
+                                    ceil(
+                                      element_style._temporal_display.indicator_content_size /
+                                        0.75 *
+                                        NativeElixirPdfUtilities.Limits.get(:svg_raster_scale)
+                                    )
+                                ],
+                                Keyword.fetch!(opts, :__image_budget__),
+                                opts
+                              ) do
+                         {:ok, Map.put(element_style, :_temporal_picker_image, image)}
+                       end,
+                     else: {:ok, element_style}
                    ),
                  {:ok, element_style, children} <-
                    prepare_embedded_element(node, element_style, children, opts) do
@@ -1082,7 +1234,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                   element_style =
                     if tag in ["input", "select", "textarea"] and
                          (not Map.has_key?(node, :_html_inert) or
-                            Map.has_key?(element_style, :_range_state)) and
+                            Map.has_key?(element_style, :_range_state) or
+                            Map.has_key?(element_style, :_temporal_display)) and
                          Map.get(element_style, :form_kind) != :input_button do
                       control = %{
                         tag: tag,
@@ -1093,8 +1246,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                         initial_state: Map.fetch!(node, :_initial_form_state)
                       }
 
+                      control =
+                        if Map.has_key?(element_style, :_temporal_display),
+                          do:
+                            Map.put(
+                              control,
+                              :temporal_display_mode,
+                              element_style._temporal_display.forms_mode
+                            ),
+                          else: control
+
                       if Map.has_key?(node, :_html_inert) do
-                        Map.put(element_style, :_range_control, control)
+                        Map.put(
+                          element_style,
+                          if(Map.has_key?(element_style, :_temporal_display),
+                            do: :_temporal_control,
+                            else: :_range_control
+                          ),
+                          control
+                        )
                       else
                         element_style
                         |> Map.put(:_form_control, control)
@@ -1687,6 +1857,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
          ancestors,
          opts
        ) do
+    opts =
+      if Map.has_key?(rules, :source_budget),
+        do: opts,
+        else:
+          NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.source_owner(
+            node,
+            opts
+          )
+
     inherited_font_size = Map.fetch!(inherited_style, :font_size)
 
     popover_state =
@@ -1702,7 +1881,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           "html" ->
             %{display: :block}
 
-          tag when tag in ["script", "template", "noembed"] ->
+          tag when tag in ["script", "template", "noembed", "noframes"] ->
             %{display: :none}
 
           "body" ->
@@ -1710,14 +1889,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
             case ResourceContext.current() do
               %{depth: depth} when depth > 0 ->
-                Map.put(defaults, :margin, CssValueValidator.edges(6.0))
+                Map.put(
+                  defaults,
+                  :margin,
+                  Keyword.get(opts, :__frame_body_margins__, CssValueValidator.edges(6.0))
+                )
 
               _ ->
                 defaults
             end
 
           tag
-          when tag in ~w(form article aside div footer header main nav section figcaption hgroup search dt details) ->
+          when tag in ~w(form article aside div footer header main nav section figcaption hgroup search dt details frameset frame) ->
             block_defaults(inherited_font_size, 400, 0.0)
 
           "fieldset" ->
@@ -2013,7 +2196,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             |> then(fn defaults ->
               defaults =
                 if Map.has_key?(node._initial_form_state, :temporal),
-                  do: Map.put(defaults, :_temporal_state, node._initial_form_state.temporal),
+                  do:
+                    defaults
+                    |> Map.put(:_temporal_state, node._initial_form_state.temporal)
+                    |> Map.put(:_temporal_disabled, node._initial_form_state.disabled)
+                    |> Map.put(
+                      :background_color,
+                      if(node._initial_form_state.disabled,
+                        do: {239 / 255, 239 / 255, 239 / 255, 0.3},
+                        else: {1.0, 1.0, 1.0}
+                      )
+                    )
+                    |> Map.put(
+                      :color,
+                      if(node._initial_form_state.disabled,
+                        do: {84 / 255, 84 / 255, 84 / 255},
+                        else: {0.0, 0.0, 0.0}
+                      )
+                    ),
                   else: defaults
 
               defaults =
@@ -2213,6 +2413,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           inherited_style
           |> text_style()
           |> Map.merge(defaults)
+          |> Map.put(:orphans, Map.get(inherited_style, :orphans, 2))
+          |> Map.put(:widows, Map.get(inherited_style, :widows, 2))
+          |> Map.put(:_inherited_orphans, Map.get(inherited_style, :orphans, 2))
+          |> Map.put(:_inherited_widows, Map.get(inherited_style, :widows, 2))
           |> Map.put(:_inherited_color, Map.fetch!(inherited_style, :color))
           |> Map.put(:_inherited_caption_side, Map.get(inherited_style, :caption_side, :top))
           |> Map.put(:_root_element, tag in ["html", "body"] and ancestors == [])
@@ -2287,9 +2491,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               result
           end
 
-        case {tag, ancestors, result} do
-          {tag, [], {:ok, style}} when tag in ["html", "body"] ->
-            {:ok, Map.put(style, :_root_font_size, Map.fetch!(style, :font_size))}
+        result =
+          case {tag, ancestors, result} do
+            {tag, [], {:ok, style}} when tag in ["html", "body"] ->
+              {:ok, Map.put(style, :_root_font_size, Map.fetch!(style, :font_size))}
+
+            _ ->
+              result
+          end
+
+        case result do
+          {:ok, style} ->
+            with :ok <-
+                   if(Map.has_key?(rules, :source_budget),
+                     do: :ok,
+                     else:
+                       NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.observe(
+                         node,
+                         style
+                       )
+                   ),
+                 do: result
 
           _ ->
             result
@@ -2583,6 +2805,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         :_custom_properties,
         :_font_registry,
         :_root_font_size,
+        :_frameset_parent,
         :color,
         :accent_color,
         :font_face,
@@ -2598,6 +2821,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         :line_height,
         :line_height_multiplier,
         :line_height_normal,
+        :orphans,
+        :widows,
         :list_marker_type,
         :list_style_position,
         :link_url,
@@ -2612,6 +2837,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     inherited =
       if Map.get(style, :display) in [:table_row_group, :table_row],
         do: Map.put(inherited, :_table_vertical_align, Map.get(style, :vertical_align, :middle)),
+        else: inherited
+
+    inherited =
+      if Map.get(style, :display) in [:table, :table_row_group, :table_row],
+        do:
+          Map.put(
+            inherited,
+            :_table_border_colors,
+            Map.get(
+              style,
+              :border_colors,
+              CssValueValidator.edges(Map.get(style, :color, {0, 0, 0}))
+            )
+          ),
+        else: inherited
+
+    inherited =
+      if Map.has_key?(style, :_frameset),
+        do: Map.put(inherited, :_frameset_parent, style._frameset),
         else: inherited
 
     if Map.get(style, :_svg_prepare, false) do
@@ -2634,6 +2878,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       background_repeat: :repeat,
       background_size: {:auto, :auto},
       break_inside: :auto,
+      # CSS fragmentation's fixed initial values, inherited by block content.
+      orphans: 2,
+      widows: 2,
       border_color: :current_color,
       border_colors: CssValueValidator.edges(:current_color),
       border_radius: 0.0,
@@ -2721,11 +2968,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp table_column_defaults(kind, span) do
-    %{
-      background_color: nil,
+    table_row_defaults()
+    |> Map.take([
+      :background_color,
+      :border_color,
+      :border_colors,
+      :border_radius,
+      :border_styles,
+      :border_widths,
+      :box_sizing
+    ])
+    |> Map.merge(%{
       display: if(kind == :group, do: :table_column_group, else: :table_column),
       span: span
-    }
+    })
   end
 
   defp table_cell_defaults(kind, spans, font_size) do
@@ -2911,6 +3167,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       })
 
     case kind do
+      kind when kind in ~w(date month week time datetime-local) ->
+        Map.merge(base, %{
+          display: :inline_block,
+          appearance: :auto,
+          font_families: ["monospace"],
+          font_size: 10.0,
+          font_style: :normal,
+          font_weight: 400,
+          line_height_multiplier: nil,
+          line_height_normal: true,
+          width: :auto,
+          height: :auto,
+          overflow: :hidden,
+          padding: CssValueValidator.edges(0.0, 0.0, 0.0, 0.75),
+          border_widths: CssValueValidator.edges(1.5),
+          border_styles: CssValueValidator.edges(:inset),
+          border_color: {118 / 255, 118 / 255, 118 / 255},
+          border_colors: CssValueValidator.edges({118 / 255, 118 / 255, 118 / 255})
+        })
+
       "range" ->
         Map.merge(base, %{
           display: :inline_block,
@@ -2987,7 +3263,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
         text =
           cond do
-            kind == "range" ->
+            kind == "range" or Map.has_key?(node._initial_form_state, :temporal) ->
               {:ok, ""}
 
             kind == "checkbox" ->
@@ -3013,7 +3289,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           end
 
         with {:ok, text} <- text do
-          if kind == "range", do: [], else: [%{type: :text, text: text}]
+          if kind == "range" or Map.has_key?(node._initial_form_state, :temporal),
+            do: [],
+            else: [%{type: :text, text: text}]
         end
 
       tag when tag in ~w(progress meter) ->
@@ -3267,17 +3545,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp stylesheet_diagnostic_error(dom, opts) do
-    case stylesheet_diagnostic_sources(dom, opts) do
-      {:ok, sources} ->
-        Enum.find_value(sources, fn {_label, source} ->
-          CssValueValidator.declaration_error(
-            source,
-            CssValueValidator.stylesheet_declaration_sources(source)
-          )
-        end)
-
-      {:error, error} ->
-        error
+    with {:ok, sources} <- stylesheet_diagnostic_sources(dom, opts),
+         {:ok, media_context} <- PrintMediaValidator.renderer_context(opts) do
+      Enum.find_value(sources, fn {_label, source} ->
+        CssValueValidator.declaration_error(
+          source,
+          CssValueValidator.stylesheet_declaration_sources(source, media_context)
+        )
+      end)
+    else
+      {:error, error} -> error
     end
   end
 
@@ -3571,6 +3848,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                |> resolve_font_relative_defaults()
                |> Map.delete(:_inherited_color)
                |> Map.delete(:_inherited_caption_side)
+               |> Map.delete(:_inherited_orphans)
+               |> Map.delete(:_inherited_widows)
                |> Map.delete(:_root_element)
                |> resolve_current_color_values()}
             end
@@ -3583,6 +3862,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                    |> resolve_font_relative_defaults()
                    |> Map.delete(:_inherited_color)
                    |> Map.delete(:_inherited_caption_side)
+                   |> Map.delete(:_inherited_orphans)
+                   |> Map.delete(:_inherited_widows)
                    |> Map.delete(:_root_element)
                    |> resolve_current_color_values(),
                  style = style |> apply_border_styles() |> resolve_auto_margin_values(),
@@ -3634,6 +3915,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                     else
                       style
                     end
+
+                  %{_temporal_state: _} ->
+                    style
+                    |> NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare_initial_temporal_style(
+                      declarations
+                    )
+                    |> put_line_height()
 
                   %{form_kind: :select} ->
                     style

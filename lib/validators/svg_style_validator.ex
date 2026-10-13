@@ -5,6 +5,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @inherited %{
+    svg_text_anchor: "start",
     svg_color_interpolation: "sRGB",
     svg_fill: {:color, {0, 0, 0}},
     svg_stroke: :none,
@@ -23,6 +24,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
     svg_paint_order: "normal"
   }
   @properties %{
+    "text-anchor" => :svg_text_anchor,
     "color-interpolation" => :svg_color_interpolation,
     "stop-color" => :svg_stop_color,
     "stop-opacity" => :svg_stop_opacity,
@@ -118,7 +120,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
   def presentation_property?(node, property) do
     ((Map.has_key?(@properties, property) and
         (property not in @geometry or node.tag in Map.fetch!(@geometry_elements, property))) or
-       property in ~w(color display overflow font-family font-size font-weight font-style)) and
+       property in ~w(color display overflow font-family font-size font-weight font-style letter-spacing)) and
       not Map.has_key?(Map.get(node, :attribute_namespaces, %{}), property)
   end
 
@@ -197,6 +199,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
   @spec parse(String.t(), term()) :: {:ok, term()} | :error
   def parse(property, value) do
     case {property, value} do
+      {"text-anchor", value} ->
+        if value in ~w(start middle end), do: {:ok, value}, else: :error
+
       {"color-interpolation", value} ->
         if value in ~w(sRGB auto linearRGB), do: {:ok, value}, else: :error
 

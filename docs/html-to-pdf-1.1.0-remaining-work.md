@@ -42,10 +42,13 @@ Both supported runtimes passed 1,970 tests at 100% coverage, unchanged
 performance checks, Dialyzer and 185 browser comparisons. Exact host parity
 also passed 185 comparisons.
 [Hosted CI also passed](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/actions/runs/38329634380).
-The enlarged wave 10 candidate adds controls, source policy, table presentation,
-SVG references/gradients and selected embedded content. Independent packet review
-and quick checks are recorded, but full combined qualification is still pending.
-The estimate remains anchored to the accepted source above. Failed full-family
+The enlarged wave 10 adds qualified bounded controls, source policy, table
+presentation, SVG references/gradients and selected embedded content. Its exact
+expanded-v4 patch passed 2,090 tests at 100% coverage, all original performance
+checks, Dialyzer and 207 browser comparisons on both supported runtimes; host
+parity passed 207 comparisons. It is applied locally and has not been pushed.
+The broader named feature batches remain partial, so their planning range is
+retained pending the independent closure accounting. Failed full-family
 MathML candidates and inactive reference proposals remain separate evidence.
 
 The canonical accounting audit retained all 17,267 source IDs exactly once.

@@ -7,8 +7,11 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.MathOperatorValidator
+  alias NativeElixirPdfUtilities.Validators.MathTableValidator
 
-  @rendered_elements ~w(math mi mn mo mtext ms mspace mrow mfrac msqrt mroot)
+  @grouping_elements ~w(math mrow mphantom)
+  @rendered_elements @grouping_elements ++
+                       ~w(mi mn mo mtext ms mspace mfrac msqrt mroot mtable mtr mtd)
 
   @doc false
   @spec validate_flow_geometry([term()], number(), number()) ::
@@ -176,6 +179,35 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
       }
     }
     |> then(fn defaults ->
+      defaults =
+        case node.tag do
+          "mtable" ->
+            Map.merge(defaults, %{
+              display: :inline_table,
+              math_style: :compact,
+              border_spacing: {0.0, 0.0}
+            })
+
+          "mtr" ->
+            Map.put(defaults, :display, :table_row)
+
+          "mtd" ->
+            Map.merge(defaults, %{
+              display: :table_cell,
+              text_align: :center,
+              vertical_align: :baseline,
+              padding: %{
+                top: {:math_cell_ex, 0.5},
+                bottom: {:math_cell_ex, 0.5},
+                left: {:math_cell_em, 0.4},
+                right: {:math_cell_em, 0.4}
+              }
+            })
+
+          _ ->
+            defaults
+        end
+
       defaults =
         if node.tag in ["msqrt", "mroot"],
           do: Map.put(defaults, :math_shift, :compact),
@@ -411,68 +443,71 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   @doc false
   @spec compute_style(map()) :: {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def compute_style(style) do
-    case Map.pop(style, :_math_context) do
-      {nil, style} ->
-        {:ok, style}
+    computed =
+      case Map.pop(style, :_math_context) do
+        {nil, style} ->
+          {:ok, style}
 
-      {parent, style} ->
-        depth = Map.get(style, :math_depth, parent.depth)
+        {parent, style} ->
+          depth = Map.get(style, :math_depth, parent.depth)
 
-        if style.font_size == :math do
-          FontValidator.reserve(:max_font_math_work, abs(depth - parent.depth))
+          if style.font_size == :math do
+            FontValidator.reserve(:max_font_math_work, abs(depth - parent.depth))
 
-          with {:ok, metrics} <- Font.math_metrics(parent.font) do
-            if metrics.constants.script_percent_scale_down <= 0 or
-                 metrics.constants.script_script_percent_scale_down <= 0 do
-              failure("selected font MATH script scaling percentages must be positive")
-            else
-              a = min(parent.depth, depth)
-              b = max(parent.depth, depth)
-
-              {factor, remainder} =
-                cond do
-                  a == b ->
-                    {1.0, 0}
-
-                  a <= 0 and b >= 2 ->
-                    {metrics.constants.script_script_percent_scale_down / 100, b - a - 2}
-
-                  a == 1 ->
-                    {metrics.constants.script_script_percent_scale_down /
-                       metrics.constants.script_percent_scale_down, b - a - 1}
-
-                  b == 1 ->
-                    {metrics.constants.script_percent_scale_down / 100, b - a - 1}
-
-                  true ->
-                    {1.0, b - a}
-                end
-
-              logarithm = :math.log(factor) + remainder * :math.log(0.71)
-              logarithm = if depth < parent.depth, do: -logarithm, else: logarithm
-
-              # IEEE-754 binary64's normal exponent range is a numeric invariant,
-              # not a configurable work limit. Validate before exp can overflow.
-              if logarithm < :math.log(2.2250738585072014e-308) or
-                   logarithm > :math.log(Limits.get(:max_css_numeric_magnitude)) or
-                   (parent.size > 0 and
-                      :math.log(parent.size) + logarithm >
-                        :math.log(Limits.get(:max_css_numeric_magnitude))) do
-                failure(
-                  "math-depth scales the inherited font size outside supported numeric bounds"
-                )
+            with {:ok, metrics} <- Font.math_metrics(parent.font) do
+              if metrics.constants.script_percent_scale_down <= 0 or
+                   metrics.constants.script_script_percent_scale_down <= 0 do
+                failure("selected font MATH script scaling percentages must be positive")
               else
-                {:ok,
-                 style
-                 |> Map.put(:font_size, parent.size * :math.exp(logarithm))
-                 |> Map.put(:math_depth, depth)}
+                a = min(parent.depth, depth)
+                b = max(parent.depth, depth)
+
+                {factor, remainder} =
+                  cond do
+                    a == b ->
+                      {1.0, 0}
+
+                    a <= 0 and b >= 2 ->
+                      {metrics.constants.script_script_percent_scale_down / 100, b - a - 2}
+
+                    a == 1 ->
+                      {metrics.constants.script_script_percent_scale_down /
+                         metrics.constants.script_percent_scale_down, b - a - 1}
+
+                    b == 1 ->
+                      {metrics.constants.script_percent_scale_down / 100, b - a - 1}
+
+                    true ->
+                      {1.0, b - a}
+                  end
+
+                logarithm = :math.log(factor) + remainder * :math.log(0.71)
+                logarithm = if depth < parent.depth, do: -logarithm, else: logarithm
+
+                # IEEE-754 binary64's normal exponent range is a numeric invariant,
+                # not a configurable work limit. Validate before exp can overflow.
+                if logarithm < :math.log(2.2250738585072014e-308) or
+                     logarithm > :math.log(Limits.get(:max_css_numeric_magnitude)) or
+                     (parent.size > 0 and
+                        :math.log(parent.size) + logarithm >
+                          :math.log(Limits.get(:max_css_numeric_magnitude))) do
+                  failure(
+                    "math-depth scales the inherited font size outside supported numeric bounds"
+                  )
+                else
+                  {:ok,
+                   style
+                   |> Map.put(:font_size, parent.size * :math.exp(logarithm))
+                   |> Map.put(:math_depth, depth)}
+                end
               end
             end
+          else
+            {:ok, Map.put(style, :math_depth, depth)}
           end
-        else
-          {:ok, Map.put(style, :math_depth, depth)}
-        end
-    end
+      end
+
+    with {:ok, style} <- computed, do: MathTableValidator.resolve_padding(style)
   end
 
   @doc false
@@ -524,6 +559,19 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
         with :ok <- validate_element_support(node),
              :ok <- validate_box_style(tag, style) do
           cond do
+            tag == "mtable" and display in [:inline_table, :table] ->
+              MathTableValidator.prepare(node, context)
+
+            tag in ["mtr", "mtd"] and display != :none ->
+              Diagnostics.error(
+                :layout,
+                :unsupported_html,
+                "MathML table rows and cells require a containing mtable",
+                operation: :measure_math,
+                module: __MODULE__,
+                source: tag
+              )
+
             display not in [:block, :inline, :inline_block, :none] ->
               Diagnostics.error(
                 :layout,
@@ -656,6 +704,9 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                   tag == "mroot" and length(row.children) == 2 ->
                     [base, index] = row.children
                     prepare_radical(base, index, style)
+
+                  tag == "mphantom" ->
+                    {:ok, Map.put(row, :hide_paint, true)}
 
                   true ->
                     {:ok, row}
@@ -1154,7 +1205,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
       %{namespace: :mathml, tag: tag} when tag in ["mtext", "mspace"] ->
         true
 
-      %{namespace: :mathml, tag: tag, children: children} when tag in ["math", "mrow"] ->
+      %{namespace: :mathml, tag: tag, children: children} when tag in @grouping_elements ->
         Enum.all?(children, fn child ->
           Map.get(child, :style, %{}) |> Map.get(:display) == :none or space_like?(child)
         end)
@@ -1183,7 +1234,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           [] -> false
         end
 
-      %{namespace: :mathml, tag: tag, children: children} when tag in ["math", "mrow"] ->
+      %{namespace: :mathml, tag: tag, children: children} when tag in @grouping_elements ->
         case Enum.reject(children, fn child ->
                Map.get(child, :style, %{}) |> Map.get(:display) == :none or space_like?(child)
              end) do
@@ -1300,9 +1351,11 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                 end
 
               ascent =
-                if total <= 0,
-                  do: target / 2 + axis,
-                  else: max(0, (ascent - axis) * (target / total) + axis)
+                cond do
+                  total <= 0 -> target / 2 + axis
+                  target == total -> ascent
+                  true -> max(0, (ascent - axis) * (target / total) + axis)
+                end
 
               {ascent, target - ascent, target}
             else
@@ -1384,7 +1437,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
   defp validate_box_style(tag, style) do
     unsupported? =
-      (tag in ["math", "mrow", "mspace", "mfrac", "msqrt", "mroot"] and
+      ((tag in @grouping_elements or tag in ~w(mspace mfrac msqrt mroot)) and
          not Map.get(style, :_math_formatting, true)) or
         Map.get(style, :link_url) != nil or Map.get(style, :link_destination) != nil or
         (tag != "math" and Map.get(style, :html_target) != nil) or

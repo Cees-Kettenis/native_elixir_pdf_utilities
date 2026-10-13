@@ -15,6 +15,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlTree
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlEntities
   alias NativeElixirPdfUtilities.Validators.ForeignContentValidator
+  alias NativeElixirPdfUtilities.Validators.TemplatePatchValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   # This fixed byte alphabet follows UTF-8 encoding, not a configurable ceiling.
@@ -189,83 +190,80 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
   defp parse_input(html, context) do
     HtmlValidator.with_render_budget(fn ->
-      case HtmlValidator.validate_html_source(html) do
-        {:ok, html} ->
-          HtmlValidator.reserve_render_resource(
-            :max_aggregate_html_source_bytes,
-            byte_size(html),
-            :html
-          )
+      TemplatePatchValidator.with_parser_invocation(html, fn html ->
+        HtmlValidator.reserve_render_resource(
+          :max_aggregate_html_source_bytes,
+          byte_size(html),
+          :html
+        )
 
-          # Normalize the input stream before tokenization, not decoded references.
-          # Keep the caller's bytes for diagnostics and resource accounting.
-          input =
-            HtmlValidator.preprocess_html(html)
+        # Normalize the input stream before tokenization, not decoded references.
+        # Keep the caller's bytes for diagnostics and resource accounting.
+        input =
+          HtmlValidator.preprocess_html(html)
 
-          HtmlValidator.reserve_render_resource(:max_html_tree_work, 3 * byte_size(html), :html)
-          crlf = :binary.matches(html, "\r\n")
+        HtmlValidator.reserve_render_resource(:max_html_tree_work, 3 * byte_size(html), :html)
+        crlf = :binary.matches(html, "\r\n")
 
-          {column_positions, column_extras} =
-            unicode_columns(html, 0, 0, [], [], :binary.compile_pattern(@non_ascii_bytes))
+        {column_positions, column_extras} =
+          unicode_columns(html, 0, 0, [], [], :binary.compile_pattern(@non_ascii_bytes))
 
-          source_context = %{
-            original: html,
-            column_positions: column_positions,
-            column_extras: column_extras,
-            size: byte_size(input),
-            crlf:
-              crlf
-              |> Enum.with_index()
-              |> Enum.map(fn {{position, 2}, index} -> position - index end)
-              |> List.to_tuple(),
-            lines:
-              [
-                0
-                | Enum.map(:binary.matches(html, ["\r\n", "\r", "\n"]), fn {position, length} ->
-                    position + length
-                  end)
-              ]
-              |> List.to_tuple()
-          }
+        source_context = %{
+          original: html,
+          column_positions: column_positions,
+          column_extras: column_extras,
+          size: byte_size(input),
+          crlf:
+            crlf
+            |> Enum.with_index()
+            |> Enum.map(fn {{position, 2}, index} -> position - index end)
+            |> List.to_tuple(),
+          lines:
+            [
+              0
+              | Enum.map(:binary.matches(html, ["\r\n", "\r", "\n"]), fn {position, length} ->
+                  position + length
+                end)
+            ]
+            |> List.to_tuple()
+        }
 
-          case parse_document(input, context, source_context) do
-            {:ok, dom} ->
-              {:ok, dom}
+        case parse_document(input, context, source_context) do
+          {:ok, dom} ->
+            {:ok, dom}
 
-            {:error, {:html_source, source, remaining_bytes}} ->
-              offset = byte_size(input) - byte_size(source) - remaining_bytes
+          {:error, {:html_source, source, remaining_bytes}} ->
+            offset = byte_size(input) - byte_size(source) - remaining_bytes
 
-              {source, line, column} =
-                original_source_span(source_context, offset, byte_size(source))
+            {source, line, column} =
+              original_source_span(source_context, offset, byte_size(source))
 
-              Diagnostics.error(
-                :html,
-                :unsupported_html,
-                html_error_message(line, source),
-                source: source,
-                line: line,
-                column: column
-              )
+            Diagnostics.error(
+              :html,
+              :unsupported_html,
+              html_error_message(line, source),
+              source: source,
+              line: line,
+              column: column
+            )
 
-            {:error, {:html_diagnostic, reason, diagnostic, remaining_bytes, token}} ->
-              offset = byte_size(input) - byte_size(token) - remaining_bytes
+          {:error, {:html_diagnostic, reason, diagnostic, remaining_bytes, token}} ->
+            offset = byte_size(input) - byte_size(token) - remaining_bytes
 
-              {source, line, column} =
-                original_source_span(source_context, offset, byte_size(token))
+            {source, line, column} =
+              original_source_span(source_context, offset, byte_size(token))
 
-              source = if diagnostic.source == token, do: source, else: diagnostic.source
+            source = if diagnostic.source == token, do: source, else: diagnostic.source
 
-              Diagnostics.error(diagnostic.stage, reason, diagnostic.message,
-                source: source,
-                module: Map.get(diagnostic, :module),
-                line: line,
-                column: column
-              )
-          end
-
-        {:error, {reason, diagnostic}} ->
-          {:error, {reason, diagnostic}}
-      end
+            Diagnostics.error(diagnostic.stage, reason, diagnostic.message,
+              source: source,
+              module: Map.get(diagnostic, :module),
+              operation: Map.get(diagnostic, :operation),
+              line: line,
+              column: column
+            )
+        end
+      end)
     end)
   end
 
@@ -768,7 +766,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
                  prepared,
                  token
                ),
-             :ok <- HtmlValidator.validate_html_element_attributes(tag, attributes),
+             source = token_source(source_context, token, remaining),
+             planning =
+               (if tag == "template" and prepared.namespace == :html do
+                  offset =
+                    source_context.size - byte_size(token) - byte_size(stream_source(remaining))
+
+                  {tree, parent,
+                   %{
+                     source: source,
+                     offset:
+                       offset +
+                         boundary_index(
+                           source_context.crlf,
+                           offset,
+                           0,
+                           tuple_size(source_context.crlf)
+                         ),
+                     tokenizer_context: context,
+                     ancestors: ancestors
+                   }}
+                else
+                  nil
+                end),
+             :ok <- HtmlValidator.validate_html_element_attributes(tag, attributes, planning),
              false <- HtmlValidator.omitted_html_end_tag?(closing_tag, {:start, tag}, ancestors),
              true <- ForeignContentValidator.valid_child?(context, prepared, ancestors) do
           element = %{
@@ -776,7 +797,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
             tag: tag,
             attributes: attributes,
             children: [],
-            source: token_source(source_context, token, remaining)
+            source: source
           }
 
           element =

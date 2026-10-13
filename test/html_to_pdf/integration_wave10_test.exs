@@ -152,4 +152,102 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave10Test do
     assert pdf =~ "W n"
     refute pdf =~ "/AcroForm"
   end
+
+  test "selected documents transport temporal logical text through a bordered table", %{
+    root: root
+  } do
+    File.write!(Path.join(root, "temporal-grid.html"), """
+    <style>
+      body{margin:0;padding-bottom:12pt}
+      table{width:170px}td{vertical-align:top}
+      p{margin:0;orphans:3;widows:3}
+    </style>
+    <table border=1 rules=all>
+      <tr><td><input type=date readonly value=2026-10-13></td></tr>
+      <tr><td><p>Selected temporal grid</p></td></tr>
+    </table>
+    """)
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<object data='temporal-grid.html' type='text/html' style='width:190px;height:100px'>Fallback temporal grid</object><p>Outer tail</p>",
+               base_url: root,
+               forms: :static,
+               default_font: "Helvetica",
+               system_font_discovery: false,
+               compress_streams: false,
+               page_size: {240, 180}
+             )
+
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    assert text =~ "2026-10-13"
+    assert text =~ "Selected temporal grid"
+    assert text =~ "Outer tail"
+    refute text =~ "Fallback temporal grid"
+    refute text =~ "10/13/2026"
+    assert pdf =~ "W n"
+    refute pdf =~ "/AcroForm"
+  end
+
+  test "frameset siblings initialize independent child controls and collapsed table surfaces", %{
+    root: root
+  } do
+    File.write!(Path.join(root, "frame-grid.html"), """
+    <style>body{margin:0}td{vertical-align:top}</style>
+    <table border=1 rules=all><tr><td>
+      <input type=date readonly value=2026-10-13>
+      <p>Framed grid</p><a href='#child'>Child link</a>
+    </td></tr></table>
+    """)
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<frameset cols='50%,50%' border=0><frame src='frame-grid.html'><frame src='frame-grid.html'></frameset>",
+               base_url: root,
+               forms: :static,
+               default_font: "Helvetica",
+               system_font_discovery: false,
+               compress_streams: false,
+               page_size: {360, 180},
+               margin: 0
+             )
+
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    assert length(Regex.scan(~r/2026-10-13/, text)) == 2
+    assert length(Regex.scan(~r/Framed grid/, text)) == 2
+    assert length(Regex.scan(~r/Child link/, text)) == 2
+    assert pdf =~ "W n"
+    refute pdf =~ "/AcroForm"
+  end
+
+  test "selected child SVG transports actual CID fonts and Unicode through parent resources", %{
+    root: root
+  } do
+    File.write!(Path.join(root, "svg-text.html"), """
+    <style>body{margin:0}svg{width:180px;height:40px}</style>
+    <svg viewBox='0 0 180 40'>
+      <text x='4' y='24' font-family='DejaVu Sans' font-size='16'>Σ Child SVG</text>
+    </svg>
+    """)
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<object data='svg-text.html' type='text/html' style='width:190px;height:50px'>Unused glyph fallback</object><p>Parent text</p>",
+               base_url: root,
+               forms: :static,
+               default_font: "Helvetica",
+               system_font_discovery: false,
+               compress_streams: false,
+               page_size: {240, 180}
+             )
+
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    assert text =~ "Σ Child SVG"
+    assert text =~ "Parent text"
+    refute text =~ "Unused glyph fallback"
+    assert pdf =~ "/CIDFontType2"
+    assert pdf =~ "/FontFile2"
+    assert pdf =~ "/ToUnicode"
+    assert pdf =~ "W n"
+  end
 end

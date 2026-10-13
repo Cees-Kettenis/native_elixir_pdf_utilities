@@ -2,7 +2,13 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorTest do
   use ExUnit.Case
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, HtmlTree, Style}
-  alias NativeElixirPdfUtilities.Validators.{HtmlTreeValidator, HtmlValidator}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlTreeValidator,
+    HtmlValidator,
+    TemplatePatchValidator
+  }
+
   alias NativeElixirPdfUtilities.Limits
 
   test "first tree-order marker uses exact XML name values without changing the tree" do
@@ -245,5 +251,483 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorTest do
 
     assert {:error, {:unsupported_html, _}} =
              NativeElixirPdfUtilities.HtmlToPdf.render(source)
+  end
+
+  test "parser plans the original earlier range at the opening token before the public source gate" do
+    source =
+      "<head><?marker name='H'></head><body><?start name='A'><p style='width:bananas'>Old</p><?end><template for='A'><p>New</p></template><?marker name='Future'></body>"
+
+    traces = [
+      {TemplatePatchValidator, :with_insertion_context, 5},
+      {HtmlTree, :begin_content_patch, 2},
+      {HtmlTree, :adopt_content_patch, 2},
+      {HtmlTree, :finish_content_patch, 1}
+    ]
+
+    Enum.each(traces, &:erlang.trace_pattern(&1, true, [:local]))
+
+    task =
+      Task.async(fn ->
+        receive do
+          :parse -> HtmlParser.parse_document_detailed(source)
+        end
+      end)
+
+    try do
+      :erlang.trace(task.pid, true, [:call])
+      send(task.pid, :parse)
+      assert {:error, {:unsupported_html, diagnostic}} = Task.await(task)
+      assert diagnostic.stage == :html and diagnostic.operation == :parse
+
+      assert diagnostic.module == TemplatePatchValidator and
+               diagnostic.source == "<template for='A'>"
+
+      assert diagnostic.message =~ "matched earlier body range with 1 original subtree"
+      assert diagnostic.message =~ "original_source_policy"
+      assert diagnostic.message =~ "selected_fonts_and_metrics"
+      assert diagnostic.message =~ "active_resource_authorization_and_contents"
+
+      assert_receive {:trace, _, :call,
+                      {TemplatePatchValidator, :with_insertion_context,
+                       [tree, parent, "A", origin, _]}}
+
+      assert tree.nodes[parent].tag == "body"
+      assert origin.source.text == "<template for='A'>"
+      assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, parent, "A")
+      [old] = target.removed
+      assert tree.nodes[old].attributes["style"] == "width:bananas"
+      assert HtmlTree.fetch(tree, old).children |> hd() |> Map.fetch!(:text) == "Old"
+
+      refute Enum.any?(tree.nodes, fn {_, node} ->
+               node[:text] == "New" or node[:data] == "name='Future'"
+             end)
+
+      refute_receive {:trace, _, :call, {HtmlTree, :begin_content_patch, _}}
+      refute_receive {:trace, _, :call, {HtmlTree, :adopt_content_patch, _}}
+      refute_receive {:trace, _, :call, {HtmlTree, :finish_content_patch, _}}
+
+      assert {:error, {:unsupported_html, rendered}} =
+               NativeElixirPdfUtilities.HtmlToPdf.render(source)
+
+      assert rendered.module == TemplatePatchValidator and rendered.source == diagnostic.source
+    after
+      Enum.each(traces, &:erlang.trace_pattern(&1, false, [:local]))
+    end
+  end
+
+  test "missing empty and future targets remain inert-fallback plans with precise original diagnostics" do
+    for name <- ["", "Missing", "Future"] do
+      source = "<p>é🙂</p>\r\n<template for='#{name}'><p>New</p></template><?marker name='Future'>"
+
+      assert {:error, {:unsupported_html, diagnostic}} =
+               HtmlParser.parse_document_detailed(source)
+
+      assert diagnostic.source == "<template for='#{name}'>"
+      assert diagnostic.line == 2 and diagnostic.column == 1
+      assert diagnostic.message =~ "inert fallback"
+      assert diagnostic.message =~ "no original source has been discarded"
+    end
+
+    assert {:error, {:unsupported_html, diagnostic}} =
+             HtmlParser.parse_detailed("<template for='A' shadowrootmode='open'></template>")
+
+    assert diagnostic.message =~ "declarative shadow"
+  end
+
+  test "planning handles bind the original tree and budget and reject reuse alteration forgery and expiry" do
+    prefix = "<?marker name='A'><p>Old</p>"
+    {source, dom, tree, origin} = planning_fixture(prefix, "<template for='A'>", "div")
+
+    keys = MapSet.new(Process.get_keys())
+
+    escaped =
+      TemplatePatchValidator.with_parser_invocation(source, fn _ ->
+        TemplatePatchValidator.with_insertion_context(tree, tree.root, "A", origin, fn handle ->
+          assert {:error, {:invalid_document, _}} =
+                   TemplatePatchValidator.authorize_mutation(handle, tree)
+
+          altered = %{
+            tree
+            | nodes:
+                Map.update!(
+                  tree.nodes,
+                  tree.root,
+                  &Map.put(&1, :source, %{text: "changed", line: 1, column: 1})
+                )
+          }
+
+          assert {:error, {:invalid_document, _}} =
+                   TemplatePatchValidator.with_planned_insertion(handle, altered, fn _ ->
+                     flunk("altered plan consumed")
+                   end)
+
+          assert {:error, {:invalid_document, _}} =
+                   TemplatePatchValidator.with_planned_insertion(%{receipt: handle}, tree, fn _ ->
+                     flunk("forged plan consumed")
+                   end)
+
+          assert {:error, {:invalid_document, _}} =
+                   TemplatePatchValidator.with_parser_invocation(source, fn _ ->
+                     TemplatePatchValidator.with_planned_insertion(handle, tree, fn _ ->
+                       flunk("cross-invocation plan consumed")
+                     end)
+                   end)
+
+          budget_key = {HtmlValidator, :render_budget}
+          counters = Process.get(budget_key)
+          Process.put(budget_key, %{})
+
+          assert {:error, {:invalid_document, _}} =
+                   TemplatePatchValidator.with_planned_insertion(handle, tree, fn _ ->
+                     flunk("reset budget accepted")
+                   end)
+
+          Process.put(budget_key, counters)
+
+          assert {:error, {:invalid_document, _}} =
+                   Task.async(fn ->
+                     TemplatePatchValidator.with_planned_insertion(handle, tree, fn _ ->
+                       flunk("cross-process plan consumed")
+                     end)
+                   end)
+                   |> Task.await()
+
+          assert :checked =
+                   TemplatePatchValidator.with_planned_insertion(handle, tree, fn context ->
+                     assert context.target.start == hd(dom.children).node_id
+
+                     assert context.original.parent == tree.root and
+                              context.insertion.parent == tree.root
+
+                     assert context.insertion.context == "div"
+                     assert context.pending_checks != []
+
+                     assert {:error, {:unsupported_html, _}} =
+                              TemplatePatchValidator.authorize_mutation(handle, tree)
+
+                     :checked
+                   end)
+
+          assert {:error, {:invalid_document, _}} =
+                   TemplatePatchValidator.with_planned_insertion(handle, tree, fn _ ->
+                     flunk("reused plan consumed")
+                   end)
+
+          handle
+        end)
+      end)
+
+    assert {:error, {:invalid_document, _}} =
+             TemplatePatchValidator.with_planned_insertion(escaped, tree, fn _ ->
+               flunk("expired plan consumed")
+             end)
+
+    assert MapSet.new(Process.get_keys()) == keys
+
+    assert {:error, {:invalid_document, _}} =
+             TemplatePatchValidator.with_insertion_context(tree, tree.root, "A", origin, fn _ ->
+               flunk("unowned tree accepted")
+             end)
+
+    for callback <- [
+          fn _ -> {:error, {:stop, %{stage: :html, reason: :stop, message: "stop"}}} end,
+          fn _ -> raise "planning exception" end
+        ] do
+      try do
+        TemplatePatchValidator.with_parser_invocation(source, fn _ ->
+          TemplatePatchValidator.with_insertion_context(tree, tree.root, "A", origin, callback)
+        end)
+      rescue
+        RuntimeError -> :ok
+      end
+
+      assert MapSet.new(Process.get_keys()) == keys
+    end
+
+    assert {:error, {:invalid_document, _}} =
+             TemplatePatchValidator.with_parser_invocation("different", fn _ ->
+               TemplatePatchValidator.with_insertion_context(tree, tree.root, "A", origin, fn _ ->
+                 :bad
+               end)
+             end)
+
+    forged = %{origin | source: %{origin.source | column: 2}}
+
+    assert {:error, {:invalid_document, _}} =
+             TemplatePatchValidator.with_parser_invocation(source, fn _ ->
+               TemplatePatchValidator.with_insertion_context(tree, tree.root, "A", forged, fn _ ->
+                 :bad
+               end)
+             end)
+
+    false_token = %{origin | source: %{text: "<?marker name='A'>", line: 1, column: 1}, offset: 0}
+
+    assert {:error, {:invalid_document, _}} =
+             TemplatePatchValidator.with_parser_invocation(source, fn _ ->
+               TemplatePatchValidator.with_insertion_context(
+                 tree,
+                 tree.root,
+                 "A",
+                 false_token,
+                 fn _ -> :bad end
+               )
+             end)
+
+    assert {:error, {:invalid_encoding, _}} =
+             TemplatePatchValidator.with_parser_invocation(<<255>>, fn _ -> :bad end)
+  end
+
+  test "original and insertion contexts stop at fragment boundaries without borrowing host styles" do
+    prefix =
+      "<style>p{color:red}</style><?marker name='Outer'><template><style>p{color:blue}</style><div><?marker name='Inner'><p>Old</p></div>"
+
+    {source, dom, tree, origin} =
+      planning_fixture(prefix, "<template for='Inner'>", "template", "</template>")
+
+    [outer_style, _, template] = dom.children
+    [inner_style, div] = template.content.children
+
+    assert :ok =
+             TemplatePatchValidator.with_parser_invocation(source, fn _ ->
+               TemplatePatchValidator.with_insertion_context(
+                 tree,
+                 template.node_id,
+                 "Inner",
+                 origin,
+                 fn handle ->
+                   TemplatePatchValidator.with_planned_insertion(handle, tree, fn context ->
+                     assert context.original.parent == template.content.node_id
+                     assert context.original.stylesheets == [inner_style.node_id]
+                     refute outer_style.node_id in context.original.stylesheets
+                     assert context.insertion.stylesheets == [inner_style.node_id]
+                     assert context.original.ancestors == [template.content.node_id]
+                     assert context.insertion.ancestors == [div.node_id, template.content.node_id]
+                     assert context.insertion.scope == template.content.node_id
+
+                     assert context.insertion.stylesheet_selection ==
+                              :requires_renderer_media_context
+
+                     :ok
+                   end)
+                 end
+               )
+             end)
+  end
+
+  test "patch transactions detach at start adopt before the live end and clean markers at close" do
+    source =
+      "<div><?start name='A'><p>Old</p><?end><p>Keep</p></div><template><p>New<span>Nested</span></p><template><b>Inert</b></template></template>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(source)
+    tree = HtmlTree.from_document(dom)
+    [div, template] = dom.children
+    [start, old, finish, keep] = div.children
+    [replacement, nested] = template.content.children
+    assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
+    {tree, _} = HtmlTree.close(tree, tree.root)
+    assert {:ok, transaction} = HtmlTree.begin_content_patch(tree, target)
+    assert transaction.original == tree
+
+    assert Enum.map(HtmlTree.fetch(transaction.tree, div.node_id).children, & &1.node_id) == [
+             start.node_id,
+             finish.node_id,
+             keep.node_id
+           ]
+
+    assert HtmlTree.fetch(transaction.original, old.node_id) == old
+    assert {:ok, transaction} = HtmlTree.adopt_content_patch(transaction, [replacement.node_id])
+    assert {:ok, transaction} = HtmlTree.adopt_content_patch(transaction, [nested.node_id])
+
+    assert Enum.map(HtmlTree.fetch(transaction.tree, div.node_id).children, & &1.node_id) == [
+             start.node_id,
+             replacement.node_id,
+             nested.node_id,
+             finish.node_id,
+             keep.node_id
+           ]
+
+    assert {:ok, active} = HtmlTree.finish_content_patch(transaction)
+    [active_div, active_template] = HtmlTree.children(active, active.root)
+
+    assert Enum.map(active_div.children, & &1.node_id) == [
+             replacement.node_id,
+             nested.node_id,
+             keep.node_id
+           ]
+
+    assert active_template.content.children == []
+    [adopted, nested, _] = active_div.children
+    assert adopted.document_id == replacement.document_id and adopted.source == replacement.source
+    assert adopted.parent_id == div.node_id and adopted.tree_scope_id == div.tree_scope_id
+
+    assert Enum.all?(
+             adopted.children,
+             &(&1.parent_id == adopted.node_id and &1.tree_scope_id == div.tree_scope_id)
+           )
+
+    assert nested.content.parent_id == nil and nested.content.tree_scope_id != div.tree_scope_id
+    assert nested.content.children |> hd() |> Map.fetch!(:tree_scope_id) == nested.content.node_id
+    assert HtmlTree.fetch(transaction.original, tree.root) == dom
+    assert :ok = HtmlTreeValidator.validate_transport(HtmlTree.fetch(active, active.root))
+    assert transaction.inserted == [replacement.node_id, nested.node_id]
+  end
+
+  test "marker-only and unmatched-end transactions keep source identities and reject stale or cyclic adoption" do
+    for marker <- ["<?marker name='A'>", "<?start name='A'><p>Old</p>"] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed("<div>#{marker}</div><template><p>New</p></template>")
+
+      tree = HtmlTree.from_document(dom)
+      [div, template] = dom.children
+      [replacement] = template.content.children
+      assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
+      assert {:ok, transaction} = HtmlTree.begin_content_patch(tree, target)
+
+      assert {:error, {:invalid_document, _}} =
+               HtmlTree.adopt_content_patch(transaction, [div.node_id])
+
+      assert {:error, {:invalid_document, _}} =
+               HtmlTree.adopt_content_patch(transaction, [target.start])
+
+      assert {:error, {:invalid_document, _}} =
+               HtmlTree.adopt_content_patch(transaction, [
+                 replacement.node_id,
+                 replacement.node_id
+               ])
+
+      assert {:error, {:invalid_document, _}} =
+               HtmlTree.adopt_content_patch(transaction, [make_ref()])
+
+      active_tree = transaction.tree
+      detached = put_in(active_tree.nodes[replacement.node_id].parent_id, nil)
+      transaction = %{transaction | tree: detached}
+      assert {:ok, transaction} = HtmlTree.adopt_content_patch(transaction, [replacement.node_id])
+      assert {:ok, active} = HtmlTree.finish_content_patch(transaction)
+      assert [adopted] = HtmlTree.fetch(active, div.node_id).children
+      assert adopted.node_id == replacement.node_id
+
+      assert {:error, {:invalid_document, _}} =
+               HtmlTree.finish_content_patch(%{transaction | tree: active})
+
+      assert {:error, {:invalid_document, _}} =
+               HtmlTree.begin_content_patch(tree, %{target | removed: [make_ref()]})
+    end
+
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    assert {:ok, dom} = HtmlParser.parse_detailed("<?marker name='A'>")
+    tree = HtmlTree.from_document(dom)
+    assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
+    Limits.install(%{limits | max_html_tree_work: 0})
+    assert {:error, {:resource_limit_exceeded, _}} = HtmlTree.begin_content_patch(tree, target)
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             TemplatePatchValidator.with_parser_invocation(dom.source.text, fn _ ->
+               TemplatePatchValidator.with_insertion_context(tree, tree.root, "A", %{}, fn _ ->
+                 :bad
+               end)
+             end)
+  end
+
+  test "invocation plans retain distinct body-to-head and foreign insertion parents" do
+    token = "<template for='A'>"
+
+    for {prefix, closing, target_tag, target_namespace} <- [
+          {"<head><style>p{color:red}</style><?marker name='A'></head><body>", "</body>", "head",
+           :html},
+          {"<body><svg><?marker name='A'></svg>", "</body>", "svg", :svg}
+        ] do
+      assert {:ok, dom} = HtmlParser.parse_document_detailed(prefix <> closing)
+      [html] = dom.children
+      [head, body] = html.children
+      tree = HtmlTree.from_document(dom)
+      source = prefix <> token
+      root = tree.nodes[tree.root]
+
+      tree = %{
+        tree
+        | nodes:
+            Map.put(tree.nodes, tree.root, %{root | source: %{text: source, line: 1, column: 1}})
+      }
+
+      origin = %{
+        source: %{text: token, line: 1, column: String.length(prefix) + 1},
+        offset: byte_size(prefix),
+        tokenizer_context: "body",
+        ancestors: []
+      }
+
+      assert :checked =
+               TemplatePatchValidator.with_parser_invocation(source, fn _ ->
+                 TemplatePatchValidator.with_insertion_context(
+                   tree,
+                   body.node_id,
+                   "A",
+                   origin,
+                   fn handle ->
+                     TemplatePatchValidator.with_planned_insertion(handle, tree, fn context ->
+                       assert context.original.parent == body.node_id
+                       assert context.original.context == "body"
+                       assert context.original.scope == dom.node_id
+                       assert tree.nodes[context.insertion.parent].tag == target_tag
+                       assert context.insertion.namespace == target_namespace
+                       assert context.insertion.scope == dom.node_id
+                       assert context.insertion.stylesheets == context.original.stylesheets
+
+                       if target_namespace == :svg do
+                         assert context.insertion.context == {:foreign, :svg, "svg", %{}}
+                       else
+                         assert context.insertion.context == "head"
+                         assert context.insertion.parent == head.node_id
+                         assert context.target.scope == html.node_id
+                       end
+
+                       assert {:error, {:unsupported_html, diagnostic}} =
+                                TemplatePatchValidator.authorize_mutation(handle, tree)
+
+                       assert diagnostic.source == token and diagnostic.operation == :parse
+                       assert diagnostic.message =~ "insertion_content_model"
+                       :checked
+                     end)
+                   end
+                 )
+               end)
+    end
+  end
+
+  test "direct DOM styling cannot borrow parser plans or bypass composition policy" do
+    assert {:ok, dom} = HtmlParser.parse_document_detailed("<template><p>Inert</p></template>")
+    [html] = dom.children
+    [head, body] = html.children
+    [template] = head.children
+    template = %{template | attributes: Map.put(template.attributes, "for", "A")}
+    dom = %{dom | children: [%{html | children: [%{head | children: [template]}, body]}]}
+
+    assert {:error, {:unsupported_html, diagnostic}} = Style.compute_detailed(dom)
+    assert diagnostic.stage == :html and diagnostic.module == TemplatePatchValidator
+    assert diagnostic.message =~ "validated parser composition contexts"
+    assert Process.get({TemplatePatchValidator, :invocation}) == nil
+  end
+
+  defp planning_fixture(prefix, token, context, closing \\ "") do
+    assert {:ok, dom} = HtmlParser.parse_detailed(prefix <> closing)
+    tree = HtmlTree.from_document(dom)
+    source = prefix <> token
+    owner = tree.nodes[tree.root]
+
+    tree = %{
+      tree
+      | nodes:
+          Map.put(tree.nodes, tree.root, %{owner | source: %{text: source, line: 1, column: 1}})
+    }
+
+    origin = %{
+      source: %{text: token, line: 1, column: String.length(prefix) + 1},
+      offset: byte_size(prefix),
+      tokenizer_context: context,
+      ancestors: []
+    }
+
+    {source, dom, tree, origin}
   end
 end

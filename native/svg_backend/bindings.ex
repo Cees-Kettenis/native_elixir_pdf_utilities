@@ -40,7 +40,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes do
   def vectorize(_source, _fonts, _resources), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc false
-  @spec validate_shape_work(binary(), {pos_integer(), pos_integer()}) ::
+  @spec validate_shape_work(binary(), {pos_integer(), pos_integer(), [binary()]}) ::
           {:ok, {non_neg_integer(), non_neg_integer()}} | {:error, binary()}
   def validate_shape_work(_source, _ceilings), do: :erlang.nif_error(:nif_not_loaded)
 

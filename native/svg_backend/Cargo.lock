@@ -255,6 +255,7 @@ dependencies = [
  "svgtypes",
  "tiny-skia",
  "usvg",
+ "ttf-parser",
 ]
 
 [[package]]

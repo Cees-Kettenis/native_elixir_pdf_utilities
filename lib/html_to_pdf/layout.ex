@@ -139,7 +139,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                     |> Enum.map(&Map.put(&1, :position_anchor, :canvas))
 
                   style =
-                    style |> Map.put(:background_color, nil) |> Map.put(:background_image, nil)
+                    style
+                    |> Map.put(:background_color, nil)
+                    |> Map.put(:background_image, nil)
+                    |> Map.put(
+                      :_root_body_fragmentation,
+                      Map.get(node, :namespace, :html) == :html
+                    )
 
                   {%{node | style: style}, canvas_boxes}
 
@@ -706,12 +712,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     result =
       Enum.reduce_while(children, {:ok, [], page_height - margins.top}, fn child,
                                                                            {:ok, boxes, y} ->
-        case layout_block(
-               child,
-               margins.left,
-               y,
-               page_width - margins.left - margins.right
-             ) do
+        result =
+          if Map.has_key?(child.style, :_frameset) and child.style.display != :none do
+            height = page_height - margins.top - margins.bottom
+
+            with {:ok, group} <-
+                   NativeElixirPdfUtilities.HtmlToPdf.Frameset.layout(
+                     child,
+                     page_width - margins.left - margins.right,
+                     height
+                   ) do
+              group =
+                group
+                |> Map.put(:x, margins.left)
+                |> Map.put(:y, y - height)
+                |> Map.put(:transform, {1, 0, 0, 1, margins.left, y - height})
+
+              {:ok, [group], y - height}
+            end
+          else
+            layout_block(child, margins.left, y, page_width - margins.left - margins.right)
+          end
+
+        case result do
           {:ok, block_boxes, next_y} -> {:cont, {:ok, Enum.reverse(block_boxes, boxes), next_y}}
           {:error, reason} -> {:halt, {:error, reason}}
         end
@@ -934,6 +957,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 Enum.all?(Map.values(border_widths), &(&1 <= 0))
             )
             |> Map.put(:flow_id, {:block, box_x, box_top})
+            |> Map.put(:orphans, Map.get(style, :orphans, 2))
+            |> Map.put(:widows, Map.get(style, :widows, 2))
 
           content_metadata =
             flow_metadata
@@ -1023,6 +1048,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                   width: content_width,
                   height: content_box_height
                 })
+
+              # Root bodies also fragment in the PDF page surface. Preserve
+              # their trailing padding with the last content fragment, as the
+              # embedded viewport already preserves the complete block extent.
+              content_boxes =
+                if Map.get(block, :tag) == "body" and
+                     Map.get(style, :_root_body_fragmentation, false) and padding.bottom > 0 and
+                     Map.get(style, :height) in [nil, :auto] and
+                     Map.get(ResourceContext.current() || %{}, :depth, 0) == 0 do
+                  case content_boxes
+                       |> Enum.with_index()
+                       |> Enum.reverse()
+                       |> Enum.find(fn {box, _index} ->
+                         box.type != :page_break and not Map.get(box, :out_of_flow, false)
+                       end) do
+                    {%{flow_id: _} = last, index} ->
+                      marker =
+                        %{
+                          type: HtmlValidator.reserve_layout_box(:flow_marker),
+                          role: :block_end_padding,
+                          x: box_x,
+                          y: box_top - box_height,
+                          width: 0.0,
+                          height: padding.bottom
+                        }
+                        |> Map.merge(
+                          Map.take(last, [:flow_id, :fragment_id, :break_inside, :break_after])
+                        )
+
+                      List.insert_at(content_boxes, index + 1, marker)
+
+                    _ ->
+                      content_boxes
+                  end
+                else
+                  content_boxes
+                end
 
               background_box =
                 style
@@ -1417,6 +1479,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                positioned_containing_block(style, x, y, available_width, next_y),
              {:ok, positioned_boxes} <-
                positioned_child_boxes(positioned_children, containing_block) do
+          positioned_boxes =
+            if Map.get(style, :_root_body_fragmentation, false) and
+                 Map.get(ResourceContext.current() || %{}, :depth, 0) == 0 do
+              Enum.map(positioned_boxes, fn entry ->
+                %{entry | boxes: Enum.map(entry.boxes, &Map.put(&1, :position_anchor, :root))}
+              end)
+            else
+              positioned_boxes
+            end
+
           boxes =
             boxes
             |> mark_container_background(style, x, y, available_width, next_y)
@@ -4329,8 +4401,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           available_width
       end
 
-    with {:ok, %{rows: rows, columns: columns}} <-
-           NativeElixirPdfUtilities.Validators.HtmlTableValidator.form(children) do
+    with {:ok, %{rows: rows, columns: columns, collapsed_edges: shared_edges}} <-
+           NativeElixirPdfUtilities.Validators.HtmlTableValidator.form(children, style) do
       # With no columns there are no cell edges for collapsed table borders.
       # Visible rows still contribute their declared height, but neither table
       # padding nor collapsed borders contribute to this grid's geometry.
@@ -4342,41 +4414,79 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       borders = Map.get(style, :border_widths, edges(0.0))
       padding = Map.get(style, :padding, edges(0.0))
 
+      count = max(table_column_count(rows), length(columns))
+      row_count = length(rows)
+
+      boundary = %{
+        top: for(column <- 0..max(count - 1, 0), do: {:horizontal, 0, column}),
+        bottom: for(column <- 0..max(count - 1, 0), do: {:horizontal, row_count, column}),
+        left: for(row <- 0..max(row_count - 1, 0), do: {:vertical, row, 0}),
+        right: for(row <- 0..max(row_count - 1, 0), do: {:vertical, row, count})
+      }
+
       outer =
-        case collapsed? do
-          true ->
-            cells = rows
-            row_count = length(cells)
-            column_count = if cells == [], do: 0, else: table_column_count(cells)
+        if collapsed? do
+          Map.new(boundary, fn {side, keys} ->
+            width =
+              Enum.map(keys, &Map.get(shared_edges, &1, %{width: 0.0}).width)
+              |> Enum.max()
 
-            Enum.with_index(cells)
-            |> Enum.reduce(borders, fn {row, row_index}, outer ->
-              Enum.reduce(row.cells, outer, fn placement, acc ->
-                cell_borders = Map.get(placement.cell.style, :border_widths, edges(0.0))
+            {side, width}
+          end)
+        else
+          borders
+        end
 
-                %{
-                  left:
-                    if(placement.column == 0,
-                      do: max(acc.left, cell_borders.left),
-                      else: acc.left
-                    ),
-                  right:
-                    if(placement.column + placement.colspan == column_count,
-                      do: max(acc.right, cell_borders.right),
-                      else: acc.right
-                    ),
-                  top: if(row_index == 0, do: max(acc.top, cell_borders.top), else: acc.top),
-                  bottom:
-                    if(row_index + placement.rowspan == row_count,
-                      do: max(acc.bottom, cell_borders.bottom),
-                      else: acc.bottom
-                    )
-                }
+      outline_sides =
+        Map.new(boundary, fn {side, keys} ->
+          candidates = Enum.map(keys, &Map.get(shared_edges, &1)) |> Enum.reject(&is_nil/1)
+
+          {side,
+           collapsed? and Map.get(borders, side, 0.0) > 0 and
+             candidates != [] and Enum.all?(candidates, &(&1.style != :hidden))}
+        end)
+
+      shared_edges =
+        Enum.reduce(boundary, shared_edges, fn {side, keys}, edges ->
+          if Map.fetch!(outline_sides, side) do
+            keys
+            |> Enum.filter(&Map.has_key?(edges, &1))
+            |> Enum.reduce(edges, fn key, acc ->
+              Map.update!(acc, key, fn candidate ->
+                if elem(candidate.rank, 3) == 0,
+                  do: Map.put(candidate, :outline, true),
+                  else: candidate
               end)
             end)
+          else
+            edges
+          end
+        end)
 
-          false ->
-            borders
+      style =
+        if collapsed? do
+          outline_widths =
+            Map.new(outline_sides, fn {side, paint?} ->
+              {side, if(paint?, do: Map.fetch!(borders, side), else: 0.0)}
+            end)
+
+          outline_styles =
+            Map.new(Map.get(style, :border_styles, edges(:none)), fn {side, border_style} ->
+              paint_style =
+                case border_style do
+                  :inset -> :ridge
+                  :outset -> :groove
+                  value -> value
+                end
+
+              {side, paint_style}
+            end)
+
+          style
+          |> Map.put(:border_widths, outline_widths)
+          |> Map.put(:border_styles, outline_styles)
+        else
+          style
         end
 
       insets =
@@ -4409,7 +4519,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           Map.get(style, :border_collapse, :separate),
           Map.get(style, :border_spacing, {1.5, 1.5}),
           Map.get(style, :table_layout, :auto),
-          outer
+          shared_edges
         )
 
       box_width =
@@ -4522,7 +4632,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         %{before: background, after: border}
 
       _ ->
-        %{before: style |> background_box(x, y, width, height) |> tag_boxes(metadata), after: []}
+        boxes =
+          style
+          |> background_box(x, y, width, height)
+          |> tag_boxes(metadata)
+          |> Enum.map(&Map.put(&1, :role, :table_separate_background))
+
+        %{before: boxes, after: []}
     end
   end
 
@@ -4554,7 +4670,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp table_tracks(rows, columns, width, border_collapse, border_spacing, table_layout, outer) do
+  defp table_tracks(
+         rows,
+         columns,
+         width,
+         border_collapse,
+         border_spacing,
+         table_layout,
+         shared_edges
+       ) do
     case rows == [] or (table_column_count(rows) == 0 and columns == []) do
       true ->
         # Empty visible rows keep their row sizing and flow metadata. A table
@@ -4563,56 +4687,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       false ->
         grid_rows = rows
-        row_count = length(grid_rows)
         column_count = max(table_column_count(grid_rows), length(columns))
 
         grid_rows =
           case border_collapse do
-            :collapse ->
-              shared_edges =
-                grid_rows
-                |> Enum.with_index()
-                |> Enum.reduce(%{}, fn {row, row_index}, shared ->
-                  Enum.reduce(row.cells, shared, fn placement, edges ->
-                    HtmlValidator.reserve_render_resource(
-                      :max_table_grid_work,
-                      2 * (placement.colspan + placement.rowspan),
-                      :layout
-                    )
+            :collapse when map_size(shared_edges) == 0 ->
+              # The validator's empty edge result has no visible or hidden
+              # candidates. Retain zero border geometry without paint metadata.
+              HtmlValidator.reserve_render_resource(
+                :max_table_grid_work,
+                length(grid_rows),
+                :layout
+              )
 
-                    widths = Map.get(placement.cell.style, :border_widths, edges(0.0))
+              Enum.map(grid_rows, fn row ->
+                # Each cell issues a zero-edge map, style, cell and placement.
+                HtmlValidator.reserve_render_resource(
+                  :max_table_grid_work,
+                  4 * length(row.cells),
+                  :layout
+                )
 
-                    horizontal =
-                      Enum.flat_map(
-                        placement.column..(placement.column + placement.colspan - 1),
-                        fn column ->
-                          [
-                            {{:horizontal, row_index, column}, widths.top, :top},
-                            {{:horizontal, row_index + placement.rowspan, column}, widths.bottom,
-                             :bottom}
-                          ]
-                        end
-                      )
+                cells =
+                  Enum.map(row.cells, fn placement ->
+                    cell = placement.cell
 
-                    vertical =
-                      Enum.flat_map(row_index..(row_index + placement.rowspan - 1), fn row ->
-                        [
-                          {{:vertical, row, placement.column}, widths.left, :left},
-                          {{:vertical, row, placement.column + placement.colspan}, widths.right,
-                           :right}
-                        ]
-                      end)
-
-                    Enum.reduce(horizontal ++ vertical, edges, fn {key, width, side}, acc ->
-                      candidate = %{width: width, owner: {row_index, placement.column, side}}
-
-                      Map.update(acc, key, candidate, fn current ->
-                        if width >= current.width, do: candidate, else: current
-                      end)
-                    end)
+                    %{
+                      placement
+                      | cell: %{
+                          cell
+                          | style: Map.put(cell.style, :_collapsed_borders, edges(0.0))
+                        }
+                    }
                   end)
-                end)
 
+                %{row | cells: cells}
+              end)
+
+            :collapse ->
               Enum.with_index(grid_rows, fn row, row_index ->
                 cells =
                   Enum.map(row.cells, fn placement ->
@@ -4660,53 +4772,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                         |> Enum.max()
                     }
 
-                    borders = %{
-                      left:
-                        if(placement.column == 0,
-                          do: max(borders.left, outer.left),
-                          else: borders.left
-                        ),
-                      right:
-                        if(placement.column + placement.colspan == column_count,
-                          do: max(borders.right, outer.right),
-                          else: borders.right
-                        ),
-                      top: if(row_index == 0, do: max(borders.top, outer.top), else: borders.top),
+                    keys = %{
+                      top: Enum.map(horizontal, &{:horizontal, row_index, &1}),
                       bottom:
-                        if(row_index + placement.rowspan == row_count,
-                          do: max(borders.bottom, outer.bottom),
-                          else: borders.bottom
-                        )
+                        Enum.map(horizontal, &{:horizontal, row_index + placement.rowspan, &1}),
+                      left: Enum.map(vertical, &{:vertical, &1, placement.column}),
+                      right:
+                        Enum.map(vertical, &{:vertical, &1, placement.column + placement.colspan})
                     }
 
-                    paint_borders = %{
-                      top:
-                        Enum.any?(horizontal, fn column ->
-                          Map.fetch!(shared_edges, {:horizontal, row_index, column}).owner ==
-                            {row_index, placement.column, :top}
-                        end),
-                      bottom:
-                        Enum.any?(horizontal, fn column ->
-                          Map.fetch!(
-                            shared_edges,
-                            {:horizontal, row_index + placement.rowspan, column}
-                          ).owner ==
-                            {row_index, placement.column, :bottom}
-                        end),
-                      left:
-                        Enum.any?(vertical, fn row ->
-                          Map.fetch!(shared_edges, {:vertical, row, placement.column}).owner ==
-                            {row_index, placement.column, :left}
-                        end),
-                      right:
-                        Enum.any?(vertical, fn row ->
-                          Map.fetch!(
-                            shared_edges,
-                            {:vertical, row, placement.column + placement.colspan}
-                          ).owner ==
-                            {row_index, placement.column, :right}
-                        end)
-                    }
+                    segments =
+                      Map.new(keys, fn {side, entries} ->
+                        {side,
+                         Enum.map(entries, fn key ->
+                           candidate = Map.fetch!(shared_edges, key)
+
+                           Map.merge(candidate, %{
+                             key: key,
+                             paint:
+                               candidate.owner == {row_index, placement.column, side} and
+                                 not Map.get(candidate, :outline, false)
+                           })
+                         end)}
+                      end)
+
+                    paint_borders =
+                      Map.new(segments, fn {side, candidates} ->
+                        {side, Enum.any?(candidates, & &1.paint)}
+                      end)
 
                     %{
                       placement
@@ -4716,6 +4809,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                               cell.style
                               |> Map.put(:_collapsed_borders, borders)
                               |> Map.put(:_collapsed_border_winners, paint_borders)
+                              |> Map.put(:_collapsed_border_segments, segments)
                         }
                     }
                   end)
@@ -4879,6 +4973,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           cell_height =
             (row_heights |> Enum.slice(index, rowspan) |> Enum.sum()) +
               vertical_spacing * max(rowspan - 1, 0)
+
+          cell =
+            case Map.fetch(cell.style, :_collapsed_border_segments) do
+              {:ok, segments} ->
+                segments =
+                  Map.new(segments, fn {side, candidates} ->
+                    {side,
+                     Enum.map(candidates, fn candidate ->
+                       {offset, length} =
+                         case candidate.key do
+                           {:horizontal, _row, track} ->
+                             {Enum.sum(Enum.slice(column_widths, column, track - column)),
+                              Enum.at(column_widths, track)}
+
+                           {:vertical, track, _column} ->
+                             {Enum.sum(Enum.slice(row_heights, index, track - index)),
+                              Enum.at(row_heights, track)}
+                         end
+
+                       Map.merge(candidate, %{offset: offset, length: length})
+                     end)}
+                  end)
+
+                %{cell | style: Map.put(cell.style, :_collapsed_border_segments, segments)}
+
+              :error ->
+                cell
+            end
 
           {:ok, cell_boxes} =
             layout_table_cell(
@@ -5106,64 +5228,115 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
          height,
          border_collapse
        ) do
-    case border_collapse do
-      :collapse ->
-        border_widths = Map.get(style, :border_widths, edges(0.0))
-        resolved_widths = Map.get(style, :_collapsed_borders, border_widths)
-        winners = Map.get(style, :_collapsed_border_winners, edges(true))
-        border_styles = Map.get(style, :border_styles, edges(:solid))
+    case {border_collapse, Map.get(style, :_collapsed_border_segments)} do
+      {:collapse, nil} ->
+        []
 
-        border_colors =
-          Map.get(style, :border_colors, edges(Map.get(style, :border_color, {0, 0, 0})))
+      {:collapse, segments} ->
+        uniform? =
+          Enum.all?(segments, fn {_side, candidates} ->
+            length(Enum.uniq(Enum.map(candidates, &{&1.width, &1.style, &1.color, &1.paint}))) ==
+              1
+          end)
 
-        collapsed_widths = %{
-          top:
-            if(winners.top and border_widths.top >= resolved_widths.top,
-              do: border_widths.top,
-              else: 0.0
-            ),
-          right:
-            if(winners.right and border_widths.right >= resolved_widths.right,
-              do: border_widths.right,
-              else: 0.0
-            ),
-          bottom:
-            if(winners.bottom and border_widths.bottom >= resolved_widths.bottom,
-              do: border_widths.bottom,
-              else: 0.0
-            ),
-          left:
-            if(winners.left and border_widths.left >= resolved_widths.left,
-              do: border_widths.left,
-              else: 0.0
-            )
-        }
+        # A spanning side can have different winners on each underlying track.
+        # Retain the ordinary rect for uniform sides; clip individual strokes
+        # only when conflict resolution requires a partial side.
+        entries =
+          if uniform?,
+            do: [%{side: nil, candidate: nil}],
+            else:
+              Enum.flat_map(segments, fn {side, candidates} ->
+                for candidate <- candidates,
+                    candidate.paint and candidate.width > 0,
+                    do: %{side: side, candidate: candidate}
+              end)
 
-        stroke_width = collapsed_widths |> Map.values() |> Enum.max()
+        Enum.flat_map(entries, fn entry ->
+          widths =
+            Map.new(segments, fn {side, candidates} ->
+              candidate = if entry.side == nil, do: hd(candidates), else: entry.candidate
 
-        case visible_border?(collapsed_widths, border_styles, border_colors) do
-          true ->
-            [
-              %{
-                type: HtmlValidator.reserve_layout_box(:rect),
-                x: x,
-                y: y,
-                width: width,
-                height: height,
-                fill_color: nil,
-                stroke_color: Map.get(style, :border_color, {0, 0, 0}),
-                stroke_width: stroke_width,
-                border_widths: collapsed_widths,
-                fragment_bottom_border_width: border_widths.bottom,
-                border_colors: border_colors,
-                border_styles: border_styles,
-                border_radius: 0.0
-              }
-            ]
+              {side,
+               if((entry.side == nil or side == entry.side) and candidate.paint,
+                 do: candidate.width,
+                 else: 0.0
+               )}
+            end)
 
-          false ->
+          styles =
+            Map.new(segments, fn {side, candidates} ->
+              candidate = if entry.side == nil, do: hd(candidates), else: entry.candidate
+              # CSS2 maps these relief styles in the collapsed border model.
+              paint_style =
+                case candidate.style do
+                  :inset -> :ridge
+                  :outset -> :groove
+                  value -> value
+                end
+
+              {side, paint_style}
+            end)
+
+          colors =
+            Map.new(segments, fn {side, candidates} ->
+              candidate = if entry.side == nil, do: hd(candidates), else: entry.candidate
+              {side, candidate.color}
+            end)
+
+          if visible_border?(widths, styles, colors) do
+            box = %{
+              type: HtmlValidator.reserve_layout_box(:rect),
+              x: x,
+              y: y,
+              width: width,
+              height: height,
+              fill_color: nil,
+              stroke_color: colors.top,
+              stroke_width: Enum.max(Map.values(widths)),
+              border_widths: widths,
+              border_colors: colors,
+              border_styles: styles,
+              fragment_bottom_border_width:
+                if(
+                  entry.side == nil and
+                    Enum.all?(
+                      segments.bottom,
+                      &(not Map.get(&1, :outline, false) and &1.style != :hidden)
+                    ),
+                  do: Map.get(style, :border_widths, edges(0.0)).bottom,
+                  else: 0.0
+                ),
+              border_radius: 0.0
+            }
+
+            clip =
+              case entry.side do
+                side when side in [:top, :bottom] ->
+                  %{
+                    x: x + entry.candidate.offset,
+                    y: y - box.stroke_width,
+                    width: entry.candidate.length,
+                    height: height + 2 * box.stroke_width
+                  }
+
+                side when side in [:left, :right] ->
+                  %{
+                    x: x - box.stroke_width,
+                    y: y + height - entry.candidate.offset - entry.candidate.length,
+                    width: width + 2 * box.stroke_width,
+                    height: entry.candidate.length
+                  }
+
+                nil ->
+                  nil
+              end
+
+            [if(clip == nil, do: box, else: Map.put(box, :clip, clip))]
+          else
             []
-        end
+          end
+        end)
 
       _ ->
         []
@@ -5962,7 +6135,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     box_inset =
       case border_collapse do
         :collapse ->
-          padding.top + padding.bottom + max(border_widths.top, border_widths.bottom)
+          padding.top + padding.bottom +
+            (Map.get(style, :_collapsed_borders, border_widths).top +
+               Map.get(style, :_collapsed_borders, border_widths).bottom) / 2
 
         _ ->
           vertical_box_size(style)
@@ -6321,14 +6496,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             line_metadata
           end
 
-        # Empty atomic boxes place their baseline at the bottom margin edge.
-        # Keep that fractional depth after rasterizing the top edge, rather
-        # than independently rounding the shared text baseline.
+        # Empty atomic boxes use the bottom margin edge; temporal flex editors
+        # can also expose a fractional baseline. Preserve the shared depth
+        # after rasterizing the line's top edge.
         line_metadata =
           if baseline_depth / @css_pixel_points !=
                Float.floor(baseline_depth / @css_pixel_points) and
                Enum.any?(line_runs, fn run ->
-                 Map.get(run, :_inline_bottom_baseline, false) and
+                 (Map.get(run, :_inline_bottom_baseline, false) or
+                    Map.has_key?(run.style, :_temporal_display)) and
                    Map.fetch!(run, :_inline_baseline_depth) +
                      Map.get(run.style, :margin, edges(0.0)).top == baseline_depth
                end) do
@@ -8274,6 +8450,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     {intrinsic_height, first_baseline, baseline, lines} =
       case run do
+        %{style: %{_temporal_display: display}} ->
+          baseline =
+            (display.intrinsic_height - display.editor_height) / 2 + 0.75 + display.baseline_depth
+
+          {display.intrinsic_height, baseline, baseline, nil}
+
         %{style: %{_math_box: measured}} ->
           {measured.ascent + measured.descent, measured.ascent, measured.ascent, nil}
 
@@ -8383,10 +8565,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             ),
         else: baseline
 
+    baseline =
+      if Map.has_key?(style, :_temporal_display),
+        do:
+          (content_height - style._temporal_display.editor_height) / 2 + 0.75 +
+            style._temporal_display.baseline_depth,
+        else: baseline
+
     bottom_baseline =
       baseline == nil or
         (Map.get(style, :overflow, :visible) != :visible and
-           not Map.has_key?(style, :_number_state))
+           not Map.has_key?(style, :_number_state) and
+           not Map.has_key?(style, :_temporal_display))
+
+    first_baseline =
+      if Map.has_key?(style, :_temporal_display), do: baseline, else: first_baseline
 
     first_baseline =
       if bottom_baseline,
@@ -8585,6 +8778,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     background = css_background_box(background_style, x, y, width, height)
 
     background =
+      if Map.has_key?(style, :_temporal_display),
+        do:
+          background ++
+            NativeElixirPdfUtilities.HtmlToPdf.TemporalArtwork.boxes(style, x, y, width, height),
+        else: background
+
+    background =
       if Map.has_key?(style, :_range_state) do
         background ++
           NativeElixirPdfUtilities.HtmlToPdf.RangeArtwork.boxes(
@@ -8701,8 +8901,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             # The native 1px non-AA stroke passes through ScopedRasterFlags
             # at the fixed 0.75 CSS-to-point scale: hairline, alpha *= 0.75.
             alpha =
-              if Map.has_key?(style, :_number_state) and
-                   get_in(style, [:_form_control, :initial_state, :disabled]),
+              if (Map.has_key?(style, :_number_state) and
+                    get_in(style, [:_form_control, :initial_state, :disabled])) or
+                   Map.get(style, :_temporal_disabled, false),
                  do: 0.3 * @css_pixel_points,
                  else: @css_pixel_points
 
@@ -8711,12 +8912,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             %{
               rect
               | border_radius: 1.5 + @css_pixel_points / 2,
-                fill_color: if(fill_color, do: {1.0, 1.0, 1.0}, else: nil),
+                fill_color:
+                  if(Map.has_key?(style, :_temporal_display),
+                    do: fill_color,
+                    else: if(fill_color, do: {1.0, 1.0, 1.0}, else: nil)
+                  ),
                 stroke_width: if(border_visible?, do: @css_pixel_points, else: 0.0),
                 stroke_color: color,
                 border_colors: edges(color)
             }
             |> Map.put(:role, :native_menu)
+
+          Map.has_key?(style, :_temporal_display) and style.border_radius > 0 ->
+            Map.put(rect, :role, :temporal_host)
 
           Map.get(style, :form_kind) == :select ->
             Map.put(rect, :role, :css_menu)

@@ -57,7 +57,7 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
         {:file, path} ->
           "file://" <> URI.encode(path, &(&1 == ?/ or URI.char_unreserved?(&1)))
 
-        {:srcdoc, _html} ->
+        {kind, _value} when kind in [:srcdoc, :blank] ->
           base = parent.resolution_base
 
           case if(is_binary(base), do: URI.parse(base)) do
@@ -162,7 +162,7 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
     # physical host clip remains the authored point rectangle. Surface hosts
     # retain the caller's point dimensions and have no browsing-context UI.
     {viewport_width, viewport_height} =
-      if surface.host in [:iframe, :object, :embed] do
+      if surface.host in [:iframe, :object, :embed, :frame] do
         {Float.ceil(width / 0.75) * 0.75, Float.ceil(height / 0.75) * 0.75}
       else
         {width, height}
@@ -243,7 +243,7 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
     scroll_height = max(layout.content_height, elem(layout.page_size, 1) - bottom)
 
     enabled? =
-      surface.host in [:iframe, :object, :embed] and width > 0 and height > 0 and
+      surface.host in [:iframe, :object, :embed, :frame] and width > 0 and height > 0 and
         overflow != :hidden
 
     # There are four scrollbar-presence states. Track states rather than inventing a pass
@@ -325,7 +325,7 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
   def prepare_layout(surface, width, height) do
     case surface do
       %{context: context, forms: _forms, host: host}
-      when host in [:surface, :iframe, :object, :embed] ->
+      when host in [:surface, :iframe, :object, :embed, :frame] ->
         with :ok <- ResourceValidator.validate_context(context),
              {:ok, {width, height}} <- HtmlValidator.prepare_viewport_dimensions(width, height) do
           # Zero-area surfaces still validate and account for their entire tree.

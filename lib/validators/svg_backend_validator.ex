@@ -9,7 +9,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
     SvgValidator,
     SvgClipValidator,
     SvgReferenceValidator,
-    SvgPaintValidator
+    SvgPaintValidator,
+    SvgTextValidator
   }
 
   @doc false
@@ -27,10 +28,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
          :ok <- validate_capabilities(summary, context),
          :ok <- validate_inline_geometry(summary),
          :ok <- SvgClipValidator.validate_summary(summary),
-         :ok <- SvgReferenceValidator.validate_summary(summary),
          :ok <- SvgPaintValidator.validate_summary(summary),
-         :ok <- validate_stroke_work(source, context.mode),
-         {:ok, fonts} <- validate_fonts(context.fonts, summary.text),
+         :ok <- SvgReferenceValidator.validate_summary(summary),
+         :ok <- SvgTextValidator.validate_summary(summary),
+         {:ok, fonts} <- validate_fonts(context.fonts, summary),
+         :ok <- validate_stroke_work(source, context.mode, fonts),
          {:ok, resources} <- validate_resources(context.resources, image_budget, summary),
          {:ok, dimensions} <-
            SvgValidator.validate_dimensions(summary.root, options, image_budget),
@@ -78,22 +80,22 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
           {:ok, map()} | {:error, {atom(), map()}}
   def prepare_vector(source, options, context, image_budget) do
     with {:ok, request} <- prepare_request(source, options, context, image_budget, false) do
-      if request.mode == :inline and request.fonts == [] and map_size(request.resources) == 0,
+      if request.mode == :inline and map_size(request.resources) == 0,
         do: {:ok, request},
         else:
           unsupported(
-            "SVG vector output requires an inline shape scene without fonts or image resources",
+            "SVG vector output requires an inline shape/text scene without image resources",
             :vectorize
           )
     end
   end
 
-  defp validate_stroke_work(source, mode) do
+  defp validate_stroke_work(source, mode, fonts) do
     if mode == :inline do
       with :ok <- native_load_result(NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.load_native()) do
         case NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.validate_shape_work(
                source,
-               {Limits.get(:max_svg_stroke_work), Limits.get(:max_svg_gradient_work)}
+               {Limits.get(:max_svg_stroke_work), Limits.get(:max_svg_gradient_work), fonts}
              ) do
           {:ok, {strokes, gradients}} ->
             HtmlValidator.reserve_render_resource(:max_svg_stroke_work, strokes, :layout)
@@ -154,7 +156,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
       context.mode == :inline and
           Enum.any?(summary.elements, fn {namespace, tag} ->
             namespace != :svg or
-                tag not in ~w(svg g defs symbol use linearGradient radialGradient stop clipPath path rect circle ellipse line polyline polygon title desc)
+                tag not in ~w(svg g defs symbol use linearGradient radialGradient stop clipPath path rect circle ellipse line polyline polygon text tspan title desc)
           end) ->
         unsupported(
           "inline SVG geometry cannot omit text, references, images, effects or native HTML; their complete scenes remain pending"
@@ -215,7 +217,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
     end)
   end
 
-  defp validate_fonts(fonts, text) do
+  defp validate_fonts(fonts, summary) do
     FontValidator.with_budget(fn ->
       if length(fonts) > Limits.get(:max_font_count) do
         Diagnostics.error(:limits, :resource_limit_exceeded, "SVG fonts exceed max_font_count",
@@ -230,15 +232,39 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
                      %{data: data} when is_binary(data) ->
                        FontValidator.reserve_source(data)
 
+                       # Inline work validation and actual execution each create
+                       # a byte-backed font database. Image mode executes once.
                        HtmlValidator.reserve_render_resource(
                          :max_svg_font_work_bytes,
-                         byte_size(data),
+                         byte_size(data) * if(summary.context.mode == :inline, do: 2, else: 1),
                          :font
                        )
 
                        case FontValidator.prepare_ttf(data) do
                          {:ok, parsed} ->
-                           {:ok, data, parsed}
+                           with :ok <-
+                                  if(summary.context.mode == :inline,
+                                    do:
+                                      HtmlValidator.validate_font_embedding(
+                                        Map.get(font, :family, "selected SVG font"),
+                                        parsed.embedding_flags,
+                                        parsed.variable_font?
+                                      ),
+                                    else: :ok
+                                  ),
+                                {:ok, _bounds} <-
+                                  if(summary.context.mode == :inline,
+                                    do:
+                                      FontValidator.prepare_glyph_bounds(
+                                        font
+                                        |> Map.merge(parsed)
+                                        |> Map.put(:type, :embedded)
+                                        |> Map.put_new(:id, :crypto.hash(:sha256, data))
+                                      ),
+                                    else: {:ok, nil}
+                                  ) do
+                             {:ok, data, parsed}
+                           end
 
                          {:error, _} = error ->
                            error
@@ -267,14 +293,19 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
                  end
                end) do
           characters =
-            text |> Enum.join() |> String.graphemes() |> Enum.reject(&(&1 in ["\t", "\r", "\n"]))
+            summary.text
+            |> Enum.join()
+            |> String.graphemes()
+            |> Enum.reject(&(&1 in ["\t", "\r", "\n"]))
 
           if Enum.all?(characters, fn character ->
                Enum.any?(validated, fn {_data, parsed} ->
                  Font.supports_text?(Map.put(parsed, :type, :embedded), character)
                end)
              end) do
-            {:ok, validated |> Enum.reverse() |> Enum.map(&elem(&1, 0))}
+            with :ok <- SvgTextValidator.validate_selected_text(summary, validated) do
+              {:ok, validated |> Enum.reverse() |> Enum.map(&elem(&1, 0))}
+            end
           else
             unsupported(
               "selected SVG font bytes do not cover all text; glyph fallback integration is required"

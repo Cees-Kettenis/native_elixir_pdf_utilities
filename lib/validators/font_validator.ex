@@ -100,7 +100,12 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
 
     case Process.get(key) do
       nil ->
-        Process.put(key, %{sources: MapSet.new(), faces: MapSet.new(), memo: %{}})
+        Process.put(key, %{
+          budget_id: make_ref(),
+          sources: MapSet.new(),
+          faces: MapSet.new(),
+          memo: %{}
+        })
 
         try do
           fun.()

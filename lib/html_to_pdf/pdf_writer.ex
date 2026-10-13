@@ -1488,6 +1488,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         border_side_stream(box, side, stroke_width, graphics_state_resources)
       end)
 
+    contours =
+      if Map.get(box, :role) == :temporal_host,
+        do: PageGeometry.rounded_border_contours(box, box.raster_page_height)
+
+    stroke_parts =
+      if contours,
+        do: ["q"] ++ Enum.map(contours, &rect_path/1) ++ ["W* n"] ++ stroke_parts ++ ["Q"],
+        else: stroke_parts
+
     Enum.join(fill_parts ++ border_cutout_stream(stroke_parts, box), " ")
   end
 
@@ -1654,7 +1663,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           inset + stroke_width / 2
       end
 
-    if Map.get(box, :role) == :fieldset and border_style == :solid do
+    if Map.get(box, :role) in [
+         :fieldset,
+         :table_border,
+         :table_cell_background,
+         :table_separate_background
+       ] and border_style == :solid do
+      inset =
+        if Map.get(box, :role) == :table_border, do: painted_inset - stroke_width / 2, else: inset
+
       strip =
         case side do
           :top ->
@@ -1679,6 +1696,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
               height: box.height
             }
         end
+
+      strip =
+        if Map.get(box, :role) == :fieldset,
+          do: strip,
+          else: %{
+            strip
+            | x: strip.x - @raster_boundary_bias / scale,
+              y: strip.y + @raster_boundary_bias / scale
+          }
 
       ["q", "#{format_number(scale)} 0 0 #{format_number(scale)} 0 0 cm"]
       |> put_opacity(color, :fill, graphics_state_resources)
@@ -1736,27 +1762,61 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           Enum.map(channels, &(round(&1 * multiplier * 255) / 255))
       end
 
+    luminance = fn rgb ->
+      rgb
+      |> Tuple.to_list()
+      |> Enum.take(3)
+      |> Enum.zip([0.2126, 0.7152, 0.0722])
+      |> Enum.reduce(0.0, fn {channel, weight}, sum ->
+        linear =
+          if channel <= 0.04045,
+            do: channel / 12.92,
+            else: :math.pow((channel + 0.055) / 1.055, 2.4)
+
+        sum + linear * weight
+      end)
+    end
+
+    # Chromium's current table relief rule gives very dark borders contrast
+    # by lightening once for the shadow and twice for the lighter edge.
     adjusted =
-      if role == :fieldset and not dark? do
+      if role in [:table_cell_background, :table_separate_background, :table_border] do
+        relative_luminance = luminance.(color)
+
+        cond do
+          relative_luminance <= 0.014443844 ->
+            light =
+              if value == 0,
+                do: List.duplicate(84 / 255, 3),
+                else:
+                  Enum.map(channels, &(round(&1 * min(1.0, value + 0.33) / value * 255) / 255))
+
+            light_value = Enum.max(light)
+
+            if dark?,
+              do: light,
+              else:
+                Enum.map(
+                  light,
+                  &(round(&1 * min(1.0, light_value + 0.33) / light_value * 255) / 255)
+                )
+
+          not dark? and relative_luminance > 0.83077 ->
+            channels
+
+          true ->
+            adjusted
+        end
+      else
+        adjusted
+      end
+
+    adjusted =
+      if role in [:fieldset, :temporal_host] and not dark? do
         # Chromium 152's CalculateInsetOutsetColor keeps the original lighter
         # edge unless its contrast against Color::Dark is below 1.75.
         dark =
           relief_color(color, side, if(side in [:top, :left], do: :inset, else: :outset), nil)
-
-        luminance = fn rgb ->
-          rgb
-          |> Tuple.to_list()
-          |> Enum.take(3)
-          |> Enum.zip([0.2126, 0.7152, 0.0722])
-          |> Enum.reduce(0.0, fn {channel, weight}, sum ->
-            linear =
-              if channel <= 0.04045,
-                do: channel / 12.92,
-                else: :math.pow((channel + 0.055) / 1.055, 2.4)
-
-            sum + linear * weight
-          end)
-        end
 
         if (luminance.(color) + 0.05) / (luminance.(dark) + 0.05) >= 1.75,
           do: channels,

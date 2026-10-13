@@ -218,7 +218,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
     end
   end
 
-  test "MathML child painting succeeds while unsupported SVG text diagnoses and child destinations serialize" do
+  test "MathML child painting succeeds while unsupported SVG scenes diagnose and child destinations serialize" do
     child = "<math><mtext><span style='background:red'>Painted</span></mtext></math>"
 
     assert {:ok, painted} =
@@ -230,15 +230,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
     assert {:ok, text} = Text.extract(painted, layout: false)
     assert text =~ "Painted"
 
-    for content <- ["<svg><text>SVG text</text></svg>"] do
+    for content <- ["<svg><foreignObject><p>SVG child</p></foreignObject></svg>"] do
       html =
         "<iframe srcdoc='#{escape("<body style=\"overflow:hidden\">" <> content <> "</body>")}'></iframe>"
 
       assert {:error, {reason, diagnostic}} = HtmlToPdf.render(html, forms: :static)
-      assert reason in [:unsupported_html, :not_implemented]
-      assert diagnostic.reason == reason and diagnostic.message != ""
-      assert diagnostic.stage in [:layout, :style, :html]
-      assert is_binary(diagnostic.source)
+      assert reason == :unsupported_html
+      assert diagnostic.reason == reason and diagnostic.message =~ "complete scene"
+      assert diagnostic.stage == :layout and diagnostic.operation == :prepare
+      assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgSceneValidator
+      assert diagnostic.source == "foreignObject"
     end
 
     child =

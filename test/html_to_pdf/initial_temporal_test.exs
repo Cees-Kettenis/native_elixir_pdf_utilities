@@ -222,7 +222,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialTemporalTest do
            |> Map.fetch!(:kind) == "date"
   end
 
-  test "temporal inapplicability and unfinished visible rendering return public diagnostics" do
+  test "temporal inapplicability and unsupported editing return public diagnostics" do
     for kind <- @types do
       for attribute <- ~w(checked multiple size placeholder) do
         assert {:error, {:unsupported_html, diagnostic}} =
@@ -232,12 +232,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialTemporalTest do
                  diagnostic.message != ""
       end
 
-      assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render("<input type=#{kind} value=bad>", forms: :static)
+      assert {:ok, _} = HtmlToPdf.render("<input type=#{kind} value=bad>", forms: :static)
 
-      assert diagnostic.stage == :style and diagnostic.operation == :compute
-      assert diagnostic.source == kind and diagnostic.module == HtmlTemporalValidator
-      assert diagnostic.message =~ "Native temporal picker display"
+      assert {:error, {:unsupported_form, diagnostic}} =
+               HtmlToPdf.render("<input type=#{kind} value=bad>")
+
+      assert diagnostic.stage == :forms and diagnostic.source == "temporal"
+      assert diagnostic.message =~ "Mutable temporal controls"
 
       assert HtmlValidator.valid_form_element?(
                "input",
@@ -253,7 +254,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialTemporalTest do
              )
     end
 
-    assert :ok = HtmlTemporalValidator.validate_render_style(%{}, %{})
+    assert {:ok, %{}} = HtmlTemporalValidator.prepare_render_style(%{}, %{}, [], [])
   end
 
   test "direct scalar transport preserves canonical values only for disabled or readonly temporal controls" do
@@ -333,11 +334,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialTemporalTest do
     control = %{attributes: attrs, initial_state: state}
     node = %{style: %{_temporal_state: state.temporal, _form_control: control}}
 
-    assert {:error, {:unsupported_html, diagnostic}} =
+    assert {:error, {:invalid_layout, diagnostic}} =
              HtmlTemporalValidator.validate_initial_layout(node)
 
     assert diagnostic.stage == :layout and diagnostic.operation == :layout and
-             diagnostic.source == "date"
+             diagnostic.source == "temporal"
 
     assert {:error, {:invalid_layout, %{source: "temporal"}}} =
              HtmlTemporalValidator.validate_initial_layout(

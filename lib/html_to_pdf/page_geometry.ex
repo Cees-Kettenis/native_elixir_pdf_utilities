@@ -40,11 +40,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
   def rounded_border_contours(box, page_height) do
     solid? =
       case Map.get(box, :border_styles) do
-        nil -> true
-        styles -> Enum.all?(Map.values(styles), &(&1 == :solid))
+        nil ->
+          true
+
+        styles ->
+          Enum.all?(Map.values(styles), fn style ->
+            style == :solid or
+              (Map.get(box, :role) == :temporal_host and style in [:inset, :outset])
+          end)
       end
 
-    if Map.get(box, :role) in [:native_listbox, :css_menu] and box.border_radius > 0 and
+    if Map.get(box, :role) in [:native_listbox, :css_menu, :temporal_host] and
+         box.border_radius > 0 and
          solid? do
       inner = %{
         box

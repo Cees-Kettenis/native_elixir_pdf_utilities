@@ -22,6 +22,27 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlValidator do
         }
   @type destination :: {:uri, String.t()} | {:fragment, String.t()}
 
+  @doc "Classifies the HTML about:blank URL family without granting resource access."
+  @spec blank_document_url(term()) :: {:ok, String.t()} | :not_blank
+  def blank_document_url(reference) do
+    # HTML matches-about:blank permits query/fragment but requires the exact
+    # opaque path "blank", a null host and empty credentials.
+    if is_binary(reference) and String.valid?(reference) do
+      case resolve_reference(reference, nil) do
+        {:ok, url} ->
+          case URI.parse(url) do
+            %URI{scheme: "about", path: "blank", host: nil, userinfo: nil} -> {:ok, url}
+            _ -> :not_blank
+          end
+
+        {:error, _} ->
+          :not_blank
+      end
+    else
+      :not_blank
+    end
+  end
+
   @doc false
   @spec prepare_style_output_options(keyword()) ::
           {:ok, keyword()} | {:error, {atom(), Diagnostics.diagnostic()}}

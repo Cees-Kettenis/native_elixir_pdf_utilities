@@ -46,7 +46,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedDispatchTest do
       assert {:ok, :empty} = ObjectValidator.select(%{}, parent, :embed)
 
       for source <- ["", "  about:blank\n"] do
-        assert {:ok, :blank} = ObjectValidator.select(%{"src" => source}, parent, :embed)
+        assert {:ok, selected} = ObjectValidator.select(%{"src" => source}, parent, :embed)
+        assert selected == if(source == "", do: :blank, else: {:blank, "about:blank"})
 
         assert {:ok, {:viewport, surface}} =
                  EmbeddedViewport.prepare_selected(:blank, parent, [], :embed)

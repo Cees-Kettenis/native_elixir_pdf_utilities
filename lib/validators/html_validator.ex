@@ -13,7 +13,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   alias NativeElixirPdfUtilities.Validators.HtmlUrlValidator
   alias NativeElixirPdfUtilities.Limits
 
-  @structural_tags ~w(html head body base style title meta script template)
+  @structural_tags ~w(html head body frameset noframes base style title meta script template)
   @flow_container_tags ~w(form article aside div footer header main nav section address blockquote figure figcaption hgroup search center li dt dd details fieldset)
   @block_tags @flow_container_tags ++
                 ~w(p h1 h2 h3 h4 h5 h6 ul ol dl dt pre listing xmp plaintext table img picture hr summary legend)
@@ -37,12 +37,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @inline_tags @text_inline_tags ++ @form_control_tags ++ ~w(progress meter)
   @list_tags ~w(ul ol)
   @table_content_tags ~w(caption th td)
-  @void_tags ~w(base meta br wbr img source col input hr embed)
+  @void_tags ~w(base meta br wbr img source col input hr embed frame)
   @supported_tags Map.new(
                     @structural_tags ++
                       @block_tags ++
                       @inline_tags ++
-                      ~w(source caption colgroup col thead tbody tfoot tr th td option optgroup),
+                      ~w(frame source caption colgroup col thead tbody tfoot tr th td option optgroup),
                     &{&1, true}
                   )
   # HTML reserves these eight names; they are not configurable resource limits.
@@ -52,7 +52,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @paragraph_following_tags ~w(address article aside blockquote details dialog div dl fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 header hgroup hr main menu nav ol p pre xmp plaintext search section table ul)
 
   @paragraph_following_starts Enum.map(@paragraph_following_tags, &{:start, &1})
-  @head_starts Enum.map(~w(base style meta title script template noscript), &{:start, &1})
+  @head_starts Enum.map(
+                 ~w(base style meta title script template noscript noframes),
+                 &{:start, &1}
+               )
   @table_starts Enum.map(~w(colgroup thead tbody tfoot tr), &{:start, &1})
 
   @render_option_keys [
@@ -608,7 +611,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec validate_html_element_attributes(String.t(), map()) ::
           :ok | {:error, {:unsupported_html, Diagnostics.diagnostic()}}
-  def validate_html_element_attributes(tag, attributes) do
+  @spec validate_html_element_attributes(String.t(), map(), term()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_html_element_attributes(tag, attributes, context \\ nil) do
     with :ok <- validate_static_url_attributes(attributes, tag) do
       if html_hidden_state(attributes) == :until_found do
         Diagnostics.error(
@@ -652,21 +657,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             end
 
           "template" ->
-            cond do
-              Enum.any?(
-                ~w(for shadowrootmode shadowrootdelegatesfocus shadowrootserializable shadowrootslotassignment shadowrootclonable shadowrootcustomelementregistry),
-                &Map.has_key?(attributes, &1)
-              ) ->
-                Diagnostics.error(
-                  :html,
-                  :unsupported_html,
-                  "template replacement and declarative shadow attributes require composition support that is not implemented yet",
-                  module: __MODULE__
-                )
-
-              true ->
-                :ok
-            end
+            NativeElixirPdfUtilities.Validators.TemplatePatchValidator.validate_attributes(
+              attributes,
+              context
+            )
 
           "script" ->
             cond do
@@ -1246,6 +1240,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         else: ancestors
 
     cond do
+      tag == "frame" ->
+        context == "frameset"
+
+      tag == "frameset" ->
+        context in [:document, :after_doctype, :after_head, "html", "frameset"]
+
+      context == "frameset" ->
+        tag == "noframes"
+
+      tag == "noframes" ->
+        context in [:document, :after_doctype, :after_head, "html", "head", "body"]
+
       tag == "base" and context not in [:document, :after_doctype, "html", "head", "template"] ->
         false
 
@@ -2074,7 +2080,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec valid_html_element?(String.t(), map(), list()) :: boolean()
   def valid_html_element?(tag, attributes, children) do
     children =
-      if tag in (@void_tags ++ ~w(style script title xmp plaintext noembed)),
+      if tag in (@void_tags ++ ~w(style script title xmp plaintext noembed noframes)),
         do: children,
         else: html_content_nodes(children)
 
@@ -2084,7 +2090,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           children,
           &match?(
             %{tag: tag}
-            when tag in ["base", "style", "meta", "title", "script", "template", "noscript"],
+            when tag in [
+                   "base",
+                   "style",
+                   "meta",
+                   "title",
+                   "script",
+                   "template",
+                   "noscript",
+                   "noframes"
+                 ],
             &1
           )
         )
@@ -2098,7 +2113,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       "a" ->
         valid_noninteractive_children?(children, "a")
 
-      tag when tag in ~w(style script iframe xmp plaintext noembed) ->
+      "frameset" ->
+        Enum.all?(children, &match?(%{tag: tag} when tag in ~w(frame frameset noframes), &1))
+
+      tag when tag in ~w(style script iframe xmp plaintext noembed noframes) ->
         Enum.all?(children, &match?(%{type: :text}, &1))
 
       "title" ->
@@ -2302,7 +2320,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           source: token
         )
 
-      context == "html" and previous == "head" and next != {:start, "body"} ->
+      context == "html" and previous == "head" and
+          next not in [{:start, "body"}, {:start, "frameset"}] ->
         {:imply, "body"}
 
       context == "head" and implied? and next in [:text, {:start, "noscript"}] ->
@@ -2411,7 +2430,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
     {body, body_nodes} =
       case html_content_nodes(body_content) do
-        [%{tag: "body"} = body] ->
+        [%{tag: tag} = body] when tag in ["body", "frameset"] ->
           {body, body_content}
 
         _ ->
@@ -2452,6 +2471,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
            "html",
            "head",
            "body",
+           "frameset",
            "ul",
            "ol",
            "dl",
@@ -2557,12 +2577,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         ["tbody", context | ancestors]
 
       context in [:document, :after_doctype, :after_head, "html"] and
-          tag not in ~w(html head body) ->
+          tag not in ~w(html head body frameset) ->
         if tag in ~w(base style meta title script template),
           do: ["head", "html", context | ancestors],
           else: ["body", "html", context | ancestors]
 
-      context in [:document, :after_doctype, :after_head] and tag in ~w(head body) ->
+      context in [:document, :after_doctype, :after_head] and tag in ~w(head body frameset) ->
         ["html", context | ancestors]
 
       true ->
@@ -2634,7 +2654,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec html_text_mode(term()) :: :data | :raw_text | :rcdata | :plaintext
   def html_text_mode(context) do
     case context do
-      tag when tag in ~w(style script iframe xmp noembed) -> :raw_text
+      tag when tag in ~w(style script iframe xmp noembed noframes) -> :raw_text
       tag when tag in ~w(title textarea) -> :rcdata
       "plaintext" -> :plaintext
       _ -> :data
@@ -2660,10 +2680,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           offset -> {offset, 0}
         end
 
-      tag when tag in ~w(style title textarea iframe xmp noembed) ->
+      tag when tag in ~w(style title textarea iframe xmp noembed noframes) ->
         pattern =
           case tag do
             "iframe" -> ~r/<\/iframe(?=[ \t\n\f\r\/>])/i
+            "noframes" -> ~r/<\/noframes(?=[ \t\n\f\r\/>])/i
             "style" -> ~r/<\/style(?=[ \t\n\f\r\/>])/i
             "title" -> ~r/<\/title(?=[ \t\n\f\r\/>])/i
             "textarea" -> ~r/<\/textarea(?=[ \t\n\f\r\/>])/i
@@ -3102,6 +3123,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           {:cont, {:ok, Map.put(acc, name, value)}}
 
         {name, "iframe", false} when name in ~w(src srcdoc width height name) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "frame", false}
+        when name in ~w(src name frameborder marginwidth marginheight scrolling noresize) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "frameset", false} when name in ~w(rows cols frameborder border bordercolor) ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
         {name, "embed", false} when name in ~w(src type width height name) ->
@@ -4934,7 +4962,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                    Map.get(layout_tree, :link_scope),
                    page_size
                  ),
-               :ok <- validate_fieldset_pagination_metadata(boxes) do
+               :ok <- validate_fieldset_pagination_metadata(boxes),
+               :ok <- validate_paragraph_line_limits(boxes, :pagination) do
             :ok
           else
             {:error, {_reason, _diagnostic}} = error -> error
@@ -4943,6 +4972,29 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
         _ ->
           invalid_pagination()
+      end
+    end)
+  end
+
+  # Pagination consumes already prepared positive CSS line counts, including
+  # directly supplied layout boxes. CSS numeric magnitude remains the bound.
+  defp validate_paragraph_line_limits(boxes, stage) do
+    Enum.reduce_while(boxes, :ok, fn box, :ok ->
+      counts = [Map.get(box, :orphans, 2), Map.get(box, :widows, 2)]
+
+      if Enum.all?(counts, &(is_integer(&1) and &1 > 0)) do
+        Enum.each(counts, &check_render_resource(:max_css_numeric_magnitude, &1, stage))
+        {:cont, :ok}
+      else
+        {:halt,
+         Diagnostics.error(
+           stage,
+           :invalid_layout,
+           "orphans and widows require positive validator-prepared integer line counts",
+           module: __MODULE__,
+           operation: if(stage == :layout, do: :layout, else: :paginate),
+           source: "orphans/widows"
+         )}
       end
     end)
   end
@@ -5990,6 +6042,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
         (custom? or custom_html_tag?(parent) or "a" in ancestors or "button" in ancestors or
            node.tag in [
+             "frameset",
+             "frame",
+             "noframes",
              "object",
              "mark",
              "ins",
@@ -6010,6 +6065,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              "legend"
            ] or
            parent in [
+             "frameset",
+             "noframes",
              "a",
              "button",
              "object",
@@ -6114,7 +6171,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                   :invalid_layout
 
                 true ->
-                  NativeElixirPdfUtilities.Validators.SvgSceneValidator.validate_prepared(scene)
+                  with :ok <-
+                         NativeElixirPdfUtilities.Validators.SvgTextValidator.validate_original_fonts(
+                           node
+                         ) do
+                    NativeElixirPdfUtilities.Validators.SvgSceneValidator.validate_prepared(scene)
+                  end
               end
 
             %{type: :text, text: text, style: style} ->
@@ -6377,9 +6439,48 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           :ok
       end
 
+    line_result =
+      case node do
+        %{style: %{_root_body_fragmentation: _}} ->
+          Diagnostics.error(
+            :layout,
+            :invalid_layout,
+            "Root body fragmentation identity is created by Layout; do not supply internal body scope in a styled tree",
+            module: __MODULE__,
+            operation: :layout,
+            source: "body"
+          )
+
+        %{style: style} when is_map(style) ->
+          validate_paragraph_line_limits([style], :layout)
+
+        _ ->
+          :ok
+      end
+
+    table_border_result =
+      case node do
+        %{style: style}
+        when is_map_key(style, :_collapsed_border_segments) or
+               is_map_key(style, :_collapsed_border_winners) ->
+          Diagnostics.error(
+            :layout,
+            :invalid_layout,
+            "collapsed table edge winners and segments are internal formation metadata; compute styles before layout and do not supply border calculations",
+            operation: :layout,
+            module: __MODULE__,
+            source: Map.get(node, :tag, "element")
+          )
+
+        _ ->
+          :ok
+      end
+
     with :ok <- gauge_result,
+         :ok <- table_border_result,
          :ok <- heading_result,
          :ok <- caption_result,
+         :ok <- line_result,
          :ok <-
            NativeElixirPdfUtilities.Validators.HtmlFormValidator.validate_initial_number_layout(
              node
@@ -6467,7 +6568,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   defp valid_layout_style?(style) do
-    # Collapsed edge metadata is created by Layout after input validation.
+    # Collapsed edge metadata is prepared after input validation.
     # Incoming styled trees must not supply internal border calculations.
     is_map(style) and not Map.has_key?(style, :_collapsed_borders) and
       (Map.get(style, :html_target) == nil or

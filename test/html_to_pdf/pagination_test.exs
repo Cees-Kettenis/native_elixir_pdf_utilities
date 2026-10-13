@@ -7,6 +7,114 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
+  test "root body trailing padding keeps the final fragment within its page" do
+    for {height, padding, count} <- [{"auto", 12, 2}, {"auto", 0, 1}, {"20pt", 12, 1}] do
+      html =
+        "<style>body{margin:0;padding:12pt 12pt #{padding}pt;height:#{height};font-size:10.5pt;line-height:13.5pt}p{margin:0 0 3pt}</style><body><div style=height:300pt>First</div><p>After</p></body>"
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {300, 330}, margin: 0)
+      assert {:ok, pages} = Pagination.paginate(layout)
+      assert length(pages) == count
+      assert Enum.any?(hd(pages).boxes, &(Map.get(&1, :text) == "First"))
+      last = List.last(pages)
+      assert Enum.any?(last.boxes, &(Map.get(&1, :text) == "After"))
+      markers = Enum.filter(last.boxes, &(Map.get(&1, :role) == :block_end_padding))
+      assert length(markers) == if(height == "auto" and padding > 0, do: 1, else: 0)
+
+      if count == 2 do
+        after_line = Enum.find(last.boxes, &(Map.get(&1, :text) == "After"))
+        assert_in_delta after_line.y + after_line.line_baseline_depth, 330, 0.001
+        assert [marker] = markers
+        assert marker.type == :flow_marker and marker.width == 0 and marker.height == 12
+      end
+
+      assert {:ok, _} = NativeElixirPdfUtilities.HtmlToPdf.PdfWriter.render(pages, forms: :static)
+    end
+  end
+
+  test "root body end padding follows only the last multiline fragment and preserves overflow" do
+    for overflow <- ["visible", "hidden"] do
+      html =
+        "<style>body{margin:0;padding:12pt;overflow:#{overflow};font-size:10.5pt;line-height:13.5pt}p{margin:0 0 3pt}</style><body><div style=height:300pt>First</div><p>Middle<br>Last</p></body>"
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {300, 330}, margin: 0)
+      assert {:ok, [first, last]} = Pagination.paginate(layout)
+      refute Enum.any?(first.boxes, &(Map.get(&1, :role) == :block_end_padding))
+
+      assert Enum.map(Enum.filter(last.boxes, &(&1.type == :text)), & &1.text) == [
+               "Middle",
+               "Last"
+             ]
+
+      [marker] = Enum.filter(last.boxes, &(Map.get(&1, :role) == :block_end_padding))
+      last_line = Enum.find(last.boxes, &(Map.get(&1, :text) == "Last"))
+      assert marker.fragment_id == last_line.fragment_id
+      assert marker.y + marker.height < last_line.y
+    end
+  end
+
+  test "root padding before a forced final break keeps content and positioned tails on their owning pages" do
+    for after_break <- ["", "break-after:page"] do
+      html =
+        "<style>body{margin:0;padding:12pt;position:relative;font-size:10.5pt;line-height:13.5pt}p{margin:0 0 3pt}</style><body><div style=height:300pt>First</div><p style='#{after_break}'>After</p><p style='position:absolute;top:24pt'>Absolute</p></body>"
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {300, 330}, margin: 0)
+      assert {:ok, [first, last]} = Pagination.paginate(layout)
+      assert Enum.any?(first.boxes, &(Map.get(&1, :text) == "Absolute"))
+      refute Enum.any?(last.boxes, &(Map.get(&1, :text) == "Absolute"))
+      assert Enum.any?(last.boxes, &(Map.get(&1, :text) == "After"))
+      refute Enum.any?(first.boxes, &(Map.get(&1, :text) == "After"))
+    end
+  end
+
+  test "root end-padding markers use the existing cumulative layout and writer budgets" do
+    alias NativeElixirPdfUtilities.Limits
+    alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<body style='margin:0;padding:12pt'><p style=margin:0>Body</p></body>"
+             )
+
+    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {100, 100}, margin: 0)
+    assert Enum.any?(layout.boxes, &(Map.get(&1, :role) == :block_end_padding))
+    assert {:ok, pages} = Pagination.paginate(layout)
+    count = Enum.sum(Enum.map(pages, &length(&1.boxes)))
+    Limits.install(%{previous | max_layout_boxes: count - 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = PdfWriter.render(pages)
+    assert diagnostic.stage == :writer and diagnostic.message =~ "max_layout_boxes"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Layout.layout(styled, page_size: {100, 100}, margin: 0)
+
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_layout_boxes"
+  end
+
+  test "empty hidden and absolute-only root bodies do not attach padding to positioned paint" do
+    for content <- [
+          "",
+          "<p style=display:none>Hidden</p>",
+          "<p style='position:absolute;top:10pt'>Absolute</p>"
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed("<body style='margin:0;padding:12pt'>#{content}</body>")
+
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {100, 100}, margin: 0)
+      refute Enum.any?(layout.boxes, &(Map.get(&1, :role) == :block_end_padding))
+      assert {:ok, [_]} = Pagination.paginate(layout)
+    end
+  end
+
   test "fragmented fieldsets keep side borders and paint the legend notch only on their first page" do
     assert {:ok, dom} =
              HtmlParser.parse_detailed(

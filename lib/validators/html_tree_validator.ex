@@ -143,6 +143,105 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
     end)
   end
 
+  @doc false
+  @spec validate_patch_boundaries(HtmlTree.t(), map(), boolean()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_patch_boundaries(tree, target, opening?) do
+    HtmlValidator.with_render_budget(fn ->
+      parent = Map.get(tree.nodes, target.parent)
+      start = Map.get(tree.nodes, target.start)
+      finish = if target.end, do: Map.get(tree.nodes, target.end)
+
+      HtmlValidator.reserve_render_resource(
+        :max_html_tree_work,
+        if(is_map(parent), do: 2 * length(parent.children), else: 1),
+        :html
+      )
+
+      owned? =
+        is_map(parent) and
+          match?(
+            %{type: :processing_instruction, target: marker} when marker in ["marker", "start"],
+            start
+          ) and start.parent_id == target.parent and
+          target.start in parent.children and
+          (target.end == nil or
+             (is_map(finish) and
+                (target.end == target.start or
+                   match?(%{type: :processing_instruction, target: "end"}, finish)) and
+                finish.parent_id == target.parent and
+                target.end in parent.children))
+
+      range_matches? =
+        if owned? and opening? do
+          if start.target == "marker" do
+            target.end == target.start and target.removed == []
+          else
+            patch_range(tree, target.parent, target.start) == {target.end, target.removed}
+          end
+        else
+          not opening?
+        end
+
+      if owned? and range_matches?,
+        do: :ok,
+        else:
+          Diagnostics.error(
+            :html,
+            :invalid_document,
+            "content patch boundaries or removed range no longer belong to the prepared insertion parent",
+            module: __MODULE__,
+            operation: :content_patch
+          )
+    end)
+  end
+
+  @doc false
+  @spec validate_patch_adoption(HtmlTree.t(), map(), [reference()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_patch_adoption(tree, target, ids) do
+    HtmlValidator.with_render_budget(fn ->
+      with :ok <- validate_patch_boundaries(tree, target, false) do
+        HtmlValidator.reserve_render_resource(:max_html_tree_work, length(ids), :html)
+
+        valid? =
+          Enum.uniq(ids) == ids and
+            Enum.all?(ids, fn id ->
+              node = Map.get(tree.nodes, id)
+
+              is_map(node) and node.document_id == tree.nodes[tree.root].document_id and
+                node.type not in [:document, :document_fragment] and
+                id not in [target.start, target.end] and
+                adoptable_subtree?(tree, id, target.parent, node.document_id, 0)
+            end)
+
+        if valid?,
+          do: :ok,
+          else:
+            Diagnostics.error(
+              :html,
+              :invalid_document,
+              "patch adoption requires distinct authored nodes from this document, excluding boundaries and insertion-parent ancestors",
+              module: __MODULE__,
+              operation: :content_patch
+            )
+      end
+    end)
+  end
+
+  defp adoptable_subtree?(tree, id, parent, document, depth) do
+    HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
+    HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+    node = Map.get(tree.nodes, id)
+
+    if is_map(node) and id != parent and node.document_id == document do
+      children = Map.get(node, :children, []) ++ if(node[:content], do: [node.content], else: [])
+      Enum.all?(children, &adoptable_subtree?(tree, &1, parent, document, depth + 1))
+    else
+      false
+    end
+  end
+
   # Children are stored backwards. Search only ordinary descendants in authored
   # tree order; template content is a different tree, never a light descendant.
   defp find_patch_marker(tree, parent, name) do

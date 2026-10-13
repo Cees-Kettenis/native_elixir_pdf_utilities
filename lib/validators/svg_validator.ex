@@ -205,6 +205,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
       graph: %{},
       path_costs: %{},
       text_costs: %{},
+      text_by_node: %{},
       hrefs: [],
       text: [],
       geometry: [],
@@ -279,6 +280,14 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
           |> Enum.filter(fn {uri, _prefix, _key, _value} -> uri == [] end)
           |> Map.new(fn {_uri, _prefix, key, value} ->
             {to_string(key), to_string(value)}
+          end)
+
+        attrs =
+          Enum.reduce(attributes, attrs, fn {attribute_uri, _prefix, key, value}, attrs ->
+            if to_string(attribute_uri) == "http://www.w3.org/XML/1998/namespace" and
+                 to_string(key) == "space",
+               do: Map.put(attrs, "xml:space", to_string(value)),
+               else: attrs
           end)
 
         namespace =
@@ -559,6 +568,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
             %{
               state
               | text: [text | state.text],
+                text_by_node: Map.update(state.text_by_node, index, text, &(&1 <> text)),
                 text_costs:
                   Map.update!(state.text_costs, index, &(&1 + length(String.to_charlist(text))))
             }

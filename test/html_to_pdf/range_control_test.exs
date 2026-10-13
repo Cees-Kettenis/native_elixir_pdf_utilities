@@ -90,7 +90,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeControlTest do
              HtmlToPdf.render("<input type=range list=ticks>", forms: :static)
 
     assert diagnostic.source == "range/list" and diagnostic.message =~ "tick artwork"
-    assert diagnostic.operation == :render
+    assert diagnostic.stage == :html and diagnostic.reason == :unsupported_html
+    assert diagnostic.operation == :compute and diagnostic.module == HtmlFormValidator
+    assert diagnostic.line == 1 and diagnostic.column == 1
+    assert diagnostic.message =~ "remove list"
+
+    assert {:error, {:unsupported_html, parser_diagnostic}} =
+             HtmlParser.parse_detailed("<input type=range list=ticks>")
+
+    assert parser_diagnostic == diagnostic
   end
 
   test "disabled fieldsets and selectors use canonical Range state and retain source identities" do

@@ -9,6 +9,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
   alias NativeElixirPdfUtilities.Validators.ResourceValidator
   alias NativeElixirPdfUtilities.HtmlToPdf.ResourceContext
   alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator
 
   @type kind :: :image | :background_image | :font
 
@@ -16,27 +17,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
   @spec resolve(String.t(), kind(), keyword(), HtmlValidator.image_budget() | nil) ::
           {:ok, binary()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def resolve(reference, kind, opts, image_budget \\ nil) do
-    FontValidator.with_budget(fn ->
-      case kind do
-        :font ->
-          FontValidator.reserve(:max_font_candidates, 1)
+    TemplateRendererContextValidator.with_resource_observation(reference, kind, opts, fn ->
+      result =
+        FontValidator.with_budget(fn ->
+          case kind do
+            :font ->
+              FontValidator.reserve(:max_font_candidates, 1)
 
-          case Map.get(Keyword.get(opts, :assets, %{}), reference) do
-            {:bytes, bytes} -> FontValidator.check(:max_font_source_bytes, byte_size(bytes))
-            _ -> :ok
+              case Map.get(Keyword.get(opts, :assets, %{}), reference) do
+                {:bytes, bytes} -> FontValidator.check(:max_font_source_bytes, byte_size(bytes))
+                _ -> :ok
+              end
+
+              FontValidator.memo(
+                {:asset, reference, Keyword.get(opts, :base_url), Keyword.get(opts, :assets, %{}),
+                 Keyword.get(opts, :asset_resolver),
+                 Keyword.get(opts, :__document_url_context__)},
+                fn ->
+                  do_resolve(reference, kind, opts, :font)
+                end
+              )
+
+            _ ->
+              do_resolve(reference, kind, opts, image_budget)
           end
+        end)
 
-          FontValidator.memo(
-            {:asset, reference, Keyword.get(opts, :base_url), Keyword.get(opts, :assets, %{}),
-             Keyword.get(opts, :asset_resolver), Keyword.get(opts, :__document_url_context__)},
-            fn ->
-              do_resolve(reference, kind, opts, :font)
-            end
-          )
+      TemplateRendererContextValidator.observe_resource(
+        reference,
+        kind,
+        result,
+        :ordinary_renderer_options,
+        nil,
+        opts
+      )
 
-        _ ->
-          do_resolve(reference, kind, opts, image_budget)
-      end
+      result
     end)
   end
 
@@ -44,20 +60,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
   @spec resolve_local(term(), kind() | :stylesheet, ResourceContext.t(), keyword()) ::
           {:ok, binary()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def resolve_local(reference, kind, context, opts \\ []) do
-    with {:ok, source} <-
-           ResourceValidator.authorize_dependency(reference, kind, context, opts) do
-      budget =
-        case kind do
-          :font -> :local_font
-          :stylesheet -> :stylesheet
-          _ -> context.image_budget
-        end
+    TemplateRendererContextValidator.with_resource_observation(reference, kind, opts, fn ->
+      with {:ok, source} <-
+             ResourceValidator.authorize_dependency(reference, kind, context, opts) do
+        budget =
+          case kind do
+            :font -> :local_font
+            :stylesheet -> :stylesheet
+            _ -> context.image_budget
+          end
 
-      FontValidator.with_budget(fn ->
-        if kind == :font, do: FontValidator.reserve(:max_font_candidates, 1)
-        resolve_explicit_source(source, reference, budget)
-      end)
-    end
+        result =
+          FontValidator.with_budget(fn ->
+            if kind == :font, do: FontValidator.reserve(:max_font_candidates, 1)
+            resolve_explicit_source(source, reference, budget)
+          end)
+
+        TemplateRendererContextValidator.observe_resource(
+          reference,
+          kind,
+          result,
+          :issued_local_dependency,
+          source,
+          opts
+        )
+
+        result
+      end
+    end)
   end
 
   defp do_resolve(reference, kind, opts, image_budget) do

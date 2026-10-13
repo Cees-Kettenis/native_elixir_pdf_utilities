@@ -583,7 +583,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
   @doc false
   @spec prepare_initial_number_style(map(), [{String.t(), term()}]) :: map()
-  def prepare_initial_number_style(style, declarations) do
+  defdelegate prepare_initial_number_style(style, declarations),
+    to: __MODULE__,
+    as: :prepare_initial_textfield_style
+
+  @doc false
+  @spec prepare_initial_textfield_style(map(), [{String.t(), term()}]) :: map()
+  def prepare_initial_textfield_style(style, declarations) do
     native? =
       style.appearance == :auto and
         not Enum.any?(declarations, fn {property, _value} ->
@@ -603,6 +609,27 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           Map.new(style.border_styles, fn {side, _} -> {side, :solid} end)
         ),
       else: style
+  end
+
+  @doc false
+  @spec prepare_initial_temporal_style(map(), [{String.t(), term()}]) :: map()
+  def prepare_initial_temporal_style(style, declarations) do
+    # Rounded corners defer TextField background/border paint to CSS. Preserve
+    # the UA inset border instead of the native one-pixel frame in that case.
+    style =
+      if style.border_radius > 0,
+        do: Map.put(style, :_native_menu, false),
+        else: prepare_initial_textfield_style(style, declarations)
+
+    # The UA font shorthand resets inherited line height. An authored temporal
+    # line-height or font shorthand still wins in the ordinary cascade.
+    if Enum.any?(declarations, fn {property, _} -> property in ["line-height", "font"] end),
+      do: style,
+      else:
+        style
+        |> Map.put(:line_height_normal, true)
+        |> Map.delete(:line_height_multiplier)
+        |> Map.delete(:line_height_explicit)
   end
 
   @doc false
@@ -1132,6 +1159,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                 :unsupported_form,
                 "Mutable HTML Range cannot be represented by the existing PDF field types without slider actions; use forms: :static for initial Range artwork",
                 source: "range",
+                operation: :write_pdf,
+                module: __MODULE__
+              )
+
+            Enum.any?(controls, &(Map.get(&1.control, :temporal_display_mode) == :static)) ->
+              error(
+                :unsupported_form,
+                "Temporal artwork was prepared for static forms; recompute styles with forms: :interactive before readonly scalar transport",
+                source: "temporal",
                 operation: :write_pdf,
                 module: __MODULE__
               )

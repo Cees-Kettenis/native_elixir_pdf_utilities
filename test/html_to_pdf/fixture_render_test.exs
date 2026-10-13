@@ -180,8 +180,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixtureRenderTest do
       |> Enum.filter(&(&1.type == :rect))
       |> Enum.find(&(&1.border_widths.top == 0.75 and &1.x == header_border_box.x))
 
-    assert metric_border_box.border_colors.top ==
-             {0.8666666666666667, 0.8941176470588236, 0.9254901960784314}
+    # The preceding item-head bottom border wins the equal-width cell-origin tie.
+    assert metric_border_box.border_colors.top == {215 / 255, 223 / 255, 233 / 255}
   end
 
   test "renders a government application with interactive form controls" do

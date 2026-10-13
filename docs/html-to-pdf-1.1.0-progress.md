@@ -25,7 +25,33 @@ See [remaining work](html-to-pdf-1.1.0-remaining-work.md) for the scope and
 dependencies behind that estimate. Counts are planning units, not a completion
 percentage or a promised schedule.
 
-## Wave 10 candidate preparation
+## Current implementation workflow
+
+The user requested ten implementation agents on 2026-10-13. Validator roles
+are stopped during implementation. Each worker runs focused checks, the
+coordinator combines larger waves and pushes them on the milestone branch,
+and the next wave starts without waiting for complete acceptance. Full matrix,
+complete browser comparison, 100 percent coverage and the fixed baseline
+performance audit are deferred until the full feature plan is implemented.
+A final reviewer will then resolve regressions and audit the complete source.
+Published implementation waves do not imply final milestone qualification.
+
+## Combined integration checkpoint 10
+
+The expanded-v4 source patch, SHA-256
+`97b734ad1af12c71dd89ca24ed90b9a54049018bca0b1e11f6506ee2d3c32e6c`,
+qualified locally on 2026-10-13 and was applied to the main checkout without
+changing the user's existing CHANGELOG edits. It has not been committed or
+pushed. Both Elixir 1.19 and 1.20 passed 2,090 tests at 100% coverage, all 19
+original performance workloads, Dialyzer and 207 browser parity tests. The exact
+host parity command passed 207 tests. Every matrix stage passed with no project
+warnings. The validator classified 31 third-party OTP `xmerl_ucs` missing-spec
+warnings individually. The final source guards remained unchanged.
+
+The Elixir 1.20 100-row workload used 12,993,115 median reductions against the
+unchanged 13,024,000 maximum. Its increase over the 11,840,000 baseline was
+9.74 percent. This ordinary reduction check does not complete the separate
+fixed pre-milestone cumulative elapsed-time audit.
 
 The six workers now produce two or three adjacent slices per larger wave and
 continue while an immutable combined candidate is reviewed. Workers run quick
@@ -52,16 +78,67 @@ the limits test still expected 139 defaults after the new central gradient
 ceiling added the 140th. The correction restores validation order and adds
 focused tests for source diagnostics, instance inheritance, presentation hints
 and public measurement-budget recovery. No ceiling, workload or coverage gate
-was weakened. The corrected expanded candidate then passed all 2,088 tests at
-100 percent coverage on both runtimes. Elixir 1.19 passed the 19 performance
-workloads, but Dialyzer could not read the private SVG binding after its compiler
-test produced a BEAM without debug information. Elixir 1.20's 100-row workload
-used 13,046,571 reductions against the unchanged 13,024,000 ceiling. The next
-correction preserves module-local binding debug metadata and builds table
-failure context only when its validator needs to return a diagnostic. The
-private binding regression also preserves caller compiler options and raster
-bytes. Neither failure is resolved by changing gates or baselines. These
-candidate results do not qualify wave 10 or reduce accepted remaining work.
+was weakened. Those earlier attempts did not qualify wave 10. Later corrections
+made the private native binding readable by Dialyzer, reduced unnecessary table
+diagnostic allocations and covered malformed prepared-cell attributes. The
+expanded-v4 evidence above qualifies the resulting bounded profiles. Broader
+named feature batches remain partial, so the remaining-work estimate is retained.
+
+## Next larger-wave assembly
+
+Wave 11 is assembled separately from the qualified wave 10. Reviewed slices
+add all five native temporal initial artwork types, root-body
+padding and orphan/widow pagination, legacy table borders and a zero-edge grid
+fast path, blank child source identity, and bounded zero-border framesets.
+Parser planning remains publicly inactive. The CSS diagnostic correction uses
+the actual print-media context rather than a new media interpretation.
+
+Combined focused checks passed 109, 502, 234, 164, 423 and 70 tests in separate
+overlapping runs. Cross-family tests cover
+selected child temporal controls inside bordered tables and independent sibling
+frames containing the same content. The linear paragraph correction removes a
+repeated linked-list lookup. Frameset corrections preserve proportional track
+allocation, hidden/excess child initialization and separate border enable/width
+values. Earlier failed packages and browser comparisons remain retained.
+
+Reviewed selected-CID SVG text, independent Math phantom/matrix and source-bound
+parser observation packets are merged with their required corrections. A
+canonical Math patch fixes new-file import metadata without changing its source.
+Template mutation remains diagnosed until all seven obligations are complete.
+The mpadded depth-policy conflict, failed full-family Math scripts and template
+mutation obligations remain open. Atomic table baseline work stays separate
+while its traversal and malformed-descendant corrections are reviewed. The
+Math owner-box correction centers the decorated table on the selected MATH
+axis; the minimal parser guard prevents nested callbacks replacing actual outer
+style observations. SVG reference diagnostics cover unprepared effect CSS
+before allocation while preserving existing detailed failure owners. Focused
+passes do not qualify this next candidate; it still needs the full
+supported-runtime matrix and exact host browser comparison.
+
+The first expanded wave 11 freeze ran 2,225 tests on each supported runtime,
+with nine failures and coverage of 99.59 and 99.60 percent. Required performance,
+Dialyzer and browser comparison stages were skipped after those failures.
+All 693 source hashes and 23 guards remained unchanged. The failed source,
+coverage artifacts and original browser evidence are retained.
+
+Corrections are assembled in a separate tree. They preserve diagnostic owners
+and source locations, replace obsolete SVG-text rejection inputs with still
+unsupported scenes, charge zero-edge table cloning before allocation, and check
+prepared frameset and Math matrix resource work before new allocations.
+Selected physical font metrics remain required for native temporal artwork.
+Meaningful source, malformed-input and paint tests cover the reported gaps.
+Independent review proved nested SVG text through metadata can reach its
+existing diagnostic, so that branch remains. Focused passes and source review
+still do not qualify the correction freeze or future feature packets.
+
+The corrected wave 11 v2 freeze passed all 2,269 unit tests on Elixir 1.19.
+Every other module reached 100 percent coverage, but SvgTextValidator reached
+99.43 percent because a positioning condition repeated an earlier unconditional
+rejection. The validator stopped the failed round before downstream expensive
+checks. All 699 files remained unchanged and 130 coverage artifacts were
+retained. A separate minimal correction removes only that dominated condition;
+raw, inherited and prepared positioning diagnostics retain their original owner.
+The correction freeze still requires fresh full acceptance.
 
 ## Combined integration checkpoint 9
 

@@ -15,7 +15,18 @@ defmodule NativeElixirPdfUtilities.Validators.ResourceValidator do
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type dependency_descriptor :: {:file, String.t()} | {:bytes, binary()}
-  @type document_descriptor :: {:file, String.t()} | {:srcdoc, String.t()}
+  @type document_descriptor :: {:file, String.t()} | {:srcdoc, String.t()} | {:blank, String.t()}
+
+  @doc "Identifies an embedded source in diagnostics without selecting or authorizing it."
+  @spec document_source_label(term()) :: String.t() | nil
+  def document_source_label(source) do
+    case source do
+      {:srcdoc, _html} -> "about:srcdoc"
+      {:blank, url} when is_binary(url) -> url
+      reference when is_binary(reference) -> reference
+      _ -> nil
+    end
+  end
 
   @doc false
   @spec renderer_context_options(keyword()) :: keyword()
@@ -42,9 +53,15 @@ defmodule NativeElixirPdfUtilities.Validators.ResourceValidator do
         {:srcdoc, html}
 
       :error ->
-        case attributes |> Map.get("src", "") |> HtmlValidator.trim_ascii_whitespace() do
-          source when source in ["", "about:blank"] -> {:srcdoc, ""}
-          source -> source
+        source = attributes |> Map.get("src", "") |> HtmlValidator.trim_ascii_whitespace()
+
+        if source == "" do
+          {:blank, "about:blank"}
+        else
+          case HtmlUrlValidator.blank_document_url(source) do
+            {:ok, _url} -> {:blank, source}
+            :not_blank -> source
+          end
         end
     end
   end
@@ -158,6 +175,16 @@ defmodule NativeElixirPdfUtilities.Validators.ResourceValidator do
         with {:ok, html} <- HtmlValidator.validate_html_source(html),
              {:ok, child} <- child_context(context, nil, context.resolution_base, nil) do
           {:ok, {:srcdoc, html}, child}
+        end
+
+      {:blank, url} ->
+        case HtmlUrlValidator.blank_document_url(url) do
+          {:ok, _normalized} ->
+            with {:ok, child} <- child_context(context, nil, context.resolution_base, nil),
+                 do: {:ok, {:blank, url}, child}
+
+          :not_blank ->
+            error(:invalid_document, "blank embedded source requires an about:blank URL", url)
         end
 
       reference when is_binary(reference) ->

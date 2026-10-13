@@ -285,33 +285,47 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   @doc false
-  @spec stylesheet_declaration_sources(String.t()) :: [String.t()]
-  def stylesheet_declaration_sources(css) do
-    css
-    |> then(&Regex.replace(~r/@font-face\s*\{[^{}]*\}/ui, &1, ""))
-    |> then(&Regex.scan(~r/[^{}]+\{(?<declarations>[^{}]*)\}/u, &1, capture: ["declarations"]))
-    |> List.flatten()
-    |> Enum.flat_map(&CssParser.declaration_sources/1)
+  @spec stylesheet_declaration_sources(String.t()) :: [map()] | {:error, {atom(), map()}}
+  @spec stylesheet_declaration_sources(String.t(), term()) :: [map()] | {:error, {atom(), map()}}
+  def stylesheet_declaration_sources(css, media_context \\ nil) do
+    case CssParser.style_declaration_records(css, media_context) do
+      {:ok, records} -> records
+      error -> error
+    end
   end
 
   @doc false
-  @spec declaration_error(String.t(), [String.t()]) :: nil | {atom(), Diagnostics.diagnostic()}
+  @spec declaration_error(String.t(), [String.t() | map()] | {:error, {atom(), map()}}) ::
+          nil | {atom(), Diagnostics.diagnostic()}
   def declaration_error(css, sources) do
-    Enum.find_value(sources, fn source ->
-      with {:ok, [declaration]} <- CssParser.parse_declarations(source),
-           {:ok, _validated} <-
-             validate_declaration(policy_style(), declaration, HtmlValidator.new_css_budget()) do
-        nil
-      else
-        _ ->
-          {:error, error} = declaration_failure(css, source)
-          {reason, diagnostic} = error
-          {reason, Map.delete(diagnostic, :module)}
-      end
-    end)
+    case sources do
+      {:error, {reason, diagnostic}} ->
+        {reason, diagnostic}
+
+      sources ->
+        Enum.find_value(sources, fn source ->
+          text =
+            case source do
+              %{source: %{text: text}} -> text
+              text -> text
+            end
+
+          with {:ok, [declaration]} <- CssParser.parse_declarations(text),
+               {:ok, _validated} <-
+                 validate_declaration(policy_style(), declaration, HtmlValidator.new_css_budget()) do
+            nil
+          else
+            _ ->
+              {:error, {reason, diagnostic}} = declaration_failure(css, source)
+              {reason, Map.delete(diagnostic, :module)}
+          end
+        end)
+    end
   end
 
-  defp policy_style do
+  @doc false
+  @spec policy_style() :: map()
+  def policy_style do
     %{color: {0, 0, 0}, font_size: 12.0, _root_font_size: 12.0, _custom_properties: %{}}
     |> ensure_box_style()
     |> flex_container_defaults()
@@ -319,25 +333,34 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp declaration_failure(css, declaration) do
-    source =
+    {source, line, column} =
       case declaration do
-        source when is_binary(source) ->
-          HtmlValidator.trim_css_whitespace(source)
+        %{source: %{text: text, line: line, column: column}} ->
+          {text, line, column}
 
         declaration ->
-          CssParser.declaration_sources(css)
-          |> Enum.find(fn source ->
-            {:ok, parsed} = HtmlValidator.validate_css_declaration(source)
-            parsed == declaration
-          end)
-          |> HtmlValidator.trim_css_whitespace()
-      end
+          source =
+            case declaration do
+              source when is_binary(source) ->
+                HtmlValidator.trim_css_whitespace(source)
 
-    {index, _length} = :binary.match(css, source)
-    prefix = binary_part(css, 0, index)
-    lines = String.split(prefix, "\n", trim: false)
-    line = length(lines)
-    column = String.length(List.last(lines) || "") + 1
+              declaration ->
+                CssParser.declaration_sources(css)
+                |> Enum.find(fn source ->
+                  {:ok, parsed} = HtmlValidator.validate_css_declaration(source)
+                  parsed == declaration
+                end)
+                |> HtmlValidator.trim_css_whitespace()
+            end
+
+          {index, _length} = :binary.match(css, source)
+          prefix = binary_part(css, 0, index)
+          lines = String.split(prefix, "\n", trim: false)
+          line = length(lines)
+          column = String.length(List.last(lines) || "") + 1
+
+          {source, line, column}
+      end
 
     Diagnostics.error(
       :css,
@@ -549,6 +572,27 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
           property when property in ["break-inside", "page-break-inside"] ->
             put_break_inside(style, value)
+
+          property when property in ["orphans", "widows"] ->
+            normalized = value |> String.trim() |> String.downcase(:ascii)
+            key = if property == "orphans", do: :orphans, else: :widows
+
+            case normalized do
+              "initial" ->
+                {:ok, Map.put(style, key, 2)}
+
+              keyword when keyword in ["inherit", "unset"] ->
+                inherited = if key == :orphans, do: :_inherited_orphans, else: :_inherited_widows
+                {:ok, Map.put(style, key, Map.get(style, inherited, Map.get(style, key, 2)))}
+
+              _ ->
+                with {number, ""} <- HtmlValidator.parse_css_number(normalized),
+                     true <- number > 0 and Regex.match?(~r/\A[+]?[0-9]+\z/, normalized) do
+                  {:ok, Map.put(style, key, String.to_integer(normalized))}
+                else
+                  _ -> {:error, :invalid_document}
+                end
+            end
 
           "vertical-align" ->
             with {:ok, align} <- HtmlValidator.parse_vertical_align(value, style.font_size),

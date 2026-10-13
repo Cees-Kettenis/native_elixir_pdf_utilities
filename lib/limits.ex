@@ -26,6 +26,8 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_html_depth: 128,
     max_embedded_documents: 256,
     max_embedded_document_depth: 16,
+    max_frameset_tracks: 1_024,
+    max_frameset_cells: 65_536,
     max_html_tree_work: 20_000_000,
     max_text_decoration_layers: 128,
     max_html_numeric_token_bytes: 1_024,
@@ -173,6 +175,8 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_html_depth
           | :max_embedded_documents
           | :max_embedded_document_depth
+          | :max_frameset_tracks
+          | :max_frameset_cells
           | :max_html_tree_work
           | :max_text_decoration_layers
           | :max_html_numeric_token_bytes

@@ -1,12 +1,21 @@
 defmodule NativeElixirPdfUtilities.Validators.HtmlTemporalValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.Diagnostics
-  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlValidator,
+    HtmlFormValidator,
+    LanguageValidator,
+    WriterValidator
+  }
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font
 
   # HTML calendar units and the ISO week epoch are fixed format rules.
   @epoch_days :calendar.date_to_gregorian_days({1970, 1, 1})
   @day_milliseconds 86_400_000
   @kinds ~w(date month week time datetime-local)
+  @native_types @kinds
 
   @doc false
   @spec temporal_type?(term()) :: boolean()
@@ -276,30 +285,357 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTemporalValidator do
   end
 
   @doc false
-  @spec validate_render_style(map(), map()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
-  def validate_render_style(node, style) do
+  @spec prepare_render_style(map(), map(), [map()], keyword()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_render_style(node, style, ancestors, opts) do
     case node do
-      %{tag: "input", attributes: attributes} ->
+      %{tag: "input", attributes: attributes, _initial_form_state: state} ->
         kind = HtmlValidator.input_type(Map.get(attributes, "type", "text"))
 
-        if Map.get(style, :display) != :none and temporal_type?(kind) do
-          Diagnostics.error(
-            :style,
-            :unsupported_html,
-            "Native temporal picker display is not yet supported; use display:none for preserved initial state or supply a static image of the control",
-            module: __MODULE__,
-            operation: :compute,
-            source: kind,
-            line: get_in(node, [:source, :line]),
-            column: get_in(node, [:source, :column])
-          )
-        else
-          :ok
+        cond do
+          style.display == :none or not temporal_type?(kind) ->
+            {:ok, style}
+
+          LanguageValidator.resolved_language(node, ancestors) not in [
+            [],
+            [""],
+            ["en"],
+            ["en", "us"]
+          ] ->
+            Diagnostics.error(
+              :style,
+              :unsupported_html,
+              "Native temporal display currently supports the English US field format; use lang=en-US or supply static artwork for another locale",
+              module: __MODULE__,
+              operation: :compute,
+              source: kind
+            )
+
+          true ->
+            with {:ok, display} <-
+                   prepare_display(
+                     style,
+                     state,
+                     attributes,
+                     Keyword.get(opts, :forms, :interactive)
+                   ),
+                 {:ok, width} <-
+                   HtmlFormValidator.validate_initial_control_dimension(
+                     display.intrinsic_width,
+                     :width
+                   ),
+                 {:ok, height} <-
+                   HtmlFormValidator.validate_initial_control_dimension(
+                     display.intrinsic_height,
+                     :height
+                   ) do
+              style =
+                style
+                |> Map.put(:_temporal_display, display)
+                |> Map.put(:_temporal_disabled, state.disabled)
+
+              style =
+                if style.width in [nil, :auto], do: Map.put(style, :width, width), else: style
+
+              style =
+                if style.height in [nil, :auto], do: Map.put(style, :height, height), else: style
+
+              {:ok, style}
+            end
         end
 
       _ ->
-        :ok
+        {:ok, style}
     end
+  end
+
+  # Chromium DateComponents uses the ECMAScript Date range and a maximum
+  # year of 275760. These are fixed native-widget format invariants, not Limits.
+  @native_max_year 275_760
+  @native_max_milliseconds 8_640_000_000_000_000
+
+  @doc false
+  @spec prepare_display(map(), map(), map(), :static | :interactive) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_display(style, state, attributes, forms_mode) do
+    kind = state.temporal.kind
+
+    bounds =
+      Enum.map(~w(min max), fn name ->
+        case parse(kind, Map.get(attributes, name)) do
+          {:ok, parsed} -> parsed
+          :error -> nil
+        end
+      end)
+
+    components = state.temporal.components
+
+    native_range? =
+      Enum.all?(
+        [state.temporal.value | Enum.map(bounds, &if(&1, do: &1.number))],
+        fn value ->
+          is_nil(value) or kind == "time" or
+            value <=
+              if(kind == "month",
+                do: (@native_max_year - 1970) * 12 + 8,
+                else: @native_max_milliseconds
+              )
+        end
+      )
+
+    cond do
+      kind not in @native_types ->
+        unsupported_display(:style, :compute, kind)
+
+      match?(%{type: :built_in}, Map.get(style, :font_face)) ->
+        Diagnostics.error(
+          :style,
+          :unsupported_html,
+          "Native temporal fields require selected physical font metrics; supply an embedded font instead of a built-in PDF font with estimated advances",
+          module: __MODULE__,
+          operation: :compute,
+          source: kind
+        )
+
+      style.border_radius > 0 and
+          (length(Enum.uniq(Map.values(style.border_widths))) > 1 or
+             Enum.any?(
+               Map.values(style.border_styles),
+               &(&1 not in [:solid, :inset, :outset, :none, :hidden])
+             )) ->
+        Diagnostics.error(
+          :style,
+          :unsupported_html,
+          "Rounded temporal hosts require uniform border widths and solid, inset or outset paint; use a uniform border or supply static artwork for this border shape",
+          module: __MODULE__,
+          operation: :compute,
+          source: kind
+        )
+
+      not native_range? ->
+        Diagnostics.error(
+          :style,
+          :unsupported_html,
+          "Temporal initial display exceeds Chromium's fixed native date range; supply static artwork for this valid calendar value",
+          module: __MODULE__,
+          operation: :compute,
+          source: kind
+        )
+
+      true ->
+        parts =
+          case kind do
+            "time" ->
+              time_parts(state)
+
+            "datetime-local" ->
+              calendar_parts(kind, components, bounds) ++ [{", ", [], 0.0}] ++ time_parts(state)
+
+            _ ->
+              calendar_parts(kind, components, bounds)
+          end
+
+        proof = %{
+          type: :text,
+          x: 0,
+          y: 0,
+          text:
+            Enum.map_join(parts, fn {text, candidates, _padding} ->
+              Enum.join([text | candidates])
+            end),
+          font:
+            case Map.get(style, :font_face) do
+              %{type: :embedded, id: id} = font when is_binary(id) -> Font.pdf_name(font)
+              _ -> nil
+            end,
+          font_face: Map.get(style, :font_face),
+          font_size: Map.get(style, :font_size),
+          color: Map.get(style, :color)
+        }
+
+        with true <- forms_mode in [:static, :interactive],
+             {:ok, font_size} <-
+               HtmlValidator.normalize_geometry_number(Map.get(style, :font_size)),
+             {:ok, line_height} <-
+               HtmlValidator.normalize_geometry_number(Map.get(style, :line_height)),
+             {:ok, letter_spacing} <-
+               HtmlValidator.normalize_geometry_number(Map.get(style, :letter_spacing)),
+             true <- font_size >= 0 and line_height >= 0,
+             {:ok, _} <- WriterValidator.prepare([%{size: {100, 100}, boxes: [proof]}], []) do
+          # Blink's shaped font size uses 1/64 CSS-pixel precision, as the
+          # existing writer does before compensating PDF glyph advances.
+          shaped_size = Float.floor(font_size / 0.75 * 64) / 64 * 0.75
+
+          parts =
+            Enum.map(parts, fn {text, candidates, padding} ->
+              widths =
+                Enum.map([text | candidates], fn value ->
+                  max(0.0, Font.text_width(value, style.font_face, shaped_size, letter_spacing))
+                  |> then(&(Float.ceil(&1 / 0.75 * 64) / 64 * 0.75))
+                end)
+
+              %{
+                text: text,
+                padding: padding,
+                color: style.color,
+                width: hd(widths) + 2 * padding,
+                maximum_width: Enum.max(widths) + 2 * padding
+              }
+            end)
+
+          # Native indicator em geometry enters Blink's LayoutUnit before flex
+          # sizing. Retaining its 1/64-pixel fraction avoids later baseline ties.
+          content_size =
+            Float.floor(font_size / 0.75 * if(kind == "time", do: 1.05, else: 1.0) * 64) / 64 *
+              0.75
+
+          indicator_padding = if kind == "time", do: 2.25, else: 1.5
+          indicator_margin = if kind == "time", do: 6.0, else: 0.0
+          indicator_width = content_size + 2 * indicator_padding + indicator_margin
+          editor_height = line_height + 1.5
+
+          intrinsic_width =
+            Float.ceil(Enum.sum(Enum.map(parts, & &1.maximum_width)) / 0.75) * 0.75 +
+              indicator_width
+
+          intrinsic_height = max(editor_height, content_size + 2 * indicator_padding)
+
+          {:ok,
+           %{
+             kind: kind,
+             value: state.value,
+             forms_mode: forms_mode,
+             parts: parts,
+             intrinsic_width: intrinsic_width,
+             intrinsic_height: intrinsic_height,
+             editor_height: editor_height,
+             baseline_depth: HtmlValidator.text_baseline_depth(style),
+             indicator_width: indicator_width,
+             indicator_padding: indicator_padding,
+             indicator_margin: indicator_margin,
+             indicator_content_size: content_size,
+             picker_visible: not state.disabled and not state.readonly and font_size > 0
+           }}
+        else
+          {:error, {reason, diagnostic}} ->
+            {:error, {reason, diagnostic}}
+
+          _ ->
+            Diagnostics.error(
+              :style,
+              :invalid_document,
+              "Temporal display requires bounded font geometry and a selected font containing every displayed field",
+              module: __MODULE__,
+              operation: :compute,
+              source: kind
+            )
+        end
+    end
+  end
+
+  # Native English-US fields are separate padded elements, not ISO strings.
+  # Symbolic fields size every label, even when bounds constrain their value.
+  @month_names ~w(January February March April May June July August September October November December)
+  defp calendar_parts(kind, components, bounds) do
+    [minimum, maximum] = bounds
+    minimum_year = if minimum, do: minimum.components.year, else: 1
+    maximum_year = if maximum, do: maximum.components.year, else: @native_max_year
+    year_max = Integer.to_string(max(minimum_year, maximum_year)) |> String.pad_leading(4, "0")
+
+    placeholder = if kind in ["month", "week"], do: "----", else: "yyyy"
+    year = display_component(components, :year, 4, placeholder)
+    year = {year, [placeholder, year_max], 0.75}
+
+    case kind do
+      "month" ->
+        month = if components, do: Enum.at(@month_names, components.month - 1), else: "---------"
+        [{month, ["---------" | @month_names], 0.75}, {" ", [], 0.0}, year]
+
+      "week" ->
+        week = display_component(components, :week, 2, "--")
+        [{"Week ", [], 0.0}, {week, ["--", "53"], 0.75}, {", ", [], 0.0}, year]
+
+      _ ->
+        [
+          {display_component(components, :month, 2, "mm"), ["mm", "12"], 0.75},
+          {"/", [], 0.0},
+          {display_component(components, :day, 2, "dd"), ["dd", "31"], 0.75},
+          {"/", [], 0.0},
+          year
+        ]
+    end
+  end
+
+  defp time_parts(state) do
+    components = state.temporal.components
+
+    second? =
+      rem(state.temporal.value || 0, 60_000) != 0 or
+        rem(state.temporal.min || 0, 60_000) != 0 or
+        (state.temporal.step != :any and :math.fmod(state.temporal.step, 60.0) != 0)
+
+    millisecond? =
+      rem(state.temporal.value || 0, 1000) != 0 or
+        rem(state.temporal.min || 0, 1000) != 0 or
+        (state.temporal.step != :any and :math.fmod(state.temporal.step, 1.0) != 0)
+
+    hour =
+      if components do
+        adjusted = %{
+          components
+          | hour: if(rem(components.hour, 12) == 0, do: 12, else: rem(components.hour, 12))
+        }
+
+        display_component(adjusted, :hour, 2, "--")
+      else
+        "--"
+      end
+
+    parts = [
+      {hour, ["--", "12"], 0.75},
+      {":", [], 0.0},
+      {display_component(components, :minute, 2, "--"), ["--", "59"], 0.75}
+    ]
+
+    parts =
+      if second?,
+        do:
+          parts ++
+            [
+              {":", [], 0.0},
+              {display_component(components, :second, 2, "--"), ["--", "59"], 0.75}
+            ],
+        else: parts
+
+    parts =
+      if millisecond?,
+        do:
+          parts ++
+            [
+              {".", [], 0.0},
+              {display_component(components, :millisecond, 3, "---"), ["---", "999"], 0.75}
+            ],
+        else: parts
+
+    ampm = if components, do: if(components.hour < 12, do: "AM", else: "PM"), else: "--"
+    parts ++ [{" ", [], 0.0}, {ampm, ["--", "AM", "PM"], 0.75}]
+  end
+
+  defp display_component(components, key, digits, placeholder) do
+    if components,
+      do: Integer.to_string(Map.fetch!(components, key)) |> String.pad_leading(digits, "0"),
+      else: placeholder
+  end
+
+  defp unsupported_display(stage, operation, kind) do
+    Diagnostics.error(
+      stage,
+      :unsupported_html,
+      "Native temporal picker display is not yet supported for this type; use display:none for preserved initial state or supply a static image of the control",
+      module: __MODULE__,
+      operation: operation,
+      source: kind
+    )
   end
 
   @doc false
@@ -310,7 +646,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTemporalValidator do
         :ok
 
       %{style: style} when is_map(style) ->
-        control = Map.get(style, :_form_control)
+        control = Map.get(style, :_form_control, Map.get(style, :_temporal_control))
 
         temporal? =
           Map.has_key?(style, :_temporal_state) or
@@ -324,7 +660,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTemporalValidator do
           valid? =
             case control do
               %{initial_state: state, attributes: attributes} ->
-                valid_initial?(state, attributes) and
+                valid_initial?(state, attributes) and is_boolean(Map.get(state, :disabled)) and
                   Map.get(style, :_temporal_state) == Map.get(state, :temporal)
 
               _ ->
@@ -332,14 +668,74 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTemporalValidator do
             end
 
           if valid? do
-            Diagnostics.error(
-              :layout,
-              :unsupported_html,
-              "Native temporal picker display is not yet supported; supply a static image of the control",
-              module: __MODULE__,
-              operation: :layout,
-              source: control.initial_state.temporal.kind
-            )
+            state = control.initial_state
+
+            cond do
+              not is_map(Map.get(style, :_temporal_display)) ->
+                Diagnostics.error(
+                  :layout,
+                  :invalid_layout,
+                  "Temporal layout requires validator-prepared segmented display; compute styles before layout",
+                  module: __MODULE__,
+                  operation: :layout,
+                  source: "temporal"
+                )
+
+              true ->
+                case prepare_display(
+                       style,
+                       state,
+                       control.attributes,
+                       Map.get(style._temporal_display, :forms_mode)
+                     ) do
+                  {:ok, display} ->
+                    image = Map.get(style, :_temporal_picker_image)
+
+                    if display == style._temporal_display and
+                         Map.get(style, :_temporal_disabled) == state.disabled and
+                         not is_nil(image) == display.picker_visible do
+                      if display.picker_visible do
+                        # The existing writer validator owns decoded image frames
+                        # and resource bounds, including directly supplied styles.
+                        case WriterValidator.prepare(
+                               [
+                                 %{
+                                   size: {100, 100},
+                                   boxes: [
+                                     %{
+                                       type: :image,
+                                       image: image,
+                                       x: 0,
+                                       y: 0,
+                                       width: display.indicator_content_size,
+                                       height: display.indicator_content_size
+                                     }
+                                   ]
+                                 }
+                               ],
+                               []
+                             ) do
+                          {:ok, _} -> :ok
+                          error -> error
+                        end
+                      else
+                        :ok
+                      end
+                    else
+                      Diagnostics.error(
+                        :layout,
+                        :invalid_layout,
+                        "Temporal layout requires canonical segmented display, picker resources and disabled state; compute styles before layout",
+                        module: __MODULE__,
+                        operation: :layout,
+                        source: "temporal"
+                      )
+                    end
+
+                  error ->
+                    error
+                end
+            end
           else
             Diagnostics.error(
               :layout,

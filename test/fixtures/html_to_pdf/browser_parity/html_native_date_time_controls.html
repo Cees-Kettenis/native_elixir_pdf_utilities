@@ -1,0 +1,21 @@
+<!doctype html><html lang=en-US><head><style>
+@page {size:300pt 360pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt;}
+body {padding:12pt;} p {margin:0 0 3pt;} .row {margin:0 0 9pt;}
+input {display:block;font-family:"DejaVu Sans Mono";}
+</style></head><body>
+<div class=row><p>Date picker</p><input type=date name=date value=2026-10-13></div>
+<div class=row><p>Empty date placeholder</p><input type=date name=empty></div>
+<div class=row><p>Leap date with bounded year width</p><input type=date name=leap min=2000-01-01 max=2030-12-31 value=2000-02-29></div>
+<div class=row><p>Readonly initial date</p><input type=date name=readonly readonly value=2026-10-13></div>
+<div class=row><p>Disabled initial date</p><input type=date name=disabled disabled value=2026-10-13></div>
+<div style="break-before:page">
+<div class=row><p>Time picker</p><input type=time name=time value=13:02></div>
+<div class=row><p>Midnight in twelve-hour display</p><input type=time name=midnight value=00:00></div>
+<div class=row><p>Empty time placeholder</p><input type=time name=empty_time></div>
+<div class=row><p>Seconds and milliseconds</p><input type=time name=fraction value=13:02:03.100></div>
+<div class=row><p>Minimum requires seconds</p><input type=time name=minimum min=01:02:03 value=13:02></div>
+<div class=row><p>Step requires milliseconds</p><input type=time name=step step=.1 value=13:02></div>
+<div class=row><p>Disabled time across midnight</p><input type=time name=overnight disabled min=23:00 max=01:00 value=00:02:00.100></div>
+<p>After native temporal controls</p>
+</div></body></html>

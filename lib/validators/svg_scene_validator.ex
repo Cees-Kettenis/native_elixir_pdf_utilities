@@ -10,7 +10,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
     SvgViewportValidator
   }
 
-  @paint_tags ~w(svg g defs symbol use linearGradient radialGradient stop clipPath rect circle ellipse line polyline polygon path title desc style)
+  @paint_tags ~w(svg g defs symbol use linearGradient radialGradient stop clipPath rect circle ellipse line polyline polygon path text tspan title desc style)
   @length_attributes %{
     "rect" => ~w(x y width height rx ry),
     "circle" => ~w(cx cy r),
@@ -89,8 +89,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
             case NativeElixirPdfUtilities.Validators.SvgValidator.validate_processing(source, %{
                    mode: :inline
                  }) do
-              {:ok, _} -> :ok
-              error -> error
+              {:ok, _} ->
+                NativeElixirPdfUtilities.Validators.SvgTextValidator.validate_original_fonts(node)
+
+              error ->
+                error
             end
 
           %{type: :element, children: children} ->

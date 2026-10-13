@@ -72,7 +72,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewportTest do
              {:srcdoc, ""}
 
     for attributes <- [%{}, %{"src" => ""}, %{"src" => "  about:blank \n"}] do
-      assert ResourceValidator.iframe_source(attributes) == {:srcdoc, ""}
+      assert ResourceValidator.iframe_source(attributes) == {:blank, "about:blank"}
     end
 
     assert ResourceValidator.iframe_source(%{"src" => "  child.html  "}) == "child.html"

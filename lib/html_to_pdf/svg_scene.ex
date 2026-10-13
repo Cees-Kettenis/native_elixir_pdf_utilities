@@ -8,6 +8,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
     SvgClipValidator,
     SvgReferenceValidator,
     SvgPaintValidator,
+    SvgTextValidator,
     SvgSceneValidator,
     SvgStyleValidator
   }
@@ -50,8 +51,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
     with :ok <- SvgSceneValidator.validate_paint_style(node.style),
          :ok <- SvgClipValidator.validate_tree(node),
          :ok <- SvgReferenceValidator.validate_tree(node),
-         :ok <- SvgPaintValidator.validate_tree(node) do
-      source = serialize(node)
+         :ok <- SvgPaintValidator.validate_tree(node),
+         {:ok, text} <- SvgTextValidator.prepare_tree(node) do
+      source = serialize(node, true, nil, false, text.aliases)
 
       {:ok,
        %{
@@ -59,9 +61,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
          attributes: node.attributes,
          style: node.style,
          budget: budget,
-         logical_text: [],
+         logical_text: text.logical_text,
          links: [],
-         selected_fonts: [],
+         selected_fonts: text.fonts,
          node_id: Map.get(node, :node_id),
          document_id: Map.get(node, :document_id),
          tree_scope_id: Map.get(node, :tree_scope_id)
@@ -91,7 +93,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
                SvgBackend.rasterize(
                  source,
                  [width: raster_width, height: raster_height],
-                 %{mode: :inline},
+                 %{mode: :inline, fonts: scene.selected_fonts},
                  scene.budget
                ),
              {:ok, image} <- PngDecoder.decode(png, scene.budget, false) do
@@ -105,7 +107,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
                      SvgBackend.vectorize(
                        source,
                        [width: raster_width, height: raster_height],
-                       %{mode: :inline},
+                       %{mode: :inline, fonts: scene.selected_fonts},
                        scene.budget
                      ),
                    {:ok, _form} <- SvgFormValidator.prepare_source(pdf) do
@@ -149,7 +151,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
     end
   end
 
-  defp serialize(node, root? \\ true, references \\ nil, reference? \\ false) do
+  defp serialize(node, root?, references, reference?, fonts) do
     references = references || SvgReferenceValidator.referenced_ids(node)
     reference? = reference? or MapSet.member?(references, Map.get(node.attributes, "id"))
     specified = Map.get(node.style, :_svg_specified, %{})
@@ -250,15 +252,53 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
       end)
 
     attributes =
+      if node.tag in ~w(text tspan use) and
+           Map.has_key?(fonts, Map.get(node.style.font_face, :data)) do
+        alias = Map.fetch!(fonts, node.style.font_face.data)
+
+        attributes
+        |> Map.put("font-family", alias)
+        |> Map.put("font-weight", to_string(node.style.font_weight))
+        |> Map.put("font-style", to_string(node.style.font_style))
+        |> Map.put("letter-spacing", "#{node.style.letter_spacing / 0.75}px")
+      else
+        attributes
+      end
+
+    attributes =
+      if node.tag in ~w(text tspan) do
+        Enum.reduce(~w(x y dx dy), attributes, fn property, attrs ->
+          case Map.fetch(attrs, property) do
+            {:ok, value} ->
+              {:ok, length} = SvgStyleValidator.length(value, true)
+              Map.put(attrs, property, property_value(length, node.style))
+
+            :error ->
+              attrs
+          end
+        end)
+      else
+        attributes
+      end
+
+    attributes =
       attributes
       |> Map.put("display", if(node.style.display == :none, do: "none", else: "inline"))
 
     children =
       Enum.map_join(node.children, "", fn child ->
         case child do
-          %{type: :element, tag: tag} when tag in ~w(style title desc) -> ""
-          %{type: :element, namespace: :svg} -> serialize(child, false, references, reference?)
-          _ -> ""
+          %{type: :element, tag: tag} when tag in ~w(style title desc) ->
+            ""
+
+          %{type: :element, namespace: :svg} ->
+            serialize(child, false, references, reference?, fonts)
+
+          %{type: :text, text: text} when node.tag in ~w(text tspan) ->
+            escape(text)
+
+          _ ->
+            ""
         end
       end)
 
