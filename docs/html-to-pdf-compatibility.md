@@ -17,7 +17,7 @@ effect; see [page declarations without an effect](#page-declarations-without-an-
 | Tables | `table`, `caption`, `colgroup`, `col`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td` |
 | Images | `img` with a `src` |
 | Custom containers | Valid unregistered HTML custom names with inline defaults and supported transparent contents |
-| Form controls | Text, search, telephone, URL, email, password, checkbox, radio, hidden, submit, reset, and button `input`; `select`, `option`, `textarea`, `button`, ordinary `form` and `label` containers |
+| Form controls | Text, search, telephone, URL, email, password, number, checkbox, radio, hidden, submit, reset, and button `input`; `select`, `option`, `textarea`, `button`, ordinary `form` and `label` containers |
 
 Preformatted text retains spaces, default eight-space tab stops, and line breaks.
 `pre` and `listing` discard one immediately following newline and default to bundled DejaVu
@@ -126,9 +126,17 @@ Input type keywords use ASCII case matching. Missing, empty, unknown, obsolete o
 untrimmed values select Text, so `type="hidden "` remains visible and
 `type="checKbox"` creates a text field. The original type string stays available to
 CSS. Recognized states whose rendering is unfinished still return diagnostics;
-these include dates, number, range, color, file and image inputs.
+these include dates, range, color, file and image inputs.
 Defaulted Text uses the same sanitation, readonly rules, values and generated names
 as explicit text inputs. Caller-supplied input trees use the same validator.
+
+Number inputs sanitize invalid lexical values to empty and retain valid authored
+values for display and PDF Text fields. Their canonical initial state includes
+parsed value, min/max, positive step or `any`, step base and applicable
+readonly/required/placeholder metadata. Out-of-range values still render.
+Full step-mismatch and constraint aggregation remain unfinished. Static and
+interactive artwork share original page geometry and clipped text; other Text
+appearances retain their existing path.
 
 Ordinary `form` containers render as blocks and `label` containers render inline.
 Submission metadata is retained without running actions. Supported controls use
@@ -147,8 +155,9 @@ owner groups sharing a PDF field name return `:unsupported_form`; use unique
 names or `forms: :static`. Broader selection modes, fieldsets,
 legends, optgroups, constraint states and shadow-tree integration remain open.
 
-Ordinary single-select initial state retains the last authored selection or
-defaults to the first enabled option. Explicit disabled selections remain
+Ordinary single-select menu state retains the last authored selection or
+defaults to the first enabled option when its display size is one. An explicit
+size of zero has no implicit selection under the pinned HTML rules. Explicit disabled selections remain
 selected. Empty selects and all-disabled selects without a selected option
 render with no selection; editable PDF choice fields omit their initial value.
 Empty option values remain empty strings. Initial `:checked` matches canonical
@@ -158,8 +167,11 @@ label attributes supply display labels independently of values. Text-derived
 labels and values trim and collapse ASCII whitespace while preserving NBSP;
 explicit values remain intact. Empty dropdowns retain a normal font line without
 an authored height. Native dropdowns reset CSS line-height to the font's normal
-line height. Multiple/listbox sizing, rich/custom controls, interactive disabled
-option policy, constraints and shadow integration remain open.
+line height. Multiple and listbox controls retain all selected identities in
+source order, styled option/group flow, clipping and initial scroll artwork. PDF
+Choice fields retain complete option indices, scalar or array values, selection
+indices and an initial top index. Rich/custom controls, complete interactive
+disabled-option policy, constraints and shadow integration remain open.
 
 Supported text-entry, checkbox, radio and selection controls create editable AcroForm fields by default. Use
 `forms: :static` for static artwork. See [field naming and filling](pdf-forms.md). Links support `http://`, `https://`, and `mailto:` destinations.
@@ -173,7 +185,7 @@ when the type is omitted. Parsed attributes and CSS selectors retain the authore
 value. Other characters remain in the control value. Textarea line breaks remain
 multiline content. Empty text-entry inputs retain one line of intrinsic height.
 
-Text/search/telephone/URL/email inputs and textareas accept `readonly` by boolean presence, including
+Text/search/telephone/URL/email/password/Number inputs and textareas accept `readonly` by boolean presence, including
 `readonly="false"`. Interactive fields expose `read_only: true` and reject filling
 with `:read_only_form_field`; flattening remains available. Readonly adds no
 disabled appearance. Static artwork stays identical unless author CSS selects the
@@ -193,8 +205,8 @@ Initial comma-separated tokens trim ASCII edge whitespace and rejoin in order;
 empty tokens remain. This rule preserves internal CR/LF inside invalid tokens,
 unlike single-email sanitation. The PDF field stays one text field whose value
 is a string. Invalid initial list tokens still render; complete constraint state
-and IDN display conversion remain unfinished. Other supported input types and
-HTML listboxes still reject `multiple`.
+and IDN display conversion remain unfinished. HTML select controls also support boolean `multiple`. Other input states retain
+their own applicability rules.
 
 Password inputs remove initial CR/LF without trimming and display one bullet per
 grapheme. Original attributes remain visible to CSS. Interactive output uses a

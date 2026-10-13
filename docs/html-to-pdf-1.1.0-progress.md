@@ -5,11 +5,55 @@ resources, controls and composition, inline SVG, embedded documents, and MathML.
 This file records delivered batches and remaining work. The full milestone is
 not complete.
 
-The earlier batch 55 handoff was resumed on 2026-10-12. Seven combined integration
-waves now pass the required gates. The latest copied integration is
-`e9074a1d71ca4b67d162934c9d6eaeb24094b72e`. Historical entries retain their original
-acceptance evidence and remaining scope. Later lane work is still being combined;
-the milestone remains unfinished.
+The earlier batch 55 handoff was resumed on 2026-10-12. Through checkpoint 8, eight combined integration
+waves passed the required gates. That verified integration is
+`871f2b5707eac05538af71b07bb3775c36f467fb`, with 1,897 units at 100% coverage and
+175 parity tests on each supported runtime and the host. Historical entries
+retain their original acceptance evidence and remaining scope. The milestone
+remains unfinished.
+
+## Combined integration checkpoint 9 source
+
+Initial select state now preserves source-order selected identities, indices,
+exports and values. Menu and listbox artwork use that state; PDF Choice fields
+retain their full option indices, scalar or array values and initial top index.
+Rich selected-content clones remain open. The pinned size-zero selection
+semantics differ from Chromium and that direct disagreement is retained.
+
+Number inputs prepare lexical and parsed values, min/max/step/base, applicability
+and renderable range violations centrally. Invalid values sanitize to empty.
+Static artwork and PDF Text appearances use the same source layout, clips and
+original page paint frame. Other Text controls keep their established path.
+The bare Number comparison supplies Chromium's actual physical Arial font through
+the public native caller-font API in each environment. The host and containers
+use different verified files; production font discovery is unchanged. Range,
+temporal inputs and full validity aggregation remain open.
+
+Writer validation prepares the optional rounded outer and single inner clips.
+Native placement moves both levels once. Paint and clipped annotations share the
+prepared geometry, including nested drawing groups. Image border-box links keep
+ordinary object-fit letterboxing clickable while respecting separate content
+clips. Iframe and select scrollbar artwork use one validator-owned geometry
+path, preserving existing zero-offset cases and child target scopes.
+
+Source-only CSS preparation retains active and inactive authored rules, media,
+font candidates and declaration spans. Font descriptor policy and exact failure
+indices have one validator authority. Supplied CSS diagnostics use original
+stylesheet-local spans without replaying variable expansion. The existing print
+media validator owns selection for both ordinary and source records, including
+nested queries. Inline and embedded CSS records now bind their original HTML
+tokens, character references and byte spans. Empty and split UTF-8 boundaries
+are checked centrally. Source preview uses the same selected stylesheet owners
+for HTML and SVG, preserving namespaced attributes and inert non-CSS bodies.
+Unmatched or inert insertion contexts, resource authorization and a complete
+removed-source certificate remain open.
+Template replacement remains unsupported.
+
+Both supported-runtime matrices, exact host parity, committed source hashes and
+unchanged performance guardrails are required before this source batch is
+published. All previous rendering disagreements and failed preflights remain
+identified separately. The full milestone and final cumulative idle timing audit
+remain open.
 
 ## Combined integration checkpoint 8 source
 

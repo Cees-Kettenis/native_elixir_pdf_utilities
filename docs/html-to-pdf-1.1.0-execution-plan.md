@@ -1,16 +1,18 @@
 # 1.1.0 execution plan
 
-Prepared on 2026-10-12 from the previous agent's handoff and seven independent area audits. The milestone plan in `tmp/1.1.0-plan.md` remains authoritative.
+Prepared on 2026-10-12 from the previous agent's handoff and seven independent area audits. This execution plan records the permanent scopes and outstanding obligations; local orchestration plans remain review evidence.
 
-Work began from verified batch55, preserving the previous agent's unfinished batch56. Seven combined waves have passed their required gates and are copied into the original checkout. The latest verified integration is `e9074a1d71ca4b67d162934c9d6eaeb24094b72e`. Both supported runtimes passed 1,862 unit tests at 100% every-module and total coverage and 173 parity tests; performance, Dialyzer and exact host parity also passed. The latest wave includes bounded inline SVG, iframe scrollbar and media geometry, measured HTML-child composition, MathML fractions, and parser prerequisites. Subsequent lane checkpoints remain queued. The full milestone and final cumulative idle timing audit are unfinished.
+Work began from verified batch55, preserving the previous agent's unfinished batch56. Through checkpoint 8, eight combined waves passed their required gates and were copied into the original checkout. That verified integration is `871f2b5707eac05538af71b07bb3775c36f467fb`. Both supported runtimes passed 1,897 unit tests at 100% every-module and total coverage, 19 performance workloads, Dialyzer and 175 parity tests. Exact host parity also passed. The full milestone and final cumulative idle timing audit are unfinished.
 
-The eighth source batch combines validated CSS declaration/cascade ownership,
-limited original source-context traversal and bounded MathML radicals. It keeps
-all source-policy, resource, template replacement and dated-Core limitations
-explicit. The select/listbox and authored CSS provenance checkpoints are queued
-for a subsequent integration. New producer work is not imported while a combined
-candidate is frozen. Each source batch needs both supported matrices, exact host
-parity and source/performance hash checks before publication.
+The ninth source batch combines canonical select/listbox selection, bounded
+Number controls, shared rounded clipping and scrollbar geometry, and authored
+CSS provenance with validator-owned font descriptors and original HTML/inline
+source binding. It preserves newer print
+media selection and the prior SVG, MathML, source-context and resource contracts.
+Range and temporal controls, full constraint validation, complete source policy
+and pending MathML scripts remain separate work. New producer source is not
+imported during a combined freeze. Both supported matrices, exact host parity and
+source/performance hash checks are required before each publication.
 
 ## Checkpoint estimate
 
