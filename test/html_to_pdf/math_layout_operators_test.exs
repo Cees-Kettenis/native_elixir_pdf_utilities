@@ -346,6 +346,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
       assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
       assert diagnostic.source == <<character::utf8>>
       assert diagnostic.message =~ "no usable glyph"
+
+      for value <- ["invalid #{unit}", "calc(1#{unit} +2px)"] do
+        assert {:ok, fallback} =
+                 MathLayout.measure(%{operator | attributes: %{"lspace" => value}})
+
+        assert fallback.core_operator.lspace == 20 * 4 / 18
+      end
     end
   end
 
@@ -748,11 +755,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
     assert diagnostic.source == "+" and diagnostic.operation == :measure_math
     assert diagnostic.message =~ "no usable glyph"
 
-    assert {:error, {:invalid_document, diagnostic}} =
-             HtmlToPdf.render("<math><mo minsize='2vw'>(</mo></math>")
+    for unit <- ["vw", "cqw"] do
+      assert {:ok, pdf} = HtmlToPdf.render("<math><mo minsize='2#{unit}'>(</mo></math>")
+      assert byte_size(pdf) > 0
+    end
 
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.MathOperatorValidator
-    assert diagnostic.source == "2vw"
     Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 100))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -804,5 +811,106 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
     assert text =~ "Before" and text =~ "After"
     assert text =~ "∑3=4"
     assert text =~ "5\u2061\u2062\u2063\u20646!=7"
+  end
+
+  test "calculated minmax uses selected natural glyph height after percentage preparation", %{
+    node: n,
+    row: r
+  } do
+    assert {:ok, natural} = MathLayoutValidator.prepare_element(n.("mo", "(", %{}), %{})
+    glyph = natural.source_glyph
+
+    height =
+      (elem(glyph.bounds, 3) - elem(glyph.bounds, 1)) * glyph.font_size / glyph.units_per_em
+
+    operator = n.("mo", "(", %{"minsize" => "calc(200% + 4pt)", "maxsize" => "max(100%, 10pt)"})
+    assert {:ok, prepared} = MathLayoutValidator.prepare_element(operator, %{})
+    assert {:ok, constrained} = MathLayoutValidator.prepare_operator_stretch(prepared, {0, 0})
+
+    assert_in_delta constrained.target_ascent +
+                      constrained.target_descent,
+                    2 * height + 4,
+                    1.0e-10
+
+    assert {:ok, measured} = MathLayout.measure(r.([operator]))
+    assert measured.actual_text == "("
+  end
+
+  test "calculations discover actual core and root metrics through embellishment", %{
+    node: n,
+    row: r,
+    style: style,
+    font: font
+  } do
+    assert {:ok, zero} =
+             MathLayout.with_context(fn ->
+               MathLayoutValidator.prepare_glyph("0", font, 14, [])
+             end)
+
+    assert {:ok, cap} =
+             MathLayout.with_context(fn ->
+               MathLayoutValidator.prepare_glyph("H", font, 20, [])
+             end)
+
+    operator = n.("mo", "+", %{"lspace" => "calc(1rch + 0.5cap + 0.25rlh + 1vw)"})
+
+    operator = %{
+      operator
+      | style:
+          Map.merge(style, %{_root_font_face: font, _root_font_size: 14, _root_line_height: 28})
+    }
+
+    wrapper = %{r.([operator]) | style: %{style | font_size: 40}}
+
+    assert {:ok, prepared} =
+             MathLayoutValidator.prepare_element(wrapper, %{
+               viewport_width: 600,
+               viewport_height: 200
+             })
+
+    expected =
+      zero.advance * 14 / zero.units_per_em + elem(cap.bounds, 3) * 10 / cap.units_per_em + 7 + 6
+
+    assert_in_delta prepared.core_operator.lspace, expected, 1.0e-10
+  end
+
+  test "viewport context uses actual print dimensions and child client viewport" do
+    assert {:ok, context} = MathLayoutValidator.prepare_css_context(print_viewport: {800, 400})
+    assert context == %{viewport_width: 600.0, viewport_height: 300.0}
+
+    assert {:ok, context} =
+             MathLayoutValidator.prepare_css_context(
+               __client_css_viewport__: %{width: 200, height: 100}
+             )
+
+    assert context == %{viewport_width: 150.0, viewport_height: 75.0}
+
+    assert {:error, {:invalid_options, diagnostic}} =
+             MathLayoutValidator.prepare_css_context(print_viewport: {-1, 400})
+
+    assert diagnostic.stage == :options
+    assert diagnostic.message =~ "print_viewport"
+  end
+
+  test "styled operators inherit the actual html root face and line height, not body metrics" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
+
+    html = """
+    <html style="font-family:DejaVu Sans;font-size:12pt;line-height:24pt">
+    <body style="font-size:18pt;line-height:36pt">
+    <math style="font-size:20pt"><mo lspace="0.5rlh" rspace="1rch">+</mo></math>
+    </body></html>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    [body] = Enum.reject(styled.children, &(&1.type == :text))
+    [math] = Enum.reject(body.children, &(&1.type == :text))
+    assert math.style._root_font_size == 12
+    assert math.style._root_line_height == 24
+    assert math.style._root_font_face.family == "DejaVu Sans"
+    assert math.style._math_box.core_operator.lspace == 12
+    assert {:ok, zero} = MathLayout.glyph("0", math.style._root_font_face, 12)
+    assert_in_delta math.style._math_box.core_operator.rspace, zero.width, 1.0e-10
   end
 end

@@ -215,6 +215,16 @@ footprint independently of inherited font size; authored CSS dimensions win.
 Applicable resources and unsupported interactive control modes still use their
 existing diagnostics. Event-handler and scripting exclusions still apply.
 
+Known boolean form attributes also remain authored metadata on other HTML hosts
+when inapplicable. For example, paragraph `disabled` does not create a disabled
+state, select `readonly` does not make a PDF field read-only, and textarea
+`multiple` does not change its value or layout. Actual select `multiple`, textarea
+`readonly`, disabled fieldsets and selected options retain their existing state.
+Attribute selectors still see inactive values. Static `resize:none` is admitted
+as canonical textarea grip suppression; resizing actions and other resize modes
+remain outside this profile.
+
+
 
 Number inputs sanitize invalid lexical values to empty and retain valid authored
 values for display and PDF Text fields. Their canonical initial state includes
@@ -743,8 +753,16 @@ and invalid values, including `false`, mean Hidden. Author display overrides may
 reveal content and still receive normal resource failures. Hidden descendants
 create no fields or resource loads, while stylesheet/metadata processing and
 actual sibling positions remain. An image's own `src` retains strict resource
-validation even when that image is hidden. Exact ASCII-insensitive `until-found` diagnoses
-pending initial content-visibility/containment painting; whitespace is not trimmed.
+validation even when that image is hidden. Exact ASCII-insensitive `until-found`
+retains applicable initial box dimensions, padding, borders and backgrounds while
+skipping painted contents, generated content and PDF text fields. Whitespace is
+not trimmed. Inline and `display:contents` hosts keep their visible content.
+`content-visibility:hidden/visible` controls this initial box policy after the
+cascade; automatic offscreen skipping and find-in-page revealing remain excluded.
+Original source traversal, selector-visible attributes and composed identities
+remain available. Contained root/body boxes disable body background propagation
+without extending the document-canvas contract. Special-control suppression uses
+the same canonical flag in the controls integration.
 `type=hidden` input keeps its separate UA `!important` rule.
 Directional layout remains a 1.2.0 dependency.
 

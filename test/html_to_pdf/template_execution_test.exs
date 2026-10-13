@@ -19,6 +19,151 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
     assert Process.get({TemplateExecutionValidator, :execution}) == nil
   end
 
+  test "successive replacement preserves lexical source ownership and real earlier placements" do
+    html =
+      "<body><div><?start name='A'><p>Old A</p><?end?></div><section><?start name='B'><p>Old B</p><?end?></section><template for='A'><p>New A</p></template><template for='B'><p>New B</p></template><p>After both</p></body>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+    assert {:ok, text} = Text.extract(pdf)
+    assert text =~ "New A" and text =~ "New B" and text =~ "After both"
+    refute text =~ "Old A" or text =~ "Old B"
+    assert Process.get({TemplateExecutionValidator, :execution}) == nil
+  end
+
+  test "valid original inert inline and local stylesheet contexts can actually replace" do
+    html =
+      "<body><div><?start name='A'><p>Removed</p><?end?></div><template for='A'><style>p{color:red}</style><p style='font-size:14px'>Inert validated</p></template><p>After</p></body>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+    assert {:ok, text} = Text.extract(pdf)
+    assert text =~ "Inert validated" and text =~ "After"
+    refute text =~ "Removed"
+  end
+
+  test "one source CSS budget spans original detached fragments instead of resetting per view" do
+    png = PngFixture.build(1, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
+    fragment = "<template for='A'><p style='--x:3pt;width:var(--x)'>Original</p></template>"
+    html = "<body><img src='pixel.png'><?marker name='A'>#{fragment}#{fragment}</body>"
+
+    opts =
+      Keyword.put(@opts, :asset_resolver, fn _ ->
+        frame = Process.get({TemplateExecutionValidator, :execution})
+        assert frame.source_view == nil
+        assert :atomics.get(frame.css_budget, 1) == 18
+        send(self(), {:completed_source_budget, frame.css_budget})
+        {:ok, png}
+      end)
+
+    assert {:ok, _} = HtmlToPdf.render(html, opts)
+    assert_received {:completed_source_budget, budget}
+    assert :atomics.get(budget, 1) == 18
+    assert Process.get({TemplateExecutionValidator, :execution}) == nil
+  end
+
+  test "nested ordinary template CSS keeps its own original fragment scope" do
+    html =
+      "<body><?marker name='A'><template for='A'><template><p style='font-size:15px'>Nested inert</p></template><p style='color:blue'>Outer actual</p></template></body>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+    assert {:ok, text} = Text.extract(pdf)
+    assert text =~ "Outer actual"
+    refute text =~ "Nested inert"
+  end
+
+  test "validated inert CSS cannot hide an unresolved resource or borrow active fetch evidence" do
+    html =
+      "<body><?marker name='A'><template for='A'><div style='display:none;background-image:url(hidden.png)'><p>Hidden</p></div><p>Actual</p></template></body>"
+
+    opts =
+      Keyword.put(@opts, :asset_resolver, fn request ->
+        flunk("hidden original source fetched #{inspect(request)}")
+      end)
+
+    assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, opts)
+    assert diagnostic.stage == :asset and diagnostic.operation == :parse
+    assert diagnostic.source == "<div style='display:none;background-image:url(hidden.png)'>"
+    assert diagnostic.message =~ "authorization and contents remain pending"
+    assert Process.get({TemplateExecutionValidator, :execution}) == nil
+  end
+
+  test "an inert declaration cannot borrow a prospective host custom property" do
+    html =
+      "<body style='--host:8px'><div><?marker name='A'></div><template for='A'><p style='width:var(--host)'>Inert</p></template></body>"
+
+    assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html, @opts)
+    assert diagnostic.source == "width:var(--host)"
+    assert diagnostic.message =~ "declaration/context policy failed"
+    assert diagnostic.operation == :source_style_contexts
+
+    assert {:ok, _} =
+             HtmlToPdf.render(
+               "<body style='--host:8px'><p style='width:var(--host)'>Ordinary inherited value</p></body>",
+               @opts
+             )
+
+    assert Process.get({TemplateExecutionValidator, :execution}) == nil
+  end
+
+  test "excluded original stylesheet links cannot disappear through replacement or fetch" do
+    html =
+      "<body><?marker name='A'><template for='A'><link rel='stylesheet' href='original.css'><p>Actual</p></template></body>"
+
+    opts =
+      Keyword.put(@opts, :asset_resolver, fn request ->
+        flunk("excluded original stylesheet fetched #{inspect(request)}")
+      end)
+
+    assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, opts)
+    assert diagnostic.stage == :html and diagnostic.operation == :render
+    assert diagnostic.source == "<link rel='stylesheet' href='original.css'>"
+    assert diagnostic.line == 1 and diagnostic.column == 43
+    assert Process.get({TemplateExecutionValidator, :execution}) == nil
+    assert {:error, {:unsupported_html, _}} = HtmlParser.parse_document_detailed(html)
+  end
+
+  test "invalid unmatched original inert CSS cannot disappear through a matched insertion" do
+    html =
+      "<body><?marker name='A'><template for='A'><style>.absent{width:bananas}</style><p>Good</p></template></body>"
+
+    assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, @opts)
+    assert diagnostic.source == "width:bananas"
+    assert diagnostic.message =~ "unmatched_original_context"
+  end
+
+  test "a consumed range cannot become a reusable target for a later template" do
+    html =
+      "<body><?start name='A'><p>Old</p><?end?><template for='A'><p>First inserted</p></template><template for='A'><p>Second inserted</p></template><p>After replacement</p></body>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+    assert {:ok, text} = Text.extract(pdf)
+    assert text =~ "First inserted" and text =~ "After replacement"
+    refute text =~ "Second inserted" or text =~ "Old"
+  end
+
+  test "a later candidate cannot use bytes after its real closing token as an original prefix" do
+    html =
+      "<body><?marker name='A'><template for='A'><p>First</p></template><?marker name='B'><template for='B'><p>Second</p></template><p>Future</p></body>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+    assert {:ok, text} = Text.extract(pdf)
+    assert text =~ "First" and text =~ "Second" and text =~ "Future"
+    assert TemplateExecutionValidator.original_prefix_provenance(%{}, 0) == :not_owned
+  end
+
+  test "successive replacement cannot discard invalid later original source" do
+    html =
+      "<body><?marker name='A'><template for='A'><p>First</p></template><?start name='B'><p style='width:bananas'>Invalid later original</p><?end?><template for='B'><p>Second</p></template></body>"
+
+    assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html, @opts)
+    assert diagnostic.source == "width:bananas"
+    assert diagnostic.stage == :css and diagnostic.operation == :source_style_contexts
+
+    assert diagnostic.line == 1 and
+             diagnostic.column == String.length(hd(String.split(html, "width:bananas"))) + 1
+
+    assert Process.get({TemplateExecutionValidator, :execution}) == nil
+  end
+
   test "no earlier target retains an ordinary inert template after original validation" do
     assert {:ok, pdf} =
              HtmlToPdf.render(
@@ -129,6 +274,74 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
     assert {:ok, text} = Text.extract(pdf)
     assert text =~ "Actual"
     assert Process.get({TemplateExecutionValidator, :execution}) == nil
+  end
+
+  test "live source projection rejects malformed, changed and out-of-prefix facts without issuing authority" do
+    png = PngFixture.build(1, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
+
+    html =
+      "<body><?marker name='A'><template for='A'><img src='pixel.png'><p>Actual</p></template></body>"
+
+    opts =
+      Keyword.put(@opts, :asset_resolver, fn _ ->
+        frame = Process.get({TemplateExecutionValidator, :execution})
+
+        if frame.mode == :execute and frame.parser do
+          assert {:error, {:invalid_document, malformed}} =
+                   TemplateExecutionValidator.original_prefix_provenance(%{}, 0)
+
+          assert malformed.stage == :html and
+                   malformed.operation == :template_candidate_projection
+
+          assert malformed.source == "source_prefix"
+
+          assert {:error, {:invalid_document, boundary}} =
+                   TemplateExecutionValidator.original_prefix_provenance(frame.original, -1)
+
+          assert boundary.source == "source_prefix" and boundary.message =~ "original byte offset"
+
+          assert {:error, {:invalid_document, future}} =
+                   TemplateExecutionValidator.original_prefix_provenance(frame.original, 0)
+
+          assert future.message =~ "protected original token identity"
+          node = Enum.find(Map.values(frame.original.nodes), &(&1[:tag] == "img"))
+
+          altered = %{
+            frame.original
+            | nodes: Map.put(frame.original.nodes, node.node_id, %{node | tag: "p"})
+          }
+
+          assert {:error, {:invalid_document, changed}} =
+                   TemplateExecutionValidator.original_prefix_provenance(altered, byte_size(html))
+
+          assert changed.source == "<img src='pixel.png'>" and
+                   changed.message =~ "lexical ownership"
+
+          send(self(), :checked_prospective_source_projection)
+        end
+
+        {:ok, png}
+      end)
+
+    assert {:ok, _pdf} = HtmlToPdf.render(html, opts)
+    assert_received :checked_prospective_source_projection
+    assert TemplateExecutionValidator.original_prefix_provenance(%{}, 0) == :not_owned
+  end
+
+  test "original source prefix boundaries use UTF-8 byte offsets and shared diagnostics" do
+    alias NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator
+    assert {:ok, "α"} = HtmlCssSourceValidator.validate_source_prefix("αβ", 2)
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             HtmlCssSourceValidator.validate_source_prefix("αβ", 1)
+
+    assert diagnostic.stage == :html and diagnostic.reason == :invalid_document
+    assert diagnostic.source == "source_prefix" and diagnostic.message =~ "UTF-8 token boundary"
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             HtmlCssSourceValidator.validate_source_prefix("αβ", 5)
+
+    assert diagnostic.message =~ "original byte offset"
   end
 
   test "a changed preparation policy cannot activate even with permissive counters" do

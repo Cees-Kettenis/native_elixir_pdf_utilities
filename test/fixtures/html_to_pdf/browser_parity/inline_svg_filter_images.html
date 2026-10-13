@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size: 420pt 240pt; margin: 12pt; }
+body { margin: 0; font-family: 'DejaVu Sans'; font-size: 12pt; }
+p { margin: 0 0 8pt; }
+svg { display: block; }
+</style></head><body><p>Original local vector filter inputs</p>
+<svg width="480" height="190" viewBox="0 0 480 190">
+<defs>
+<linearGradient id="color"><stop stop-color="#b12c3b"/><stop offset="1" stop-color="#235296"/></linearGradient>
+<g id="card" transform="translate(4 6)"><rect x="5" y="5" width="90" height="40" fill="url(#color)"/><circle cx="118" cy="25" r="20" fill="#287445"/></g>
+<filter id="image" filterUnits="userSpaceOnUse" x="0" y="0" width="155" height="80"><feImage href="#card"/></filter>
+<filter id="blend" filterUnits="userSpaceOnUse" x="0" y="0" width="155" height="80"><feImage href="#card" result="input"/><feGaussianBlur in="input" stdDeviation="1" result="soft"/><feBlend in="SourceGraphic" in2="soft" mode="multiply"/></filter>
+</defs>
+<g transform="translate(8 8)"><rect width="130" height="50" fill="#c3d4ea" filter="url(#image)"/></g>
+<g transform="translate(220 8)"><rect x="5" y="5" width="130" height="50" fill="#eed582" filter="url(#blend)"/></g>
+<g transform="translate(15 100) rotate(5)"><rect width="130" height="50" fill="#c3d4ea" filter="url(#image)"/></g>
+<rect x="8" y="47" width="50" height="12" fill="#235296"/>
+</svg><p>Independent vector input and graph composition.</p></body></html>

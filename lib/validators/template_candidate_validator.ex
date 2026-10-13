@@ -26,7 +26,16 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateCandidateValidator do
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_original(tree, finish, plan) do
     with {:ok, provenance} <-
-           HtmlCssSourceValidator.prepare_prefix(HtmlTree.fetch(tree, tree.root), finish),
+           (case NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.original_prefix_provenance(
+                   tree,
+                   finish
+                 ) do
+              :not_owned ->
+                HtmlCssSourceValidator.prepare_prefix(HtmlTree.fetch(tree, tree.root), finish)
+
+              result ->
+                result
+            end),
          :ok <-
            if(plan.target,
              do: :ok,

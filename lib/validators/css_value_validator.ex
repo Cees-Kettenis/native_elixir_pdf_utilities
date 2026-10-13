@@ -435,6 +435,19 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             with {:ok, appearance} <- HtmlValidator.parse_control_appearance(value),
                  do: {:ok, Map.put(style, :appearance, appearance)}
 
+          "content-visibility" ->
+            case String.downcase(HtmlValidator.trim_ascii_whitespace(value), :ascii) do
+              "hidden" -> {:ok, Map.put(style, :content_visibility, :hidden)}
+              "visible" -> {:ok, Map.put(style, :content_visibility, :visible)}
+              _ -> :error
+            end
+
+          "resize" ->
+            # Canonical suppression is consumed by the static textarea grip authority.
+            if String.downcase(HtmlValidator.trim_ascii_whitespace(value), :ascii) == "none",
+              do: {:ok, Map.put(style, :resize, :none)},
+              else: :error
+
           "background-color" ->
             with {:ok, color} <- HtmlValidator.parse_css_color(value, Map.fetch!(style, :color)) do
               {:ok, Map.put(style, :background_color, transparent_color_to_nil(color))}

@@ -2,12 +2,23 @@
 use usvg::tiny_skia_path::{PathSegment, Point};
 
 pub fn work(group: &usvg::Group, ceiling: u64) -> Result<u64, String> {
-    let mut total = match group.mask() {
+    let mut total = 0u64;
+    for filter in group.filters() {
+        for primitive in filter.primitives() {
+            if let usvg::filter::Kind::Image(image) = primitive.kind() {
+                total = total.saturating_add(work(image.root(), ceiling)?);
+                if total > ceiling {
+                    return Err("max_svg_stroke_work".into());
+                }
+            }
+        }
+    }
+    total = total.saturating_add(match group.mask() {
         Some(mask) => mask_work(mask, ceiling)?,
         None => 0,
-    };
+    });
     total = total.saturating_add(match group.clip_path() {
-        Some(clip) => work(clip.root(), ceiling)?,
+        Some(clip) => clip_work(clip, ceiling)?,
         None => 0,
     });
     for node in group.children() {
@@ -78,6 +89,17 @@ pub fn work(group: &usvg::Group, ceiling: u64) -> Result<u64, String> {
     Ok(total)
 }
 
+fn clip_work(clip: &usvg::ClipPath, ceiling: u64) -> Result<u64, String> {
+    let mut total = work(clip.root(), ceiling)?;
+    if let Some(parent) = clip.clip_path() {
+        total = total.saturating_add(clip_work(parent, ceiling)?);
+    }
+    if total > ceiling {
+        return Err("max_svg_stroke_work".into());
+    }
+    Ok(total)
+}
+
 fn mask_work(mask: &usvg::Mask, ceiling: u64) -> Result<u64, String> {
     let mut total = work(mask.root(), ceiling)?;
     if let Some(parent) = mask.mask() {
@@ -91,10 +113,21 @@ fn mask_work(mask: &usvg::Mask, ceiling: u64) -> Result<u64, String> {
 
 /// Counts functions needed for every prepared fill/stroke gradient occurrence.
 pub fn gradient_work(group: &usvg::Group, ceiling: u64) -> Result<u64, String> {
-    let mut total = match group.mask() {
+    let mut total = 0u64;
+    for filter in group.filters() {
+        for primitive in filter.primitives() {
+            if let usvg::filter::Kind::Image(image) = primitive.kind() {
+                total = total.saturating_add(gradient_work(image.root(), ceiling)?);
+                if total > ceiling {
+                    return Err("max_svg_gradient_work".into());
+                }
+            }
+        }
+    }
+    total = total.saturating_add(match group.mask() {
         Some(mask) => mask_gradient_work(mask, ceiling)?,
         None => 0,
-    };
+    });
     for node in group.children() {
         total = total.saturating_add(match node {
             usvg::Node::Group(group) => gradient_work(group, ceiling)?,
@@ -164,6 +197,21 @@ pub fn text_with_surfaces<'a>(
     surfaces: &std::collections::HashSet<String>,
 ) -> Result<PreparedText<'a>, String> {
     let mut prepared = PreparedText::default();
+    for filter in group.filters() {
+        for primitive in filter.primitives() {
+            if let usvg::filter::Kind::Image(image) = primitive.kind() {
+                let children = text_with_surfaces(image.root(), database, surfaces)?;
+                for (font, glyphs) in children.mappings {
+                    prepared
+                        .mappings
+                        .entry(font)
+                        .or_insert_with(std::collections::BTreeMap::new)
+                        .extend(glyphs);
+                }
+                prepared.clusters.extend(children.clusters);
+            }
+        }
+    }
     if let Some(mask) = group.mask() {
         let mut current = Some(mask);
         while let Some(mask) = current {
@@ -200,15 +248,11 @@ pub fn text_with_surfaces<'a>(
                 }
                 for span in text_node.layouted() {
                     if span.stroke.is_some()
-                        || span
-                            .fill
-                            .as_ref()
-                            .is_some_and(|fill| !matches!(fill.paint(), usvg::Paint::Color(_)))
                         || span.underline.is_some()
                         || span.overline.is_some()
                         || span.line_through.is_some()
                     {
-                        return Err("SVG text currently requires solid RGB fill without stroke or decorations; native gradient/stroke text paint remains pending".into());
+                        return Err("SVG text currently requires fill without stroke or decorations; native stroke text paint remains pending".into());
                     }
                     let clusters = clusters(span, database)?;
                     for cluster in &clusters {
@@ -358,8 +402,13 @@ pub fn text_with_surfaces<'a>(
                         offset += count;
                     }
                 }
-                // The admitted font profile cannot contain color/raster glyphs.
-                text(text_node.flattened(), database)?;
+                // Paint-server artwork uses the same issued selected-font clusters.
+                // Keep its plans as well as validating the actual glyph font profile.
+                let children = text_with_surfaces(text_node.flattened(), database, surfaces)?;
+                for (font, glyphs) in children.mappings {
+                    prepared.mappings.entry(font).or_default().extend(glyphs);
+                }
+                prepared.clusters.extend(children.clusters);
             }
             usvg::Node::Path(path) => {
                 for paint in path

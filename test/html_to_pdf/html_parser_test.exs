@@ -966,7 +966,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     end
   end
 
-  test "initial hidden attributes retain authored values and diagnose unsupported until-found boxes" do
+  test "initial hidden attributes retain authored values including until-found boxes" do
     for {tag, value} <- [{"div", "false"}, {"x-box", ""}, {"input", "HIDDEN"}] do
       html =
         "<" <>
@@ -982,10 +982,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
           "<x-box hidden=UNTIL-FOUND>Text</x-box>",
           "<template><p hidden=until-found>Unused</p></template>"
         ] do
-      assert {:error, {:unsupported_html, diagnostic}} = HtmlParser.parse_detailed(html)
-      assert diagnostic.stage == :html
-      assert diagnostic.message =~ "content-visibility"
-      assert is_binary(diagnostic.source)
+      assert {:ok, _} = HtmlParser.parse_detailed(html)
     end
   end
 
@@ -1993,8 +1990,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     for html <- [
           "<select><optgroup><option>A</option></optgroup></select>",
           "<select><optgroup label='Group'>Unexpected</optgroup></select>",
-          "<select><optgroup label='Group'><span>Unsupported</span></optgroup></select>",
-          "<select><optgroup label='Group' selected></optgroup></select>"
+          "<select><optgroup label='Group'><span>Unsupported</span></optgroup></select>"
         ] do
       assert {:error, {reason, diagnostic}} = HtmlParser.parse_detailed(html)
       assert diagnostic.stage == :html and diagnostic.reason == reason
@@ -2882,7 +2878,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
           "<select readonly><option>X</option></select>",
           "<button readonly>X</button>"
         ] do
-      assert {:error, :unsupported_html} = HtmlParser.parse(html)
+      assert {:ok, _} = HtmlParser.parse(html)
     end
   end
 
@@ -2924,7 +2920,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     for html <- [
           "<textarea multiple>A</textarea>"
         ] do
-      assert {:error, :unsupported_html} = HtmlParser.parse(html)
+      assert {:ok, _} = HtmlParser.parse(html)
     end
   end
 
@@ -3056,8 +3052,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     for html <- [
           "<legend>Orphan</legend>",
           "<fieldset><legend><div>Block</div></legend></fieldset>",
-          "<fieldset readonly></fieldset>",
-          "<fieldset><legend disabled>Caption</legend></fieldset>",
           "<p><fieldset></fieldset></p>"
         ] do
       assert {:error, {reason, diagnostic}} = HtmlParser.parse_detailed(html)

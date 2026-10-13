@@ -1493,28 +1493,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     for tag <- ["button", "option"] do
       html = "<#{tag} required>Invalid</#{tag}>"
-      assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html)
-      assert diagnostic.stage == :html and diagnostic.operation == :render
-      assert diagnostic.source == "<#{tag} required>" and diagnostic.line == 1
-      assert diagnostic.reason == :unsupported_html and diagnostic.column == 1
+      reference = "<#{tag}>Invalid</#{tag}>"
+      html = if tag == "option", do: "<select>" <> html <> "</select>", else: html
+      reference = if tag == "option", do: "<select>" <> reference <> "</select>", else: reference
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:ok, reference} = HtmlToPdf.render(reference)
+      assert pdf == reference
     end
   end
 
-  test "horizontal rule limits and unfinished automatic-margin contexts return actionable diagnostics" do
+  test "horizontal rule limits and automatic-margin contexts return public results" do
     opts = [system_font_discovery: false]
 
     for html <- [
           "<div style='display:flex'><div style='width:60pt;margin:0 auto'>Text</div></div>",
           "<div style='display:grid'><div style='width:60pt;margin:0 auto'>Text</div></div>",
-          "<div style='position:absolute;width:60pt;margin:0 auto'>Text</div>",
-          "<hr style='display:flex'>"
+          "<div style='position:absolute;width:60pt;margin:0 auto'>Text</div>"
         ] do
-      assert {:error, {:invalid_layout, diagnostic}} = HtmlToPdf.render(html, opts)
-      assert diagnostic.stage == :layout and diagnostic.reason == :invalid_layout
-      assert diagnostic.operation == :layout and diagnostic.source in ["div", "hr"]
-      assert diagnostic.message =~ "automatic inline margins"
-      assert diagnostic.message =~ "numeric margins"
+      assert {:ok, pdf} = HtmlToPdf.render(html, opts)
+      assert {:ok, "Text"} = Text.extract(pdf, layout: false)
     end
+
+    assert {:ok, _pdf} = HtmlToPdf.render("<hr style='display:flex'>", opts)
 
     magnitude = trunc(Limits.get(:max_css_numeric_magnitude)) + 1
 
@@ -2037,10 +2037,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
         else: assert(fields == [])
     end
 
-    assert {:error, {:unsupported_html, %{stage: :html, operation: :render, message: message}}} =
-             HtmlToPdf.render("<p hidden=until-found>Unsupported box</p>")
-
-    assert message =~ "content-visibility"
+    assert {:ok, blank} = HtmlToPdf.render("<p hidden=until-found>Unprinted content</p>")
+    assert {:error, {:no_extractable_text, _}} = NativeElixirPdfUtilities.Text.extract(blank)
 
     assert {:error, {:invalid_document, %{stage: :asset, source: "asset:denied"}}} =
              HtmlToPdf.render("<img hidden style='display:block' src='asset:denied'>",
@@ -4998,10 +4996,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     for html <- [
           "<textarea multiple>A</textarea>"
         ] do
-      assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html)
-      assert diagnostic.stage == :html and diagnostic.operation == :render
-      source = hd(String.split(html, ">", parts: 2)) <> ">"
-      assert diagnostic.source == source and diagnostic.line == 1 and diagnostic.column == 1
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:ok, reference} = HtmlToPdf.render(String.replace(html, " multiple", ""))
+      assert pdf == reference
     end
   end
 

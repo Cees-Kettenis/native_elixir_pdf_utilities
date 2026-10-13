@@ -3255,7 +3255,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
 
     for tag <- ["select", "option", "button"] do
       refute HtmlValidator.valid_boolean_form_attribute?(tag, "readonly")
-      refute HtmlValidator.valid_form_attribute?(tag, "readonly", "")
+      assert HtmlValidator.valid_form_attribute?(tag, "readonly", "")
     end
 
     for type <- ["text", "TEXT", "search", "SeArCh"] do

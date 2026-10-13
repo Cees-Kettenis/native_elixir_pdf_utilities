@@ -6005,3 +6005,20 @@ Wave 6 combines later operators, controls, captions, child destinations and
 parser identity work in isolation. Pending source is not included in this
 checkpoint. Full feature completion, documentation/inventory reconciliation
 and the final cumulative performance audit remain required.
+
+## Combined implementation wave 16
+
+Wave 15 is published as `a172346c786826a1f231138ae85035adf02f0a64`.
+Wave 16 integrates the adjacent composition, sizing, MathML, initial visibility,
+control, template, SVG navigation, resource-cache, clipping, paint and filter
+changes listed in the remaining-work record. Fourteen implementation workers
+continue while the coordinator runs focused integration checks. Full acceptance,
+complete parity, coverage and performance remain deferred to final review.
+
+The shared default Style path now reuses the actual issued ResourceContext image
+budget, matching the existing standalone SVG path. This repairs the original
+Math/SVG scope mismatch without relaxing scene authorization. Scoped child-widget
+integration also retains the genuine foreignObject context rather than omitting
+it from the paint preparation descriptor. Native clip, gradient, filter and link
+helpers propagate the existing PDF object-allocation failure contract together.
+Original browser disagreements are retained for further implementation and review.

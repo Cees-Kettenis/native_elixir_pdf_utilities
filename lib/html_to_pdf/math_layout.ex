@@ -157,6 +157,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
               {:error, _} = error -> throw({:math_layout_error, error})
             end
 
+          placement =
+            if Enum.any?(prepared.rows, fn row ->
+                 Enum.any?(row, &Map.has_key?(&1, :content_layout_source))
+               end) do
+              widths = List.to_tuple(Enum.map(placement.cells, & &1.content_width))
+              intrinsic = List.to_tuple(Enum.map(placement.cells, & &1.measured))
+
+              {rows, _} =
+                Enum.map_reduce(prepared.rows, 0, fn row, index ->
+                  Enum.map_reduce(row, index, fn cell, index ->
+                    measured =
+                      if Map.has_key?(cell, :content_layout_source) do
+                        with {:ok, request} <-
+                               MathTableValidator.prepare_cell_reflow(cell, elem(widths, index)) do
+                          measure_prepared(request.prepared, request.prepared.stretch_constraint)
+                        else
+                          error -> throw({:math_layout_error, error})
+                        end
+                      else
+                        elem(intrinsic, index)
+                      end
+
+                    {measured, index + 1}
+                  end)
+                end)
+
+              case MathTableValidator.prepare_geometry(prepared, rows) do
+                {:ok, geometry} -> geometry
+                error -> throw({:math_layout_error, error})
+              end
+            else
+              placement
+            end
+
           cells =
             Enum.map(placement.cells, fn cell ->
               inner =
@@ -653,7 +687,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
       end
 
     measured =
-      if Map.get(prepared, :root, false),
+      if Map.get(prepared, :root, false) or Map.get(prepared, :native_owner, false),
         do: measured,
         else:
           decorate_geometry(

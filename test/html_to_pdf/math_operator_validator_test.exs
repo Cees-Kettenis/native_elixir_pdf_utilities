@@ -498,10 +498,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorValidatorTest do
     for value <- [
           "2vw",
           "1cqw",
-          "calc(1em + 2px)",
-          "min(1em, 2px)",
-          "max(1em, 2px)",
-          "clamp(1px, 1em, 2em)"
+          "calc(1em + 2vw)"
         ] do
       assert {:error, {:invalid_document, diagnostic}} =
                MathOperatorValidator.prepare("+", %{"lspace" => value})
@@ -512,5 +509,75 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorValidatorTest do
       assert diagnostic.message =~ "operator lspace"
       assert diagnostic.message =~ "CSS"
     end
+  end
+
+  test "typed CSS arithmetic resolves spacing with font and dictionary percentage context" do
+    for {value, expected} <- [
+          {"calc(1em + 2px)", 19.5},
+          {"min(1em, 2px)", 1.5},
+          {"max(1em, 2px)", 18},
+          {"clamp(1px, 1em, 2em)", 18},
+          {"clamp(2em, 1em, 0px)", 36},
+          {"calc((1em - 4pt) / 2 + 3px * 2)", 11.5},
+          {"calc(150% - 1pt)", 5},
+          {"min(200%, 12px)", 8},
+          {"calc(1em * 2em / 4em)", 9},
+          {"calc(1rch + 1rcap + 1rex + 1rlh + 1ric)", 52},
+          {"calc(1vw + 2vh + 1vmin + 1vmax + 1vi + 1vb)", 26}
+        ] do
+      assert {:ok, operator} =
+               MathOperatorValidator.prepare("+", %{"lspace" => value}, %{
+                 font_size: 18,
+                 root_zero_advance: 6,
+                 root_cap_height: 9,
+                 root_x_height: 5,
+                 root_line_height: 20,
+                 root_ideographic_advance: 12,
+                 viewport_width: 600,
+                 viewport_height: 200
+               })
+
+      assert_in_delta operator.lspace, expected, 1.0e-10
+    end
+  end
+
+  test "malformed and dimensionally invalid calculations use Core dictionary fallback" do
+    for value <- [
+          "calc(1em+2px)",
+          "calc(1em -2px)",
+          "calc(1em + 2)",
+          "calc(1em * 2px)",
+          "calc(1em / 2px)",
+          "calc(2)",
+          "min()",
+          "clamp(1em, 2em)",
+          "calc(1bogus + 2pt)",
+          "calc(1em) trailing",
+          "calc(1em +)"
+        ] do
+      assert {:ok, operator} = MathOperatorValidator.prepare("+", %{"lspace" => value})
+      assert_in_delta operator.lspace, 12 * 4 / 18, 1.0e-10
+    end
+  end
+
+  test "arithmetic failures and nesting exhaustion retain actionable operator diagnostics" do
+    for value <- ["calc(1em / 0)", "calc(1em + 1rch)"] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               MathOperatorValidator.prepare("+", %{"lspace" => value})
+
+      assert diagnostic.stage == :layout
+      assert diagnostic.operation == :prepare_math_operator
+      assert diagnostic.source == value
+      assert diagnostic.message =~ "operator lspace"
+    end
+
+    Limits.install(Map.put(Limits.effective(), :max_css_calculation_depth, 2))
+    value = "calc(min(max(1em, 2em), 3em))"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             MathOperatorValidator.prepare("+", %{"lspace" => value})
+
+    assert diagnostic.message =~ "max_css_calculation_depth"
+    assert diagnostic.source == value
   end
 end

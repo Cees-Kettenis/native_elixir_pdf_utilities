@@ -5,6 +5,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.TestSupport.TableGeometry
 
   @inline_image "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC"
 
@@ -21,6 +22,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert {:ok, reference_tree} = Style.compute_detailed(reference_dom)
     assert {:ok, reference} = Layout.layout(reference_tree, page_size: {180, 200}, margin: 10)
+    layout = %{layout | boxes: TableGeometry.original_cell_artwork(layout.boxes)}
+    reference = %{reference | boxes: TableGeometry.original_cell_artwork(reference.boxes)}
     # Source identities differ across parses; painted geometry must match exactly.
     assert %{layout | boxes: Enum.map(layout.boxes, &Map.delete(&1, :table_cell))} ==
              %{reference | boxes: Enum.map(reference.boxes, &Map.delete(&1, :table_cell))}
@@ -35,7 +38,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert {:ok, shorter_dom} = HtmlParser.parse_detailed(shorter)
     assert {:ok, shorter_tree} = Style.compute_detailed(shorter_dom)
     assert {:ok, shorter_layout} = Layout.layout(shorter_tree, page_size: {180, 200}, margin: 10)
-    shorter_b = Enum.find(shorter_layout.boxes, &(Map.get(&1, :text) == "B"))
+
+    shorter_b =
+      Enum.find(
+        TableGeometry.original_cell_artwork(shorter_layout.boxes),
+        &(Map.get(&1, :text) == "B")
+      )
+
     assert_in_delta shorter_b.y - b.y, 15.0, 0.0001
     assert c.y < b.y
   end
@@ -2110,7 +2119,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
              "Save"
            ]
 
-    assert length(Enum.reject(rects, &(Map.get(&1, :role) == :select_arrow))) == 6
+    assert length(Enum.reject(rects, &(Map.get(&1, :role) in [:select_arrow, :textarea_resizer]))) ==
+             6
+
+    assert length(Enum.filter(rects, &(Map.get(&1, :role) == :textarea_resizer))) == 4
 
     assert [%{shape: {:chevron, :down}, stroke_width: 1.5, fill_color: nil}] =
              Enum.filter(rects, &(Map.get(&1, :role) == :select_arrow))
@@ -3265,6 +3277,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert {:ok, styled_tree} = Style.compute(dom, [])
     assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {160, 160}, margin: 10)
+    layout_tree = %{layout_tree | boxes: TableGeometry.original_cell_artwork(layout_tree.boxes)}
 
     text_boxes =
       layout_tree.boxes

@@ -1,4 +1,5 @@
 //! Byte-only backend. Caller policy and resource budgets live in Elixir validators.
+mod annotation_validator;
 mod color_validator;
 mod effects_validator;
 mod filter_logic_validator;
@@ -141,6 +142,45 @@ fn vectorize_slots<'a>(
             let mut binary = OwnedBinary::new(pdf.len()).ok_or(rustler::Error::BadArg)?;
             binary.as_mut_slice().copy_from_slice(&pdf);
             Ok((atoms::ok(), binary.release(env)).encode(env))
+        }
+        Err(message) => Ok((atoms::error(), message).encode(env)),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn vectorize_annotations<'a>(
+    env: Env<'a>,
+    source: String,
+    fonts: Vec<Binary<'a>>,
+    resources: HashMap<String, Binary<'a>>,
+    slots: Vec<String>,
+    dimensions: (u32, u32),
+    ceilings: (u64, u64, u64),
+) -> NifResult<Term<'a>> {
+    let result = (|| {
+        let mut options = shape_options(fonts)?;
+        options.image_href_resolver = image_resources::resolver(resources);
+        let tree = parse_shape_tree(&source, &options)?;
+        let plan = annotation_validator::prepare(&source, &tree, ceilings.0, ceilings.1)?;
+        let work = plan.work;
+        let count = plan.boxes;
+        let pdf = vector::convert_with_annotations(
+            &tree,
+            plan,
+            ceilings.2,
+            slots.into_iter().collect(),
+            (
+                dimensions.0 as f32 / tree.size().width(),
+                dimensions.1 as f32 / tree.size().height(),
+            ),
+        )?;
+        Ok::<_, String>((pdf, work, count))
+    })();
+    match result {
+        Ok((pdf, work, count)) => {
+            let mut binary = OwnedBinary::new(pdf.len()).ok_or(rustler::Error::BadArg)?;
+            binary.as_mut_slice().copy_from_slice(&pdf);
+            Ok((atoms::ok(), (binary.release(env), work, count)).encode(env))
         }
         Err(message) => Ok((atoms::error(), message).encode(env)),
     }
@@ -315,12 +355,13 @@ fn render_bytes(
 fn validate_shape_work<'a>(env: Env<'a>, source: String, ceilings: Term<'a>) -> Term<'a> {
     // New source preparation is explicitly tagged. Old scalar/tuple results
     // remain unchanged for loaded bindings and the byte-only public contracts.
-    let text_request = ceilings
+    let request = ceilings
         .decode::<(
             rustler::Atom,
             (u64, u64, usize, u64, u64, usize),
             Vec<Binary>,
             HashMap<String, Binary>,
+            Vec<String>,
         )>()
         .or_else(|_| {
             ceilings
@@ -328,15 +369,36 @@ fn validate_shape_work<'a>(env: Env<'a>, source: String, ceilings: Term<'a>) -> 
                     rustler::Atom,
                     (u64, u64, usize, u64, u64, usize),
                     Vec<Binary>,
+                    HashMap<String, Binary>,
                 )>()
-                .map(|(tag, limits, fonts)| (tag, limits, fonts, HashMap::new()))
+                .map(|(tag, bounds, fonts, resources)| (tag, bounds, fonts, resources, vec![]))
+        })
+        .or_else(|_| {
+            ceilings
+                .decode::<(
+                    rustler::Atom,
+                    (u64, u64, usize, u64, u64, usize),
+                    Vec<Binary>,
+                    Vec<String>,
+                )>()
+                .map(|(tag, bounds, fonts, links)| (tag, bounds, fonts, HashMap::new(), links))
+        })
+        .or_else(|_| {
+            ceilings
+                .decode::<(
+                    rustler::Atom,
+                    (u64, u64, usize, u64, u64, usize),
+                    Vec<Binary>,
+                )>()
+                .map(|(tag, bounds, fonts)| (tag, bounds, fonts, HashMap::new(), vec![]))
         });
     if let Ok((
         tag,
         (strokes, gradients, bytes, expansion, expanded_source, nodes),
         fonts,
         resources,
-    )) = text_request
+        links,
+    )) = request
     {
         if tag != atoms::prepare_text() {
             return (
@@ -346,13 +408,33 @@ fn validate_shape_work<'a>(env: Env<'a>, source: String, ceilings: Term<'a>) -> 
                 .encode(env);
         }
         let result: Result<(u64, u64, String, u64, u64, u64), String> = (|| {
-            let identified = text_source_validator::identify(&source, bytes)?;
+            let identified = text_source_validator::identify(&source, bytes, &links)?;
             let mut options = shape_options(fonts)?;
             options.image_href_resolver = image_resources::resolver(resources);
-            let initial = parse_shape_tree(&identified.source, &options)?;
+            let measurement = text_source_validator::measurement(
+                &identified.source,
+                bytes,
+                expansion.saturating_sub(identified.work.saturating_add(expanded_source)),
+            )?;
+            let initial = parse_shape_tree(
+                measurement
+                    .as_ref()
+                    .map_or(identified.source.as_str(), |value| value.source.as_str()),
+                &options,
+            )?;
             let initial_strokes = vector_validator::work(initial.root(), strokes)?;
             let initial_gradients = vector_validator::gradient_work(initial.root(), gradients)?;
-            let prepared = text_source_validator::prepare(&identified.source, &initial, bytes)?;
+            let measurement_work = measurement
+                .as_ref()
+                .map_or(0, |value| value.work.saturating_add(expanded_source));
+            let remaining_work =
+                expansion.saturating_sub(identified.work.saturating_add(measurement_work));
+            let prepared = text_source_validator::prepare(
+                &identified.source,
+                &initial,
+                bytes,
+                remaining_work,
+            )?;
             let final_nodes = usvg::roxmltree::Document::parse_with_options(
                 &prepared.source,
                 usvg::roxmltree::ParsingOptions {
@@ -370,9 +452,10 @@ fn validate_shape_work<'a>(env: Env<'a>, source: String, ceilings: Term<'a>) -> 
             let work = identified
                 .work
                 .checked_add(prepared.work)
+                .and_then(|work| work.checked_add(measurement_work))
                 .and_then(|work| {
                     work.checked_add(if prepared.source != identified.source {
-                        expanded_source + prepared.extra_nodes
+                        expanded_source.saturating_add(prepared.extra_nodes)
                     } else {
                         0
                     })
@@ -383,6 +466,7 @@ fn validate_shape_work<'a>(env: Env<'a>, source: String, ceilings: Term<'a>) -> 
             }
             let (strokes_used, gradients_used) = if prepared.source != identified.source {
                 let final_tree = parse_shape_tree(&prepared.source, &options)?;
+                text_source_validator::verify(&prepared, &final_tree)?;
                 vector_validator::text(final_tree.root(), final_tree.fontdb())?;
                 (
                     initial_strokes
@@ -401,7 +485,12 @@ fn validate_shape_work<'a>(env: Env<'a>, source: String, ceilings: Term<'a>) -> 
                 (initial_strokes, initial_gradients)
             };
             // Issued string copies plus the returned binary are accounted.
-            let source_bytes = identified.source.len() as u64 + 2 * prepared.source.len() as u64;
+            let source_bytes = identified.source.len() as u64
+                + 2 * prepared.source.len() as u64
+                + measurement
+                    .as_ref()
+                    .map_or(0, |value| value.source.len() as u64)
+                + text_source_validator::retained_source_bytes(&prepared);
             Ok((
                 strokes_used,
                 gradients_used,
@@ -799,6 +888,7 @@ rustler::init!(
         validate_pattern_work,
         validate_filter_work,
         vectorize_effects,
+        vectorize_annotations,
         vectorize_resources,
         validate_resource_surfaces,
         prepare_html_surface,

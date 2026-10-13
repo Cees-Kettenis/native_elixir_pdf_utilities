@@ -69,7 +69,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   coordinates and intersect ancestor clips; linked text receives the same
   transform and visible intersection. A zero dimension prepares an empty clip.
   Dimensions alone do not clip nondegenerate groups. Rotation, skew, reflection
-  and grouped form controls return explicit diagnostics pending further support.
+  and raw grouped form controls return explicit diagnostics. Prepared child
+  viewports carry validator-issued fields separately, preserving their document
+  names, owners, actual clipped widgets and genuine appearance paint.
   Group depth and all nested drawing instructions use shared resource limits.
 
   Text and image links may supply `:link_destination` as
@@ -84,7 +86,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   Rectangles may supply `:shape` as `:rectangle` or `{:triangle, direction}`, with
   `direction` one of `:up`, `:down`, `:left` or `:right`. `{:chevron, :down}`
-  supplies an open down chevron for native menu strokes.
+  supplies an open down chevron for native menu strokes. `{:diagonal, :up}`
+  supplies an open rising stroke for native textarea resize artwork.
 
   Text, rectangle and image boxes may carry an absolute `:clip` rectangle with
   finite bounded `x`/`y` and positive `width`/`height`. It may supply a
@@ -117,6 +120,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           with {:ok, pages, controls} <-
                  NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare(
                    context.pages,
+                   opts
+                 ),
+               {:ok, controls} <-
+                 NativeElixirPdfUtilities.Validators.HtmlFormValidator.merge_composition(
+                   pages,
+                   controls,
                    opts
                  ),
                {font_resources, next_object_id} <- font_resources(pages, 3),
@@ -1055,7 +1064,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         :frameset_canvas ->
           %{box | y: box.y + @raster_boundary_bias}
 
-        role when role in [:inline_background, :frameset_border, :scrollbar] ->
+        role when role in [:inline_background, :frameset_border, :scrollbar, :text_decoration] ->
           # Match Chromium's print-matrix ties at the left and top raster edges.
           %{box | x: box.x - @raster_boundary_bias, y: box.y + @raster_boundary_bias}
 
@@ -1194,7 +1203,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           case WriterValidator.visible_border?(box) and border_style not in [:none, :hidden] do
             true ->
               stroke_box =
-                if Map.get(box, :shape) == {:chevron, :down},
+                if Map.get(box, :shape) in [{:chevron, :down}, {:diagonal, :up}],
                   do: box,
                   else: inset_stroke_box(box)
 
@@ -1258,7 +1267,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                 |> put_opacity(box.stroke_color, :stroke, graphics_state_resources)
                 |> put_stroke_color(
                   box.stroke_color,
-                  if(Map.get(box, :role) == :native_menu, do: 0.0, else: box.stroke_width / scale)
+                  if(Map.get(box, :role) in [:native_menu, :textarea_resizer],
+                    do: 0.0,
+                    else: box.stroke_width / scale
+                  )
                 )
                 |> put_stroke_pattern(border_style, box.stroke_width / scale, nil)
                 |> Kernel.++(
@@ -1448,6 +1460,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   defp rect_path(box) do
     case Map.get(box, :shape, :rectangle) do
+      {:diagonal, :up} ->
+        "#{format_number(box.x)} #{format_number(box.y)} m " <>
+          "#{format_number(box.x + box.width)} #{format_number(box.y + box.height)} l"
+
       {:chevron, :down} ->
         "#{format_number(box.x)} #{format_number(box.y + box.height)} m " <>
           "#{format_number(box.x + box.width / 2)} #{format_number(box.y)} l " <>

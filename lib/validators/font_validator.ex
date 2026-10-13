@@ -749,6 +749,20 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   @spec prepare_text_ink_bounds(term()) ::
           {:ok, {number(), number()} | nil} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_text_ink_bounds(box) do
+    prepare_text_ink_geometry(box, :vertical)
+  end
+
+  @doc "Measures selected embedded-font glyph ink in PDF coordinates, including horizontal overhang, kerning and authored spacing."
+  @spec prepare_text_ink_rectangle(term()) ::
+          {:ok, {number(), number(), number(), number()} | nil}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_text_ink_rectangle(box) do
+    prepare_text_ink_geometry(box, :rectangle)
+  end
+
+  # Both callers use the same glyph and outline authority. The existing vertical
+  # measurement avoids allocating advances when horizontal geometry is not needed.
+  defp prepare_text_ink_geometry(box, geometry) do
     with_budget(fn ->
       case box do
         %{
@@ -781,13 +795,20 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
                 Enum.map(String.to_charlist(selected_text), &Map.get(cmap, &1, 0))
               )
 
-            if is_list(ids), do: reserve(:max_font_math_work, length(ids))
-
             valid? =
-              is_list(ids) and length(ids) == length(String.codepoints(selected_text)) and
-                Enum.all?(ids, &(is_integer(&1) and &1 > 0 and &1 < tuple_size(bounds))) and
+              valid_text_glyph_selection?(
+                ids,
+                tuple_size(bounds),
+                length(String.codepoints(selected_text))
+              ) and
                 size <= Limits.get(:max_css_numeric_magnitude) and
-                abs(baseline) <= Limits.get(:max_pdf_numeric_magnitude)
+                abs(baseline) <= Limits.get(:max_pdf_numeric_magnitude) and
+                (geometry == :vertical or
+                   (is_number(Map.get(box, :x)) and
+                      abs(box.x) <= Limits.get(:max_pdf_numeric_magnitude) and
+                      is_number(Map.get(box, :letter_spacing, 0.0)) and
+                      abs(Map.get(box, :letter_spacing, 0.0)) <=
+                        Limits.get(:max_css_numeric_magnitude)))
 
             if valid? do
               ink = ids |> Enum.map(&elem(bounds, &1)) |> Enum.reject(&(&1 == {0, 0, 0, 0}))
@@ -799,7 +820,70 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
                 _ ->
                   minimum = Enum.min(Enum.map(ink, &elem(&1, 1))) * size / units + baseline
                   maximum = Enum.max(Enum.map(ink, &elem(&1, 3))) * size / units + baseline
-                  {:ok, {maximum, minimum}}
+
+                  case geometry do
+                    :vertical ->
+                      {:ok, {maximum, minimum}}
+
+                    :rectangle ->
+                      reserve(:max_font_math_work, 2 * length(ids))
+
+                      widths =
+                        NativeElixirPdfUtilities.HtmlToPdf.Font.glyph_widths(font, Enum.max(ids))
+
+                      scale = size / units
+                      spacing = Map.get(box, :letter_spacing, 0.0)
+                      explicit? = Map.has_key?(box, :glyph_ids)
+
+                      {_cursor, _previous, left, right} =
+                        Enum.reduce(ids, {box.x, nil, nil, nil}, fn id,
+                                                                    {cursor, previous, left,
+                                                                     right} ->
+                          adjustment =
+                            if explicit?,
+                              do: 0,
+                              else: Map.get(Map.get(font, :kerning, %{}), {previous, id}, 0)
+
+                          cursor = cursor + adjustment * scale
+                          outline = elem(bounds, id)
+
+                          {left, right} =
+                            case outline do
+                              {0, 0, 0, 0} ->
+                                {left, right}
+
+                              {xmin, _ymin, xmax, _ymax} ->
+                                glyph_left = cursor + xmin * scale
+                                glyph_right = cursor + xmax * scale
+
+                                {if(left == nil, do: glyph_left, else: min(left, glyph_left)),
+                                 if(right == nil, do: glyph_right, else: max(right, glyph_right))}
+                            end
+
+                          advance =
+                            if id < tuple_size(widths),
+                              do: elem(widths, id),
+                              else: font.default_width
+
+                          {cursor + advance * scale + spacing, id, left, right}
+                        end)
+
+                      if Enum.all?(
+                           [left, minimum, right, maximum],
+                           &(abs(&1) <= Limits.get(:max_pdf_numeric_magnitude))
+                         ) do
+                        {:ok, {left, minimum, right, maximum}}
+                      else
+                        Diagnostics.error(
+                          :font,
+                          :resource_limit_exceeded,
+                          "text ink rectangle exceeds max_pdf_numeric_magnitude; reduce text size or spacing",
+                          operation: :measure_child,
+                          module: __MODULE__,
+                          source: text
+                        )
+                      end
+                  end
               end
             else
               Diagnostics.error(
@@ -832,6 +916,24 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
           )
       end
     end)
+  end
+
+  # Charge each selected glyph before consuming its list link. Improper and
+  # mismatched selections are ordinary direct-input errors, not Enum failures.
+  defp valid_text_glyph_selection?(ids, glyph_count, remaining) do
+    case ids do
+      [] ->
+        remaining == 0
+
+      [id | tail] ->
+        reserve(:max_font_math_work, 1)
+
+        is_integer(id) and id > 0 and id < glyph_count and remaining > 0 and
+          valid_text_glyph_selection?(tail, glyph_count, remaining - 1)
+
+      _ ->
+        false
+    end
   end
 
   @doc false

@@ -21,10 +21,7 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
 
             %{
               control.appearance
-              | boxes:
-                  Enum.map(control.appearance.boxes, fn box ->
-                    if box.type == :text, do: %{box | text: text}, else: box
-                  end)
+              | boxes: appearance_state_boxes(control.appearance.boxes, {:button, text})
             }
           end
         else
@@ -32,7 +29,7 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
             control.appearance,
             %{
               control.appearance
-              | boxes: Enum.reject(control.appearance.boxes, &(&1.type == :text))
+              | boxes: appearance_state_boxes(control.appearance.boxes, :background)
             }
           ]
         end
@@ -217,6 +214,35 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
           ]
       )
     end
+  end
+
+  defp appearance_state_boxes(boxes, state) do
+    Enum.flat_map(boxes, fn box ->
+      case {box.type, state} do
+        {:text, :background} ->
+          []
+
+        {:glyph_group, :background} ->
+          []
+
+        {:text, {:button, text}} ->
+          [%{box | text: text}]
+
+        {type, _state} when type in [:drawing_group, :glyph_group] ->
+          box = %{box | boxes: appearance_state_boxes(box.boxes, state)}
+
+          box =
+            case {type, state} do
+              {:glyph_group, {:button, text}} -> Map.put(box, :actual_text, text)
+              _ -> box
+            end
+
+          [box]
+
+        _ ->
+          [box]
+      end
+    end)
   end
 
   @doc false

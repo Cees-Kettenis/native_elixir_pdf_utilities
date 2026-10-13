@@ -116,8 +116,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
 
     File.write!(Path.join(root, "extra.html"), "<body style='margin:0'>Extra child<input></body>")
 
-    assert {:error, {:unsupported_form, diagnostic}} = HtmlToPdf.render(html, base_url: root)
-    assert diagnostic.message =~ "form"
+    assert {:ok, interactive} = HtmlToPdf.render(html, base_url: root)
+    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(interactive)
+    File.write!(Path.join(root, "extra-range.html"), "<input type='range'>")
+
+    assert {:error, {:unsupported_form, diagnostic}} =
+             HtmlToPdf.render(String.replace(html, "extra.html", "extra-range.html"),
+               base_url: root
+             )
+
+    assert diagnostic.message =~ "Range"
     assert {:ok, pdf} = HtmlToPdf.render(html, base_url: root, forms: :static)
     assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
     assert text =~ "Frame child"
@@ -434,6 +442,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
     )
 
     File.write!(Path.join(root, "zero-form.html"), "<input>")
+    File.write!(Path.join(root, "zero-range.html"), "<input type='range'>")
     File.write!(Path.join(root, "zero-invalid.html"), <<255>>)
 
     for border <- ["2", "8"] do
@@ -453,8 +462,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
       refute pdf =~ "/Subtype /Link"
       assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
 
-      assert {:error, {:unsupported_form, _}} =
+      assert {:ok, hidden_form} =
                HtmlToPdf.render(String.replace(html, "zero-border.html", "zero-form.html"),
+                 base_url: root,
+                 page_size: {300, 200},
+                 margin: 0
+               )
+
+      assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(hidden_form)
+
+      assert {:error, {:unsupported_form, _}} =
+               HtmlToPdf.render(String.replace(html, "zero-border.html", "zero-range.html"),
                  base_url: root,
                  page_size: {300, 200},
                  margin: 0
@@ -661,6 +679,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
       "<input name='shared' value='Clipped field'>"
     )
 
+    File.write!(Path.join(root, "zero-range.html"), "<input type='range'>")
+
     File.write!(
       Path.join(root, "zero-links.html"),
       "<p id='target'><a href='#target'>Zero cell link</a></p>"
@@ -686,10 +706,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
       refute text =~ "Zero cell link"
       html = String.replace(html, "zero-links.html", "zero-fields.html")
 
-      assert {:error, {:unsupported_form, diagnostic}} =
+      assert {:ok, invisible_widgets} =
                HtmlToPdf.render(html, base_url: root, page_size: {300, 200}, margin: 0)
 
-      assert diagnostic.operation == :layout_embedded_viewport
+      assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(invisible_widgets)
+
+      assert {:error, {:unsupported_form, diagnostic}} =
+               HtmlToPdf.render(String.replace(html, "zero-fields.html", "zero-range.html"),
+                 base_url: root,
+                 page_size: {300, 200},
+                 margin: 0
+               )
+
+      assert diagnostic.message =~ "Range"
 
       assert {:ok, pdf} =
                HtmlToPdf.render(html,

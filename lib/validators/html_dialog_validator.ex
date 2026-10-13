@@ -12,7 +12,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlDialogValidator do
       offsets: CssValueValidator.edges(:auto, 0.0, :auto, 0.0),
       width: :fit_content,
       padding: CssValueValidator.edges(font_size),
-      margin: CssValueValidator.edges(0.0, :auto, 0.0, :auto),
+      margin: CssValueValidator.edges(:auto),
       border_widths: CssValueValidator.edges(2.25),
       border_styles: CssValueValidator.edges(:solid),
       border_colors: CssValueValidator.edges({0.0, 0.0, 0.0}),

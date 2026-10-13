@@ -12,6 +12,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.MathOperatorDictionary
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.CssCalculationValidator
 
   @dictionary MathOperatorDictionary.data()
   @row_parents [
@@ -36,9 +37,15 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
     "ex" => :x_height,
     "cap" => :cap_height,
     "ch" => :zero_advance,
-    "lh" => :line_height
+    "lh" => :line_height,
+    "ic" => :ideographic_advance,
+    "rex" => :root_x_height,
+    "rcap" => :root_cap_height,
+    "rch" => :root_zero_advance,
+    "ric" => :root_ideographic_advance,
+    "rlh" => :root_line_height
   }
-  @contextual_units ~w(ic rlh rex rch rcap ric vw vh vi vb vmin vmax svw svh svi svb svmin svmax lvw lvh lvi lvb lvmin lvmax dvw dvh dvi dvb dvmin dvmax cqw cqh cqi cqb cqmin cqmax)
+  @contextual_units ~w(vw vh vi vb vmin vmax svw svh svi svb svmin svmax lvw lvh lvi lvb lvmin lvmax dvw dvh dvi dvb dvmin dvmax cqw cqh cqi cqb cqmin cqmax)
   @context_keys [
     :parent,
     :index,
@@ -50,11 +57,20 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
     :cap_height,
     :zero_advance,
     :line_height,
+    :ideographic_advance,
+    :root_x_height,
+    :root_cap_height,
+    :root_zero_advance,
+    :root_ideographic_advance,
+    :root_line_height,
+    :viewport_width,
+    :viewport_height,
     :text_only
   ]
 
   @typedoc "Point lengths, glyph-height percentages, or the unbounded Core maximum."
-  @type size_constraint :: number() | {:percentage, number()} | :infinity
+  @type size_constraint ::
+          number() | {:percentage, number()} | CssCalculationValidator.calculation() | :infinity
 
   @typedoc "Validated operator properties for a prepared MathML core operator."
   @type semantics :: %{
@@ -109,7 +125,10 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
   Fence and separator are semantic metadata and do not change Core geometry.
   Numeric percentages and absolute, em, rem, ex, cap, ch and lh lengths are resolved
   against the core operator's selected font and computed style.
-  CSS calculations and units requiring other geometry are diagnosed explicitly.
+  Typed `calc`, `min`, `max`, and `clamp` expressions retain min/max percentages
+  until natural glyph height is known. Optional `viewport_width` and
+  `viewport_height` are point dimensions of the actual CSS viewport. Root font
+  units use the corresponding `root_*` metric. Missing geometry is diagnosed.
   `stretch_axis` uses the names accepted by `MathLayout.stretch/6`, even when
   `stretchy` is false. Multi-character operators need text layout, not stretch/6.
   """
@@ -118,7 +137,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
   def prepare(text, attributes, context \\ %{}) do
     with :ok <- validate_arguments(text, attributes, context) do
       size = Map.get(context, :font_size, 12)
-      context = Map.put_new(context, :root_font_size, size)
+      context = context |> Map.put_new(:root_font_size, size) |> Map.put_new(:font_size, size)
       explicit = Map.get(attributes, "form", "") |> String.downcase(:ascii)
       explicit? = explicit in ["infix", "prefix", "postfix"]
       index = Map.get(context, :index, 0)
@@ -213,7 +232,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
       child_index = Map.get(context, :child_index, index)
       size = Map.get(context, :font_size, 12)
       root = Map.get(context, :root_font_size, size)
-      font_lengths = Enum.map(Map.values(@font_units), &Map.get(context, &1))
+
+      font_lengths =
+        Enum.map(
+          Map.values(@font_units) ++ [:viewport_width, :viewport_height],
+          &Map.get(context, &1)
+        )
+
       parent = Map.get(context, :parent)
 
       cond do
@@ -298,7 +323,16 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
         prepared =
           case HtmlValidator.parse_css_number(normalized) do
             :error ->
-              :error
+              if is_binary(normalized) and
+                   String.starts_with?(normalized, ["calc(", "min(", "max(", "clamp("]),
+                 do:
+                   prepare_calculation(
+                     normalized,
+                     context,
+                     spacing?,
+                     if(spacing?, do: default * size, else: 0)
+                   ),
+                 else: :error
 
             {number, "%"} ->
               if spacing?,
@@ -322,7 +356,15 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
               end
 
             {_number, unit} when unit in @contextual_units ->
-              :unsupported_geometry
+              if Map.has_key?(unit_scales(context), unit),
+                do:
+                  prepare_calculation(
+                    normalized,
+                    context,
+                    spacing?,
+                    if(spacing?, do: default * size, else: 0)
+                  ),
+                else: :unsupported_geometry
 
             {_number, unit} when unit in ["pc", "q"] ->
               # Fixed CSS absolute-unit conversions: 1pc = 12pt, 1q = 1/4mm.
@@ -390,21 +432,75 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
           {:ok, percentage} ->
             {:cont, {:ok, Map.put(properties, key, percentage)}}
 
+          {:error, {reason, diagnostic}} ->
+            {:halt, failure(reason, "operator #{key}: #{diagnostic.message}", value)}
+
           :error ->
-            if is_binary(normalized) and
-                 String.starts_with?(normalized, ["calc(", "min(", "max(", "clamp("]) do
-              {:halt,
-               failure(
-                 :invalid_document,
-                 "operator #{key} CSS calculations are not supported by this slice",
-                 value
-               )}
-            else
-              {:cont, {:ok, Map.put(properties, key, fallback)}}
-            end
+            {:cont, {:ok, Map.put(properties, key, fallback)}}
         end
       end
     end)
+  end
+
+  # Unit scales belong to the core's selected style, even through embellishment.
+  defp unit_scales(context) do
+    scales = %{
+      "pt" => 1,
+      "px" => 0.75,
+      "in" => 72,
+      "cm" => 72 / 2.54,
+      "mm" => 72 / 25.4,
+      "q" => 72 / 101.6,
+      "pc" => 12,
+      "em" => context.font_size,
+      "rem" => context.root_font_size
+    }
+
+    scales =
+      Enum.reduce(@font_units, scales, fn {unit, key}, scales ->
+        if is_number(context[key]), do: Map.put(scales, unit, context[key]), else: scales
+      end)
+
+    case {context[:viewport_width], context[:viewport_height]} do
+      {width, height} when is_number(width) and is_number(height) ->
+        scales =
+          Map.merge(scales, %{
+            "cqw" => width / 100,
+            "cqi" => width / 100,
+            "cqh" => height / 100,
+            "cqb" => height / 100,
+            "cqmin" => min(width, height) / 100,
+            "cqmax" => max(width, height) / 100
+          })
+
+        # The supported CSS model has no eligible size-query container. CSS
+        # container units therefore use the small viewport, which is fixed in print.
+        Enum.reduce(["", "s", "l", "d"], scales, fn prefix, scales ->
+          Map.merge(scales, %{
+            (prefix <> "vw") => width / 100,
+            (prefix <> "vi") => width / 100,
+            (prefix <> "vh") => height / 100,
+            (prefix <> "vb") => height / 100,
+            (prefix <> "vmin") => min(width, height) / 100,
+            (prefix <> "vmax") => max(width, height) / 100
+          })
+        end)
+
+      _ ->
+        scales
+    end
+  end
+
+  defp prepare_calculation(value, context, spacing?, basis) do
+    case CssCalculationValidator.prepare(value, unit_scales(context)) do
+      {:ok, expression} ->
+        if spacing?,
+          do: CssCalculationValidator.resolve(expression, basis),
+          else: {:ok, expression}
+
+      other ->
+        other
+    end
   end
 
   defp failure(reason, message, source) do

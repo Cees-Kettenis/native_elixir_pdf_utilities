@@ -262,6 +262,86 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableSpanConstraintsTest do
     assert diagnostic.source == "mtd" and diagnostic.message =~ "nonoverlapping"
   end
 
+  test "nested percentage matrices keep an indefinite anonymous Math row basis" do
+    html =
+      "<math><mtable style='width:180pt'><mtr><mtd style='width:90pt;padding:0'><mtable style='width:100%;background:lightblue'><mtr><mtd style='padding:0'><mn>1</mn></mtd></mtr></mtable></mtd><mtd style='padding:0'><mn>2</mn></mtd></mtr></mtable></math>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+
+    assert {:ok, %{children: [math]}} =
+             ResourceContext.run([], HtmlValidator.new_image_budget(), fn _ ->
+               Style.compute_detailed(dom, system_font_discovery: false)
+             end)
+
+    assert_in_delta math.style._math_box.width, 180, 1.0e-9
+    backgrounds = Enum.filter(math.style._math_box.drawing_items, &(&1.kind == :background))
+    assert length(backgrounds) == 1
+    glyph = Enum.find(math.style._math_box.glyphs, &(&1.text == "1"))
+    assert_in_delta hd(backgrounds).width, glyph.width, 1.0e-9
+    assert hd(backgrounds).width < 90
+    assert math.style._math_box.actual_text == "12"
+    assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+    assert {:ok, "12"} = Text.extract(pdf, layout: false)
+  end
+
+  test "ordinary HTML token content wraps at its allocated matrix cell width" do
+    text = "Alpha beta gamma delta epsilon"
+
+    html =
+      "<math><mtable style='width:100pt'><mtr><mtd style='padding:0'><mtext style='font-family:DejaVu Sans;font-size:12pt;line-height:18pt;display:inline'><span>#{text}</span></mtext></mtd></mtr></mtable></math>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+
+    assert {:ok, %{children: [math]}} =
+             ResourceContext.run([], HtmlValidator.new_image_budget(), fn _ ->
+               Style.compute_detailed(dom, system_font_discovery: false)
+             end)
+
+    measured = math.style._math_box
+    assert_in_delta measured.width, 100, 1.0e-9
+    assert measured.actual_text == text
+    assert_in_delta measured.ascent + measured.descent, 54, 1.0e-9
+
+    lines =
+      measured.drawing_items
+      |> Enum.filter(&(&1.kind == :native))
+      |> Enum.flat_map(fn item ->
+        if item.box.type == :glyph_group, do: item.box.boxes, else: [item.box]
+      end)
+      |> Enum.filter(&(&1.type == :text))
+      |> Enum.map(& &1.y)
+      |> Enum.uniq()
+
+    assert length(lines) > 1
+    assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+    assert {:ok, ^text} = Text.extract(pdf, layout: false)
+  end
+
+  test "cell reflow request failures use the shared diagnostic contract" do
+    for cell <- [
+          %{},
+          %{content_layout_source: %{}, content_layout_context: %{}},
+          %{
+            content_layout_source: %{type: :element, namespace: :mathml, tag: "mrow"},
+            content_layout_context: nil
+          }
+        ] do
+      assert {:error, {reason, diagnostic}} = MathTableValidator.prepare_cell_reflow(cell, 10)
+      assert reason == diagnostic.reason and diagnostic.source == "mtd"
+      assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
+    end
+
+    cell = %{
+      content_layout_source: %{type: :element, namespace: :mathml, tag: "mrow"},
+      content_layout_context: %{}
+    }
+
+    assert {:error, {_, diagnostic}} = MathTableValidator.prepare_cell_reflow(cell, nil)
+    assert diagnostic.message =~ "definite"
+    assert {:error, {_, diagnostic}} = MathTableValidator.prepare_cell_reflow(cell, 10)
+    assert diagnostic.operation == :measure_math and diagnostic.stage == :layout
+  end
+
   test "wide spans reserve redistribution work before allocation", %{style: style} do
     source = table([[cell("1", style, %{"columnspan" => "100"})]], style)
     Limits.install(Map.put(Limits.effective(), :max_table_grid_work, 400))

@@ -147,6 +147,33 @@ pub fn filter_work(
             let rect = filter.rect();
             let region = area(rect.width(), rect.height(), sx, sy);
             for primitive in filter.primitives() {
+                // Resolved logical-input graph nodes, result names, traversal
+                // sets and dependency edges are reserved before extraction.
+                let edges = match primitive.kind() {
+                    usvg::filter::Kind::Merge(fe) => fe.inputs().len() as u64,
+                    _ => 2,
+                };
+                pixels = pixels
+                    .saturating_add(48)
+                    .saturating_add((primitive.result().len() as u64).saturating_add(3) / 4)
+                    .saturating_add(edges.saturating_mul(2));
+                work = work
+                    .saturating_add(primitive.result().len() as u64)
+                    .saturating_add(edges.saturating_mul(8))
+                    .saturating_add(8);
+                check(pixels, work, pixel_ceiling, work_ceiling)?;
+                if let usvg::filter::Kind::Image(image) = primitive.kind() {
+                    pixels = pixels.saturating_add(pattern_pixels(
+                        image.root(),
+                        usvg::Transform::from_scale(sx, sy),
+                        pixel_ceiling,
+                        region.max(canvas),
+                    )?);
+                    let nested = filter_work(image.root(), (sx, sy), pixel_ceiling, work_ceiling)?;
+                    pixels = pixels.saturating_add(nested.0);
+                    work = work.saturating_add(nested.1);
+                    check(pixels, work, pixel_ceiling, work_ceiling)?;
+                }
                 // Each retained result and both cloned inputs can coexist with
                 // conversion, clipping, algorithm scratch and output buffers.
                 pixels = pixels.saturating_add(region.max(canvas).saturating_mul(8));

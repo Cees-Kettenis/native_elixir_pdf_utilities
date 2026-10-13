@@ -1,12 +1,16 @@
 defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
   @moduledoc "Shared bounded CSS calculations with dimensional arithmetic and the Values 4 numeric functions."
+  alias NativeElixirPdfUtilities.{Diagnostics, Limits}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, SourceSizeValidator}
+
+  @length_units ~w(pt px in cm mm pc q em rem ex rex cap rcap ch rch ic ric lh rlh vw vh vi vb vmin vmax svw svh svi svb svmin svmax lvw lvh lvi lvb lvmin lvmax dvw dvh dvi dvb dvmin dvmax cqw cqh cqi cqb cqmin cqmax)
   @type numeric :: number() | :infinity | :negative_infinity | :nan
   @type dimension :: %{optional(atom()) => integer()}
 
   @doc "Evaluates a CSS scalar or math function in an already prepared length environment."
   @spec evaluate(String.t(), map()) :: {:ok, numeric(), dimension()} | :error
   def evaluate(value, environment) do
+    value = Regex.replace(~r/\/\*.*?\*\//s, value, " ")
     value = value |> HtmlValidator.trim_css_whitespace() |> String.downcase(:ascii)
 
     if length(component_terms(value, true)) == 1 and not String.starts_with?(value, "("),
@@ -20,6 +24,152 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
     value
     |> NativeElixirPdfUtilities.HtmlToPdf.CssParser.strip_comments()
     |> evaluate(%{width: 0, height: 0, color_components: true})
+  end
+
+  @typedoc "A length-percentage source with validated grammar and measured point scales."
+  @type length_calculation :: {:css_calculation, {String.t(), %{String.t() => number()}}}
+
+  @doc "Prepares a length-percentage calculation while deferring its percentage basis."
+  @spec prepare_length(term(), term()) ::
+          {:ok, length_calculation()} | :error | {:error, Diagnostics.detailed_error()}
+  def prepare_length(value, scales) do
+    valid? =
+      is_binary(value) and String.valid?(value) and is_map(scales) and
+        Enum.all?(scales, fn {unit, scale} ->
+          is_binary(unit) and is_number(scale) and scale >= 0 and
+            scale <= Limits.get(:max_css_numeric_magnitude)
+        end)
+
+    if valid? do
+      with {:ok, units} <- referenced_length_units(value) do
+        case Enum.find(units, &(not Map.has_key?(scales, &1))) do
+          nil ->
+            {:ok, {:css_calculation, {value, scales}}}
+
+          unit ->
+            length_failure(
+              :invalid_document,
+              "CSS calculation in #{unit} requires measured unit geometry",
+              value
+            )
+        end
+      end
+    else
+      length_failure(
+        :invalid_document,
+        "CSS calculation requires text and measured unit scales",
+        nil
+      )
+    end
+  end
+
+  @doc "Collects units through the shared grammar after validating a length-percentage type."
+  @spec referenced_length_units(term()) ::
+          {:ok, [String.t()]} | :error | {:error, Diagnostics.detailed_error()}
+  def referenced_length_units(value) do
+    cond do
+      not (is_binary(value) and String.valid?(value)) ->
+        length_failure(
+          :invalid_document,
+          "CSS calculation requires text and measured unit scales",
+          nil
+        )
+
+      byte_size(value) > Limits.get(:max_html_numeric_token_bytes) ->
+        length_failure(
+          :resource_limit_exceeded,
+          "CSS calculation exceeds max_html_numeric_token_bytes",
+          value
+        )
+
+      true ->
+        HtmlValidator.with_render_budget(fn ->
+          collector = make_ref()
+          Process.put(collector, [])
+
+          try do
+            HtmlValidator.reserve_render_resource(:max_css_work, byte_size(value), :css)
+
+            environment = %{
+              type_check: true,
+              percentage_basis: 1.0,
+              unit_scales: Map.new(@length_units, &{&1, 1.0}),
+              _depth_limit: :max_css_calculation_depth,
+              _unit_collector: collector
+            }
+
+            case evaluate(value, environment) do
+              {:ok, _, %{length: 1}} ->
+                {:ok, collector |> Process.get() |> Enum.reverse() |> Enum.uniq()}
+
+              _ ->
+                :error
+            end
+          after
+            Process.delete(collector)
+          end
+        end)
+    end
+  end
+
+  @doc "Evaluates a prepared length against its actual point-valued percentage basis."
+  @spec resolve_length(term(), term()) ::
+          {:ok, number()} | {:error, Diagnostics.detailed_error()}
+  def resolve_length(calculation, basis) do
+    case calculation do
+      {:css_calculation, {value, scales}}
+      when is_binary(value) and is_map(scales) and is_number(basis) and basis >= 0 ->
+        HtmlValidator.with_render_budget(fn ->
+          if basis > Limits.get(:max_css_numeric_magnitude) do
+            length_failure(
+              :resource_limit_exceeded,
+              "CSS calculation exceeds max_css_numeric_magnitude",
+              value
+            )
+          else
+            environment = %{
+              unit_scales: scales,
+              percentage_basis: basis,
+              _depth_limit: :max_css_calculation_depth,
+              _bounded_length: true
+            }
+
+            case evaluate(value, environment) do
+              {:ok, number, %{length: 1}} when is_number(number) ->
+                {:ok, number}
+
+              {:ok, _, %{length: 1}} ->
+                length_failure(
+                  :invalid_document,
+                  "CSS calculation divides by zero or produces a non-finite length",
+                  value
+                )
+
+              _ ->
+                length_failure(
+                  :invalid_document,
+                  "CSS calculation requires a validated expression and percentage basis",
+                  value
+                )
+            end
+          end
+        end)
+
+      _ ->
+        length_failure(
+          :invalid_document,
+          "CSS calculation requires a validated expression and percentage basis",
+          nil
+        )
+    end
+  end
+
+  defp length_failure(reason, message, source) do
+    Diagnostics.error(:layout, reason, message,
+      operation: :prepare_css_calculation,
+      module: __MODULE__,
+      source: source
+    )
   end
 
   @doc false
@@ -73,7 +223,28 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
   end
 
   defp expression(value, environment, depth) do
-    HtmlValidator.check_render_resource(:max_media_query_depth, depth, :style)
+    result = expression_value(value, environment, depth)
+
+    case result do
+      {:ok, number, _} when is_number(number) ->
+        if Map.get(environment, :_bounded_length, false),
+          do:
+            HtmlValidator.check_render_resource(:max_css_numeric_magnitude, abs(number), :layout)
+
+        result
+
+      _ ->
+        result
+    end
+  end
+
+  defp expression_value(value, environment, depth) do
+    HtmlValidator.check_render_resource(
+      Map.get(environment, :_depth_limit, :max_media_query_depth),
+      depth,
+      :style
+    )
+
     terms = component_terms(value, true)
     HtmlValidator.reserve_render_resource(:max_css_work, length(terms), :style)
 
@@ -95,12 +266,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
              {:ok, left, left_type} <-
                expression(terms |> Enum.take(index) |> Enum.join(" "), environment, depth + 1),
              {:ok, right, right_type} <-
-               expression(terms |> Enum.drop(index + 1) |> Enum.join(" "), environment, depth + 1),
-             true <-
-               not Map.get(environment, :color_components, false) or
-                 operator in ["+", "-"] or
-                 (operator == "*" and (left_type == %{} or right_type == %{})) or
-                 (operator == "/" and right_type == %{}) do
+               expression(terms |> Enum.drop(index + 1) |> Enum.join(" "), environment, depth + 1) do
           case operator do
             additive when additive in ["+", "-"] ->
               if left_type == right_type,
@@ -215,8 +381,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
                  unit not in ["", "%", "deg", "grad", "rad", "turn"] do
               :error
             else
+              case Map.get(environment, :_unit_collector) do
+                nil ->
+                  :ok
+
+                collector ->
+                  if unit in @length_units,
+                    do: Process.put(collector, [unit | Process.get(collector)])
+              end
+
               environment =
-                if unit in ~w(ex rex ch rch cap rcap ic ric lh rlh) and
+                if not Map.has_key?(environment, :unit_scales) and
+                     unit in ~w(ex rex ch rch cap rcap ic ric lh rlh) and
                      not Map.get(environment, :type_check, false) and
                      not Map.has_key?(environment, :source_metrics) do
                   case SourceSizeValidator.prepare_context(environment, ["1" <> unit], []) do
@@ -230,16 +406,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
               {scale, type} =
                 case unit do
                   unit when unit in ~w(vw svw lvw dvw vi svi lvi dvi) ->
-                    {environment.width / 100, :length}
+                    {Map.get(environment, :width, 0.0) / 100, :length}
 
                   unit when unit in ~w(vh svh lvh dvh vb svb lvb dvb) ->
-                    {environment.height / 100, :length}
+                    {Map.get(environment, :height, 0.0) / 100, :length}
 
                   unit when unit in ~w(vmin svmin lvmin dvmin) ->
-                    {min(environment.width, environment.height) / 100, :length}
+                    {min(Map.get(environment, :width, 0.0), Map.get(environment, :height, 0.0)) /
+                       100, :length}
 
                   unit when unit in ~w(vmax svmax lvmax dvmax) ->
-                    {max(environment.width, environment.height) / 100, :length}
+                    {max(Map.get(environment, :width, 0.0), Map.get(environment, :height, 0.0)) /
+                       100, :length}
 
                   unit when unit in ~w(em rem) ->
                     {Map.get(
@@ -249,7 +427,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
                      ), :length}
 
                   unit when unit in ~w(ex rex ch rch cap rcap ic ric lh rlh) ->
-                    key = unit |> String.trim_leading("r") |> String.to_existing_atom()
+                    key =
+                      Map.fetch!(
+                        %{"ex" => :ex, "ch" => :ch, "cap" => :cap, "ic" => :ic, "lh" => :lh},
+                        String.trim_leading(unit, "r")
+                      )
 
                     metrics =
                       if String.starts_with?(unit, "r"),
@@ -335,6 +517,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
                   _ ->
                     {nil, :unknown}
                 end
+
+              {scale, type} =
+                if Map.has_key?(environment, :unit_scales) and unit in @length_units,
+                  do: {Map.get(environment.unit_scales, unit), :length},
+                  else: {scale, type}
 
               with true <- is_number(scale),
                    {:ok, value} <- HtmlValidator.normalize_geometry_number(number * scale),

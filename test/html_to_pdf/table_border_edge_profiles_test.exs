@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableBorderEdgeProfilesTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, PdfWriter, Style}
   alias NativeElixirPdfUtilities.Validators.{CssValueValidator, HtmlTableValidator}
+  alias NativeElixirPdfUtilities.TestSupport.TableGeometry
 
   test "legacy frame hints prepare each authored outer-side selection" do
     for {frame, sides} <- [
@@ -116,7 +117,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableBorderEdgeProfilesTest do
 
     borders =
       Enum.filter(
-        layout.boxes,
+        TableGeometry.original_cell_artwork(layout.boxes),
         &(Map.get(&1, :role) == :table_border and Map.has_key?(&1, :clip) and
             &1.border_widths.left > 0)
       )

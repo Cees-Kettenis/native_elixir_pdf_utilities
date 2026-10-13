@@ -69,14 +69,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextProfileRegressionTest do
 
   test "prepared stroke gradient and transformed text require coherent visible logical painting" do
     for html <- [
-          "<svg width=200 height=50><text y=25 stroke=red>Stroke</text></svg>",
-          "<svg width=200 height=50><defs><linearGradient id=g><stop offset=0 /><stop offset=1 /></linearGradient></defs><text y=25 fill='url(#g)'>Gradient</text></svg>"
+          "<svg width=200 height=50><text y=25 stroke=red>Stroke</text></svg>"
         ] do
       assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html)
       assert diagnostic.stage == :layout and diagnostic.reason == :unsupported_html
       assert diagnostic.module == SvgTextValidator and diagnostic.source == "text"
-      assert diagnostic.message =~ "solid RGB fill without stroke"
+      assert diagnostic.message =~ "fill without stroke"
     end
+
+    assert {:ok, gradient_pdf} =
+             HtmlToPdf.render(
+               "<svg width=200 height=50><defs><linearGradient id=g><stop offset=0 /><stop offset=1 /></linearGradient></defs><text y=25 fill='url(#g)'>Gradient</text></svg>"
+             )
+
+    assert {:ok, "Gradient"} = Text.extract(gradient_pdf)
+    assert gradient_pdf =~ "/PatternType 2"
 
     for style <- ["text-transform:uppercase", "white-space:pre", "text-decoration:underline"] do
       assert {:error, {:unsupported_html, diagnostic}} =

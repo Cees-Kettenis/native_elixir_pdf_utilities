@@ -66,6 +66,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes do
   def vectorize_slots(_source, _fonts, _slots), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc false
+  @spec vectorize_annotations(
+          binary(),
+          [binary()],
+          %{binary() => binary()},
+          [binary()],
+          {pos_integer(), pos_integer()},
+          {non_neg_integer(), non_neg_integer(), non_neg_integer()}
+        ) :: {:ok, {binary(), non_neg_integer(), non_neg_integer()}} | {:error, binary()}
+  def vectorize_annotations(_source, _fonts, _resources, _slots, _dimensions, _ceilings),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc false
   @spec validate_shape_work(
           binary(),
           {pos_integer(), pos_integer(), [binary()]}
@@ -74,6 +86,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes do
              {pos_integer(), pos_integer(), pos_integer(), pos_integer(), non_neg_integer(),
               pos_integer()}, [binary()]}
           | {:prepare_text, tuple(), [binary()], map()}
+          | {:prepare_text, tuple(), [binary()], [binary()]}
+          | {:prepare_text, tuple(), [binary()], map(), [binary()]}
         ) ::
           {:ok, {non_neg_integer(), non_neg_integer()}}
           | {:ok,

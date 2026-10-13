@@ -383,8 +383,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
                 end),
              tree <- EmbeddedViewportValidator.prepare_viewport_tree(surface),
              {:ok, layout, geometry} <- layout_client(tree, surface, width, height, geometry),
-             {:ok, boxes} <-
-               EmbeddedViewportValidator.prepare_paint(layout, surface, width, height) do
+             {:ok, boxes, widgets} <-
+               EmbeddedViewportValidator.prepare_composition(layout, surface, width, height) do
+          # Target-bearing nonpainting markers belong to the document's target
+          # transport. Pagination's destination owner finalizes them later.
+          boxes =
+            Enum.reject(boxes, fn box ->
+              box.type == :page_break or
+                (box.type == :flow_marker and not Map.has_key?(box, :html_targets))
+            end)
+
           origin = %{x: layout.margins.left, y: geometry.client_height - layout.margins.top}
 
           metadata =
@@ -410,6 +418,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
             metadata
             |> Map.put(:client_rect, client_rect)
             |> Map.put(:scroll_offset, %{x: 0.0, y: 0.0})
+            |> Map.put(:embedded_widgets, widgets)
 
           metadata =
             if surface.host == :iframe,

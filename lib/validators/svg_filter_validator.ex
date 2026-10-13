@@ -10,7 +10,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFilterValidator do
     SvgImageValidator
   }
 
-  @primitives ~w(feBlend feColorMatrix feComponentTransfer feComposite feConvolveMatrix feDiffuseLighting feDisplacementMap feDropShadow feFlood feGaussianBlur feMerge feMorphology feOffset feSpecularLighting feTile feTurbulence)
+  @primitives ~w(feBlend feColorMatrix feComponentTransfer feComposite feConvolveMatrix feDiffuseLighting feDisplacementMap feDropShadow feFlood feGaussianBlur feImage feMerge feMorphology feOffset feSpecularLighting feTile feTurbulence)
   @children ~w(feMergeNode feFuncR feFuncG feFuncB feFuncA feDistantLight fePointLight feSpotLight)
   @inputs ~w(SourceGraphic SourceAlpha)
   @enum %{
@@ -77,6 +77,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFilterValidator do
       result =
         with :ok <- validate_parameters(node),
              :ok <- validate_structure(node, ancestors),
+             :ok <- if(node.tag == "feImage", do: validate_image_input(node, ids), else: :ok),
              :ok <- if(node.tag == "filter", do: validate_graph(node, ids), else: :ok) do
           case reference do
             {:ok, :none} ->
@@ -160,6 +161,104 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFilterValidator do
               inputs
             )
         end)
+    end
+  end
+
+  defp validate_image_input(node, ids) do
+    href = Map.get(node.attributes, "href", Map.get(node.attributes, "xlink:href", ""))
+
+    case href do
+      "#" <> id ->
+        case Map.get(ids, id) do
+          nil -> invalid("feImage must identify a same-scene painted input", "feImage href")
+          target -> validate_image_vector(target, ids, MapSet.new([id]))
+        end
+
+      _ ->
+        unsupported(
+          "feImage external inputs require their authorized graph image resource context",
+          "feImage href"
+        )
+    end
+  end
+
+  # Targets retain their original local tree and actual geometry. Source text
+  # and HTML require independently issued selected-input plans, never borrowed
+  # SourceGraphic replacement metadata.
+  defp validate_image_vector(node, ids, visited) do
+    if node.tag not in (~w(g rect circle ellipse line polyline polygon path use text tspan title desc linearGradient radialGradient stop clipPath mask pattern marker) ++
+                          tags()) do
+      unsupported(
+        "feImage selected text, HTML and nested image inputs require their genuine independent paint plans",
+        "feImage " <> node.tag
+      )
+    else
+      href = Map.get(node.attributes, "href", Map.get(node.attributes, "xlink:href", ""))
+
+      result =
+        if node.tag == "use" do
+          case href do
+            "#" <> id ->
+              cond do
+                MapSet.member?(visited, id) ->
+                  invalid("feImage local input references contain a cycle", "feImage href")
+
+                not Map.has_key?(ids, id) ->
+                  invalid("feImage local input reference is missing", "feImage href")
+
+                true ->
+                  validate_image_vector(Map.fetch!(ids, id), ids, MapSet.put(visited, id))
+              end
+
+            _ ->
+              invalid("feImage reused inputs require explicit local references", "feImage href")
+          end
+        else
+          :ok
+        end
+
+      values =
+        if Map.has_key?(node, :style),
+          do: Map.values(node.style),
+          else:
+            Enum.flat_map(node.attributes, fn {property, value} ->
+              case SvgStyleValidator.parse(property, value) do
+                {:ok, parsed} -> [parsed]
+                _ -> []
+              end
+            end)
+
+      references = for {kind, id} <- values, kind in [:paint_server, :fragment], do: id
+
+      painted =
+        Enum.reduce_while(references, :ok, fn id, :ok ->
+          cond do
+            MapSet.member?(visited, id) ->
+              {:halt, invalid("feImage input paint references contain a cycle", "feImage href")}
+
+            not Map.has_key?(ids, id) ->
+              {:halt, invalid("feImage input paint reference is missing", "feImage href")}
+
+            true ->
+              case validate_image_vector(Map.fetch!(ids, id), ids, MapSet.put(visited, id)) do
+                :ok -> {:cont, :ok}
+                error -> {:halt, error}
+              end
+          end
+        end)
+
+      with :ok <- result, :ok <- painted do
+        Enum.reduce_while(node.children, :ok, fn child, :ok ->
+          if Map.get(child, :type) == :element do
+            case validate_image_vector(child, ids, visited) do
+              :ok -> {:cont, :ok}
+              error -> {:halt, error}
+            end
+          else
+            {:cont, :ok}
+          end
+        end)
+      end
     end
   end
 

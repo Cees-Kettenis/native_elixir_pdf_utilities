@@ -121,10 +121,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
                   )
 
                 Map.has_key?(node, :style) and
-                    (Map.get(node.style, :svg_stroke, :none) != :none or
-                       match?({:paint_server, _}, Map.get(node.style, :svg_fill))) ->
+                    Map.get(node.style, :svg_stroke, :none) != :none ->
                   unsupported(
-                    "SVG text currently requires solid RGB fill without stroke; gradient/stroke text paint remains pending",
+                    "SVG text currently requires fill without stroke; stroke text paint remains pending",
                     node.tag
                   )
 
@@ -134,13 +133,6 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
                        Map.get(node.style, :_text_decorations, []) != []) ->
                   unsupported(
                     "SVG text transforms, preserved whitespace and decorations require matching visible and logical text",
-                    node.tag
-                  )
-
-                Map.has_key?(node.attributes, "textLength") and
-                    Enum.any?(node.children, &(Map.get(&1, :tag) == "tspan")) ->
-                  unsupported(
-                    "SVG textLength over nested spans requires complete ancestral length distribution",
                     node.tag
                   )
 

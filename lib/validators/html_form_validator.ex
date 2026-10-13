@@ -546,7 +546,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
         )
 
       type == "image" and Keyword.get(opts, :forms, :interactive) == :interactive and
-          not state.disabled ->
+        not state.disabled and not Map.has_key?(node, :_html_inert) ->
         Diagnostics.error(
           :forms,
           :unsupported_form,
@@ -1115,6 +1115,32 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     trunc((height - style.line_height) / 0.75 * 64 / 2) / 64 * 0.75
   end
 
+  @doc "Returns the initial single-line input/menu editor's used vertical offset; multiline textarea content remains top aligned."
+  @spec initial_control_content_offset(map(), number()) :: float()
+  def initial_control_content_offset(style, height) do
+    if Map.get(style, :form_kind) in [:text, :select],
+      do: initial_number_content_offset(style, height),
+      else: 0.0
+  end
+
+  @doc "Returns the fixed Linux initial textarea resize strokes in CSS pixels, before actual control placement."
+  @spec initial_resizer_strokes(map(), number(), number()) :: [map()]
+  def initial_resizer_strokes(style, width, height) do
+    if width > 0 and height > 0 and Map.get(style, :form_kind) == :textarea and
+         Map.get(style, :resize) != :none and
+         Map.get(style, :overflow) in [:auto, :scroll, :hidden] do
+      # Chromium's 15px CornerRect uses integer division for the half and
+      # three-quarter endpoints. ScopedRasterFlags turns the 1px stroke into
+      # a PDF hairline and scales its 153/255 alpha by the .75 print matrix.
+      for {left, size} <- [{8, 7}, {4, 3}],
+          {shift, color} <- [{0, {0, 0, 0, 0.45}}, {1, {1, 1, 1, 0.45}}] do
+        %{left: left - shift, bottom: 1, size: size - shift, color: color}
+      end
+    else
+      []
+    end
+  end
+
   @doc false
   @spec readonly_input_type?(String.t()) :: boolean()
   def readonly_input_type?(type),
@@ -1193,9 +1219,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     namespaces = Map.get(node, :attribute_namespaces, %{})
 
     cond do
-      Map.get(node, :namespace, :html) != :html -> attributes
-      Map.get(node, :tag) == "input" -> applicable_input_attributes(attributes, namespaces)
-      true -> Map.reject(attributes, fn {name, _} -> not is_nil(Map.get(namespaces, name)) end)
+      Map.get(node, :namespace, :html) != :html ->
+        attributes
+
+      Map.get(node, :tag) == "input" ->
+        applicable_input_attributes(attributes, namespaces)
+
+      true ->
+        Map.reject(attributes, fn {name, _} ->
+          not is_nil(Map.get(namespaces, name)) or
+            (name in ~w(checked disabled readonly multiple required selected alpha) and
+               not HtmlValidator.valid_boolean_form_attribute?(Map.get(node, :tag), name))
+        end)
     end
   end
 
@@ -1761,6 +1796,23 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     end
   end
 
+  @doc "Prepares child controls in an issued document scope, retaining their actual HTML owner and control identity for final composition."
+  @spec prepare_scoped([map()], keyword(), NativeElixirPdfUtilities.HtmlToPdf.ResourceContext.t()) ::
+          {:ok, [map()], [map()]} | {:error, {atom(), map()}}
+  def prepare_scoped(pages, opts, context) do
+    with :ok <- NativeElixirPdfUtilities.Validators.ResourceValidator.validate_context(context) do
+      prepare(pages, Keyword.put(opts, :__retain_html_identity__, true))
+    end
+  catch
+    {:render_resource_limit, {:error, {reason, diagnostic}}} ->
+      {:error,
+       {reason,
+        Diagnostics.with_context(diagnostic,
+          module: __MODULE__,
+          operation: :compose_child_widgets
+        )}}
+  end
+
   @doc false
   @spec prepare([map()], keyword()) :: {:ok, [map()], [map()]} | {:error, {atom(), map()}}
   def prepare(pages, opts) do
@@ -1883,6 +1935,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
               error(:unsupported_form, "a control cannot span pages or repeat in page furniture")
 
             true ->
+              HtmlValidator.reserve_render_resource(
+                :max_pdf_form_fields,
+                length(controls),
+                :forms
+              )
+
+              HtmlValidator.reserve_render_resource(
+                :max_appearance_widgets,
+                length(controls) * 2,
+                :forms
+              )
+
               # HTML radios keep per-element :required state, but PDF widgets in
               # one field share the group's submission requirement.
               required_radio_groups =
@@ -2059,6 +2123,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                 field = %{
                   name: name,
                   html_owner: item.control.initial_state.owner,
+                  html_control_id: item.control.id,
                   type: String.to_existing_atom(item.type),
                   value: value,
                   choices: choices,
@@ -2168,7 +2233,28 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                     Enum.map(pages, fn page ->
                       %{
                         page
-                        | boxes: Enum.reject(page.boxes, &(not is_nil(Map.get(&1, :form_owner))))
+                        | boxes:
+                            Enum.flat_map(page.boxes, fn box ->
+                              if is_nil(Map.get(box, :form_owner)) do
+                                [box]
+                              else
+                                case Map.get(box, :html_targets, []) do
+                                  [] ->
+                                    []
+
+                                  _targets ->
+                                    [
+                                      box
+                                      |> Map.take([:x, :y, :html_targets])
+                                      |> Map.merge(%{
+                                        type: HtmlValidator.reserve_layout_box(:flow_marker),
+                                        width: 0.0,
+                                        height: 0.0
+                                      })
+                                    ]
+                                end
+                              end
+                            end)
                       }
                     end)
 
@@ -2179,10 +2265,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                       end)
                     end)
 
+                  HtmlValidator.reserve_render_resource(:max_appearance_text_bytes, bytes, :forms)
+
                   if bytes <= Limits.get(:max_appearance_text_bytes),
                     do:
                       {:ok, cleaned,
-                       fields |> Enum.reverse() |> Enum.map(&Map.delete(&1, :html_owner))},
+                       fields
+                       |> Enum.reverse()
+                       |> Enum.map(fn field ->
+                         if Keyword.get(opts, :__retain_html_identity__, false),
+                           do: field,
+                           else: Map.drop(field, [:html_owner, :html_control_id])
+                       end)},
                     else:
                       error(
                         :resource_limit_exceeded,
@@ -2198,6 +2292,127 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
       _ ->
         error(:invalid_options, "forms must be :interactive or :static")
     end
+  catch
+    {:render_resource_limit, failure} -> failure
+  end
+
+  @doc "Combines canonical writer-normalized child fields with root fields, retaining separate document names and shared widget/appearance ceilings."
+  @spec merge_composition([map()], [map()], keyword()) ::
+          {:ok, [map()]} | {:error, {atom(), map()}}
+  def merge_composition(pages, root_fields, opts) do
+    records =
+      pages
+      |> Enum.with_index(1)
+      |> Enum.flat_map(fn {page, number} ->
+        page.boxes
+        |> Enum.flat_map(fn box ->
+          case Map.get(box, :embedded_widgets) do
+            %{fields: [_ | _]} = record ->
+              [%{record | fields: Enum.map(record.fields, &Map.put(&1, :page, number))}]
+
+            _ ->
+              []
+          end
+        end)
+      end)
+
+    count = length(root_fields) + Enum.reduce(records, 0, &(length(&1.fields) + &2))
+
+    cond do
+      records != [] and Keyword.get(opts, :forms, :interactive) == :static ->
+        error(
+          :unsupported_form,
+          "interactive child fields require surfaces prepared with forms: :interactive; recompute static child artwork for forms: :static"
+        )
+
+      count > Limits.get(:max_pdf_form_fields) or count * 2 > Limits.get(:max_appearance_widgets) ->
+        error(
+          :resource_limit_exceeded,
+          "composed HTML controls exceed the shared field or appearance count limit"
+        )
+
+      length(Enum.uniq_by(records, & &1.token)) != length(records) ->
+        error(
+          :unsupported_form,
+          "a child control document cannot repeat across pages or page furniture"
+        )
+
+      true ->
+        document_order = records |> Enum.map(& &1.document_id) |> Enum.uniq()
+        documents = Enum.group_by(records, & &1.document_id)
+        names = MapSet.new(Enum.map(root_fields, & &1.name))
+
+        Enum.reduce_while(document_order, {:ok, [root_fields], names}, fn id,
+                                                                          {:ok, chunks, names} ->
+          own = documents[id] |> Enum.flat_map(& &1.fields)
+          name_work = Enum.reduce(own, 0, &(byte_size(&1.name) + &2))
+
+          prefix =
+            Stream.iterate(1, &(&1 + 1))
+            |> Enum.find_value(fn index ->
+              prefix = "CHILD_#{index}_"
+
+              HtmlValidator.reserve_render_resource(
+                :max_html_tree_work,
+                name_work + byte_size(prefix) * length(own),
+                :forms
+              )
+
+              if Enum.all?(own, &(not MapSet.member?(names, prefix <> &1.name))), do: prefix
+            end)
+
+          cond do
+            Enum.any?(
+              own,
+              &(byte_size(prefix) + byte_size(&1.name) > Limits.get(:max_pdf_form_text_bytes))
+            ) ->
+              {:halt,
+               error(
+                 :resource_limit_exceeded,
+                 "child PDF field name exceeds max_pdf_form_text_bytes"
+               )}
+
+            length(Enum.uniq_by(own, & &1.html_control_id)) != length(own) ->
+              {:halt,
+               error(:unsupported_form, "a child control cannot repeat in composed artwork")}
+
+            true ->
+              groups = Enum.group_by(own, & &1.name)
+
+              invalid =
+                Enum.find(groups, fn {_name, members} ->
+                  first = hd(members)
+
+                  length(members) > 1 and
+                    (first.type != :radio or
+                       Enum.any?(
+                         members,
+                         &(&1.type != :radio or &1.html_owner != first.html_owner or
+                             &1.flags != first.flags)
+                       ) or
+                       length(Enum.uniq_by(members, & &1.export)) != length(members))
+                end)
+
+              if invalid do
+                {:halt,
+                 error(
+                   :invalid_form,
+                   "composed child fields must retain unique names or one consistent radio owner and export group"
+                 )}
+              else
+                own = Enum.map(own, &Map.put(&1, :name, prefix <> &1.name))
+                names = Enum.reduce(own, names, &MapSet.put(&2, &1.name))
+                {:cont, {:ok, [own | chunks], names}}
+              end
+          end
+        end)
+        |> case do
+          {:ok, chunks, _names} -> {:ok, chunks |> Enum.reverse() |> List.flatten()}
+          failure -> failure
+        end
+    end
+  catch
+    {:render_resource_limit, failure} -> failure
   end
 
   defp validate_initial_controls(pages) do
@@ -2269,7 +2484,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                        ))) and
                    (not is_binary(Map.get(state, :value)) or
                       not String.valid?(Map.get(state, :value)))) or
-                not HtmlValidator.valid_form_element?(tag, attributes, children) or
+                not HtmlValidator.valid_form_element?(tag, attributes, children, :initial_dom) or
                 (tag == "input" and
                    (HtmlValidator.button_input_type?(
                       HtmlValidator.input_type(Map.get(attributes, "type", "text"))

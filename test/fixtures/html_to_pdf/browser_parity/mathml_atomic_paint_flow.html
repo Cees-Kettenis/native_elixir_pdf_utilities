@@ -1,0 +1,17 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@page {size:300pt 300pt;margin:12pt}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:12pt;line-height:18pt}
+p {margin:0;line-height:42pt}
+math {font-family:"STIX Two Math";font-size:18pt}
+a {text-decoration:none}
+</style></head><body>
+<p>Ordinary <math><mn>123</mn></math> end.</p>
+<p>Padded <math><mpadded width="36pt" height="8pt" depth="0pt" lspace="6pt" voffset="4pt"><mn>7</mn></mpadded></math> end.</p>
+<p>Phantom <math><mphantom><merror><mn>9</mn></merror></mphantom><mn>2</mn></math> end.</p>
+<p>Native <math><mtext><span style="font-family:DejaVu Sans;font-style:italic">jAV</span></mtext></math> end.</p>
+<p>Rule <math><mfrac><mn>1</mn><mn>2</mn></mfrac></math> end.</p>
+<p>Error <math><merror><mn>7</mn></merror></math> end.</p>
+<p>Linked <a href="https://example.test/math"><math><mn>456</mn></math></a> end.</p>
+<p>Table <math><mtable><mtr style="background:lightyellow"><mtd style="background:lightblue"><mn>7</mn></mtd><mtd><mn>8</mn></mtd></mtr></mtable></math> end.</p>
+<p>Clip <span style="display:inline-block;width:30pt;height:18pt;overflow:hidden"><a href="https://example.test/clip"><math><mn>123456789</mn></math></a></span> end.</p>
+</body></html>

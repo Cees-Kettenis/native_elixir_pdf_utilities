@@ -8,7 +8,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgClipValidator do
     SvgTransformValidator
   }
 
-  @shapes ~w(path rect circle ellipse polyline polygon)
+  @shapes ~w(path rect circle ellipse polyline polygon use text)
 
   @doc false
   @spec validate_summary(map()) :: :ok | {:error, {atom(), map()}}
@@ -61,7 +61,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgClipValidator do
           node.tag == "defs" and
               Enum.any?(
                 geometry,
-                &(&1.tag not in ~w(clipPath pattern marker mask filter symbol use svg g image path rect circle ellipse line polyline polygon text linearGradient radialGradient))
+                &(&1.tag not in ~w(clipPath pattern marker mask filter symbol use svg g image path rect circle ellipse line polyline polygon text a linearGradient radialGradient))
               ) ->
             unsupported(
               "SVG defs requires supported static geometry, symbols or bounded paint/clip definitions",
@@ -73,24 +73,27 @@ defmodule NativeElixirPdfUtilities.Validators.SvgClipValidator do
             invalid("SVG clipPath requires an id and a direct defs parent", "clipPath")
 
           node.tag == "clipPath" and
-              Map.get(node.attributes, "clipPathUnits", "userSpaceOnUse") != "userSpaceOnUse" ->
-            unsupported("SVG clipPath currently requires userSpaceOnUse coordinates", "clipPath")
+              Map.get(node.attributes, "clipPathUnits", "userSpaceOnUse") not in ~w(userSpaceOnUse objectBoundingBox) ->
+            invalid("SVG clipPathUnits requires userSpaceOnUse or objectBoundingBox", "clipPath")
 
           node.tag == "clipPath" and
-              (length(geometry) != 1 or hd(geometry).tag not in @shapes) ->
-            unsupported("SVG clipPath requires exactly one static geometry child", "clipPath")
-
-          clip != {:ok, :none} and
-              (node.tag in ~w(defs clipPath) or "clipPath" in ancestors) ->
+              Enum.any?(geometry, &(&1.tag not in @shapes)) ->
             unsupported(
-              "linked or nested SVG clip definitions require complete clip composition",
-              node.tag
+              "SVG clipPath requires static shape, text or same-document use children",
+              "clipPath"
             )
 
-          clip != {:ok, :none} and node.tag == "svg" and ancestors == [] ->
-            unsupported(
-              "outer SVG clipping requires unified host box and annotation composition",
-              "svg"
+          node.tag == "use" and "clipPath" in ancestors and
+              Map.get(
+                ids,
+                String.trim_leading(
+                  Map.get(node.attributes, "href", Map.get(node.attributes, "xlink:href", "")),
+                  "#"
+                )
+              ) not in @shapes ->
+            invalid(
+              "SVG clip use must reference same-document shape, text or use geometry",
+              "use"
             )
 
           true ->

@@ -69,7 +69,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     {root_positioned_boxes, flow_boxes} =
       Enum.split_with(boxes, &(Map.get(&1, :position_anchor) == :root))
 
-    fieldset_paints = Enum.filter(flow_boxes, &Map.has_key?(&1, :fieldset_paint_id))
+    {fieldset_paints, spanning_cells?} =
+      Enum.reduce(flow_boxes, {[], false}, fn box, {fieldsets, spanning?} ->
+        fieldsets =
+          if Map.has_key?(box, :fieldset_paint_id), do: [box | fieldsets], else: fieldsets
+
+        {fieldsets, spanning? or Map.has_key?(box, :table_span_fragment)}
+      end)
+
+    fieldset_paints = Enum.reverse(fieldset_paints)
 
     flow_boxes =
       if fieldset_paints == [] do
@@ -107,6 +115,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       |> keep_table_groups(headers, content_height)
       |> groups_to_pages(headers, page_size, margins)
       |> close_table_fragments()
+      |> paint_spanning_cell_fragments(spanning_cells?, margins.bottom)
       |> paint_fieldset_fragments(fieldset_paints, margins, pagination_order)
       |> restore_root_positioned_boxes(root_positioned_boxes, pagination_order)
       |> paint_table_outlines()
@@ -218,6 +227,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
           boxes = Enum.reject(page.boxes, &Map.has_key?(&1, :fieldset_paint_id))
           %{page | boxes: Enum.sort_by(decorations ++ boxes, &Map.fetch!(&1, pagination_order))}
         end)
+    end
+  end
+
+  defp paint_spanning_cell_fragments(pages, spanning_cells?, bottom) do
+    if spanning_cells? do
+      {pages, _consumed} =
+        Enum.map_reduce(pages, %{}, fn page, consumed ->
+          case NativeElixirPdfUtilities.Validators.HtmlTableValidator.prepare_cell_page_fragments(
+                 page.boxes,
+                 consumed,
+                 bottom
+               ) do
+            {:ok, boxes, next} -> {%{page | boxes: boxes}, next}
+            {:error, _} = error -> throw({:render_resource_limit, error})
+          end
+        end)
+
+      pages
+    else
+      pages
     end
   end
 
@@ -351,6 +380,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       end
 
     target_top = target_group_top(state, group)
+
     group_bottom = target_top - Map.get(group, :placement_height, group.height)
 
     state =
@@ -365,6 +395,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       end
 
     target_top = state.current_y
+
+    target_top =
+      case NativeElixirPdfUtilities.Validators.MathPaintValidator.prepare_pagination_top(
+             group.boxes,
+             group.top,
+             target_top,
+             page_size,
+             elem(page_size, 1) - margins.top
+           ) do
+        {:ok, top} -> top
+        {:error, _} = error -> throw({:render_resource_limit, error})
+      end
 
     shifted_boxes =
       group.boxes

@@ -357,8 +357,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextTest do
     data: data
   } do
     for content <- [
-          "<text y='25' font-family='NativeSvgFont0' stroke='red'>A</text>",
-          "<defs><linearGradient id='r'><stop offset='0' /><stop offset='1' /></linearGradient></defs><text y='25' font-family='NativeSvgFont0' fill='url(#r)'>A</text>"
+          "<text y='25' font-family='NativeSvgFont0' stroke='red'>A</text>"
         ] do
       assert {:error, {:invalid_document, diagnostic}} =
                SvgBackend.vectorize(source(content), [width: 200, height: 50], %{
@@ -366,8 +365,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextTest do
                  fonts: [%{data: data}]
                })
 
-      assert diagnostic.message =~ "solid RGB fill"
+      assert diagnostic.message =~ "fill without stroke"
     end
+
+    assert {:ok, gradient_pdf} =
+             SvgBackend.vectorize(
+               source(
+                 "<defs><linearGradient id='r'><stop offset='0' /><stop offset='1' /></linearGradient></defs><text y='25' font-family='NativeSvgFont0' fill='url(#r)'>A</text>"
+               ),
+               [width: 200, height: 50],
+               %{mode: :inline, fonts: [%{data: data}]}
+             )
+
+    assert {:ok, "A"} = Text.extract(gradient_pdf)
+    assert gradient_pdf =~ "/PatternType 2"
 
     html =
       "<svg width=200 height=50 font-family='DejaVu Sans'><defs><g id='label'><text y=25>A</text></g></defs><use href='#label' font-weight=700 /></svg>"

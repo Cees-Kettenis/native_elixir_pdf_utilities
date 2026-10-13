@@ -16,6 +16,80 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildTest do
     end)
   end
 
+  test "atomic child measurement resolves real relative positioning before native paint validation" do
+    for display <- ["inline-block", "inline-flex", "inline-grid"] do
+      plain =
+        "<span style='display:#{display};padding:2pt;background:blue;font-size:12pt'>Text</span>"
+
+      shifted =
+        String.replace(plain, "padding:2pt;", "padding:2pt;position:relative;left:3pt;top:2pt;")
+
+      assert {:ok, ordinary} = measured(plain)
+      assert {:ok, positioned} = measured(shifted)
+      assert positioned.width == ordinary.width
+      assert positioned.ascent == ordinary.ascent
+      assert positioned.descent == ordinary.descent
+      [ordinary_rect | _] = Enum.filter(ordinary.boxes, &(&1.type == :rect))
+      [positioned_rect | _] = Enum.filter(positioned.boxes, &(&1.type == :rect))
+      assert_in_delta positioned_rect.x - ordinary_rect.x, 3, 0.75 / 64
+      assert_in_delta positioned_rect.y - ordinary_rect.y, -2, 0.75 / 64
+      refute Enum.any?(positioned.boxes, &(&1.type == :inline_positioning_marker))
+      refute Enum.any?(positioned.boxes, &Map.has_key?(&1, :inline_positioning_contexts))
+    end
+  end
+
+  test "auto inline-flex preferred width includes source item margins and real gaps" do
+    assert {:ok, child} =
+             measured(
+               "<span style='display:inline-flex;gap:3pt'><span style='width:20pt;height:10pt;margin-left:1pt;margin-right:2pt'></span> <span style='display:none;width:200pt'></span><span style='width:30pt;height:10pt;margin-left:2pt;margin-right:1pt'></span></span>"
+             )
+
+    assert_in_delta child.width, 20 + 30 + 6 + 3, 0.75 / 64
+  end
+
+  test "auto inline-flex preferred width uses real gaps with ordinary CSS children" do
+    assert {:ok, child} =
+             measured(
+               "<span style='display:inline-flex;gap:3pt'><span style='width:20pt;height:10pt'></span> <span style='display:none;width:200pt'></span><span style='width:30pt;height:10pt'></span></span>"
+             )
+
+    assert_in_delta child.width, 20 + 30 + 3, 0.75 / 64
+  end
+
+  test "column inline-flex preferred width uses cross-axis widths instead of vertical basis" do
+    assert {:ok, column} =
+             measured(
+               "<span style='display:inline-flex;flex-direction:column;gap:3pt'><span style='width:20pt;height:10pt;flex-basis:100pt'></span><span style='width:30pt;height:10pt;flex-basis:100pt'></span></span>"
+             )
+
+    assert_in_delta column.width, 30, 0.75 / 64
+  end
+
+  test "auto inline-grid preferred width retains fixed tracks and source gaps" do
+    assert {:ok, child} =
+             measured(
+               "<span style='display:inline-grid;grid-template-columns:20pt 30pt;gap:3pt'><span style='width:10pt;height:10pt'></span><span style='width:10pt;height:10pt'></span></span>"
+             )
+
+    assert_in_delta child.width, 20 + 30 + 3, 0.75 / 64
+  end
+
+  test "ordinary inline flex and grid paint keep rectangles beside the text baseline" do
+    for display <- ["inline-flex", "inline-grid"] do
+      html =
+        "<span style='font-size:12pt;line-height:72pt'>Before <span style='display:#{display};gap:3pt;grid-template-columns:20pt 30pt'><span style='width:20pt;height:12pt;background:blue'></span><span style='width:30pt;height:12pt;background:green'></span></span> After</span>"
+
+      assert {:ok, child} = measured(html)
+      rects = Enum.filter(child.boxes, &(&1.type == :rect))
+      assert length(rects) == 2
+      # An empty atomic container synthesizes its baseline at its bottom edge.
+      assert Enum.all?(rects, &(abs(&1.y) <= 0.75 / 64))
+      assert Enum.all?(rects, &(abs(&1.height - 12) <= 0.75 / 64))
+      assert Enum.any?(child.boxes, &(&1.type == :text and &1.text =~ "Before"))
+      assert Enum.any?(child.boxes, &(&1.type == :text and &1.text =~ "After"))
+    end
+  end
+
   test "inline child paint retains backgrounds, decorations, links and original Unicode" do
     assert {:ok, child} =
              measured(

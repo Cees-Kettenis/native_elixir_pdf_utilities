@@ -113,3 +113,23 @@ host SVG CSS/transform behavior, processing/work propagation and expanded-instan
 logical geometry. Ancestral lengths and complex clipping are now assigned to
 additional workers. These family counts are broader than the individual packets
 already delivered. Remaining effort still requires multiple larger waves.
+
+Wave 16 combines document-fragment selection and executed clone validation,
+containing and replaced dimensions, automatic margins and overflow alignment,
+root horizontal geometry, Math display contents and actual matrix-cell reflow,
+shared contextual Math length calculations, visible annotation/native composition,
+successive template replacement and inert CSS, attribute applicability and initial
+hidden-until-found content, scoped child widgets, SVG links, authorized foreign-slot
+cache reuse, native clip unions, local filter-image inputs, selected input text,
+and selected-font text gradients and patterns. These are implementation changes
+with focused checks. Original browser failures remain open and preserved.
+
+Remaining implementation includes original template resource/glyph obligations
+and clone binding, special-control and embedded-child content skipping, child SVG
+used root dimensions and effects/control transport, table row continuation and
+caption/decorated pagination, generic calculated dimensions, Ruby CJK wrapping,
+Math contextual CSS owners and first baselines, final Math ink and equation flow,
+SVG stroke and ancestral lengths, clip/link precision, and remaining text-path,
+paint-server and nested-resource interactions. Workers are closing these scopes
+in parallel. No effort percentage is inferred from packet or specification counts.
+The final full acceptance, coverage and baseline performance review remains due.

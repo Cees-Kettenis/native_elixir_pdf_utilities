@@ -713,135 +713,125 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_html_element_attributes(tag, attributes, context \\ nil) do
     with :ok <- validate_static_url_attributes(attributes, tag) do
-      if html_hidden_state(attributes) == :until_found do
-        Diagnostics.error(
-          :html,
-          :unsupported_html,
-          "hidden=#{inspect(attributes["hidden"])} requires initial content-visibility box painting that is not implemented yet",
-          module: __MODULE__,
-          source: tag
-        )
-      else
-        case tag do
-          "input" ->
-            with :ok <-
-                   NativeElixirPdfUtilities.Validators.HtmlFormValidator.validate_initial_range_attributes(
-                     %{tag: tag, attributes: attributes}
-                   ),
-                 do:
-                   NativeElixirPdfUtilities.Validators.HtmlFormValidator.validate_initial_special_attributes(
-                     attributes
-                   )
+      case tag do
+        "input" ->
+          with :ok <-
+                 NativeElixirPdfUtilities.Validators.HtmlFormValidator.validate_initial_range_attributes(
+                   %{tag: tag, attributes: attributes}
+                 ),
+               do:
+                 NativeElixirPdfUtilities.Validators.HtmlFormValidator.validate_initial_special_attributes(
+                   attributes
+                 )
 
-          tag when tag in ~w(xmp plaintext noembed) ->
-            NativeElixirPdfUtilities.Validators.ForeignContentValidator.validate_static_input(
-              :html,
-              tag,
-              attributes
-            )
+        tag when tag in ~w(xmp plaintext noembed) ->
+          NativeElixirPdfUtilities.Validators.ForeignContentValidator.validate_static_input(
+            :html,
+            tag,
+            attributes
+          )
 
-          tag
-          when tag in ~w(canvas progress meter output datalist dialog font body q acronym basefont bgsound blink keygen) ->
-            # Reuse the parser's attribute authority for direct DOM inputs.
-            captures =
-              Enum.map(attributes, fn {name, value} -> ["", name, "\"" <> value <> "\""] end)
+        tag
+        when tag in ~w(canvas progress meter output datalist dialog font body q acronym basefont bgsound blink keygen) ->
+          # Reuse the parser's attribute authority for direct DOM inputs.
+          captures =
+            Enum.map(attributes, fn {name, value} -> ["", name, "\"" <> value <> "\""] end)
 
-            case attributes_to_map(captures, tag, :html) do
-              {:ok, _} ->
-                :ok
+          case attributes_to_map(captures, tag, :html) do
+            {:ok, _} ->
+              :ok
 
-              {:error, :unsupported_html} ->
+            {:error, :unsupported_html} ->
+              Diagnostics.error(
+                :html,
+                :unsupported_html,
+                "#{tag} requires global attributes and its applicable #{if(tag in ~w(progress meter output datalist), do: "control", else: "static")} attributes; remove unsupported attributes",
+                module: __MODULE__,
+                source: tag
+              )
+          end
+
+        "template" ->
+          NativeElixirPdfUtilities.Validators.TemplatePatchValidator.validate_attributes(
+            attributes,
+            context
+          )
+
+        "script" ->
+          cond do
+            not Enum.all?(Map.keys(attributes), &valid_script_attribute?/1) ->
+              Diagnostics.error(
+                :html,
+                :unsupported_html,
+                "script data blocks require supported attributes without event handlers",
+                module: __MODULE__
+              )
+
+            script_type(attributes) != :data ->
+              Diagnostics.error(
+                :html,
+                :unsupported_html,
+                "#{script_type(attributes)} script elements are outside the static rendering profile; only non-executable data blocks are supported",
+                module: __MODULE__
+              )
+
+            true ->
+              :ok
+          end
+
+        "base" ->
+          NativeElixirPdfUtilities.Validators.HtmlUrlValidator.validate_base_element(
+            attributes,
+            []
+          )
+
+        "meta" ->
+          directive = attributes |> Map.get("http-equiv", "") |> String.downcase()
+
+          cond do
+            directive in ~w(refresh content-security-policy content-security-policy-report-only set-cookie) ->
+              Diagnostics.error(
+                :html,
+                :unsupported_html,
+                "meta http-equiv=#{inspect(directive)} requests browser navigation, security enforcement, or session state outside the static rendering profile",
+                module: __MODULE__
+              )
+
+            Map.has_key?(attributes, "charset") and
+                String.downcase(attributes["charset"]) != "utf-8" ->
+              Diagnostics.error(
+                :html,
+                :unsupported_html,
+                "HTML input is UTF-8; meta charset must declare utf-8",
+                module: __MODULE__
+              )
+
+            true ->
+              :ok
+          end
+
+        _ ->
+          if custom_html_tag?(tag) do
+            case Enum.find(~w(dir), &Map.has_key?(attributes, &1)) do
+              nil ->
+                NativeElixirPdfUtilities.Validators.ForeignContentValidator.validate_static_input(
+                  :html,
+                  tag,
+                  attributes
+                )
+
+              attribute ->
                 Diagnostics.error(
                   :html,
                   :unsupported_html,
-                  "#{tag} requires global attributes and its applicable #{if(tag in ~w(progress meter output datalist), do: "control", else: "static")} attributes; remove unsupported attributes",
+                  "custom container #{attribute} requires direction semantics that are not implemented yet",
                   module: __MODULE__,
                   source: tag
                 )
             end
-
-          "template" ->
-            NativeElixirPdfUtilities.Validators.TemplatePatchValidator.validate_attributes(
-              attributes,
-              context
-            )
-
-          "script" ->
-            cond do
-              not Enum.all?(Map.keys(attributes), &valid_script_attribute?/1) ->
-                Diagnostics.error(
-                  :html,
-                  :unsupported_html,
-                  "script data blocks require supported attributes without event handlers",
-                  module: __MODULE__
-                )
-
-              script_type(attributes) != :data ->
-                Diagnostics.error(
-                  :html,
-                  :unsupported_html,
-                  "#{script_type(attributes)} script elements are outside the static rendering profile; only non-executable data blocks are supported",
-                  module: __MODULE__
-                )
-
-              true ->
-                :ok
-            end
-
-          "base" ->
-            NativeElixirPdfUtilities.Validators.HtmlUrlValidator.validate_base_element(
-              attributes,
-              []
-            )
-
-          "meta" ->
-            directive = attributes |> Map.get("http-equiv", "") |> String.downcase()
-
-            cond do
-              directive in ~w(refresh content-security-policy content-security-policy-report-only set-cookie) ->
-                Diagnostics.error(
-                  :html,
-                  :unsupported_html,
-                  "meta http-equiv=#{inspect(directive)} requests browser navigation, security enforcement, or session state outside the static rendering profile",
-                  module: __MODULE__
-                )
-
-              Map.has_key?(attributes, "charset") and
-                  String.downcase(attributes["charset"]) != "utf-8" ->
-                Diagnostics.error(
-                  :html,
-                  :unsupported_html,
-                  "HTML input is UTF-8; meta charset must declare utf-8",
-                  module: __MODULE__
-                )
-
-              true ->
-                :ok
-            end
-
-          _ ->
-            if custom_html_tag?(tag) do
-              case Enum.find(~w(dir), &Map.has_key?(attributes, &1)) do
-                nil ->
-                  NativeElixirPdfUtilities.Validators.ForeignContentValidator.validate_static_input(
-                    :html,
-                    tag,
-                    attributes
-                  )
-
-                attribute ->
-                  Diagnostics.error(
-                    :html,
-                    :unsupported_html,
-                    "custom container #{attribute} requires direction semantics that are not implemented yet",
-                    module: __MODULE__,
-                    source: tag
-                  )
-              end
-            else
-              :ok
-            end
-        end
+          else
+            :ok
+          end
       end
     end
   end
@@ -3268,6 +3258,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         {name, _, false} when name in @preserved_global_attributes ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
+        {name, _, false}
+        when name in ~w(checked disabled readonly multiple required selected alpha) ->
+          # HTML retains known boolean metadata on inapplicable hosts as source.
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
         {"style", _, false} ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
@@ -3713,14 +3708,24 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
     %{
       style:
-        Map.take(if(root_paints, do: root_style, else: body_style), [
-          :background_color,
-          :background_image,
-          :background_position,
-          :background_repeat,
-          :background_size
-        ]),
-      body_background_propagated: not root_paints
+        Map.take(
+          if(
+            root_paints or Map.get(root_style, :content_visibility) == :hidden or
+              Map.get(body_style, :content_visibility) == :hidden,
+            do: root_style,
+            else: body_style
+          ),
+          [
+            :background_color,
+            :background_image,
+            :background_position,
+            :background_repeat,
+            :background_size
+          ]
+        ),
+      body_background_propagated:
+        not root_paints and Map.get(root_style, :content_visibility) != :hidden and
+          Map.get(body_style, :content_visibility) != :hidden
     }
   end
 
@@ -4538,6 +4543,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec valid_form_attribute?(String.t(), String.t(), String.t()) :: boolean()
   def valid_form_attribute?(tag, name, value) do
     case {tag, name, value} do
+      {_tag, name, _value}
+      when name in ~w(checked disabled readonly multiple required selected alpha) ->
+        true
+
       {"form", name, _value}
       when name in ~w(name action method target enctype accept-charset autocomplete rel novalidate) ->
         true
@@ -4715,7 +4724,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
   @doc false
   @spec valid_form_element?(String.t(), map(), [term()]) :: boolean()
-  def valid_form_element?(tag, attributes, children) do
+  def valid_form_element?(tag, attributes, children),
+    do: valid_form_element?(tag, attributes, children, :authored)
+
+  @doc "Checks authored control content or the initial DOM after selected-content copying."
+  @spec valid_form_element?(String.t(), map(), [term()], :authored | :initial_dom) :: boolean()
+  def valid_form_element?(tag, attributes, children, surface) do
     children = if tag in ~w(input textarea), do: children, else: html_content_nodes(children)
 
     case tag do
@@ -4750,16 +4764,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           case child do
             %{type: :element, tag: tag, attributes: attributes, children: children}
             when tag in ["option", "optgroup"] ->
-              valid_form_element?(tag, attributes, children)
+              valid_form_element?(tag, attributes, children, surface)
 
             %{type: :element, tag: "hr", attributes: attributes, children: children} ->
               valid_html_element?("hr", attributes, children)
 
             %{type: :element, tag: "button", attributes: attributes, children: children} ->
-              index == 0 and valid_form_element?("button", attributes, children)
+              index == 0 and valid_form_element?("button", attributes, children, surface)
 
             %{type: :element, tag: "div", children: children} ->
-              valid_form_element?("select", %{}, children)
+              valid_form_element?("select", %{}, children, surface)
 
             _ ->
               script_supporting_element?(child)
@@ -4771,7 +4785,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           Enum.all?(children, fn child ->
             case child do
               %{type: :element, tag: "option", attributes: attributes, children: children} ->
-                valid_form_element?("option", attributes, children)
+                valid_form_element?("option", attributes, children, surface)
 
               _ ->
                 script_supporting_element?(child)
@@ -4779,13 +4793,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           end)
 
       "option" ->
-        valid_noninteractive_children?(children, "option")
+        valid_noninteractive_children?(children, "option", [], surface)
 
       "textarea" ->
         Enum.all?(children, &match?(%{type: :text}, &1))
 
       "button" ->
-        valid_noninteractive_children?(children, "button")
+        valid_noninteractive_children?(children, "button", [], surface)
 
       _ ->
         false
@@ -4865,7 +4879,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
   # Anchors and buttons forbid interactive or tabindex descendants in the
   # active tree. Template contents have their own document-fragment context.
-  defp valid_noninteractive_children?(children, context, ancestors \\ []) do
+  defp valid_noninteractive_children?(children, context, ancestors \\ [], surface \\ :authored) do
     children = html_content_nodes(children)
 
     Enum.all?(children, fn child ->
@@ -4877,14 +4891,24 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         when is_map(attributes) and is_list(nested) ->
           html? = Map.get(child, :namespace, :html) == :html
 
-          valid_html_child_element?(context, child, ancestors) and
+          # Copied option children are actual executed DOM, rather than authored
+          # children of selectedcontent. Keep all interactive ancestry checks.
+          valid_html_child_element?(
+            if(surface == :initial_dom and context == "selectedcontent",
+              do: "option",
+              else: context
+            ),
+            child,
+            ancestors
+          ) and
             if(html? and tag == "template",
               do: script_supporting_element?(child),
               else:
                 valid_noninteractive_children?(
                   nested,
                   if(html?, do: tag, else: {:foreign, tag}),
-                  [context | ancestors]
+                  [context | ancestors],
+                  surface
                 )
             )
 
@@ -5302,6 +5326,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                        Map.get(styled_tree, :link_scope)
                      ),
                    :ok <- validate_layout_nodes(children),
+                   :ok <-
+                     NativeElixirPdfUtilities.Validators.CssSizingValidator.validate_root(
+                       Map.get(styled_tree, :document_root_sizing)
+                     ),
                    {:ok, page_size} <- page_size_result,
                    :ok <- validate_page_size(page_size),
                    {:ok, margins} <- margins_result,
@@ -6483,7 +6511,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                        ),
                      :ok <- HtmlMetadataValidator.validate_attributes(node),
                      :ok <- HtmlMetadataValidator.validate_item_references(node, tree),
-                     {:ok, custom?} <- validate_dom_html_element(node, parent, ancestors),
+                     {:ok, _custom?} <- validate_dom_html_element(node, parent, ancestors),
                      :ok <-
                        NativeElixirPdfUtilities.Validators.ForeignContentValidator.validate_render_support(
                          node,
@@ -6536,11 +6564,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                       is_nil(html_tag) ->
                         nil
 
-                      Map.has_key?(attributes, "multiple") and not custom? and
+                      Map.has_key?(attributes, "multiple") and
+                        valid_boolean_form_attribute?(tag, "multiple") and
                           is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "multiple")) ->
                         "multiple"
 
-                      Map.has_key?(attributes, "readonly") and not custom? and
+                      Map.has_key?(attributes, "readonly") and
+                        valid_boolean_form_attribute?(tag, "readonly") and
                           is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "readonly")) ->
                         "readonly"
 
@@ -6901,6 +6931,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         with :ok <-
                NativeElixirPdfUtilities.Validators.RubyValidator.validate_layout_metadata(node),
              :ok <- validate_layout_metadata(node),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.HtmlVisibilityValidator.validate_layout_metadata(
+                 node
+               ),
              :ok <- validate_list_marker_image(node),
              :ok <- validate_auto_margin_context(node, parent_display) do
           case node do
@@ -7308,45 +7342,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end
   end
 
-  defp validate_auto_margin_context(node, parent_display) do
+  defp validate_auto_margin_context(node, _parent_display) do
     case node do
-      %{style: %{margin_inline_auto: auto} = style} ->
-        case auto do
-          %{left: left, right: right}
-          when is_boolean(left) and is_boolean(right) and map_size(auto) == 2 ->
-            display = Map.get(style, :display)
-
-            if Map.get(node, :type) == :element and (left or right) and
-                 display not in [:none, :inline, :inline_block, :soft_break] and
-                 not (display in [:image, :table] and
-                        parent_display not in [:flex, :inline_flex, :grid, :inline_grid] and
-                        Map.get(style, :position, :static) != :absolute) and
-                 (display != :block or
-                    parent_display in [:flex, :inline_flex, :grid, :inline_grid] or
-                    Map.get(style, :position, :static) == :absolute) and
-                 not (Map.get(node, :tag) == "dialog" and Map.get(style, :_dialog, false)) do
-              Diagnostics.error(
-                :layout,
-                :invalid_layout,
-                "automatic inline margins in #{display} or positioned/flex/grid item contexts require geometry that is not implemented yet; use numeric margins or an ordinary flow block",
-                operation: :layout,
-                module: __MODULE__,
-                source: Map.get(node, :tag, "element")
-              )
-            else
-              :ok
-            end
-
-          _ ->
-            Diagnostics.error(
-              :layout,
-              :invalid_layout,
-              "margin_inline_auto requires exactly boolean left and right entries; use validated automatic-margin intent",
-              operation: :layout,
-              module: __MODULE__,
-              source: Map.get(node, :tag, "element")
-            )
-        end
+      %{style: style} when is_map(style) ->
+        NativeElixirPdfUtilities.Validators.CssSizingValidator.validate_auto_margins(
+          style,
+          Map.get(node, :tag, "element")
+        )
 
       _ ->
         :ok

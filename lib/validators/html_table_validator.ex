@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.HtmlMetadataValidator
 
@@ -683,6 +684,765 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
     end
   end
 
+  @doc "Prepares bounded measured row bands for canonical spanning-cell placements."
+  @spec prepare_row_band_geometry(term(), term(), term()) ::
+          {:ok, map()} | {:error, Diagnostics.detailed_error()}
+  def prepare_row_band_geometry(rows, heights, spacing) do
+    HtmlValidator.with_render_budget(fn ->
+      {valid_rows, row_count, placements} = prepare_table_geometry_rows(rows)
+      proper_heights = table_collection_size(heights)
+
+      valid =
+        valid_rows and proper_heights == {:ok, row_count} and is_number(spacing) and
+          spacing >= 0 and spacing <= Limits.get(:max_css_numeric_magnitude) and
+          Enum.all?(heights, fn height ->
+            is_number(height) and height >= 0 and height <= Limits.get(:max_css_numeric_magnitude)
+          end)
+
+      if valid do
+        HtmlValidator.reserve_render_resource(:max_table_grid_work, 8 * row_count, :layout)
+
+        {prefixes, _total} =
+          Enum.map_reduce(heights, 0.0, fn height, offset ->
+            {offset, offset + height + spacing}
+          end)
+
+        indexed =
+          Enum.zip(prefixes, heights)
+          |> Enum.with_index()
+          |> Map.new(fn {geometry, index} -> {index, geometry} end)
+
+        Enum.each(
+          prefixes,
+          &HtmlValidator.check_render_resource(:max_pdf_numeric_magnitude, abs(&1), :layout)
+        )
+
+        plans =
+          Enum.reduce(placements, %{}, fn {{start, _column} = key, placement}, plans ->
+            if placement.rowspan > 1 do
+              HtmlValidator.reserve_render_resource(
+                :max_table_grid_work,
+                5 * placement.rowspan,
+                :layout
+              )
+
+              {first, _height} = Map.fetch!(indexed, start)
+              last = start + placement.rowspan - 1
+
+              bands =
+                Enum.map(start..last, fn row ->
+                  {offset, height} = Map.fetch!(indexed, row)
+
+                  %{
+                    row: row,
+                    offset: offset - first,
+                    height: height + if(row == last, do: 0.0, else: spacing)
+                  }
+                end)
+
+              Map.put(plans, key, bands)
+            else
+              plans
+            end
+          end)
+
+        {:ok, plans}
+      else
+        Diagnostics.error(
+          :layout,
+          :invalid_layout,
+          "table continuation requires canonical placements, one bounded measured height per row and nonnegative spacing; recompute table geometry",
+          module: __MODULE__,
+          operation: :prepare_row_band_geometry
+        )
+      end
+    end)
+  end
+
+  @doc "Prepares row and row-group background positioning boxes and cell-owned coverage for a measured table grid."
+  @spec prepare_cell_background_geometry(term(), term(), term(), term()) ::
+          {:ok, map()} | {:error, Diagnostics.detailed_error()}
+  def prepare_cell_background_geometry(rows, heights, widths, spacing) do
+    HtmlValidator.with_render_budget(fn ->
+      {valid_rows, row_count, placements} = prepare_table_geometry_rows(rows)
+      height_count = table_collection_size(heights)
+      width_count = table_collection_size(widths)
+
+      valid =
+        valid_rows and height_count == {:ok, row_count} and match?({:ok, _}, width_count) and
+          match?(
+            {horizontal, vertical} when is_number(horizontal) and is_number(vertical),
+            spacing
+          ) and
+          Enum.all?(Tuple.to_list(spacing) ++ heights ++ widths, fn value ->
+            is_number(value) and value >= 0 and value <= Limits.get(:max_css_numeric_magnitude)
+          end)
+
+      valid =
+        valid and
+          Enum.all?(rows, fn row ->
+            Map.has_key?(row, :row_group) and Map.has_key?(row, :group_style) and
+              (Map.get(row, :group_style) == nil or is_map(row.group_style))
+          end) and
+          Enum.all?(placements, fn {{_row, column}, placement} ->
+            case placement do
+              %{colspan: span} when is_integer(span) and span >= 1 ->
+                column + span <= elem(width_count, 1)
+
+              _ ->
+                false
+            end
+          end)
+
+      if valid do
+        {horizontal, vertical} = spacing
+        columns = elem(width_count, 1)
+
+        HtmlValidator.reserve_render_resource(
+          :max_table_grid_work,
+          10 * row_count + 4 * columns + 12 * length(placements),
+          :layout
+        )
+
+        {row_starts, row_end} = Enum.map_reduce(heights, 0.0, &{&2, &2 + &1 + vertical})
+
+        {column_starts, column_end} =
+          Enum.map_reduce(widths, horizontal, &{&2, &2 + &1 + horizontal})
+
+        row_positions =
+          Map.new(Enum.with_index(row_starts ++ [row_end]), fn {value, index} ->
+            {index, value}
+          end)
+
+        column_positions =
+          Map.new(Enum.with_index(column_starts ++ [column_end]), fn {value, index} ->
+            {index, value}
+          end)
+
+        indexed_rows = Map.new(Enum.with_index(rows), fn {row, index} -> {index, row} end)
+
+        indexed_heights =
+          Map.new(Enum.with_index(heights), fn {height, index} -> {index, height} end)
+
+        groups =
+          Enum.reduce(Enum.with_index(rows), %{}, fn {row, index}, groups ->
+            case Map.fetch(groups, row.row_group) do
+              :error ->
+                Map.put(groups, row.row_group, {index, index + 1})
+
+              {:ok, {first, last}} ->
+                if last == index and
+                     Map.fetch!(indexed_rows, first).group_style == row.group_style do
+                  Map.put(groups, row.row_group, {first, index + 1})
+                else
+                  throw(
+                    {:render_resource_limit,
+                     Diagnostics.error(
+                       :layout,
+                       :invalid_layout,
+                       "table row groups require contiguous canonical rows with one prepared group style; recompute table geometry",
+                       module: __MODULE__,
+                       operation: :prepare_cell_background_geometry
+                     )}
+                  )
+                end
+            end
+          end)
+
+        Enum.each(row_starts ++ column_starts ++ [row_end, column_end], fn value ->
+          HtmlValidator.check_render_resource(:max_pdf_numeric_magnitude, value, :layout)
+        end)
+
+        geometry =
+          Map.new(placements, fn {{index, column} = key, placement} ->
+            row = Map.fetch!(indexed_rows, index)
+            top = Map.fetch!(row_positions, index)
+            height = Map.fetch!(row_positions, index + placement.rowspan) - top - vertical
+            left = Map.fetch!(column_positions, column)
+            width = Map.fetch!(column_positions, column + placement.colspan) - left - horizontal
+            coverage = %{x: left, y: -top - height, width: width, height: height}
+            {group_start, group_end} = Map.fetch!(groups, row.row_group)
+            group_top = Map.fetch!(row_positions, group_start)
+            group_height = Map.fetch!(row_positions, group_end) - group_top - vertical
+            row_width = column_end
+
+            layers = [
+              %{
+                style: row.group_style,
+                role: :table_row_group_background,
+                position: %{
+                  x: 0.0,
+                  y: -group_top - group_height,
+                  width: row_width,
+                  height: group_height
+                },
+                coverage: coverage
+              },
+              %{
+                style: row.row.style,
+                role: :table_row_background,
+                position: %{
+                  x: 0.0,
+                  y: -top - Map.fetch!(indexed_heights, index),
+                  width: row_width,
+                  height: Map.fetch!(indexed_heights, index)
+                },
+                coverage: coverage
+              }
+            ]
+
+            {key, layers}
+          end)
+
+        {:ok, geometry}
+      else
+        Diagnostics.error(
+          :layout,
+          :invalid_layout,
+          "table backgrounds require canonical cell spans, row-group identities, one measured height per row, bounded column widths and nonnegative spacing; recompute table geometry",
+          module: __MODULE__,
+          operation: :prepare_cell_background_geometry
+        )
+      end
+    end)
+  end
+
+  @doc "Prepares row-band clips from actual native artwork, preserving horizontal ink overflow and reserving fragment copies."
+  @spec prepare_cell_band_paint(term(), term(), term()) ::
+          {:ok, [map()]} | {:error, Diagnostics.detailed_error()}
+  def prepare_cell_band_paint(boxes, bands, top) do
+    HtmlValidator.with_render_budget(fn ->
+      with {:ok, _count} <- table_collection_size(bands),
+           true <- is_number(top) and abs(top) <= Limits.get(:max_pdf_numeric_magnitude),
+           true <-
+             Enum.all?(bands, fn band ->
+               case band do
+                 %{row: row, offset: offset, height: height} ->
+                   is_integer(row) and row >= 0 and is_number(offset) and offset >= 0 and
+                     is_number(height) and height >= 0 and
+                     Enum.all?(
+                       [offset, height, top - offset - height],
+                       &(abs(&1) <= Limits.get(:max_pdf_numeric_magnitude))
+                     )
+
+                 _ ->
+                   false
+               end
+             end),
+           true <-
+             Enum.reduce_while(bands, nil, fn band, previous ->
+               if (previous == nil and band.offset == 0) or
+                    (previous != nil and band.row == previous.row + 1 and
+                       Float.round((band.offset - previous.offset - previous.height) * 1.0, 4) ==
+                         0.0),
+                  do: {:cont, band},
+                  else: {:halt, false}
+             end) != false,
+           {:ok, bounds, count} <- table_paint_ink_bounds(boxes) do
+        HtmlValidator.reserve_render_resource(
+          :max_table_grid_work,
+          (2 * count + 3) * length(bands),
+          :layout
+        )
+
+        HtmlValidator.reserve_render_resource(
+          :max_layout_boxes,
+          (2 * count + 3) * length(bands),
+          :layout
+        )
+
+        case bounds do
+          nil ->
+            {:ok, []}
+
+          {left, _bottom, right, _top} ->
+            last = List.last(bands)
+            total_height = if last == nil, do: 0.0, else: last.offset + last.height
+            fragment_identity = make_ref()
+            HtmlValidator.check_render_resource(:max_pdf_numeric_magnitude, right - left, :layout)
+
+            {:ok,
+             Enum.map(bands, fn band ->
+               Map.put(band, :clip, %{
+                 x: left,
+                 y: top - band.offset - band.height,
+                 width: right - left,
+                 height: band.height
+               })
+               |> Map.put(:cell_geometry, %{
+                 identity: fragment_identity,
+                 total_height: total_height,
+                 offset: band.offset
+               })
+             end)}
+        end
+      else
+        false ->
+          Diagnostics.error(
+            :layout,
+            :invalid_layout,
+            "table cell bands require canonical row indices, bounded measured offsets and heights, and a PDF origin",
+            module: __MODULE__,
+            operation: :prepare_cell_band_paint
+          )
+
+        :error ->
+          Diagnostics.error(
+            :layout,
+            :invalid_layout,
+            "table cell bands require proper measured collections",
+            module: __MODULE__,
+            operation: :prepare_cell_band_paint
+          )
+
+        error ->
+          error
+      end
+    end)
+  end
+
+  @doc "Consumes actual page capacity for spanning cell surfaces and returns their visible native fragments with continuing state."
+  @spec prepare_cell_page_fragments(term(), term(), term()) ::
+          {:ok, [map()], map()} | {:error, Diagnostics.detailed_error()}
+  def prepare_cell_page_fragments(boxes, previous, bottom) do
+    HtmlValidator.with_render_budget(fn ->
+      with {:ok, count} <- table_collection_size(boxes, 0, :pagination),
+           true <-
+             is_map(previous) and is_number(bottom) and bottom >= 0 and
+               bottom <= Limits.get(:max_pdf_numeric_magnitude) do
+        HtmlValidator.reserve_render_resource(
+          :max_table_grid_work,
+          5 * count + map_size(previous),
+          :pagination
+        )
+
+        HtmlValidator.reserve_render_resource(:max_layout_boxes, 2 * count, :pagination)
+
+        valid_state =
+          Enum.all?(previous, fn {identity, consumed} ->
+            is_reference(identity) and is_number(consumed) and consumed >= 0 and
+              consumed <= Limits.get(:max_pdf_numeric_magnitude)
+          end)
+
+        if not valid_state,
+          do:
+            throw(
+              {:render_resource_limit,
+               cell_fragment_failure(
+                 "cell continuation state requires issued cell identities and bounded nonnegative consumed heights"
+               )}
+            )
+
+        result =
+          Enum.reduce_while(boxes, {:ok, [], previous, %{}}, fn box,
+                                                                {:ok, result, next, allocations} ->
+            case box do
+              %{table_span_fragment: descriptor} when is_map(descriptor) ->
+                with :ok <- validate_cell_fragment_descriptor(box),
+                     :ok <-
+                       NativeElixirPdfUtilities.Validators.HtmlLinkValidator.validate_boxes([box]),
+                     {:ok, _bounds, descendants} <- table_paint_ink_bounds(box.boxes),
+                     :ok <-
+                       HtmlValidator.reserve_render_resource(
+                         :max_table_grid_work,
+                         descendants + 1,
+                         :pagination
+                       ),
+                     :ok <-
+                       NativeElixirPdfUtilities.Validators.WriterValidator.validate_native_boxes([
+                         box
+                       ]) do
+                  if Map.get(box, :role) == :table_border do
+                    {:cont, {:ok, [box | result], next, allocations}}
+                  else
+                    id = descriptor.identity
+                    part = {id, descriptor.part}
+
+                    geometry = {descriptor.source, descriptor.total_height}
+
+                    if Map.get(allocations, id, geometry) != geometry,
+                      do:
+                        throw(
+                          {:render_resource_limit,
+                           cell_fragment_failure(
+                             "one cell continuation identity must retain the same canonical source and measured total height"
+                           )}
+                        )
+
+                    allocations = Map.put(allocations, id, geometry)
+
+                    case Map.get(allocations, part) do
+                      :painted ->
+                        {:cont, {:ok, result, next, allocations}}
+
+                      nil ->
+                        consumed =
+                          if Map.get(box, :table_section) == :head,
+                            do: 0.0,
+                            else: Map.get(previous, id, 0.0)
+
+                        top = box.y + box.height
+
+                        if is_number(consumed) and consumed >= 0 and
+                             consumed <= descriptor.total_height and top >= bottom do
+                          height = min(descriptor.total_height - consumed, top - bottom)
+                          delta = height + consumed - box.height - descriptor.offset
+
+                          HtmlValidator.reserve_render_resource(
+                            :max_layout_boxes,
+                            2 * descendants + 2,
+                            :pagination
+                          )
+
+                          HtmlValidator.reserve_render_resource(
+                            :max_table_grid_work,
+                            4 * descendants + 2,
+                            :pagination
+                          )
+
+                          children =
+                            NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.translate_boxes(
+                              box.boxes,
+                              0.0,
+                              delta
+                            )
+
+                          clip = %{x: 0.0, y: 0.0, width: box.width, height: height}
+
+                          with {:ok, children} <-
+                                 visible_cell_fragment_paint(
+                                   children,
+                                   {0.0, 0.0, box.width, height}
+                                 ) do
+                            {a, b, c, d, e, f} = box.transform
+
+                            painted = %{
+                              box
+                              | y: top - height,
+                                height: height,
+                                clip: clip,
+                                transform: {a, b, c, d, e, f + box.height - height},
+                                boxes: children
+                            }
+
+                            painted =
+                              case Map.fetch(box, :html_targets) do
+                                :error ->
+                                  painted
+
+                                {:ok, targets} ->
+                                  HtmlValidator.reserve_render_resource(
+                                    :max_table_grid_work,
+                                    2 * length(targets),
+                                    :pagination
+                                  )
+
+                                  targets =
+                                    Enum.map(targets, fn target ->
+                                      offset = target.dy + height - box.height
+
+                                      HtmlValidator.check_render_resource(
+                                        :max_pdf_numeric_magnitude,
+                                        abs(offset),
+                                        :pagination
+                                      )
+
+                                      Map.put(target, :dy, offset)
+                                    end)
+
+                                  Map.put(painted, :html_targets, targets)
+                              end
+
+                            next = Map.put(next, id, consumed + height)
+                            allocations = Map.put(allocations, part, :painted)
+                            {:cont, {:ok, [painted | result], next, allocations}}
+                          else
+                            error -> {:halt, error}
+                          end
+                        else
+                          {:halt,
+                           cell_fragment_failure(
+                             "cell continuation requires bounded consumed height and an actual printable page capacity"
+                           )}
+                        end
+                    end
+                  end
+                else
+                  error -> {:halt, error}
+                end
+
+              %{table_span_fragment: _} ->
+                {:halt,
+                 cell_fragment_failure(
+                   "cell continuation requires validator-prepared source geometry"
+                 )}
+
+              box when is_map(box) ->
+                {:cont, {:ok, [box | result], next, allocations}}
+
+              _ ->
+                {:halt, cell_fragment_failure("cell continuation requires native page boxes")}
+            end
+          end)
+
+        case result do
+          {:ok, result, next, _allocations} -> {:ok, Enum.reverse(result), next}
+          error -> error
+        end
+      else
+        _ ->
+          cell_fragment_failure(
+            "cell continuation requires proper page boxes, a consumed-height map and bounded page bottom"
+          )
+      end
+    end)
+  end
+
+  defp validate_cell_fragment_descriptor(box) do
+    case box do
+      %{
+        type: :drawing_group,
+        table_id: table,
+        x: x,
+        y: y,
+        transform: {a, b, c, d, e, f},
+        table_span_fragment: %{
+          identity: identity,
+          source: {table, row, column},
+          part: part,
+          total_height: height,
+          offset: offset
+        }
+      } ->
+        if a == 1 and b == 0 and c == 0 and d == 1 and e == x and f == y and
+             is_reference(identity) and is_integer(row) and row >= 0 and is_integer(column) and
+             column >= 0 and
+             is_integer(part) and part >= 0 and is_number(height) and height >= 0 and
+             is_number(offset) and offset >= 0 and offset <= height and
+             height <= Limits.get(:max_pdf_numeric_magnitude) do
+          :ok
+        else
+          cell_fragment_failure(
+            "cell continuation requires canonical table/row/column identity and bounded measured geometry"
+          )
+        end
+
+      _ ->
+        cell_fragment_failure(
+          "cell continuation requires a native group with canonical table/row/column identity"
+        )
+    end
+  end
+
+  defp cell_fragment_failure(message) do
+    Diagnostics.error(:pagination, :invalid_layout, message,
+      module: __MODULE__,
+      operation: :prepare_cell_page_fragments,
+      source: "table_span_fragment"
+    )
+  end
+
+  # A page carries only actual visible source artwork. In particular, whole
+  # spanning text is not duplicated invisibly under every logical row clip.
+  defp visible_cell_fragment_paint(boxes, clip) do
+    Enum.reduce_while(boxes, {:ok, []}, fn box, {:ok, visible} ->
+      with {:ok, bounds, _count} <- table_paint_ink_bounds([box]) do
+        retained =
+          cond do
+            bounds == nil ->
+              if Map.get(box, :type) == :flow_marker, do: [box], else: []
+
+            true ->
+              {left, bottom, right, top} =
+                NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.intersect_clip(bounds, clip)
+
+              cond do
+                right > left and top > bottom ->
+                  [box]
+
+                Map.get(box, :html_targets, []) != [] ->
+                  # Keep the actual selected origin under the same cell clip,
+                  # without copying invisible text or inventing a source ID.
+                  [
+                    Map.take(box, [:x, :y, :html_targets])
+                    |> Map.merge(%{type: :flow_marker, width: 0.0, height: 0.0})
+                  ]
+
+                true ->
+                  []
+              end
+          end
+
+        {:cont, {:ok, Enum.reverse(retained, visible)}}
+      else
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, visible} -> {:ok, Enum.reverse(visible)}
+      error -> error
+    end
+  end
+
+  # Actual selected outlines preserve italic and atomic overflow without an
+  # invented horizontal ceiling. Native groups keep their existing transforms.
+  defp table_paint_ink_bounds(boxes, depth \\ 1) do
+    HtmlValidator.check_render_resource(:max_drawing_group_depth, depth, :layout)
+
+    with {:ok, count} <- table_collection_size(boxes) do
+      HtmlValidator.reserve_render_resource(:max_table_grid_work, 3 * count, :layout)
+
+      Enum.reduce_while(boxes, {:ok, nil, count}, fn box, {:ok, union, count} ->
+        result =
+          with :ok <- NativeElixirPdfUtilities.Validators.HtmlLinkValidator.validate_boxes([box]) do
+            case box do
+              %{type: type, boxes: children} when type in [:drawing_group, :glyph_group] ->
+                # Glyph groups contain text only. Validate that shared writer
+                # contract before recursing into an invalid nested collection.
+                glyph_shape =
+                  if type == :glyph_group do
+                    with {:ok, count} <- table_collection_size(children),
+                         :ok <-
+                           HtmlValidator.reserve_render_resource(
+                             :max_table_grid_work,
+                             count,
+                             :layout
+                           ) do
+                      NativeElixirPdfUtilities.Validators.WriterValidator.validate_native_boxes([
+                        box
+                      ])
+                    else
+                      :error ->
+                        Diagnostics.error(
+                          :layout,
+                          :invalid_layout,
+                          "table glyph artwork requires a proper native text collection",
+                          module: __MODULE__,
+                          operation: :prepare_cell_band_paint
+                        )
+
+                      error ->
+                        error
+                    end
+                  else
+                    :ok
+                  end
+
+                with :ok <- glyph_shape,
+                     {:ok, bounds, descendants} <-
+                       table_paint_ink_bounds(
+                         children,
+                         if(type == :drawing_group, do: depth + 1, else: depth)
+                       ),
+                     :ok <-
+                       HtmlValidator.reserve_render_resource(
+                         :max_table_grid_work,
+                         descendants + 1,
+                         :layout
+                       ),
+                     :ok <-
+                       NativeElixirPdfUtilities.Validators.WriterValidator.validate_native_boxes([
+                         box
+                       ]) do
+                  bounds =
+                    if type == :drawing_group and bounds != nil do
+                      bounds =
+                        NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.intersect_clip(
+                          bounds,
+                          NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.box_clip_bounds(
+                            Map.get(box, :clip)
+                          )
+                        )
+
+                      {left, bottom, right, top} = bounds
+                      {a, _b, _c, d, e, f} = box.transform
+
+                      if right > left and top > bottom,
+                        do: {a * left + e, d * bottom + f, a * right + e, d * top + f},
+                        else: nil
+                    else
+                      bounds
+                    end
+
+                  {:ok, bounds, descendants}
+                end
+
+              _ ->
+                with :ok <-
+                       NativeElixirPdfUtilities.Validators.WriterValidator.validate_native_boxes([
+                         box
+                       ]) do
+                  case box do
+                    %{type: :text} ->
+                      with {:ok, bounds} <-
+                             NativeElixirPdfUtilities.Validators.FontValidator.prepare_text_ink_rectangle(
+                               box
+                             ),
+                           do: {:ok, bounds, 0}
+
+                    %{x: x, y: y, width: width, height: height} ->
+                      stroke = Map.get(box, :stroke_width, 0.0) / 2
+                      bounds = {x - stroke, y - stroke, x + width + stroke, y + height + stroke}
+
+                      Enum.each(Tuple.to_list(bounds), fn value ->
+                        HtmlValidator.check_render_resource(
+                          :max_pdf_numeric_magnitude,
+                          abs(value),
+                          :layout
+                        )
+                      end)
+
+                      if Map.get(box, :type) == :flow_marker,
+                        do: {:ok, nil, 0},
+                        else: {:ok, bounds, 0}
+
+                    _ ->
+                      Diagnostics.error(
+                        :layout,
+                        :invalid_layout,
+                        "table cell paint requires actual bounded native artwork or selected target markers",
+                        module: __MODULE__,
+                        operation: :prepare_cell_band_paint
+                      )
+                  end
+                end
+            end
+          end
+
+        case result do
+          {:ok, nil, descendants} ->
+            {:cont, {:ok, union, count + descendants}}
+
+          {:ok, bounds, descendants} ->
+            {left, bottom, right, top} = bounds
+
+            union =
+              case union do
+                nil -> bounds
+                {a, b, c, d} -> {min(a, left), min(b, bottom), max(c, right), max(d, top)}
+              end
+
+            {:cont, {:ok, union, count + descendants}}
+
+          error ->
+            {:halt, error}
+        end
+      end)
+    else
+      :error ->
+        Diagnostics.error(
+          :layout,
+          :invalid_layout,
+          "table cell artwork requires proper native paint collections",
+          module: __MODULE__,
+          operation: :prepare_cell_band_paint
+        )
+
+      error ->
+        error
+    end
+  end
+
   @doc "Validates measured table cells and prepares baseline row heights and canonical offsets."
   @spec prepare_baseline_geometry(term(), term(), term()) ::
           {:ok, map()} | {:error, Diagnostics.detailed_error()}
@@ -690,59 +1450,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
           {:ok, map()} | {:error, Diagnostics.detailed_error()}
   def prepare_baseline_geometry(rows, metrics, vertical_spacing, policy \\ :aligned) do
     HtmlValidator.with_render_budget(fn ->
-      {proper_rows, row_count} =
-        case table_collection_size(rows) do
-          {:ok, count} -> {true, count}
-          :error -> {false, 0}
-        end
-
-      valid_rows =
-        proper_rows and
-          Enum.all?(Enum.with_index(rows), fn {row, index} ->
-            case row do
-              %{row: %{style: style}, cells: cells} when is_map(style) and is_list(cells) ->
-                case table_collection_size(cells) do
-                  {:ok, count} ->
-                    HtmlValidator.reserve_render_resource(
-                      :max_table_grid_work,
-                      2 * count,
-                      :layout
-                    )
-
-                    Enum.all?(cells, fn cell ->
-                      case cell do
-                        %{
-                          cell: %{style: cell_style, children: children},
-                          column: column,
-                          rowspan: rowspan
-                        }
-                        when is_map(cell_style) and is_list(children) and is_integer(column) and
-                               column >= 0 and
-                               is_integer(rowspan) and rowspan >= 1 and
-                               rowspan <= row_count - index ->
-                          match?({:ok, _}, table_collection_size(children))
-
-                        _ ->
-                          false
-                      end
-                    end)
-
-                  :error ->
-                    false
-                end
-
-              _ ->
-                false
-            end
-          end)
-
-      placements =
-        if valid_rows,
-          do:
-            Enum.flat_map(Enum.with_index(rows), fn {row, index} ->
-              Enum.map(row.cells, &{{index, &1.column}, &1})
-            end),
-          else: []
+      {valid_rows, row_count, placements} = prepare_table_geometry_rows(rows)
 
       valid =
         policy in [:aligned, :fragmented_start] and valid_rows and is_map(metrics) and
@@ -1002,6 +1710,66 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
 
   # Direct measured models need bounded proper-list inspection before
   # enumeration or placement allocation, including improper-list tails.
+  # Baseline measurement and continuation share canonical placement shape and
+  # preallocation accounting; neither execution path reinterprets spans.
+  defp prepare_table_geometry_rows(rows) do
+    {proper_rows, row_count} =
+      case table_collection_size(rows) do
+        {:ok, count} -> {true, count}
+        :error -> {false, 0}
+      end
+
+    valid_rows =
+      proper_rows and
+        Enum.all?(Enum.with_index(rows), fn {row, index} ->
+          case row do
+            %{row: %{style: style}, cells: cells} when is_map(style) and is_list(cells) ->
+              case table_collection_size(cells) do
+                {:ok, count} ->
+                  HtmlValidator.reserve_render_resource(
+                    :max_table_grid_work,
+                    2 * count,
+                    :layout
+                  )
+
+                  Enum.all?(cells, fn cell ->
+                    case cell do
+                      %{
+                        cell: %{style: cell_style, children: children},
+                        column: column,
+                        rowspan: rowspan
+                      }
+                      when is_map(cell_style) and is_list(children) and is_integer(column) and
+                             column >= 0 and
+                             is_integer(rowspan) and rowspan >= 1 and
+                             rowspan <= row_count - index ->
+                        match?({:ok, _}, table_collection_size(children))
+
+                      _ ->
+                        false
+                    end
+                  end)
+
+                :error ->
+                  false
+              end
+
+            _ ->
+              false
+          end
+        end)
+
+    placements =
+      if valid_rows,
+        do:
+          Enum.flat_map(Enum.with_index(rows), fn {row, index} ->
+            Enum.map(row.cells, &{{index, &1.column}, &1})
+          end),
+        else: []
+
+    {valid_rows, row_count, placements}
+  end
+
   defp table_collection_size(collection, count \\ 0, stage \\ :layout) do
     case collection do
       [] ->
@@ -1684,6 +2452,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
           {:ok,
            %{
              rows: [map()],
+             has_spanning_cells: boolean(),
              columns: [map()],
              column_presentation: [map()],
              collapsed_edges: map()
@@ -1813,13 +2582,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
             end)
 
           with {:ok, rows, columns, _group} <- result,
-               {:ok, rows} <- form_grid(Enum.reverse(rows)) do
+               {:ok, rows, spanning_cells?} <- form_grid(Enum.reverse(rows)) do
             columns = Enum.reverse(columns)
 
             with :ok <- validate_border_grid_support(rows, columns, table_style) do
               {:ok,
                %{
                  rows: rows,
+                 has_spanning_cells: spanning_cells?,
                  columns: Enum.map(columns, &Map.take(&1, [:width])),
                  column_presentation: Enum.map(columns, & &1.presentation),
                  collapsed_edges:
@@ -2232,7 +3002,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
       end
     end)
     |> case do
-      {:ok, rows, _occupied} -> {:ok, Enum.reverse(rows)}
+      {:ok, rows, occupied} -> {:ok, Enum.reverse(rows), map_size(occupied) > 0}
       error -> error
     end
   end

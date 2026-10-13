@@ -161,6 +161,75 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     end
   end
 
+  @tag :until_found_initial
+  test "hidden-until-found uses its actual initial no-script print boxes" do
+    for name <- [
+          "html_until_found_initial",
+          "html_until_found_composed",
+          "html_until_found_body_canvas"
+        ] do
+      fixture = Path.join(@fixtures_dir, name <> ".html")
+
+      stats =
+        PdfVisualCompare.assert_browser_match!(fixture,
+          artifact_dir: "tmp/browser_parity/" <> name,
+          render_opts: [forms: :static],
+          max_changed_ratio: 0.01,
+          max_average_delta: 0.01
+        )
+
+      assert stats.scripting == :disabled
+      assert stats.page_count == 1
+
+      if name != "html_until_found_body_canvas" do
+        for pdf_name <- ["native.pdf", "chromium.pdf"] do
+          assert {:ok, text} =
+                   NativeElixirPdfUtilities.Text.extract(
+                     File.read!(Path.join(stats.artifact_dir, pdf_name))
+                   )
+
+          refute text =~ "Hidden block contents"
+          refute text =~ "Hidden open dialog contents"
+          refute text =~ "Input initial contents"
+          refute text =~ "Skipped assigned text"
+          refute text =~ "Skipped shadow text"
+          assert text =~ "Visible final content"
+        end
+      end
+    end
+  end
+
+  @tag :noninput_attribute_applicability
+  test "ordinary and non-input controls retain inactive authored boolean metadata" do
+    fixture = Path.join(@fixtures_dir, "html_noninput_attribute_applicability.html")
+
+    stats =
+      PdfVisualCompare.assert_browser_match!(fixture,
+        artifact_dir: "tmp/browser_parity/html_noninput_attribute_applicability",
+        render_opts: [forms: :static],
+        max_changed_ratio: 0.01,
+        max_average_delta: 0.01
+      )
+
+    assert stats.scripting == :disabled
+    assert stats.page_count == 1
+
+    for name <- ["native.pdf", "chromium.pdf"] do
+      assert {:ok, text} =
+               NativeElixirPdfUtilities.Text.extract(
+                 File.read!(Path.join(stats.artifact_dir, name))
+               )
+
+      for caption <- [
+            "Ordinary source metadata",
+            "Editable choice",
+            "Actual readonly text",
+            "Static button metadata"
+          ],
+          do: assert(text =~ caption)
+    end
+  end
+
   @tag :input_attribute_applicability
   test "input state ignores inactive attributes while authored selectors still apply" do
     fixture = Path.join(@fixtures_dir, "html_input_attribute_applicability.html")
@@ -367,7 +436,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   end
 
   @fixture_thresholds [
+    {"html_fragment_link_decoration_fonts.html",
+     max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_shadow_document_fragments.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_math_enclosing_links.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"svg_nested_text_lengths.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_math_table_source_clones.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_selected_content_slot_order.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_selected_content_clones.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
@@ -503,6 +576,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     {"html_file_empty_controls.html",
      render_opts: [
        forms: :static,
+       fonts: [
+         %{
+           family: "Arial",
+           path: Path.expand("priv/fonts/dejavu/DejaVuSans.ttf"),
+           weight: 400,
+           style: :normal
+         },
+         %{
+           family: "DejaVu Sans",
+           path: Path.expand("priv/fonts/dejavu/DejaVuSans.ttf"),
+           weight: 400,
+           style: :normal
+         },
+         %{
+           family: "DejaVu Sans Mono",
+           path: Path.expand("priv/fonts/dejavu/DejaVuSansMono.ttf"),
+           weight: 400,
+           style: :normal
+         }
+       ],
+       system_font_discovery: false
+     ],
+     max_changed_ratio: 0.01,
+     max_average_delta: 0.01},
+    {"html_inert_special_initial_controls.html",
+     render_opts: [
+       forms: :interactive,
        fonts: [
          %{
            family: "Arial",
@@ -700,6 +800,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
      max_changed_ratio: 0.01,
      max_average_delta: 0.01},
     {"mathml_fractions_ordinary.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_schema_css_backgrounds.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_schema_nested_owners.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_schema_css_clip_position.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_schemas_flex_grid.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_schema_css_boxes.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_schemas_css_flow.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_radical_owner_boxes.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
@@ -709,6 +813,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
      max_average_delta: 0.01},
     {"mathml_html_children.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_semantics_annotations.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_annotation_composition.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_annotation_css_alternatives.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_annotation_svg_flex.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_unknown_rows.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_anonymous_row_boxes.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_matrix_cell_boxes.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
@@ -716,6 +823,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     {"mathml_matrix_integer_spacing_ordinary.html",
      max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_matrix_owner_boxes.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_matrix_cell_reflow.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_matrix_percentage_boxes.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_matrix_spans_constraints.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_matrix_spacing_boxes.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
@@ -771,12 +879,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
      max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_reuse.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_gradients.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"inline_svg_text_paint_servers.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_patterns_markers.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_masks.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_foreign_object.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_filters.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_html_filters.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"inline_svg_filter_images.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"inline_svg_filter_text_inputs.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_path_clips_scoped.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"inline_svg_complete_clips.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_nested_html_resources.html",
      max_changed_ratio: 0.01,
      max_average_delta: 0.01,
@@ -1015,9 +1127,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     {"mathml_style_groups.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_error_groups.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_padded_boxes.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_display_contents.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_atomic_paint_flow.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_script_corner_kerning.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_all_stretch_rows.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_operator_font_lengths.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_operator_calculations.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"mathml_operator_context_lengths.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_token_defaults.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_tokens_rows.html",
      chromium_transform: &__MODULE__.math_token_italic_reference/1,
@@ -1931,8 +2047,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   end
 
   for {fixture_name, thresholds} <- @fixture_thresholds do
+    if fixture_name == "html_fragment_link_decoration_fonts.html", do: @tag(:shadow_fragments)
+    if fixture_name == "html_shadow_document_fragments.html", do: @tag(:shadow_fragments)
     if fixture_name == "html_math_enclosing_links.html", do: @tag(:math_links)
+    if fixture_name == "svg_nested_text_lengths.html", do: @tag(:svg_nested_lengths)
     if fixture_name == "html_math_table_source_clones.html", do: @tag(:math_clone_sources)
+    if fixture_name == "html_inert_special_initial_controls.html", do: @tag(:inert_special_inputs)
     if fixture_name == "html_modern_color_initial_values.html", do: @tag(:modern_color_inputs)
     if fixture_name == "html_selected_content_clones.html", do: @tag(:selected_content)
     if fixture_name == "html_selected_content_shadow_clones.html", do: @tag(:clone_shadows)
@@ -2010,9 +2130,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     if fixture_name == "mathml_radical_owner_boxes.html", do: @tag(:math_radical_owner_boxes)
     if fixture_name == "mathml_schemas_css_flow.html", do: @tag(:math_schemas_css_flow)
     if fixture_name == "mathml_schema_css_boxes.html", do: @tag(:math_schema_css_boxes)
+    if fixture_name == "mathml_schemas_flex_grid.html", do: @tag(:math_schemas_flex_grid)
+    if fixture_name == "mathml_schema_nested_owners.html", do: @tag(:math_schema_nested_owners)
+
+    if fixture_name == "mathml_schema_css_clip_position.html",
+      do: @tag(:math_schema_css_clip_position)
+
+    if fixture_name == "mathml_schema_css_backgrounds.html",
+      do: @tag(:math_schema_css_backgrounds)
 
     if fixture_name == "mathml_html_children.html", do: @tag(:math_html_children)
     if fixture_name == "mathml_semantics_annotations.html", do: @tag(:math_semantics)
+
+    if fixture_name in [
+         "mathml_annotation_composition.html",
+         "mathml_annotation_css_alternatives.html",
+         "mathml_annotation_svg_flex.html"
+       ],
+       do: @tag(:math_annotation_composition)
+
     if fixture_name == "mathml_unknown_rows.html", do: @tag(:math_unknown_rows)
     if fixture_name == "mathml_anonymous_row_boxes.html", do: @tag(:math_anonymous_rows)
     if fixture_name == "mathml_phantoms.html", do: @tag(:math_phantoms)
@@ -2029,6 +2165,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     if fixture_name in ["mathml_style_groups.html", "mathml_error_groups.html"],
       do: @tag(:math_grouping)
 
+    if fixture_name == "mathml_display_contents.html", do: @tag(:math_display_contents)
+    if fixture_name == "mathml_atomic_paint_flow.html", do: @tag(:math_atomic_paint_flow)
+
     if fixture_name == "mathml_padded_boxes.html", do: @tag(:math_padding)
 
     if fixture_name == "mathml_multiscripts.html", do: @tag(:math_multiscripts)
@@ -2040,6 +2179,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
 
     if fixture_name == "mathml_all_stretch_rows.html", do: @tag(:math_all_stretch)
     if fixture_name == "mathml_operator_font_lengths.html", do: @tag(:math_operator_font_lengths)
+    if fixture_name == "mathml_operator_calculations.html", do: @tag(:math_operator_calculations)
+
+    if fixture_name == "mathml_operator_context_lengths.html",
+      do: @tag(:math_operator_context_lengths)
+
     @tag math_tokens: fixture_name in ["mathml_token_defaults.html", "mathml_tokens_rows.html"]
     @tag math_operators:
            fixture_name in ["mathml_operators.html", "mathml_operators_ordinary.html"]
@@ -2106,6 +2250,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
          "html_table_caption_blocks.html"
        ],
        do: @tag(:table_formation)
+
+    if fixture_name == "mathml_matrix_cell_reflow.html", do: @tag(:math_matrix_reflow)
 
     if fixture_name == "mathml_matrix_percentage_boxes.html", do: @tag(:math_matrix_percentage)
 
@@ -2174,6 +2320,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     if fixture_name in ~w(inline_svg_text_selected.html inline_svg_text_font_attributes.html),
       do: @tag(:inline_svg_text)
 
+    if fixture_name == "inline_svg_path_clips_scoped.html", do: @tag(:svg_path_clips)
+
+    if fixture_name in ~w(inline_svg_path_clips_scoped.html inline_svg_complete_clips.html),
+      do: @tag(:svg_complete_clips)
+
+    if fixture_name in ~w(inline_svg_text_paint_servers.html inline_svg_gradients.html),
+      do: @tag(:svg_text_paint)
+
     if fixture_name == "inline_svg_patterns_markers.html", do: @tag(:svg_patterns_markers)
     if fixture_name == "inline_svg_images_resources.html", do: @tag(:svg_images_resources)
 
@@ -2184,6 +2338,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     if fixture_name == "inline_svg_foreign_object.html", do: @tag(:svg_foreign_object)
     if fixture_name == "inline_svg_filters.html", do: @tag(:svg_filters)
     if fixture_name == "inline_svg_html_filters.html", do: @tag(:svg_html_filters)
+    if fixture_name == "inline_svg_filter_images.html", do: @tag(:svg_filter_images)
+    if fixture_name == "inline_svg_filter_text_inputs.html", do: @tag(:svg_filter_text_inputs)
 
     if fixture_name in [
          "inline_svg_text_selected.html",
@@ -2226,6 +2382,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
                artifact_dir: artifact_dir
              } = stats
 
+      if @fixture_name == "inline_svg_text_paint_servers.html" do
+        for renderer <- ["native", "chromium"] do
+          assert {:ok, text} =
+                   NativeElixirPdfUtilities.Text.extract(
+                     File.read!(Path.join(artifact_dir, renderer <> ".pdf")),
+                     layout: false
+                   )
+
+          for original <- [
+                "office café Ω",
+                "Radial paint Ω",
+                "Affine café Ω",
+                "Same server",
+                "Pattern office Ω",
+                "BBox café Ω"
+              ],
+              do: assert(text =~ original)
+        end
+
+        native = File.read!(Path.join(artifact_dir, "native.pdf"))
+        assert native =~ "/FontFile2"
+        assert native =~ "/PatternType 1" and native =~ "/PatternType 2"
+      end
+
       if @fixture_name == "inline_svg_nested_html_resources.html" do
         for renderer <- ["native", "chromium"] do
           assert {:ok, text} =
@@ -2235,6 +2415,103 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
                    )
 
           assert length(Regex.scan(~r/Nested café Ω/, text)) == 3
+        end
+      end
+
+      if @fixture_name == "html_shadow_document_fragments.html" do
+        alias NativeElixirPdfUtilities.Pdf.Reader
+
+        assert {:ok, chromium} =
+                 Reader.read_validated(File.read!(Path.join(artifact_dir, "chromium.pdf")))
+
+        assert {:ok, native} =
+                 Reader.read_validated(File.read!(Path.join(artifact_dir, "native.pdf")))
+
+        destinations =
+          Enum.find_value(chromium.document.objects, fn
+            {_, %{value: %{"Dests" => {:ref, ref}}}} -> chromium.document.objects[ref].value
+            _ -> nil
+          end)
+
+        assert Map.keys(destinations) == ["duplicate"]
+        assert [{:ref, _page}, {:name, "XYZ"}, 12, chromium_y, _zoom] = destinations["duplicate"]
+        assert_in_delta List.last(hd(chromium.pages).media_box) - chromium_y, 48, 0.001
+
+        native_links =
+          for {_, %{value: %{"Subtype" => {:name, "Link"}} = link}} <- native.document.objects,
+              do: link
+
+        assert length(native_links) == 2
+
+        for link <- native_links do
+          assert [{:ref, _page}, {:name, "XYZ"}, 12, native_y, nil] = link["Dest"]
+          assert_in_delta List.last(hd(native.pages).media_box) - native_y, 48, 0.001
+        end
+      end
+
+      if @fixture_name == "mathml_annotation_svg_flex.html" do
+        for renderer <- ["native", "chromium"] do
+          assert {:ok, text} =
+                   NativeElixirPdfUtilities.Text.extract(
+                     File.read!(Path.join(artifact_dir, renderer <> ".pdf")),
+                     layout: false
+                   )
+
+          compact = String.replace(text, ~r/\s/u, "")
+          assert compact =~ "FlexαScene1end." and compact =~ "GridβPaint2end."
+        end
+      end
+
+      if @fixture_name == "mathml_annotation_css_alternatives.html" do
+        for renderer <- ["native", "chromium"] do
+          assert {:ok, text} =
+                   NativeElixirPdfUtilities.Text.extract(
+                     File.read!(Path.join(artifact_dir, renderer <> ".pdf")),
+                     layout: false
+                   )
+
+          compact = String.replace(text, ~r/\s/u, "")
+          assert compact =~ "Flexα123end." and compact =~ "Gridβ456end."
+          refute compact =~ "Hidden"
+        end
+      end
+
+      if @fixture_name == "mathml_annotation_composition.html" do
+        for renderer <- ["native", "chromium"] do
+          assert {:ok, text} =
+                   NativeElixirPdfUtilities.Text.extract(
+                     File.read!(Path.join(artifact_dir, renderer <> ".pdf")),
+                     layout: false
+                   )
+
+          compact = String.replace(text, ~r/\s/u, "")
+
+          for original <- [
+                "OwnerAlphaBeta1end.",
+                "Mixed2Before3+4After5end.",
+                "Alternativeα6+7β8end.",
+                "SceneαScene9β0end.",
+                "Selected12end."
+              ],
+              do:
+                assert(
+                  compact =~ original,
+                  "#{renderer} omitted original mixed content #{original}"
+                )
+
+          refute compact =~ "Hidden"
+        end
+      end
+
+      if @fixture_name == "svg_nested_text_lengths.html" do
+        for renderer <- ["native", "chromium"] do
+          assert {:ok, text} =
+                   NativeElixirPdfUtilities.Text.extract(
+                     File.read!(Path.join(artifact_dir, renderer <> ".pdf")),
+                     layout: false
+                   )
+
+          assert String.replace(text, ~r/\s+/u, "") == "ABCDEFABCDEF"
         end
       end
 
@@ -2508,7 +2785,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
                    "DejaVu Sans Mono"
                  ]
 
-        @fixture_name in ["html_file_empty_controls.html", "html_file_empty_geometry.html"] ->
+        @fixture_name in [
+          "html_file_empty_controls.html",
+          "html_file_empty_geometry.html",
+          "html_inert_special_initial_controls.html"
+        ] ->
           assert Enum.sort(Enum.map(font_sources, & &1.family)) == [
                    "Arial",
                    "DejaVu Sans",

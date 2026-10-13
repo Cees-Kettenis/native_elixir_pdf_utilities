@@ -49,7 +49,12 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
         indexed: %{},
         actions: %{},
         busy: false,
-        source_styles: %{}
+        source_styles: %{},
+        source_provenance: nil,
+        source_view: nil,
+        fragment_views: [],
+        declaration_contexts: [],
+        css_budget: HtmlValidator.new_css_budget()
       }
 
       Process.put(@key, frame)
@@ -86,7 +91,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                    Style.with_source_style_contexts(
                      original,
                      Enum.map(entries, & &1.css),
-                     HtmlValidator.new_css_budget(),
+                     Process.get(@key).css_budget,
                      fn node, _, context ->
                        if context.status == :resolved do
                          current = Process.get(@key)
@@ -103,11 +108,19 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                      end,
                      opts
                    ),
-                 :ok <- complete_declaration_contexts(source_contexts),
+                 _ =
+                   Process.put(@key, %{
+                     Process.get(@key)
+                     | source_provenance: source_contexts.source_provenance,
+                       declaration_contexts:
+                         source_contexts.source_obligations.declaration_contexts
+                   }),
+                 :ok <- prepare_original_fragment_contexts(nodes, opts),
+                 :ok <- complete_declaration_contexts(Process.get(@key).declaration_contexts),
                  :ok <- validate_original_resource_contexts(nodes),
                  {:ok, prepared} <- prepare_runtime_view(original, opts, image_budget),
                  :ok <- validate_glyph_coverage(original, prepared.styled_tree),
-                 :ok <- prepare_original_fragments(nodes, opts, image_budget),
+                 :ok <- prepare_original_fragments(opts, image_budget),
                  :ok <- validate_live() do
               Process.put(@key, %{Process.get(@key) | mode: :execute, parser: nil})
 
@@ -248,6 +261,200 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
   end
 
   @doc false
+  @spec original_prefix_provenance(term(), term()) ::
+          :not_owned | {:ok, map()} | {:error, {atom(), map()}}
+  def original_prefix_provenance(tree, finish) do
+    case Process.get(@key) do
+      %{
+        mode: :execute,
+        busy: true,
+        parser: parser,
+        original: original,
+        source_provenance: provenance
+      }
+      when not is_nil(provenance) ->
+        if match?(%{id: ^parser}, Process.get({TemplatePatchValidator, :invocation})) do
+          project_original_source(tree, finish, original.root)
+        else
+          :not_owned
+        end
+
+      _ ->
+        :not_owned
+    end
+  end
+
+  @doc false
+  @spec original_view_provenance(term()) :: :not_owned | {:ok, map()} | {:error, {atom(), map()}}
+  def original_view_provenance(dom) do
+    case Process.get(@key) do
+      %{
+        mode: :original,
+        busy: true,
+        source_view: %{root: root, fragment: fragment},
+        original: original
+      } ->
+        if is_map(dom) and dom[:node_id] == root do
+          with :ok <-
+                 NativeElixirPdfUtilities.Validators.HtmlTreeValidator.validate_transport(dom),
+               tree = HtmlTree.from_document(dom),
+               {:ok, provenance} <-
+                 project_original_source(
+                   tree,
+                   byte_size(original.nodes[original.root].source.text),
+                   root
+                 ) do
+            contexts =
+              Map.new(provenance.insertion_contexts, fn {id, reason} ->
+                {id, if(original.nodes[id].tree_scope_id == fragment, do: nil, else: reason)}
+              end)
+
+            embedded =
+              Enum.map(provenance.embedded, fn entry ->
+                entry = %{entry | node: HtmlTree.fetch(tree, entry.node.node_id)}
+
+                if entry.node.tree_scope_id == fragment,
+                  do: Map.put(entry, :insertion_context, nil),
+                  else: entry
+              end)
+
+            {:ok, %{provenance | insertion_contexts: contexts, embedded: embedded}}
+          end
+        else
+          :not_owned
+        end
+
+      _ ->
+        :not_owned
+    end
+  end
+
+  # Both prospective prefixes and detached views preserve exact authored payloads
+  # while keeping real placement separate from original lexical ownership.
+  defp project_original_source(tree, finish, expected_root) do
+    %{original: original, source_provenance: provenance} = Process.get(@key)
+
+    with :ok <- validate_live(),
+         {:ok, _prefix} <-
+           NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator.validate_source_prefix(
+             original.nodes[original.root].source.text,
+             finish
+           ),
+         :ok <-
+           if(
+             is_struct(tree, HtmlTree) and is_map(tree.nodes) and
+               tree.root == expected_root and Map.has_key?(tree.nodes, tree.root),
+             do: :ok,
+             else:
+               Diagnostics.error(
+                 :html,
+                 :invalid_document,
+                 "candidate source projection requires the captured logical tree",
+                 module: __MODULE__,
+                 operation: :template_candidate_projection,
+                 source: "source_prefix"
+               )
+           ) do
+      HtmlValidator.reserve_render_resource(
+        :max_html_tree_work,
+        map_size(tree.nodes),
+        :html
+      )
+
+      bindings =
+        Enum.reduce_while(tree.nodes, {:ok, %{}}, fn {id, node}, {:ok, bindings} ->
+          metadata =
+            if is_map(node) and node[:node_id] == id and is_reference(id) and
+                 is_reference(node[:document_id]) do
+              NativeElixirPdfUtilities.Validators.HtmlTreeValidator.validate_node_metadata(
+                Map.delete(node, :projection)
+              )
+            else
+              Diagnostics.error(
+                :html,
+                :invalid_document,
+                "candidate source projection requires canonical stored node identities",
+                module: __MODULE__,
+                operation: :template_candidate_projection,
+                source: "source_prefix"
+              )
+            end
+
+          if metadata != :ok do
+            {:halt, metadata}
+          else
+            HtmlValidator.reserve_render_resource(
+              :max_html_tree_work,
+              byte_size(node.source.text) + 1,
+              :html
+            )
+
+            authored = Map.get(original.nodes, id)
+            span = Map.get(provenance.token_bindings, id)
+
+            cond do
+              node.type in [:document, :document_fragment] or node.source.text == "" ->
+                {:cont, {:ok, bindings}}
+
+              id == node.node_id && authored && span &&
+                span.offset + byte_size(span.raw) <= finish &&
+                node.document_id == authored.document_id &&
+                  Map.take(node, @payload) == Map.take(authored, @payload) ->
+                {:cont,
+                 {:ok,
+                  Map.put(bindings, id, %{
+                    original:
+                      Map.take(authored, [
+                        :node_id,
+                        :document_id,
+                        :parent_id,
+                        :tree_scope_id,
+                        :source
+                      ]),
+                    placement:
+                      Map.take(node, [
+                        :node_id,
+                        :document_id,
+                        :parent_id,
+                        :tree_scope_id,
+                        :source
+                      ])
+                  })}}
+
+              true ->
+                {:halt,
+                 Diagnostics.error(
+                   :html,
+                   :invalid_document,
+                   "candidate prefix cannot retain the protected original token identity; lexical ownership and current placement remain distinct",
+                   module: __MODULE__,
+                   operation: :template_candidate_projection,
+                   source: node.source.text,
+                   line: node.source.line,
+                   column: node.source.column
+                 )}
+            end
+          end
+        end)
+
+      with {:ok, bindings} <- bindings do
+        ids = Map.keys(bindings)
+
+        {:ok,
+         %{
+           provenance
+           | token_bindings: Map.take(provenance.token_bindings, ids),
+             inline: Map.take(provenance.inline, ids),
+             records: Map.take(provenance.records, ids),
+             insertion_contexts: Map.take(provenance.insertion_contexts, ids),
+             embedded: Enum.filter(provenance.embedded, &Map.has_key?(bindings, &1.node.node_id))
+         }
+         |> Map.put(:prefix_placements, bindings)}
+      end
+    end
+  end
+
+  @doc false
   @spec authorize(term(), HtmlTree.t(), map()) :: :ok | :not_owned | {:error, {atom(), map()}}
   def authorize(handle, tree, context) do
     frame = Process.get(@key)
@@ -321,8 +528,8 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
 
   # This names the complete authored-declaration obligation, rather than treating
   # successful active styling as policy for inactive or unmatched declarations.
-  defp complete_declaration_contexts(result) do
-    case Enum.find(result.source_obligations.declaration_contexts, &(&1.status == :unresolved)) do
+  defp complete_declaration_contexts(records) do
+    case Enum.find(records, &(&1.status == :unresolved)) do
       nil ->
         :ok
 
@@ -340,20 +547,120 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
     end
   end
 
-  defp prepare_original_fragments(nodes, opts, image_budget) do
+  defp prepare_original_fragment_contexts(nodes, opts) do
     Enum.reduce_while(nodes, :ok, fn node, :ok ->
       case Map.get(node, :content) do
         %{type: :document_fragment} = fragment ->
-          # Validation executes an explicit detached view, retaining the original
-          # fragment scope and child identities. It does not inherit host styles.
           result =
             with {:ok, normalized} <-
-                   HtmlValidator.construct_html_document(%{fragment | type: :document}),
-                 tree = HtmlTree.from_document(normalized),
-                 view = HtmlTree.fetch(tree, tree.root),
-                 {:ok, prepared} <- prepare_runtime_view(view, opts, image_budget),
-                 :ok <- validate_glyph_coverage(view, prepared.styled_tree),
-                 do: :ok
+                   HtmlValidator.construct_html_document(%{fragment | type: :document}) do
+              view = normalized |> HtmlTree.from_document() |> then(&HtmlTree.fetch(&1, &1.root))
+              frame = Process.get(@key)
+
+              Process.put(@key, %{
+                frame
+                | busy: true,
+                  source_view: %{root: view.node_id, fragment: fragment.node_id}
+              })
+
+              try do
+                with {:ok, entries} <- Style.prepare_stylesheets(view, opts),
+                     {:ok, contexts} <-
+                       Style.with_source_style_contexts(
+                         view,
+                         Enum.map(entries, & &1.css),
+                         frame.css_budget,
+                         fn source_node, _, context ->
+                           if context.status == :resolved do
+                             current = Process.get(@key)
+                             HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+
+                             Process.put(@key, %{
+                               current
+                               | source_styles:
+                                   Map.put(
+                                     current.source_styles,
+                                     source_node.node_id,
+                                     context.style
+                                   )
+                             })
+                           end
+
+                           :ok
+                         end,
+                         opts
+                       ),
+                     :ok <-
+                       complete_declaration_contexts(
+                         Enum.reject(
+                           contexts.source_obligations.declaration_contexts,
+                           &(&1.status == :unresolved and &1.reason == :template_insertion_context)
+                         )
+                       ) do
+                  current = Process.get(@key)
+
+                  checked =
+                    Enum.reduce(contexts.source_obligations.declaration_contexts, %{}, fn record,
+                                                                                          checked ->
+                      HtmlValidator.reserve_render_resource(
+                        :max_css_work,
+                        byte_size(record.source.text) + 1,
+                        :css
+                      )
+
+                      if record.status == :checked_in_original_context and
+                           record.source[:provenance] == :original_html and
+                           is_map(record.source[:owner]) and
+                           record.source.owner.tree_scope_id == fragment.node_id do
+                        Map.put(checked, {record.source, record.declaration}, record)
+                      else
+                        checked
+                      end
+                    end)
+
+                  records =
+                    Enum.map(current.declaration_contexts, fn record ->
+                      HtmlValidator.reserve_render_resource(
+                        :max_css_work,
+                        byte_size(record.source.text) + 1,
+                        :css
+                      )
+
+                      if record.status == :unresolved and
+                           record.source[:provenance] == :original_html and
+                           is_map(record.source[:owner]) and
+                           record.source.owner.tree_scope_id == fragment.node_id do
+                        match = Map.get(checked, {record.source, record.declaration})
+
+                        if match,
+                          do:
+                            %{
+                              record
+                              | status: :checked_in_original_context,
+                                contexts: match.contexts
+                            }
+                            |> Map.delete(:reason),
+                          else: record
+                      else
+                        record
+                      end
+                    end)
+
+                  HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+
+                  Process.put(@key, %{
+                    current
+                    | declaration_contexts: records,
+                      fragment_views: [view | current.fragment_views]
+                  })
+
+                  :ok
+                end
+              after
+                current = Process.get(@key)
+                Process.put(@key, %{current | busy: frame.busy, source_view: frame.source_view})
+              end
+            end
 
           case result do
             :ok -> {:cont, :ok}
@@ -362,6 +669,20 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
 
         _ ->
           {:cont, :ok}
+      end
+    end)
+  end
+
+  defp prepare_original_fragments(opts, image_budget) do
+    Enum.reduce_while(Enum.reverse(Process.get(@key).fragment_views), :ok, fn view, :ok ->
+      result =
+        with {:ok, prepared} <- prepare_runtime_view(view, opts, image_budget),
+             :ok <- validate_glyph_coverage(view, prepared.styled_tree),
+             do: :ok
+
+      case result do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
       end
     end)
   end
@@ -509,7 +830,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
         HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
 
         children =
-          if Map.get(node, :tag) in ~w(style script title),
+          if not fragments? and Map.get(node, :tag) in ~w(style script title),
             do: [],
             else: Map.get(node, :children, [])
 

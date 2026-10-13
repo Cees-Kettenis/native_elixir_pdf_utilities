@@ -14,6 +14,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.HtmlUrlValidator
+  alias NativeElixirPdfUtilities.Validators.HtmlMetadataValidator
 
   @type identity :: {reference(), reference(), reference()}
   @type context :: %{
@@ -54,7 +55,91 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
     end
   end
 
-  defp prepare_document(children, url_context, document_id, tree_scope_id) do
+  @doc false
+  @spec prepare_composition([map()], HtmlUrlValidator.context(), map(), map() | nil) ::
+          {:ok, context()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_composition(children, url_context, composition, resource_context) do
+    if map_size(composition.roots) == 0 and
+         map_size(Map.get(composition, :clone_logical_nodes, %{})) == 0 do
+      if resource_context == nil,
+        do: prepare(children, url_context),
+        else: prepare(children, url_context, resource_context)
+    else
+      prepared =
+        NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator.prepared_index(children)
+
+      targets = logical_target_children(composition.logical.children, composition, prepared)
+
+      if resource_context == nil do
+        prepare_document(children, url_context, make_ref(), make_ref(), targets)
+      else
+        with :ok <-
+               NativeElixirPdfUtilities.Validators.ResourceValidator.validate_context(
+                 resource_context
+               ) do
+          prepare_document(
+            children,
+            url_context,
+            resource_context.document_id,
+            resource_context.tree_scope_id,
+            targets
+          )
+        end
+      end
+    end
+  end
+
+  # Navigation selects the actual Document light tree, not flat slot order or
+  # shadow descendants. Selected-content destinations use their latest real
+  # clone children; the original authored validation tree stays immutable.
+  defp logical_target_children(nodes, composition, prepared) do
+    Enum.flat_map(nodes, fn original ->
+      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+
+      node =
+        Map.get(
+          Map.get(composition, :clone_logical_nodes, %{}),
+          Map.get(original, :node_id),
+          original
+        )
+
+      content_id = get_in(node, [:content, :node_id])
+
+      consumed? =
+        Map.get(node, :tag) == "template" and Map.get(node, :namespace, :html) == :html and
+          Map.has_key?(composition.roots, content_id)
+
+      if consumed? do
+        []
+      else
+        case node do
+          %{type: :element, children: nested} ->
+            rendered = Map.get(prepared, Map.get(node, :node_id), %{})
+
+            selector =
+              Map.get_lazy(rendered, :_selector_id, fn ->
+                Map.get_lazy(node, :node_id, &make_ref/0)
+              end)
+
+            node = Map.put(node, :_selector_id, selector)
+
+            nested =
+              if node.tag == "template" and Map.get(node, :namespace, :html) == :html,
+                do: nested,
+                else: logical_target_children(nested, composition, prepared)
+
+            [Map.put(node, :children, nested)]
+
+          _ ->
+            [node]
+        end
+      end
+    end)
+  end
+
+  defp prepare_document(children, url_context, document_id, tree_scope_id, target_children \\ nil) do
+    targets = target_children || children
+
     context =
       collect(children, %{
         document_id: document_id,
@@ -63,8 +148,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
         names: %{},
         links: %{},
         selected: MapSet.new(),
-        document_targets: []
+        document_targets: [],
+        logical_scope: HtmlMetadataValidator.tree_scope(targets)
       })
+
+    context =
+      if target_children == nil do
+        context
+      else
+        %{context | names: collect(targets, %{context | names: %{}, links: %{}}).names}
+      end
 
     with {:ok, links} <-
            Enum.reduce_while(context.links, {:ok, %{}}, fn {href, _}, {:ok, links} ->
@@ -75,7 +168,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
            end) do
       index =
         if Enum.any?(links, fn {_href, destination} -> match?({:fragment, _}, destination) end),
-          do: NativeElixirPdfUtilities.Validators.HtmlMetadataValidator.first_tree_ids(children),
+          do: HtmlMetadataValidator.first_tree_ids(targets),
           else: %{}
 
       ids =
@@ -125,9 +218,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
           identity = {context.document_id, context.tree_scope_id, node_id}
 
           name =
-            if node.tag == "a" and Map.get(node, :namespace, :html) == :html,
-              do: Map.get(attributes, "name", ""),
-              else: ""
+            if node.tag == "a" and Map.get(node, :namespace, :html) == :html and
+                 {Map.get(node, :document_id), Map.get(node, :tree_scope_id)} ==
+                   context.logical_scope and
+                 is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "name")),
+               do: Map.get(attributes, "name", ""),
+               else: ""
 
           names =
             if name == "", do: context.names, else: Map.put_new(context.names, name, identity)
@@ -210,14 +306,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
          case box do
            box when is_map(box) ->
              targets = Map.get(box, :html_targets, [])
-
-             if is_list(targets) and targets != [],
-               do:
-                 HtmlValidator.reserve_render_resource(
-                   :max_css_work,
-                   length(targets),
-                   :pagination
-                 )
+             targets_valid? = valid_box_targets?(targets)
 
              origin_valid? =
                targets == [] or
@@ -226,18 +315,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
 
              destination = Map.get(box, :link_destination)
 
-             is_list(targets) and origin_valid? and
-               Enum.all?(targets, fn target ->
-                 case target do
-                   %{identity: identity, dx: dx, dy: dy} ->
-                     valid_identity?(identity) and
-                       match?({:ok, _}, HtmlValidator.normalize_geometry_number(dx)) and
-                       match?({:ok, _}, HtmlValidator.normalize_geometry_number(dy))
-
-                   _ ->
-                     false
-                 end
-               end) and valid_prepared_destination?(destination) and
+             targets_valid? and origin_valid? and
+               valid_prepared_destination?(destination) and
                (destination == nil or Map.get(box, :type) in [:text, :image, :link_region])
 
            _ ->
@@ -254,6 +333,26 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
         module: __MODULE__,
         source: "html_targets/link_destination"
       )
+    end
+  end
+
+  # Selected target lists consume the existing CSS work quota per link, so
+  # improper direct annotations diagnose before an Enum traversal can raise.
+  defp valid_box_targets?(targets) do
+    case targets do
+      [] ->
+        true
+
+      [%{identity: identity, dx: dx, dy: dy} | tail] ->
+        HtmlValidator.reserve_render_resource(:max_css_work, 1, :pagination)
+
+        valid_identity?(identity) and
+          match?({:ok, _}, HtmlValidator.normalize_geometry_number(dx)) and
+          match?({:ok, _}, HtmlValidator.normalize_geometry_number(dy)) and
+          valid_box_targets?(tail)
+
+      _ ->
+        false
     end
   end
 
@@ -530,21 +629,36 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
           _ -> requested
         end
 
+      targets = Map.get(box, :html_targets, [])
+
+      target_clip =
+        if targets == [] do
+          clip
+        else
+          case box do
+            %{type: :drawing_group} ->
+              elem(DrawingGeometry.compose_group(box, composition), 4)
+
+            _ ->
+              DrawingGeometry.intersect_clip(
+                clip,
+                DrawingGeometry.transform_box_clip(Map.get(box, :clip), {sx, sy, tx, ty})
+              )
+          end
+        end
+
       positions =
-        Enum.reduce(Map.get(box, :html_targets, []), positions, fn target, positions ->
+        Enum.reduce(targets, positions, fn target, positions ->
           position =
             target_position(
               box.x + target.dx,
               box.y + target.dy,
               page,
               {sx, sy, tx, ty},
-              DrawingGeometry.intersect_clip(
-                clip,
-                DrawingGeometry.transform_box_clip(Map.get(box, :clip), {sx, sy, tx, ty})
-              )
+              target_clip
             )
 
-          Map.put_new(positions, target.identity, position)
+          put_visible_target_position(positions, target.identity, position)
         end)
 
       case box do
@@ -556,7 +670,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
           positions =
             Enum.reduce(Map.get(box, :link_document_targets, []), positions, fn target,
                                                                                 positions ->
-              Map.put_new(
+              put_visible_target_position(
                 positions,
                 target.identity,
                 target_position(target.x, target.y, page, transform, clip)
@@ -596,6 +710,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
 
         _ ->
           {positions, beginnings, expected, requested}
+      end
+    end)
+  end
+
+  # One already-selected DOM identity can occupy several physical fragments.
+  # Clipping an earlier fragment must not hide its later genuine placement.
+  defp put_visible_target_position(positions, identity, position) do
+    Map.update(positions, identity, position, fn previous ->
+      case {previous, position} do
+        {{:unavailable, _, _, _}, {:xyz, _, _, _}} -> position
+        _ -> previous
       end
     end)
   end

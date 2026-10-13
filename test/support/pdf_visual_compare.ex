@@ -133,9 +133,15 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
 
     chromium_pdf = Path.join(artifact_dir, "chromium.pdf")
     native_pdf = Path.join(artifact_dir, "native.pdf")
-    chromium_fixture_path = chromium_fixture_path!(fixture_path, artifact_dir, opts, render_opts)
 
-    render_chromium_pdf!(chromium_bin, chromium_fixture_path, chromium_pdf)
+    {chromium_fixture_path, temporary_input} =
+      chromium_fixture_path!(fixture_path, artifact_dir, opts, render_opts)
+
+    try do
+      render_chromium_pdf!(chromium_bin, chromium_fixture_path, chromium_pdf)
+    after
+      if temporary_input, do: File.rm!(temporary_input)
+    end
 
     html = File.read!(fixture_path)
     native_renderer = Keyword.get(opts, :native_renderer, &HtmlToPdf.render/2)
@@ -576,7 +582,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
 
     case {page_size, page_furniture, fonts, chromium_transform} do
       {nil, nil, [], nil} ->
-        fixture_path
+        {fixture_path, nil}
 
       _configured ->
         chromium_fixture_path = Path.join(artifact_dir, "chromium-input.html")
@@ -594,7 +600,18 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
         |> maybe_inject_chromium_page_margin_css(Keyword.get(opts, :chromium_page_margin_css))
         |> then(&File.write!(chromium_fixture_path, &1))
 
-        chromium_fixture_path
+        # Font injection must preserve the original document's resource directory.
+        # Loading the artifact copy changes relative authored image/child URLs.
+        # Retain that exact evidence copy while loading a temporary sibling;
+        # source markup/resource references receive no reference transformation.
+        temporary_input =
+          Path.join(
+            Path.dirname(fixture_path),
+            ".chromium-input-#{System.pid()}-#{System.unique_integer([:positive])}.html"
+          )
+
+        File.cp!(chromium_fixture_path, temporary_input)
+        {temporary_input, temporary_input}
     end
   end
 

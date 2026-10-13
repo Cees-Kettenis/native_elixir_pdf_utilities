@@ -38,11 +38,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
   end
 
   defp select_stylesheets(nodes, media_context, namespaces, tree_kind \\ :document) do
-    scope =
-      Enum.find_value(nodes, {nil, nil}, fn node ->
-        if Map.has_key?(node, :document_id) and Map.has_key?(node, :tree_scope_id),
-          do: {node.document_id, node.tree_scope_id}
-      end)
+    scope = tree_scope(nodes)
 
     sources = stylesheet_nodes(nodes, scope, namespaces)
 
@@ -231,17 +227,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
     end
   end
 
+  @doc "Returns the first top-level authored document/tree identity, or the unbound legacy scope."
+  @spec tree_scope([map()]) :: {term(), term()}
+  def tree_scope(nodes) do
+    Enum.find_value(nodes, {nil, nil}, fn node ->
+      if Map.has_key?(node, :document_id) and Map.has_key?(node, :tree_scope_id),
+        do: {node.document_id, node.tree_scope_id},
+        else: nil
+    end)
+  end
+
   @doc false
   @spec first_tree_ids([map()]) :: %{optional({term(), term(), String.t()}) => map()}
   def first_tree_ids(nodes) do
-    scope =
-      Enum.find_value(nodes, {nil, nil}, fn node ->
-        if Map.has_key?(node, :document_id) and Map.has_key?(node, :tree_scope_id),
-          do: {node.document_id, node.tree_scope_id},
-          else: nil
-      end)
-
-    first_tree_ids(nodes, scope)
+    first_tree_ids(nodes, tree_scope(nodes))
   end
 
   @doc false

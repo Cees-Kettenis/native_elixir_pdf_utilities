@@ -90,17 +90,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextLengthTest do
     end
   end
 
-  test "parent length and absolute chunk distributions retain precise pending diagnostics" do
-    for body <- [
-          "<text y='40' textLength='120'>A<tspan>B</tspan></text>",
-          "<text y='40' x='0 30' textLength='120'>AB</text>"
-        ] do
-      assert {:error, {:unsupported_html, d}} =
-               HtmlToPdf.render("<svg width=200 height=80>#{body}</svg>")
+  test "parent length distributes across descendants while absolute chunk distributions stay diagnosed" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<svg width=200 height=80><text y='40' textLength='120'>A<tspan>B</tspan></text></svg>"
+             )
 
-      assert d.message =~ "length distribution"
-      assert d.stage == :layout
-    end
+    assert {:ok, "AB"} = Text.extract(pdf, layout: false)
+    assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(pdf)
+    assert_in_delta List.last(spans).end_x - hd(spans).x, 90, 0.001
+
+    assert {:error, {:unsupported_html, d}} =
+             HtmlToPdf.render(
+               "<svg width=200 height=80><text y='40' x='0 30' textLength='120'>AB</text></svg>"
+             )
+
+    assert d.message =~ "length distribution"
+    assert d.stage == :layout
   end
 
   test "source preparation preserves original Unicode and IDs and normalizes before both paints",

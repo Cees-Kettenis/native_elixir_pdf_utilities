@@ -296,7 +296,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewportTest do
     assert [%{"Rect" => [6.75, 87, 56.75, 97]}] = links
   end
 
-  test "static child controls paint completely while interactive widgets diagnose" do
+  test "static child controls paint completely and interactive widgets keep isolated values" do
     child =
       "<body style='margin:0;overflow:hidden'><input name=shared value='Child value'><textarea>Child notes</textarea></body>"
 
@@ -304,10 +304,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewportTest do
     assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
     assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
     assert text =~ "Child value" and text =~ "Child notes"
-    assert {:error, {:unsupported_form, diagnostic}} = HtmlToPdf.render(iframe(child))
-    assert diagnostic.stage == :layout and diagnostic.operation == :layout_embedded_viewport
-    assert diagnostic.message =~ "transformed widget geometry"
-    assert diagnostic.message =~ "forms: :static"
+    assert {:ok, interactive} = HtmlToPdf.render(iframe(child))
+    assert {:ok, fields} = NativeElixirPdfUtilities.Forms.fields(interactive)
+    assert Enum.map(fields, & &1.value) == ["Child value", "Child notes"]
+    assert Enum.all?(fields, &String.starts_with?(&1.name, "CHILD_1_"))
+
+    assert {:error, {:unsupported_form, diagnostic}} =
+             HtmlToPdf.render(iframe("<input type=range>"))
+
+    assert diagnostic.message =~ "Range" and diagnostic.message =~ "forms: :static"
   end
 
   test "sibling documents charge aggregate source, image, CSS and child budgets", %{root: root} do

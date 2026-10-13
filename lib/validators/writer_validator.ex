@@ -73,6 +73,23 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     HtmlValidator.with_render_budget(fn -> prepare(pages, opts, :pages) end)
   end
 
+  @doc "Checks a widget rectangle and its clipped rectangle through the writer's existing numeric bounds before appearance allocation."
+  @spec validate_pdf_geometry(term()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_pdf_geometry(values) do
+    case values do
+      [_, _, _, _, _, _, _, _] ->
+        if Enum.all?(values, &bounded_number?/1),
+          do: :ok,
+          else:
+            drawing_group_error(
+              "composed widget geometry must remain within max_pdf_numeric_magnitude"
+            )
+
+      _ ->
+        drawing_group_error("widget geometry requires two bounded PDF rectangles")
+    end
+  end
+
   @doc false
   @spec prepare_appearances(term(), term()) ::
           {:ok, context()} | {:error, {atom(), Diagnostics.diagnostic()}}
@@ -348,8 +365,31 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           start = %{type: :drawing_group_start, transform: transform, clip: local_clip}
 
           start =
-            if(Map.get(box, :role) in [:frameset_viewport, :iframe_viewport],
-              do: Map.put(start, :role, box.role),
+            case Map.get(box, :embedded_widgets) do
+              nil ->
+                start
+
+              descriptor ->
+                {:ok, fields} =
+                  NativeElixirPdfUtilities.Validators.EmbeddedFormValidator.compose(
+                    descriptor,
+                    composition
+                  )
+
+                Map.put(start, :embedded_widgets, %{
+                  document_id: descriptor.context.document_id,
+                  token: descriptor.token,
+                  fields: fields
+                })
+            end
+
+          start =
+            if(
+              Map.get(box, :viewport_paint_role, Map.get(box, :role)) in [
+                :frameset_viewport,
+                :iframe_viewport
+              ],
+              do: Map.put(start, :role, Map.get(box, :viewport_paint_role, Map.get(box, :role))),
               else: start
             )
 
@@ -382,6 +422,18 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           {[normalize_group_annotation(box, composition, parent_height)], count}
       end
     end)
+  end
+
+  @doc "Validates the shared writer clip rectangle grammar, including rounded outer and inner rectangles."
+  @spec validate_clip_rectangle(term()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_clip_rectangle(clip) do
+    if valid_clip_rectangle?(clip, true),
+      do: :ok,
+      else:
+        drawing_group_error(
+          "clip requires bounded rectangle geometry and an optional rounded inner rectangle"
+        )
   end
 
   @doc "Validates native paint boxes using the same geometry and annotation rules as PDF writing."
@@ -490,7 +542,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           {:triangle, :down},
           {:triangle, :left},
           {:triangle, :right},
-          {:chevron, :down}
+          {:chevron, :down},
+          {:diagonal, :up}
         ] and
           (Map.get(box, :role) != :select_arrow or
              (Map.get(box, :shape) == {:chevron, :down} and is_map(Map.get(box, :clip)))) and
@@ -622,6 +675,11 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
               (box.transform != {1, 0, 0, 1, 0, 0} or not is_map(clip)) ->
             drawing_group_error("overflow clipping must preserve the containing coordinate plane")
 
+          Map.get(box, :viewport_paint_role) not in [nil, :iframe_viewport, :frameset_viewport] ->
+            drawing_group_error(
+              "drawing_group viewport paint role must identify an existing iframe or frameset viewport"
+            )
+
           not Enum.all?([width, height, a, b, c, d, e, f, baseline], &bounded_number?/1) ->
             drawing_group_error(
               "drawing_group dimensions, baseline and affine values must be numeric and within max_pdf_numeric_magnitude"
@@ -661,8 +719,20 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             drawing_group_error("drawing_group links belong on child text boxes")
 
           true ->
-            {sx, sy, tx, ty, _clip, paint_height} =
-              DrawingGeometry.compose_group(box, {sx, sy, tx, ty, nil, parent_height})
+            composition = DrawingGeometry.compose_group(box, {sx, sy, tx, ty, nil, parent_height})
+            {sx, sy, tx, ty, _clip, paint_height} = composition
+
+            widget_validation =
+              case Map.get(box, :embedded_widgets) do
+                nil ->
+                  :ok
+
+                descriptor ->
+                  NativeElixirPdfUtilities.Validators.EmbeddedFormValidator.validate_composition(
+                    descriptor,
+                    composition
+                  )
+              end
 
             transform = {sx, sy, tx, ty}
 
@@ -675,88 +745,98 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                 bounds -> Tuple.to_list(bounds)
               end
 
-            if Enum.all?(
-                 [sx, sy, tx, ty, sx * width + tx, sy * height + ty] ++ clip_bounds,
-                 &bounded_number?/1
-               ) do
-              Enum.reduce_while(children, {:ok, count + 2}, fn child, {:ok, count} ->
-                result =
-                  case child do
-                    %{type: :drawing_group} ->
-                      valid_drawing_group(child, depth + 1, transform, count, paint_height)
-
-                    child when is_map(child) ->
-                      HtmlValidator.check_render_resource(:max_layout_boxes, count + 1, :writer)
-
-                      pieces =
-                        if child[:type] == :glyph_group, do: Map.get(child, :boxes), else: [child]
-
-                      if is_list(pieces) and child[:type] == :glyph_group do
-                        HtmlValidator.check_render_resource(
-                          :max_layout_boxes,
-                          count + length(pieces) + 2,
-                          :writer
-                        )
-                      end
-
-                      cond do
-                        not is_list(pieces) ->
-                          drawing_group_error(
-                            "drawing_group children must contain valid existing writer boxes"
-                          )
-
-                        not is_nil(Map.get(child, :form_control)) or
-                            Enum.any?(
-                              pieces,
-                              &(is_map(&1) and not is_nil(Map.get(&1, :form_control)))
-                            ) ->
-                          drawing_group_error(
-                            "drawing_group form controls require transformed widget support",
-                            :unsupported_form
-                          )
-
-                        (child[:type] == :flow_marker and Map.get(child, :html_targets, []) == []) or
-                          child[:type] not in [
-                            :text,
-                            :rect,
-                            :image,
-                            :link_region,
-                            :glyph_group,
-                            :flow_marker
-                          ] or
-                          not is_boolean(Map.get(child, :snap_to_css_pixel_grid, false)) or
-                            not valid_box?(child) ->
-                          drawing_group_error(
-                            "drawing_group children must contain valid text, rectangle, image, link_region, glyph_group or drawing_group boxes"
-                          )
-
-                        not Enum.all?(pieces, &valid_group_geometry?(&1, transform, paint_height)) ->
-                          drawing_group_error(
-                            "drawing_group child geometry and transformed bounds must be within max_pdf_numeric_magnitude"
-                          )
-
-                        true ->
-                          count =
-                            count +
-                              if child[:type] == :glyph_group, do: length(pieces) + 2, else: 1
-
-                          HtmlValidator.check_render_resource(:max_layout_boxes, count, :writer)
-                          {:ok, count}
-                      end
-
-                    _ ->
-                      drawing_group_error("drawing_group children must be writer box maps")
-                  end
-
-                case result do
-                  {:ok, _count} -> {:cont, result}
-                  {:error, _} -> {:halt, result}
-                end
-              end)
+            if widget_validation != :ok do
+              widget_validation
             else
-              drawing_group_error(
-                "drawing_group cumulative transform and viewport bounds exceed max_pdf_numeric_magnitude"
-              )
+              if Enum.all?(
+                   [sx, sy, tx, ty, sx * width + tx, sy * height + ty] ++ clip_bounds,
+                   &bounded_number?/1
+                 ) do
+                Enum.reduce_while(children, {:ok, count + 2}, fn child, {:ok, count} ->
+                  result =
+                    case child do
+                      %{type: :drawing_group} ->
+                        valid_drawing_group(child, depth + 1, transform, count, paint_height)
+
+                      child when is_map(child) ->
+                        HtmlValidator.check_render_resource(:max_layout_boxes, count + 1, :writer)
+
+                        pieces =
+                          if child[:type] == :glyph_group,
+                            do: Map.get(child, :boxes),
+                            else: [child]
+
+                        if is_list(pieces) and child[:type] == :glyph_group do
+                          HtmlValidator.check_render_resource(
+                            :max_layout_boxes,
+                            count + length(pieces) + 2,
+                            :writer
+                          )
+                        end
+
+                        cond do
+                          not is_list(pieces) ->
+                            drawing_group_error(
+                              "drawing_group children must contain valid existing writer boxes"
+                            )
+
+                          not is_nil(Map.get(child, :form_control)) or
+                              Enum.any?(
+                                pieces,
+                                &(is_map(&1) and not is_nil(Map.get(&1, :form_control)))
+                              ) ->
+                            drawing_group_error(
+                              "drawing_group form controls require transformed widget support",
+                              :unsupported_form
+                            )
+
+                          (child[:type] == :flow_marker and
+                             Map.get(child, :html_targets, []) == []) or
+                            child[:type] not in [
+                              :text,
+                              :rect,
+                              :image,
+                              :link_region,
+                              :glyph_group,
+                              :flow_marker
+                            ] or
+                            not is_boolean(Map.get(child, :snap_to_css_pixel_grid, false)) or
+                              not valid_box?(child) ->
+                            drawing_group_error(
+                              "drawing_group children must contain valid text, rectangle, image, link_region, glyph_group or drawing_group boxes"
+                            )
+
+                          not Enum.all?(
+                            pieces,
+                            &valid_group_geometry?(&1, transform, paint_height)
+                          ) ->
+                            drawing_group_error(
+                              "drawing_group child geometry and transformed bounds must be within max_pdf_numeric_magnitude"
+                            )
+
+                          true ->
+                            count =
+                              count +
+                                if child[:type] == :glyph_group, do: length(pieces) + 2, else: 1
+
+                            HtmlValidator.check_render_resource(:max_layout_boxes, count, :writer)
+                            {:ok, count}
+                        end
+
+                      _ ->
+                        drawing_group_error("drawing_group children must be writer box maps")
+                    end
+
+                  case result do
+                    {:ok, _count} -> {:cont, result}
+                    {:error, _} -> {:halt, result}
+                  end
+                end)
+              else
+                drawing_group_error(
+                  "drawing_group cumulative transform and viewport bounds exceed max_pdf_numeric_magnitude"
+                )
+              end
             end
         end
 
@@ -1161,7 +1241,9 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     end
   end
 
-  defp valid_optional_color?(color) do
+  @doc "Validates an optional canonical color shared by computed styles and PDF paint."
+  @spec valid_optional_color?(term()) :: boolean()
+  def valid_optional_color?(color) do
     case color do
       nil -> true
       color -> valid_color?(color)
@@ -1202,7 +1284,9 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     end
   end
 
-  defp valid_border_colors?(border_colors) do
+  @doc "Validates canonical per-edge colors shared by computed root geometry and PDF paint."
+  @spec valid_border_colors?(term()) :: boolean()
+  def valid_border_colors?(border_colors) do
     case border_colors do
       nil ->
         true
@@ -1215,7 +1299,9 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     end
   end
 
-  defp valid_border_styles?(border_styles) do
+  @doc "Validates canonical border styles shared by computed root geometry and PDF paint."
+  @spec valid_border_styles?(term()) :: boolean()
+  def valid_border_styles?(border_styles) do
     case border_styles do
       nil ->
         true

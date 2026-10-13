@@ -368,32 +368,37 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
 
           anonymous = %{cell | tag: "mrow", style: row_style}
 
-          case MathLayoutValidator.prepare_element(
-                 anonymous,
-                 Map.drop(context, [
-                   :inline_stretch_size,
-                   :block_stretch_size,
-                   :operator_context,
-                   :available_inline_size
-                 ])
-               ) do
-            {:ok, content} ->
-              {:cont,
-               {:ok,
-                [
-                  %{
-                    content: Map.delete(content, :root),
-                    style: cell.style,
-                    column: placement.column,
-                    colspan: placement.colspan,
-                    rowspan: placement.rowspan,
-                    source: Map.take(cell, @source_fields)
-                  }
-                  | cells
-                ]}}
+          content_context =
+            Map.drop(context, [
+              :inline_stretch_size,
+              :block_stretch_size,
+              :operator_context,
+              :available_inline_size,
+              :available_content_width
+            ])
 
-            error ->
-              {:halt, error}
+          with {:ok, content} <- MathLayoutValidator.prepare_element(anonymous, content_context) do
+            prepared_cell = %{
+              content: Map.delete(content, :root),
+              style: cell.style,
+              column: placement.column,
+              colspan: placement.colspan,
+              rowspan: placement.rowspan,
+              source: Map.take(cell, @source_fields)
+            }
+
+            prepared_cell =
+              if native_flow_content?(content) do
+                prepared_cell
+                |> Map.put(:content_layout_source, anonymous)
+                |> Map.put(:content_layout_context, content_context)
+              else
+                prepared_cell
+              end
+
+            {:cont, {:ok, [prepared_cell | cells]}}
+          else
+            error -> {:halt, error}
           end
         end)
 
@@ -413,6 +418,64 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
     |> case do
       {:ok, {rows, row_boxes}} -> {:ok, {Enum.reverse(rows), Enum.reverse(row_boxes)}}
       error -> error
+    end
+  end
+
+  # Preparation already guarantees the supported proper subtree. The extra
+  # walk identifies real ordinary HTML layout rather than changing its rules.
+  defp native_flow_content?(content) do
+    HtmlValidator.reserve_render_resource(:max_css_work, 1, :layout)
+
+    case content do
+      %{kind: :native_flow} ->
+        true
+
+      %{kind: :matrix, rows: rows} ->
+        Enum.any?(rows, fn row -> Enum.any?(row, &native_flow_content?(&1.content)) end)
+
+      %{kind: :operator, content: child} ->
+        native_flow_content?(child)
+
+      %{kind: :radical, base: base, index: index} ->
+        native_flow_content?(base) or (index != nil and native_flow_content?(index))
+
+      %{children: children} ->
+        Enum.any?(children, &native_flow_content?/1)
+
+      _ ->
+        false
+    end
+  end
+
+  @doc "Prepares retained actual cell content for measurement at its allocated content width."
+  @spec prepare_cell_reflow(term(), term()) ::
+          {:ok, map()} | {:error, Diagnostics.detailed_error()}
+  def prepare_cell_reflow(cell, width) do
+    case cell do
+      %{
+        content_layout_source: %{type: :element, namespace: :mathml, tag: "mrow"} = source,
+        content_layout_context: context
+      }
+      when is_map(context) ->
+        with :ok <- MathLayoutValidator.validate_available_inline_size(width) do
+          if is_number(width) do
+            with {:ok, prepared} <-
+                   MathLayoutValidator.prepare_element(
+                     source,
+                     Map.put(context, :available_content_width, width)
+                   ) do
+              {:ok, %{prepared: prepared}}
+            end
+          else
+            failure("matrix cell reflow requires its definite allocated content width", "mtd")
+          end
+        end
+
+      _ ->
+        failure(
+          "matrix cell reflow requires retained actual anonymous Math content and context",
+          "mtd"
+        )
     end
   end
 

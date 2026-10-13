@@ -7,7 +7,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
 
   @doc false
   @spec prepare(map()) :: {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def prepare(dom), do: prepare_prefix(dom, nil)
+  def prepare(dom) do
+    case NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.original_view_provenance(
+           dom
+         ) do
+      :not_owned -> prepare_prefix(dom, nil)
+      result -> result
+    end
+  end
 
   @doc false
   @spec prepare_prefix(term(), non_neg_integer() | nil) ::
@@ -50,6 +57,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
              do:
                {:ok,
                 %{
+                  token_bindings: bound,
                   inline: inline,
                   embedded: embedded,
                   records: records,
@@ -67,10 +75,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
       handle,
       prefix_tree,
       fn candidate ->
-        original = HtmlTree.fetch(candidate.original, candidate.original.root)
         prospective = HtmlTree.fetch(candidate.prospective, candidate.prospective.root)
 
-        with {:ok, provenance} <- prepare_prefix(original, candidate.captured_finish),
+        with provenance = candidate.authored_prefix,
              :ok <-
                NativeElixirPdfUtilities.Validators.HtmlTreeValidator.validate_transport(
                  prospective
@@ -137,35 +144,41 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
     )
   end
 
+  @doc false
+  @spec validate_source_prefix(term(), term()) ::
+          {:ok, String.t()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_source_prefix(source, finish) do
+    with {:ok, source} <- HtmlValidator.validate_html_source(source) do
+      case finish do
+        nil ->
+          {:ok, source}
+
+        finish when is_integer(finish) and finish >= 0 and finish <= byte_size(source) ->
+          prefix = binary_part(source, 0, finish)
+          HtmlValidator.reserve_render_resource(:max_html_tree_work, byte_size(prefix), :html)
+
+          if String.valid?(prefix),
+            do: {:ok, prefix},
+            else:
+              binding_error("source prefix must end at an original UTF-8 token boundary", %{
+                text: "source_prefix"
+              })
+
+        _ ->
+          binding_error("source prefix must be an original byte offset within the document", %{
+            text: "source_prefix"
+          })
+      end
+    end
+  end
+
   # Validate actual tokenizer ownership, rather than searching for snippets. This
   # reads the original stream once and does not build another tree or count nodes.
   defp bind_tokens(dom, finish) do
     original = dom.source.text
     HtmlValidator.reserve_render_resource(:max_html_tree_work, 4 * byte_size(original), :html)
 
-    with {:ok, original} <- HtmlValidator.validate_html_source(original),
-         {:ok, token_source} <-
-           (case finish do
-              nil ->
-                {:ok, original}
-
-              finish when is_integer(finish) and finish >= 0 and finish <= byte_size(original) ->
-                prefix = binary_part(original, 0, finish)
-
-                if String.valid?(prefix),
-                  do: {:ok, prefix},
-                  else:
-                    binding_error(
-                      "source prefix must end at an original UTF-8 token boundary",
-                      %{text: "source_prefix"}
-                    )
-
-              _ ->
-                binding_error(
-                  "source prefix must be an original byte offset within the document",
-                  %{text: "source_prefix"}
-                )
-            end) do
+    with {:ok, token_source} <- validate_source_prefix(original, finish) do
       lines = [
         0
         | Enum.map(:binary.matches(original, ["\r\n", "\r", "\n"]), fn {at, size} -> at + size end)

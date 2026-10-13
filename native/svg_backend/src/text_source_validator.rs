@@ -9,6 +9,7 @@ pub struct PreparedSource {
     pub source: String,
     pub work: u64,
     pub extra_nodes: u64,
+    checks: Vec<PlacementCheck>,
 }
 
 fn document(source: &str) -> Result<Document<'_>, String> {
@@ -24,7 +25,7 @@ fn document(source: &str) -> Result<Document<'_>, String> {
 
 // Newly issued IDs identify only roots whose length must use selected metrics.
 // Every existing original ID, namespace, text byte and reference stays intact.
-pub fn identify(source: &str, ceiling: usize) -> Result<PreparedSource, String> {
+pub fn identify(source: &str, ceiling: usize, links: &[String]) -> Result<PreparedSource, String> {
     let xml = document(source)?;
     let ids: HashSet<_> = xml
         .descendants()
@@ -33,6 +34,7 @@ pub fn identify(source: &str, ceiling: usize) -> Result<PreparedSource, String> 
     let mut edits = vec![];
     let mut work = 0;
     let mut index = 0;
+    let mut anchor = 0;
     for node in xml.descendants().filter(|node| {
         node.is_element()
             && matches!(
@@ -41,6 +43,49 @@ pub fn identify(source: &str, ceiling: usize) -> Result<PreparedSource, String> 
             )
     }) {
         work += 1;
+        if node.tag_name().name() == "a"
+            && (node.has_attribute("href")
+                || node.has_attribute(("http://www.w3.org/1999/xlink", "href")))
+        {
+            let url = links
+                .get(anchor)
+                .ok_or("issued SVG link source count does not match original anchors")?;
+            anchor += 1;
+            if !node.has_attribute("id") {
+                let id = loop {
+                    index += 1;
+                    let id = format!("NativeSvgAnchor{index}");
+                    if !ids.contains(id.as_str()) {
+                        break id;
+                    }
+                };
+                edits.push((
+                    insertion(node, source)..insertion(node, source),
+                    format!(" id=\"{id}\""),
+                ));
+            }
+            let escaped = url
+                .replace('&', "&amp;")
+                .replace('\"', "&quot;")
+                .replace('\'', "&apos;")
+                .replace('<', "&lt;");
+            if let Some(attribute) = node
+                .attributes()
+                .find(|a| a.name() == "href" && a.namespace().is_none())
+                .or_else(|| {
+                    node.attributes().find(|a| {
+                        a.name() == "href" && a.namespace() == Some("http://www.w3.org/1999/xlink")
+                    })
+                })
+            {
+                edits.push((attribute.range_value(), escaped));
+            } else {
+                edits.push((
+                    insertion(node, source)..insertion(node, source),
+                    format!(" href=\"{escaped}\""),
+                ));
+            }
+        }
         if node.tag_name().name() == "text"
             && node
                 .descendants()
@@ -61,12 +106,74 @@ pub fn identify(source: &str, ceiling: usize) -> Result<PreparedSource, String> 
             ));
         }
     }
+    if anchor != links.len() {
+        return Err("issued SVG link source count does not match original anchors".into());
+    }
     let source = apply(source, edits, ceiling)?;
     Ok(PreparedSource {
         source,
         work,
         extra_nodes: 0,
+        checks: vec![],
     })
+}
+
+// Composite length roots need the selected natural glyph geometry before any
+// descendant or ancestor distribution. The temporary tree uses the same fonts,
+// namespaces, source text, original positions and viewport as the final source.
+fn composite_length_root(root: Node<'_, '_>) -> bool {
+    root.descendants()
+        .filter(|node| node.is_element() && node.has_attribute("textLength"))
+        .any(|node| {
+            node.children()
+                .any(|child| child.is_element() && matches!(child.tag_name().name(), "tspan" | "a"))
+                || (node.tag_name().name() == "tspan" && node.parent_element() != Some(root))
+                || (node.tag_name().name() == "tspan"
+                    && node
+                        .next_siblings()
+                        .skip(1)
+                        .find(|next| next.is_text() || next.is_element())
+                        .is_some_and(|next| next.is_element()))
+        })
+}
+
+pub fn measurement(
+    source: &str,
+    ceiling: usize,
+    work_ceiling: u64,
+) -> Result<Option<PreparedSource>, String> {
+    if !source.contains("textLength") {
+        return Ok(None);
+    }
+    let xml = document(source)?;
+    let mut edits = vec![];
+    let mut work = 0;
+    for root in xml
+        .descendants()
+        .filter(|node| node.is_element() && node.tag_name().name() == "text")
+    {
+        if !composite_length_root(root) {
+            continue;
+        }
+        charge_length_work(&mut work, work_ceiling)?;
+        for node in root.descendants().filter(|node| node.is_element()) {
+            charge_length_work(&mut work, work_ceiling)?;
+            if let Some(length) = node.attributes().find(|attribute| {
+                attribute.namespace().is_none() && attribute.name() == "textLength"
+            }) {
+                edits.push((length.range(), String::new()));
+            }
+        }
+    }
+    if edits.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(PreparedSource {
+        source: apply(source, edits, ceiling)?,
+        work,
+        extra_nodes: 0,
+        checks: vec![],
+    }))
 }
 
 fn insertion(node: Node<'_, '_>, source: &str) -> usize {
@@ -184,13 +291,54 @@ fn viewport_width(node: Node<'_, '_>, tree: &usvg::Tree) -> Result<f64, String> 
     Ok(length.number * factor)
 }
 
-pub fn prepare(source: &str, tree: &usvg::Tree, ceiling: usize) -> Result<PreparedSource, String> {
+pub fn prepare(
+    source: &str,
+    tree: &usvg::Tree,
+    ceiling: usize,
+    work_ceiling: u64,
+) -> Result<PreparedSource, String> {
     let xml = document(source)?;
     let mut roots = HashMap::new();
     texts(tree.root(), &mut roots);
     let mut edits = vec![];
     let mut work = 0;
     let mut extra_nodes = 0;
+    let mut checks = vec![];
+    let mut composite_roots = HashSet::new();
+    for root in xml.descendants().filter(|node| {
+        node.is_element() && node.tag_name().name() == "text" && composite_length_root(*node)
+    }) {
+        composite_roots.insert(root.id());
+        if let Some(instances) = roots.get(root.attribute("id").unwrap_or("")) {
+            let mut issued: Option<String> = None;
+            let mut selected_edits = vec![];
+            for (instance, text) in instances.iter().enumerate() {
+                let mut candidate_edits = vec![];
+                let (candidate, mut check) = composite_spacing(
+                    root,
+                    text,
+                    tree,
+                    source,
+                    &mut candidate_edits,
+                    &mut work,
+                    work_ceiling,
+                )?;
+                if issued
+                    .as_ref()
+                    .is_some_and(|previous| previous != &candidate)
+                {
+                    return Err("SVG composite reused lengths require actual independent instance distribution".into());
+                }
+                if issued.is_none() {
+                    selected_edits = candidate_edits;
+                    issued = Some(candidate);
+                }
+                check.instance = instance;
+                checks.push(check);
+            }
+            edits.extend(selected_edits);
+        }
+    }
     for node in xml.descendants().filter(|node| {
         node.is_element()
             && matches!(
@@ -199,6 +347,12 @@ pub fn prepare(source: &str, tree: &usvg::Tree, ceiling: usize) -> Result<Prepar
             )
             && node.has_attribute("textLength")
     }) {
+        if node
+            .ancestors()
+            .any(|parent| composite_roots.contains(&parent.id()))
+        {
+            continue;
+        }
         work += 1;
         let length = svgtypes::Length::from_str(node.attribute("textLength").unwrap())
             .map_err(|_| "internal validated textLength lost its length")?;
@@ -361,5 +515,372 @@ pub fn prepare(source: &str, tree: &usvg::Tree, ceiling: usize) -> Result<Prepar
         source,
         work,
         extra_nodes,
+        checks,
     })
+}
+
+#[derive(Clone)]
+struct PlacementCheck {
+    root: String,
+    instance: usize,
+    starts: Vec<f32>,
+    ends: Vec<f32>,
+    logical: String,
+    members: Vec<(usvg::fontdb::ID, u16, usize)>,
+}
+
+#[derive(Clone)]
+struct PositionedCluster {
+    start: usize,
+    end: usize,
+    x: f32,
+    end_x: f32,
+    shift: f32,
+}
+
+fn positioned_clusters(
+    text: &usvg::Text,
+    database: &usvg::fontdb::Database,
+) -> Result<Vec<PositionedCluster>, String> {
+    let mut result: Vec<PositionedCluster> = Vec::new();
+    let mut offset = 0;
+    for glyph in text
+        .layouted()
+        .iter()
+        .flat_map(|span| &span.positioned_glyphs)
+    {
+        let x = glyph.outline_transform().tx;
+        let end_x = crate::vector_validator::glyph_end(glyph, database)?;
+        if glyph.text.is_empty() {
+            if let Some(previous) = result.last_mut() {
+                previous.end_x = previous.end_x.max(end_x);
+            }
+        } else {
+            let count = glyph.text.chars().count();
+            result.push(PositionedCluster {
+                start: offset,
+                end: offset + count,
+                x,
+                end_x,
+                shift: 0.0,
+            });
+            offset += count;
+        }
+    }
+    Ok(result)
+}
+
+// A text leaf may lose boundary whitespace under SVG's default collapsing.
+// Bind its actual selected source span without replacing any original bytes.
+fn collapsed_leaf(value: &str) -> String {
+    let mut out = String::new();
+    let mut space = false;
+    for ch in value.chars() {
+        if matches!(ch, ' ' | '\t' | '\r' | '\n') {
+            if !space {
+                out.push(' ');
+            }
+            space = true;
+        } else {
+            out.push(ch);
+            space = false;
+        }
+    }
+    out
+}
+
+fn composite_spacing(
+    root: Node<'_, '_>,
+    text: &usvg::Text,
+    tree: &usvg::Tree,
+    source: &str,
+    edits: &mut Vec<(Range<usize>, String)>,
+    work: &mut u64,
+    work_ceiling: u64,
+) -> Result<(String, PlacementCheck), String> {
+    if text.chunks().len() != 1
+        || !matches!(text.chunks()[0].text_flow(), usvg::TextFlow::Linear)
+        || text.rotate().iter().any(|angle| *angle != 0.0)
+    {
+        return Err("SVG composite textLength requires complete rotated/path or absolute chunk distribution".into());
+    }
+    let chunk = &text.chunks()[0];
+    let logical = chunk.text().to_string();
+    let source_spans: Vec<_> = chunk
+        .spans()
+        .iter()
+        .map(|span| {
+            chunk
+                .text()
+                .get(span.start()..span.end())
+                .ok_or("SVG composite length lost an original selected source range")
+        })
+        .collect::<Result<_, _>>()?;
+    if source_spans.len() != text.layouted().len() {
+        return Err("SVG composite length requires complete selected source-span mapping".into());
+    }
+    let leaves: Vec<_> = root
+        .descendants()
+        .filter(|node| {
+            node.is_text()
+                && node
+                    .ancestors()
+                    .take_while(|ancestor| *ancestor != root)
+                    .all(|ancestor| {
+                        !ancestor.is_element()
+                            || matches!(ancestor.tag_name().name(), "tspan" | "a" | "textPath")
+                    })
+        })
+        .collect();
+    let mut ranges = vec![];
+    let mut span = 0;
+    let mut offset = 0;
+    for leaf in leaves {
+        charge_length_work(work, work_ceiling)?;
+        let normalized = collapsed_leaf(leaf.text().unwrap_or(""));
+        let Some(selected) = source_spans.get(span) else {
+            if normalized.trim_matches(' ').is_empty() {
+                continue;
+            }
+            return Err("SVG composite length lost its actual source leaf".into());
+        };
+        if ![
+            normalized.as_str(),
+            normalized.trim_start_matches(' '),
+            normalized.trim_end_matches(' '),
+            normalized.trim_matches(' '),
+        ]
+        .contains(selected)
+        {
+            if normalized.trim_matches(' ').is_empty() {
+                continue;
+            }
+            return Err(
+                "SVG composite textLength source whitespace does not match selected glyph text"
+                    .into(),
+            );
+        }
+        let end = offset + selected.chars().count();
+        ranges.push((leaf, offset..end));
+        offset = end;
+        span += 1;
+    }
+    if span != source_spans.len() || offset != logical.chars().count() {
+        return Err("SVG composite length requires complete original Unicode leaf mapping".into());
+    }
+    let mut glyphs = positioned_clusters(text, tree.fontdb())?;
+    if text
+        .layouted()
+        .iter()
+        .flat_map(|span| &span.positioned_glyphs)
+        .map(|glyph| glyph.text.as_str())
+        .collect::<String>()
+        != logical
+    {
+        return Err("SVG composite length selected glyphs do not preserve original Unicode".into());
+    }
+    let mut targets: Vec<_> = root
+        .descendants()
+        .filter(|node| node.is_element() && node.has_attribute("textLength"))
+        .collect();
+    targets.sort_by_key(|node| std::cmp::Reverse(node.ancestors().count()));
+    let mut resolved: Vec<(Node<'_, '_>, Range<usize>)> = vec![];
+    for node in targets {
+        charge_length_work(work, work_ceiling)?;
+        if node.attribute("lengthAdjust").unwrap_or("spacing") != "spacing" {
+            return Err(
+                "SVG composite glyph scaling requires complete nested selected-glyph distribution"
+                    .into(),
+            );
+        }
+        let leaf_ranges: Vec<_> = ranges
+            .iter()
+            .filter(|(leaf, _)| leaf.ancestors().any(|parent| parent == node))
+            .map(|(_, range)| range)
+            .collect();
+        let (Some(first), Some(last)) = (leaf_ranges.first(), leaf_ranges.last()) else {
+            continue;
+        };
+        let range = first.start..last.end;
+        let indexes: Vec<_> = glyphs
+            .iter()
+            .enumerate()
+            .filter(|(_, glyph)| glyph.start >= range.start && glyph.end <= range.end)
+            .map(|(index, _)| index)
+            .collect();
+        if indexes.is_empty() {
+            continue;
+        }
+        let children: Vec<_> = resolved
+            .iter()
+            .filter(|(descendant, _)| {
+                descendant.ancestors().skip(1).any(|parent| parent == node)
+                    && !resolved.iter().any(|(other, _)| {
+                        other != descendant
+                            && descendant
+                                .ancestors()
+                                .skip(1)
+                                .any(|parent| parent == *other)
+                            && other.ancestors().skip(1).any(|parent| parent == node)
+                    })
+            })
+            .map(|(_, range)| range)
+            .collect();
+        let step_count = indexes
+            .iter()
+            .filter(|index| {
+                !children.iter().any(|child| {
+                    glyphs[**index].start > child.start && glyphs[**index].start < child.end
+                })
+            })
+            .count();
+        let length = svgtypes::Length::from_str(node.attribute("textLength").unwrap())
+            .map_err(|_| "internal validated composite length lost its value")?;
+        let target = match length.unit {
+            svgtypes::LengthUnit::None | svgtypes::LengthUnit::Px => length.number,
+            svgtypes::LengthUnit::Percent => viewport_width(node, tree)? * length.number / 100.0,
+            _ => {
+                return Err(
+                    "SVG composite textLength requires its actual validated host unit context"
+                        .into(),
+                )
+            }
+        } as f32;
+        let first_index = indexes[0];
+        let last_index = *indexes.last().unwrap();
+        let current = glyphs[last_index].end_x + glyphs[last_index].shift
+            - glyphs[first_index].x
+            - glyphs[first_index].shift;
+        if !target.is_finite() || !current.is_finite() {
+            return Err("SVG composite textLength requires finite selected glyph geometry".into());
+        }
+        if step_count > 1 {
+            let adjustment = (target - current) / (step_count - 1) as f32;
+            let mut shift = 0.0;
+            for index in indexes {
+                charge_length_work(work, work_ceiling)?;
+                glyphs[index].shift += shift;
+                if !children.iter().any(|child| {
+                    glyphs[index].start > child.start && glyphs[index].start < child.end
+                }) {
+                    shift += adjustment;
+                }
+            }
+            // The selected character cursor includes the adjustment on the
+            // last typographic character. Parent adjustment subsequently uses
+            // the actual resulting positions, including following source text.
+            for glyph in glyphs.iter_mut().skip(last_index + 1) {
+                charge_length_work(work, work_ceiling)?;
+                glyph.shift += shift;
+            }
+        }
+        resolved.push((node, range));
+    }
+    let original_width = glyphs.last().map_or(0.0, |glyph| glyph.end_x)
+        - glyphs.first().map_or(0.0, |glyph| glyph.x);
+    let final_width = glyphs.last().map_or(0.0, |glyph| glyph.end_x + glyph.shift)
+        - glyphs.first().map_or(0.0, |glyph| glyph.x + glyph.shift);
+    let anchor_shift = match chunk.anchor() {
+        usvg::TextAnchor::Start => 0.0,
+        usvg::TextAnchor::Middle => -(final_width - original_width) / 2.0,
+        usvg::TextAnchor::End => -(final_width - original_width),
+    };
+    for glyph in &mut glyphs {
+        glyph.shift += anchor_shift;
+    }
+    let mut dx = text.dx().to_vec();
+    if dx.len() != offset {
+        return Err("SVG composite length lost its actual character offsets".into());
+    }
+    let mut previous = 0.0;
+    for glyph in &glyphs {
+        dx[glyph.start] += glyph.shift - previous;
+        previous = glyph.shift;
+    }
+    let issued = dx
+        .iter()
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    for node in root.descendants().filter(|node| node.is_element()) {
+        for attribute in node.attributes().filter(|attribute| {
+            attribute.namespace().is_none()
+                && (attribute.name() == "textLength" || (node != root && attribute.name() == "dx"))
+        }) {
+            edits.push((attribute.range(), String::new()));
+        }
+    }
+    attribute(root, "dx", issued.clone(), source, edits);
+    let check = PlacementCheck {
+        instance: 0,
+        root: root.attribute("id").unwrap_or("").to_string(),
+        starts: glyphs.iter().map(|glyph| glyph.x + glyph.shift).collect(),
+        ends: glyphs
+            .iter()
+            .map(|glyph| glyph.end_x + glyph.shift)
+            .collect(),
+        logical,
+        members: text
+            .layouted()
+            .iter()
+            .flat_map(|span| &span.positioned_glyphs)
+            .map(|glyph| (glyph.font, glyph.id.0, glyph.text.len()))
+            .collect(),
+    };
+    Ok((issued, check))
+}
+
+// Verify the compiler's actual selected-glyph placement after final parsing.
+// This is internal geometry evidence, never an original-source or permission receipt.
+pub fn verify(prepared: &PreparedSource, tree: &usvg::Tree) -> Result<(), String> {
+    if prepared.checks.is_empty() {
+        return Ok(());
+    }
+    let mut roots = HashMap::new();
+    texts(tree.root(), &mut roots);
+    for check in &prepared.checks {
+        let text = roots
+            .get(check.root.as_str())
+            .and_then(|instances| instances.get(check.instance))
+            .ok_or("SVG prepared length root lost its actual final instance")?;
+        let logical: String = text.chunks().iter().map(|chunk| chunk.text()).collect();
+        let glyphs = positioned_clusters(text, tree.fontdb())?;
+        let members: Vec<_> = text
+            .layouted()
+            .iter()
+            .flat_map(|span| &span.positioned_glyphs)
+            .map(|glyph| (glyph.font, glyph.id.0, glyph.text.len()))
+            .collect();
+        if members != check.members {
+            return Err("SVG prepared length changed actual selected font, glyph or source cluster identity".into());
+        }
+        if logical != check.logical || glyphs.len() != check.starts.len() {
+            return Err(
+                "SVG prepared composite length lost original selected Unicode clusters".into(),
+            );
+        }
+        for ((glyph, start), end) in glyphs.iter().zip(&check.starts).zip(&check.ends) {
+            let tolerance = f32::EPSILON * start.abs().max(end.abs()).max(1.0) * 32.0;
+            if (glyph.x - start).abs() > tolerance || (glyph.end_x - end).abs() > tolerance {
+                return Err("SVG composite textLength final selected glyph geometry differs from its actual placement plan".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn charge_length_work(work: &mut u64, ceiling: u64) -> Result<(), String> {
+    *work = work.checked_add(1).ok_or("max_svg_expansion_work")?;
+    if *work > ceiling {
+        return Err("max_svg_expansion_work".into());
+    }
+    Ok(())
+}
+
+pub fn retained_source_bytes(prepared: &PreparedSource) -> u64 {
+    prepared
+        .checks
+        .iter()
+        .map(|check| (check.logical.len() + check.root.len()) as u64)
+        .sum()
 }

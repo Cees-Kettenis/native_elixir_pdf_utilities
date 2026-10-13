@@ -1,7 +1,7 @@
 defmodule NativeElixirPdfUtilities.Validators.SvgForeignObjectValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.Diagnostics
-  alias NativeElixirPdfUtilities.HtmlToPdf.{Layout, ResourceContext}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Layout, RenderCache, ResourceContext}
 
   alias NativeElixirPdfUtilities.Validators.{
     EmbeddedViewportValidator,
@@ -31,13 +31,23 @@ defmodule NativeElixirPdfUtilities.Validators.SvgForeignObjectValidator do
               if MapSet.member?(authored_ids, candidate), do: nil, else: candidate
             end)
 
-          {id,
-           %{
-             node: node,
-             context: context,
-             document: %{type: :document, children: node.children},
-             forms: Keyword.get(options, :forms, :interactive)
-           }}
+          permission = make_ref()
+
+          slot = %{
+            permission: permission,
+            node: node,
+            context: context,
+            document: %{type: :document, children: node.children},
+            forms: Keyword.get(options, :forms, :interactive)
+          }
+
+          RenderCache.fetch(
+            context.scope,
+            {:svg_foreign_slot, context.document_id, permission},
+            fn -> {id, slot} end
+          )
+
+          {id, slot}
         end)
 
       by_node =
@@ -105,12 +115,33 @@ defmodule NativeElixirPdfUtilities.Validators.SvgForeignObjectValidator do
               context: context,
               node: %{tag: "foreignObject", namespace: :svg},
               document: %{type: :document, children: children},
-              forms: forms
+              forms: forms,
+              permission: permission
             }
             when is_binary(id) and is_list(children) and forms in [:static, :interactive] ->
-              case ResourceValidator.validate_context(context) do
-                :ok -> {:cont, {:ok, [id | ids]}}
-                error -> {:halt, error}
+              with :ok <- ResourceValidator.validate_context(context),
+                   true <- is_reference(permission),
+                   {^id, ^slot} <-
+                     RenderCache.fetch(
+                       context.scope,
+                       {:svg_foreign_slot, context.document_id, permission},
+                       fn -> nil end
+                     ) do
+                {:cont, {:ok, [id | ids]}}
+              else
+                {:error, _} = error ->
+                  {:halt, error}
+
+                _ ->
+                  {:halt,
+                   Diagnostics.error(
+                     :svg,
+                     :invalid_document,
+                     "SVG HTML slot requires its unchanged issued subtree, fonts, bytes and context",
+                     source: id,
+                     module: __MODULE__,
+                     operation: :prepare
+                   )}
               end
 
             _ ->
@@ -145,7 +176,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgForeignObjectValidator do
            {:ok, boxes} <-
              EmbeddedViewportValidator.prepare_paint(
                layout,
-               %{forms: original.forms, host: :surface},
+               %{forms: original.forms, host: :surface, context: original.context},
                slot.width,
                slot.height
              ) do

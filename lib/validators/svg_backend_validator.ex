@@ -13,6 +13,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
     SvgEffectsValidator,
     SvgFilterValidator,
     SvgTextValidator,
+    SvgLinkValidator,
     SvgDocumentViewportValidator,
     ResourceValidator
   }
@@ -41,6 +42,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
          :ok <- SvgFilterValidator.validate_summary(summary),
          :ok <- SvgReferenceValidator.validate_summary(summary),
          :ok <- SvgTextValidator.validate_summary(summary),
+         {:ok, links} <- SvgLinkValidator.prepare_summary(summary),
          {:ok, fonts} <- validate_fonts(context.fonts, summary),
          {:ok, resources} <- validate_resources(context, image_budget, summary),
          {:ok, prepared_source} <-
@@ -87,6 +89,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
       {:ok,
        %{
          source: prepared_source,
+         annotations?: links != [],
          root: summary.root,
          width: dimensions[:width],
          height: dimensions[:height],
@@ -329,13 +332,15 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
 
   defp validate_stroke_work(source, mode, fonts, summary, resources) do
     if mode == :inline do
-      with :ok <- native_load_result(NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.load_native()) do
+      with :ok <- native_load_result(NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.load_native()),
+           {:ok, links} <- SvgLinkValidator.prepare_summary(summary) do
         request =
-          if Enum.any?(summary.geometry, &Map.has_key?(&1.attributes, "textLength")) do
+          if links != [] or
+               Enum.any?(summary.geometry, &Map.has_key?(&1.attributes, "textLength")) do
             {:prepare_text,
              {Limits.get(:max_svg_stroke_work), Limits.get(:max_svg_gradient_work),
               Limits.get(:max_svg_bytes), Limits.get(:max_svg_expansion_work),
-              summary.expanded_work, Limits.get(:max_svg_nodes)}, fonts, resources}
+              summary.expanded_work, Limits.get(:max_svg_nodes)}, fonts, resources, links}
           else
             {Limits.get(:max_svg_stroke_work), Limits.get(:max_svg_gradient_work), fonts,
              resources}
@@ -427,7 +432,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
       context.mode == :inline and
           Enum.any?(summary.elements, fn {namespace, tag} ->
             namespace != :svg or
-                tag not in (~w(svg g defs symbol use pattern marker mask linearGradient radialGradient stop clipPath image path rect circle ellipse line polyline polygon text tspan textPath title desc) ++
+                tag not in (~w(svg g defs symbol use pattern marker mask image linearGradient radialGradient stop clipPath path rect circle ellipse line polyline polygon text tspan textPath a title desc) ++
                               SvgFilterValidator.tags())
           end) ->
         unsupported(
@@ -630,8 +635,15 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
                      false
                    ) do
                 {:ok, request} ->
-                  {:cont,
-                   {:ok, Map.merge(nested, request.resources) |> Map.put(name, request.source)}}
+                  case SvgLinkValidator.validate_nested_request(request, name) do
+                    :ok ->
+                      {:cont,
+                       {:ok,
+                        Map.merge(nested, request.resources) |> Map.put(name, request.source)}}
+
+                    error ->
+                      {:halt, error}
+                  end
 
                 error ->
                   {:halt, error}

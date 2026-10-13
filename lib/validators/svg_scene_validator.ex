@@ -10,7 +10,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
     SvgViewportValidator
   }
 
-  @paint_tags ~w(svg g defs symbol use pattern marker mask foreignObject linearGradient radialGradient stop clipPath image rect circle ellipse line polyline polygon path text tspan textPath title desc style)
+  @paint_tags ~w(svg g defs symbol use pattern marker mask foreignObject linearGradient radialGradient stop clipPath image rect circle ellipse line polyline polygon path text tspan textPath a title desc style)
   @length_attributes %{
     "rect" => ~w(x y width height rx ry),
     "circle" => ~w(cx cy r),
@@ -288,13 +288,34 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
     issued = Map.get(scene, :resource_context)
 
     if is_nil(issued) and is_nil(context) do
-      :ok
+      with {:ok, _ids} <-
+             NativeElixirPdfUtilities.Validators.SvgForeignObjectValidator.validate_slots(
+               Map.get(scene, :foreign_slots, %{})
+             ),
+           do: :ok
     else
       with :ok <- NativeElixirPdfUtilities.Validators.ResourceValidator.validate_context(issued),
            :ok <- NativeElixirPdfUtilities.Validators.ResourceValidator.validate_context(context) do
         if issued.document_id == context.document_id and
              issued.tree_scope_id == context.tree_scope_id and issued.image_budget == scene.budget do
-          :ok
+          with {:ok, _ids} <-
+                 NativeElixirPdfUtilities.Validators.SvgForeignObjectValidator.validate_slots(
+                   Map.get(scene, :foreign_slots, %{})
+                 ) do
+            Enum.reduce_while(Map.get(scene, :foreign_slots, %{}), :ok, fn {_id, slot}, :ok ->
+              if slot.context.scope == context.scope and
+                   slot.context.authorization_root == context.authorization_root and
+                   slot.context.image_budget == scene.budget do
+                {:cont, :ok}
+              else
+                {:halt,
+                 invalid(
+                   "SVG HTML slot requires its scene permission scope and shared image budget",
+                   "foreignObject"
+                 )}
+              end
+            end)
+          end
         else
           invalid(
             "SVG paint requires its issued source document scope and shared image budget",
@@ -303,6 +324,24 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
         end
       end
     end
+  end
+
+  defp reserve_foreign_paint_hit(painted) do
+    Enum.reduce_while(painted.html_placements, :ok, fn placement, :ok ->
+      HtmlValidator.reserve_render_resource(:max_layout_boxes, 1, :layout)
+
+      with {:ok, group} <-
+             NativeElixirPdfUtilities.Validators.SvgForeignObjectValidator.layout_slot(placement),
+           {:ok, _, _, _} <-
+             NativeElixirPdfUtilities.HtmlToPdf.PdfWriter.appearance_objects(
+               [%{size: {placement.width, placement.height}, boxes: [group]}],
+               1
+             ) do
+        {:cont, :ok}
+      else
+        error -> {:halt, error}
+      end
+    end)
   end
 
   @doc false
@@ -333,15 +372,38 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
           resources: Map.get(scene, :resources, %{})
         }
 
-        with {:ok, _} <- SvgBackendValidator.prepare(source, dimensions, context, scene.budget) do
-          case result do
-            {:ok, %{image: nil}} ->
-              :ok
+        if map_size(Map.get(scene, :foreign_slots, %{})) > 0 do
+          with :ok <-
+                 validate_paint_scope(
+                   scene,
+                   NativeElixirPdfUtilities.HtmlToPdf.ResourceContext.current()
+                 ),
+               {:ok, _} <-
+                 SvgBackendValidator.prepare_vector(source, dimensions, context, scene.budget),
+               {:ok, painted} <- result,
+               :ok <- reserve_foreign_paint_hit(painted),
+               {:ok, _} <-
+                 NativeElixirPdfUtilities.Validators.SvgFormValidator.prepare_source(
+                   painted.image.data
+                 ) do
+            :ok
+          end
+        else
+          with {:ok, _} <- SvgBackendValidator.prepare(source, dimensions, context, scene.budget) do
+            case result do
+              {:ok, %{image: nil}} ->
+                :ok
 
-            _ ->
-              with {:ok, _} <-
-                     SvgBackendValidator.prepare_vector(source, dimensions, context, scene.budget),
-                   do: :ok
+              _ ->
+                with {:ok, _} <-
+                       SvgBackendValidator.prepare_vector(
+                         source,
+                         dimensions,
+                         context,
+                         scene.budget
+                       ),
+                     do: :ok
+            end
           end
         end
       else

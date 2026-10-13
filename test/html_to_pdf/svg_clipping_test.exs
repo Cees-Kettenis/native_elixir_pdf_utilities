@@ -51,28 +51,89 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClippingTest do
     end
   end
 
-  test "unfinished clip definition scopes diagnose before painting" do
-    for definition <- [
-          "<clipPath id=c><rect /><circle /></clipPath>",
-          "<clipPath id=c />",
-          "<clipPath id=c clipPathUnits=objectBoundingBox><rect /></clipPath>",
-          "<clipPath id=c><g><rect /></g></clipPath>",
-          "<clipPath id=c><line x2=20 y2=20 /></clipPath>",
-          "<clipPath id=c clip-path='url(#other)'><rect /></clipPath>",
-          "<clipPath id=c><rect clip-path='url(#other)' /></clipPath>"
+  test "multiple children object bounds and linked reference clips compose actual vector geometry" do
+    definitions = [
+      "<clipPath id=c><rect width=20 height=40 /><circle cx=30 cy=20 r=10 /></clipPath>",
+      "<clipPath id=c />",
+      "<clipPath id=c clipPathUnits=objectBoundingBox><rect width='.5' height='1' /></clipPath>",
+      "<clipPath id=c clip-path='url(#other)'><rect width=30 height=30 /></clipPath>",
+      "<clipPath id=c><rect width=30 height=30 clip-path='url(#other)' /><circle cx=30 cy=30 r=8 /></clipPath>",
+      "<clipPath id=c><use href='#shape' x=10 /></clipPath>"
+    ]
+
+    for definition <- definitions do
+      assert {:ok, pdf} =
+               HtmlToPdf.render(
+                 "<svg width=40 height=40><defs><rect id=shape width=20 height=30 /><clipPath id=other><circle cx=15 cy=15 r=10 /></clipPath>#{definition}</defs><rect width=40 height=40 clip-path='url(#c)' /></svg>"
+               )
+
+      refute pdf =~ "/Subtype /Image"
+      assert {:ok, _} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+    end
+  end
+
+  test "clip geometry rejects elements the native static profile cannot paint" do
+    for geometry <- [
+          "<g><rect /></g>",
+          "<line x2=20 y2=20 />",
+          "<image href='missing.png' width=20 height=20 />"
         ] do
       assert {:error, {:unsupported_html, diagnostic}} =
                HtmlToPdf.render(
-                 "<svg width=40 height=40><defs><clipPath id=other><circle r=10 /></clipPath>#{definition}</defs><rect width=40 height=40 clip-path='url(#c)' /></svg>"
+                 "<svg width=40 height=40><defs><clipPath id=c>#{geometry}</clipPath></defs><rect width=40 height=40 clip-path='url(#c)' /></svg>"
                )
 
       assert diagnostic.module == SvgClipValidator
       assert diagnostic.stage == :layout
-      assert diagnostic.reason == :unsupported_html
       assert diagnostic.operation == :prepare
-      assert diagnostic.source in ["clipPath", "rect"]
-      assert diagnostic.message != ""
+      assert diagnostic.source == "clipPath"
     end
+
+    assert {:error, {:invalid_document, %{module: SvgClipValidator, message: message}}} =
+             HtmlToPdf.render(
+               "<svg><defs><clipPath id=c clipPathUnits=wrong><rect /></clipPath></defs></svg>"
+             )
+
+    assert message =~ "clipPathUnits"
+  end
+
+  test "empty clips preserve empty geometry while visible siblings paint" do
+    source =
+      "<svg width='40' height='40'><defs><clipPath id='empty'/></defs><rect width='40' height='40' fill='red' clip-path='url(#empty)'/><rect width='5' height='5' fill='blue'/></svg>"
+
+    assert {:ok, pdf} = SvgBackend.vectorize(source, [width: 40, height: 40], %{mode: :inline})
+    refute streams(pdf) =~ "1 0 0 rg"
+    assert streams(pdf) =~ "0 0 1 rg"
+    assert {:ok, png} = SvgBackend.rasterize(source, [width: 40, height: 40], %{mode: :inline})
+
+    assert {:ok, image} =
+             NativeElixirPdfUtilities.HtmlToPdf.PngDecoder.decode(
+               png,
+               NativeElixirPdfUtilities.Validators.HtmlValidator.new_image_budget(),
+               false
+             )
+
+    assert binary_part(image.data, 0, 3) == <<0, 0, 255>>
+    assert :binary.at(image.alpha_data, 20 * 40 + 20) == 0
+  end
+
+  test "linked clipping cycles and expanded work cannot bypass shared limits", %{limits: limits} do
+    assert {:error, {:invalid_document, %{message: message}}} =
+             HtmlToPdf.render(
+               "<svg width='40' height='40'><defs><clipPath id='a' clip-path='url(#b)'><rect width='10' height='10'/></clipPath><clipPath id='b' clip-path='url(#a)'><circle r='10'/></clipPath></defs><rect width='20' height='20' clip-path='url(#a)'/></svg>"
+             )
+
+    assert message =~ "cycle"
+
+    source =
+      "<svg width='40' height='40'><defs><clipPath id='a'><path d='M0 0H30V30H0Z'/></clipPath><clipPath id='b' clip-path='url(#a)'><path d='M0 0H30V30H0Z'/></clipPath></defs><rect width='40' height='40' clip-path='url(#b)'/></svg>"
+
+    Limits.install(Map.put(limits, :max_svg_stroke_work, 10))
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             SvgBackend.vectorize(source, [width: 40, height: 40], %{mode: :inline})
+
+    assert message =~ "max_svg_stroke_work"
   end
 
   test "malformed definitions and wrong local targets use shared diagnostics" do
@@ -87,7 +148,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClippingTest do
                HtmlToPdf.render("<svg width=40 height=40>#{content}</svg>")
     end
 
-    assert {:error, {:unsupported_html, %{module: SvgClipValidator, source: "svg"}}} =
+    assert {:ok, _} =
              HtmlToPdf.render(
                "<svg width=40 height=40 clip-path='url(#c)'><defs><clipPath id=c><rect /></clipPath></defs></svg>"
              )
@@ -149,6 +210,80 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClippingTest do
     assert {:ok, pdf} = SvgBackend.vectorize(source, [width: 40, height: 40], %{mode: :inline})
     assert streams(pdf) =~ "0 0 0 0 re\nW\nn\n"
     assert streams(pdf) =~ "0 0 1 rg"
+  end
+
+  test "outer viewport and selected-font text clips preserve real resolved geometry" do
+    source =
+      "<svg width='40' height='40' clip-path='url(#cut)'><defs><clipPath id='cut'><rect width='20' height='40'/></clipPath></defs><rect width='40' height='40' fill='red'/></svg>"
+
+    assert {:ok, png} = SvgBackend.rasterize(source, [width: 40, height: 40], %{mode: :inline})
+
+    assert {:ok, image} =
+             NativeElixirPdfUtilities.HtmlToPdf.PngDecoder.decode(
+               png,
+               NativeElixirPdfUtilities.Validators.HtmlValidator.new_image_budget(),
+               false
+             )
+
+    assert :binary.at(image.alpha_data, 20 * 40 + 10) == 255
+    assert :binary.at(image.alpha_data, 20 * 40 + 30) == 0
+
+    html =
+      "<svg width='160' height='40'><defs><clipPath id='text'><text x='2' y='30' font-size='30'>Clip Ω</text><circle cx='140' cy='20' r='14'/></clipPath></defs><rect width='160' height='40' fill='blue' clip-path='url(#text)'/></svg>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert pdf =~ "/S /Alpha"
+    refute pdf =~ "/Subtype /Image"
+    assert {:error, {:no_extractable_text, _}} = Text.extract(pdf, layout: false)
+  end
+
+  test "union clipping retains genuine selected text and native filtered layer geometry" do
+    html =
+      "<svg width='180' height='48'><defs><clipPath id='union'><rect width='120' height='48'/><circle cx='145' cy='24' r='24'/></clipPath></defs><g clip-path='url(#union)' opacity='.7'><text x='2' y='28' font-size='20'>Painted café Ω</text></g></svg>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    assert text == "Painted café Ω"
+    assert pdf =~ "/FontFile2"
+    assert pdf =~ "/S /Alpha"
+    refute pdf =~ "/Subtype /Image"
+
+    source =
+      "<svg width='80' height='80'><defs><clipPath id='union'><rect x='8' y='8' width='30' height='60'/><circle cx='45' cy='40' r='30'/></clipPath><filter id='blur' x='-1' y='-1' width='3' height='3'><feGaussianBlur stdDeviation='4'/></filter></defs><g clip-path='url(#union)' filter='url(#blur)'><rect x='25' y='25' width='20' height='20' fill='red'/></g></svg>"
+
+    assert {:ok, pdf} = SvgBackend.vectorize(source, [width: 80, height: 80], %{mode: :inline})
+    assert pdf =~ "/S /Alpha"
+    assert pdf =~ "/Subtype /Image"
+    assert {:ok, _} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+  end
+
+  test "authorized nested SVG empty clips retain their actual empty set" do
+    child =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><defs><clipPath id='empty'/></defs><rect width='40' height='40' fill='red' clip-path='url(#empty)'/><rect width='5' height='5' fill='blue'/></svg>"
+
+    source =
+      "<svg width='40' height='40'><image href='svg-resource:child' width='40' height='40'/></svg>"
+
+    context = %{
+      mode: :inline,
+      resources: %{"svg-resource:child" => %{data: child, media_type: "image/svg+xml"}}
+    }
+
+    assert {:ok, png} = SvgBackend.rasterize(source, [width: 40, height: 40], context)
+
+    assert {:ok, image} =
+             NativeElixirPdfUtilities.HtmlToPdf.PngDecoder.decode(
+               png,
+               NativeElixirPdfUtilities.Validators.HtmlValidator.new_image_budget(),
+               false
+             )
+
+    assert binary_part(image.data, 0, 3) == <<0, 0, 255>>
+    assert :binary.at(image.alpha_data, 20 * 40 + 20) == 0
+    assert {:ok, pdf} = SvgBackend.vectorize(source, [width: 40, height: 40], context)
+    refute streams(pdf) =~ "1 0 0 rg"
+    assert streams(pdf) =~ "0 0 1 rg"
+    refute pdf =~ "/Subtype /Image"
   end
 
   test "clip URL grammar accepts bounded quoted fragments and rejects external or malformed references" do

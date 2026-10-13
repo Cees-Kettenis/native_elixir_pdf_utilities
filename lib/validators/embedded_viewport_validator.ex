@@ -289,44 +289,60 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
   @doc false
   @spec prepare_paint(map(), EmbeddedViewport.t(), number(), number()) ::
           {:ok, [map()]} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def prepare_paint(layout, surface, _width, _height) do
-    page = %{size: layout.page_size, boxes: layout.boxes}
+  def prepare_paint(layout, surface, width, height) do
+    case prepare_composition(layout, surface, width, height) do
+      {:ok, boxes, nil} ->
+        {:ok, boxes}
 
-    case NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare([page],
-           forms: surface.forms
-         ) do
-      {:ok, [page], []} ->
-        {:ok,
-         page.boxes
-         # Keep target-bearing markers for the document target transport.
-         # Extent and break markers only affect layout, not Form painting.
-         |> Enum.reject(fn box ->
-           box.type == :page_break or
-             (box.type == :flow_marker and not Map.has_key?(box, :html_targets))
-         end)
-         |> Enum.map(fn box ->
-           box = Map.delete(box, :form_control)
-           # The child canvas has its own clipped print origin. Keep its fill
-           # above vertical raster ties without moving text or link geometry.
-           if surface.host == :frame and box.type == :rect and
-                is_nil(Map.get(box, :role)) and
-                Map.get(box, :paint_layer) == :container_background and box.x == 0 and box.y == 0 and
-                {box.width, box.height} == layout.page_size,
-              do: Map.put(box, :role, :frameset_canvas),
-              else: box
-         end)}
-
-      {:ok, _pages, _controls} ->
+      {:ok, _boxes, _widgets} ->
         Diagnostics.error(
           :layout,
           :unsupported_form,
-          "interactive child controls require transformed widget geometry; use forms: :static for their complete static artwork",
+          "paint-only child preparation cannot carry interactive fields; use prepare_composition for widgets or forms: :static for static artwork",
           module: __MODULE__,
           operation: :layout_embedded_viewport
         )
 
-      {:error, {_reason, _diagnostic}} = error ->
-        error
+      failure ->
+        failure
+    end
+  end
+
+  @doc "Prepares native child paint and an opaque descriptor for real interactive fields after shared form validation."
+  @spec prepare_composition(map(), EmbeddedViewport.t(), number(), number()) ::
+          {:ok, [map()],
+           NativeElixirPdfUtilities.Validators.EmbeddedFormValidator.descriptor() | nil}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_composition(layout, surface, _width, _height) do
+    page = %{size: layout.page_size, boxes: layout.boxes}
+
+    with {:ok, [page], controls} <-
+           NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare_scoped(
+             [page],
+             [forms: surface.forms],
+             surface.context
+           ),
+         {:ok, widgets} <-
+           if(controls == [],
+             do: {:ok, nil},
+             else:
+               NativeElixirPdfUtilities.Validators.EmbeddedFormValidator.issue(
+                 surface.context,
+                 controls
+               )
+           ) do
+      {:ok,
+       Enum.map(page.boxes, fn box ->
+         box = Map.delete(box, :form_control)
+         # The child canvas has its own clipped print origin. Keep its fill
+         # above vertical raster ties without moving text or link geometry.
+         if surface.host == :frame and box.type == :rect and
+              is_nil(Map.get(box, :role)) and
+              Map.get(box, :paint_layer) == :container_background and box.x == 0 and box.y == 0 and
+              {box.width, box.height} == layout.page_size,
+            do: Map.put(box, :role, :frameset_canvas),
+            else: box
+       end), widgets}
     end
   end
 

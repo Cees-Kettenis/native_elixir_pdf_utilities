@@ -122,6 +122,28 @@ is an execution postcondition; caller byte/structure/glyph validation stays in
 FontValidator and SvgBackendValidator. Complete font selection, outline/text
 semantics and logical drawings still belong to SVG-5.
 
+## Selected-font text paint servers
+
+Inline text fills accept the same validated local gradients and patterns as
+geometry. Axial/radial shading patterns and colored tiles fill genuine selected
+CID glyphs directly. Whole-text object bounding boxes and user-space coordinates
+come from the prepared usvg scene. Each layout span allocates its paint resource
+once, before its original glyph clusters paint. Original FontFile2 bytes, glyph
+IDs, source Unicode and once-per-cluster ActualText remain intact.
+
+Pattern matrices follow the default user space of the containing PDF stream.
+Transparency forms, masks and tile streams establish their own paint origin;
+full scene transforms continue to describe clipping and selection geometry.
+Existing gradient/path/font work quotas apply before PDF allocation. Stroke
+text remains the separate glyph-program implementation lane.
+
+The batch passes79 focused tests. The original gradient and both selected-text
+Chromium fixtures pass. The original patterns/markers fixture remains red on
+this lane at5.642% changed pixels and1.294% average delta. The new original text
+paint-server fixture is red at2.475% changed pixels and0.362% average delta
+against unchanged1% gates. Their sources, PDFs, rasters and earlier failures are
+preserved. Paint-server visual parity remains open.
+
 ## Native patterns and markers
 
 Inline scenes admit local pattern definitions and inherited marker-start,
@@ -283,3 +305,47 @@ sampling experiment remained red at 3.708% and .446%; the existing bounded
 sampling default is retained. Original inputs, references and both red artifacts
 are preserved. This implements real HTML SourceGraphic and logical input but
 does not close S6/S7 parity or the remaining static graph obligations.
+
+## Local filter image inputs and shared paint servers
+
+Local feImage inputs use their original same-scene vector targets, including
+transforms, gradients, bounded patterns and nested static effects. Input-root
+stroke, gradient and intermediate surface work is counted before rendering.
+Independent selected text inputs now use issued glyph plans as described below.
+HTML and external byte image inputs remain diagnosed until their independent
+selected-input plans and resource transport are added.
+
+The pinned usvg source has a shared-filter defect: image paint-server resolution
+used Arc::get_mut and skipped repeated filter definitions. This repository
+vendors checksum-verified usvg0.47.0 with the corrections recorded in its provenance manifest. Filter instances
+can clone the same original filter ID, while general node IDs remain
+non-cloneable. Arc::make_mut resolves each image input's actual gradient space.
+The original crate checksum and before/after per-file provenance are tracked in
+vendor/usvg-0.47.0/native-patch-provenance.json; MIT/Apache licenses are retained.
+
+The new original inline_svg_filter_images comparison improves from4.661%changed
+and.838%average to1.430% and.243% after the shared paint-server correction. The
+fixed1% gates remain red on edges/antialiasing. Both original artifacts remain
+intact. This does not close feImage or S7 parity.
+
+
+## Independently selected filter text inputs
+
+Local feImage references can paint independently issued SVG text. Its original
+selected font bytes, glyph IDs and Unicode are prepared from that actual input
+root, and a bounded source graph binds live input text to the real image Do.
+Flood or constant output cannot claim unrelated SourceGraphic text. Hidden,
+transparent and fully clipped selected inputs emit no logical replacement.
+
+The pinned Chromium152 reference maps viewport-dependent referenced paint from
+the nearest SVG viewport into the primitive subregion. Its layout_svg_text.cc
+marks actual text layout viewport-dependent even with absolute font sizes.
+The vendored parser therefore applies that actual input-group transform while
+preserving authored font sizes and selected glyphs. The source proof is
+svg_fe_image.cc at tag152.0.7977.82, linked in vendor provenance. This change
+covers referenced text and its visible containing groups; broader percentage
+shape and nested viewport dependence remain to be implemented.
+
+The original inline_svg_filter_text_inputs case passes its unchanged1% gates.
+Exact nonlinear output-ink selection, per-cluster filter displacement and links,
+HTML/resource feImage inputs, filterRes and kernelUnitLength remain open.

@@ -1530,11 +1530,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert [%{text: "Shown"}] = shown.children
     assert [%{text: "After"}] = after_node.children
 
-    for tag <- ["p", "x-box", "script", "template"] do
+    for tag <- ["p", "x-box"] do
       node = %{type: :element, tag: tag, attributes: %{"hidden" => "until-found"}, children: []}
 
-      assert {:error, {:unsupported_html, %{stage: :html, operation: :compute, source: ^tag}}} =
+      assert {:ok, %{children: [styled]}} =
                Style.compute_detailed(%{type: :document, children: [node]})
+
+      assert styled.attributes["hidden"] == "until-found"
+      assert Map.get(styled.style, :_html_content_skipped, false) == (tag == "p")
     end
   end
 
@@ -6866,11 +6869,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
         children: [%{type: :element, tag: tag, attributes: attributes, children: []}]
       }
 
-      assert {:error, {:invalid_document, diagnostic}} = Style.compute_detailed(dom)
-      assert diagnostic.stage == :style and diagnostic.reason == :invalid_document
-      assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlValidator
-      assert diagnostic.operation == :compute and diagnostic.source == tag
-      assert diagnostic.message =~ "readonly"
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      assert hd(styled.children).attributes == attributes
     end
   end
 
@@ -6917,9 +6917,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
         children: [%{type: :element, tag: tag, attributes: attributes, children: []}]
       }
 
-      assert {:error, {:invalid_document, diagnostic}} = Style.compute_detailed(invalid)
-      assert diagnostic.stage == :style and diagnostic.source == tag
-      assert diagnostic.message =~ "multiple" and diagnostic.message =~ "email"
+      assert {:ok, styled} = Style.compute_detailed(invalid)
+      assert hd(styled.children).attributes == attributes
     end
   end
 

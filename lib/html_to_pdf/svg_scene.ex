@@ -16,6 +16,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
     SvgPaintValidator,
     SvgEffectsValidator,
     SvgFilterValidator,
+    SvgLinkValidator,
     SvgForeignObjectValidator,
     SvgTextValidator,
     SvgTextPositionValidator,
@@ -67,6 +68,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
          :ok <- SvgPaintValidator.validate_tree(node),
          :ok <- SvgEffectsValidator.validate_tree(node),
          {:ok, text} <- SvgTextValidator.prepare_tree(node),
+         {:ok, link_plan} <- SvgLinkValidator.prepare_tree(node, options),
          {:ok, projected, slots} <- SvgForeignObjectValidator.prepare_tree(node, options),
          :ok <- SvgFilterValidator.validate_tree(node, slots),
          {:ok, projected, resources, fonts} <-
@@ -75,6 +77,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
          # The SVG replaced-document default viewport is fixed at 300 x 150 CSS pixels.
          {:ok, document_viewport} <-
            SvgViewport.measure(node.attributes, node.style, %{width: 225.0, height: 112.5}) do
+      projected = SvgLinkValidator.project_tree(projected, link_plan)
+
       document_node = %{
         projected
         | style:
@@ -124,6 +128,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
          budget: budget,
          logical_text: text.logical_text,
          links: [],
+         link_plan: link_plan,
          selected_fonts: fonts,
          resources: resources,
          resource_context: ResourceContext.current(),
@@ -167,13 +172,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
     context = ResourceContext.current()
 
     with :ok <- SvgSceneValidator.validate_paint_scope(scene, context) do
-      if is_nil(context) or map_size(Map.get(scene, :foreign_slots, %{})) > 0 do
+      if is_nil(context) or Map.get(scene, :link_plan, %{urls: []}).urls != [] do
         paint_scene(scene, width, height)
       else
         key =
           {:svg_scene_paint, context.document_id, context.tree_scope_id, context.resolution_base,
            context.authorization_root, scene.source, Map.get(scene, :resources, %{}),
-           scene.selected_fonts, scene.attributes, scene.style, width, height}
+           Map.get(scene, :foreign_slots, %{}), scene.selected_fonts, scene.attributes,
+           scene.style, width, height}
 
         RenderCache.fetch(
           context.scope,
@@ -238,7 +244,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
             end
 
           with {:ok, pdf, placements} <- assembled,
-               {:ok, _form} <- SvgFormValidator.prepare_source(pdf),
+               {:ok, form} <- SvgFormValidator.prepare_source(pdf),
+               {:ok, svg_links} <- SvgLinkValidator.project(form, scene.link_plan),
                {:ok, html_links} <-
                  NativeElixirPdfUtilities.Validators.SvgFormSlotValidator.prepare_links(
                    placements,
@@ -258,7 +265,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
                layout_extent: viewport.layout_extent,
                baseline: viewport.baseline,
                logical_text: scene.logical_text,
-               links: scene.links ++ html_links,
+               links: scene.links ++ html_links ++ svg_links,
                selected_fonts: scene.selected_fonts,
                html_placements: placements
              }}
@@ -293,10 +300,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
                          },
                          scene.budget
                        ),
-                     {:ok, _form} <- SvgFormValidator.prepare_source(pdf) do
+                     {:ok, form} <- SvgFormValidator.prepare_source(pdf),
+                     {:ok, links} <- SvgLinkValidator.project(form, scene.link_plan) do
                   {:ok,
                    %{
                      format: :pdf_form,
+                     svg_links: links,
                      data: pdf,
                      width_px: image.width_px,
                      height_px: image.height_px
@@ -313,7 +322,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
                  layout_extent: viewport.layout_extent,
                  baseline: viewport.baseline,
                  logical_text: scene.logical_text,
-                 links: scene.links,
+                 links:
+                   scene.links ++
+                     if(vector_image, do: Map.get(vector_image, :svg_links, []), else: []),
                  selected_fonts: scene.selected_fonts
                }}
             end

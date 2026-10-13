@@ -32,8 +32,11 @@ container content width. Initial intrinsic measurement retains the actual
 styled source and its existing resource context only when the matrix needs
 that width. Placement remeasures that source. An inline equation with an
 indefinite percentage basis keeps its natural table width. A percentage inside
-a nested cell must use that cell's allocation rather than the outer equation's
-width; complete nested percentage remeasurement remains open.
+a default nested Math row remains indefinite, so its percentage table keeps
+its natural width. Ordinary HTML token flow instead uses the actual allocated
+cell content width. Its row height and baseline are measured after column
+allocation, preserving the selected fonts, CSS whitespace and original logical
+text on the visible glyph groups.
 
 Fractions, radicals, native HTML text and nested matrices can participate in
 spaced cells. Continuous spacing uses its authored length without quantizing it
