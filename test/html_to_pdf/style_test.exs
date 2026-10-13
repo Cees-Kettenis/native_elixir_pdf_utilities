@@ -1745,7 +1745,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
               type: :element,
               tag: "option",
               attributes: %{},
-              children: [%{type: :element, tag: "span", attributes: %{}, children: []}]
+              children: [%{type: :element, tag: "button", attributes: %{}, children: []}]
             }
           ]
         ] do
@@ -2154,12 +2154,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                )
     end
 
+    assert {:ok, %{list_style_image_source: "marker.png"}} =
+             NativeElixirPdfUtilities.Validators.HtmlValidator.parse_css_list_style(
+               "list-style",
+               "url(marker.png)"
+             )
+
     for {property, value} <- [
           {"list-style", "circle square"},
           {"list-style-type", "inside"},
           {"list-style-position", "square"},
           {"list-style", "inside outside"},
-          {"list-style", "url(marker.png)"},
+          {"list-style", "url(marker.png) url(other.png)"},
           {"list-style-type", ""}
         ] do
       assert :error =
@@ -5959,7 +5965,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   test "compute rejects invalid style branches" do
     invalid_styles = [
-      "display: contents",
+      "display: unknown",
       "flex-direction: sideways",
       "flex-wrap: reverse",
       "align-items: baseline",
@@ -6936,7 +6942,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     end
 
     for {attributes, children} <- [
-          {%{"type" => "file"}, []},
           {%{"type" => "range", "required" => ""}, []},
           {%{"type" => "unknown", "checked" => ""}, []},
           {%{}, [%{type: :text, text: "Invalid child"}]}

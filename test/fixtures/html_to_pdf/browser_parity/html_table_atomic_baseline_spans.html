@@ -1,0 +1,7 @@
+<!doctype html><html><head><style>
+@page{size:300pt 300pt;margin:12pt}html,body{margin:0;padding:0}body{font-family:"DejaVu Sans";font-size:9pt;line-height:12pt}p{margin:0 0 6pt}.atomic{display:inline-block;width:260pt;vertical-align:top}table{width:260pt;table-layout:fixed;border-collapse:collapse;margin:0 0 10pt}td,th{padding:3pt;vertical-align:baseline;border:1px solid #789}th{font-weight:normal;text-align:left}col{width:50%}.small{font-size:8pt;line-height:12pt}.large{font-size:18pt;line-height:24pt}
+</style></head><body>
+<p>Rowspan ascent and row group minimum height</p><div class="atomic"><table><colgroup><col><col></colgroup><tbody style="height:66pt"><tr><th id="span" scope="rowgroup" rowspan="2" class="large">Spanning<br>Large</th><td headers="span" class="small">First small</td></tr><tr><td headers="span" class="large">Second large</td></tr></tbody></table></div>
+<p>Empty baseline cells retain minimum height</p><div class="atomic"><table><tbody style="height:54pt"><tr><td style="height:36pt"></td><td class="small">Small flow</td></tr><tr><td colspan="2" class="large">Next row</td></tr></tbody></table></div>
+<p>End spanning baseline document</p>
+</body></html>

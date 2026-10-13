@@ -4,23 +4,37 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, ResourceValidator}
 
-  @doc "Prepares bounded legacy frameset tracks and the supported border-zero grid."
+  @doc "Prepares bounded legacy frameset tracks, border inheritance and static paint colors."
   @spec prepare(term(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
-  def prepare(attributes, inherited \\ nil) do
-    if is_map(attributes) do
+  @spec prepare(term(), term(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def prepare(attributes, inherited \\ nil, style \\ %{}) do
+    if is_map(attributes) and is_map(style) do
       with {:ok, enabled, width} <- border(attributes, inherited, :frameset),
-           :ok <- supported_border(width),
+           {:ok, hints} <- prepare_color_hints(attributes, inherited),
            {:ok, rows} <- tracks(Map.get(attributes, "rows")),
            {:ok, columns} <- tracks(Map.get(attributes, "cols")),
-           :ok <- cells_limit(rows, columns) do
+           :ok <- cells_limit(rows, columns),
+           color <-
+             (case Map.get(style, :border_colors) do
+                %{left: color} -> color
+                nil -> Map.get(hints, :border_color) || Map.get(style, :color, {0.0, 0.0, 0.0})
+                _ -> :invalid
+              end),
+           true <- NativeElixirPdfUtilities.Validators.WriterValidator.valid_color?(color) do
         {:ok,
          %{
            rows: rows,
            columns: columns,
-           border: false,
            border_enabled: enabled,
-           border_width: width
+           border_width: width,
+           has_border_color:
+             Map.has_key?(attributes, "bordercolor") or
+               (is_map(inherited) and Map.get(inherited, :has_border_color, false)),
+           border_color: color
          }}
+      else
+        false -> invalid("frameset paint requires a validated border color")
+        error -> error
       end
     else
       invalid("frameset requires an attribute map")
@@ -93,24 +107,26 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
   @spec prepare_frame(term(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
   def prepare_frame(attributes, inherited) do
     if is_map(attributes) do
-      with {:ok, enabled, width} <- border(attributes, inherited, :frame),
-           :ok <- supported_border(width),
+      with {:ok, enabled, _width} <- border(attributes, inherited, :frame),
            {:ok, horizontal} <- margin(Map.get(attributes, "marginwidth")),
            {:ok, vertical} <- margin(Map.get(attributes, "marginheight")) do
         scrolling = Map.get(attributes, "scrolling", "auto")
 
-        if is_binary(scrolling) and String.downcase(scrolling, :ascii) in ["", "auto"] do
+        if is_binary(scrolling) do
           {:ok,
            %{
              source: ResourceValidator.iframe_source(Map.delete(attributes, "srcdoc")),
              border_enabled: enabled,
+             scrollbars:
+               if(String.downcase(scrolling, :ascii) in ["no", "off", "noscroll"],
+                 do: :none,
+                 else: :auto
+               ),
              name: Map.get(attributes, "name"),
              margins: %{horizontal: horizontal, vertical: vertical}
            }}
         else
-          unsupported(
-            "frame scrolling hints require their own scrollbar policy; omit scrolling or use auto"
-          )
+          invalid("frame scrolling requires a legacy string value")
         end
       end
     else
@@ -124,15 +140,18 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
     if is_nil(value) do
       {:ok, nil}
     else
-      case HtmlValidator.parse_html_integer(value, :nonnegative) do
+      case legacy_integer(value) do
+        {:ok, number} when number < 0 ->
+          {:ok, nil}
+
         {:ok, number} ->
-          case HtmlValidator.normalize_geometry_number(number * 0.75) do
-            {:ok, points} -> {:ok, points}
+          case HtmlValidator.parse_css_number(Integer.to_string(number), 0.75) do
+            {points, ""} -> {:ok, points}
             _ -> invalid("frame margin exceeds the supported numeric range")
           end
 
         :error ->
-          {:ok, nil}
+          {:ok, 0.0}
       end
     end
   end
@@ -185,7 +204,7 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
         case Map.fetch(attributes, "frameborder") do
           {:ok, value} when is_binary(value) ->
             if kind == :frame do
-              case HtmlValidator.parse_html_integer(value) do
+              case legacy_integer(value) do
                 {:ok, number} -> number != 0
                 :error -> false
               end
@@ -211,10 +230,18 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
               0.0
 
             kind == :frameset and Map.has_key?(attributes, "border") ->
-              case HtmlValidator.parse_html_integer(attributes["border"]) do
-                {:ok, 0} -> 0.0
-                {:ok, number} -> max(number, 1) * 0.75
-                :error -> 0.0
+              case legacy_integer(attributes["border"]) do
+                {:ok, 0} ->
+                  0.0
+
+                {:ok, number} ->
+                  case HtmlValidator.parse_css_number(Integer.to_string(max(number, 1)), 0.75) do
+                    {points, ""} -> points
+                    _ -> :invalid
+                  end
+
+                :error ->
+                  0.0
               end
 
             true ->
@@ -231,13 +258,123 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
     end
   end
 
-  defp supported_border(width) do
-    if width > 0,
-      do:
-        unsupported(
-          "frameset/frame beveled borders remain pending; use border=0 or frameborder=0 for the supported grid"
-        ),
-      else: :ok
+  # Blink stores these legacy frame attributes as signed 32-bit integers.
+  # This is a fixed browser conversion invariant, not a resource ceiling.
+  defp legacy_integer(value) do
+    case HtmlValidator.parse_html_integer(value) do
+      {:ok, integer} when integer >= -2_147_483_648 and integer <= 2_147_483_647 -> {:ok, integer}
+      _ -> :error
+    end
+  end
+
+  @doc "Resolves legacy border-color hints before author CSS takes precedence."
+  @spec prepare_color_hints(term(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def prepare_color_hints(attributes, inherited) do
+    if is_map(attributes) and (is_nil(inherited) or is_map(inherited)) do
+      color =
+        case HtmlValidator.parse_html_legacy_color(Map.get(attributes, "bordercolor")) do
+          {:ok, color} -> color
+          :error -> if(is_map(inherited), do: Map.get(inherited, :border_color), else: nil)
+        end
+
+      if is_nil(color) or NativeElixirPdfUtilities.Validators.WriterValidator.valid_color?(color) do
+        {:ok,
+         if(is_nil(color),
+           do: %{},
+           else: %{
+             border_color: color,
+             border_colors: NativeElixirPdfUtilities.Validators.CssValueValidator.edges(color)
+           }
+         )}
+      else
+        invalid("frameset border-color inheritance requires a validated color")
+      end
+    else
+      invalid("frameset border-color hints require attributes and an inherited plan")
+    end
+  end
+
+  @doc "Issues shared grid edge flags from already prepared child documents and nested grids."
+  @spec prepare_children(term(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def prepare_children(plan, children) do
+    case {plan, children} do
+      {%{rows: rows, columns: columns}, children}
+      when is_list(rows) and rows != [] and is_list(columns) and columns != [] and
+             is_list(children) ->
+        with :ok <- cells_limit(rows, columns),
+             :ok <-
+               HtmlValidator.check_render_resource(:max_html_nodes, length(children), :layout) do
+          row_count = length(rows)
+          column_count = length(columns)
+          cells = row_count * column_count
+
+          HtmlValidator.reserve_render_resource(
+            :max_html_tree_work,
+            min(length(children), cells) + row_count + column_count + 2,
+            :layout
+          )
+
+          children
+          |> Enum.take(cells)
+          |> Enum.with_index()
+          |> Enum.reduce_while({:ok, {MapSet.new(), MapSet.new()}}, fn {child, index},
+                                                                       {:ok,
+                                                                        {vertical, horizontal}} ->
+            edges =
+              case child do
+                %{
+                  tag: "frameset",
+                  style: %{_frameset: %{outer_edges: {left, right, top, bottom} = edges}}
+                } ->
+                  if Enum.all?([left, right, top, bottom], &is_boolean/1),
+                    do: {:ok, edges},
+                    else: invalid("nested frameset requires issued edge flags")
+
+                %{tag: "frame", style: %{embedded_document: %{frame_border: enabled}}}
+                when is_boolean(enabled) ->
+                  {:ok, {enabled, enabled, enabled, enabled}}
+
+                _ ->
+                  invalid("frameset borders require prepared frame or nested grid edges")
+              end
+
+            case edges do
+              {:ok, {left, right, top, bottom}} ->
+                column = rem(index, column_count)
+                row = div(index, column_count)
+                vertical = if(left, do: MapSet.put(vertical, column), else: vertical)
+                vertical = if(right, do: MapSet.put(vertical, column + 1), else: vertical)
+                horizontal = if(top, do: MapSet.put(horizontal, row), else: horizontal)
+                horizontal = if(bottom, do: MapSet.put(horizontal, row + 1), else: horizontal)
+                {:cont, {:ok, {vertical, horizontal}}}
+
+              error ->
+                {:halt, error}
+            end
+          end)
+          |> case do
+            {:ok, {vertical, horizontal}} ->
+              {:ok,
+               Map.merge(plan, %{
+                 column_allow_border:
+                   List.to_tuple(Enum.map(0..column_count, &MapSet.member?(vertical, &1))),
+                 row_allow_border:
+                   List.to_tuple(Enum.map(0..row_count, &MapSet.member?(horizontal, &1))),
+                 outer_edges:
+                   {MapSet.member?(vertical, 0), MapSet.member?(vertical, column_count),
+                    MapSet.member?(horizontal, 0), MapSet.member?(horizontal, row_count)}
+               })}
+
+            error ->
+              error
+          end
+        end
+
+      _ ->
+        invalid("frameset borders require bounded prepared tracks and child cells")
+    end
+  catch
+    {:render_resource_limit, error} -> error
   end
 
   @doc "Issues the legacy grid style, whose layout is retained despite display:none."
@@ -334,10 +471,22 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
   @spec prepare_layout(term(), term(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
   def prepare_layout(plan, width, height) do
     case plan do
-      %{rows: rows, columns: columns, border: false}
-      when is_list(rows) and is_list(columns) and rows != [] and columns != [] ->
+      %{
+        rows: rows,
+        columns: columns,
+        border_enabled: enabled,
+        border_width: gap,
+        border_color: color,
+        has_border_color: colored
+      }
+      when is_boolean(enabled) and is_boolean(colored) and is_list(rows) and is_list(columns) and
+             rows != [] and columns != [] ->
         with {:ok, {width, height}} <- HtmlValidator.prepare_viewport_dimensions(width, height),
              :ok <- cells_limit(rows, columns),
+             true <-
+               match?({:ok, _}, HtmlValidator.normalize_geometry_number(gap)) and gap >= 0 and
+                 (enabled or gap == 0) and
+                 NativeElixirPdfUtilities.Validators.WriterValidator.valid_color?(color),
              true <-
                Enum.all?(rows ++ columns, fn
                  {kind, value} when kind in [:absolute, :percentage, :relative] ->
@@ -354,14 +503,20 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
             :layout
           )
 
-          {:ok, %{columns: sizes(columns, width), rows: sizes(rows, height)}}
+          {:ok,
+           %{
+             columns: sizes(columns, max(width - gap * (length(columns) - 1), 0)),
+             rows: sizes(rows, max(height - gap * (length(rows) - 1), 0)),
+             gap: gap,
+             border_color: if(colored, do: color, else: {208 / 255, 208 / 255, 208 / 255})
+           }}
         else
           false -> invalid("prepared frameset dimensions require canonical nonnegative tracks")
           error -> error
         end
 
       _ ->
-        invalid("frameset layout requires prepared border-zero rows and columns")
+        invalid("frameset layout requires prepared rows, columns and border metadata")
     end
   catch
     {:render_resource_limit, error} -> error
@@ -419,12 +574,108 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
 
                      if result == :ok, do: {:cont, :ok}, else: {:halt, result}
                    end) do
-              {:ok, grid}
+              with {:ok, borders} <- border_parts(plan, grid, length(children), width, height),
+                   do: {:ok, Map.put(grid, :borders, borders)}
             end
         end
 
       _ ->
         invalid("frameset rendering requires a prepared canonical grid element")
+    end
+  catch
+    {:render_resource_limit, error} -> error
+  end
+
+  defp border_parts(plan, grid, child_count, width, height) do
+    rows = List.to_tuple(grid.rows)
+    columns = List.to_tuple(grid.columns)
+    row_count = tuple_size(rows)
+    column_count = tuple_size(columns)
+    vertical = Map.get(plan, :column_allow_border)
+    horizontal = Map.get(plan, :row_allow_border)
+
+    if is_tuple(vertical) and tuple_size(vertical) == column_count + 1 and
+         is_tuple(horizontal) and tuple_size(horizontal) == row_count + 1 and
+         Enum.all?(Tuple.to_list(vertical) ++ Tuple.to_list(horizontal), &is_boolean/1) do
+      count = min(child_count, row_count * column_count)
+      HtmlValidator.reserve_render_resource(:max_html_tree_work, count, :layout)
+
+      if count == 0 or grid.gap == 0 or width == 0 or height == 0 do
+        {:ok, []}
+      else
+        {parts, _, _} =
+          Enum.reduce(0..(count - 1), {[], 0.0, 0.0}, fn index, {parts, x, y} ->
+            column = rem(index, column_count)
+            row = div(index, column_count)
+            x = x + elem(columns, column)
+            vertical_border = column + 1 < column_count and elem(vertical, column + 1)
+
+            parts =
+              if(vertical_border,
+                do:
+                  bevel_parts(x, height - y, grid.gap, height - y, :vertical, grid.border_color) ++
+                    parts,
+                else: parts
+              )
+
+            x = x + if(vertical_border, do: grid.gap, else: 0)
+
+            if column + 1 == column_count and index + 1 < count do
+              y = y + elem(rows, row)
+              horizontal_border = row + 1 < row_count and elem(horizontal, row + 1)
+
+              parts =
+                if(horizontal_border,
+                  do:
+                    bevel_parts(0.0, height - y, width, grid.gap, :horizontal, grid.border_color) ++
+                      parts,
+                  else: parts
+                )
+
+              {parts, 0.0, y + if(horizontal_border, do: grid.gap, else: 0)}
+            else
+              {parts, x, y}
+            end
+          end)
+
+        {:ok, Enum.reverse(parts)}
+      end
+    else
+      invalid("frameset painting requires issued row and column edge flags")
+    end
+  end
+
+  # Chromium's native frameset bevel uses fixed edge colors, not CSS relief shading.
+  defp bevel_parts(x, top, width, height, orientation, color) do
+    thickness = if(orientation == :vertical, do: width, else: height)
+
+    HtmlValidator.reserve_render_resource(
+      :max_html_tree_work,
+      if(thickness >= 2.25, do: 3, else: 1),
+      :layout
+    )
+
+    fill = %{x: x, y: top - height, width: width, height: height, fill_color: color}
+
+    if thickness >= 2.25 do
+      leading = Map.put(fill, :fill_color, {170 / 255, 170 / 255, 170 / 255})
+      trailing = Map.put(fill, :fill_color, {0.0, 0.0, 0.0})
+
+      if orientation == :vertical do
+        [
+          Map.merge(trailing, %{x: x + width - 0.75, width: 0.75}),
+          Map.put(leading, :width, 0.75),
+          fill
+        ]
+      else
+        [
+          Map.merge(trailing, %{height: 0.75}),
+          Map.merge(leading, %{y: top - 0.75, height: 0.75}),
+          fill
+        ]
+      end
+    else
+      [fill]
     end
   end
 

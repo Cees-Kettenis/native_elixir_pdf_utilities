@@ -328,46 +328,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedDispatchTest do
     end)
   end
 
-  test "selected SVG fitting delegates aspect syntax and diagnoses roots requiring a dynamic viewport" do
-    image = %{width: 90.0, height: 30.0, width_px: 120, height_px: 40}
+  test "selected SVG documents preserve aspect metadata for their actual viewport" do
+    alias NativeElixirPdfUtilities.Validators.{SvgDocumentViewportValidator, SvgValidator}
 
-    for {value, fit, positions} <- [
-          {"xMinYMax meet", :contain, {0.0, 1.0}},
-          {"xMaxYMin slice", :cover, {1.0, 0.0}},
-          {"none", :fill, {0.0, 0.0}}
-        ] do
-      assert {:ok, fitting} =
-               ObjectValidator.prepare_svg_fitting(
-                 %{"viewbox" => "0 0 120 40", "preserveaspectratio" => value},
-                 image
+    for value <- ["xMinYMax meet", "xMaxYMin slice", "none"] do
+      source =
+        "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='40' viewBox='0 0 100 100' preserveAspectRatio='#{value}'><rect width='100' height='100'/></svg>"
+
+      assert {:ok, summary} = SvgValidator.validate_processing(source, %{mode: :image})
+      assert {:ok, plan} = SvgDocumentViewportValidator.prepare(summary)
+      assert plan.width == 90.0 and plan.height == 30.0
+      assert plan.attributes["preserveAspectRatio"] == value
+
+      assert {:ok, raster} =
+               SvgDocumentViewportValidator.prepare_raster(
+                 plan,
+                 60,
+                 45,
+                 HtmlValidator.new_image_budget()
                )
 
-      assert fitting.object_fit == fit
-      {horizontal, vertical} = positions
-      assert fitting.object_position == {{:percent, horizontal}, {:percent, vertical}}
+      assert raster.width == 160 and raster.height == 120
     end
 
-    for root <- [%{}, %{"viewbox" => "0 0 100 100"}] do
-      assert {:error, {:not_implemented, diagnostic}} =
-               ObjectValidator.prepare_svg_fitting(root, image)
-
-      assert diagnostic.message =~ "dynamic SVG document viewport"
-    end
-
-    assert {:error, {_reason, diagnostic}} =
-             ObjectValidator.prepare_svg_fitting(
-               %{"viewbox" => "0 0 120 40", "preserveaspectratio" => "invalid"},
-               image
+    assert {:ok, summary} =
+             SvgValidator.validate_processing(
+               "<svg viewBox='0 0 10 10' preserveAspectRatio='invalid'/>",
+               %{mode: :image}
              )
 
+    assert {:error, {:invalid_document, diagnostic}} =
+             SvgDocumentViewportValidator.prepare(summary)
+
     assert diagnostic.message =~ "preserveAspectRatio"
-
-    for {root, decoded} <- [{nil, image}, {%{}, %{}}, {%{}, %{width: -1, height: 1}}] do
-      assert {:error, {:invalid_document, diagnostic}} =
-               ObjectValidator.prepare_svg_fitting(root, decoded)
-
-      assert diagnostic.stage == :resource and diagnostic.message =~ "decoder dimensions"
-    end
   end
 
   test "embed never exposes fallback children and hidden hosts never select sources" do

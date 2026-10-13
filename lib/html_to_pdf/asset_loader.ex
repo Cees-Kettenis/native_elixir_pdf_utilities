@@ -82,7 +82,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
           result,
           :issued_local_dependency,
           source,
-          opts
+          opts,
+          context
         )
 
         result

@@ -1,0 +1,18 @@
+<!doctype html><html><head><style>
+@page {size:360pt 200pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:12pt;line-height:18pt;}
+p {margin:0;}
+.custom {quotes:"[" "]" "{" "}";}
+.override::before {content:"(";color:red;}
+.override::after {content:")";color:red;}
+.silent::before {content:no-open-quote;}
+.silent::after {content:no-close-quote;}
+.hide::before {display:none;}
+</style></head><body>
+<p><q>Outer <q>inner <q>deep</q></q></q> <q>Sibling</q></p>
+<p lang="fr-CA"><q>French <q>nested</q></q></p>
+<p lang="de"><q>German <q>nested</q></q></p>
+<p class="custom"><q>Custom <q>nested</q></q> <i class="silent"><q>Silent depth</q></i></p>
+<p><q class="override">Replaced</q> <q style="quotes:none">Suppressed <q>nested</q></q></p>
+<p><q class="hide">Hidden before</q> <q>Clamped closing</q></p>
+</body></html>

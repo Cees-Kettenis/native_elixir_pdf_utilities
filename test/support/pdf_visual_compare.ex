@@ -70,6 +70,18 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     HtmlToPdf.render(html, Keyword.update!(opts, :fonts, &(&1 ++ [font])))
   end
 
+  @doc "Renders unchanged embedded HTML using the exact caller-provided font bytes in each child scope."
+  @spec render_embedded_font_bytes(String.t(), keyword(), String.t()) ::
+          {:ok, binary()} | {:error, term()}
+  def render_embedded_font_bytes(html, opts, fixture_path) do
+    fonts =
+      Enum.map(Keyword.fetch!(default_render_opts(fixture_path), :fonts), fn font ->
+        font |> Map.put(:data, File.read!(Map.fetch!(font, :path))) |> Map.delete(:path)
+      end)
+
+    HtmlToPdf.render(html, Keyword.put(opts, :fonts, fonts))
+  end
+
   @doc false
   @spec assert_browser_match!(String.t(), keyword()) :: comparison_stats()
   def assert_browser_match!(fixture_path, opts \\ []) do

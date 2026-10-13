@@ -5,6 +5,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, MathLayout, ResourceContext, Style}
 
   alias NativeElixirPdfUtilities.Validators.{
+    CssValueValidator,
     FontValidator,
     HtmlValidator,
     MathLayoutValidator,
@@ -157,9 +158,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
           matrix([[%{ordinary | attributes: %{"columnspan" => "2"}}]], style),
           element("mtable", [ordinary], %{style | display: :inline_table}),
           ordinary,
-          matrix(
-            [[%{ordinary | style: Map.put(ordinary.style, :background_color, {1, 0, 0})}]],
-            style
+          element(
+            "mtable",
+            [
+              element(
+                "mtr",
+                [ordinary],
+                Map.merge(style, %{display: :table_row, background_image: "pending.png"})
+              )
+            ],
+            %{style | display: :inline_table}
           ),
           %{
             matrix([[ordinary]], style)
@@ -396,5 +404,414 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
 
     assert {:error, {_, diagnostic}} = MathTableValidator.prepare_geometry(boxed, [[child]])
     assert diagnostic.source == "mtable" and diagnostic.message =~ "decorated"
+  end
+
+  test "cell borders and padding determine allocated paint, common baselines and original identities",
+       %{style: style} do
+    padding = %{top: 1.0, right: 2.0, bottom: 3.0, left: 4.0}
+    border = %{top: 1.0, right: 1.0, bottom: 1.0, left: 1.0}
+
+    paint =
+      Map.merge(style, %{
+        border_widths: border,
+        border_color: {0, 0, 1},
+        border_style: :solid,
+        background_color: {1, 1, 0}
+      })
+
+    first =
+      cell("1", style, padding)
+      |> Map.put(:_selector_id, 41)
+      |> Map.put(:_document_order, [0, 0, 0])
+
+    first = %{
+      first
+      | style:
+          Map.merge(
+            first.style,
+            Map.take(paint, [:border_widths, :border_color, :border_style, :background_color])
+          )
+    }
+
+    last = cell("234", style, padding)
+
+    last = %{
+      last
+      | style:
+          Map.merge(
+            last.style,
+            Map.take(paint, [:border_widths, :border_color, :border_style, :background_color])
+          )
+    }
+
+    node = matrix([[first], [last]], style)
+    assert {:ok, one} = MathLayout.measure(token("1", style))
+    assert {:ok, longer} = MathLayout.measure(token("234", style))
+    assert {:ok, prepared} = MathLayoutValidator.prepare_element(node, %{})
+    assert hd(hd(prepared.rows)).source._selector_id == 41
+    assert hd(hd(prepared.rows)).source._document_order == [0, 0, 0]
+    assert hd(hd(prepared.rows)).source.tag == "mtd"
+    assert {:ok, measured} = MathLayout.measure(node)
+    expected_width = max(one.max_content_width, longer.max_content_width) + 8
+    assert_in_delta measured.width, expected_width, 1.0e-9
+    backgrounds = Enum.filter(measured.drawing_items, &(&1.kind == :background))
+    assert length(backgrounds) == 2
+    first_box = hd(backgrounds)
+    assert_in_delta first_box.width, expected_width, 1.0e-9
+    assert_in_delta first_box.height, one.ascent + one.descent + 6, 1.0e-9
+    assert first_box.style._math_source._selector_id == 41
+    assert first_box.style._math_source.tag == "mtd"
+
+    assert_in_delta hd(measured.glyphs).x,
+                    5 + (expected_width - 8 - one.width) / 2 + hd(one.glyphs).x,
+                    1.0e-9
+
+    assert measured.actual_text == "1234"
+    assert :ok == MathLayoutValidator.validate_measured_geometry(measured)
+  end
+
+  test "allocated empty and mixed-size cells preserve glyphs, Unicode and phantom suppression", %{
+    style: style
+  } do
+    html =
+      "<mtable><mtr><mtd style='background-color:lightyellow;border:1px solid blue'><mn>α</mn></mtd><mtd style='font-size:24pt;background-color:lightblue;border:1px solid blue'><mn>12</mn></mtd></mtr><mtr><mtd style='background-color:lightblue;border:1px solid blue'></mtd><mtd style='background-color:lightyellow;border:1px solid blue'><mn>β</mn></mtd></mtr></mtable>"
+
+    assert {:ok, visible} = styled_math("<math style='font-size:18pt'>#{html}</math>")
+    assert length(Enum.filter(visible.drawing_items, &(&1.kind == :background))) == 4
+    assert visible.actual_text == "α12β"
+
+    assert {:ok, hidden} =
+             styled_math("<math style='font-size:18pt'><mphantom>#{html}</mphantom></math>")
+
+    assert hidden.glyphs == [] and hidden.drawing_items == [] and hidden.actual_text == ""
+
+    assert hidden.width == visible.width and hidden.ascent == visible.ascent and
+             hidden.descent == visible.descent
+
+    assert {:ok, pdf} = HtmlToPdf.render("<math>#{html}</math>", system_font_discovery: false)
+    assert {:ok, "α12β"} = Text.extract(pdf, layout: false)
+    assert :ok == MathLayoutValidator.validate_measured_geometry(visible)
+
+    assert {:ok, plain} =
+             MathLayout.measure(
+               matrix(
+                 [[cell("1", style, %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0})]],
+                 style
+               )
+             )
+
+    assert plain.drawing_items |> Enum.all?(&(&1.kind == :glyph))
+    assert {:ok, glyph} = MathLayout.measure(token("1", style))
+
+    assert_in_delta plain.ink_ascent,
+                    glyph.ink_ascent + hd(plain.glyphs).y - hd(glyph.glyphs).y,
+                    1.0e-9
+  end
+
+  test "cell decoration retains bounded prepared geometry and pending row/span/spacing policy", %{
+    style: style
+  } do
+    zero = %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+    ordinary = cell("1", style, zero)
+
+    for alteration <- [
+          %{border_widths: nil},
+          %{border_widths: %{zero | left: -1.0}},
+          %{margin: %{}},
+          %{width: 50.0},
+          %{background_image: "blocked"}
+        ] do
+      assert {:error, {reason, diagnostic}} =
+               MathLayout.measure(
+                 matrix([[%{ordinary | style: Map.merge(ordinary.style, alteration)}]], style)
+               )
+
+      assert diagnostic.reason == reason and diagnostic.source == "mtd"
+      assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
+    end
+
+    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 30))
+    border = %{top: 20.0, right: 20.0, bottom: 20.0, left: 20.0}
+
+    assert {:error, {_, diagnostic}} =
+             MathLayout.measure(
+               matrix(
+                 [[%{ordinary | style: Map.put(ordinary.style, :border_widths, border)}]],
+                 style
+               )
+             )
+
+    assert diagnostic.source == "mtable" and diagnostic.message =~ "bounds"
+  end
+
+  test "row backgrounds precede allocated cell paint and retain original row identity", %{
+    style: style
+  } do
+    zero = %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+    first = cell("1", style, zero)
+
+    colored = %{
+      cell("23", style, zero)
+      | style: Map.merge(first.style, %{background_color: {0, 0, 1}})
+    }
+
+    node = matrix([[first, colored], [cell("456", style, zero)]], style)
+    [row1, row2] = node.children
+    row1 = Map.put(row1, :_selector_id, 73)
+    row1 = %{row1 | style: Map.put(row1.style, :background_color, {1, 1, 0})}
+    row2 = %{row2 | style: Map.put(row2.style, :background_color, {0, 1, 0})}
+    node = %{node | children: [row1, row2]}
+
+    assert {:ok, plain} =
+             MathLayout.measure(matrix([[first, colored], [cell("456", style, zero)]], style))
+
+    assert {:ok, prepared} = MathLayoutValidator.prepare_element(node, %{})
+    assert hd(prepared.row_boxes).source._selector_id == 73
+    assert {:ok, measured} = MathLayout.measure(node)
+
+    assert measured.width == plain.width and measured.ascent == plain.ascent and
+             measured.descent == plain.descent
+
+    assert measured.glyphs == plain.glyphs and measured.actual_text == "123456"
+    backgrounds = Enum.filter(measured.drawing_items, &(&1.kind == :background))
+    assert length(backgrounds) == 4
+
+    assert Enum.map(backgrounds, & &1.style._math_source.tag) == [
+             "mtr",
+             "mtr",
+             "mtr",
+             "mtd"
+           ]
+
+    assert hd(backgrounds).style._math_source._selector_id == 73
+    [first_bg, second_bg, ragged_bg, _] = backgrounds
+    assert_in_delta second_bg.x, first_bg.width, 1.0e-9
+    assert_in_delta first_bg.width + second_bg.width, measured.width, 1.0e-9
+    assert_in_delta ragged_bg.width, first_bg.width, 1.0e-9
+    assert ragged_bg.width < measured.width
+    assert :ok == MathLayoutValidator.validate_measured_geometry(measured)
+
+    assert {:ok, phantom} =
+             styled_math(
+               "<math><mphantom><mtable><mtr style='background-color:yellow'><mtd><mn>α</mn></mtd></mtr></mtable></mphantom><mn>β</mn></math>"
+             )
+
+    assert phantom.actual_text == "β" and Enum.all?(phantom.drawing_items, &(&1.kind == :glyph))
+  end
+
+  test "prepared row paint rejects invalid sources, row edges and mismatched row metadata", %{
+    style: style
+  } do
+    zero = %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+
+    assert {:ok, prepared} =
+             MathLayoutValidator.prepare_element(matrix([[cell("1", style, zero)]], style), %{})
+
+    assert {:ok, measured} = MathLayout.measure(token("1", style))
+    [row] = prepared.row_boxes
+
+    for rows <- [
+          [],
+          [nil],
+          [%{row | source: %{namespace: :html, tag: "mtr"}}],
+          [%{row | style: Map.put(row.style, :border_widths, %{zero | top: 1})}],
+          [%{row | style: Map.put(row.style, :padding, %{zero | left: 1})}],
+          [%{row | style: Map.put(row.style, :background_image, "pending")}]
+        ] do
+      assert {:error, {reason, diagnostic}} =
+               MathTableValidator.prepare_geometry(%{prepared | row_boxes: rows}, [[measured]])
+
+      assert diagnostic.reason == reason and diagnostic.source in ["mtr", "mtable"]
+      assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
+    end
+  end
+
+  test "exact integer CSS-pixel spacing contributes unchanged point lengths to intrinsic sizes and gaps",
+       %{style: style} do
+    padding = %{top: 2.0, right: 3.0, bottom: 2.0, left: 3.0}
+
+    natural =
+      matrix(
+        [
+          [cell("1", style, padding), cell("23", style, padding)],
+          [cell("45", style, padding), cell("6", style, padding)]
+        ],
+        style
+      )
+
+    assert {:ok, base} = MathLayout.measure(natural)
+
+    assert {:ok, parsed} =
+             CssValueValidator.validate_resolved(natural.style, "border-spacing", "4px 2px")
+
+    assert parsed.border_spacing == {3.0, 1.5}
+    assert {:ok, measured} = MathLayout.measure(%{natural | style: parsed})
+
+    for field <- [:width, :min_content_width, :max_content_width] do
+      assert_in_delta Map.fetch!(measured, field), Map.fetch!(base, field) + 9, 1.0e-9
+    end
+
+    assert_in_delta measured.ascent, base.ascent + 2.25, 1.0e-9
+    assert_in_delta measured.descent, base.descent + 2.25, 1.0e-9
+    assert_in_delta hd(measured.glyphs).x, hd(base.glyphs).x + 3, 1.0e-9
+    assert_in_delta hd(measured.glyphs).y, hd(base.glyphs).y + 0.75, 1.0e-9
+    assert_in_delta Enum.at(measured.glyphs, 3).y, Enum.at(base.glyphs, 3).y - 0.75, 1.0e-9
+    assert measured.actual_text == base.actual_text
+    assert :ok == MathLayoutValidator.validate_measured_geometry(measured)
+  end
+
+  test "separate gaps expose owner paint and remain outside row and cell background rectangles",
+       %{style: style} do
+    zero = %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+    ordinary = cell("1", style, zero)
+    colored = %{ordinary | style: Map.put(ordinary.style, :background_color, {0, 0, 1})}
+    natural = matrix([[colored, ordinary]], style)
+    [row] = natural.children
+    row = %{row | style: Map.put(row.style, :background_color, {1, 1, 0})}
+
+    node = %{
+      natural
+      | children: [row],
+        style:
+          Map.merge(natural.style, %{
+            border_spacing: {3.0, 1.5},
+            background_color: {0, 1, 0}
+          })
+    }
+
+    assert {:ok, measured} = MathLayout.measure(element("math", [node], style))
+    [owner, row1, row2, cell_bg] = Enum.filter(measured.drawing_items, &(&1.kind == :background))
+    assert owner.width == measured.width and owner.height == measured.ascent + measured.descent
+    assert measured.ink_ascent >= measured.ascent and measured.ink_descent >= measured.descent
+    assert row1.x == 3.0 and row2.x == row1.x + row1.width + 3.0
+    assert cell_bg.x == row1.x and cell_bg.width == row1.width
+    assert_in_delta row2.x + row2.width + 3.0, measured.width, 1.0e-9
+    assert_in_delta owner.height, row1.height + 3.0, 1.0e-9
+    assert Enum.map([row1, row2, cell_bg], & &1.style._math_source.tag) == ["mtr", "mtr", "mtd"]
+    assert measured.actual_text == "11"
+  end
+
+  test "fractional spacing, empty-grid gaps and oversized allocated extents retain shared diagnostics",
+       %{style: style} do
+    zero = %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+    natural = matrix([[cell("1", style, zero)]], style)
+    assert :error == CssValueValidator.validate_resolved(natural.style, "border-spacing", "-1px")
+    assert :error == CssValueValidator.validate_resolved(natural.style, "border-spacing", "10%")
+
+    for spacing <- [{4.0, 2.0}, {0.375, 0.0}, {-0.75, 0.0}] do
+      assert {:error, {:unsupported_html, diagnostic}} =
+               MathLayout.measure(%{
+                 natural
+                 | style: Map.put(natural.style, :border_spacing, spacing)
+               })
+
+      assert diagnostic.source == "mtable" and
+               diagnostic.message =~ "fractional spacing is pending"
+
+      assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
+    end
+
+    for rows <- [[], [[]], [[], []]] do
+      empty = matrix(rows, style)
+
+      assert {:error, {:unsupported_html, diagnostic}} =
+               MathLayout.measure(%{
+                 empty
+                 | style: Map.put(empty.style, :border_spacing, {3.0, 1.5})
+               })
+
+      assert diagnostic.source == "mtable" and
+               diagnostic.message =~ "empty-grid spacing is pending"
+    end
+
+    assert {:ok, prepared} = MathLayoutValidator.prepare_element(matrix([], style), %{})
+    altered = %{prepared | style: Map.put(prepared.style, :border_spacing, {3.0, 1.5})}
+
+    assert {:error, {:unsupported_html, diagnostic}} =
+             MathTableValidator.prepare_geometry(altered, [])
+
+    assert diagnostic.message =~ "empty-grid spacing is pending"
+
+    assert {:ok, prepared} = MathLayoutValidator.prepare_element(natural, %{})
+    assert {:ok, child} = MathLayout.measure(token("1", style))
+    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 30))
+    wide = %{prepared | style: Map.put(prepared.style, :border_spacing, {15.0, 0.0})}
+
+    assert {:error, {:unsupported_html, diagnostic}} =
+             MathTableValidator.prepare_geometry(wide, [[child]])
+
+    assert diagnostic.source == "mtable" and diagnostic.message =~ "bounds"
+  end
+
+  test "nonzero spacing diagnoses held fraction composition through nested rows and phantom", %{
+    style: style
+  } do
+    for content <- [
+          "<mfrac><mn>1</mn><mn>2</mn></mfrac>",
+          "<mrow><mfrac><mn>1</mn><mn>2</mn></mfrac></mrow>",
+          "<mphantom><mfrac><mn>1</mn><mn>2</mn></mfrac></mphantom>"
+        ] do
+      assert {:error, {:unsupported_html, diagnostic}} =
+               styled_math(
+                 "<math><mtable style='border-spacing:4px 2px'><mtr><mtd>#{content}</mtd></mtr></mtable></math>"
+               )
+
+      assert diagnostic.source == "mtd" and
+               diagnostic.message =~ "fraction and complex cell composition remain pending"
+
+      assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
+    end
+
+    assert {:ok, prepared} =
+             MathLayoutValidator.prepare_element(
+               matrix(
+                 [[cell("1", style, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0})]],
+                 style
+               ),
+               %{}
+             )
+
+    assert {:ok, child} = MathLayout.measure(token("1", style))
+    original = hd(hd(prepared.rows))
+
+    for content <- [
+          nil,
+          Map.put(original.content, :children, [hd(original.content.children) | :bad_tail])
+        ] do
+      state = %{
+        prepared
+        | style: Map.put(prepared.style, :border_spacing, {3.0, 1.5}),
+          rows: [[%{original | content: content}]]
+      }
+
+      assert {:error, {:unsupported_html, diagnostic}} =
+               MathTableValidator.prepare_geometry(state, [[child]])
+
+      assert diagnostic.source == "mtd" and diagnostic.operation == :measure_math
+    end
+  end
+
+  test "spaced prepared content admission uses existing depth and work limits", %{style: style} do
+    zero = %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+
+    assert {:ok, prepared} =
+             MathLayoutValidator.prepare_element(matrix([[cell("1", style, zero)]], style), %{})
+
+    assert {:ok, child} = MathLayout.measure(token("1", style))
+    spaced = %{prepared | style: Map.put(prepared.style, :border_spacing, {3.0, 1.5})}
+    limits = Limits.effective()
+    Limits.install(Map.put(limits, :max_html_depth, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             MathTableValidator.prepare_geometry(spaced, [[child]])
+
+    assert diagnostic.source == "mtd" and diagnostic.message =~ "max_html_depth"
+    assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
+    Limits.install(Map.put(limits, :max_table_grid_work, 3))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             MathTableValidator.prepare_geometry(spaced, [[child]])
+
+    assert diagnostic.message =~ "max_table_grid_work" and diagnostic.operation == :measure_math
   end
 end

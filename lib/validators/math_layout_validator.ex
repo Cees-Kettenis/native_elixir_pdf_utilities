@@ -9,9 +9,9 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   alias NativeElixirPdfUtilities.Validators.MathOperatorValidator
   alias NativeElixirPdfUtilities.Validators.MathTableValidator
 
-  @grouping_elements ~w(math mrow mphantom)
+  @grouping_elements ~w(math mrow mphantom semantics maction)
   @rendered_elements @grouping_elements ++
-                       ~w(mi mn mo mtext ms mspace mfrac msqrt mroot mtable mtr mtd)
+                       ~w(mi mn mo mtext ms annotation annotation-xml mspace mfrac msqrt mroot mtable mtr mtd)
 
   @doc false
   @spec validate_flow_geometry([term()], number(), number()) ::
@@ -234,6 +234,26 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
         defaults
       end
     end)
+  end
+
+  # Core 3.6 and 3.7 select the first element, even if that element is hidden.
+  # This is a UA default, so author declarations can show alternate children.
+  # Canonical selector identities also cover HTML and SVG integration children.
+  @doc false
+  @spec child_selection_defaults(map(), [map()]) :: map()
+  def child_selection_defaults(node, ancestors) do
+    case ancestors do
+      [%{namespace: :mathml, tag: tag, children: children} | _]
+      when tag in ~w(semantics maction) ->
+        first = Enum.find(children, &(Map.get(&1, :type) == :element))
+
+        if first != nil and Map.fetch!(first, :_selector_id) != Map.fetch!(node, :_selector_id),
+          do: %{display: :none},
+          else: %{}
+
+      _ ->
+        %{}
+    end
   end
 
   @doc false
@@ -680,7 +700,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                  }}
               end
 
-            tag in ~w(mi mn mtext ms) ->
+            tag in ~w(mi mn mtext ms annotation annotation-xml) ->
               with {:ok, runs} <- token_runs(children, true),
                    do: prepare_token_content(children, style, runs, context)
 
@@ -1202,7 +1222,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   # preparation adds anonymous token boxes. This determines the outer form.
   defp space_like?(node) do
     case node do
-      %{namespace: :mathml, tag: tag} when tag in ["mtext", "mspace"] ->
+      %{namespace: :mathml, tag: tag} when tag in ~w(mtext mspace annotation annotation-xml) ->
         true
 
       %{namespace: :mathml, tag: tag, children: children} when tag in @grouping_elements ->

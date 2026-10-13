@@ -1,0 +1,18 @@
+<!doctype html>
+<html><head><style>
+@page {size:300pt 220pt;margin:12pt}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:14pt}
+p {margin:0}
+span {color:#b91c1c}
+.card {display:block;margin-bottom:8pt}
+</style></head><body>
+<div class="card"><template shadowrootmode="open"><style>
+:host {color:#1d4ed8}
+:host(.card) {display:block}
+p {margin:0}
+::slotted(.title) {font-weight:700;color:#166534}
+</style><p><slot name="title">Unused title</slot></p><p><slot>Unused body</slot></p><p><slot name="absent">Fallback content</slot></p></template><span class="title" slot="title">Assigned heading</span>Assigned body<span slot="missing">Unassigned hidden</span></div>
+<div class="card"><template shadowrootmode="closed" shadowrootslotassignment="manual"><p style="margin:0"><slot>Manual fallback</slot></p></template>Manual hidden</div>
+<div class="card"><template shadowrootmode="open"><section><template shadowrootmode="closed"><p style="margin:0"><slot>Nested fallback</slot></p></template>Nested assignment</section><p style="margin:0"><slot>Outer fallback</slot></p></template>Outer assignment</div>
+<p><span>Outside scope</span></p>
+</body></html>

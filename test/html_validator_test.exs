@@ -3428,8 +3428,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
           "image"
         ] do
       assert HtmlValidator.input_type(String.upcase(type)) == type
-      refute HtmlValidator.valid_form_attribute?("input", "type", type)
-      refute HtmlValidator.valid_form_element?("input", %{"type" => type}, [])
+      assert HtmlValidator.valid_form_attribute?("input", "type", type)
+      assert HtmlValidator.valid_form_element?("input", %{"type" => type}, [])
     end
   end
 

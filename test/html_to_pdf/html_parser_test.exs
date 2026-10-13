@@ -1322,8 +1322,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
                HtmlParser.parse_detailed(html)
     end
 
+    for attribute <- ["for=target"] do
+      assert {:error, {:unsupported_html, %{stage: :html, source: source, message: message}}} =
+               HtmlParser.parse_detailed("<template #{attribute}></template>")
+
+      assert source == "<template #{attribute}>"
+      assert message =~ "composition"
+    end
+
     for attribute <- [
-          "for=target",
           "shadowrootmode=open",
           "shadowrootdelegatesfocus",
           "shadowrootserializable",
@@ -1331,11 +1338,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
           "shadowrootclonable",
           "shadowrootcustomelementregistry"
         ] do
-      assert {:error, {:unsupported_html, %{stage: :html, source: source, message: message}}} =
+      assert {:ok, %{children: [%{tag: "template", content: %{children: []}}]}} =
                HtmlParser.parse_detailed("<template #{attribute}></template>")
-
-      assert source == "<template #{attribute}>"
-      assert message =~ "composition"
     end
   end
 

@@ -1,0 +1,17 @@
+<!doctype html><html><head><style>
+@page { size: 360pt 300pt; margin: 18pt; }
+body { margin: 0; font-family: 'DejaVu Sans'; font-size: 10pt; line-height: 15pt; }
+.items { margin: 0 0 9pt; padding-left: 30pt; }
+.items div { display: list-item; list-style: decimal; }
+menu, dir { margin: 0 0 9pt; }
+.flex { display: flex; gap: 24pt; padding-left:30pt; margin:0 0 9pt; }
+.grid { display:grid; grid-template-columns: 90pt 90pt; gap:24pt; padding-left:30pt; margin:0 0 9pt; }
+li { margin:0; }
+</style></head><body>
+<section class="items"><div>CSS first</div><div>CSS second</div></section>
+<menu><li>Menu first</li><li>Menu second</li></menu>
+<dir><li>Directory first</li><li>Directory second</li></dir>
+<ul class="flex"><li>Flex first</li><li>Flex second</li></ul>
+<ul class="grid"><li>Grid first</li><li>Grid second</li></ul>
+<dl><dt>Term</dt><dd>Outer<dl><dt>Nested term</dt><dd>Nested definition</dd></dl></dd></dl>
+</body></html>

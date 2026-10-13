@@ -13,6 +13,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
 
+  @doc "Translates validated native boxes, including glyph-group children in the parent coordinate space."
+  @spec translate_boxes([map()], number(), number()) :: [map()]
+  def translate_boxes(boxes, delta_x, delta_y) do
+    Enum.map(boxes, fn box ->
+      box =
+        case box do
+          %{type: :glyph_group, boxes: children} ->
+            %{box | boxes: translate_boxes(children, delta_x, delta_y)}
+
+          _ ->
+            box
+        end
+
+      translate_box(box, delta_x, delta_y)
+    end)
+  end
+
   @doc "Translates validated artwork and annotations while keeping drawing-group children and clips local."
   @spec translate_box(map(), number(), number()) :: map()
   def translate_box(box, delta_x, delta_y) do

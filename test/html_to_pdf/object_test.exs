@@ -31,7 +31,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ObjectTest do
 
     for attributes <- [
           "",
-          "data='  ' type='text/html'",
           "data='https://never.test/no-file' type='application/x-unknown'",
           "data='https://never.test/no-file' type='malformed'",
           "data='https://never.test/no-file'"

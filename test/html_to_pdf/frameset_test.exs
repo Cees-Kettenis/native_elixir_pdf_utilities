@@ -231,13 +231,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
     refute_receive {:resolved, _}
   end
 
-  test "default/custom borders, author geometry and visible noframes produce explicit diagnostics",
+  test "unsupported author geometry and visible noframes produce explicit diagnostics",
        %{root: root} do
     for html <- [
-          "<frameset><frame></frameset>",
-          "<frameset border='4'><frame></frameset>",
           "<frameset border='0' style='height:50pt'><frame></frameset>",
-          "<frameset border='0'><frame scrolling='no'></frameset>",
           "<frameset border='0'><noframes style='display:block'>Fallback</noframes></frameset>"
         ] do
       assert {:error, {:not_implemented, diagnostic}} = HtmlToPdf.render(html, base_url: root)
@@ -253,18 +250,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
     assert {:ok, frame} = FramesetValidator.prepare_frame(%{"frameborder" => "1"}, parent)
     assert frame.border_enabled == true
 
-    assert {:error, {:not_implemented, diagnostic}} =
-             FramesetValidator.prepare(%{"border" => "10"}, parent)
-
-    assert diagnostic.stage == :layout and diagnostic.source == "frameset"
-    assert diagnostic.message =~ "beveled borders"
+    assert {:ok, positive} = FramesetValidator.prepare(%{"border" => "10"}, parent)
+    assert positive.border_width == 7.5 and positive.border_enabled == true
 
     assert {:ok, disabled} = FramesetValidator.prepare(%{"frameborder" => "no"})
     assert {:ok, nested} = FramesetValidator.prepare(%{"border" => "10"}, disabled)
     assert nested.border_enabled == false and nested.border_width == 0
 
-    assert {:error, {:not_implemented, _}} =
+    assert {:ok, reenabled} =
              FramesetValidator.prepare(%{"border" => "10", "frameborder" => "yes"}, disabled)
+
+    assert reenabled.border_width == 7.5 and reenabled.border_enabled == true
 
     assert {:ok, frame} = FramesetValidator.prepare_frame(%{"frameborder" => "yes"}, parent)
     assert frame.border_enabled == false
@@ -274,13 +270,204 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
 
     assert {:error, {:invalid_document, _}} = FramesetValidator.prepare(%{"frameborder" => false})
 
-    assert {:error, {:not_implemented, public}} =
+    assert {:ok, _pdf} =
              HtmlToPdf.render(
                "<frameset border='0'><frame src='child.html'><frameset border='10'><frame src='child.html'></frameset></frameset>",
                base_url: root
              )
+  end
 
-    assert public.message =~ "beveled borders"
+  test "beveled border gaps, colors and child edge flags follow the initial grid", %{root: root} do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Frameset
+
+    ResourceContext.run(
+      [authorization_root: root],
+      HtmlValidator.new_image_budget(),
+      fn context ->
+        for {attributes, frame_attributes, gap, count, color} <- [
+              {"", "", 4.5, 3, {208 / 255, 208 / 255, 208 / 255}},
+              {"border='8' bordercolor='red' style='border-left-color:blue'", "", 6.0, 3,
+               {0.0, 0.0, 1.0}},
+              {"border='2' bordercolor='blue'", "", 1.5, 1, {0.0, 0.0, 1.0}},
+              {"border='8'", "frameborder='0'", 6.0, 0, nil}
+            ] do
+          assert {:ok, dom} =
+                   HtmlParser.parse_document_detailed(
+                     "<frameset cols='*,*' #{attributes}><frame #{frame_attributes}><frame #{frame_attributes}></frameset>"
+                   )
+
+          assert {:ok, tree} = Style.compute_detailed(dom, [base_url: root], context.image_budget)
+          [node] = tree.children
+          assert node.style._frameset.border_width == gap
+          assert {:ok, group} = Frameset.layout(node, 300, 200)
+          frames = Enum.filter(group.boxes, &(&1.type == :drawing_group))
+          parts = Enum.filter(group.boxes, &(&1.type == :rect))
+          assert length(parts) == count
+          assert Enum.at(frames, 1).x == Enum.at(frames, 0).width + gap
+          if count > 0, do: assert(hd(parts).fill_color == color)
+
+          if count == 3 do
+            assert Enum.at(parts, 1).fill_color == {170 / 255, 170 / 255, 170 / 255}
+            assert Enum.at(parts, 2).fill_color == {0.0, 0.0, 0.0}
+            assert Enum.at(parts, 1).width == 0.75
+          end
+
+          assert {:ok, _pdf} =
+                   HtmlToPdf.render(
+                     "<frameset cols='*,*' #{attributes}><frame #{frame_attributes}><frame #{frame_attributes}></frameset>",
+                     base_url: root,
+                     page_size: {300, 200},
+                     margin: 0
+                   )
+
+          malformed = put_in(node.style._frameset.column_allow_border, {true})
+          assert {:error, {:invalid_document, diagnostic}} = Frameset.layout(malformed, 300, 200)
+          assert diagnostic.message =~ "edge flags"
+          assert ResourceContext.current() == context
+        end
+      end
+    )
+
+    assert {:error, {:invalid_document, _}} =
+             FramesetValidator.prepare(%{}, nil, %{border_colors: false})
+  end
+
+  test "scrolling hints suppress gutters while preserving child CSS, scopes and margins", %{
+    root: root
+  } do
+    alias NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport
+    alias NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator
+
+    File.write!(
+      Path.join(root, "scroll.html"),
+      "<body style='margin:0'><div style='width:800px;height:800px;background:red'></div></body>"
+    )
+
+    ResourceContext.run(
+      [authorization_root: root],
+      HtmlValidator.new_image_budget(),
+      fn context ->
+        for {hint, policy, client} <- [
+              {"no", :none, {90.0, 60.0}},
+              {"OFF", :none, {90.0, 60.0}},
+              {"noscroll", :none, {90.0, 60.0}},
+              {"yes", :auto, {78.75, 48.75}},
+              {"unknown", :auto, {78.75, 48.75}}
+            ] do
+          assert {:ok, dom} =
+                   HtmlParser.parse_document_detailed(
+                     "<frameset border='0'><frame src='scroll.html' scrolling='#{hint}' marginwidth='12' marginheight='4'></frameset>"
+                   )
+
+          assert {:ok, tree} = Style.compute_detailed(dom, [base_url: root], context.image_budget)
+          [node] = tree.children
+          [frame] = node.children
+          surface = frame.style.embedded_document
+          assert surface.frame_scrollbars == policy
+          assert surface.frame_margins == %{horizontal: 9.0, vertical: 3.0}
+          assert {:ok, group} = EmbeddedViewport.layout(surface, 90, 60)
+
+          client_rect =
+            case group do
+              %{client_rect: rect} -> rect
+              %{boxes: [%{client_rect: rect} | _]} -> rect
+            end
+
+          assert {client_rect.width, client_rect.height} == client
+          assert surface.context.authorization_root == root
+          assert surface.context.image_budget == context.image_budget
+          assert ResourceContext.current() == context
+
+          assert {:error, {:invalid_layout, invalid}} =
+                   EmbeddedViewportValidator.prepare_layout(
+                     Map.put(surface, :frame_scrollbars, false),
+                     90,
+                     60
+                   )
+
+          assert invalid.message =~ "scrollbar policy"
+        end
+      end
+    )
+  end
+
+  test "legacy margin and border integers recover without float overflow and preserve limits" do
+    assert {:ok, parent} = FramesetValidator.prepare(%{"border" => "0"})
+    huge = String.duplicate("9", 400)
+
+    for {token, expected} <- [
+          {"garbage", 0.0},
+          {"", 0.0},
+          {huge, 0.0},
+          {"-1", nil},
+          {"-2", nil},
+          {" +12px", 9.0}
+        ] do
+      assert {:ok, frame} =
+               FramesetValidator.prepare_frame(
+                 %{"marginwidth" => token, "marginheight" => token},
+                 parent
+               )
+
+      assert frame.margins == %{horizontal: expected, vertical: expected}
+    end
+
+    assert {:ok, frame} = FramesetValidator.prepare_frame(%{"frameborder" => huge}, parent)
+    assert frame.border_enabled == false
+    assert {:ok, plan} = FramesetValidator.prepare(%{"border" => huge})
+    assert plan.border_width == 0
+    assert {:ok, plan} = FramesetValidator.prepare(%{"border" => "-2"})
+    assert plan.border_width == 0.75
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             FramesetValidator.prepare(%{"border" => String.duplicate("9", 1_025)})
+
+    assert diagnostic.message =~ "max_html_numeric_token_bytes"
+  end
+
+  test "positive bordered zero-area cells retain selected content and form failures", %{
+    root: root
+  } do
+    File.write!(
+      Path.join(root, "zero-border.html"),
+      "<body style='margin:0'><a id='hidden' href='#hidden'>Hidden bordered child</a></body>"
+    )
+
+    File.write!(Path.join(root, "zero-form.html"), "<input>")
+    File.write!(Path.join(root, "zero-invalid.html"), <<255>>)
+
+    for border <- ["2", "8"] do
+      html =
+        "<frameset cols='500,100%' border='#{border}'><frame src='child.html'><frame src='zero-border.html'></frameset>"
+
+      assert {:ok, pdf} =
+               HtmlToPdf.render(html,
+                 base_url: root,
+                 forms: :static,
+                 page_size: {300, 200},
+                 margin: 0
+               )
+
+      assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+      refute text =~ "Hidden bordered child"
+      refute pdf =~ "/Subtype /Link"
+      assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+
+      assert {:error, {:unsupported_form, _}} =
+               HtmlToPdf.render(String.replace(html, "zero-border.html", "zero-form.html"),
+                 base_url: root,
+                 page_size: {300, 200},
+                 margin: 0
+               )
+
+      assert {:error, {:invalid_encoding, _}} =
+               HtmlToPdf.render(String.replace(html, "zero-border.html", "zero-invalid.html"),
+                 base_url: root,
+                 forms: :static,
+                 page_size: {300, 200},
+                 margin: 0
+               )
+    end
   end
 
   test "frame margin defaults retain author CSS precedence", %{root: root} do

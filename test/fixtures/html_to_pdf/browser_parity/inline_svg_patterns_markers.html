@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size: 420pt 240pt; margin: 12pt; }
+body { margin: 0; font-family: 'DejaVu Sans'; font-size: 12pt; }
+p { margin: 0 0 8pt; }
+svg { display: block; }
+.tip { fill: #c52b40; }
+.marked { stroke: #194f94; stroke-width: 3; marker-start: url(#arrow); marker-mid: url(#dot); marker-end: url(#arrow); }
+</style></head><body>
+<p>Native patterns and marker artwork Ω café</p>
+<svg width="480" height="180" viewBox="0 0 480 180">
+<defs>
+<pattern id="stripes" patternUnits="userSpaceOnUse" x="2" y="3" width="12" height="10" patternTransform="rotate(12)"><rect width="6" height="10" fill="#287445"/><rect x="6" width="6" height="10" fill="#e0c974"/></pattern>
+<pattern id="squares" width=".25" height=".5" patternContentUnits="objectBoundingBox"><rect width=".12" height=".5" fill="#194f94"/><rect x=".12" width=".13" height=".5" fill="#ccdae9"/></pattern>
+<pattern id="inherited" href="#stripes" patternTransform="rotate(-8)"/>
+<marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse" viewBox="0 0 8 8"><path class="tip" d="M0 0L8 4L0 8Z"/></marker>
+<marker id="dot" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="4" refY="4"><circle cx="4" cy="4" r="3" fill="#287445"/></marker>
+</defs>
+<rect x="8" y="8" width="110" height="65" fill="url(#stripes)"/>
+<g transform="translate(145 12) rotate(8)"><rect width="100" height="60" fill="url(#squares)"/></g>
+<rect x="280" y="8" width="110" height="65" fill="url(#inherited)"/>
+<path class="marked" d="M35 132L110 110L175 140L240 105" fill="none"/>
+<path d="M280 125Q330 85 390 125" fill="none" stroke="url(#stripes)" stroke-width="10" marker-end="url(#arrow)"/>
+</svg><p>Pattern units, transformed origins and arrows survived.</p>
+</body></html>

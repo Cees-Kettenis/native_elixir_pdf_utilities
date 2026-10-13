@@ -6,7 +6,6 @@ defmodule NativeElixirPdfUtilities.Validators.ObjectValidator do
   alias NativeElixirPdfUtilities.Validators.HtmlUrlValidator
   alias NativeElixirPdfUtilities.Validators.MimeValidator
   alias NativeElixirPdfUtilities.Validators.ResourceValidator
-  alias NativeElixirPdfUtilities.Validators.SvgViewportValidator
 
   @document_mimes ["text/html", "text/plain"]
   @image_mimes ["image/png", "image/jpeg", "image/svg+xml"]
@@ -40,7 +39,7 @@ defmodule NativeElixirPdfUtilities.Validators.ObjectValidator do
           | {:document, String.t(), String.t()}
           | {:image, String.t(), String.t()}
 
-  @doc "Selects object fallback, an empty embed, or a supported local resource before lookup."
+  @doc "Selects static fallback, blank initialization, an empty embed or a supported local resource before lookup."
   @spec select(map(), NativeElixirPdfUtilities.HtmlToPdf.ResourceContext.t(), :object | :embed) ::
           {:ok, selected()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def select(attributes, context, host \\ :object) do
@@ -66,6 +65,16 @@ defmodule NativeElixirPdfUtilities.Validators.ObjectValidator do
         {:ok, if(Map.has_key?(attributes, "src"), do: :blank, else: :empty)}
 
       {reference, _, {:ok, _url}} when host == :embed ->
+        {:ok, {:blank, reference}}
+
+      {"", {:ok, mime}, _} when mime in ["text/html", "text/plain", "image/svg+xml"] ->
+        {:ok, :blank}
+
+      {reference, _, {:ok, _url}} when is_nil(supplied) ->
+        {:ok, {:blank, reference}}
+
+      {reference, {:ok, mime}, {:ok, _url}}
+      when mime in ["text/html", "text/plain", "image/svg+xml"] ->
         {:ok, {:blank, reference}}
 
       {"", _, _} ->
@@ -112,10 +121,10 @@ defmodule NativeElixirPdfUtilities.Validators.ObjectValidator do
           | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_selection(selected, host) do
     case {selected, host} do
-      {:blank, :embed} ->
+      {:blank, host} when host in [:object, :embed] ->
         {:ok, :blank, nil, nil}
 
-      {{:blank, url}, :embed} ->
+      {{:blank, url}, host} when host in [:object, :embed] ->
         case HtmlUrlValidator.blank_document_url(url) do
           {:ok, _normalized} ->
             {:ok, :blank, url, nil}
@@ -124,7 +133,7 @@ defmodule NativeElixirPdfUtilities.Validators.ObjectValidator do
             Diagnostics.error(
               :resource,
               :invalid_document,
-              "embed blank source requires an about:blank URL",
+              "embedded blank source requires an about:blank URL",
               operation: :load_embedded_resource,
               module: __MODULE__
             )
@@ -173,65 +182,6 @@ defmodule NativeElixirPdfUtilities.Validators.ObjectValidator do
     else
       {:error, {reason, diagnostic}} ->
         Diagnostics.error(:resource, reason, diagnostic.message,
-          operation: :load_embedded_resource,
-          module: __MODULE__
-        )
-    end
-  end
-
-  @doc "Selects a static SVG document's own aspect rule instead of outer bitmap fitting."
-  @spec prepare_svg_fitting(term(), term()) ::
-          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def prepare_svg_fitting(root, image) do
-    with true <- is_map(root),
-         %{width: image_width, height: image_height} <- image,
-         true <-
-           is_number(image_width) and image_width > 0 and is_number(image_height) and
-             image_height > 0,
-         attributes <-
-           root
-           |> Map.put("viewBox", Map.get(root, "viewbox"))
-           |> Map.put("preserveAspectRatio", Map.get(root, "preserveaspectratio")),
-         {:ok, viewport} <-
-           SvgViewportValidator.prepare(attributes, %{}, %{
-             width: image_width,
-             height: image_height
-           }) do
-      {horizontal, vertical, mode} = viewport.aspect
-
-      case viewport.view_box do
-        {_x, _y, width, height}
-        when height > 0 and (mode == :none or width * image_height == height * image_width) ->
-          {:ok,
-           %{
-             object_fit:
-               case mode do
-                 :none -> :fill
-                 :meet -> :contain
-                 :slice -> :cover
-               end,
-             object_position: {{:percent, horizontal}, {:percent, vertical}}
-           }}
-
-        _ ->
-          Diagnostics.error(
-            :resource,
-            :not_implemented,
-            "selected SVG documents require a viewBox with an intrinsic matching aspect ratio, or preserveAspectRatio=none; other roots require a dynamic SVG document viewport",
-            module: __MODULE__,
-            operation: :load_embedded_resource,
-            source: "SVG"
-          )
-      end
-    else
-      {:error, {_reason, _diagnostic}} = error ->
-        error
-
-      _ ->
-        Diagnostics.error(
-          :resource,
-          :invalid_document,
-          "selected SVG fitting requires canonical root attributes and positive decoder dimensions",
           operation: :load_embedded_resource,
           module: __MODULE__
         )

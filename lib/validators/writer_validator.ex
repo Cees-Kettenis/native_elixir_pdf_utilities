@@ -346,6 +346,13 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           {children, count} = normalize_boxes(box.boxes, count, composition)
 
           start = %{type: :drawing_group_start, transform: transform, clip: local_clip}
+
+          start =
+            if(Map.get(box, :role) == :frameset_viewport,
+              do: Map.put(start, :role, :frameset_viewport),
+              else: start
+            )
+
           {[start, children, %{type: :drawing_group_end}], count}
 
         %{type: :flow_marker} ->

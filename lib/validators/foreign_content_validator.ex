@@ -323,7 +323,10 @@ defmodule NativeElixirPdfUtilities.Validators.ForeignContentValidator do
   def validate_render_support(node, active?, mode \\ :render) do
     case node do
       %{namespace: :mathml} when active? ->
-        NativeElixirPdfUtilities.Validators.MathLayoutValidator.validate_element_support(node)
+        # Element layout support depends on computed visibility. Unselected
+        # semantics/maction annotations still undergo all static validation;
+        # MathLayoutValidator prepares every visible element after the cascade.
+        validate_inert_element(node)
 
       %{namespace: namespace, tag: _tag} when namespace in [:mathml, :svg] ->
         if active? and namespace == :svg and mode == :render,

@@ -31,7 +31,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           context.ids
           |> Enum.reverse()
           |> Enum.reduce(%{}, fn {id, item}, ids ->
-            Map.put_new(ids, id, item)
+            Map.put_new(ids, {item.scope, id}, item)
           end)
 
         controls =
@@ -39,12 +39,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           |> Enum.reverse()
           |> Enum.map(fn item ->
             owner =
-              if item.tag in ~w(progress meter) do
+              if item.tag in ~w(progress meter datalist) do
                 nil
               else
                 case Map.fetch(item.attributes, "form") do
                   {:ok, reference} ->
-                    case Map.get(ids, reference) do
+                    case Map.get(ids, {item.scope, reference}) do
                       %{tag: "form", namespace: :html, ref: ref} -> ref
                       _ -> nil
                     end
@@ -63,7 +63,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
             if item.input_type == "radio" and name not in [nil, ""] and
                  Map.has_key?(item.attributes, "checked") do
-              Map.put(winners, {item.owner, name}, item.ref)
+              Map.put(winners, {item.scope, item.owner, name}, item.ref)
             else
               winners
             end
@@ -77,17 +77,41 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
             checked =
               if item.input_type == "radio" and name not in [nil, ""],
-                do: Map.get(winners, {item.owner, name}) == item.ref,
+                do: Map.get(winners, {item.scope, item.owner, name}) == item.ref,
                 else: Map.has_key?(item.attributes, "checked")
 
             state = %{owner: item.owner, checked: checked, disabled: item.disabled}
+
+            state =
+              if item.tag == "input" and Map.has_key?(item.attributes, "list") do
+                reference = Map.fetch!(item.attributes, "list")
+
+                HtmlValidator.reserve_render_resource(
+                  :max_html_tree_work,
+                  byte_size(reference),
+                  :style
+                )
+
+                association =
+                  case Map.get(ids, {item.scope, reference}) do
+                    %{tag: "datalist", namespace: :html} = source ->
+                      Map.take(source, [:ref, :source_id, :scope]) |> Map.put(:id, reference)
+
+                    _ ->
+                      nil
+                  end
+
+                Map.put(state, :datalist, association)
+              else
+                state
+              end
 
             state =
               if item.input_type == "radio" do
                 indeterminate =
                   if name in [nil, ""],
                     do: not checked,
-                    else: not Map.has_key?(winners, {item.owner, name})
+                    else: not Map.has_key?(winners, {item.scope, item.owner, name})
 
                 Map.put(state, :indeterminate, indeterminate)
               else
@@ -96,6 +120,55 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
             state =
               case {item.tag, item.input_type} do
+                {"output", _} ->
+                  references = Map.get(item.attributes, "for", "")
+
+                  HtmlValidator.reserve_render_resource(
+                    :max_html_tree_work,
+                    byte_size(references),
+                    :style
+                  )
+
+                  tokens = references |> HtmlValidator.html_class_tokens() |> Enum.uniq()
+
+                  HtmlValidator.reserve_render_resource(
+                    :max_html_tree_work,
+                    length(tokens),
+                    :style
+                  )
+
+                  sources =
+                    Enum.map(tokens, fn id ->
+                      case Map.get(ids, {item.scope, id}) do
+                        nil -> %{id: id, ref: nil, source_id: nil, scope: item.scope}
+                        source -> Map.take(source, [:ref, :source_id, :scope]) |> Map.put(:id, id)
+                      end
+                    end)
+
+                  Map.merge(state, %{
+                    value: item.output_value,
+                    default_value: item.output_value,
+                    default_value_override: nil,
+                    disabled: false,
+                    source_tokens: tokens,
+                    sources: sources
+                  })
+
+                {"datalist", _} ->
+                  HtmlValidator.reserve_render_resource(
+                    :max_html_tree_work,
+                    2 * length(item.datalist_options),
+                    :style
+                  )
+
+                  Map.merge(state, %{
+                    owner: nil,
+                    disabled: false,
+                    options: item.datalist_options,
+                    suggestions:
+                      Enum.filter(item.datalist_options, &(not &1.disabled and &1.value != ""))
+                  })
+
                 {"textarea", _} ->
                   value = item.textarea_value
 
@@ -135,6 +208,30 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                     placeholder_shown: value == "" and placeholder != ""
                   })
 
+                {"input", "color"} ->
+                  case prepare_initial_color(item.attributes) do
+                    {:ok, color} -> Map.merge(state, color)
+                    {:error, _} = error -> throw({:render_resource_limit, error})
+                  end
+
+                {"input", "image"} ->
+                  Map.merge(state, %{
+                    value: Map.get(item.attributes, "value", ""),
+                    image_input: %{
+                      src: Map.get(item.attributes, "src", ""),
+                      alt: Map.get(item.attributes, "alt", "")
+                    }
+                  })
+
+                {"input", "file"} ->
+                  Map.merge(state, %{
+                    value: "",
+                    files: [],
+                    multiple: Map.has_key?(item.attributes, "multiple"),
+                    required: Map.has_key?(item.attributes, "required"),
+                    accept: Map.get(item.attributes, "accept", "")
+                  })
+
                 {"input", "number"} ->
                   Map.merge(state, prepare_initial_number(item.attributes))
 
@@ -157,11 +254,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                 indeterminate =
                   if name in [nil, ""],
                     do: not checked,
-                    else: not Map.has_key?(winners, {item.owner, name})
+                    else: not Map.has_key?(winners, {item.scope, item.owner, name})
 
                 Map.put(state, :indeterminate, indeterminate)
               else
                 state
+              end
+
+            disabled_options =
+              if item.tag == "datalist" do
+                Enum.reduce(item.datalist_options, disabled_options, fn option, disabled ->
+                  if option.disabled, do: MapSet.put(disabled, option.id), else: disabled
+                end)
+              else
+                disabled_options
               end
 
             {state, selected_options, disabled_options} =
@@ -187,7 +293,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
             target =
               case Map.fetch(label.attributes, "for") do
                 {:ok, id} ->
-                  case Map.get(ids, id) do
+                  case Map.get(ids, {label.scope, id}) do
                     nil -> nil
                     item -> if labelable_initial_element?(item), do: item.ref, else: nil
                   end
@@ -205,6 +311,224 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
       if is_nil(previous),
         do: Process.delete(@initial_context),
         else: Process.put(@initial_context, previous)
+    end
+  end
+
+  @doc false
+  @spec prepare_initial_color(map()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_initial_color(attributes) do
+    value = Map.get(attributes, "value", "")
+    HtmlValidator.reserve_render_resource(:max_html_tree_work, 2 * byte_size(value), :html)
+    parsed = HtmlValidator.parse_css_color(value, nil)
+
+    cond do
+      Map.has_key?(attributes, "alpha") or
+          (Map.has_key?(attributes, "colorspace") and
+             String.downcase(Map.fetch!(attributes, "colorspace"), :ascii) == "display-p3") ->
+        Diagnostics.error(
+          :html,
+          :unsupported_html,
+          "Color alpha and wide-gamut serialization are not yet supported; omit alpha and use limited-srgb for an opaque initial swatch",
+          module: __MODULE__,
+          source: "color"
+        )
+
+      parsed == :error and
+          (String.contains?(value, "(") or
+             String.downcase(HtmlValidator.trim_ascii_whitespace(value), :ascii) == "currentcolor" or
+             (String.starts_with?(value, "#") and byte_size(value) == 5)) ->
+        Diagnostics.error(
+          :html,
+          :unsupported_html,
+          "This color syntax is outside the shared color parser's initial swatch profile; use a named sRGB color, hexadecimal RGB/RGBA or comma-separated rgb/rgba",
+          module: __MODULE__,
+          source: "color"
+        )
+
+      true ->
+        channels =
+          case parsed do
+            {:ok, color} when is_tuple(color) ->
+              color |> Tuple.to_list() |> Enum.take(3) |> Enum.map(&round(&1 * 255))
+
+            _ ->
+              [0, 0, 0]
+          end
+
+        # Opaque color input serializes three fixed 8-bit sRGB channels.
+        rgb = channels |> Enum.map(&(&1 / 255)) |> List.to_tuple()
+        canonical = "#" <> Base.encode16(:erlang.list_to_binary(channels), case: :lower)
+        {:ok, %{value: canonical, color_input: %{value: canonical, rgb: rgb}}}
+    end
+  end
+
+  @doc false
+  @spec validate_initial_special_attributes(map()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_initial_special_attributes(attributes) do
+    if HtmlValidator.input_type(Map.get(attributes, "type", "text")) == "color" do
+      case prepare_initial_color(attributes) do
+        {:ok, _} -> :ok
+        error -> error
+      end
+    else
+      :ok
+    end
+  end
+
+  @doc false
+  @spec prepare_special_input_style(map(), map(), keyword()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_special_input_style(node, style, opts) do
+    state = Map.get(node, :_initial_form_state, %{})
+    type = HtmlValidator.input_type(Map.get(node.attributes, "type", "text"))
+
+    cond do
+      Map.get(node, :namespace, :html) != :html or node.tag != "input" or style.display == :none ->
+        {:ok, style}
+
+      type == "image" and style.border_radius > 0 and
+          Enum.uniq(Map.values(style.border_widths)) |> length() > 1 ->
+        Diagnostics.error(
+          :style,
+          :unsupported_html,
+          "Rounded image inputs currently require uniform border widths; use equal edges for the content clip",
+          module: __MODULE__,
+          operation: :compute,
+          source: "input/image"
+        )
+
+      type == "image" and style.border_radius > 0 and
+          Enum.uniq(Map.values(style.padding)) |> length() > 1 ->
+        Diagnostics.error(
+          :style,
+          :unsupported_html,
+          "Rounded image inputs currently require uniform padding; use equal edges for the content clip",
+          module: __MODULE__,
+          operation: :compute,
+          source: "input/image"
+        )
+
+      type == "image" and Keyword.get(opts, :forms, :interactive) == :interactive and
+          not state.disabled ->
+        Diagnostics.error(
+          :forms,
+          :unsupported_form,
+          "Image-input submit coordinates require native actions unavailable in PDF controls; use forms: :static for the authorized initial image",
+          module: __MODULE__,
+          operation: :compute,
+          source: "input/image"
+        )
+
+      type == "color" ->
+        cond do
+          not is_number(style.width) or not is_number(style.height) ->
+            Diagnostics.error(
+              :style,
+              :unsupported_html,
+              "Color swatches currently require explicit or initial point width and height; use fixed dimensions",
+              module: __MODULE__,
+              operation: :compute,
+              source: "color"
+            )
+
+          style.width <
+            style.border_widths.left + style.border_widths.right + style.padding.left +
+              style.padding.right + 4.5 or
+              style.height <
+                style.border_widths.top + style.border_widths.bottom + style.padding.top +
+                  style.padding.bottom + 7.5 ->
+            Diagnostics.error(
+              :style,
+              :unsupported_html,
+              "Color host is too small for the native swatch wrapper and border; increase its width or height",
+              module: __MODULE__,
+              operation: :compute,
+              source: "color"
+            )
+
+          true ->
+            {:ok, style}
+        end
+
+      true ->
+        {:ok, style}
+    end
+  end
+
+  @doc false
+  @spec validate_initial_color_layout(map()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_initial_color_layout(node) do
+    case node do
+      %{style: %{display: :none}} ->
+        :ok
+
+      %{style: %{_color_state: color} = style} ->
+        valid? =
+          case Map.get(style, :_form_control) || Map.get(style, :_color_control) do
+            %{
+              tag: "input",
+              attributes: attrs,
+              initial_state: %{value: value, disabled: disabled} = state
+            }
+            when is_map(attrs) and is_binary(value) and is_boolean(disabled) ->
+              valid_attributes? =
+                Enum.all?(attrs, fn {key, value} ->
+                  is_binary(key) and String.valid?(key) and is_binary(value) and
+                    String.valid?(value)
+                end)
+
+              case if(valid_attributes?, do: prepare_initial_color(attrs), else: :error) do
+                {:ok, expected} ->
+                  HtmlValidator.input_type(Map.get(attrs, "type", "text")) == "color" and
+                    color == expected.color_input and state.value == expected.value and
+                    Map.get(state, :color_input) == color and
+                    Map.get(style, :_color_disabled) == state.disabled
+
+                _ ->
+                  false
+              end
+
+            _ ->
+              false
+          end
+
+        if valid?,
+          do: :ok,
+          else:
+            Diagnostics.error(
+              :layout,
+              :invalid_layout,
+              "Color layout requires canonical initial value, swatch and disabled state; compute styles before layout",
+              module: __MODULE__,
+              operation: :layout,
+              source: "color"
+            )
+
+      %{style: style} when is_map(style) ->
+        case Map.get(style, :_form_control) || Map.get(style, :_color_control) do
+          %{tag: "input", attributes: attributes} ->
+            if not is_map(attributes) or
+                 HtmlValidator.input_type(Map.get(attributes, "type", "text")) == "color" do
+              Diagnostics.error(
+                :layout,
+                :invalid_layout,
+                "Color layout requires canonical swatch state; compute styles before layout",
+                module: __MODULE__,
+                operation: :layout,
+                source: "color"
+              )
+            else
+              :ok
+            end
+
+          _ ->
+            :ok
+        end
+
+      _ ->
+        :ok
     end
   end
 
@@ -668,14 +992,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     children == [] and
       (not Map.has_key?(attributes, "checked") or type in ["checkbox", "radio"]) and
       (not Map.has_key?(attributes, "readonly") or HtmlValidator.readonly_input_type?(type)) and
-      (not Map.has_key?(attributes, "multiple") or type == "email") and
+      (not Map.has_key?(attributes, "multiple") or type in ["email", "file"]) and
       (not Map.has_key?(attributes, "size") or HtmlValidator.text_input_type?(type)) and
       (not Map.has_key?(attributes, "placeholder") or
          (HtmlValidator.readonly_input_type?(type) and
             not HtmlTemporalValidator.temporal_type?(type))) and
-      (not Map.has_key?(attributes, "list") or type == "range") and
+      (not Map.has_key?(attributes, "list") or
+         type in ~w(text search tel url email number range color date month week time datetime-local)) and
       (not Enum.any?(~w(min max step), &Map.has_key?(attributes, &1)) or
          type in ["number", "range"] or HtmlTemporalValidator.temporal_type?(type)) and
+      (not Enum.any?(~w(src alt width height), &Map.has_key?(attributes, &1)) or type == "image") and
+      (not Enum.any?(~w(alpha colorspace), &Map.has_key?(attributes, &1)) or type == "color") and
+      (not Map.has_key?(attributes, "accept") or type == "file") and
+      (type not in ["color", "image"] or not Map.has_key?(attributes, "required")) and
       (type != "range" or
          not Enum.any?(
            ~w(accept alpha alt colorspace dirname formaction formenctype formmethod formnovalidate formtarget height maxlength minlength pattern required popovertarget popovertargetaction src width),
@@ -694,7 +1023,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
         %{type: :element, children: children} ->
           html? = Map.get(node, :namespace, :html) == :html
 
-          if node.tag in ~w(input select textarea button label fieldset progress meter) or
+          if node.tag in ~w(input select textarea button label fieldset progress meter output datalist) or
                Map.has_key?(node.attributes, "id") do
             register_initial_node(node, form_owner, label_ref, ancestor_disabled?)
           end
@@ -745,7 +1074,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
     relevant? =
       namespace == :html and
-        node.tag in ~w(input select textarea button label fieldset progress meter)
+        node.tag in ~w(input select textarea button label fieldset progress meter output datalist)
 
     if relevant? or Map.get(attributes, "id", "") != "" do
       context = Process.get(@initial_context)
@@ -760,10 +1089,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
         tag: node.tag,
         namespace: namespace,
         attributes: attributes,
+        scope: {Map.get(node, :document_id), Map.get(node, :tree_scope_id)},
+        source_id: Map.get(node, :node_id),
         input_type: input_type,
         order: node._document_order,
         ancestor_owner: form_owner,
-        disabled: ancestor_disabled? or Map.has_key?(attributes, "disabled")
+        disabled:
+          node.tag != "datalist" and
+            (ancestor_disabled? or Map.has_key?(attributes, "disabled"))
       }
 
       item =
@@ -776,6 +1109,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
               |> String.replace(~r/\r\n?/, "\n")
             ),
           else: item
+
+      item =
+        case {namespace, node.tag} do
+          {:html, "output"} ->
+            Map.put(item, :output_value, HtmlValidator.descendant_text_content(node.children))
+
+          {:html, "datalist"} ->
+            Map.put(item, :datalist_options, initial_datalist_options(node.children))
+
+          _ ->
+            item
+        end
 
       item =
         if node.tag == "select" and namespace == :html,
@@ -793,7 +1138,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           {:html, "label"} ->
             %{context | labels: [item | context.labels]}
 
-          {:html, tag} when tag in ~w(input select textarea button fieldset progress meter) ->
+          {:html, tag}
+          when tag in ~w(input select textarea button fieldset progress meter output datalist) ->
             %{context | controls: [item | context.controls]}
 
           _ ->
@@ -809,9 +1155,97 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     end
   end
 
+  # Datalist collects descendant options, including a legacy fallback select.
+  # Its suggestions do not acquire selection or change an input's authored value.
+  defp initial_datalist_options(children, ancestor_disabled? \\ false) do
+    Enum.flat_map(children, fn node ->
+      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :style)
+
+      case node do
+        %{type: :element, tag: "option", attributes: attributes, children: nested} ->
+          if Map.get(node, :namespace, :html) == :html do
+            text = HtmlValidator.initial_option_text(nested)
+
+            label =
+              case Map.get(attributes, "label", "") do
+                "" -> text
+                label -> label
+              end
+
+            [
+              %{
+                id: node._selector_id,
+                source_id: Map.get(node, :node_id),
+                value: Map.get(attributes, "value", text),
+                label: label,
+                disabled: ancestor_disabled? or Map.has_key?(attributes, "disabled")
+              }
+            ]
+          else
+            []
+          end
+
+        %{type: :element, tag: tag, attributes: attributes, children: nested} ->
+          disabled? =
+            ancestor_disabled? or
+              (tag == "optgroup" and Map.get(node, :namespace, :html) == :html and
+                 Map.has_key?(attributes, "disabled"))
+
+          initial_datalist_options(nested, disabled?)
+
+        _ ->
+          []
+      end
+    end)
+  end
+
+  @doc false
+  @spec prepare_initial_auxiliary_style(map(), map()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_initial_auxiliary_style(node, style) do
+    state = Map.get(node, :_initial_form_state, %{})
+
+    cond do
+      Map.get(node, :namespace, :html) != :html ->
+        {:ok, style}
+
+      node.tag == "datalist" and style.display != :none ->
+        Diagnostics.error(
+          :style,
+          :unsupported_html,
+          "Visible authored datalist contents are not yet supported; retain display:none and render fallback content as a separate ordinary element",
+          module: __MODULE__,
+          operation: :compute,
+          source: "datalist"
+        )
+
+      node.tag == "datalist" ->
+        {:ok, Map.put(style, :_datalist_state, state)}
+
+      node.tag == "output" ->
+        {:ok, Map.put(style, :_output_state, state)}
+
+      node.tag == "input" and style.display != :none and Map.get(state, :datalist) != nil and
+        not state.disabled and
+        not Map.get(state, :readonly, Map.has_key?(node.attributes, "readonly")) and
+          HtmlValidator.input_type(Map.get(node.attributes, "type", "text")) != "range" ->
+        Diagnostics.error(
+          :style,
+          :unsupported_html,
+          "Mutable datalist suggestion artwork is not yet supported; use readonly or disabled initial text, hide the input, or supply static artwork",
+          module: __MODULE__,
+          operation: :compute,
+          source: "input/list"
+        )
+
+      true ->
+        {:ok, style}
+    end
+  end
+
   defp labelable_initial_element?(item) do
     item.namespace == :html and
-      (item.tag in ~w(select textarea button progress meter) or
+      (item.tag in ~w(select textarea button progress meter output) or
          (item.tag == "input" and item.input_type != "hidden"))
   end
 
@@ -909,11 +1343,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
       options
       |> Enum.with_index()
       |> Enum.map(fn {option, index} ->
-        text =
-          option.children
-          |> Enum.map_join(&Map.get(&1, :text, ""))
-          |> HtmlValidator.trim_ascii_whitespace()
-          |> String.replace(~r/[ \t\n\f\r]+/u, " ")
+        text = HtmlValidator.initial_option_text(option.children)
 
         label =
           case Map.get(option.attributes, "label", "") do
@@ -1008,7 +1438,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
               node
               |> Map.put(
                 :_initial_selected,
-                Map.get(selected_options, node._selector_id, %{selected: false}).selected
+                Map.get(selected_options, node._selector_id, %{
+                  selected: Map.has_key?(node.attributes, "selected")
+                }).selected
               )
               |> Map.put(
                 :_initial_option_label,
@@ -1126,7 +1558,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                     "input" ->
                       type = HtmlValidator.input_type(Map.get(control.attributes, "type", "text"))
 
-                      if HtmlValidator.readonly_input_type?(type) or type == "range",
+                      if HtmlValidator.readonly_input_type?(type) or type in ["range", "color"],
                         do: "text",
                         else: type
 
@@ -1163,6 +1595,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                 module: __MODULE__
               )
 
+            Enum.any?(
+              controls,
+              &(Map.has_key?(&1.control.initial_state, :color_input) and
+                    not &1.control.initial_state.disabled)
+            ) ->
+              error(
+                :unsupported_form,
+                "Mutable color picker actions are unavailable in PDF text fields; use forms: :static for initial swatch artwork",
+                source: "color",
+                operation: :write_pdf,
+                module: __MODULE__
+              )
+
             Enum.any?(controls, &(Map.get(&1.control, :temporal_display_mode) == :static)) ->
               error(
                 :unsupported_form,
@@ -1181,6 +1626,23 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                 :unsupported_form,
                 "Mutable temporal controls require typed editing and picker actions unavailable in PDF text fields; use forms: :static for supplied initial artwork",
                 source: "temporal",
+                operation: :write_pdf,
+                module: __MODULE__
+              )
+
+            Enum.any?(controls, fn item ->
+              not is_nil(Map.get(item.control.initial_state, :datalist)) and
+                not item.control.initial_state.disabled and
+                  not Map.get(
+                    item.control.initial_state,
+                    :readonly,
+                    Map.has_key?(item.control.attributes, "readonly")
+                  )
+            end) ->
+              error(
+                :unsupported_form,
+                "Mutable datalist suggestions require selection actions unavailable in PDF text fields; use readonly or disabled scalar transport",
+                source: "input/list",
                 operation: :write_pdf,
                 module: __MODULE__
               )
@@ -1266,6 +1728,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                 original_page_appearance? =
                   item.type == "choice" or
                     Map.has_key?(item.control.initial_state, :temporal) or
+                    Map.has_key?(item.control.initial_state, :color_input) or
                     (item.control.tag == "input" and
                        HtmlValidator.input_type(Map.get(attributes, "type", "text")) in [
                          "number",
@@ -1557,7 +2020,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                        HtmlValidator.input_type(Map.get(attributes, "type", "text"))
                      ) or HtmlTemporalValidator.valid_initial?(state, attributes))
 
-              not number_valid? or not range_valid? or not temporal_valid? or
+              color_valid? =
+                attributes_valid? and
+                  (tag != "input" or
+                     HtmlValidator.input_type(Map.get(attributes, "type", "text")) != "color" or
+                     case prepare_initial_color(attributes) do
+                       {:ok, expected} -> Map.take(state, [:value, :color_input]) == expected
+                       _ -> false
+                     end)
+
+              not color_valid? or not number_valid? or not range_valid? or not temporal_valid? or
                 not is_boolean(checked) or
                 not is_boolean(disabled) or
                 not (is_nil(owner) or is_reference(owner)) or not selection_valid? or
@@ -1574,7 +2046,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                    (HtmlValidator.button_input_type?(
                       HtmlValidator.input_type(Map.get(attributes, "type", "text"))
                     ) or
-                      HtmlValidator.input_type(Map.get(attributes, "type", "text")) == "hidden"))
+                      HtmlValidator.input_type(Map.get(attributes, "type", "text")) in [
+                        "hidden",
+                        "image",
+                        "file"
+                      ]))
 
             _ ->
               true

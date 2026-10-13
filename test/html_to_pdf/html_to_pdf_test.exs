@@ -1301,7 +1301,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   test "closed disclosures still diagnose executable and unsupported input" do
     for html <- [
           "<details><summary>Legend</summary><script>alert(1)</script></details>",
-          "<details><summary>Legend</summary><input type=file value=/etc/passwd></details>",
           "<details><summary onclick='alert(1)'>Legend</summary></details>",
           "<details><summary>Legend</summary><a href='javascript:alert(1)'>Link</a></details>",
           "<div><summary>Orphan</summary></div>",
@@ -1313,6 +1312,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       assert diagnostic.stage in [:html, :style]
       assert is_binary(diagnostic.message) and diagnostic.message != ""
     end
+  end
+
+  test "closed file input preserves empty initial state without painting a selector or fetching value" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<details><summary>Legend</summary><input type=file name=upload value=/etc/passwd></details>",
+               asset_resolver: fn request -> flunk("file scalar fetched #{inspect(request)}") end
+             )
+
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
+    assert text =~ "Legend"
+    refute text =~ "passwd"
+    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
   end
 
   test "required controls retain empty initial values and PDF requirement flags" do
@@ -4956,7 +4968,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     end
   end
 
-  test "recognized unsupported input types fail before resource resolution" do
+  test "special initial controls do not fetch authored scalar or file values" do
     owner = self()
 
     resolver = fn source ->
@@ -4964,17 +4976,48 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       {:error, :not_found}
     end
 
-    for type <- ["FILE", "color", "image"],
-        forms <- [:static, :interactive] do
-      html = ~s(<input type="#{type}" value="/path/not-to-read">)
+    for forms <- [:static, :interactive] do
+      assert {:ok, _} =
+               HtmlToPdf.render("<input type=file hidden value='/path/not-to-read'>",
+                 forms: forms,
+                 asset_resolver: resolver
+               )
 
-      assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render(html, forms: forms, asset_resolver: resolver)
+      if forms == :static do
+        assert {:ok, pdf} =
+                 HtmlToPdf.render("<input type=FILE value='/path/not-to-read'>",
+                   forms: forms,
+                   asset_resolver: resolver
+                 )
 
-      assert diagnostic.stage == :html and diagnostic.operation == :render
-      assert diagnostic.source == html and diagnostic.line == 1 and diagnostic.column == 1
+        assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
+        assert text =~ "Choose File" and text =~ "No file chosen"
+        refute text =~ "/path/not-to-read"
+        assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+      else
+        assert {:error, {:unsupported_form, diagnostic}} =
+                 HtmlToPdf.render("<input type=FILE value='/path/not-to-read'>",
+                   forms: forms,
+                   asset_resolver: resolver
+                 )
+
+        assert diagnostic.stage == :forms and diagnostic.operation == :compute
+        assert diagnostic.source == "input/file" and diagnostic.message =~ "forms: :static"
+      end
     end
 
+    assert {:ok, _} =
+             HtmlToPdf.render("<input type=color value='/path/not-to-read'>",
+               forms: :static,
+               asset_resolver: resolver
+             )
+
+    assert {:error, {:unsupported_form, diagnostic}} =
+             HtmlToPdf.render("<input type=color value='/path/not-to-read'>",
+               asset_resolver: resolver
+             )
+
+    assert diagnostic.stage == :forms and diagnostic.source == "color"
     refute_received {:unexpected_input_asset, _}
   end
 

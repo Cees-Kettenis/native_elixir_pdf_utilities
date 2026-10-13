@@ -7,7 +7,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
   alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
-  alias NativeElixirPdfUtilities.HtmlToPdf.PngDecoder
   alias NativeElixirPdfUtilities.HtmlToPdf.SvgBackend
   alias NativeElixirPdfUtilities.HtmlToPdf.ResourceContext
   alias NativeElixirPdfUtilities.HtmlToPdf.ScrollbarPainter
@@ -23,6 +22,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
             NativeElixirPdfUtilities.Validators.ResourceValidator.document_descriptor(),
           optional(:client_css_viewport) => %{width: number(), height: number()},
           optional(:media_css_viewport) => %{width: number(), height: number()},
+          optional(:frame_border) => boolean(),
+          optional(:frame_scrollbars) => :auto | :none,
+          optional(:frame_margins) => map(),
+          optional(:frame_name) => String.t() | nil,
           tree: Style.styled_tree(),
           context: ResourceContext.t(),
           forms: :static | :interactive,
@@ -31,6 +34,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
 
   @typedoc "Authorized child source awaiting its actual layout viewport before styling."
   @type prepared :: %{
+          optional(:frame_border) => boolean(),
+          optional(:frame_scrollbars) => :auto | :none,
+          optional(:frame_margins) => map(),
+          optional(:frame_name) => String.t() | nil,
           prepared_dom: NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.dom_tree(),
           options: keyword(),
           document_url: String.t() | nil,
@@ -166,20 +173,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
                        context.image_budget,
                        byte_size(resource.bytes)
                      ),
-                   {:ok, png, root} <-
-                     SvgBackend.rasterize_with_metadata(
-                       resource.bytes,
-                       [],
-                       %{mode: :image},
-                       context.image_budget
-                     ),
-                   {:ok, image} <- PngDecoder.decode(png, context.image_budget, false),
-                   {:ok, fitting} <-
-                     NativeElixirPdfUtilities.Validators.ObjectValidator.prepare_svg_fitting(
-                       root,
-                       image
-                     ) do
-                {:ok, {:image, %{image: image, svg_document_fitting: fitting}}}
+                   {:ok, image} <-
+                     SvgBackend.prepare_document(resource.bytes, context.image_budget, source) do
+                {:ok, {:image, %{image: image, svg_document_fitting: %{object_fit: :fill}}}}
               end
             end)
           else

@@ -458,13 +458,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewportTest do
              width: :auto,
              height: nil
            }) ==
-             %{display: :inline_block, width: 225.0, height: 112.5}
+             %{display: :inline_block, width: :auto, height: nil}
 
     assert EmbeddedViewportValidator.prepare_iframe_style(%{display: :grid, width: 0, height: 0}) ==
              %{display: :block, width: 0, height: 0}
 
     assert EmbeddedViewportValidator.prepare_iframe_style(%{display: :inline}) ==
-             %{display: :inline_block, width: 225.0, height: 112.5}
+             %{display: :inline_block}
+
+    assert EmbeddedViewportValidator.intrinsic_size() == {225.0, 112.5}
   end
 
   test "viewport failures retain scope cleanup and child execution policy" do

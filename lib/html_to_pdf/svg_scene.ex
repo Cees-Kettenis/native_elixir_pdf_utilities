@@ -8,7 +8,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
     SvgClipValidator,
     SvgReferenceValidator,
     SvgPaintValidator,
+    SvgEffectsValidator,
     SvgTextValidator,
+    SvgTextPositionValidator,
     SvgSceneValidator,
     SvgStyleValidator
   }
@@ -52,8 +54,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
          :ok <- SvgClipValidator.validate_tree(node),
          :ok <- SvgReferenceValidator.validate_tree(node),
          :ok <- SvgPaintValidator.validate_tree(node),
+         :ok <- SvgEffectsValidator.validate_tree(node),
          {:ok, text} <- SvgTextValidator.prepare_tree(node) do
-      source = serialize(node, true, nil, false, text.aliases)
+      source = serialize(node, true, nil, false, text.aliases, text.positions)
 
       {:ok,
        %{
@@ -151,7 +154,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
     end
   end
 
-  defp serialize(node, root?, references, reference?, fonts) do
+  defp serialize(node, root?, references, reference?, fonts, positions) do
     references = references || SvgReferenceValidator.referenced_ids(node)
     reference? = reference? or MapSet.member?(references, Map.get(node.attributes, "id"))
     specified = Map.get(node.style, :_svg_specified, %{})
@@ -208,7 +211,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
       end
 
     attributes =
-      if node.tag in ~w(svg symbol),
+      if node.tag in ~w(svg symbol marker),
         do: Map.put(attributes, "overflow", to_string(node.style.overflow)),
         else: attributes
 
@@ -222,9 +225,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
         inherited? = SvgStyleValidator.inherited_property?(key)
 
         output_property =
-          if property == "transform" and node.tag in ~w(linearGradient radialGradient),
-            do: "gradientTransform",
-            else: property
+          cond do
+            property == "transform" and node.tag in ~w(linearGradient radialGradient) ->
+              "gradientTransform"
+
+            property == "transform" and node.tag == "pattern" ->
+              "patternTransform"
+
+            true ->
+              property
+          end
 
         cond do
           not eligible? or root_geometry? or is_nil(value) or value == :auto ->
@@ -267,15 +277,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
 
     attributes =
       if node.tag in ~w(text tspan) do
-        Enum.reduce(~w(x y dx dy), attributes, fn property, attrs ->
-          case Map.fetch(attrs, property) do
-            {:ok, value} ->
-              {:ok, length} = SvgStyleValidator.length(value, true)
-              Map.put(attrs, property, property_value(length, node.style))
+        plan = Map.fetch!(positions, SvgTextPositionValidator.plan_key(node))
 
-            :error ->
-              attrs
-          end
+        Enum.reduce(plan.lengths, attributes, fn {property, lengths}, attrs ->
+          Map.put(attrs, property, property_value(lengths, node.style, reference?))
         end)
       else
         attributes
@@ -292,7 +297,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
             ""
 
           %{type: :element, namespace: :svg} ->
-            serialize(child, false, references, reference?, fonts)
+            serialize(child, false, references, reference?, fonts, positions)
 
           %{type: :text, text: text} when node.tag in ~w(text tspan) ->
             escape(text)
@@ -315,7 +320,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
     "<#{node.tag} #{attrs}>#{children}</#{node.tag}>"
   end
 
-  defp property_value(value, style) do
+  defp property_value(value, style, reference? \\ false) do
     case value do
       {:paint_server, id} ->
         "url(##{id})"
@@ -345,7 +350,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
         "#{n * 100}%"
 
       {:svg_em, n} ->
-        "#{n * style.font_size / 0.75}"
+        if reference?, do: "#{n}em", else: "#{n * style.font_size / 0.75}"
 
       {:svg_rem, n} ->
         "#{n * style._root_font_size / 0.75}"
@@ -354,7 +359,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
         "matrix(" <> Enum.map_join(Tuple.to_list(value), " ", &to_string/1) <> ")"
 
       value when is_list(value) ->
-        Enum.map_join(value, " ", &property_value(&1, style))
+        Enum.map_join(value, " ", &property_value(&1, style, reference?))
 
       value ->
         to_string(value)

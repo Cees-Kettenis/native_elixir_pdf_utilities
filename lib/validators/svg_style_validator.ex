@@ -21,7 +21,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
     svg_stroke_dasharray: :none,
     svg_stroke_dashoffset: {:user, 0.0},
     svg_shape_rendering: "auto",
-    svg_paint_order: "normal"
+    svg_paint_order: "normal",
+    svg_marker_start: :none,
+    svg_marker_mid: :none,
+    svg_marker_end: :none
   }
   @properties %{
     "text-anchor" => :svg_text_anchor,
@@ -54,7 +57,12 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
     "stroke-dasharray" => :svg_stroke_dasharray,
     "stroke-dashoffset" => :svg_stroke_dashoffset,
     "shape-rendering" => :svg_shape_rendering,
-    "paint-order" => :svg_paint_order
+    "paint-order" => :svg_paint_order,
+    "marker-start" => :svg_marker_start,
+    "marker-mid" => :svg_marker_mid,
+    "marker-end" => :svg_marker_end,
+    "mask" => :svg_mask,
+    "mask-type" => :svg_mask_type
   }
   @geometry ~w(x y cx cy r rx ry width height)
   @geometry_elements %{
@@ -83,6 +91,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
       svg_stop_opacity: 1.0,
       svg_opacity: 1.0,
       svg_clip_path: :none,
+      svg_mask: :none,
+      svg_mask_type: "luminance",
       svg_width: :auto,
       svg_height: :auto,
       svg_x: {:user, 0.0},
@@ -129,9 +139,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
   def presentation_declarations(node) do
     Enum.reduce_while(node.attributes, {:ok, []}, fn {property, value}, {:ok, declarations} ->
       property =
-        if property == "gradientTransform" and node.tag in ~w(linearGradient radialGradient),
-          do: "transform",
-          else: property
+        if (property == "gradientTransform" and node.tag in ~w(linearGradient radialGradient)) or
+             (property == "patternTransform" and node.tag == "pattern"),
+           do: "transform",
+           else: property
 
       if presentation_property?(node, property) do
         if String.contains?(value, "!") do
@@ -205,10 +216,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
       {"color-interpolation", value} ->
         if value in ~w(sRGB auto linearRGB), do: {:ok, value}, else: :error
 
-      {"clip-path", "none"} ->
+      {property, "none"} when property in ~w(clip-path mask marker-start marker-mid marker-end) ->
         {:ok, :none}
 
-      {"clip-path", value} when is_binary(value) ->
+      {property, value}
+      when property in ~w(clip-path mask marker-start marker-mid marker-end) and is_binary(value) ->
         case Regex.run(
                ~r/\Aurl\(\s*(#[A-Za-z_][A-Za-z0-9_.:-]*|"#[A-Za-z_][A-Za-z0-9_.:-]*"|'#[A-Za-z_][A-Za-z0-9_.:-]*')\s*\)\z/,
                value
@@ -221,6 +233,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
           _ ->
             :error
         end
+
+      {"mask-type", value} ->
+        if value in ~w(luminance alpha), do: {:ok, value}, else: :error
 
       {"offset", value} ->
         case HtmlValidator.parse_css_number(value) do

@@ -2,7 +2,29 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
-  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, ForeignContentValidator}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlValidator,
+    ForeignContentValidator,
+    SvgTextPositionValidator
+  }
+
+  @typedoc "Internal bounded XML summary issued by validate_processing/2, including original document geometry metadata."
+  @type document_summary :: %{
+          required(:source_root) => %{String.t() => String.t()},
+          required(:source_nodes) => [
+            %{
+              attributes: %{String.t() => String.t()},
+              tag: String.t(),
+              namespace: :svg | :html,
+              index: pos_integer(),
+              parent: non_neg_integer() | nil,
+              children: []
+            }
+          ],
+          required(:expanded_work) => non_neg_integer(),
+          optional(atom()) => term()
+        }
 
   @doc false
   @spec validate(term(), term(), HtmlValidator.image_budget() | nil) ::
@@ -22,18 +44,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
       with {:ok, {intrinsic_width, intrinsic_height}} <- svg_intrinsic_dimensions(attributes),
            {:ok, {width, height}} <-
              svg_raster_dimensions(options, intrinsic_width, intrinsic_height),
-           :ok <- validate_svg_raster_budget(width, height),
-           :ok <-
-             HtmlValidator.reserve_render_resource(
-               :max_aggregate_svg_raster_pixels,
-               width * height,
-               :style
-             ),
-           :ok <-
-             if(budget == nil,
-               do: :ok,
-               else: HtmlValidator.reserve_decoded_image(budget, width, height, 4)
-             ) do
+           :ok <- validate_raster_dimensions(width, height, budget) do
         {:ok, [width: width, height: height]}
       end
     else
@@ -49,6 +60,42 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         "SVG dimensions exceed the supported numeric range; reduce dimensions or aspect ratio",
         source: "SVG"
       )
+  catch
+    {:render_resource_limit, {:error, {reason, diagnostic}}} ->
+      {:error,
+       {reason,
+        Diagnostics.with_context(diagnostic,
+          source: "SVG",
+          module: __MODULE__,
+          operation: :rasterize
+        )}}
+  end
+
+  @doc "Validates and charges the actual SVG raster canvas before native allocation."
+  @spec validate_raster_dimensions(term(), term(), HtmlValidator.image_budget() | nil) ::
+          :ok | {:error, {atom(), map()}}
+  def validate_raster_dimensions(width, height, budget) do
+    if is_integer(width) and width > 0 and is_integer(height) and height > 0 do
+      with :ok <- if(is_nil(budget), do: :ok, else: HtmlValidator.validate_image_budget(budget)),
+           :ok <- validate_svg_raster_budget(width, height),
+           :ok <-
+             HtmlValidator.reserve_render_resource(
+               :max_aggregate_svg_raster_pixels,
+               width * height,
+               :style
+             ) do
+        if budget == nil,
+          do: :ok,
+          else: HtmlValidator.reserve_decoded_image(budget, width, height, 4)
+      end
+    else
+      Diagnostics.error(
+        :style,
+        :invalid_document,
+        "SVG raster dimensions must be positive integers",
+        source: "SVG"
+      )
+    end
   catch
     {:render_resource_limit, {:error, {reason, diagnostic}}} ->
       {:error,
@@ -92,7 +139,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
   end
 
   @doc false
-  @spec validate_processing(term(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
+  @spec validate_processing(term(), term()) ::
+          {:ok, document_summary()} | {:error, {atom(), map()}}
   def validate_processing(svg, context) do
     with {:ok, context} <- validate_context(context),
          :ok <- validate_source(svg) do
@@ -196,6 +244,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
       filters: 0,
       references: 0,
       root: nil,
+      source_root: nil,
       styles: [],
       stack: [],
       context: context,
@@ -205,10 +254,12 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
       graph: %{},
       path_costs: %{},
       text_costs: %{},
+      position_costs: %{},
       text_by_node: %{},
       hrefs: [],
       text: [],
       geometry: [],
+      source_nodes: [],
       opacity_layers: 0,
       nested_viewports: 0,
       clip_references: 0,
@@ -415,6 +466,16 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
             []
           end
 
+        position_work =
+          if namespace == :svg and name in ~w(text tspan) do
+            case SvgTextPositionValidator.reserve_work(%{tag: name, attributes: attrs}, :style) do
+              {:ok, work} -> work
+              error -> throw({:svg_validation, error})
+            end
+          else
+            0
+          end
+
         paths = byte_size(Map.get(attrs, "d", "")) + byte_size(Map.get(attrs, "points", ""))
 
         index = state.nodes + 1
@@ -440,6 +501,27 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         state = %{
           state
           | stack: [%{namespace: namespace, name: name, index: index} | state.stack],
+            source_root:
+              if(state.root == nil,
+                do:
+                  Map.new(
+                    for {uri, _prefix, key, value} <- attributes,
+                        to_string(uri) == "",
+                        do: {to_string(key), to_string(value)}
+                  ),
+                else: state.source_root
+              ),
+            source_nodes: [
+              %{
+                tag: name,
+                namespace: namespace,
+                attributes: attrs,
+                children: [],
+                index: index,
+                parent: if(parent, do: parent.index, else: nil)
+              }
+              | state.source_nodes
+            ],
             elements: MapSet.put(state.elements, {namespace, name}),
             geometry:
               if(state.context.mode == :inline and namespace == :svg,
@@ -510,6 +592,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
             graph: graph,
             path_costs: Map.put(state.path_costs, index, paths),
             text_costs: Map.put(state.text_costs, index, 0),
+            position_costs: Map.put(state.position_costs, index, position_work),
             hrefs:
               Enum.map(hrefs, &{index, &1, line, name}) ++
                 Enum.map(paint_hrefs, fn {href, property} -> {index, href, line, property} end) ++
@@ -603,11 +686,19 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
 
     # Every authored node and every reused subtree charges the same outer scope.
     work =
-      visit_expansion([{1, MapSet.new(), 1}], graph, summary.path_costs, summary.text_costs, %{
-        nodes: 0,
-        paths: 0,
-        counts: %{}
-      })
+      visit_expansion(
+        [{1, MapSet.new(), 1}],
+        graph,
+        summary.path_costs,
+        summary.text_costs,
+        summary.position_costs,
+        %{
+          nodes: 0,
+          positions: 0,
+          paths: 0,
+          counts: %{}
+        }
+      )
 
     costs =
       Enum.reduce(work.counts, %{opacity: 0, clip: 0, viewport: 0}, fn {index, count}, total ->
@@ -618,6 +709,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
     {:ok,
      Map.merge(summary, %{
        expanded_work: work.nodes,
+       expanded_position_work: work.positions,
        expansion_counts: work.counts,
        opacity_layers: costs.opacity,
        clip_references: costs.clip,
@@ -627,7 +719,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
     {:svg_validation, error} -> error
   end
 
-  defp visit_expansion(pending, graph, path_costs, text_costs, work) do
+  defp visit_expansion(pending, graph, path_costs, text_costs, position_costs, work) do
     case pending do
       [] ->
         work
@@ -635,6 +727,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
       [{index, ancestors, depth} | rest] ->
         paths = Map.fetch!(path_costs, index)
         node_work = 1 + Map.fetch!(text_costs, index)
+        positions = Map.fetch!(position_costs, index)
 
         cond do
           MapSet.member?(ancestors, index) ->
@@ -643,7 +736,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
           depth > Limits.get(:max_svg_depth) ->
             reject("SVG reference expansion exceeds max_svg_depth", 1)
 
-          work.nodes + node_work > Limits.get(:max_svg_expansion_work) ->
+          work.nodes + node_work + work.positions + positions >
+              Limits.get(:max_svg_expansion_work) ->
             throw(
               {:svg_validation,
                Diagnostics.error(
@@ -666,13 +760,19 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
             )
 
           true ->
-            HtmlValidator.reserve_render_resource(:max_svg_expansion_work, node_work, :style)
+            HtmlValidator.reserve_render_resource(
+              :max_svg_expansion_work,
+              node_work + if(Map.has_key?(work.counts, index), do: positions, else: 0),
+              :style
+            )
+
             HtmlValidator.reserve_render_resource(:max_svg_expanded_path_bytes, paths, :style)
             ancestors = MapSet.put(ancestors, index)
             children = Enum.map(Map.fetch!(graph, index), &{&1, ancestors, depth + 1})
 
-            visit_expansion(children ++ rest, graph, path_costs, text_costs, %{
+            visit_expansion(children ++ rest, graph, path_costs, text_costs, position_costs, %{
               nodes: work.nodes + node_work,
+              positions: work.positions + positions,
               paths: work.paths + paths,
               counts: Map.update(work.counts, index, 1, &(&1 + 1))
             })

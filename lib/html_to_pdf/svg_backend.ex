@@ -1,7 +1,14 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend do
   @moduledoc false
   alias NativeElixirPdfUtilities.Diagnostics
-  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, SvgBackendValidator, SvgValidator}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{PngDecoder, RenderCache, ResourceContext}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlValidator,
+    SvgBackendValidator,
+    SvgDocumentViewportValidator,
+    SvgValidator
+  }
 
   @doc "Renders a complete validated SVG resource using supplied bytes only. Inline host composition remains gated."
   @spec rasterize(term(), term(), term(), HtmlValidator.image_budget() | nil) ::
@@ -48,6 +55,75 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend do
       result ->
         result
     end
+  end
+
+  @doc "Prepares an exact-byte SVG document under the existing image policy without allocating its raster canvas."
+  @spec prepare_document(term(), HtmlValidator.image_budget(), term()) ::
+          {:ok, map()} | {:error, {atom(), map()}}
+  def prepare_document(source, image_budget, origin \\ "SVG") do
+    SvgBackendValidator.prepare_document(source, image_budget, origin)
+  end
+
+  @doc "Renders an issued SVG document at its actual child viewport, preserving its original source bytes."
+  @spec paint_document(term(), term(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def paint_document(descriptor, width, height) do
+    with {:ok, request} <- SvgBackendValidator.document_request(descriptor) do
+      context = descriptor.context
+
+      ResourceContext.with_document(context, fn ->
+        result =
+          RenderCache.fetch(
+            context.scope,
+            {:svg_document_raster, context.document_id, descriptor.svg_document, width, height},
+            fn ->
+              with {:ok, raster} <-
+                     SvgDocumentViewportValidator.prepare_raster(
+                       request.document_viewport,
+                       width,
+                       height,
+                       context.image_budget
+                     ),
+                   :ok <- SvgBackendValidator.native_load_result(load_native()),
+                   {:ok, png} <-
+                     NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.render_document(
+                       request.source,
+                       raster.width,
+                       raster.height,
+                       request.fonts,
+                       request.resources,
+                       raster.matrix
+                     )
+                     |> SvgValidator.conversion_result(),
+                   {:ok, image} <- PngDecoder.decode(png, context.image_budget, false) do
+                {:ok, image}
+              end
+            end
+          )
+
+        case result do
+          {:error, {reason, diagnostic}} ->
+            {:error,
+             {reason,
+              Diagnostics.with_context(Map.delete(diagnostic, :source),
+                source: request.document_source,
+                module: __MODULE__,
+                operation: :rasterize_document
+              )}}
+
+          result ->
+            result
+        end
+      end)
+    end
+  catch
+    {:render_resource_limit, {:error, {reason, diagnostic}}} ->
+      {:error,
+       {reason,
+        Diagnostics.with_context(diagnostic,
+          operation: :rasterize_document,
+          module: __MODULE__,
+          source: Map.get(descriptor, :document_source, "SVG")
+        )}}
   end
 
   @doc "Converts a validated inline SVG scene to a bounded vector PDF source using supplied bytes only."

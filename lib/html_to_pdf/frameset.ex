@@ -19,10 +19,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Frameset do
       cells = column_count * tuple_size(rows)
 
       {column_offsets, _} =
-        Enum.map_reduce(grid.columns, 0.0, fn value, offset -> {offset, offset + value} end)
+        Enum.map_reduce(grid.columns, 0.0, fn value, offset ->
+          {offset, offset + value + grid.gap}
+        end)
 
       {row_offsets, _} =
-        Enum.map_reduce(grid.rows, 0.0, fn value, offset -> {offset, offset + value} end)
+        Enum.map_reduce(grid.rows, 0.0, fn value, offset ->
+          {offset, offset + value + grid.gap}
+        end)
 
       column_offsets = List.to_tuple(column_offsets)
       row_offsets = List.to_tuple(row_offsets)
@@ -46,6 +50,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Frameset do
 
         case result do
           {:ok, group} ->
+            group =
+              if(child.tag == "frame", do: Map.put(group, :role, :frameset_viewport), else: group)
+
             x = if(index < cells, do: elem(column_offsets, column), else: 0.0)
             y = if(index < cells, do: height - elem(row_offsets, row) - cell_height, else: 0.0)
 
@@ -63,6 +70,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Frameset do
       end)
       |> case do
         {:ok, boxes} ->
+          borders =
+            Enum.map(grid.borders, fn part ->
+              Map.merge(part, %{
+                type: HtmlValidator.reserve_layout_box(:rect),
+                stroke_color: nil,
+                stroke_width: 0.0,
+                border_radius: 0.0,
+                role: :frameset_border,
+                snap_to_css_pixel_grid: true
+              })
+            end)
+
           {:ok,
            %{
              type: HtmlValidator.reserve_layout_box(:drawing_group),
@@ -72,7 +91,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Frameset do
              height: height,
              transform: {1, 0, 0, 1, 0, 0},
              clip: %{x: 0.0, y: 0.0, width: width, height: height},
-             boxes: Enum.reverse(boxes)
+             boxes: Enum.reverse(boxes) ++ borders
            }}
 
         error ->

@@ -239,6 +239,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           style
         end
 
+      style =
+        if Map.get(style, :_dialog_default_padding, false) do
+          style
+          |> Map.put(:padding, edges(style.font_size))
+          |> Map.delete(:_dialog_default_padding)
+        else
+          style
+        end
+
       validate_cascade_list(style, dependent_declarations, budget, consumer, failure)
     end
   end
@@ -423,7 +432,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             end
 
           "appearance" ->
-            with {:ok, appearance} <- HtmlValidator.parse_gauge_appearance(value),
+            with {:ok, appearance} <- HtmlValidator.parse_control_appearance(value),
                  do: {:ok, Map.put(style, :appearance, appearance)}
 
           "background-color" ->
@@ -539,6 +548,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
           "text-transform" ->
             put_text_transform(style, value)
+
+          "quotes" ->
+            with {:ok, pairs} <-
+                   NativeElixirPdfUtilities.Validators.HtmlQuoteValidator.parse(value, style),
+                 do: {:ok, Map.put(style, :quotes, pairs)}
 
           "content" ->
             put_generated_content(style, value)
@@ -678,10 +692,34 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           "display" ->
             put_display(style, value)
 
+          "list-style-image" ->
+            case HtmlValidator.parse_background_image_reference(value) do
+              {:ok, nil} ->
+                {:ok,
+                 style |> Map.put(:list_style_image, nil) |> Map.delete(:list_style_image_source)}
+
+              {:ok, source} ->
+                {:ok, Map.put(style, :list_style_image_source, source)}
+
+              :error ->
+                {:error, :invalid_document}
+
+              {:error, _} = error ->
+                error
+            end
+
           property when property in ~w(list-style list-style-type list-style-position) ->
             case HtmlValidator.parse_css_list_style(property, value) do
-              {:ok, properties} -> {:ok, Map.merge(style, properties)}
-              :error -> {:error, :invalid_document}
+              {:ok, properties} ->
+                style =
+                  if property == "list-style",
+                    do: Map.delete(style, :list_style_image_source),
+                    else: style
+
+                {:ok, Map.merge(style, properties)}
+
+              :error ->
+                {:error, :invalid_document}
             end
 
           property when property in ["width", "height"] ->
@@ -840,6 +878,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
         {:ok, Map.put(style, :display, :inline)}
 
+      "list-item" ->
+        {:ok,
+         style
+         |> ensure_box_style()
+         |> Map.put(:display, :list_item)
+         |> Map.put_new(:list_marker_type, :disc)
+         |> Map.put_new(:list_style_position, :outside)}
+
       "inline-block" ->
         style =
           if Map.has_key?(style, :_math_context),
@@ -847,6 +893,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             else: style
 
         {:ok, style |> ensure_box_style() |> Map.put(:display, :inline_block)}
+
+      "contents" ->
+        {:ok, Map.put(style, :display, :contents)}
 
       "none" ->
         {:ok, Map.put(style, :display, :none)}
@@ -1093,7 +1142,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
       _ ->
         token_regex =
-          ~r/\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|attr\(\s*[a-zA-Z_][a-zA-Z0-9_:-]*\s*\)|counter\(\s*[a-zA-Z_][a-zA-Z0-9_-]*\s*\))/u
+          ~r/\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|attr\(\s*[a-zA-Z_][a-zA-Z0-9_:-]*\s*\)|counter\(\s*[a-zA-Z_][a-zA-Z0-9_-]*\s*\)|open-quote|close-quote|no-open-quote|no-close-quote)/u
 
         tokens = Regex.scan(token_regex, normalized)
         parsed_source = Enum.map_join(tokens, "", &List.first/1) |> String.trim()
@@ -1104,8 +1153,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
               Enum.map(tokens, fn [_, token] ->
                 cond do
                   String.starts_with?(token, ["\"", "'"]) ->
-                    text = String.slice(token, 1, String.length(token) - 2)
-                    {:string, String.replace(text, ~r/\\([\\"'])/u, "\\1")}
+                    {:string, HtmlValidator.decode_css_string(token)}
+
+                  token in ~w(open-quote close-quote no-open-quote no-close-quote) ->
+                    {:quote, token |> String.replace("-", "_") |> String.to_existing_atom()}
 
                   String.starts_with?(token, "attr(") ->
                     [_, name] = Regex.run(~r/^attr\(\s*([a-zA-Z_][a-zA-Z0-9_:-]*)\s*\)$/u, token)

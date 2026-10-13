@@ -48,7 +48,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
           required(:cid_to_gid) => %{optional(pos_integer()) => non_neg_integer()},
           required(:cid_to_unicode) => %{
             optional(pos_integer()) => non_neg_integer() | String.t()
-          }
+          },
+          optional(:latin_ligatures) => %{optional(String.t()) => non_neg_integer()}
         }
   @type font_face :: built_in_font() | embedded_font()
 
@@ -160,16 +161,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
            :ok <- HtmlValidator.validate_font_configs(Keyword.fetch!(prepared_opts, :fonts)),
            {:ok, bundled_configs} <- normalize_configs(bundled_font_configs()),
            :ok <- HtmlValidator.validate_font_configs(bundled_configs),
-           {:ok, configured} <- load_fonts(Keyword.fetch!(prepared_opts, :fonts), :configured),
-           {:ok, bundled} <- load_fonts(bundled_configs, :bundled) do
-        fallback = configured ++ bundled
+           {:ok, registry} <-
+             FontValidator.with_registry_loads(
+               Keyword.fetch!(prepared_opts, :fonts),
+               bundled_configs,
+               fn ->
+                 with {:ok, configured} <-
+                        load_fonts(Keyword.fetch!(prepared_opts, :fonts), :configured),
+                      {:ok, bundled} <- load_fonts(bundled_configs, :bundled) do
+                   fallback = configured ++ bundled
 
-        {:ok,
-         %{
-           embedded: Enum.uniq_by(fallback, &font_key/1),
-           fallback: fallback,
-           system_font_discovery: Keyword.get(prepared_opts, :system_font_discovery, true)
-         }}
+                   {:ok,
+                    %{
+                      embedded: Enum.uniq_by(fallback, &font_key/1),
+                      fallback: fallback,
+                      system_font_discovery:
+                        Keyword.get(prepared_opts, :system_font_discovery, true)
+                    }}
+                 end
+               end
+             ) do
+        {:ok, registry}
       else
         {:error, {_reason, _diagnostic}} = error -> error
         _ -> :error
@@ -419,7 +431,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     end
   end
 
-  @doc "Shapes common Latin ligatures when the font provides them and letter spacing is zero."
+  @doc "Shapes common Latin ligatures authorized by the selected font's Latin GSUB liga feature when letter spacing is zero."
   @spec shape_ligatures(String.t(), map(), number()) :: String.t()
   def shape_ligatures(text, font, letter_spacing \\ 0) do
     if letter_spacing == 0 do
@@ -431,10 +443,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
         {"fl", 0xFB02, "ﬂ"}
       ]
       |> Enum.reduce(text, fn {letters, codepoint, ligature}, shaped ->
-        case Map.get(font.cmap, codepoint, 0) do
-          0 -> shaped
-          _glyph -> String.replace(shaped, letters, ligature)
-        end
+        if Map.get(Map.get(font, :latin_ligatures, %{}), letters) == codepoint and
+             Map.get(font.cmap, codepoint, 0) > 0,
+           do: String.replace(shaped, letters, ligature),
+           else: shaped
       end)
     else
       text
@@ -447,7 +459,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   """
   @spec pdf_encoding([String.t() | {String.t(), number()}], embedded_font()) :: pdf_encoding()
   def pdf_encoding(texts, font) do
-    encoding = %{codepoint_to_cid: %{}, cid_to_gid: %{}, cid_to_unicode: %{}}
+    encoding = %{
+      codepoint_to_cid: %{},
+      cid_to_gid: %{},
+      cid_to_unicode: %{},
+      latin_ligatures: Map.get(font, :latin_ligatures, %{})
+    }
 
     {encoding, _next_cid} =
       Enum.reduce(texts, {encoding, 1}, fn entry, {encoding, next_cid} ->
@@ -472,9 +489,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
                 glyph_id ->
                   encoding = %{
-                    codepoint_to_cid: Map.put(encoding.codepoint_to_cid, codepoint, next_cid),
-                    cid_to_gid: Map.put(encoding.cid_to_gid, next_cid, glyph_id),
-                    cid_to_unicode: Map.put(encoding.cid_to_unicode, next_cid, codepoint)
+                    encoding
+                    | codepoint_to_cid: Map.put(encoding.codepoint_to_cid, codepoint, next_cid),
+                      cid_to_gid: Map.put(encoding.cid_to_gid, next_cid, glyph_id),
+                      cid_to_unicode: Map.put(encoding.cid_to_unicode, next_cid, codepoint)
                   }
 
                   {encoding, next_cid + 1}
@@ -502,7 +520,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       end
 
     text
-    |> shape_ligatures(%{cmap: encoding.codepoint_to_cid}, letter_spacing)
+    |> shape_ligatures(
+      %{
+        cmap: encoding.codepoint_to_cid,
+        latin_ligatures: Map.get(encoding, :latin_ligatures, %{})
+      },
+      letter_spacing
+    )
     |> String.to_charlist()
     |> Enum.map_join("", fn codepoint ->
       cid = Map.fetch!(encoding.codepoint_to_cid, codepoint)
@@ -521,8 +545,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   end
 
   defp load_fonts(fonts, source) do
-    Enum.reduce_while(fonts, {:ok, []}, fn font, {:ok, acc} ->
-      case load_font(Map.put(font, :source, source)) do
+    fonts
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {font, ordinal}, {:ok, acc} ->
+      case load_font(Map.put(font, :source, source), ordinal) do
         {:ok, loaded} -> {:cont, {:ok, acc ++ [loaded]}}
         {:error, _reason} = error -> {:halt, error}
         :error -> {:halt, :error}
@@ -681,7 +707,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     {String.downcase(font.family), font.weight, font.style}
   end
 
-  defp load_font(font) do
+  defp load_font(font, ordinal \\ nil) do
     FontValidator.reserve_face(font)
 
     result =
@@ -695,7 +721,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
     family = Map.fetch!(font, :family)
 
-    with {:ok, data, parsed} <- result,
+    with {:ok, data, parsed, selected} <- result,
          :ok <-
            HtmlValidator.validate_font_embedding(
              family,
@@ -707,18 +733,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
         |> Base.encode16(case: :lower)
         |> binary_part(0, 12)
 
-      {:ok,
-       parsed
-       |> Map.merge(%{
-         type: :embedded,
-         family: family,
-         weight: Map.fetch!(font, :weight),
-         style: Map.fetch!(font, :style),
-         source: Map.fetch!(font, :source),
-         id: hash,
-         pdf_name: pdf_safe_name(family) <> "-" <> hash,
-         data: data
-       })}
+      loaded =
+        parsed
+        |> Map.merge(%{
+          type: :embedded,
+          family: family,
+          weight: Map.fetch!(font, :weight),
+          style: Map.fetch!(font, :style),
+          source: Map.fetch!(font, :source),
+          id: hash,
+          pdf_name: pdf_safe_name(family) <> "-" <> hash,
+          data: data
+        })
+
+      {:ok, FontValidator.observe_loaded_font(font, ordinal, selected, loaded)}
     else
       {:error, {_reason, _diagnostic}} = error -> error
       _ -> :error
@@ -726,7 +754,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   end
 
   defp load_first_supported_font(paths, bundled?) do
-    Enum.reduce_while(paths, :error, fn path, :error ->
+    paths
+    |> Enum.with_index()
+    |> Enum.reduce_while(:error, fn {path, ordinal}, :error ->
       fetch = if bundled?, do: &FontCache.fetch_bundled/2, else: &FontCache.fetch/2
 
       result =
@@ -740,7 +770,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
         end)
 
       case result do
-        {:ok, {data, parsed}} -> {:halt, {:ok, data, parsed}}
+        {:ok, {data, parsed}} -> {:halt, {:ok, data, parsed, ordinal}}
         {:error, {_reason, _diagnostic}} = error -> {:halt, error}
         :error -> {:cont, :error}
       end
@@ -748,14 +778,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   end
 
   defp load_first_supported_data(candidates) do
-    Enum.reduce_while(candidates, :error, fn data, :error ->
+    candidates
+    |> Enum.with_index()
+    |> Enum.reduce_while(:error, fn {data, ordinal}, :error ->
       FontValidator.reserve(:max_font_candidates, 1)
       FontValidator.reserve_source(data)
 
       case FontValidator.memo({:parsed, :crypto.hash(:sha256, data)}, fn ->
              FontValidator.prepare_ttf(data)
            end) do
-        {:ok, parsed} -> {:halt, {:ok, data, parsed}}
+        {:ok, parsed} -> {:halt, {:ok, data, parsed, ordinal}}
         {:error, {_reason, _diagnostic}} = error -> {:halt, error}
         :error -> {:cont, :error}
       end

@@ -6,6 +6,94 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   alias NativeElixirPdfUtilities.Validators.MathFontValidator
 
   @doc false
+  @spec with_source_owner(reference(), (-> term())) :: term()
+  def with_source_owner(owner, runner) do
+    with {:ok, _context} <-
+           NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.font_registry_context(
+             owner
+           ) do
+      key = {__MODULE__, :source_owner}
+      previous = Process.get(key)
+      Process.put(key, owner)
+
+      try do
+        runner.()
+      after
+        if previous, do: Process.put(key, previous), else: Process.delete(key)
+      end
+    end
+  end
+
+  @doc false
+  @spec with_registry_loads([map()], [map()], (-> term())) :: term()
+  def with_registry_loads(configured, bundled, runner) do
+    key = {__MODULE__, :registry_loads}
+    previous = Process.get(key)
+    owner = Process.get({__MODULE__, :source_owner})
+
+    context =
+      if owner && is_nil(previous),
+        do:
+          NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.font_registry_context(
+            owner
+          )
+
+    frame =
+      case context do
+        {:ok, context} ->
+          %{owner: owner, context: context, configured: configured, bundled: bundled}
+
+        _ ->
+          nil
+      end
+
+    Process.put(key, frame)
+
+    try do
+      runner.()
+    after
+      if previous, do: Process.put(key, previous), else: Process.delete(key)
+    end
+  end
+
+  @doc false
+  @spec observe_loaded_font(map(), non_neg_integer() | nil, non_neg_integer(), map()) :: map()
+  def observe_loaded_font(font, ordinal, selected, loaded) do
+    case Process.get({__MODULE__, :registry_loads}) do
+      %{owner: owner} = frame when is_integer(ordinal) ->
+        with {:ok, context} <-
+               NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.font_registry_context(
+                 owner
+               ),
+             true <- context == frame.context do
+          source = Map.fetch!(font, :source)
+          configs = if source == :bundled, do: frame.bundled, else: frame.configured
+          config = Enum.at(configs, ordinal)
+
+          if config &&
+               Map.take(config, [:family, :weight, :style]) ==
+                 Map.take(font, [:family, :weight, :style]) do
+            NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.observe_font_load(
+              owner,
+              source,
+              ordinal,
+              selected,
+              config,
+              loaded
+            )
+          else
+            loaded
+          end
+        else
+          _ -> loaded
+        end
+
+      _ ->
+        loaded
+    end
+  end
+
+  @doc false
   @spec prepare_x_height(term()) :: {:ok, number()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_x_height(font) do
     with_budget(fn ->
@@ -869,7 +957,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
                  end,
                  glyph_count
                ),
-             {:ok, embedding_flags} <- font_embedding_flags(data, tables) do
+             {:ok, embedding_flags} <- font_embedding_flags(data, tables),
+             {:ok, ligatures} <- prepare_latin_ligatures(data, tables, glyph_count, cmap) do
           {:ok,
            %{
              units_per_em: units_per_em,
@@ -877,6 +966,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
              default_width: List.last(widths) || 600,
              cmap: cmap,
              kerning: kerning,
+             latin_ligatures: ligatures,
              ascent: ascent,
              descent: descent,
              line_gap: line_gap,
@@ -888,6 +978,40 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
 
       _ ->
         :error
+    end
+  end
+
+  # Basic Latin replacement requires the selected script's liga lookup and its exact output glyph.
+  defp prepare_latin_ligatures(data, tables, glyph_count, cmap) do
+    case table(data, tables, "GSUB") do
+      :error ->
+        {:ok, %{}}
+
+      {:ok, gsub} ->
+        with {:ok, features} <-
+               MathFontValidator.prepare_substitution_features(gsub, glyph_count, :latin) do
+          lookups = Map.get(features.substitutions, "liga", [])
+          replacements = Enum.reduce(lookups, %{}, fn lookup, acc -> Map.merge(lookup, acc) end)
+
+          ligatures = [
+            {"ffi", 0xFB03},
+            {"ffl", 0xFB04},
+            {"ff", 0xFB00},
+            {"fi", 0xFB01},
+            {"fl", 0xFB02}
+          ]
+
+          {:ok,
+           Enum.reduce(ligatures, %{}, fn {letters, codepoint}, result ->
+             glyphs = Enum.map(String.to_charlist(letters), &Map.get(cmap, &1, 0))
+             output = Map.get(cmap, codepoint, 0)
+
+             if output > 0 and Enum.all?(glyphs, &(&1 > 0)) and
+                  Map.get(replacements, glyphs) == output,
+                do: Map.put(result, letters, codepoint),
+                else: result
+           end)}
+        end
     end
   end
 

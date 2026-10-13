@@ -84,12 +84,12 @@ defmodule NativeElixirPdfUtilities.Validators.SvgPaintValidator do
                   {:cont, :ok}
 
                 {:ok, {:paint_server, id}} ->
-                  if Map.get(ids, id) in @gradients,
+                  if Map.get(ids, id) in (@gradients ++ ["pattern"]),
                     do: {:cont, :ok},
                     else:
                       {:halt,
                        invalid(
-                         "SVG #{property} target ##{id} must identify a same-scene linear or radial gradient",
+                         "SVG #{property} target ##{id} must identify a same-scene gradient or pattern",
                          node.tag
                        )}
 

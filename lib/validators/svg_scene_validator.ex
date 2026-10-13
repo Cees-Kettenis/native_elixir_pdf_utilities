@@ -10,7 +10,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
     SvgViewportValidator
   }
 
-  @paint_tags ~w(svg g defs symbol use linearGradient radialGradient stop clipPath rect circle ellipse line polyline polygon path text tspan title desc style)
+  @paint_tags ~w(svg g defs symbol use pattern marker mask linearGradient radialGradient stop clipPath rect circle ellipse line polyline polygon path text tspan title desc style)
   @length_attributes %{
     "rect" => ~w(x y width height rx ry),
     "circle" => ~w(cx cy r),
@@ -37,7 +37,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
   defp validate_geometry_node(node) do
     cond do
       Enum.any?(node.attributes, fn {key, value} ->
-        key in ~w(filter mask marker marker-start marker-mid marker-end vector-effect transform-origin pathLength) and
+        key in ~w(filter vector-effect transform-origin pathLength) and
             value != "none"
       end) ->
         unsupported(

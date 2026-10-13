@@ -1,7 +1,7 @@
 defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
-  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PngDecoder}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PngDecoder, RenderCache, ResourceContext}
 
   alias NativeElixirPdfUtilities.Validators.{
     FontValidator,
@@ -10,7 +10,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
     SvgClipValidator,
     SvgReferenceValidator,
     SvgPaintValidator,
-    SvgTextValidator
+    SvgEffectsValidator,
+    SvgTextValidator,
+    SvgDocumentViewportValidator,
+    ResourceValidator
   }
 
   @doc false
@@ -29,13 +32,24 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
          :ok <- validate_inline_geometry(summary),
          :ok <- SvgClipValidator.validate_summary(summary),
          :ok <- SvgPaintValidator.validate_summary(summary),
+         :ok <- SvgEffectsValidator.validate_summary(summary),
          :ok <- SvgReferenceValidator.validate_summary(summary),
          :ok <- SvgTextValidator.validate_summary(summary),
          {:ok, fonts} <- validate_fonts(context.fonts, summary),
          :ok <- validate_stroke_work(source, context.mode, fonts),
          {:ok, resources} <- validate_resources(context.resources, image_budget, summary),
          {:ok, dimensions} <-
-           SvgValidator.validate_dimensions(summary.root, options, image_budget),
+           if(raster? == :document,
+             do: SvgDocumentViewportValidator.prepare(summary),
+             else: SvgValidator.validate_dimensions(summary.root, options, image_budget)
+           ),
+         :ok <-
+           if(
+             raster? == true and
+               Enum.any?(~w(pattern mask marker), &MapSet.member?(summary.elements, {:svg, &1})),
+             do: validate_pattern_surfaces(source, dimensions, fonts),
+             else: :ok
+           ),
          # Pinned resvg's actual max_bbox is five canvas widths/heights (25× area).
          # Image mode reserves three temporary surfaces per expanded node/text character.
          # A clip reference reserves its group pixmap, clip pixmap and alpha mask.
@@ -44,7 +58,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
          :ok <-
            HtmlValidator.reserve_render_resource(
              :max_aggregate_svg_surface_pixels,
-             if(raster?, do: dimensions[:width] * dimensions[:height], else: 0) *
+             if(raster? == true, do: dimensions[:width] * dimensions[:height], else: 0) *
                if(context.mode == :inline,
                  do:
                    1 + 25 * summary.opacity_layers +
@@ -61,7 +75,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
          height: dimensions[:height],
          mode: context.mode,
          fonts: fonts,
-         resources: resources
+         resources: resources,
+         document_viewport: if(raster? == :document, do: dimensions, else: nil)
        }}
     end
   catch
@@ -73,6 +88,86 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
           module: __MODULE__,
           operation: :prepare
         )}}
+  end
+
+  @doc "Issues an image-policy SVG document request in its existing authorized child scope."
+  @spec prepare_document(term(), HtmlValidator.image_budget(), term()) ::
+          {:ok, map()} | {:error, {atom(), map()}}
+  def prepare_document(source, image_budget, origin) do
+    context = ResourceContext.current()
+    origin = ResourceValidator.document_source_label(origin) || "SVG"
+
+    with :ok <- ResourceValidator.validate_context(context),
+         true <- image_budget == context.image_budget,
+         {:ok, request} <- prepare_request(source, [], %{mode: :image}, image_budget, :document) do
+      request = Map.put(request, :document_source, origin)
+      identity = make_ref()
+
+      RenderCache.fetch(
+        context.scope,
+        {:svg_document_request, context.document_id, identity},
+        fn -> request end
+      )
+
+      {:ok,
+       %{
+         svg_document: identity,
+         context: context,
+         document_source: origin,
+         width: request.width,
+         height: request.height,
+         width_px: max(round(request.width / 0.75), 1),
+         height_px: max(round(request.height / 0.75), 1)
+       }}
+    else
+      {:error, {reason, diagnostic}} ->
+        {:error,
+         {reason, Diagnostics.with_context(Map.delete(diagnostic, :source), source: origin)}}
+
+      _ ->
+        Diagnostics.error(
+          :resource,
+          :invalid_document,
+          "selected SVG preparation requires the issued child document's shared image budget",
+          module: __MODULE__,
+          operation: :prepare_document,
+          source: "SVG"
+        )
+    end
+  end
+
+  @doc "Resolves an issued SVG request without accepting replacement source, fonts or resource maps."
+  @spec document_request(term()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def document_request(descriptor) do
+    with %{svg_document: identity, context: context} <- descriptor,
+         true <- is_reference(identity),
+         :ok <- ResourceValidator.validate_context(context),
+         request when is_map(request) <-
+           RenderCache.fetch(
+             context.scope,
+             {:svg_document_request, context.document_id, identity},
+             fn -> nil end
+           ),
+         true <-
+           descriptor[:width] == request.width and descriptor[:height] == request.height and
+             descriptor[:width_px] == max(round(request.width / 0.75), 1) and
+             descriptor[:height_px] == max(round(request.height / 0.75), 1) and
+             descriptor[:document_source] == request.document_source do
+      {:ok, request}
+    else
+      {:error, {_, _}} = error ->
+        error
+
+      _ ->
+        Diagnostics.error(
+          :resource,
+          :invalid_document,
+          "selected SVG request is not issued in this child document scope with its canonical intrinsic dimensions",
+          module: __MODULE__,
+          operation: :rasterize_document,
+          source: "SVG"
+        )
+    end
   end
 
   @doc false
@@ -87,6 +182,45 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
             "SVG vector output requires an inline shape/text scene without image resources",
             :vectorize
           )
+    end
+  end
+
+  defp validate_pattern_surfaces(source, dimensions, fonts) do
+    with :ok <- native_load_result(NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.load_native()) do
+      case NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.validate_pattern_work(
+             source,
+             dimensions[:width],
+             dimensions[:height],
+             Limits.get(:max_aggregate_svg_surface_pixels),
+             fonts
+           ) do
+        {:ok, pixels} ->
+          HtmlValidator.reserve_render_resource(
+            :max_aggregate_svg_surface_pixels,
+            pixels,
+            :layout
+          )
+
+        {:error, "max_aggregate_svg_surface_pixels"} ->
+          Diagnostics.error(
+            :limits,
+            :resource_limit_exceeded,
+            "SVG pattern tiles and effect layers exceed max_aggregate_svg_surface_pixels",
+            source: "SVG effects",
+            module: __MODULE__,
+            operation: :prepare
+          )
+
+        {:error, message} ->
+          Diagnostics.error(
+            :layout,
+            :invalid_document,
+            "SVG pattern preparation failed: " <> message,
+            source: "SVG effects",
+            module: __MODULE__,
+            operation: :prepare
+          )
+      end
     end
   end
 
@@ -150,13 +284,13 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
   @spec validate_capabilities(map(), map()) :: :ok | {:error, {atom(), map()}}
   def validate_capabilities(summary, context) do
     supported =
-      ~w(svg g defs clipPath symbol use path rect circle ellipse line polyline polygon linearGradient radialGradient stop text tspan textPath image title desc a)
+      ~w(svg g defs clipPath symbol use pattern marker mask path rect circle ellipse line polyline polygon linearGradient radialGradient stop text tspan textPath image title desc a)
 
     cond do
       context.mode == :inline and
           Enum.any?(summary.elements, fn {namespace, tag} ->
             namespace != :svg or
-                tag not in ~w(svg g defs symbol use linearGradient radialGradient stop clipPath path rect circle ellipse line polyline polygon text tspan title desc)
+                tag not in ~w(svg g defs symbol use pattern marker mask linearGradient radialGradient stop clipPath path rect circle ellipse line polyline polygon text tspan title desc)
           end) ->
         unsupported(
           "inline SVG geometry cannot omit text, references, images, effects or native HTML; their complete scenes remain pending"
@@ -171,7 +305,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
         )
 
       Enum.any?(summary.elements, fn {namespace, tag} ->
-        namespace == :html or tag in ~w(filter mask pattern marker)
+        namespace == :html or tag == "filter" or
+            (context.mode != :inline and tag in ~w(pattern marker mask))
       end) ->
         unsupported(
           "SVG effects and HTML require bounded intermediate scene composition before this adapter can render them"

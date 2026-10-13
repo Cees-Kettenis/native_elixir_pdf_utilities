@@ -315,7 +315,9 @@ defmodule NativeElixirPdfUtilities.Validators.MathFontValidator do
   @doc false
   @spec prepare_substitution_features(term(), term()) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def prepare_substitution_features(data, glyph_count) do
+  @spec prepare_substitution_features(term(), term(), :math | :latin) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_substitution_features(data, glyph_count, policy \\ :math) do
     FontValidator.with_budget(fn ->
       try do
         require_valid(is_binary(data), "table bytes must be a binary")
@@ -334,10 +336,17 @@ defmodule NativeElixirPdfUtilities.Validators.MathFontValidator do
           require_valid(variations == 0, "math feature variations are not supported")
         end
 
+        require_valid(policy in [:math, :latin], "unsupported substitution selection policy")
         script_records = tagged_offsets(data, scripts, true)
 
+        selected_script =
+          if policy == :math,
+            do: List.keyfind(script_records, "math", 0),
+            else:
+              List.keyfind(script_records, "latn", 0) || List.keyfind(script_records, "DFLT", 0)
+
         substitutions =
-          case List.keyfind(script_records, "math", 0) do
+          case selected_script do
             nil ->
               %{}
 
@@ -373,7 +382,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathFontValidator do
                 |> Enum.reduce(%{}, fn index, result ->
                   {tag, offset} = elem(feature_records, index)
 
-                  if tag in ["ssty", "flac", "dtls"] do
+                  if tag in if(policy == :math, do: ["ssty", "flac", "dtls"], else: ["liga"]) do
                     feature = features + offset
                     <<parameters::16, count::16>> = slice(data, feature, 4)
                     require_valid(parameters == 0, "unexpected math feature parameters")
@@ -398,7 +407,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathFontValidator do
                     |> Enum.map(fn index ->
                       offset = elem(lookup_offsets, index)
                       require_valid(offset >= 2 + lookup_count * 2, "invalid lookup offset")
-                      substitution_lookup(data, lookups + offset, glyph_count)
+                      substitution_lookup(data, lookups + offset, glyph_count, policy)
                     end)
 
                   {tag, parsed}
@@ -418,7 +427,19 @@ defmodule NativeElixirPdfUtilities.Validators.MathFontValidator do
              end)
          }}
       catch
-        {:invalid_math_font, message} -> failure(message, "GSUB")
+        {:unsupported_latin_ligature, _message} ->
+          {:ok,
+           %{substitutions: %{}, substitution_kinds: %{}, latin_policy: :requires_full_shaping}}
+
+        {:invalid_math_font, message} ->
+          if policy == :latin,
+            do:
+              Diagnostics.error(:font, :invalid_document, "OpenType GSUB: " <> message,
+                module: __MODULE__,
+                operation: :font_ligatures,
+                source: "selected font GSUB table"
+              ),
+            else: failure(message, "GSUB")
       end
     end)
   end
@@ -437,9 +458,12 @@ defmodule NativeElixirPdfUtilities.Validators.MathFontValidator do
     records
   end
 
-  defp substitution_lookup(data, base, glyph_count) do
+  defp substitution_lookup(data, base, glyph_count, policy) do
     <<type::16, flags::16, count::16>> = slice(data, base, 6)
     # Nonzero mark-filtering flags require GDEF and are not context-free math substitutions.
+    if policy == :latin and flags not in [0, 1],
+      do: throw({:unsupported_latin_ligature, "lookup requires glyph filtering"})
+
     require_valid(flags in [0, 1], "math lookup requires unsupported glyph filtering")
     require_valid(count > 0, "empty substitution lookup")
     records = slice(data, base + 6, count * 2)
@@ -454,17 +478,34 @@ defmodule NativeElixirPdfUtilities.Validators.MathFontValidator do
           <<format::16, extended_type::16, extended_offset::32>> = slice(data, subtable, 8)
 
           require_valid(
-            format == 1 and extended_type in [1, 3] and extended_offset >= 8,
+            format == 1 and extended_offset >= 8,
             "unsupported extension substitution"
           )
 
           {extended_type,
-           substitution(data, subtable + extended_offset, extended_type, glyph_count)}
+           if(policy == :latin,
+             do:
+               latin_ligature_substitution(
+                 data,
+                 subtable + extended_offset,
+                 extended_type,
+                 glyph_count
+               ),
+             else: substitution(data, subtable + extended_offset, extended_type, glyph_count)
+           )}
         else
-          {type, substitution(data, subtable, type, glyph_count)}
+          {type,
+           if(policy == :latin,
+             do: latin_ligature_substitution(data, subtable, type, glyph_count),
+             else: substitution(data, subtable, type, glyph_count)
+           )}
         end
 
-      resolved_kind = if resolved_type == 1, do: :single, else: :alternate
+      resolved_kind =
+        if(policy == :latin,
+          do: :ligature,
+          else: if(resolved_type == 1, do: :single, else: :alternate)
+        )
 
       require_valid(
         is_nil(kind) or kind == resolved_kind,
@@ -473,6 +514,51 @@ defmodule NativeElixirPdfUtilities.Validators.MathFontValidator do
 
       # The first matching subtable wins; subsequent lookups remain separate.
       {resolved_kind, Map.merge(substitutions, result)}
+    end)
+  end
+
+  defp latin_ligature_substitution(data, base, type, glyph_count) do
+    if type != 4, do: throw({:unsupported_latin_ligature, "liga needs contextual shaping"})
+    <<format::16, coverage_offset::16, count::16>> = slice(data, base, 6)
+
+    require_valid(
+      format == 1 and coverage_offset >= 6 + count * 2,
+      "invalid ligature substitution header"
+    )
+
+    glyphs = coverage(data, base, coverage_offset, glyph_count)
+    require_valid(length(glyphs) == count, "ligature set count differs from coverage")
+    records = slice(data, base + 6, count * 2)
+    offsets = for <<offset::16 <- records>>, do: offset
+
+    Enum.zip(glyphs, offsets)
+    |> Enum.reduce(%{}, fn {first, offset}, substitutions ->
+      require_valid(offset >= 6 + count * 2, "invalid ligature set offset")
+      set = base + offset
+      <<ligature_count::16>> = slice(data, set, 2)
+      records = slice(data, set + 2, ligature_count * 2)
+      offsets = for <<offset::16 <- records>>, do: offset
+
+      Enum.reduce(offsets, substitutions, fn offset, substitutions ->
+        require_valid(offset >= 2 + ligature_count * 2, "invalid ligature offset")
+        ligature = set + offset
+        <<replacement::16, components::16>> = slice(data, ligature, 4)
+
+        require_valid(
+          components >= 2 and replacement < glyph_count,
+          "invalid ligature glyph or component count"
+        )
+
+        records = slice(data, ligature + 4, (components - 1) * 2)
+        remaining = for <<glyph::16 <- records>>, do: glyph
+
+        require_valid(
+          Enum.all?(remaining, &(&1 < glyph_count)),
+          "ligature component outside maxp glyph count"
+        )
+
+        Map.put_new(substitutions, [first | remaining], replacement)
+      end)
     end)
   end
 

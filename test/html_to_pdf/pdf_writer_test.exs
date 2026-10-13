@@ -159,6 +159,58 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert {:ok, 2} = NativeElixirPdfUtilities.Info.page_count(pdf)
   end
 
+  test "frame viewport print bias changes only paint and preserves clipped link geometry" do
+    box = %{
+      type: :image,
+      x: 1,
+      y: 2,
+      width: 3,
+      height: 4,
+      image: image_fixture(:png, <<255, 0, 0>>, 1, 1, :device_rgb),
+      link_url: "https://example.com/frame"
+    }
+
+    group = %{
+      type: :drawing_group,
+      width: 20,
+      height: 20,
+      transform: {1, 0, 0, 1, 10, 20},
+      clip: %{x: 0, y: 0, width: 20, height: 20},
+      boxes: [box]
+    }
+
+    assert {:ok, ordinary} =
+             PdfWriter.render([%{size: {50, 50}, boxes: [group]}], compress_streams: false)
+
+    assert {:ok, frame} =
+             PdfWriter.render(
+               [%{size: {50, 50}, boxes: [Map.put(group, :role, :frameset_viewport)]}],
+               compress_streams: false
+             )
+
+    assert ordinary =~ "q 1 0 0 1 10 20 cm"
+    assert frame =~ "q 1 0 0 1 9.9999 20 cm"
+    for pdf <- [ordinary, frame], do: assert(pdf =~ "/Rect [11 22 14 26]")
+
+    canvas = %{
+      type: :rect,
+      x: 0,
+      y: 0,
+      width: 20,
+      height: 20,
+      fill_color: {1, 0, 0},
+      stroke_color: nil,
+      stroke_width: 0,
+      border_radius: 0,
+      role: :frameset_canvas
+    }
+
+    assert {:ok, canvas_pdf} =
+             PdfWriter.render([%{size: {50, 50}, boxes: [canvas]}], compress_streams: false)
+
+    assert canvas_pdf =~ "0 0.0001 20 20 re f"
+  end
+
   test "nested nonuniform groups clip image border-box links independently of letterbox ink" do
     image = image_fixture(:png, <<255, 0, 0>>, 1, 1, :device_rgb)
 

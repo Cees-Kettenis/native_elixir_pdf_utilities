@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
   alias NativeElixirPdfUtilities.Diagnostics
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
+    CssParser,
     Font,
     FontFallback,
     HtmlTree,
@@ -13,6 +14,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
   }
 
   alias NativeElixirPdfUtilities.Validators.{
+    HtmlCssSourceValidator,
     HtmlValidator,
     PrintMediaValidator,
     ResourceValidator
@@ -33,8 +35,43 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
   @spec prepare(HtmlTree.t(), map(), term(), ResourceContext.t()) ::
           {:ok, map()} | {:error, {atom(), map()}}
   def prepare(tree, plan, opts, resource_context) do
+    prepare_context(tree, plan, opts, resource_context, nil)
+  end
+
+  @doc false
+  @spec prepare_candidate(term(), HtmlTree.t(), map(), term(), ResourceContext.t()) ::
+          {:ok, map()} | {:error, {atom(), map()}}
+  def prepare_candidate(handle, prefix_tree, plan, opts, resource_context) do
+    with :ok <- ResourceValidator.validate_context(resource_context),
+         {:ok, projection} <-
+           HtmlCssSourceValidator.prepare_candidate_projection(handle, prefix_tree) do
+      NativeElixirPdfUtilities.Validators.TemplatePatchValidator.with_consumed_candidate_frame(
+        handle,
+        prefix_tree,
+        fn candidate ->
+          plan = Map.put(plan, :source_offset, candidate.captured_finish)
+          prepare_context(candidate.prospective, plan, opts, resource_context, projection)
+        end
+      )
+    end
+  end
+
+  defp prepare_context(tree, plan, opts, resource_context, projection) do
     result =
       with :ok <- ResourceValidator.validate_context(resource_context),
+           :ok <-
+             if(ResourceContext.current() == resource_context,
+               do: :ok,
+               else:
+                 Diagnostics.error(
+                   :options,
+                   :invalid_options,
+                   "renderer preparation requires the current issued resource context",
+                   module: __MODULE__,
+                   operation: :template_renderer_context,
+                   source: "resource_context"
+                 )
+             ),
            {:ok, _controls} <-
              HtmlValidator.prepare_style_input(
                HtmlTree.fetch(tree, tree.root),
@@ -55,7 +92,16 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
                else: :ok
              ),
            {:ok, requested_media} <- PrintMediaValidator.renderer_context(opts),
-           {:ok, sheets} <- Style.prepare_stylesheets(HtmlTree.fetch(tree, tree.root), opts) do
+           {:ok, sheets} <- Style.prepare_stylesheets(HtmlTree.fetch(tree, tree.root), opts),
+           {:ok, provenance} <-
+             if(projection,
+               do: {:ok, projection},
+               else:
+                 HtmlCssSourceValidator.prepare_prefix(
+                   HtmlTree.fetch(tree, tree.root),
+                   plan.source_offset
+                 )
+             ) do
         page_options =
           Enum.reduce(sheets, [], fn entry, acc ->
             PageGeometry.merge_page_options(acc, entry.prepared.page_options)
@@ -75,6 +121,17 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
           references: [],
           owners: %{},
           resource_frame: nil,
+          font_providers: %{},
+          font_recipes: [],
+          font_candidate_frame: nil,
+          font_registry_frame: nil,
+          font_outcomes: %{},
+          preparation_limits: NativeElixirPdfUtilities.Limits.effective(),
+          font_budget_id:
+            Process.get({NativeElixirPdfUtilities.Validators.FontValidator, :budget}).budget_id,
+          provenance: provenance,
+          source_projection: projection,
+          cascades: %{},
           resource_context: resource_context
         })
 
@@ -90,7 +147,38 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
                    styled,
                    Keyword.get(effective_opts, :unsupported_glyphs, :replace)
                  ),
-               {:ok, glyph_runs} <- validate_prepared_glyph_runs(resolved.children, tree),
+               {:ok, glyph_runs} <-
+                 validate_prepared_glyph_runs(resolved.children, tree, Process.get(key).cascades),
+               glyph_runs =
+                 (if projection do
+                    Map.new(glyph_runs, fn {id, runs} ->
+                      runs =
+                        Enum.map(runs, fn run ->
+                          HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :font)
+                          placement = Map.get(projection.placements, run.owner.node_id)
+
+                          Map.put(
+                            run,
+                            :original_owner,
+                            if(placement, do: placement.original, else: :unbound_synthetic_source)
+                          )
+                        end)
+
+                      {id, runs}
+                    end)
+                  else
+                    glyph_runs
+                  end),
+               glyph_runs =
+                 Map.new(glyph_runs, fn {id, runs} ->
+                   {id,
+                    Enum.map(runs, fn run ->
+                      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :font)
+                      ticket = Map.get(run.font_face, :__template_font_outcome__)
+                      outcome = Map.get(Process.get(key).font_outcomes, ticket)
+                      Map.put(run, :font_source_outcome, outcome || :unbound_later_or_system_face)
+                    end)}
+                 end),
                page_size =
                  PageGeometry.normalize_page_size(Keyword.get(effective_opts, :page_size, :a4)),
                margins = PageGeometry.normalize_margins(Keyword.get(effective_opts, :margin, 0)),
@@ -104,16 +192,52 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
             {:ok,
              %{
                source: tree.nodes[tree.root].source,
+               preparation_scope:
+                 if(projection, do: :prospective_insertion, else: :original_prefix),
+               source_placements: if(projection, do: projection.placements, else: %{}),
                original: plan.original,
                insertion: plan.insertion,
                nodes: nodes,
+               authored_prefix: %{
+                 finish: plan.source_offset,
+                 inline: provenance.records,
+                 embedded:
+                   Enum.map(provenance.embedded, &Map.take(&1, [:css, :node, :insertion_context])),
+                 insertion_contexts: provenance.insertion_contexts,
+                 policy: :original_prefix_provenance_only,
+                 completion: :requires_remaining_original_source
+               },
+               declaration_contexts: Process.get(key).cascades,
                glyph_runs: glyph_runs,
+               parent_declaration_contexts: %{
+                 original:
+                   if(projection,
+                     do: :requires_separate_original_preparation,
+                     else:
+                       declaration_chain(tree, plan.original.parent, Process.get(key).cascades)
+                   ),
+                 prospective:
+                   declaration_chain(tree, plan.insertion.parent, Process.get(key).cascades),
+                 policy:
+                   if(projection,
+                     do: :actual_prospective_parent_cascade_observed,
+                     else: :observed_existing_parent_context_only
+                   )
+               },
                glyph_policy: :normal_generic_text_fallback_observed,
                pending_glyph_owners: [:generated_content, :control_text, :unvisited_authored_text],
                references: Process.get(key).references |> Enum.reverse(),
-               prospective_policy: :requires_actual_insertion_preparation,
+               font_load_outcomes: Process.get(key).font_outcomes,
+               prospective_policy:
+                 if(projection,
+                   do: :ordinary_prospective_style_and_generic_fallback_observed,
+                   else: :requires_actual_insertion_preparation
+                 ),
                original_parent:
-                 Map.get(nodes, plan.original.parent, :not_prepared_by_normal_style),
+                 if(projection,
+                   do: :requires_separate_original_preparation,
+                   else: Map.get(nodes, plan.original.parent, :not_prepared_by_normal_style)
+                 ),
                insertion_parent:
                  Map.get(nodes, plan.insertion.parent, :not_prepared_by_normal_style),
                page: %{
@@ -244,6 +368,416 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
   end
 
   @doc false
+  @spec stylesheet_owner(map(), map()) :: map()
+  def stylesheet_owner(node, entry) do
+    case Process.get({__MODULE__, :preparation}) do
+      %{resource_frame: nil, resource_context: expected, tree: tree} = preparation ->
+        original = Map.get(tree.nodes, Map.get(node, :node_id))
+
+        if ResourceContext.current() == expected && original &&
+             Map.take(original, @source_identity) == Map.take(node, @source_identity) do
+          owner =
+            if preparation.source_projection,
+              do:
+                (case Map.get(preparation.source_projection.placements, node.node_id) do
+                   %{original: owner} -> owner
+                   _ -> :unbound_synthetic_source
+                 end),
+              else: original
+
+          if is_map(owner),
+            do: Map.put(entry, :__template_stylesheet_owner__, Map.take(owner, @source_identity)),
+            else: entry
+        else
+          entry
+        end
+
+      _ ->
+        entry
+    end
+  end
+
+  @doc false
+  @spec bind_stylesheet(map(), map(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def bind_stylesheet(entry, prepared, media_context) do
+    case Process.get({__MODULE__, :preparation}) do
+      %{resource_frame: nil, resource_context: expected} = preparation ->
+        if ResourceContext.current() == expected do
+          owner = Map.get(entry, :__template_stylesheet_owner__)
+
+          descriptor =
+            if owner do
+              Enum.find_value(preparation.provenance.embedded, fn authored ->
+                HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+
+                if Map.take(authored.node, @source_identity) == Map.take(owner, @source_identity),
+                  do: authored.descriptor
+              end)
+            end
+
+          HtmlValidator.reserve_render_resource(:max_css_work, length(prepared.rules), :css)
+
+          with :ok <-
+                 if(owner == nil or descriptor != nil,
+                   do: :ok,
+                   else:
+                     Diagnostics.error(
+                       :css,
+                       :invalid_document,
+                       "prepared stylesheet lost its original HTML source owner",
+                       module: __MODULE__,
+                       operation: :template_renderer_context
+                     )
+                 ),
+               {:ok, authored} <-
+                 CssParser.prepare_source_stylesheet(entry.css, descriptor, media_context),
+               :ok <-
+                 if(
+                   Enum.map(prepared.rules, & &1.declarations) ==
+                     Enum.map(authored.rules, & &1.declarations) and
+                     prepared.font_faces == authored.font_faces,
+                   do: :ok,
+                   else:
+                     Diagnostics.error(
+                       :css,
+                       :invalid_document,
+                       "source declarations do not match the actual prepared stylesheet cascade",
+                       module: __MODULE__,
+                       operation: :template_renderer_context
+                     )
+                 ) do
+            rules =
+              Enum.zip_with(prepared.rules, authored.rules, fn rule, source_rule ->
+                HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+                Map.put(rule, :source_declarations, source_rule.source_declarations)
+              end)
+
+            providers =
+              authored.authored_fonts
+              |> Enum.filter(& &1.active)
+              |> Enum.map(fn font ->
+                HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+                ticket = make_ref()
+
+                provider = %{
+                  authored: font,
+                  owner: owner,
+                  resolution_base: Map.get(entry, :base_url),
+                  shadow_scope_id: Map.get(entry, :shadow_scope_id),
+                  shadow_host_id: Map.get(entry, :shadow_host_id),
+                  resource_context: expected
+                }
+
+                current = Process.get({__MODULE__, :preparation})
+
+                Process.put(
+                  {__MODULE__, :preparation},
+                  Map.put(
+                    current,
+                    :font_providers,
+                    Map.put(Map.get(current, :font_providers, %{}), ticket, provider)
+                  )
+                )
+
+                ticket
+              end)
+
+            {:ok, Map.put(%{prepared | rules: rules}, :font_source_tickets, providers)}
+          end
+        else
+          {:ok, prepared}
+        end
+
+      _ ->
+        {:ok, prepared}
+    end
+  end
+
+  @doc false
+  @spec with_font_candidate(term(), non_neg_integer(), (-> term())) :: term()
+  def with_font_candidate(ticket, ordinal, runner) do
+    key = {__MODULE__, :preparation}
+    preparation = Process.get(key)
+
+    provider =
+      if is_map(preparation), do: Map.get(Map.get(preparation, :font_providers, %{}), ticket)
+
+    if provider && live_font_preparation?(preparation) && preparation.font_candidate_frame == nil do
+      candidates =
+        Enum.filter(
+          provider.authored.candidates,
+          &(&1.role in [:first_candidate, :fallback_candidate])
+        )
+
+      candidate = Enum.at(candidates, ordinal)
+      HtmlValidator.reserve_render_resource(:max_css_work, length(candidates) + 1, :font)
+
+      if candidate do
+        frame = %{provider: ticket, candidate: candidate, context: preparation.resource_context}
+        Process.put(key, %{preparation | font_candidate_frame: frame})
+
+        try do
+          case runner.() do
+            {:ok, config} ->
+              current = Process.get(key)
+
+              if live_font_preparation?(current) do
+                {:ok,
+                 {config,
+                  %{
+                    provider: provider,
+                    candidate: candidate,
+                    references:
+                      Enum.filter(current.references, fn reference ->
+                        HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :font)
+                        Map.get(reference, :font_candidate) == frame
+                      end)
+                  }}}
+              else
+                font_source_failure()
+              end
+
+            result ->
+              result
+          end
+        after
+          current = Process.get(key)
+          Process.put(key, %{current | font_candidate_frame: nil})
+        end
+      else
+        font_source_failure()
+      end
+    else
+      case runner.() do
+        {:ok, config} -> {:ok, {config, nil}}
+        result -> result
+      end
+    end
+  end
+
+  @doc false
+  @spec record_font_recipe(term(), [term()], map()) :: :ok
+  def record_font_recipe(provider, candidates, config) do
+    key = {__MODULE__, :preparation}
+    preparation = Process.get(key)
+
+    if is_map(preparation) && live_font_preparation?(preparation) &&
+         Map.has_key?(preparation.font_providers, provider) &&
+         Enum.all?(candidates, &is_map/1) do
+      HtmlValidator.reserve_render_resource(:max_css_work, length(candidates) + 1, :font)
+      recipe = %{provider: provider, candidates: candidates, config: config}
+      Process.put(key, %{preparation | font_recipes: preparation.font_recipes ++ [recipe]})
+    end
+
+    :ok
+  end
+
+  @doc false
+  @spec with_font_registry(keyword(), [map()], (-> term())) :: term()
+  def with_font_registry(opts, css_fonts, runner) do
+    key = {__MODULE__, :preparation}
+    preparation = Process.get(key)
+
+    if is_map(preparation) && live_font_preparation?(preparation) &&
+         preparation.font_registry_frame == nil &&
+         Enum.map(preparation.font_recipes, & &1.config) == css_fonts do
+      ticket = make_ref()
+
+      frame = %{
+        ticket: ticket,
+        caller_count: length(Keyword.get(opts, :fonts, [])),
+        recipes: preparation.font_recipes,
+        context: preparation.resource_context
+      }
+
+      Process.put(key, %{preparation | font_registry_frame: frame})
+
+      try do
+        NativeElixirPdfUtilities.Validators.FontValidator.with_source_owner(ticket, runner)
+      after
+        current = Process.get(key)
+        Process.put(key, %{current | font_registry_frame: nil})
+      end
+    else
+      runner.()
+    end
+  end
+
+  @doc false
+  @spec font_registry_context(term()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def font_registry_context(ticket) do
+    preparation = Process.get({__MODULE__, :preparation})
+
+    if is_map(preparation) && live_font_preparation?(preparation) &&
+         is_map(preparation.font_registry_frame) &&
+         preparation.font_registry_frame.ticket == ticket do
+      {:ok, preparation.font_registry_frame}
+    else
+      font_source_failure()
+    end
+  end
+
+  @doc false
+  @spec observe_font_load(term(), atom(), non_neg_integer(), non_neg_integer(), map(), map()) ::
+          map()
+  def observe_font_load(ticket, source, ordinal, selected, config, loaded) do
+    key = {__MODULE__, :preparation}
+
+    with {:ok, frame} <- font_registry_context(ticket) do
+      preparation = Process.get(key)
+
+      recipe =
+        if source == :configured && ordinal >= frame.caller_count,
+          do: Enum.at(frame.recipes, ordinal - frame.caller_count)
+
+      candidate = if recipe && recipe.config == config, do: Enum.at(recipe.candidates, selected)
+
+      if recipe && candidate == nil do
+        loaded
+      else
+        HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :font)
+        outcome_ticket = make_ref()
+
+        outcome = %{
+          source: source,
+          config_ordinal: ordinal,
+          selected_candidate: selected,
+          candidate: candidate,
+          family: loaded.family,
+          weight: loaded.weight,
+          style: loaded.style,
+          encoded_source: loaded.data,
+          resource_context: preparation.resource_context,
+          limits: preparation.preparation_limits,
+          basis: if(candidate, do: :validated_css_candidate, else: source),
+          shadow_scope_id: if(candidate, do: candidate.provider.shadow_scope_id),
+          policy: :successful_normal_font_parse_and_embedding
+        }
+
+        Process.put(key, %{
+          preparation
+          | font_outcomes: Map.put(preparation.font_outcomes, outcome_ticket, outcome)
+        })
+
+        Map.put(loaded, :__template_font_outcome__, outcome_ticket)
+      end
+    else
+      _ -> loaded
+    end
+  end
+
+  # A provider belongs to this ordinary preparation, its live authority and exact policy ceilings.
+  defp live_font_preparation?(preparation) do
+    is_map(preparation) && Map.get(preparation, :resource_frame) == nil &&
+      ResourceContext.current() == preparation.resource_context &&
+      ResourceValidator.validate_context(preparation.resource_context) == :ok &&
+      Map.get(preparation, :preparation_limits) == NativeElixirPdfUtilities.Limits.effective() &&
+      Map.get(
+        Process.get({NativeElixirPdfUtilities.Validators.FontValidator, :budget}) || %{},
+        :budget_id
+      ) ==
+        Map.get(preparation, :font_budget_id)
+  end
+
+  defp font_source_failure do
+    Diagnostics.error(
+      :font,
+      :invalid_document,
+      "CSS font candidate requires its live normal preparation source owner and policy context",
+      module: __MODULE__,
+      operation: :template_renderer_context
+    )
+  end
+
+  @doc false
+  @spec observe_cascade(map(), atom() | nil, [map()]) :: :ok | {:error, {atom(), map()}}
+  def observe_cascade(node, pseudo, matched) do
+    key = {__MODULE__, :preparation}
+
+    case Process.get(key) do
+      %{resource_frame: nil, resource_context: expected} = preparation ->
+        original = Map.get(preparation.tree.nodes, Map.get(node, :node_id))
+
+        if ResourceContext.current() == expected && original &&
+             Map.take(original, @source_identity) == Map.take(node, @source_identity) do
+          inline = Map.get(preparation.provenance.records, node.node_id, [])
+
+          result =
+            Enum.reduce_while(matched, {:ok, []}, fn matched, {:ok, records} ->
+              HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+
+              record =
+                if matched.inline,
+                  do: Enum.at(inline, matched.declaration_index),
+                  else: Map.get(matched, :source_record)
+
+              if record && record.declaration != matched.declaration do
+                {:halt,
+                 Diagnostics.error(
+                   :css,
+                   :invalid_document,
+                   "normal cascade declaration does not match its exact original source record",
+                   module: __MODULE__,
+                   operation: :template_renderer_context,
+                   source: record.source.text,
+                   line: record.source.line,
+                   column: record.source.column
+                 )}
+              else
+                declaration = %{
+                  declaration: matched.declaration,
+                  source: if(record, do: record.source, else: :unbound_author_source),
+                  references: if(record, do: record.references, else: []),
+                  cascade:
+                    Map.take(matched, [
+                      :important,
+                      :inline,
+                      :specificity,
+                      :order,
+                      :declaration_index
+                    ]),
+                  context: Map.take(original, @source_identity),
+                  original_context:
+                    if(preparation.source_projection,
+                      do:
+                        case Map.get(preparation.source_projection.placements, original.node_id) do
+                          %{original: owner} -> owner
+                          _ -> :unbound_synthetic_source
+                        end,
+                      else: Map.take(original, @source_identity)
+                    ),
+                  pseudo: pseudo,
+                  policy: :normal_author_cascade_observed,
+                  selection_policy: :requires_final_winning_declaration
+                }
+
+                {:cont, {:ok, [declaration | records]}}
+              end
+            end)
+
+          case result do
+            {:ok, records} ->
+              Process.put(key, %{
+                preparation
+                | cascades:
+                    Map.put(preparation.cascades, {node.node_id, pseudo}, Enum.reverse(records))
+              })
+
+              :ok
+
+            error ->
+              error
+          end
+        else
+          :ok
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  @doc false
   @spec source_owner(map(), keyword()) :: keyword()
   def source_owner(node, opts) do
     marker =
@@ -313,7 +847,16 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
 
   @doc false
   @spec observe_resource(term(), atom(), term(), atom(), term(), keyword()) :: :ok
-  def observe_resource(reference, kind, result, basis, descriptor, opts) do
+  @spec observe_resource(term(), atom(), term(), atom(), term(), keyword(), term()) :: :ok
+  def observe_resource(
+        reference,
+        kind,
+        result,
+        basis,
+        descriptor,
+        opts,
+        authorization_context \\ nil
+      ) do
     case {Process.get({__MODULE__, :preparation}), result} do
       {%{resource_context: expected, resource_frame: frame} = preparation, {:ok, bytes}} ->
         current = ResourceContext.current()
@@ -332,15 +875,47 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
             source_bytes: byte_size(bytes),
             descriptor: descriptor,
             authority_basis: basis,
+            authorization_context: authorization_context || current,
             resource_context: current,
+            font_candidate: Map.get(preparation, :font_candidate_frame),
             owner: if(owner, do: owner, else: :unbound_global_preparation),
-            policy: :loaded_in_original_preparation,
+            original_owner:
+              if(owner && preparation.source_projection,
+                do:
+                  case Map.get(preparation.source_projection.placements, owner.node_id) do
+                    %{original: owner} -> owner
+                    _ -> :unbound_synthetic_source
+                  end,
+                else: if(owner, do: owner, else: :unbound_global_preparation)
+              ),
+            policy:
+              if(preparation.source_projection,
+                do: :loaded_in_prospective_preparation,
+                else: :loaded_in_original_preparation
+              ),
             authored_owner_policy:
               if(kind == :image and owner,
                 do: :html_consuming_element_binding,
                 else: :requires_authored_css_or_candidate_binding
               ),
-            prospective_policy: :requires_actual_insertion_preparation
+            prospective_policy: :requires_actual_insertion_preparation,
+            defining_declaration_candidates:
+              if(kind == :background_image and owner,
+                do:
+                  preparation.cascades
+                  |> Map.get({owner.node_id, nil}, [])
+                  |> Enum.filter(fn declaration ->
+                    HtmlValidator.reserve_render_resource(
+                      :max_css_work,
+                      1 + length(declaration.references),
+                      :css
+                    )
+
+                    Enum.any?(declaration.references, &(&1.decoded == reference))
+                  end),
+                else: []
+              ),
+            defining_declaration_policy: :requires_final_winning_declaration
           }
 
           Process.put({__MODULE__, :preparation}, %{
@@ -360,11 +935,37 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
   @doc false
   @spec validate_prepared_glyph_runs([map()], HtmlTree.t()) ::
           {:ok, map()} | {:error, {atom(), map()}}
-  def validate_prepared_glyph_runs(nodes, tree) do
-    HtmlValidator.with_render_budget(fn -> collect_glyph_runs(nodes, tree, %{}, 0) end)
+  @spec validate_prepared_glyph_runs([map()], HtmlTree.t(), map()) ::
+          {:ok, map()} | {:error, {atom(), map()}}
+  def validate_prepared_glyph_runs(nodes, tree, cascades \\ %{}) do
+    HtmlValidator.with_render_budget(fn -> collect_glyph_runs(nodes, tree, cascades, %{}, 0) end)
   end
 
-  defp collect_glyph_runs(nodes, tree, records, depth) do
+  defp declaration_chain(tree, id, cascades) do
+    Stream.unfold(id, fn id ->
+      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :css)
+
+      case Map.get(tree.nodes, id) do
+        %{type: :element, parent_id: parent} = node ->
+          next =
+            case Map.get(tree.nodes, parent) do
+              %{tree_scope_id: scope} when scope == node.tree_scope_id -> parent
+              _ -> nil
+            end
+
+          {{id, Map.get(cascades, {id, nil}, [])}, next}
+
+        _ ->
+          nil
+      end
+    end)
+    |> Enum.map(fn {id, records} ->
+      HtmlValidator.reserve_render_resource(:max_css_work, length(records), :css)
+      %{owner: Map.take(tree.nodes[id], @source_identity), declarations: records}
+    end)
+  end
+
+  defp collect_glyph_runs(nodes, tree, cascades, records, depth) do
     HtmlValidator.check_render_resource(:max_html_depth, depth, :font)
 
     Enum.reduce_while(nodes, {:ok, records}, fn node, {:ok, records} ->
@@ -383,11 +984,13 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
                 with :ok <- validate_prepared_source(node, original, :font) do
                   run = %{
                     owner: Map.take(original, @source_identity),
+                    original_owner: Map.take(original, @source_identity),
                     authored_text: original.text,
                     resolved_text: node.text,
                     font_face: node.style.font_face,
                     font_size: node.style.font_size,
                     text_transform: Map.get(node.style, :text_transform, :none),
+                    declaration_contexts: declaration_chain(tree, original.parent_id, cascades),
                     policy: :normal_generic_text_fallback_observed
                   }
 
@@ -396,7 +999,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
             end
 
           %{type: :element, children: children} ->
-            collect_glyph_runs(children, tree, records, depth + 1)
+            collect_glyph_runs(children, tree, cascades, records, depth + 1)
         end
 
       case result do

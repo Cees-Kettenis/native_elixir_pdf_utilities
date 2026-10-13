@@ -53,7 +53,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                integer() | :odd | :even | {integer(), integer()}}
           ],
           required(:negations) => [selector_part()],
-          required(:pseudo_element) => nil | :before | :after,
+          required(:pseudo_element) => nil | :before | :after | :picker_icon,
           required(:combinator) => nil | :descendant | :child,
           optional(:language_dependent) => true
         }
@@ -653,6 +653,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                 Map.merge(info, %{
                   source: original,
                   declaration_source: record.source,
+                  declaration_index: index,
+                  candidate_index: candidate_index,
                   role: role,
                   authorization: :unresolved,
                   contents: :unresolved
@@ -1443,6 +1445,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                 {:error, :invalid_css}
             end
 
+          parsed = HtmlValidator.parse_css_shadow_selector(modifiers) ->
+            case parsed do
+              {:ok, kind, compound, rest} ->
+                parsed_compound =
+                  if is_nil(compound),
+                    do: {:ok, nil},
+                    else: parse_simple_selector(HtmlValidator.trim_css_whitespace(compound))
+
+                case parsed_compound do
+                  {:ok, compound} ->
+                    if is_nil(compound) or
+                         (is_nil(compound.pseudo_element) and
+                            not Map.has_key?(compound, :shadow_selector)) do
+                      part =
+                        if is_map(compound) and Map.get(compound, :language_dependent, false),
+                          do: Map.put(part, :language_dependent, true),
+                          else: part
+
+                      parse_selector_modifiers(
+                        rest,
+                        Map.put(part, :shadow_selector, {kind, compound})
+                      )
+                    else
+                      {:error, :invalid_css}
+                    end
+
+                  _ ->
+                    {:error, :invalid_css}
+                end
+
+              _ ->
+                {:error, :invalid_css}
+            end
+
           String.starts_with?(modifiers, "::") ->
             case HtmlValidator.parse_css_pseudo_element(modifiers) do
               {:ok, kind} -> {:ok, %{part | pseudo_element: kind}}
@@ -1531,12 +1567,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       pseudo_element_count = if is_nil(part.pseudo_element), do: 0, else: 1
       class_count = length(part.classes) + length(part.attributes) + length(part.pseudo_classes)
 
+      {shadow_ids, shadow_classes, shadow_elements} =
+        case Map.get(part, :shadow_selector) do
+          {:host, nil} ->
+            {0, 1, 0}
+
+          {:host, compound} ->
+            {ids, classes, elements} = specificity([compound])
+            {ids, classes + 1, elements}
+
+          {:slotted, compound} ->
+            {ids, classes, elements} = specificity([compound])
+            {ids, classes, elements + 1}
+
+          nil ->
+            {0, 0, 0}
+        end
+
       {negation_ids, negation_classes, negation_elements} = specificity(part.negations)
 
       {
-        ids + id_count + negation_ids,
-        classes + class_count + negation_classes,
-        elements + element_count + pseudo_element_count + negation_elements
+        ids + id_count + negation_ids + shadow_ids,
+        classes + class_count + negation_classes + shadow_classes,
+        elements + element_count + pseudo_element_count + negation_elements + shadow_elements
       }
     end)
   end

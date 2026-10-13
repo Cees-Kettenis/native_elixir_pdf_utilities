@@ -13,8 +13,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
   test "prepared track and cell cardinality is rejected before malformed track traversal", %{
     limits: limits
   } do
+    assert {:ok, prepared} = FramesetValidator.prepare(%{"border" => "0"})
     Limits.install(Map.put(limits, :max_frameset_tracks, 2))
-    plan = %{border: false, rows: [:malformed, :malformed, :malformed], columns: [relative: 1.0]}
+
+    plan =
+      Map.merge(prepared, %{rows: [:malformed, :malformed, :malformed], columns: [relative: 1.0]})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              FramesetValidator.prepare_layout(plan, 150, 90)
@@ -23,11 +26,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
     assert diagnostic.message =~ "max_frameset_tracks"
     Limits.install(Map.put(limits, :max_frameset_cells, 3))
 
-    plan = %{
-      border: false,
-      rows: [:malformed, :malformed],
-      columns: [relative: 1.0, relative: 1.0]
-    }
+    plan =
+      Map.merge(prepared, %{
+        rows: [:malformed, :malformed],
+        columns: [relative: 1.0, relative: 1.0]
+      })
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              FramesetValidator.prepare_layout(plan, 150, 90)
@@ -36,11 +39,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
 
     Limits.install(limits |> Map.put(:max_frameset_tracks, 2) |> Map.put(:max_frameset_cells, 4))
 
-    valid = %{
-      border: false,
-      rows: [relative: 1.0, relative: 1.0],
-      columns: [relative: 1.0, relative: 1.0]
-    }
+    valid =
+      Map.merge(prepared, %{
+        rows: [relative: 1.0, relative: 1.0],
+        columns: [relative: 1.0, relative: 1.0]
+      })
 
     assert {:ok, %{columns: [75.0, 75.0], rows: [45.0, 45.0]}} =
              FramesetValidator.prepare_layout(valid, 150, 90)
@@ -52,13 +55,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
   end
 
   test "malformed public prepared plans retain canonical diagnostics within allowed cardinality" do
+    assert {:ok, prepared} = FramesetValidator.prepare(%{"border" => "0"})
+
     for plan <- [
           nil,
           %{border: false, rows: [], columns: [relative: 1.0]},
           %{border: true, rows: [relative: 1.0], columns: [relative: 1.0]},
-          %{border: false, rows: [:malformed], columns: [relative: 1.0]},
-          %{border: false, rows: [absolute: -1.0], columns: [relative: 1.0]},
-          %{border: false, rows: [relative: 0.0], columns: [relative: 1.0]}
+          Map.merge(prepared, %{rows: [:malformed], columns: [relative: 1.0]}),
+          Map.merge(prepared, %{rows: [absolute: -1.0], columns: [relative: 1.0]}),
+          Map.merge(prepared, %{rows: [relative: 0.0], columns: [relative: 1.0]})
         ] do
       assert {:error, {:invalid_document, diagnostic}} =
                FramesetValidator.prepare_layout(plan, 150, 90)
@@ -145,9 +150,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
                border_width: 0.0
              })
 
-    assert frame.margins == %{horizontal: nil, vertical: nil}
+    assert frame.margins == %{horizontal: 0.0, vertical: nil}
     assert {:ok, margins} = FramesetValidator.prepare_body_margins(frame.margins)
-    assert margins == %{top: 6.0, right: 6.0, bottom: 6.0, left: 6.0}
+    assert margins == %{top: 6.0, right: 0.0, bottom: 6.0, left: 0.0}
 
     for margins <- [%{}, %{horizontal: 2.0}, %{horizontal: nil, vertical: nil, unexpected: 0}] do
       assert {:error, {:invalid_document, diagnostic}} =
@@ -238,6 +243,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
        %{limits: limits} do
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
       assert {:ok, plan} = FramesetValidator.prepare(%{"border" => "0"})
+      assert {:ok, plan} = FramesetValidator.prepare_children(plan, [])
 
       node = %{
         type: :element,

@@ -282,10 +282,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
 
     assert {:ok, child} = MathLayout.measure(token("1", style))
 
-    # One row/cell pair costs2; the existing geometry pass costs10.
-    Limits.install(Map.put(limits, :max_table_grid_work, 12))
+    # One row/cell pair costs2; geometry costs10; row paint eligibility costs1.
+    Limits.install(Map.put(limits, :max_table_grid_work, 13))
     assert {:ok, expected} = MathTableValidator.prepare_geometry(prepared, [[child]])
-    Limits.install(Map.put(limits, :max_table_grid_work, 11))
+    Limits.install(Map.put(limits, :max_table_grid_work, 12))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              MathTableValidator.prepare_geometry(prepared, [[child]])
@@ -349,5 +349,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
       assert diagnostic.source in ["mtable", "mtd"] and diagnostic.message =~ "proper"
       assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
     end
+  end
+
+  test "painted row geometry reserves each actual background rectangle beyond eligibility", %{
+    style: style,
+    limits: limits
+  } do
+    zero = %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+    node = matrix([[cell("1", style, zero)]], style)
+    [row] = node.children
+    row = %{row | style: Map.put(row.style, :background_color, {1, 1, 0})}
+    assert {:ok, prepared} = MathLayoutValidator.prepare_element(%{node | children: [row]}, %{})
+    assert {:ok, child} = MathLayout.measure(token("1", style))
+    Limits.install(Map.put(limits, :max_table_grid_work, 14))
+    assert {:ok, geometry} = MathTableValidator.prepare_geometry(prepared, [[child]])
+    assert length(geometry.row_backgrounds) == 1
+    Limits.install(Map.put(limits, :max_table_grid_work, 13))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             MathTableValidator.prepare_geometry(prepared, [[child]])
+
+    assert diagnostic.message =~ "max_table_grid_work" and diagnostic.operation == :measure_math
   end
 end

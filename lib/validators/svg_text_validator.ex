@@ -9,6 +9,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
     SvgSceneValidator,
     SvgStyleValidator,
     SvgTransformValidator,
+    SvgTextPositionValidator,
     SvgValidator
   }
 
@@ -59,6 +60,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
   @doc false
   @spec validate_tree(map()) :: :ok | {:error, {atom(), map()}}
   def validate_tree(root) do
+    with {:ok, _positions} <- prepare_tree_profile(root), do: :ok
+  end
+
+  defp prepare_tree_profile(root) do
     nodes = SvgSceneValidator.tree_nodes(root)
     text? = Enum.any?(nodes, fn {node, _} -> node.tag in ~w(text tspan) end)
 
@@ -67,7 +72,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
              do: validate_original_fonts(root),
              else: :ok
            ) do
-      Enum.reduce_while(nodes, :ok, fn {node, ancestors}, :ok ->
+      Enum.reduce_while(nodes, {:ok, %{}}, fn {node, ancestors}, {:ok, positions} ->
         attributes = if text?, do: validate_text_attributes(node), else: :ok
 
         result =
@@ -130,18 +135,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
                   )
 
                 true ->
-                  Enum.reduce_while(~w(x y dx dy), :ok, fn property, :ok ->
-                    value = Map.get(node.attributes, property)
-
-                    if is_nil(value) or match?({:ok, _}, SvgStyleValidator.length(value, true)),
-                      do: {:cont, :ok},
-                      else:
-                        {:halt,
-                         invalid(
-                           "SVG text #{property} requires one finite length; coordinate lists remain unsupported",
-                           node.tag <> " " <> property
-                         )}
-                  end)
+                  SvgTextPositionValidator.prepare(node)
               end
 
             true ->
@@ -149,7 +143,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
           end
 
         case result do
-          :ok -> {:cont, :ok}
+          :ok -> {:cont, {:ok, positions}}
+          {:ok, plan} -> {:cont, {:ok, Map.put(positions, plan.source_key, plan)}}
           error -> {:halt, error}
         end
       end)
@@ -235,7 +230,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
                    node.tag <> " " <> property
                  )
 
-          property in ~w(rotate textLength lengthAdjust) ->
+          property in ~w(textLength lengthAdjust) or
+              (property == "rotate" and node.tag not in ~w(text tspan)) ->
             unsupported(
               "SVG inherited advanced text positioning requires a complete text adapter",
               node.tag
@@ -265,7 +261,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
     nodes = SvgSceneValidator.tree_nodes(root)
     ids = Map.new(nodes, fn {node, _} -> {Map.get(node.attributes, "id"), node} end)
 
-    with :ok <- validate_tree(root),
+    with {:ok, positions} <- prepare_tree_profile(root),
          {:ok, _summary} <-
            if(Enum.any?(nodes, fn {node, _} -> node.tag in ~w(text tspan) end),
              do:
@@ -335,7 +331,13 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
           |> Enum.with_index()
           |> Map.new(fn {face, index} -> {face.data, "NativeSvgFont#{index}"} end)
 
-        {:ok, %{fonts: selected, aliases: aliases, logical_text: logical_nodes(root, ids)}}
+        {:ok,
+         %{
+           fonts: selected,
+           aliases: aliases,
+           positions: positions,
+           logical_text: logical_nodes(root, ids)
+         }}
       end
     end
   end

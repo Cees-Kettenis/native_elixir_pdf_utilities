@@ -121,3 +121,37 @@ conversion diagnostic instead of silently omitting text. Backend import failure
 is an execution postcondition; caller byte/structure/glyph validation stays in
 FontValidator and SvgBackendValidator. Complete font selection, outline/text
 semantics and logical drawings still belong to SVG-5.
+
+## Native patterns and markers
+
+Inline scenes admit local pattern definitions and inherited marker-start,
+marker-mid and marker-end properties through SvgEffectsValidator. Pinned usvg
+resolves pattern units, inherited definitions, marker units and orientations.
+The PDF writer paints patterns with colored tiling resources and marker artwork
+with ordinary transformed vector paths. Pattern child path and gradient work
+charges the same native work counters as outer artwork. Raster preparation counts
+each resolved tile's exact pinned round-to-u32 dimensions before tile allocation
+and reserves them against max_aggregate_svg_surface_pixels.
+
+The original inline_svg_patterns_markers Chromium fixture retains the existing
+1% changed-pixel and average-delta thresholds. Its first comparison is red,
+with 5.642% changed pixels and 1.294% average delta. Native rotated tiling-cell
+antialias seams remain to be resolved. The focused semantic/resource/render
+tests pass, but this does not close S4 parity or the S6/S7 implementation scopes.
+
+Inline masks now use native PDF transparency groups and Alpha/Luminosity soft
+masks. Mask coordinate units and regions resolve through the validated usvg
+scene. Colored luminance masks convert authored sRGB colors using SVG's fixed
+0.2126/0.7152/0.0722 weights before PDF luminosity conversion. Group effects apply
+once to the composed artwork, so overlapping children and genuine selected-font
+text remain inside the mask. Mask children, linked masks and their paint servers
+charge path, gradient and raster intermediate budgets before execution. Raster
+allocation bounds use each resolved layer's transformed extent, pinned antialias
+padding and the pinned 25-canvas-area cap, rather than a full-canvas reservation
+for every small mask.
+
+The original inline_svg_masks fixture retains its 1% thresholds and is currently
+red at 1.449% changed pixels, with 0.206% average delta. The changed pixels occur
+mainly at mask-region and artwork edges. Focused mask/pattern/reuse/text tests
+pass44/44. This provides actual mask behavior, while mask parity, filters and
+native foreignObject composition remain open.

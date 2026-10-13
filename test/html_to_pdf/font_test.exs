@@ -334,8 +334,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
 
       assert {:ok, ligature} = MathLayout.measure(token)
       assert ligature.actual_text == "office"
-      assert length(ligature.glyphs) < 6
-      changed = %{font | cmap: Map.put(font.cmap, 0xFB03, 65_535)}
+
+      # Pinned STIX has no Latin liga feature; its presentation-form cmap is not shaping authority.
+      assert font.latin_ligatures == %{}
+      assert length(ligature.glyphs) == 6
+      assert Enum.map(ligature.glyphs, & &1.glyph_id) == Enum.map(~c"office", &font.cmap[&1])
+      changed = %{font | cmap: Map.put(font.cmap, ?o, 65_535)}
       bad_style = %{style | font_face: changed}
 
       assert {:error, {:unsupported_glyph, _}} =
@@ -2720,7 +2724,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
   end
 
   test "ligature shaping preserves replacement order and unavailable glyphs" do
-    font = %{cmap: %{0xFB00 => 1, 0xFB01 => 2, 0xFB02 => 3, 0xFB03 => 4, 0xFB04 => 5}}
+    font = %{
+      cmap: %{0xFB00 => 1, 0xFB01 => 2, 0xFB02 => 3, 0xFB03 => 4, 0xFB04 => 5},
+      latin_ligatures: %{
+        "ff" => 0xFB00,
+        "fi" => 0xFB01,
+        "fl" => 0xFB02,
+        "ffi" => 0xFB03,
+        "ffl" => 0xFB04
+      }
+    }
+
     original = "é ffi ffl ff fi fl 中文"
 
     assert Font.shape_ligatures(original, font) == "é ﬃ ﬄ ﬀ ﬁ ﬂ 中文"
@@ -2732,6 +2746,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     for spacing <- [-1, 1] do
       assert Font.shape_ligatures(original, font, spacing) == original
     end
+  end
+
+  test "malformed selected-font GSUB fails recoverably at the shared ligature authority" do
+    data = ttf_fixture(Map.put(valid_tables(), "GSUB", <<1::16, 0::16>>))
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             Font.load_registry(fonts: [%{family: "Malformed GSUB", data: data}])
+
+    assert diagnostic.stage == :font and diagnostic.reason == :invalid_document
+    assert diagnostic.operation == :font_ligatures
+    assert diagnostic.source == "selected font GSUB table"
+    assert diagnostic.message =~ "truncated table"
+  end
+
+  test "selected Mono cmap ligatures stay inactive without a Latin liga feature" do
+    mono_path =
+      Path.join(:code.priv_dir(:native_elixir_pdf_utilities), "fonts/dejavu/DejaVuSansMono.ttf")
+
+    assert {:ok, registry} =
+             Font.load_registry(
+               fonts: [%{family: "Selected Mono", path: mono_path}],
+               system_font_discovery: false
+             )
+
+    assert {:ok, _, mono} = Font.resolve("Selected Mono", 400, :normal, registry)
+    assert Map.fetch!(mono.cmap, 0xFB01) > 0
+    assert mono.latin_ligatures == %{}
+    assert Font.shape_ligatures("No file chosen", mono) == "No file chosen"
+    encoding = Font.pdf_encoding(["file"], mono)
+    refute Map.has_key?(encoding.codepoint_to_cid, 0xFB01)
+    assert Font.text_width("file", mono, 10.5) == 4 * Font.text_width("f", mono, 10.5)
+    assert String.length(Font.encode_embedded_text("file", encoding)) == 16
+
+    assert {:ok, _, sans} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+    assert sans.latin_ligatures["fi"] == 0xFB01
+    assert Font.shape_ligatures("file", sans) == "ﬁle"
+    refute Font.shape_ligatures("file", Map.delete(sans, :latin_ligatures)) == "ﬁle"
   end
 
   test "load_registry skips an empty preferred cmap subtable" do

@@ -147,8 +147,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
               {:error, _} = error -> throw({:math_layout_error, error})
             end
 
+          cells =
+            Enum.map(placement.cells, fn cell ->
+              inner =
+                cell.measured
+                |> Map.merge(%{
+                  width: cell.content_width,
+                  ascent: cell.content_ascent,
+                  descent: cell.content_descent
+                })
+                |> Map.put(
+                  :glyphs,
+                  Enum.map(cell.measured.glyphs, &%{&1 | x: &1.x + cell.inner_x})
+                )
+                |> Map.put(
+                  :drawing_items,
+                  Enum.map(cell.measured.drawing_items, &%{&1 | x: &1.x + cell.inner_x})
+                )
+
+              %{cell | measured: decorate_geometry(inner, cell.style)}
+            end)
+
+          row_backgrounds =
+            Enum.flat_map(placement.row_backgrounds, fn row ->
+              empty = %{
+                width: row.width,
+                min_content_width: row.width,
+                max_content_width: row.width,
+                ascent: row.ascent,
+                descent: row.descent,
+                ink_ascent: row.ascent,
+                ink_descent: row.descent,
+                glyphs: [],
+                drawing_items: []
+              }
+
+              decorated = decorate_geometry(empty, row.style)
+              Enum.map(decorated.drawing_items, &%{&1 | x: &1.x + row.x, y: &1.y + row.y})
+            end)
+
           positioned = fn field ->
-            Enum.flat_map(placement.cells, fn %{measured: child, x: x, y: y} ->
+            Enum.flat_map(cells, fn %{measured: child, x: x, y: y} ->
               Enum.map(Map.fetch!(child, field), &%{&1 | x: &1.x + x, y: &1.y + y})
             end)
           end
@@ -167,8 +206,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             italic_correction: 0.0,
             top_accent_attachment: nil,
             glyphs: positioned.(:glyphs),
-            drawing_items: positioned.(:drawing_items),
-            actual_text: Enum.map_join(placement.cells, & &1.measured.actual_text)
+            drawing_items: row_backgrounds ++ positioned.(:drawing_items),
+            actual_text: Enum.map_join(cells, & &1.measured.actual_text)
           })
 
         %{kind: :radical} ->

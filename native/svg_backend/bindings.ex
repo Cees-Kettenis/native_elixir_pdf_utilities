@@ -35,6 +35,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes do
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc false
+  @spec render_document(
+          binary(),
+          pos_integer(),
+          pos_integer(),
+          [binary()],
+          %{binary() => binary()},
+          tuple()
+        ) ::
+          {:ok, binary()} | {:error, binary()}
+  def render_document(_source, _width, _height, _fonts, _resources, _matrix),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc false
   @spec vectorize(binary(), [binary()], %{binary() => binary()}) ::
           {:ok, binary()} | {:error, binary()}
   def vectorize(_source, _fonts, _resources), do: :erlang.nif_error(:nif_not_loaded)
@@ -43,6 +56,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes do
   @spec validate_shape_work(binary(), {pos_integer(), pos_integer(), [binary()]}) ::
           {:ok, {non_neg_integer(), non_neg_integer()}} | {:error, binary()}
   def validate_shape_work(_source, _ceilings), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc false
+  @spec validate_pattern_work(binary(), pos_integer(), pos_integer(), pos_integer(), [binary()]) ::
+          {:ok, non_neg_integer()} | {:error, binary()}
+  def validate_pattern_work(_source, _width, _height, _ceiling, _fonts),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   @doc false
   @spec validate_path(binary(), pos_integer(), float()) ::

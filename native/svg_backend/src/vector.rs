@@ -1,6 +1,9 @@
 //! Native geometry and selected CID text over the raster adapter's usvg tree.
 //! Authorization and supported input semantics belong to the Elixir validators.
-use pdf_writer::types::{CidFontType, FontFlags, FunctionShadingType, SystemInfo, UnicodeCmap};
+use pdf_writer::types::{
+    CidFontType, FontFlags, FunctionShadingType, MaskType, PaintType, SystemInfo, TilingType,
+    UnicodeCmap,
+};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 use std::collections::HashMap;
 use usvg::tiny_skia_path::{Path, PathSegment};
@@ -11,6 +14,7 @@ struct Resources {
     states: Vec<(String, Ref)>,
     shadings: Vec<(String, Ref)>,
     fonts: Vec<(String, Ref)>,
+    patterns: Vec<(String, Ref)>,
 }
 
 impl Resources {
@@ -30,6 +34,11 @@ impl Resources {
             shadings.pair(Name(name.as_bytes()), *id);
         }
         shadings.finish();
+        let mut patterns = resources.patterns();
+        for (name, id) in &self.patterns {
+            patterns.pair(Name(name.as_bytes()), *id);
+        }
+        patterns.finish();
         if !self.fonts.is_empty() {
             let mut fonts = resources.fonts();
             for (name, id) in &self.fonts {
@@ -44,6 +53,8 @@ struct Writer<'a> {
     pdf: Pdf,
     next: i32,
     database: &'a usvg::fontdb::Database,
+    transform: usvg::Transform,
+    luminance: bool,
     fonts: HashMap<usvg::fontdb::ID, (String, Ref, u16)>,
     mappings: HashMap<usvg::fontdb::ID, std::collections::BTreeMap<u16, String>>,
     clusters: HashMap<usize, Vec<crate::vector_validator::Cluster<'a>>>,
@@ -74,6 +85,8 @@ impl Writer<'_> {
     ) -> Result<(), String> {
         content.save_state();
         let t = group.transform();
+        let previous = self.transform;
+        self.transform = previous.pre_concat(t);
         content.transform([t.sx, t.ky, t.kx, t.sy, t.tx, t.ty]);
         // Validators admit one authored geometry child, or a generated viewport clip.
         if let Some(clip) = group.clip_path() {
@@ -87,7 +100,7 @@ impl Writer<'_> {
             };
             content.end_path();
         }
-        if group.opacity().get() != 1.0 {
+        if group.opacity().get() != 1.0 || group.mask().is_some() {
             let mut body = Content::new();
             let mut child_resources = Resources::default();
             self.children(group, &mut body, &mut child_resources)?;
@@ -105,14 +118,85 @@ impl Writer<'_> {
             child_resources.write(form.resources());
             form.finish();
             let name = format!("X{}", id.get());
+            if let Some(mask) = group.mask() {
+                self.mask(mask, content, resources)?;
+            }
             self.opacity(group.opacity().get(), content, resources);
             content.x_object(Name(name.as_bytes()));
             resources.forms.push((name, id));
         } else {
             self.children(group, content, resources)?;
         }
+        self.transform = previous;
         content.restore_state();
         Ok(())
+    }
+
+    fn mask(
+        &mut self,
+        mask: &usvg::Mask,
+        content: &mut Content,
+        resources: &mut Resources,
+    ) -> Result<(), String> {
+        let mut body = Content::new();
+        let mut child_resources = Resources::default();
+        let previous = self.transform;
+        let previous_luminance = self.luminance;
+        self.transform = usvg::Transform::identity();
+        self.luminance = mask.kind() == usvg::MaskType::Luminance;
+        if let Some(parent) = mask.mask() {
+            self.mask(parent, &mut body, &mut child_resources)?;
+        }
+        self.children(mask.root(), &mut body, &mut child_resources)?;
+        self.transform = previous;
+        self.luminance = previous_luminance;
+        let id = self.reference();
+        let stream = body.finish();
+        let rect = mask.rect();
+        let mut form = self.pdf.form_xobject(id, &stream);
+        form.bbox(Rect::new(
+            rect.left(),
+            rect.top(),
+            rect.right(),
+            rect.bottom(),
+        ));
+        form.group()
+            .transparency()
+            .isolated(true)
+            .color_space()
+            .device_rgb();
+        child_resources.write(form.resources());
+        form.finish();
+        let state = self.reference();
+        self.pdf
+            .ext_graphics(state)
+            .soft_mask()
+            .subtype(if mask.kind() == usvg::MaskType::Alpha {
+                MaskType::Alpha
+            } else {
+                MaskType::Luminosity
+            })
+            .group(id);
+        let name = format!("M{}", state.get());
+        content.set_parameters(Name(name.as_bytes()));
+        resources.states.push((name, state));
+        Ok(())
+    }
+
+    // SVG luminance uses these fixed sRGB coefficients. Convert colors to gray
+    // before the PDF luminosity mask, whose DeviceRGB gray weights can differ.
+    fn rgb(&self, color: usvg::Color) -> [f32; 3] {
+        let rgb = [
+            color.red as f32 / 255.0,
+            color.green as f32 / 255.0,
+            color.blue as f32 / 255.0,
+        ];
+        if self.luminance {
+            let gray = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+            [gray; 3]
+        } else {
+            rgb
+        }
     }
 
     fn children(
@@ -177,22 +261,16 @@ impl Writer<'_> {
                     }) {
                         let clusters = self
                             .clusters
-                            .remove(&(span as *const usvg::layout::Span as usize))
+                            .get(&(span as *const usvg::layout::Span as usize))
+                            .cloned()
                             .ok_or("internal SVG text painter lost its issued cluster plan")?;
                         for cluster in clusters {
-                            content
-                                .begin_marked_content_with_properties(Name(b"Span"))
-                                .properties()
-                                .actual_text(TextStr(cluster.text));
-                            for glyph in cluster.glyphs {
-                                self.text_glyph(
-                                    glyph,
-                                    span.fill.as_ref().unwrap(),
-                                    content,
-                                    resources,
-                                )?;
-                            }
-                            content.end_marked_content();
+                            self.text_cluster(
+                                cluster,
+                                span.fill.as_ref().unwrap(),
+                                content,
+                                resources,
+                            )?;
                         }
                     }
                 }
@@ -203,36 +281,36 @@ impl Writer<'_> {
         Ok(())
     }
 
-    // Each real selected glyph paints inside its complete original cluster.
-    // Text matrices preserve the shaped position and exact selected face.
-    fn text_glyph(
+    // ActualText starts only after this genuine text object has its selected
+    // face, authored size and first glyph matrix. Readers can then preserve
+    // the cluster's real advance and font bounds without a detached setup run.
+    fn text_cluster(
         &mut self,
-        glyph: &usvg::layout::PositionedGlyph,
+        cluster: crate::vector_validator::Cluster<'_>,
         fill: &usvg::Fill,
         content: &mut Content,
         resources: &mut Resources,
     ) -> Result<(), String> {
-        let (name, id, units) = self.selected_font(glyph.font)?;
+        let first = cluster
+            .glyphs
+            .first()
+            .ok_or("internal SVG text painter received an empty cluster plan")?;
+        let (name, id, units) = self.selected_font(first.font)?;
         if !resources.fonts.iter().any(|(_, resource)| *resource == id) {
             resources.fonts.push((name.clone(), id));
         }
-        let t = glyph.outline_transform();
-        // PDF fonts use 1000-unit design coordinates. The shaped transform
-        // maps the selected face's own units, including actual cluster offsets.
         content.save_state();
         let color = match fill.paint() {
             usvg::Paint::Color(color) => color,
             _ => return Err("internal validated SVG text fill lost its RGB paint".into()),
         };
         self.opacity(fill.opacity().get(), content, resources);
-        content.set_fill_rgb(
-            color.red as f32 / 255.0,
-            color.green as f32 / 255.0,
-            color.blue as f32 / 255.0,
-        );
+        let [r, g, b] = self.rgb(*color);
+        content.set_fill_rgb(r, g, b);
         content.begin_text();
-        content.set_font(Name(name.as_bytes()), glyph.font_size());
-        let scale = units as f32 / glyph.font_size();
+        content.set_font(Name(name.as_bytes()), first.font_size());
+        let scale = units as f32 / first.font_size();
+        let t = first.outline_transform();
         content.set_text_matrix([
             t.sx * scale,
             t.ky * scale,
@@ -241,7 +319,25 @@ impl Writer<'_> {
             t.tx,
             t.ty,
         ]);
-        content.show(Str(&glyph.id.0.to_be_bytes()));
+        content
+            .begin_marked_content_with_properties(Name(b"Span"))
+            .properties()
+            .actual_text(TextStr(cluster.text));
+        for (index, glyph) in cluster.glyphs.iter().enumerate() {
+            if index != 0 {
+                let t = glyph.outline_transform();
+                content.set_text_matrix([
+                    t.sx * scale,
+                    t.ky * scale,
+                    t.kx * scale,
+                    t.sy * scale,
+                    t.tx,
+                    t.ty,
+                ]);
+            }
+            content.show(Str(&glyph.id.0.to_be_bytes()));
+        }
+        content.end_marked_content();
         content.end_text();
         content.restore_state();
         Ok(())
@@ -357,11 +453,41 @@ impl Writer<'_> {
         match paint {
             usvg::Paint::Color(color) => {
                 self.opacity(opacity, content, resources);
-                content.set_fill_rgb(
-                    color.red as f32 / 255.0,
-                    color.green as f32 / 255.0,
-                    color.blue as f32 / 255.0,
-                );
+                let [r, g, b] = self.rgb(*color);
+                content.set_fill_rgb(r, g, b);
+                draw_path(path, content);
+                match rule {
+                    usvg::FillRule::NonZero => content.fill_nonzero(),
+                    usvg::FillRule::EvenOdd => content.fill_even_odd(),
+                };
+            }
+            usvg::Paint::Pattern(pattern) => {
+                let mut body = Content::new();
+                let mut child_resources = Resources::default();
+                let previous = self.transform;
+                self.transform = usvg::Transform::identity();
+                self.children(pattern.root(), &mut body, &mut child_resources)?;
+                self.transform = previous;
+                let rect = pattern.rect();
+                let t = previous
+                    .pre_concat(pattern.transform())
+                    .pre_translate(rect.x(), rect.y());
+                let id = self.reference();
+                let stream = body.finish();
+                let mut tile = self.pdf.tiling_pattern(id, &stream);
+                tile.paint_type(PaintType::Colored)
+                    .tiling_type(TilingType::NoDistortion)
+                    .bbox(Rect::new(0.0, 0.0, rect.width(), rect.height()))
+                    .x_step(rect.width())
+                    .y_step(rect.height())
+                    .matrix([t.sx, t.ky, t.kx, t.sy, t.tx, t.ty]);
+                child_resources.write(tile.resources());
+                tile.finish();
+                let name = format!("P{}", id.get());
+                resources.patterns.push((name.clone(), id));
+                self.opacity(opacity, content, resources);
+                content.set_fill_color_space(Name(b"Pattern"));
+                content.set_fill_pattern([], Name(name.as_bytes()));
                 draw_path(path, content);
                 match rule {
                     usvg::FillRule::NonZero => content.fill_nonzero(),
@@ -419,21 +545,13 @@ impl Writer<'_> {
         let mut functions = Vec::new();
         for pair in stops.windows(2) {
             let id = self.reference();
-            let a = pair[0].color();
-            let b = pair[1].color();
+            let a = self.rgb(pair[0].color());
+            let b = self.rgb(pair[1].color());
             self.pdf
                 .exponential_function(id)
                 .domain([0.0, 1.0])
-                .c0([
-                    a.red as f32 / 255.0,
-                    a.green as f32 / 255.0,
-                    a.blue as f32 / 255.0,
-                ])
-                .c1([
-                    b.red as f32 / 255.0,
-                    b.green as f32 / 255.0,
-                    b.blue as f32 / 255.0,
-                ])
+                .c0(a)
+                .c1(b)
                 .n(1.0);
             functions.push(id);
         }
@@ -527,6 +645,15 @@ pub fn convert(tree: &usvg::Tree) -> Result<Vec<u8>, String> {
         fonts: HashMap::new(),
         mappings: prepared.mappings,
         clusters: prepared.clusters,
+        transform: usvg::Transform::from_row(
+            0.75,
+            0.0,
+            0.0,
+            -0.75,
+            0.0,
+            tree.size().height() * 0.75,
+        ),
+        luminance: false,
     };
     let mut content = Content::new();
     let mut resources = Resources::default();

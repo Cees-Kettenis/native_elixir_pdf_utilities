@@ -355,14 +355,33 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
     end
   end
 
+  @doc "Prepares the inherited atomic table context before validating effective presentation."
+  @spec prepare_presentation_style(map(), map()) ::
+          {:ok, map()} | {:error, Diagnostics.detailed_error()}
+  def prepare_presentation_style(node, style) do
+    style =
+      if Map.get(style, :display) == :inline_block,
+        do: Map.put(style, :_table_atomic_context, true),
+        else: style
+
+    with :ok <- validate_presentation_style(node, style), do: {:ok, style}
+  end
+
   @doc "Validates effective table presentation after authored CSS has overridden HTML hints."
   @spec validate_presentation_style(map(), map()) :: :ok | {:error, Diagnostics.detailed_error()}
   @spec validate_presentation_style(map(), map(), :style | :layout) ::
           :ok | {:error, Diagnostics.detailed_error()}
-  def validate_presentation_style(node, style, stage \\ :style) do
+  @spec validate_presentation_style(map(), map(), :style | :layout, boolean() | nil) ::
+          :ok | {:error, Diagnostics.detailed_error()}
+  def validate_presentation_style(node, style, stage \\ :style, atomic_context \\ nil) do
     case style do
       %{display: :table_cell, vertical_align: :baseline} ->
-        if Map.get(node, :namespace, :html) == :html do
+        atomic =
+          if atomic_context == nil,
+            do: Map.get(style, :_table_atomic_context, false),
+            else: atomic_context
+
+        if Map.get(node, :namespace, :html) == :html and not atomic do
           opts =
             Keyword.merge(source_context(node),
               operation: if(stage == :layout, do: :layout, else: :compute_style),
@@ -373,11 +392,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
           Diagnostics.error(
             stage,
             :unsupported_html,
-            "table-cell baseline alignment requires row baseline geometry, which is not implemented; use authored vertical-align:top, middle or bottom",
+            "table-cell baseline alignment in fragmented print requires row baseline geometry and fragmentation policy, which is not implemented; use authored vertical-align:top, middle or bottom",
             opts
           )
         else
-          :ok
+          if stage == :layout and Map.get(node, :namespace, :html) == :html,
+            do: validate_baseline_cell(node),
+            else: :ok
         end
 
       %{text_align: :justify} ->
@@ -415,6 +436,545 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
 
       _ ->
         :ok
+    end
+  end
+
+  @doc "Validates measured atomic table line allocations against the printable page height."
+  @spec validate_atomic_pagination([map()], [map()], number()) ::
+          :ok | {:error, Diagnostics.detailed_error()}
+  def validate_atomic_pagination(boxes, markers, printable_height) do
+    HtmlValidator.with_render_budget(fn ->
+      case {boxes, markers, printable_height} do
+        {boxes, [], height} when is_list(boxes) and is_number(height) and height > 0 ->
+          :ok
+
+        {boxes, markers, height}
+        when is_list(boxes) and is_list(markers) and is_number(height) and height > 0 ->
+          with {:ok, box_count} <- table_collection_size(boxes, 0, :pagination),
+               {:ok, marker_count} <- table_collection_size(markers, 0, :pagination) do
+            HtmlValidator.reserve_render_resource(
+              :max_table_grid_work,
+              4 * box_count + 6 * marker_count,
+              :pagination
+            )
+
+            valid_markers? =
+              Enum.all?(boxes, &is_map/1) and
+                Enum.all?(markers, fn marker ->
+                  case marker do
+                    %{
+                      type: :flow_marker,
+                      role: :atomic_table_line,
+                      flow_id: id
+                    } ->
+                      fragment? =
+                        case Map.get(marker, :fragment_lines, false) do
+                          true ->
+                            case Map.get(marker, :fragment_id) do
+                              {:line, ^id, index} -> is_integer(index) and index >= 0
+                              _ -> false
+                            end
+
+                          false ->
+                            not Map.has_key?(marker, :fragment_id)
+
+                          _ ->
+                            false
+                        end
+
+                      id != nil and fragment? and Map.get(marker, :out_of_flow, false) != true
+
+                    _ ->
+                      false
+                  end
+                end)
+
+            if valid_markers? do
+              keys = MapSet.new(markers, &{&1.flow_id, Map.get(&1, :fragment_id)})
+
+              in_flow =
+                Enum.filter(boxes, fn box ->
+                  Map.get(box, :out_of_flow, false) != true and
+                    MapSet.member?(keys, {Map.get(box, :flow_id), Map.get(box, :fragment_id)})
+                end)
+
+              with :ok <-
+                     NativeElixirPdfUtilities.Validators.WriterValidator.validate_native_boxes(
+                       markers
+                     ),
+                   :ok <-
+                     NativeElixirPdfUtilities.Validators.WriterValidator.validate_native_boxes(
+                       in_flow
+                     ) do
+                bounds =
+                  Enum.reduce(markers ++ in_flow, %{}, fn box, bounds ->
+                    key = {box.flow_id, Map.get(box, :fragment_id)}
+
+                    {top, bottom} =
+                      NativeElixirPdfUtilities.HtmlToPdf.PageGeometry.box_vertical_bounds(box)
+
+                    Map.update(bounds, key, {top, bottom}, fn {previous_top, previous_bottom} ->
+                      {max(top, previous_top), min(bottom, previous_bottom)}
+                    end)
+                  end)
+
+                oversized =
+                  Enum.find(markers, fn marker ->
+                    {top, bottom} =
+                      Map.fetch!(bounds, {marker.flow_id, Map.get(marker, :fragment_id)})
+
+                    top - bottom > height
+                  end)
+
+                if oversized == nil do
+                  :ok
+                else
+                  Diagnostics.error(
+                    :pagination,
+                    :unsupported_html,
+                    "atomic table line allocation exceeds the printable page height; continuation of oversized atomic tables is not implemented; reduce the table allocation or use a block table with authored top, middle or bottom cell alignment",
+                    operation: :paginate,
+                    module: __MODULE__,
+                    source:
+                      "atomic table flow " <>
+                        inspect(oversized.flow_id) <>
+                        " fragment " <> inspect(Map.get(oversized, :fragment_id))
+                  )
+                end
+              else
+                {:error, {reason, diagnostic}} ->
+                  Diagnostics.error(
+                    :pagination,
+                    if(reason == :resource_limit_exceeded, do: reason, else: :invalid_layout),
+                    "atomic table line geometry is invalid; " <> diagnostic.message,
+                    operation: :paginate,
+                    module: __MODULE__,
+                    source: "atomic table line geometry"
+                  )
+              end
+            else
+              Diagnostics.error(
+                :pagination,
+                :invalid_layout,
+                "atomic table pagination requires canonical box maps, its issued zero-width flow marker and outer line fragment identity",
+                operation: :paginate,
+                module: __MODULE__,
+                source: "atomic table line metadata"
+              )
+            end
+          else
+            _ ->
+              Diagnostics.error(
+                :pagination,
+                :invalid_layout,
+                "atomic table geometry requires proper box and marker lists",
+                operation: :paginate,
+                module: __MODULE__,
+                source: "atomic table line geometry"
+              )
+          end
+
+        _ ->
+          Diagnostics.error(
+            :pagination,
+            :invalid_layout,
+            "atomic table pagination requires canonical box and marker lists with a positive printable height",
+            operation: :paginate,
+            module: __MODULE__,
+            source: "atomic table pagination"
+          )
+      end
+    end)
+  end
+
+  @doc "Prepares atomic table flow intent from the fully styled in-flow descendants."
+  @spec prepare_atomic_flow_style(map(), [map()]) :: map()
+  @spec prepare_atomic_flow_style(map(), [map()], :style | :layout) :: map()
+  def prepare_atomic_flow_style(style, children, stage \\ :style) do
+    if Map.get(style, :display) == :inline_block and atomic_flow_table?(children, stage),
+      do: Map.put(style, :_atomic_table_flow, true),
+      else: Map.delete(style, :_atomic_table_flow)
+  end
+
+  defp atomic_flow_table?(children, stage) do
+    Enum.any?(children, fn child ->
+      HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, stage)
+
+      case child do
+        %{style: %{display: :none}} -> false
+        %{style: %{position: :absolute}} -> false
+        %{style: %{display: :table}} -> true
+        %{children: children} -> atomic_flow_table?(children, stage)
+        _ -> false
+      end
+    end)
+  end
+
+  @doc "Validates issued table context against the actual prepared tree ancestry."
+  @spec validate_atomic_context(map(), boolean()) :: :ok | {:error, Diagnostics.detailed_error()}
+  def validate_atomic_context(node, atomic_context) do
+    flow =
+      case node do
+        %{type: :element, style: %{display: :inline_block} = style, children: children} ->
+          expected = prepare_atomic_flow_style(style, children, :layout)
+
+          if Map.get(style, :_atomic_table_flow) == Map.get(expected, :_atomic_table_flow),
+            do: :ok,
+            else:
+              invalid_table(
+                node,
+                "atomic table flow intent must match the in-flow table descendants; recompute styles for this tree"
+              )
+
+        %{style: %{_atomic_table_flow: _}} ->
+          invalid_table(
+            node,
+            "atomic table flow intent requires an actual inline-block owner; recompute styles for this tree"
+          )
+
+        _ ->
+          :ok
+      end
+
+    with :ok <- flow do
+      case node do
+        %{type: :element, style: %{_table_atomic_context: true} = style} ->
+          if atomic_context or Map.get(style, :display) == :inline_block do
+            :ok
+          else
+            invalid_table(
+              node,
+              "atomic table context requires an actual inline-block ancestor; recompute styles for this tree"
+            )
+          end
+
+        _ ->
+          :ok
+      end
+    end
+  end
+
+  @doc "Validates measured table cells and prepares baseline row heights and canonical offsets."
+  @spec prepare_baseline_geometry(term(), term(), term()) ::
+          {:ok, map()} | {:error, Diagnostics.detailed_error()}
+  def prepare_baseline_geometry(rows, metrics, vertical_spacing) do
+    HtmlValidator.with_render_budget(fn ->
+      {proper_rows, row_count} =
+        case table_collection_size(rows) do
+          {:ok, count} -> {true, count}
+          :error -> {false, 0}
+        end
+
+      valid_rows =
+        proper_rows and
+          Enum.all?(Enum.with_index(rows), fn {row, index} ->
+            case row do
+              %{row: %{style: style}, cells: cells} when is_map(style) and is_list(cells) ->
+                case table_collection_size(cells) do
+                  {:ok, count} ->
+                    HtmlValidator.reserve_render_resource(
+                      :max_table_grid_work,
+                      2 * count,
+                      :layout
+                    )
+
+                    Enum.all?(cells, fn cell ->
+                      case cell do
+                        %{
+                          cell: %{style: cell_style, children: children},
+                          column: column,
+                          rowspan: rowspan
+                        }
+                        when is_map(cell_style) and is_list(children) and is_integer(column) and
+                               column >= 0 and
+                               is_integer(rowspan) and rowspan >= 1 and
+                               rowspan <= row_count - index ->
+                          match?({:ok, _}, table_collection_size(children))
+
+                        _ ->
+                          false
+                      end
+                    end)
+
+                  :error ->
+                    false
+                end
+
+              _ ->
+                false
+            end
+          end)
+
+      placements =
+        if valid_rows,
+          do:
+            Enum.flat_map(Enum.with_index(rows), fn {row, index} ->
+              Enum.map(row.cells, &{{index, &1.column}, &1})
+            end),
+          else: []
+
+      valid =
+        valid_rows and is_map(metrics) and is_number(vertical_spacing) and
+          vertical_spacing >= 0 and
+          map_size(metrics) == length(placements) and
+          Enum.all?(placements, fn {key, _placement} ->
+            case Map.get(metrics, key) do
+              %{
+                intrinsic_height: intrinsic,
+                minimum_height: minimum,
+                baseline: baseline,
+                inset_bottom: inset_bottom,
+                has_flow: has_flow
+              }
+              when is_number(intrinsic) and intrinsic >= 0 and is_number(minimum) and
+                     minimum >= intrinsic and
+                     is_number(baseline) and is_number(inset_bottom) and inset_bottom >= 0 and
+                     is_boolean(has_flow) ->
+                Enum.each(
+                  [intrinsic, minimum, baseline, inset_bottom],
+                  &HtmlValidator.check_render_resource(
+                    :max_css_numeric_magnitude,
+                    abs(&1),
+                    :layout
+                  )
+                )
+
+                true
+
+              _ ->
+                false
+            end
+          end)
+
+      if valid do
+        with :ok <- validate_baseline_dependencies(placements) do
+          HtmlValidator.check_render_resource(
+            :max_css_numeric_magnitude,
+            vertical_spacing,
+            :layout
+          )
+
+          HtmlValidator.reserve_render_resource(:max_table_grid_work, length(placements), :layout)
+
+          row_geometry =
+            Enum.with_index(rows, fn row, index ->
+              cells = Enum.map(row.cells, &{&1, Map.fetch!(metrics, {index, &1.column})})
+
+              eligible =
+                Enum.filter(cells, fn {placement, metric} ->
+                  Map.get(placement.cell.style, :vertical_align, :middle) == :baseline and
+                    metric.has_flow
+                end)
+
+              ascent =
+                eligible
+                |> Enum.map(fn {_cell, metric} -> metric.baseline end)
+                |> Enum.max(fn -> nil end)
+
+              descent =
+                eligible
+                |> Enum.filter(fn {cell, _metric} -> cell.rowspan == 1 end)
+                |> Enum.map(fn {_cell, metric} -> metric.intrinsic_height - metric.baseline end)
+                |> Enum.max(fn -> 0.0 end)
+
+              minimum =
+                cells
+                |> Enum.filter(fn {cell, _metric} -> cell.rowspan == 1 end)
+                |> Enum.map(fn {_cell, metric} -> metric.minimum_height end)
+                |> Enum.max(fn -> 0.0 end)
+
+              declared =
+                case Map.get(row.row.style, :height) do
+                  value when is_number(value) -> value
+                  _ -> 0.0
+                end
+
+              height = max(minimum, declared)
+              height = if ascent == nil, do: height, else: max(height, ascent + descent)
+
+              fallback =
+                cells
+                |> Enum.map(fn {_cell, metric} -> metric.inset_bottom end)
+                |> Enum.min(fn -> 0.0 end)
+
+              %{
+                height: height,
+                baseline: if(ascent == nil, do: max(height - fallback, 0.0), else: ascent),
+                baseline_tracks_height: ascent == nil and cells != []
+              }
+            end)
+
+          HtmlValidator.reserve_render_resource(:max_table_grid_work, row_count, :layout)
+
+          geometry_by_row =
+            Map.new(Enum.with_index(row_geometry), fn {geometry, index} -> {index, geometry} end)
+
+          offsets =
+            Map.new(placements, fn {{index, _column} = key, placement} ->
+              metric = Map.fetch!(metrics, key)
+
+              offset =
+                if Map.get(placement.cell.style, :vertical_align, :middle) == :baseline and
+                     metric.has_flow,
+                   do: Map.fetch!(geometry_by_row, index).baseline - metric.baseline,
+                   else: 0.0
+
+              {key, offset}
+            end)
+
+          heights = Enum.map(row_geometry, & &1.height)
+
+          heights =
+            Enum.reduce(placements, heights, fn {{index, _column} = key, placement}, heights ->
+              if placement.rowspan > 1 do
+                metric = Map.fetch!(metrics, key)
+
+                HtmlValidator.reserve_render_resource(
+                  :max_table_grid_work,
+                  index + placement.rowspan,
+                  :layout
+                )
+
+                current =
+                  Enum.sum(Enum.slice(heights, index, placement.rowspan)) +
+                    vertical_spacing * (placement.rowspan - 1)
+
+                extra =
+                  max(metric.minimum_height + Map.fetch!(offsets, key) - current, 0.0) /
+                    placement.rowspan
+
+                if extra > 0 do
+                  HtmlValidator.reserve_render_resource(:max_table_grid_work, row_count, :layout)
+
+                  Enum.with_index(heights, fn height, row ->
+                    if row >= index and row < index + placement.rowspan,
+                      do: height + extra,
+                      else: height
+                  end)
+                else
+                  heights
+                end
+              else
+                heights
+              end
+            end)
+
+          Enum.each(
+            heights ++ Map.values(offsets),
+            &HtmlValidator.check_render_resource(:max_css_numeric_magnitude, abs(&1), :layout)
+          )
+
+          baselines =
+            Enum.zip_with(row_geometry, heights, fn row, height ->
+              if row.baseline_tracks_height,
+                do: row.baseline + height - row.height,
+                else: row.baseline
+            end)
+
+          {:ok,
+           %{
+             heights: heights,
+             baselines: baselines,
+             offsets: offsets,
+             baseline_tracks_height: Enum.map(row_geometry, & &1.baseline_tracks_height)
+           }}
+        end
+      else
+        invalid_table(
+          %{tag: "table measured geometry"},
+          "table baseline geometry requires bounded intrinsic/minimum heights, flow baselines and metrics for every canonical cell"
+        )
+      end
+    end)
+  end
+
+  # Percentage descendants need a second allocation-dependent baseline pass.
+  defp validate_baseline_dependencies(placements) do
+    Enum.reduce_while(placements, :ok, fn {_key, placement}, :ok ->
+      result =
+        if Map.get(placement.cell.style, :vertical_align, :middle) == :baseline,
+          do: validate_baseline_cell(placement.cell),
+          else: :ok
+
+      case result do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp validate_baseline_cell(node) do
+    children = Map.get(node, :children, [])
+
+    pending =
+      case table_collection_size(children) do
+        {:ok, _count} -> Enum.find_value(children, &baseline_dependency/1)
+        :error -> {:invalid_descendant, node}
+      end
+
+    case pending do
+      nil ->
+        :ok
+
+      {:invalid_descendant, descendant} ->
+        invalid_table(
+          descendant,
+          "active table baseline descendants require maps and a list of children when supplied; correct the prepared cell tree or recompute styles"
+        )
+
+      pending ->
+        Diagnostics.error(
+          :layout,
+          :unsupported_html,
+          "table baseline #{pending} requires allocation-dependent baseline geometry, which is not implemented; use authored vertical-align:top, middle or bottom",
+          Keyword.merge(source_context(node),
+            operation: :layout,
+            module: __MODULE__,
+            source: Map.get(node, :tag, "table cell") <> " baseline #{pending}"
+          )
+        )
+    end
+  end
+
+  defp baseline_dependency(node) do
+    HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, :layout)
+
+    case node do
+      %{style: %{display: :none}} ->
+        nil
+
+      node when is_map(node) ->
+        children = Map.get(node, :children, [])
+
+        case table_collection_size(children) do
+          {:ok, _count} ->
+            case node do
+              %{style: %{height: {:percent, _}}} -> "percentage-height descendant"
+              _ -> Enum.find_value(children, &baseline_dependency/1)
+            end
+
+          :error ->
+            {:invalid_descendant, node}
+        end
+
+      _ ->
+        {:invalid_descendant, node}
+    end
+  end
+
+  # Direct measured models need bounded proper-list inspection before
+  # enumeration or placement allocation, including improper-list tails.
+  defp table_collection_size(collection, count \\ 0, stage \\ :layout) do
+    case collection do
+      [] ->
+        {:ok, count}
+
+      [_head | tail] ->
+        HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, stage)
+        table_collection_size(tail, count + 1, stage)
+
+      _ ->
+        :error
     end
   end
 

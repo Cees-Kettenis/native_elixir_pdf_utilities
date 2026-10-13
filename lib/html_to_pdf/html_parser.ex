@@ -17,6 +17,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   alias NativeElixirPdfUtilities.Validators.ForeignContentValidator
   alias NativeElixirPdfUtilities.Validators.TemplatePatchValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.TemplateCandidateValidator
 
   # This fixed byte alphabet follows UTF-8 encoding, not a configurable ceiling.
   @non_ascii_bytes for byte <- 128..255, do: <<byte>>
@@ -197,74 +198,104 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
           :html
         )
 
-        # Normalize the input stream before tokenization, not decoded references.
-        # Keep the caller's bytes for diagnostics and resource accounting.
-        input =
-          HtmlValidator.preprocess_html(html)
-
-        HtmlValidator.reserve_render_resource(:max_html_tree_work, 3 * byte_size(html), :html)
-        crlf = :binary.matches(html, "\r\n")
-
-        {column_positions, column_extras} =
-          unicode_columns(html, 0, 0, [], [], :binary.compile_pattern(@non_ascii_bytes))
-
-        source_context = %{
-          original: html,
-          column_positions: column_positions,
-          column_extras: column_extras,
-          size: byte_size(input),
-          crlf:
-            crlf
-            |> Enum.with_index()
-            |> Enum.map(fn {{position, 2}, index} -> position - index end)
-            |> List.to_tuple(),
-          lines:
-            [
-              0
-              | Enum.map(:binary.matches(html, ["\r\n", "\r", "\n"]), fn {position, length} ->
-                  position + length
-                end)
-            ]
-            |> List.to_tuple()
-        }
+        {input, source_context} = source_stream(html)
 
         case parse_document(input, context, source_context) do
-          {:ok, dom} ->
-            {:ok, dom}
-
-          {:error, {:html_source, source, remaining_bytes}} ->
-            offset = byte_size(input) - byte_size(source) - remaining_bytes
-
-            {source, line, column} =
-              original_source_span(source_context, offset, byte_size(source))
-
-            Diagnostics.error(
-              :html,
-              :unsupported_html,
-              html_error_message(line, source),
-              source: source,
-              line: line,
-              column: column
-            )
-
-          {:error, {:html_diagnostic, reason, diagnostic, remaining_bytes, token}} ->
-            offset = byte_size(input) - byte_size(token) - remaining_bytes
-
-            {source, line, column} =
-              original_source_span(source_context, offset, byte_size(token))
-
-            source = if diagnostic.source == token, do: source, else: diagnostic.source
-
-            Diagnostics.error(diagnostic.stage, reason, diagnostic.message,
-              source: source,
-              module: Map.get(diagnostic, :module),
-              operation: Map.get(diagnostic, :operation),
-              line: line,
-              column: column
-            )
+          {:ok, dom} -> {:ok, dom}
+          error -> parse_error(error, source_context)
         end
       end)
     end)
+  end
+
+  defp source_stream(html) do
+    # Normalize the input stream before tokenization, not decoded references.
+    # Keep the caller's bytes for diagnostics and resource accounting.
+    HtmlValidator.reserve_render_resource(:max_html_tree_work, 3 * byte_size(html), :html)
+    input = HtmlValidator.preprocess_html(html)
+    crlf = :binary.matches(html, "\r\n")
+
+    {column_positions, column_extras} =
+      unicode_columns(html, 0, 0, [], [], :binary.compile_pattern(@non_ascii_bytes))
+
+    source_context = %{
+      original: html,
+      column_positions: column_positions,
+      column_extras: column_extras,
+      size: byte_size(input),
+      crlf:
+        crlf
+        |> Enum.with_index()
+        |> Enum.map(fn {{position, 2}, index} -> position - index end)
+        |> List.to_tuple(),
+      lines:
+        [
+          0
+          | Enum.map(:binary.matches(html, ["\r\n", "\r", "\n"]), fn {position, length} ->
+              position + length
+            end)
+        ]
+        |> List.to_tuple()
+    }
+
+    {input, source_context}
+  end
+
+  defp parse_error(error, source_context) do
+    case error do
+      {:error, {:html_source, source, remaining_bytes}} ->
+        offset = source_context.size - byte_size(source) - remaining_bytes
+
+        {source, line, column} =
+          original_source_span(source_context, offset, byte_size(source))
+
+        Diagnostics.error(
+          :html,
+          :unsupported_html,
+          html_error_message(line, source),
+          source: source,
+          line: line,
+          column: column
+        )
+
+      {:error, {:html_diagnostic, reason, diagnostic, remaining_bytes, token}} ->
+        offset = source_context.size - byte_size(token) - remaining_bytes
+
+        {source, line, column} =
+          original_source_span(source_context, offset, byte_size(token))
+
+        source = if diagnostic.source == token, do: source, else: diagnostic.source
+
+        Diagnostics.error(diagnostic.stage, reason, diagnostic.message,
+          source: source,
+          module: Map.get(diagnostic, :module),
+          operation: Map.get(diagnostic, :operation),
+          line: line,
+          column: column
+        )
+
+      {:error, {_reason, _diagnostic}} = error ->
+        error
+
+      _ ->
+        source =
+          Map.get(source_context, :candidate_source, %{
+            text: source_context.original,
+            line: 1,
+            column: 1
+          })
+
+        Diagnostics.error(
+          :html,
+          :unsupported_html,
+          "candidate source cannot be parsed completely in this tokenizer context; original input remains retained",
+          module: __MODULE__,
+          operation: :parse,
+          source: source.text,
+          line: source.line,
+          column: source.column
+        )
+    end
   end
 
   defp parse_document(html, context, source_context) do
@@ -322,6 +353,130 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
           {:ok, HtmlTree.fetch(tree, tree.root)}
         end
     end
+  end
+
+  @doc false
+  @spec capture_template_candidate(term(), HtmlTree.t()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def capture_template_candidate(handle, tree) do
+    TemplatePatchValidator.with_candidate_input(handle, tree, fn capture ->
+      {input, source_context} = source_stream(capture.source)
+      plan = capture.plan
+      source_context = Map.put(source_context, :candidate_source, plan.source)
+
+      normalized_start =
+        capture.source
+        |> binary_part(0, plan.source_offset + byte_size(plan.source.text))
+        |> HtmlValidator.preprocess_html()
+        |> byte_size()
+
+      remaining =
+        {:source, binary_part(input, normalized_start, byte_size(input) - normalized_start)}
+
+      element = %{
+        type: :element,
+        tag: "template",
+        attributes: capture.opening.attributes,
+        children: [],
+        source: plan.source
+      }
+
+      HtmlValidator.reserve_render_resource(:max_html_nodes, 1, :html)
+      {original, host} = HtmlTree.insert(tree, plan.original.parent, element)
+      {original, fragment} = HtmlTree.open_fragment(original, host, plan.source)
+
+      result =
+        element_children(
+          "template",
+          "template",
+          remaining,
+          false,
+          HtmlValidator.html_parent_stack(
+            plan.tokenizer_context,
+            "template",
+            plan.tokenizer_ancestors
+          ),
+          source_context,
+          original,
+          fragment
+        )
+
+      case result do
+        {:ok, original, {:source, rest}} ->
+          {original, _} = HtmlTree.close(original, fragment)
+          {original, _} = HtmlTree.close(original, host)
+          normalized_finish = source_context.size - byte_size(rest)
+
+          finish =
+            normalized_finish +
+              boundary_index(
+                source_context.crlf,
+                normalized_finish,
+                0,
+                tuple_size(source_context.crlf)
+              )
+
+          with {:ok, provenance} <-
+                 TemplateCandidateValidator.prepare_original(original, finish, plan),
+               {:ok, transaction} <- HtmlTree.begin_content_patch(tree, plan.target) do
+            bounded = binary_part(input, normalized_start, normalized_finish - normalized_start)
+            prospective_context = %{source_context | size: normalized_finish}
+            prospective_context = Map.put(prospective_context, :insertion, plan.target)
+            ancestors = capture.prospective_ancestors
+
+            prospective =
+              parse_children(
+                {:source, bounded},
+                plan.insertion.context,
+                "template",
+                ancestors,
+                prospective_context,
+                transaction.tree,
+                plan.target.parent
+              )
+
+            case prospective do
+              {:ok, projected, {:source, ""}} ->
+                previous = MapSet.new(transaction.tree.nodes[plan.target.parent].children)
+
+                roots =
+                  projected.nodes[plan.target.parent].children
+                  |> Enum.reverse()
+                  |> Enum.reject(&MapSet.member?(previous, &1))
+
+                with :ok <-
+                       NativeElixirPdfUtilities.Validators.HtmlTreeValidator.validate_patch_adoption(
+                         projected,
+                         plan.target,
+                         roots
+                       ),
+                     {:ok, projected} <-
+                       HtmlTree.finish_content_patch(%{
+                         transaction
+                         | tree: projected,
+                           inserted: roots
+                       }) do
+                  {:ok,
+                   %{
+                     original: original,
+                     projected: projected,
+                     host: host,
+                     fragment: fragment,
+                     inserted_roots: roots,
+                     finish: finish,
+                     provenance: provenance
+                   }}
+                end
+
+              error ->
+                parse_error(error, prospective_context)
+            end
+          end
+
+        error ->
+          parse_error(error, source_context)
+      end
+    end)
   end
 
   @doc false
@@ -539,7 +694,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
           HtmlValidator.construct_html_group(tag, [])
           |> Map.put(:source, %{text: "", line: 1, column: 1})
 
-        {tree, id} = HtmlTree.insert(tree, parent, group)
+        {tree, id} = attach_node(tree, parent, group, source_context)
 
         # The implied parent exists before reprocessing the authored token.
         # Recursion tracks its insertion mode, while HtmlTree owns its address.
@@ -621,11 +776,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
                 else: HtmlEntities.decode(token, :text)
 
             {tree, id} =
-              HtmlTree.insert(tree, parent, %{
-                type: :text,
-                text: text,
-                source: token_source(source_context, token, remaining)
-              })
+              attach_node(
+                tree,
+                parent,
+                %{
+                  type: :text,
+                  text: text,
+                  source: token_source(source_context, token, remaining)
+                },
+                source_context
+              )
 
             {tree, _node} = HtmlTree.close(tree, id)
 
@@ -644,10 +804,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         case HtmlValidator.validate_html_processing_instruction(token) do
           {:ok, node} ->
             {tree, id} =
-              HtmlTree.insert(
+              attach_node(
                 tree,
                 parent,
-                Map.put(node, :source, token_source(source_context, token, remaining))
+                Map.put(node, :source, token_source(source_context, token, remaining)),
+                source_context
               )
 
             {tree, _node} = HtmlTree.close(tree, id)
@@ -674,11 +835,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         text = binary_part(token, 9, byte_size(token) - 12)
 
         {tree, id} =
-          HtmlTree.insert(tree, parent, %{
-            type: :text,
-            text: text,
-            source: token_source(source_context, token, remaining)
-          })
+          attach_node(
+            tree,
+            parent,
+            %{
+              type: :text,
+              text: text,
+              source: token_source(source_context, token, remaining)
+            },
+            source_context
+          )
 
         {tree, _node} = HtmlTree.close(tree, id)
         parse_children(remaining, context, closing_tag, ancestors, source_context, tree, parent)
@@ -810,7 +976,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
           # Attach the opening element now. Recursive calls only track tokenizer
           # context; the canonical table owns open and closed tree relationships.
-          {tree, id} = HtmlTree.insert(tree, parent, element)
+          {tree, id} = attach_node(tree, parent, element, source_context)
 
           {tree, child_parent} =
             if tag == "template" and prepared.namespace == :html,
@@ -900,11 +1066,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
           :text ->
             {tree, id} =
-              HtmlTree.insert(tree, parent, %{
-                type: :text,
-                text: HtmlEntities.decode(token, :text),
-                source: token_source(source_context, token, remaining)
-              })
+              attach_node(
+                tree,
+                parent,
+                %{
+                  type: :text,
+                  text: HtmlEntities.decode(token, :text),
+                  source: token_source(source_context, token, remaining)
+                },
+                source_context
+              )
 
             {tree, _node} = HtmlTree.close(tree, id)
 
@@ -1016,6 +1187,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
       true ->
         ~s(line #{line}: HTML source "#{source}" is unsupported or malformed)
     end
+  end
+
+  defp attach_node(tree, parent, node, source_context) do
+    before =
+      case Map.get(source_context, :insertion) do
+        %{parent: ^parent, end: finish} -> finish
+        _ -> nil
+      end
+
+    HtmlTree.insert(tree, parent, node, before)
   end
 
   defp token_source(context, token, remaining) do

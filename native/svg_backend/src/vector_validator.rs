@@ -2,10 +2,14 @@
 use usvg::tiny_skia_path::{PathSegment, Point};
 
 pub fn work(group: &usvg::Group, ceiling: u64) -> Result<u64, String> {
-    let mut total = match group.clip_path() {
-        Some(clip) => work(clip.root(), ceiling)?,
+    let mut total = match group.mask() {
+        Some(mask) => mask_work(mask, ceiling)?,
         None => 0,
     };
+    total = total.saturating_add(match group.clip_path() {
+        Some(clip) => work(clip.root(), ceiling)?,
+        None => 0,
+    });
     for node in group.children() {
         let amount = match node {
             usvg::Node::Group(group) => work(group, ceiling)?,
@@ -48,7 +52,18 @@ pub fn work(group: &usvg::Group, ceiling: u64) -> Result<u64, String> {
                 if !amount.is_finite() || amount > ceiling as f64 {
                     return Err("max_svg_stroke_work".into());
                 }
-                amount.ceil() as u64
+                let mut total = amount.ceil() as u64;
+                for paint in path
+                    .fill()
+                    .map(|f| f.paint())
+                    .into_iter()
+                    .chain(path.stroke().map(|s| s.paint()))
+                {
+                    if let usvg::Paint::Pattern(pattern) = paint {
+                        total = total.saturating_add(work(pattern.root(), ceiling)?);
+                    }
+                }
+                total
             }
             _ => 0,
         };
@@ -60,9 +75,23 @@ pub fn work(group: &usvg::Group, ceiling: u64) -> Result<u64, String> {
     Ok(total)
 }
 
+fn mask_work(mask: &usvg::Mask, ceiling: u64) -> Result<u64, String> {
+    let mut total = work(mask.root(), ceiling)?;
+    if let Some(parent) = mask.mask() {
+        total = total.saturating_add(mask_work(parent, ceiling)?);
+    }
+    if total > ceiling {
+        return Err("max_svg_stroke_work".into());
+    }
+    Ok(total)
+}
+
 /// Counts functions needed for every prepared fill/stroke gradient occurrence.
 pub fn gradient_work(group: &usvg::Group, ceiling: u64) -> Result<u64, String> {
-    let mut total = 0u64;
+    let mut total = match group.mask() {
+        Some(mask) => mask_gradient_work(mask, ceiling)?,
+        None => 0,
+    };
     for node in group.children() {
         total = total.saturating_add(match node {
             usvg::Node::Group(group) => gradient_work(group, ceiling)?,
@@ -74,11 +103,16 @@ pub fn gradient_work(group: &usvg::Group, ceiling: u64) -> Result<u64, String> {
                     .into_iter()
                     .chain(path.stroke().map(|stroke| stroke.paint()));
                 paints
-                    .map(|paint| match paint {
-                        usvg::Paint::LinearGradient(g) => g.stops().len() as u64,
-                        usvg::Paint::RadialGradient(g) => g.stops().len() as u64,
-                        _ => 0,
+                    .map(|paint| {
+                        Ok(match paint {
+                            usvg::Paint::LinearGradient(g) => g.stops().len() as u64,
+                            usvg::Paint::RadialGradient(g) => g.stops().len() as u64,
+                            usvg::Paint::Pattern(p) => gradient_work(p.root(), ceiling)?,
+                            _ => 0,
+                        })
                     })
+                    .collect::<Result<Vec<u64>, String>>()?
+                    .into_iter()
                     .sum()
             }
             _ => 0,
@@ -86,6 +120,17 @@ pub fn gradient_work(group: &usvg::Group, ceiling: u64) -> Result<u64, String> {
         if total > ceiling {
             return Err("max_svg_gradient_work".into());
         }
+    }
+    Ok(total)
+}
+
+fn mask_gradient_work(mask: &usvg::Mask, ceiling: u64) -> Result<u64, String> {
+    let mut total = gradient_work(mask.root(), ceiling)?;
+    if let Some(parent) = mask.mask() {
+        total = total.saturating_add(mask_gradient_work(parent, ceiling)?);
+    }
+    if total > ceiling {
+        return Err("max_svg_gradient_work".into());
     }
     Ok(total)
 }
@@ -105,6 +150,21 @@ pub fn text<'a>(
     database: &usvg::fontdb::Database,
 ) -> Result<PreparedText<'a>, String> {
     let mut prepared = PreparedText::default();
+    if let Some(mask) = group.mask() {
+        let mut current = Some(mask);
+        while let Some(mask) = current {
+            let children = text(mask.root(), database)?;
+            for (font, glyphs) in children.mappings {
+                prepared
+                    .mappings
+                    .entry(font)
+                    .or_insert_with(std::collections::BTreeMap::new)
+                    .extend(glyphs);
+            }
+            prepared.clusters.extend(children.clusters);
+            current = mask.mask();
+        }
+    }
     for node in group.children() {
         match node {
             usvg::Node::Group(group) => {
@@ -139,10 +199,55 @@ pub fn text<'a>(
                 if logical != shaped {
                     return Err("SVG positioned glyph clusters do not preserve source Unicode order; bidi/unsupported shaping requires a complete logical adapter".into());
                 }
+                // Pinned usvg applies relative shifts only at a shaped cluster's
+                // first codepoint. Nonzero continuation offsets would silently
+                // change later glyph geometry, so the initial list profile must
+                // reject them before either inline paint mode executes.
+                if text_node.dx().iter().chain(text_node.dy()).any(|offset| *offset != 0.0) {
+                    let scalar_count = logical.chars().count();
+                    if text_node.dx().len() != scalar_count || text_node.dy().len() != scalar_count {
+                        return Err("SVG relative positions require complete original Unicode/codepoint mapping; hidden or metadata offsets need a complete positioning adapter".into());
+                    }
+                    let mut offset = 0;
+                    for glyph in text_node.layouted().iter().flat_map(|span| &span.positioned_glyphs) {
+                        let count = glyph.text.chars().count();
+                        for index in offset + usize::from(count > 0)..offset + count {
+                            if text_node.dx()[index] != 0.0 || text_node.dy()[index] != 0.0 {
+                                return Err("SVG nonzero relative offsets inside a shaped Unicode cluster require a complete character-positioning adapter".into());
+                            }
+                        }
+                        offset += count;
+                    }
+                }
+                if text_node.rotate().iter().any(|angle| *angle != 0.0) {
+                    if text_node.rotate().len() != logical.chars().count() {
+                        return Err("SVG rotations require complete original Unicode/codepoint mapping; hidden or metadata angles need a complete positioning adapter".into());
+                    }
+                    let mut offset = 0;
+                    for glyph in text_node.layouted().iter().flat_map(|span| &span.positioned_glyphs) {
+                        let count = glyph.text.chars().count();
+                        for index in offset + usize::from(count > 0)..offset + count {
+                            if text_node.rotate()[index] != text_node.rotate()[offset] {
+                                return Err("SVG differing rotations inside a shaped Unicode cluster require complete character-positioned glyph mapping".into());
+                            }
+                        }
+                        offset += count;
+                    }
+                }
                 // The admitted font profile cannot contain color/raster glyphs.
                 text(text_node.flattened(), database)?;
             }
-            usvg::Node::Path(_) => {}
+            usvg::Node::Path(path) => {
+                for paint in path.fill().map(|f| f.paint()).into_iter().chain(path.stroke().map(|s| s.paint())) {
+                    if let usvg::Paint::Pattern(pattern) = paint {
+                        let children = text(pattern.root(), database)?;
+                        for (font, glyphs) in children.mappings {
+                            prepared.mappings.entry(font).or_insert_with(std::collections::BTreeMap::new).extend(glyphs);
+                        }
+                        prepared.clusters.extend(children.clusters);
+                    }
+                }
+            }
             _ => return Err("selected SVG glyphs require static vector outlines; color/raster glyphs remain unsupported".into()),
         }
     }
@@ -150,6 +255,7 @@ pub fn text<'a>(
 }
 
 /// One original shaping cluster and all real glyphs that paint it.
+#[derive(Clone, Copy)]
 pub struct Cluster<'a> {
     pub glyphs: &'a [usvg::layout::PositionedGlyph],
     pub text: &'a str,
@@ -220,7 +326,7 @@ fn clusters<'a>(
                 return Err("SVG multi-glyph cluster offsets require complete logical selection bounds; this cluster is outside the initial text profile".into());
             }
         }
-        if last_end < maximum_end {
+        if glyphs.len() > 1 && last_end < maximum_end {
             return Err("SVG multi-glyph cluster endpoints require complete logical selection bounds; this cluster is outside the initial text profile".into());
         }
         clusters.push(Cluster {

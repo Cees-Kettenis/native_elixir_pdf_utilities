@@ -2,17 +2,34 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
-  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlEntities, HtmlParser}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlEntities, HtmlParser, HtmlTree}
   alias NativeElixirPdfUtilities.Validators.{ForeignContentValidator, HtmlValidator}
 
   @doc false
   @spec prepare(map()) :: {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def prepare(dom) do
+  def prepare(dom), do: prepare_prefix(dom, nil)
+
+  @doc false
+  @spec prepare_prefix(term(), non_neg_integer() | nil) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_prefix(dom, finish) do
     HtmlValidator.with_render_budget(fn ->
       canonical? = is_map(dom) and Map.has_key?(dom, :document_id)
 
       with :ok <- NativeElixirPdfUtilities.Validators.HtmlTreeValidator.validate_transport(dom),
-           {:ok, bound} <- if(canonical?, do: bind_tokens(dom), else: {:ok, %{}}) do
+           {:ok, bound} <-
+             (cond do
+                canonical? ->
+                  bind_tokens(dom, finish)
+
+                finish == nil ->
+                  {:ok, %{}}
+
+                true ->
+                  binding_error("source prefix requires canonical original token identities", %{
+                    text: "source_prefix"
+                  })
+              end) do
         {inline, embedded, insertion_contexts} =
           descriptors(dom.children, bound, canonical?, dom, %{}, [], %{}, nil)
 
@@ -42,13 +59,113 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
     end)
   end
 
+  @doc false
+  @spec prepare_candidate_projection(term(), HtmlTree.t()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_candidate_projection(handle, prefix_tree) do
+    NativeElixirPdfUtilities.Validators.TemplatePatchValidator.with_consumed_candidate_frame(
+      handle,
+      prefix_tree,
+      fn candidate ->
+        original = HtmlTree.fetch(candidate.original, candidate.original.root)
+        prospective = HtmlTree.fetch(candidate.prospective, candidate.prospective.root)
+
+        with {:ok, provenance} <- prepare_prefix(original, candidate.captured_finish),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.HtmlTreeValidator.validate_transport(
+                 prospective
+               ) do
+          nodes = source_nodes(prospective.children)
+          facts = [:node_id, :document_id, :type, :source, :tag, :attributes, :namespace]
+
+          placements =
+            Enum.reduce_while(nodes, {:ok, %{}}, fn node, {:ok, bindings} ->
+              HtmlValidator.reserve_render_resource(
+                :max_html_tree_work,
+                1 + byte_size(node.source.text),
+                :html
+              )
+
+              authored = Map.get(candidate.original.nodes, node.node_id)
+
+              cond do
+                node.type == :document_fragment or node.source.text == "" ->
+                  {:cont, {:ok, bindings}}
+
+                authored && Map.take(authored, facts) == Map.take(node, facts) ->
+                  original_facts = Map.take(authored, facts ++ [:parent_id, :tree_scope_id])
+                  prospective_facts = Map.take(node, facts ++ [:parent_id, :tree_scope_id])
+
+                  {:cont,
+                   {:ok,
+                    Map.put(bindings, node.node_id, %{
+                      original: original_facts,
+                      prospective: prospective_facts,
+                      policy: :validated_source_in_distinct_prospective_placement
+                    })}}
+
+                true ->
+                  {:halt,
+                   binding_error(
+                     "prospective CSS placement cannot bridge this original tokenizer interpretation; original source retained",
+                     node.source
+                   )}
+              end
+            end)
+
+          with {:ok, placements} <- placements do
+            ids = Map.keys(placements)
+
+            {:ok,
+             %{
+               inline: Map.take(provenance.inline, ids),
+               records: Map.take(provenance.records, ids),
+               embedded:
+                 Enum.filter(provenance.embedded, &Map.has_key?(placements, &1.node.node_id)),
+               insertion_contexts: provenance.insertion_contexts,
+               original_provenance: provenance,
+               placements: placements,
+               captured_finish: candidate.captured_finish,
+               original_scope: candidate.original_scope,
+               prospective_scope: candidate.prospective_scope,
+               policy: :original_lexical_sources_with_distinct_prospective_placements,
+               pending_checks: candidate.pending_checks
+             }}
+          end
+        end
+      end
+    )
+  end
+
   # Validate actual tokenizer ownership, rather than searching for snippets. This
   # reads the original stream once and does not build another tree or count nodes.
-  defp bind_tokens(dom) do
+  defp bind_tokens(dom, finish) do
     original = dom.source.text
     HtmlValidator.reserve_render_resource(:max_html_tree_work, 4 * byte_size(original), :html)
 
-    with {:ok, original} <- HtmlValidator.validate_html_source(original) do
+    with {:ok, original} <- HtmlValidator.validate_html_source(original),
+         {:ok, token_source} <-
+           (case finish do
+              nil ->
+                {:ok, original}
+
+              finish when is_integer(finish) and finish >= 0 and finish <= byte_size(original) ->
+                prefix = binary_part(original, 0, finish)
+
+                if String.valid?(prefix),
+                  do: {:ok, prefix},
+                  else:
+                    binding_error(
+                      "source prefix must end at an original UTF-8 token boundary",
+                      %{text: "source_prefix"}
+                    )
+
+              _ ->
+                binding_error(
+                  "source prefix must be an original byte offset within the document",
+                  %{text: "source_prefix"}
+                )
+            end) do
       lines = [
         0
         | Enum.map(:binary.matches(original, ["\r\n", "\r", "\n"]), fn {at, size} -> at + size end)
@@ -113,7 +230,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
                 end
 
               if is_integer(offset) and not Map.has_key?(indexed, offset) and
-                   offset + byte_size(source.text) <= byte_size(original) and
+                   offset + byte_size(source.text) <= byte_size(token_source) and
                    binary_part(original, offset, byte_size(source.text)) == source.text do
                 {:cont, {:ok, Map.put(indexed, offset, node)}}
               else
@@ -124,10 +241,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
         end)
 
       with {:ok, indexed} <- indexed do
-        input = HtmlValidator.preprocess_html(original)
+        input = HtmlValidator.preprocess_html(token_source)
 
         crlf =
-          :binary.matches(original, "\r\n")
+          :binary.matches(token_source, "\r\n")
           |> Enum.with_index()
           |> Enum.map(fn {{at, _}, index} -> at - index end)
 

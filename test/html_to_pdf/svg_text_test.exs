@@ -532,8 +532,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextTest do
 
   test "unsupported text grammar and shaping diagnose instead of omitting artwork", %{data: data} do
     for attrs <- [
-          "x='1 2'",
-          "rotate='20'",
+          "x='1 bad'",
+          "rotate='20deg'",
           "textLength='30'",
           "direction='rtl'",
           "writing-mode='vertical-rl'",

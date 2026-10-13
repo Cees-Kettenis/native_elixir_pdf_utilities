@@ -1,0 +1,9 @@
+<!doctype html><html><head><style>
+@page{size:300pt 340pt;margin:12pt}html,body{margin:0;padding:0}body{font-family:"DejaVu Sans";font-size:9pt;line-height:12pt}p{margin:0 0 6pt}.atomic{display:inline-block;width:260pt;vertical-align:top}table{width:260pt;table-layout:fixed;border-collapse:collapse;margin:0 0 10pt}td{padding:3pt;vertical-align:baseline;border:1px solid #789}col{width:50%}.small{font-size:8pt;line-height:12pt}.large{font-size:18pt;line-height:24pt}a{color:#246;text-decoration:none}
+</style></head><body>
+<p>Mixed fonts use a measured atomic row baseline</p><div class="atomic"><table><colgroup><col><col></colgroup><tr><td class="small">Small text</td><td class="large"><a href="https://table.test/baseline">Large text</a></td></tr></table></div>
+<p>First block line precedes a larger second line</p><div class="atomic"><table><tr><td><p class="small" style="margin:0">First small</p><p class="large" style="margin:0">Second large</p></td><td class="large">Peer large</td></tr></table></div>
+<p>Atomic first line and empty cells</p><div class="atomic"><table><tr><td class="small"><span style="display:inline-block;width:18pt;height:18pt;background:#246"></span> Atomic</td><td style="height:36pt"></td></tr></table></div>
+<p>Declared cell minimum preserves intrinsic baseline</p><div class="atomic"><table><tr><td class="small" style="height:48pt">Minimum small</td><td class="large">Peer large</td></tr></table></div>
+<p>End atomic baseline document</p>
+</body></html>

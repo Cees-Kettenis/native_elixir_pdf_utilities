@@ -115,17 +115,20 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
   @doc false
   @spec prepare_iframe_style(map()) :: map()
   def prepare_iframe_style(style) do
-    # The HTML replaced-element default is 300 by 150 CSS pixels, a fixed
-    # format default rather than a configurable resource ceiling.
     display =
       if style.display in [:inline, :inline_block, :inline_flex, :inline_grid],
         do: :inline_block,
         else: :block
 
-    style
-    |> Map.put(:display, display)
-    |> Map.update(:width, 225.0, fn value -> if value in [nil, :auto], do: 225.0, else: value end)
-    |> Map.update(:height, 112.5, fn value -> if value in [nil, :auto], do: 112.5, else: value end)
+    Map.put(style, :display, display)
+  end
+
+  @doc "Returns the fixed 300 by 150 CSS pixel fallback for an HTML replaced document without intrinsic dimensions."
+  @spec intrinsic_size() :: {float(), float()}
+  def intrinsic_size do
+    # This is a format fallback, not a configurable resource ceiling. Computed
+    # CSS auto remains auto so flex stretch can allocate a different viewport.
+    {225.0, 112.5}
   end
 
   @doc false
@@ -138,7 +141,18 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
            forms: surface.forms
          ) do
       {:ok, [page], []} ->
-        {:ok, Enum.map(page.boxes, &Map.delete(&1, :form_control))}
+        {:ok,
+         Enum.map(page.boxes, fn box ->
+           box = Map.delete(box, :form_control)
+           # The child canvas has its own clipped print origin. Keep its fill
+           # above vertical raster ties without moving text or link geometry.
+           if surface.host == :frame and box.type == :rect and
+                is_nil(Map.get(box, :role)) and
+                Map.get(box, :paint_layer) == :container_background and box.x == 0 and box.y == 0 and
+                {box.width, box.height} == layout.page_size,
+              do: Map.put(box, :role, :frameset_canvas),
+              else: box
+         end)}
 
       {:ok, _pages, _controls} ->
         Diagnostics.error(
@@ -244,7 +258,8 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
 
     enabled? =
       surface.host in [:iframe, :object, :embed, :frame] and width > 0 and height > 0 and
-        overflow != :hidden
+        overflow != :hidden and
+        (surface.host != :frame or Map.get(surface, :frame_scrollbars, :auto) != :none)
 
     # There are four scrollbar-presence states. Track states rather than inventing a pass
     # ceiling; percentage sizing may also remove an axis after reflow.
@@ -327,12 +342,26 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
       %{context: context, forms: _forms, host: host}
       when host in [:surface, :iframe, :object, :embed, :frame] ->
         with :ok <- ResourceValidator.validate_context(context),
+             true <-
+               host != :frame or Map.get(surface, :frame_scrollbars, :auto) in [:auto, :none],
              {:ok, {width, height}} <- HtmlValidator.prepare_viewport_dimensions(width, height) do
           # Zero-area surfaces still validate and account for their entire tree.
           size = {if(width == 0, do: 0.75, else: width), if(height == 0, do: 0.75, else: height)}
           opts = [page_size: "#{elem(size, 0)}pt #{elem(size, 1)}pt", margin: 0]
 
           {:ok, opts}
+        else
+          false ->
+            Diagnostics.error(
+              :layout,
+              :invalid_layout,
+              "frame viewport requires a validated initial scrollbar policy",
+              module: __MODULE__,
+              operation: :layout_embedded_viewport
+            )
+
+          error ->
+            error
         end
 
       _ ->

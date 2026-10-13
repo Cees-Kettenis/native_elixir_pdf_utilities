@@ -1591,16 +1591,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     end
   end
 
-  test "unsupported nested inline container content returns layout diagnostics" do
-    assert {:error, {:invalid_layout, diagnostic}} =
+  test "nested inline flex containers render their native list contents" do
+    assert {:ok, pdf} =
              NativeElixirPdfUtilities.HtmlToPdf.render("""
              <div><div style="display:inline-flex"><ul><li>Unsupported flex child</li></ul></div></div>
              """)
 
-    assert diagnostic.stage == :layout
-    assert diagnostic.reason == :invalid_layout
-    assert diagnostic.operation == :render
-    assert diagnostic.message =~ "layout"
+    assert String.starts_with?(pdf, "%PDF-")
   end
 
   test "collapses first-child and negative sibling margins without crossing a border" do
@@ -2508,15 +2505,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     end
   end
 
-  test "atomic inline blocks retain unsupported nested flex diagnostics" do
+  test "atomic inline blocks retain nested flex list markers and content" do
     html =
       "<div><div style='display:inline-block'><div style='display:flex'><ul><li>Unsupported flex child</li></ul></div></div></div>"
 
     assert {:ok, dom} = HtmlParser.parse(html)
     assert {:ok, styled_tree} = Style.compute(dom, [])
 
-    assert {:error, :invalid_layout} =
-             Layout.layout(styled_tree, page_size: {140, 100}, margin: 10)
+    assert {:ok, layout} = Layout.layout(styled_tree, page_size: {140, 100}, margin: 10)
+    assert Enum.any?(layout.boxes, &(Map.get(&1, :text) == "•"))
+
+    content =
+      layout.boxes
+      |> Enum.filter(&(&1.type == :text and &1.text != "•"))
+      |> Enum.map_join(" ", & &1.text)
+
+    assert String.replace(content, ~r/\s+/, " ") == "Unsupported flex child"
   end
 
   test "empty inline ancestors around blocks do not create extra line boxes" do

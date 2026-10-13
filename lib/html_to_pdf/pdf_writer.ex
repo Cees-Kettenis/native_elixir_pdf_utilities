@@ -563,7 +563,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           "EMC"
 
         :drawing_group_start ->
-          matrix = box.transform |> Tuple.to_list() |> Enum.map_join(" ", &format_number/1)
+          transform =
+            if Map.get(box, :role) == :frameset_viewport do
+              {a, b, c, d, x, y} = box.transform
+              # Keep horizontal clipping below Chromium's print-matrix raster ties.
+              # Text and rectangle paint retain their existing vertical bias.
+              # Layout and transported annotation geometry retain their real bounds.
+              {a, b, c, d, x - @raster_boundary_bias, y}
+            else
+              box.transform
+            end
+
+          matrix = transform |> Tuple.to_list() |> Enum.map_join(" ", &format_number/1)
 
           clip =
             case box.clip do
@@ -1002,11 +1013,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         :fieldset ->
           %{box | x: box.x - @raster_boundary_bias}
 
-        :inline_background ->
+        :frameset_canvas ->
+          %{box | y: box.y + @raster_boundary_bias}
+
+        role when role in [:inline_background, :frameset_border] ->
           # Match Chromium's print-matrix ties at the left and top raster edges.
           %{box | x: box.x - @raster_boundary_bias, y: box.y + @raster_boundary_bias}
 
-        role when role in [:range_track, :range_value, :range_border, :range_thumb] ->
+        role
+        when role in [
+               :range_track,
+               :range_value,
+               :range_border,
+               :range_thumb,
+               :native_color_button,
+               :native_file_button
+             ] ->
           # NativeTheme uses the same Chromium print-matrix raster edge rule.
           %{box | x: box.x - @raster_boundary_bias, y: box.y + @raster_boundary_bias}
 
@@ -1110,7 +1132,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                         "Q"
                       ]
                     else
-                      [rect_path(box), "f", "Q"]
+                      fill_box =
+                        if Map.get(box, :role) in [:native_color_button, :native_file_button],
+                          do: inset_stroke_box(box),
+                          else: box
+
+                      [rect_path(fill_box), "f", "Q"]
                     end
 
                   colors ->
@@ -1195,6 +1222,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                   if(Map.get(box, :role) == :native_menu, do: 0.0, else: box.stroke_width / scale)
                 )
                 |> put_stroke_pattern(border_style, box.stroke_width / scale, nil)
+                |> Kernel.++(
+                  if(Map.get(box, :role) in [:native_color_button, :native_file_button],
+                    do: [
+                      "/#{Map.fetch!(graphics_state_resources, {:stroke_adjust, 1.0}).name} gs"
+                    ],
+                    else: []
+                  )
+                )
                 |> Kernel.++([rect_path(stroke_box), "S", "Q"])
               end
 
@@ -1908,7 +1943,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             _ -> []
           end
 
-        opacity_resource_keys(box.fill_color, :fill) ++
+        if(Map.get(box, :role) in [:native_color_button, :native_file_button],
+          do: [{:stroke_adjust, 1.0}],
+          else: []
+        ) ++
+          opacity_resource_keys(box.fill_color, :fill) ++
           Enum.flat_map([box.stroke_color | border_colors], fn color ->
             opacity_resource_keys(color, :stroke) ++
               if(Map.get(box, :role) == :fieldset,
@@ -1941,9 +1980,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     |> Map.values()
     |> Enum.sort_by(& &1.object_id)
     |> Enum.map(fn resource ->
-      alpha_key = if resource.kind == :fill, do: "/ca", else: "/CA"
+      body =
+        if resource.kind == :stroke_adjust do
+          # Chromium's AA native button stroke serializes Skia stroke
+          # adjustment. Keep this graphics state local to the button paint.
+          "<< /Type /ExtGState /SA true >>"
+        else
+          alpha_key = if resource.kind == :fill, do: "/ca", else: "/CA"
+          "<< /Type /ExtGState #{alpha_key} #{format_number(resource.alpha)} >>"
+        end
 
-      {resource.object_id, "<< /Type /ExtGState #{alpha_key} #{format_number(resource.alpha)} >>"}
+      {resource.object_id, body}
     end)
   end
 

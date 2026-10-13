@@ -1,4 +1,5 @@
 //! Byte-only backend. Caller policy and resource budgets live in Elixir validators.
+mod effects_validator;
 mod vector;
 mod vector_validator;
 use rustler::{Binary, Encoder, Env, NifResult, OwnedBinary, Term};
@@ -18,8 +19,54 @@ fn render<'a>(
     resources: HashMap<String, Binary<'a>>,
     authored_hints: bool,
 ) -> NifResult<Term<'a>> {
-    let result = render_bytes(&source, width, height, fonts, resources, authored_hints);
+    let result = render_bytes(
+        &source,
+        width,
+        height,
+        fonts,
+        resources,
+        authored_hints,
+        None,
+    );
     match result {
+        Ok(png) => {
+            let mut binary = OwnedBinary::new(png.len()).ok_or(rustler::Error::BadArg)?;
+            binary.as_mut_slice().copy_from_slice(&png);
+            Ok((atoms::ok(), binary.release(env)).encode(env))
+        }
+        Err(message) => Ok((atoms::error(), message).encode(env)),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn render_document<'a>(
+    env: Env<'a>,
+    source: String,
+    width: u32,
+    height: u32,
+    fonts: Vec<Binary<'a>>,
+    resources: HashMap<String, Binary<'a>>,
+    matrix: (f64, f64, f64, f64, f64, f64),
+) -> NifResult<Term<'a>> {
+    // The document validator has already resolved and bounded this external
+    // transform. The exact parsed source tree keeps its authored transforms.
+    let transform = tiny_skia::Transform::from_row(
+        matrix.0 as f32,
+        matrix.1 as f32,
+        matrix.2 as f32,
+        matrix.3 as f32,
+        matrix.4 as f32,
+        matrix.5 as f32,
+    );
+    match render_bytes(
+        &source,
+        width,
+        height,
+        fonts,
+        resources,
+        false,
+        Some(transform),
+    ) {
         Ok(png) => {
             let mut binary = OwnedBinary::new(png.len()).ok_or(rustler::Error::BadArg)?;
             binary.as_mut_slice().copy_from_slice(&png);
@@ -135,6 +182,7 @@ fn render_bytes(
     fonts: Vec<Binary>,
     resources: HashMap<String, Binary>,
     authored_hints: bool,
+    document_transform: Option<tiny_skia::Transform>,
 ) -> Result<Vec<u8>, String> {
     let xml = usvg::roxmltree::Document::parse_with_options(
         source,
@@ -185,10 +233,12 @@ fn render_bytes(
     let tree = usvg::Tree::from_xmltree(&xml, &options).map_err(|error| error.to_string())?;
     let mut pixmap = tiny_skia::Pixmap::new(width, height)
         .ok_or_else(|| "SVG pixel allocation failed".to_string())?;
-    let transform = tiny_skia::Transform::from_scale(
-        width as f32 / tree.size().width(),
-        height as f32 / tree.size().height(),
-    );
+    let transform = document_transform.unwrap_or_else(|| {
+        tiny_skia::Transform::from_scale(
+            width as f32 / tree.size().width(),
+            height as f32 / tree.size().height(),
+        )
+    });
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     pixmap.encode_png().map_err(|error| error.to_string())
 }
@@ -221,6 +271,33 @@ fn validate_shape_work<'a>(env: Env<'a>, source: String, ceilings: Term<'a>) -> 
     });
     match result {
         Ok(work) => (atoms::ok(), work).encode(env),
+        Err(message) => (atoms::error(), message).encode(env),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn validate_pattern_work<'a>(
+    env: Env<'a>,
+    source: String,
+    width: u32,
+    height: u32,
+    ceiling: u64,
+    fonts: Vec<Binary<'a>>,
+) -> Term<'a> {
+    let result = shape_tree(&source, fonts).and_then(|tree| {
+        let scale = usvg::Transform::from_scale(
+            width as f32 / tree.size().width(),
+            height as f32 / tree.size().height(),
+        );
+        effects_validator::pattern_pixels(
+            tree.root(),
+            scale,
+            ceiling,
+            u64::from(width).saturating_mul(u64::from(height)),
+        )
+    });
+    match result {
+        Ok(pixels) => (atoms::ok(), pixels).encode(env),
         Err(message) => (atoms::error(), message).encode(env),
     }
 }
@@ -299,5 +376,12 @@ fn validate_path<'a>(
 
 rustler::init!(
     "Elixir.NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes",
-    [render, vectorize, validate_path, validate_shape_work]
+    [
+        render,
+        render_document,
+        vectorize,
+        validate_path,
+        validate_shape_work,
+        validate_pattern_work
+    ]
 );

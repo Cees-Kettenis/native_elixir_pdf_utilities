@@ -167,6 +167,15 @@ defmodule NativeElixirPdfUtilities.Validators.ResourceValidator do
          :ok <- validate_load_options(opts) do
       {:ok, descriptor, child}
     end
+  catch
+    {:render_resource_limit, {:error, {reason, diagnostic}}} ->
+      {:error,
+       {reason,
+        Diagnostics.with_context(diagnostic,
+          operation: :load_embedded_resource,
+          module: __MODULE__,
+          source: document_source_label(source)
+        )}}
   end
 
   defp select_document_source(source, context) do

@@ -1,0 +1,19 @@
+<!doctype html><html lang=en-US><head><style>
+@page {size:300pt 330pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10.5pt;line-height:15pt;}
+body {padding:12pt;}p {margin:0 0 3pt;}.row {margin:0 0 12pt;}
+input {display:block;font-family:"DejaVu Sans Mono";}
+.plain {appearance:none;border:1pt solid #767676;padding:2pt;width:90pt;height:15pt;font-size:10.5pt;line-height:15pt;}
+</style></head><body>
+<div class=row><p>Readonly suggested text</p><input class=plain name=text list=choices value="authored value" readonly></div>
+<datalist id=choices><option value=alternative label="Alternative label">Hidden option text</option><option selected value=selected>Selected suggestion</option><option value=disabled disabled>Disabled suggestion</option><option value="">Empty suggestion</option><option>Whitespace fallback</option></datalist>
+<div class=row><p>Readonly suggested Number</p><input type=number name=number list=numbers value=13 readonly></div>
+<datalist id=numbers><option value=10>Ten</option><option value=20>Twenty</option></datalist>
+<div class=row><p>Readonly suggested date</p><input type=date name=date list=dates value=2026-10-13 readonly></div>
+<datalist id=dates><option value=2026-10-14>Tomorrow</option></datalist>
+<div class=row><p>First duplicate ID blocks suggestions</p><input class=plain list=blocked value=unchanged readonly></div>
+<span id=blocked hidden>Wrong source type</span><datalist id=blocked><option value=wrong>Blocked source</option></datalist>
+<datalist id=legacy><label>Invisible legacy fallback<select><option value=a>Alpha</option><optgroup label=Disabled disabled><option value=b>Beta</option></optgroup><option value=c>Charlie</option></select></label></datalist>
+<p>Summary: <output for="text number date">authored values</output></p>
+<p>After hidden suggestion sources</p>
+</body></html>
