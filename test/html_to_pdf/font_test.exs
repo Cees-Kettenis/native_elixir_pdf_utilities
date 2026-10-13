@@ -2719,6 +2719,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert Font.shape_ligatures("Office file", without_ligatures) == "Office file"
   end
 
+  test "ligature shaping preserves replacement order and unavailable glyphs" do
+    font = %{cmap: %{0xFB00 => 1, 0xFB01 => 2, 0xFB02 => 3, 0xFB03 => 4, 0xFB04 => 5}}
+    original = "é ffi ffl ff fi fl 中文"
+
+    assert Font.shape_ligatures(original, font) == "é ﬃ ﬄ ﬀ ﬁ ﬂ 中文"
+
+    partial = %{font | cmap: %{0xFB00 => 1, 0xFB01 => 2, 0xFB02 => 0}}
+    assert Font.shape_ligatures(original, partial) == "é ﬀi ﬀl ﬀ ﬁ fl 中文"
+    assert Font.shape_ligatures(original, %{font | cmap: %{}}) == original
+
+    for spacing <- [-1, 1] do
+      assert Font.shape_ligatures(original, font, spacing) == original
+    end
+  end
+
   test "load_registry skips an empty preferred cmap subtable" do
     empty_format4 = cmap_format4_table(0xFFFF, 0xFFFF, 1, 0)
     populated_format4 = cmap_format4_table(?A, ?A, 1, 0)

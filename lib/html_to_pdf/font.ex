@@ -423,9 +423,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   @spec shape_ligatures(String.t(), map(), number()) :: String.t()
   def shape_ligatures(text, font, letter_spacing \\ 0) do
     if letter_spacing == 0 do
-      [{"ffi", "ﬃ"}, {"ffl", "ﬄ"}, {"ff", "ﬀ"}, {"fi", "ﬁ"}, {"fl", "ﬂ"}]
-      |> Enum.reduce(text, fn {letters, ligature}, shaped ->
-        case Map.get(font.cmap, hd(String.to_charlist(ligature)), 0) do
+      [
+        {"ffi", 0xFB03, "ﬃ"},
+        {"ffl", 0xFB04, "ﬄ"},
+        {"ff", 0xFB00, "ﬀ"},
+        {"fi", 0xFB01, "ﬁ"},
+        {"fl", 0xFB02, "ﬂ"}
+      ]
+      |> Enum.reduce(text, fn {letters, codepoint, ligature}, shaped ->
+        case Map.get(font.cmap, codepoint, 0) do
           0 -> shaped
           _glyph -> String.replace(shaped, letters, ligature)
         end
