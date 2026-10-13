@@ -118,12 +118,13 @@ Only passing batches count as accepted. Preserve user changes and prior evidence
 - `tmp/1.1.0-audits/`: independent area and shared-contract audits.
 - `docs/html-to-pdf-1.1.0-progress.md`: accepted work and handoff history.
 
-Current implementation status: waves 10, 11 and 12 are pushed on
-`milestone1-1-0`; the latest publication is
-`1cbc7ab4a5876e31a902081cef533af83c0ebcd1`. Wave 12 combined 164 changed paths and
-passed 597 integration-focused tests plus 34 native tests after Rust formatting.
-All ten implementation workers continue in isolated lanes. Both validator
-workers are stopped. Wave 13 follows immediately.
+Current implementation status: waves 10 through 13 are pushed on
+`milestone1-1-0`. The latest published source is
+`52deb4ed3dacce8177204da0a08e448f8ddb8e0e`. Wave 14 combines the next broad set of
+implementation packets while fourteen workers continue in isolated lanes.
+Both validator workers remain stopped. Twelve native workers and two app-owned
+child workers run focused checks in the shared twelve-CPU compute pool. Original
+performance settings and fixed thresholds are retained for final review.
 
 The user's current workflow supersedes the per-wave full-gate schedule above.
 Workers run focused tests and original targeted browser fixtures. The

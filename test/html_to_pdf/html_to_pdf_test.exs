@@ -1091,11 +1091,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "https://annotation.test/"
   end
 
+  test "native six script schemata render actual base and script logical content" do
+    for tag <- ~w(msub msup msubsup munder mover munderover) do
+      children =
+        "<mn>1</mn><mn>2</mn>" <> if(tag in ~w(msubsup munderover), do: "<mn>3</mn>", else: "")
+
+      assert {:ok, pdf} = HtmlToPdf.render("<math><#{tag}>#{children}</#{tag}></math>")
+      assert {:ok, text} = Text.extract(pdf, layout: false)
+      assert text == if(tag in ~w(msubsup munderover), do: "123", else: "12")
+      assert {:ok, empty} = HtmlToPdf.render("<math><#{tag}/></math>")
+      assert {:error, {:no_extractable_text, diagnostic}} = Text.extract(empty, layout: false)
+      assert diagnostic.stage == :text_extraction
+    end
+  end
+
   test "MathML still diagnoses later features and unsupported token composition" do
     alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
 
     for tag <-
-          ~w(msup msub msubsup mover munder munderover mmultiscripts mstyle merror mpadded) do
+          ~w(mstyle merror mpadded) do
       assert {:error, {:unsupported_html, diagnostic}} =
                HtmlToPdf.render("<math><#{tag}/></math>")
 
@@ -2682,7 +2696,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   test "unsupported tags and attributes use their actual source after comments" do
     for {source, message} <- [
           {"<p title=\"<canvas>\" id=x ID=y>", "attributes"},
-          {"<canvas>", "unsupported"}
+          {"<video>", "unsupported"}
         ] do
       html = "<!-- <script>example</script> -->\n  #{source}"
       assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html)
@@ -3156,7 +3170,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "search controls report unsupported attributes through HTML diagnostics" do
-    for attributes <- ["checked", ~s(pattern="query"), ~s|onclick="run()"|] do
+    for attributes <- ["checked", ~s|onclick="run()"|] do
       assert {:error, {reason, diagnostic}} =
                HtmlToPdf.render(~s(<input type="search" #{attributes}>))
 
@@ -3891,9 +3905,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                reason: :unsupported_html,
                line: 1,
                column: 1,
-               source: "<canvas>",
-               message: ~s(line 1: HTML tag "<canvas>" is unsupported)
-             }}} = HtmlToPdf.render("<canvas></canvas>")
+               source: "<video>",
+               message: ~s(line 1: HTML tag "<video>" is unsupported)
+             }}} = HtmlToPdf.render("<video></video>")
 
     assert {:error,
             {:invalid_css,
@@ -4764,7 +4778,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
   test "render_file returns diagnostics for render and write failures" do
     input_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-bad-test.html")
-    File.write!(input_path, "<canvas></canvas>")
+    File.write!(input_path, "<video></video>")
 
     assert {:error,
             {:unsupported_html,
@@ -4773,8 +4787,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                reason: :unsupported_html,
                operation: :render,
                module: NativeElixirPdfUtilities.HtmlToPdf,
-               source: "<canvas>",
-               message: ~s(line 1: HTML tag "<canvas>" is unsupported)
+               source: "<video>",
+               message: ~s(line 1: HTML tag "<video>" is unsupported)
              }}} = HtmlToPdf.render_file(input_path, input_path <> ".pdf")
 
     File.write!(input_path, "<p>Hello</p>")
@@ -4918,16 +4932,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
   test "telephone URL and email unsupported attributes return actionable diagnostics" do
     for type <- ["tel", "url", "email"],
-        attribute <-
-          if(type == "email",
-            do: ["checked", "pattern='x'"],
-            else: ["checked", "multiple", "pattern='x'"]
-          ),
+        attribute <- if(type == "email", do: ["checked"], else: ["checked", "multiple"]),
         forms <- [:static, :interactive] do
       html = ~s(<input type="#{type}" #{attribute}>)
       assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, forms: forms)
       assert diagnostic.stage == :html and diagnostic.operation == :render
       assert diagnostic.source == html and diagnostic.line == 1 and diagnostic.column == 1
+    end
+  end
+
+  test "telephone URL and email patterns preserve empty initial field values" do
+    for type <- ["tel", "url", "email"], forms <- [:static, :interactive] do
+      html = ~s(<input type="#{type}" pattern='x'>)
+      assert {:ok, pdf} = HtmlToPdf.render(html, forms: forms)
+      assert {:ok, reference} = HtmlToPdf.render(~s(<input type="#{type}">), forms: forms)
+      assert pdf == reference
+
+      if forms == :interactive do
+        assert {:ok, [%{type: :text, value: ""}]} = NativeElixirPdfUtilities.Forms.fields(pdf)
+      else
+        assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+      end
     end
   end
 

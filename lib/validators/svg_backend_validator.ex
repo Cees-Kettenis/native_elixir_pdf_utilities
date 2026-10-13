@@ -374,7 +374,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
       context.mode == :inline and
           Enum.any?(summary.elements, fn {namespace, tag} ->
             namespace != :svg or
-                tag not in (~w(svg g defs symbol use pattern marker mask linearGradient radialGradient stop clipPath path rect circle ellipse line polyline polygon text tspan title desc) ++
+                tag not in (~w(svg g defs symbol use pattern marker mask linearGradient radialGradient stop clipPath path rect circle ellipse line polyline polygon text tspan textPath title desc) ++
                               SvgFilterValidator.tags())
           end) ->
         unsupported(

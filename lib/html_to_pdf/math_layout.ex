@@ -9,7 +9,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
   alias NativeElixirPdfUtilities.Validators.MathTableValidator
 
   @doc """
-  Measures styled MathML tokens, operators, rows, fractions and radicals after preparation.
+  Measures styled MathML tokens, operators, rows, fractions, radicals and scripts after preparation.
 
   Coordinates are points relative to the alphabetic baseline, with positive y
   upwards. Layout and ink extents are separate. Drawing items retain the selected
@@ -324,6 +324,73 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             actual_text: base.actual_text <> if(index, do: index.actual_text, else: "")
           }
 
+        %{kind: kind, children: children} when kind in [:scripts, :limits, :multiscripts] ->
+          measured =
+            if kind in [:scripts, :multiscripts] do
+              Enum.with_index(children)
+              |> Enum.map(fn {child, index} ->
+                measure_prepared(child, if(index == 0, do: constraint))
+              end)
+            else
+              pending =
+                if constraint != nil,
+                  do: List.delete(prepared.inline_stretch_children, 0),
+                  else: prepared.inline_stretch_children
+
+              measured =
+                children
+                |> Enum.with_index()
+                |> Enum.reject(fn {_, index} -> index in pending end)
+                |> Map.new(fn {child, index} ->
+                  {index, measure_prepared(child, if(index == 0, do: constraint))}
+                end)
+
+              measured =
+                if map_size(measured) == 0 do
+                  Map.new(pending, &{&1, measure_prepared(Enum.at(children, &1), 0.0)})
+                else
+                  measured
+                end
+
+              target =
+                case MathLayoutValidator.prepare_limit_stretch(prepared, measured) do
+                  {:ok, target} -> target
+                  {:error, _} = error -> throw({:math_layout_error, error})
+                end
+
+              measured =
+                Enum.reduce(pending, measured, fn index, measured ->
+                  Map.put(measured, index, measure_prepared(Enum.at(children, index), target))
+                end)
+
+              Enum.map(Enum.with_index(children), fn {_, index} -> Map.fetch!(measured, index) end)
+            end
+
+          placed =
+            case if kind == :multiscripts,
+                   do: MathLayoutValidator.prepare_multiscript_placement(prepared, measured),
+                   else: MathLayoutValidator.prepare_script_placement(prepared, measured) do
+              {:ok, placement} -> placement
+              {:error, _} = error -> throw({:math_layout_error, error})
+            end
+
+          positioned = fn field ->
+            Enum.zip(measured, placed.offsets)
+            |> Enum.flat_map(fn {child, {x, y}} ->
+              Enum.map(Map.fetch!(child, field), &%{&1 | x: &1.x + x, y: &1.y + y})
+            end)
+          end
+
+          placed
+          |> Map.delete(:offsets)
+          |> Map.merge(%{
+            italic_correction: 0.0,
+            top_accent_attachment: nil,
+            glyphs: positioned.(:glyphs),
+            drawing_items: positioned.(:drawing_items),
+            actual_text: Enum.map_join(measured, & &1.actual_text)
+          })
+
         %{kind: :operator} ->
           natural = measure_prepared(Map.put(prepared.content, :root, true))
           result = MathLayoutValidator.prepare_operator_stretch(prepared, constraint)
@@ -561,7 +628,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
       else: measured
   end
 
-  # Ordinary child ink is known before any operator receives its row target.
+  # Core 3.3.1.1 measures an all-stretch row once at zero, then relayouts
+  # each operator against the initial selected-font ink maxima.
   # Wrapped operators propagate the parent's constraint to their core only.
   defp measure_row_children(prepared, children, constraint) do
     {stretching, ordinary} =
@@ -582,9 +650,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
       end)
 
     measured =
-      Map.new(ordinary, fn {child, index} ->
-        {index, measure_prepared(child)}
-      end)
+      if ordinary == [] and is_nil(constraint) do
+        Map.new(stretching, fn {child, index} ->
+          {index, measure_prepared(child, {0.0, 0.0})}
+        end)
+      else
+        Map.new(ordinary, fn {child, index} ->
+          {index, measure_prepared(child)}
+        end)
+      end
 
     target =
       if constraint != nil do

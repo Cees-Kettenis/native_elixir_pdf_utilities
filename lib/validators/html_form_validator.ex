@@ -38,7 +38,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
       prepared = prepare_initial_nodes(forest)
       facts = initial_node_facts(prepared, %{})
-      transfer_initial_node_facts(HtmlValidator.assign_render_metadata(projection), facts)
+
+      HtmlValidator.assign_render_metadata(projection)
+      |> transfer_initial_node_facts(facts)
+      |> then(
+        &NativeElixirPdfUtilities.Validators.HtmlMetadataValidator.prepare_composed_nodes(
+          logical,
+          &1,
+          clone_logical_nodes
+        )
+      )
     end
   end
 
@@ -406,6 +415,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
             {Map.put(states, item.ref, state), selected_options, disabled_options}
           end)
+
+        states =
+          NativeElixirPdfUtilities.Validators.HtmlConstraintValidator.prepare_initial_states(
+            states,
+            controls
+          )
 
         labels =
           Map.new(context.labels, fn label ->
@@ -1113,6 +1128,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
       (not Map.has_key?(attributes, "readonly") or HtmlValidator.readonly_input_type?(type)) and
       (not Map.has_key?(attributes, "multiple") or type in ["email", "file"]) and
       (not Map.has_key?(attributes, "size") or HtmlValidator.text_input_type?(type)) and
+      (not Enum.any?(~w(maxlength minlength pattern), &Map.has_key?(attributes, &1)) or
+         HtmlValidator.text_input_type?(type)) and
       (not Map.has_key?(attributes, "placeholder") or
          (HtmlValidator.readonly_input_type?(type) and
             not HtmlTemporalValidator.temporal_type?(type))) and
@@ -1136,6 +1153,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
          form_owner \\ nil,
          label_ref \\ nil,
          ancestor_disabled? \\ false,
+         in_datalist? \\ false,
          parent_scope \\ nil
        ) do
     Enum.each(nodes, fn node ->
@@ -1144,14 +1162,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           html? = Map.get(node, :namespace, :html) == :html
           scope = {Map.get(node, :document_id), Map.get(node, :tree_scope_id)}
 
-          {form_owner, label_ref, ancestor_disabled?} =
+          {form_owner, label_ref, ancestor_disabled?, in_datalist?} =
             if parent_scope != nil and scope != parent_scope,
-              do: {nil, nil, false},
-              else: {form_owner, label_ref, ancestor_disabled?}
+              do: {nil, nil, false, false},
+              else: {form_owner, label_ref, ancestor_disabled?, in_datalist?}
 
           if node.tag in ~w(input select textarea button label fieldset progress meter output datalist) or
                Map.has_key?(node.attributes, "id") do
-            register_initial_node(node, form_owner, label_ref, ancestor_disabled?)
+            register_initial_node(node, form_owner, label_ref, ancestor_disabled?, in_datalist?)
           end
 
           next_owner =
@@ -1163,6 +1181,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
             if node.tag == "label" and Map.get(node, :namespace, :html) == :html,
               do: node._selector_id,
               else: label_ref
+
+          next_datalist = in_datalist? or (html? and node.tag == "datalist")
 
           if html? and node.tag == "fieldset" and Map.has_key?(node.attributes, "disabled") do
             # Only this fieldset's own disabling is exempted. An outer disabled
@@ -1180,11 +1200,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                 next_owner,
                 next_label,
                 ancestor_disabled? or not exempt?,
+                next_datalist,
                 scope
               )
             end)
           else
-            collect_initial_metadata(children, next_owner, next_label, ancestor_disabled?, scope)
+            collect_initial_metadata(
+              children,
+              next_owner,
+              next_label,
+              ancestor_disabled?,
+              next_datalist,
+              scope
+            )
           end
 
         _ ->
@@ -1195,7 +1223,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
   # Metadata is already assigned. Collect only the ID/control facts needed
   # to resolve forward references, label targets and initial radio groups.
-  defp register_initial_node(node, form_owner, label_ref, ancestor_disabled?) do
+  defp register_initial_node(node, form_owner, label_ref, ancestor_disabled?, in_datalist?) do
     attributes = node.attributes
     namespace = Map.get(node, :namespace, :html)
 
@@ -1221,6 +1249,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
         input_type: input_type,
         order: node._document_order,
         ancestor_owner: form_owner,
+        in_datalist: in_datalist?,
+        placeholder_option: nil,
         disabled:
           node.tag != "datalist" and
             (ancestor_disabled? or Map.has_key?(attributes, "disabled"))
@@ -1250,9 +1280,23 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
         end
 
       item =
-        if node.tag == "select" and namespace == :html,
-          do: Map.put(item, :options, HtmlValidator.select_options(node.children)),
-          else: item
+        if node.tag == "select" and namespace == :html do
+          options = HtmlValidator.select_options(node.children)
+          first = List.first(options)
+
+          placeholder =
+            if first != nil and
+                 Enum.any?(node.children, &(Map.get(&1, :_selector_id) == first._selector_id)) and
+                 Map.get(
+                   first.attributes,
+                   "value",
+                   HtmlValidator.initial_option_text(first.children)
+                 ) == "", do: first._selector_id, else: nil
+
+          item |> Map.put(:options, options) |> Map.put(:placeholder_option, placeholder)
+        else
+          item
+        end
 
       context =
         case Map.get(attributes, "id", "") do
@@ -2157,6 +2201,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                      end)
 
               not color_valid? or not number_valid? or not range_valid? or not temporal_valid? or
+                not NativeElixirPdfUtilities.Validators.HtmlConstraintValidator.valid_transported_state?(
+                  state
+                ) or
                 not is_boolean(checked) or
                 not is_boolean(disabled) or
                 not (is_nil(owner) or is_reference(owner)) or not selection_valid? or
@@ -2188,7 +2235,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     if invalid? do
       error(
         :invalid_form,
-        "HTML control requires validated initial checked, disabled and owner state, an applicable UTF-8 initial text value, and selection state with UTF-8 option values and labels",
+        "HTML control requires validated initial checked, disabled and owner state, an applicable UTF-8 initial text value, and selection state with UTF-8 option values and labels; supplied constraint flags require coherent boolean candidacy and validity",
         source: "initial_state",
         operation: :write_pdf,
         module: __MODULE__

@@ -118,7 +118,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
     end
   end
 
-  test "raw nonstring spans and unsupported cell children propagate actionable diagnostics", %{
+  test "raw nonstring spans and malformed cell children propagate actionable diagnostics", %{
     style: style
   } do
     zero = %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
@@ -134,7 +134,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
       assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
     end
 
-    unsupported = element("msup", [token("1", style), token("2", style)], style)
+    unsupported = element("mn", token("1", style).children, %{style | font_size: -1})
     outer_cell = cell("1", style, zero)
     outer_cell = %{outer_cell | children: [unsupported]}
     assert {:error, {reason, expected}} = MathLayout.measure(unsupported)
@@ -142,7 +142,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
     assert {:error, {^reason, propagated}} =
              MathTableValidator.prepare(matrix([[outer_cell]], style), %{})
 
-    assert propagated.source == expected.source and propagated.message == expected.message
+    assert Map.get(propagated, :source) == Map.get(expected, :source)
+    assert propagated.message == expected.message
     assert propagated.stage == expected.stage and propagated.operation == :measure_math
   end
 

@@ -13,6 +13,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedResource do
   alias NativeElixirPdfUtilities.HtmlToPdf.ResourceContext
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator
   alias NativeElixirPdfUtilities.Validators.ObjectValidator
   alias NativeElixirPdfUtilities.Validators.ResourceValidator
 
@@ -28,6 +29,62 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedResource do
           {:ok, document()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def load_html(source, context, opts \\ []) do
     load_document(source, context, opts, :html)
+  end
+
+  @doc "Reads an initial iframe/frame document once after authorization, retaining its exact bytes and issued source scope."
+  @spec load_initial(term(), ResourceContext.t(), keyword()) ::
+          {:ok,
+           %{
+             context: ResourceContext.t(),
+             source: ResourceValidator.document_descriptor(),
+             bytes: binary(),
+             kind: :html | :text | :raster | :svg
+           }}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def load_initial(source, context, opts \\ []) do
+    with {:ok, descriptor, child} <- ResourceValidator.authorize_document(source, context, opts),
+         {:ok, bytes, kind} <-
+           (case descriptor do
+              {:srcdoc, html} ->
+                {:ok, html, :html}
+
+              {:blank, _url} ->
+                {:ok, "", :html}
+
+              {:file, path} ->
+                with {:ok, kind, _mime} <-
+                       EmbeddedViewportValidator.prepare_initial_file("", path),
+                     {:ok, maximum} <-
+                       if(kind in [:raster, :svg],
+                         do: HtmlValidator.image_source_read_limit(context.image_budget),
+                         else: {:ok, Limits.get(:max_html_source_bytes)}
+                       ),
+                     {:ok, bytes} <- FileReader.read(path, maximum),
+                     {:ok, kind, _mime} <-
+                       EmbeddedViewportValidator.prepare_initial_file(bytes, path),
+                     do: {:ok, bytes, kind}
+            end) do
+      {:ok, %{context: child, source: descriptor, bytes: bytes, kind: kind}}
+    else
+      {:error, {reason, diagnostic}} ->
+        {:error,
+         {reason,
+          Diagnostics.with_context(diagnostic,
+            operation: :load_embedded_resource,
+            module: __MODULE__,
+            source: ResourceValidator.document_source_label(source)
+          )}}
+
+      {:error, reason} ->
+        Diagnostics.error(
+          :resource,
+          if(reason in [:enoent, :enotdir], do: :resource_not_found, else: :invalid_document),
+          "authorized initial document file could not be read: #{reason}",
+          operation: :load_embedded_resource,
+          module: __MODULE__,
+          source: ResourceValidator.document_source_label(source)
+        )
+    end
   end
 
   @doc "Loads selected local object HTML after authorization and MIME validation."

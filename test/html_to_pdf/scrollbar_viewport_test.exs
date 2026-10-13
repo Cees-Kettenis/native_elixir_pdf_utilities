@@ -159,10 +159,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarViewportTest do
     alias NativeElixirPdfUtilities.Validators.WriterValidator
 
     for {direction, path} <- [
-          {:up, "0 0 m 6 0 l 3 3 l h"},
-          {:down, "0 3 m 6 3 l 3 0 l h"},
-          {:left, "6 0 m 6 3 l 0 1.5 l h"},
-          {:right, "0 0 m 0 3 l 6 1.5 l h"}
+          {:up, "-0.0001 0.0001 m 5.9999 0.0001 l 2.9999 3.0001 l h"},
+          {:down, "-0.0001 3.0001 m 5.9999 3.0001 l 2.9999 0.0001 l h"},
+          {:left, "5.9999 0.0001 m 5.9999 3.0001 l -0.0001 1.5001 l h"},
+          {:right, "-0.0001 0.0001 m -0.0001 3.0001 l 5.9999 1.5001 l h"}
         ] do
       [box] =
         ScrollbarPainter.paint([
@@ -171,6 +171,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarViewportTest do
 
       assert {:ok, pdf} = PdfWriter.render([%{size: {30, 30}, boxes: [box]}])
       assert pdf =~ path
+      assert {box.x, box.y, box.width, box.height} == {0, 0, 6, 3}
 
       assert {:error, {:invalid_pdf_input, %{stage: :pdf, message: message}}} =
                WriterValidator.prepare(
@@ -220,14 +221,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarViewportTest do
       boxes: [%{type: :rect, x: 0, y: -10, width: 90, height: 55}]
     }
 
-    previous = %{initial | seen: MapSet.new([{false, false}, {false, true}])}
+    assert initial.vertical and initial.client_width == 78.75
+
+    previous = %{
+      initial
+      | vertical: false,
+        client_width: 90,
+        seen: MapSet.new([{false, false}, {false, true}])
+    }
 
     assert {:error, {:not_implemented, diagnostic}} =
              EmbeddedViewportValidator.prepare_scroll_geometry(layout, surface, 90, 45, previous)
 
     assert diagnostic.operation == :layout_embedded_viewport
     assert diagnostic.source == "iframe" and diagnostic.message =~ "cycles"
-    assert EmbeddedViewportValidator.prepare_scrollbar_parts(initial) == {:ok, []}
+    empty = EmbeddedViewportValidator.initial_viewport(%{host: :surface}, 90, 45)
+    assert EmbeddedViewportValidator.prepare_scrollbar_parts(empty) == {:ok, []}
     assert ScrollbarPainter.paint([]) == []
   end
 end

@@ -17,7 +17,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @flow_container_tags ~w(form article aside div footer header main nav section address blockquote figure figcaption hgroup search center li dt dd details fieldset dialog)
   @block_tags @flow_container_tags ++
                 ~w(p h1 h2 h3 h4 h5 h6 ul ol menu dir dl dt pre listing xmp plaintext table img picture hr summary legend)
-  @text_inline_tags ~w(basefont bgsound iframe object embed label output datalist noscript noembed slot selectedcontent u s strong b em i span a br wbr nobr abbr acronym q font blink keygen cite dfn data time code samp kbd tt var big small mark ins del strike ruby rb rt rp rtc)
+  @text_inline_tags ~w(map area basefont bgsound iframe object embed label output datalist noscript noembed canvas slot selectedcontent u s strong b em i span a br wbr nobr abbr acronym q font blink keygen cite dfn data time code samp kbd tt var big small mark ins del strike ruby rb rt rp rtc)
   @form_control_tags ~w(input select textarea button)
   @text_input_types ~w(text search tel url email password)
   @button_input_types ~w(button reset submit)
@@ -37,7 +37,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @inline_tags @text_inline_tags ++ @form_control_tags ++ ~w(progress meter)
   @list_tags ~w(ul ol menu dir)
   @table_content_tags ~w(caption th td)
-  @void_tags ~w(base basefont bgsound keygen meta br wbr img source col input hr embed frame)
+  @void_tags ~w(area base basefont bgsound keygen meta br wbr img source col input hr embed frame)
   @supported_tags Map.new(
                     @structural_tags ++
                       @block_tags ++
@@ -82,6 +82,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   ]
   @variant_keys [:default, :first, :odd, :even]
   @type image_budget :: :atomics.atomics_ref()
+
+  @preserved_global_attributes ~w(accesskey autocapitalize autocorrect autofocus draggable enterkeyhint inputmode nonce spellcheck tabindex writingsuggestions)
 
   @script_attributes ~w(type src language charset async defer nomodule crossorigin integrity referrerpolicy blocking fetchpriority)
   @script_data_boundaries ~r/<!--|-->|<\/?[sS][cC][rR][iI][pP][tT](?=[ \t\n\f\r\/>])/
@@ -500,7 +502,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   defp valid_script_attribute?(name) do
-    name in @script_attributes or
+    name in @script_attributes or name in @preserved_global_attributes or
       name in ~w(style id class title role is hidden inert popover contenteditable headingoffset headingreset lang xml:lang itemscope itemtype itemid itemprop itemref translate) or
       String.starts_with?(name, ["data-", "aria-"])
   end
@@ -704,7 +706,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             )
 
           tag
-          when tag in ~w(progress meter output datalist dialog font body q acronym basefont bgsound blink keygen) ->
+          when tag in ~w(canvas progress meter output datalist dialog font body q acronym basefont bgsound blink keygen) ->
             # Reuse the parser's attribute authority for direct DOM inputs.
             captures =
               Enum.map(attributes, fn {name, value} -> ["", name, "\"" <> value <> "\""] end)
@@ -1314,6 +1316,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         else: ancestors
 
     cond do
+      tag == "area" ->
+        "map" in [context | ancestors]
+
       tag == "frame" ->
         context == "frameset"
 
@@ -1392,7 +1397,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       tag == "a" and "a" in [context | ancestors] ->
         false
 
-      context in ["a", "ins", "del", "object", "slot"] or custom_html_tag?(context) ->
+      context in ["a", "ins", "del", "object", "canvas", "slot", "map"] or
+          custom_html_tag?(context) ->
         case ancestors do
           [parent | rest] ->
             valid_html_child?(if(is_tuple(parent), do: "div", else: parent), tag, rest)
@@ -1484,7 +1490,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     tag = element.tag
 
     (not html? or valid_html_child?(parent, tag, ancestors)) and
-      if Enum.any?([context | ancestors], &(&1 in ["a", "button", "option"])) do
+      if Enum.any?([context | ancestors], &(&1 in ["a", "button", "option", "canvas"])) do
         attributes = element.attributes
 
         # Interactive content is conditional for anchors, images and inputs.
@@ -1496,7 +1502,25 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                (tag == "input" and input_type(Map.get(attributes, "type", "text")) != "hidden") or
                (tag in ["img", "object"] and Map.has_key?(attributes, "usemap")))
 
-        not interactive? and not Map.has_key?(attributes, "tabindex")
+        canvas_only? =
+          "canvas" in [context | ancestors] and
+            not Enum.any?([context | ancestors], &(&1 in ["a", "button", "option"]))
+
+        canvas_exception? =
+          tag in ~w(a button) or
+            (tag == "img" and Map.has_key?(attributes, "usemap")) or
+            (tag == "input" and
+               input_type(Map.get(attributes, "type", "text")) in ~w(checkbox radio button reset submit image)) or
+            (tag == "select" and
+               (Map.has_key?(attributes, "multiple") or
+                  case parse_html_integer(Map.get(attributes, "size"), :nonnegative) do
+                    {:ok, size} -> size > 1
+                    :error -> false
+                  end))
+
+        if canvas_only?,
+          do: not interactive? or canvas_exception?,
+          else: not interactive? and not Map.has_key?(attributes, "tabindex")
       else
         true
       end
@@ -2225,8 +2249,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       "template" ->
         true
 
-      "a" ->
-        valid_noninteractive_children?(children, "a")
+      tag when tag in ["a", "canvas"] ->
+        valid_noninteractive_children?(children, tag)
 
       "frameset" ->
         Enum.all?(children, &match?(%{tag: tag} when tag in ~w(frame frameset noframes), &1))
@@ -3203,6 +3227,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         {name, _, false} when namespace in [:mathml, :svg] or custom? ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
+        {name, _, false} when name in @preserved_global_attributes ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
         {"style", _, false} ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
@@ -3302,6 +3329,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         {name, "embed", false} when name in ~w(src type width height name) ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
+        {name, "canvas", false} when name in ~w(width height) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
         {name, "object", false} when name in ~w(data type width height name usemap) ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
@@ -3312,7 +3342,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           {:cont, {:ok, Map.put(acc, name, value)}}
 
         {name, "img", false}
-        when name in ~w(width height srcset sizes loading decoding fetchpriority) ->
+        when name in ~w(width height srcset sizes loading decoding fetchpriority usemap) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {"name", "map", false} ->
+          {:cont, {:ok, Map.put(acc, "name", value)}}
+
+        {name, "area", false}
+        when name in ~w(alt coords shape href target download ping rel referrerpolicy hreflang type nohref) ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
         {name, "source", false} when name in ~w(srcset sizes media type width height) ->
@@ -4253,6 +4290,27 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end
   end
 
+  @doc "Resolves applicable editing keywords; non-root foreign elements stop editing inheritance."
+  @spec html_editing_state(map()) :: :editable | :not_editable | :inherit
+  def html_editing_state(node) do
+    html? = Map.get(node, :namespace, :html) == :html
+
+    eligible? =
+      html? or
+        {Map.get(node, :namespace), Map.get(node, :tag)} in [{:svg, "svg"}, {:mathml, "math"}]
+
+    cond do
+      not eligible? ->
+        :not_editable
+
+      html? and is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "contenteditable")) ->
+        html_contenteditable_state(Map.get(node, :attributes, %{}))
+
+      true ->
+        :inherit
+    end
+  end
+
   @doc false
   @spec editing_state_matches?(:read_only | :read_write, map(), [map()], reference() | nil) ::
           boolean()
@@ -4303,27 +4361,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     resolve = fn ->
       reserve_render_resource(:max_css_work, 1, :css)
 
-      state =
-        if Map.get(node, :namespace, :html) == :html and
-             is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "contenteditable")),
-           do: html_contenteditable_state(Map.get(node, :attributes, %{})),
-           else: :inherit
-
-      eligible? =
-        Map.get(node, :namespace, :html) == :html or
-          {Map.get(node, :namespace), Map.get(node, :tag)} in [{:svg, "svg"}, {:mathml, "math"}]
-
-      case {eligible?, state} do
-        {false, _} ->
-          false
-
-        {true, :editable} ->
+      case html_editing_state(node) do
+        :editable ->
           true
 
-        {true, :not_editable} ->
+        :not_editable ->
           false
 
-        {true, :inherit} ->
+        :inherit ->
           case ancestors do
             [parent | rest] -> editable_region?(parent, rest, cache)
             [] -> false
@@ -4331,9 +4376,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       end
     end
 
-    if is_nil(cache),
-      do: resolve.(),
-      else: RenderCache.fetch(cache, {:editing_region, node._selector_id}, resolve)
+    case Map.fetch(node, :_html_editable) do
+      {:ok, editable?} ->
+        editable?
+
+      :error ->
+        if is_nil(cache),
+          do: resolve.(),
+          else: RenderCache.fetch(cache, {:editing_region, node._selector_id}, resolve)
+    end
   end
 
   @doc false
@@ -4491,7 +4542,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              "alt",
              "width",
              "height",
-             "accept"
+             "accept",
+             "maxlength",
+             "minlength",
+             "pattern"
            ] ->
         true
 
@@ -4515,7 +4569,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              "rows",
              "cols",
              "wrap",
-             "placeholder"
+             "placeholder",
+             "maxlength",
+             "minlength"
            ] ->
         true
 
@@ -4558,6 +4614,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   def prepare_input_attributes(attributes) do
     case {input_type(Map.get(attributes, "type", "text")), Map.fetch(attributes, "value")} do
       {type, {:ok, value}} when type in @text_input_types ->
+        value = :binary.replace(value, ["\r", "\n"], "", [:global])
+
         value =
           if type == "email" and Map.has_key?(attributes, "multiple") do
             value
@@ -4565,7 +4623,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             |> Enum.map(&trim_ascii_whitespace/1)
             |> Enum.join(",")
           else
-            value = :binary.replace(value, ["\r", "\n"], "", [:global])
             if type in ["url", "email"], do: trim_ascii_whitespace(value), else: value
           end
 
@@ -4961,13 +5018,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         %{type: :element, children: children} ->
           node =
             Map.drop(node, [
+              :_html_editable,
               :_default_disclosure_summary,
               :_disclosure_open,
               :_table_model,
               :_table_cell
             ])
 
-          inert? = html_inert?(node.attributes, parent_inert?)
+          inert? =
+            parent_inert? or
+              (Map.get(node, :namespace, :html) == :html and
+                 is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "inert")) and
+                 html_inert?(node.attributes, false))
+
           translation? = HtmlMetadataValidator.translation_mode(node, parent_translation?)
 
           {heading_offset, heading_level} =
@@ -5586,6 +5649,21 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     is_binary(value) and
       Regex.match?(~r/\A-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\z/, value) and
       match?({:ok, _}, parse_html_float(value))
+  end
+
+  @doc "Parses HTML's permissive list-of-floating-point-numbers microsyntax using the shared scalar parser."
+  @spec parse_html_float_list(String.t()) :: [float()]
+  def parse_html_float_list(value) do
+    value
+    |> String.split(~r/[ \t\n\r\f,;]+/, trim: true)
+    |> Enum.map(fn token ->
+      token = Regex.replace(~r/\A[^0-9.\-]*/, token, "")
+
+      case parse_html_float(token) do
+        {:ok, number} -> number
+        _ -> 0.0
+      end
+    end)
   end
 
   @doc false
@@ -6453,12 +6531,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             source: node.tag
           )
 
-        node.tag in ["a", "button"] and
+        node.tag in ["a", "button", "canvas"] and
             not valid_html_element?(node.tag, node.attributes, node.children) ->
           Diagnostics.error(
             :style,
             :invalid_document,
-            "anchors and buttons require valid static contents without interactive or tabindex descendants",
+            "anchors and buttons require noninteractive static contents; canvas permits only its specified fallback controls",
             operation: :compute,
             module: __MODULE__,
             source: node.tag
@@ -6509,11 +6587,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           )
 
         (custom? or custom_html_tag?(parent) or "a" in ancestors or "button" in ancestors or
+           "canvas" in ancestors or
            node.tag in [
              "frameset",
              "frame",
              "noframes",
              "object",
+             "canvas",
              "mark",
              "ins",
              "del",
@@ -6538,6 +6618,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              "a",
              "button",
              "object",
+             "canvas",
              "mark",
              "ins",
              "del",
@@ -6567,7 +6648,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           )
 
         custom? or
-          node.tag in ~w(picture source img xmp plaintext noembed progress meter dialog font body q acronym basefont bgsound blink keygen) or
+          node.tag in ~w(picture source img canvas xmp plaintext noembed progress meter dialog font body q acronym basefont bgsound blink keygen) or
             (Map.has_key?(node.attributes, "hidden") and node.tag not in ["script", "template"]) ->
           case validate_html_element_attributes(node.tag, node.attributes) do
             :ok ->
@@ -7109,6 +7190,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     # Collapsed edge metadata is prepared after input validation.
     # Incoming styled trees must not supply internal border calculations.
     is_map(style) and not Map.has_key?(style, :_collapsed_borders) and
+      (Map.get(style, :_image_map) == nil or
+         NativeElixirPdfUtilities.Validators.ImageMapValidator.valid_model?(style._image_map)) and
       (Map.get(style, :html_target) == nil or
          NativeElixirPdfUtilities.Validators.HtmlLinkValidator.valid_identity?(style.html_target)) and
       NativeElixirPdfUtilities.Validators.HtmlLinkValidator.valid_prepared_destination?(

@@ -219,3 +219,37 @@ pass161/161 with one preexisting exclusion. The new original inline_svg_filters
 fixture passes its unchanged 1% Chromium gates at0.638% changed pixels and0.099%
 average delta. The older pattern/mask/foreignObject red cases remain preserved.
 This batch does not complete real HTML effect inputs or filter link geometry.
+## Initial HTML form-value helper
+
+The same locked Cargo build creates `native_form_values`, a byte-only disposable
+helper copied atomically beside the NIF. It compiles original patterns before
+adding HTML's full-value anchors, with ECMAScript Unicode-v sets, string
+properties, backreferences and lookarounds. Matching uses UTF-16 code units
+with Unicode code-point semantics. Invalid authored patterns are ignored.
+URL values use `url` 2.5.8's WHATWG parser without a base. Neither operation
+loads a URL, file, script, font or other resource.
+
+The vendored regress 0.12.0 archive and original source SHA256 values are recorded
+in `vendor/regress/INSTRUMENTATION.json`, with upstream licenses preserved.
+Instrumentation charges compiler/VM entries, loop backedges, character scans,
+backreference comparisons and set-string comparisons. Recursive calls consume
+the configured depth bound. A global allocator charges every actual allocation
+request, including Vec growth, Box/String/map allocations, Unicode string-set
+copies and optimizer output, before calling the system allocator. Accounting is
+cumulative reserved bytes, so reallocations charge their full new reservation.
+The native parser's previous hard-coded nesting ceiling is replaced by Limits.
+The 65,535 capture-group and loop bounds are fixed u16 bytecode representation
+invariants. Exceeding them produces a resource diagnostic, never an invalid
+pattern or invented mismatch.
+
+A disposable process permits allocation exhaustion to terminate that helper
+without unwinding from a global allocator or terminating the rendering VM.
+Exit statuses report allocation, compilation, execution, depth and elapsed-time
+exhaustion separately. The watchdog terminates the helper at the supplied time
+limit. Validators prepare UTF-8/shape/size input, supply every configurable
+ceiling from Limits and charge actual successful work to the existing reentrant
+render budget. The execution adapter only handles framed byte transport.
+
+Relevant primary definitions are the [HTML pattern attribute](https://html.spec.whatwg.org/multipage/input.html#the-pattern-attribute),
+[regress 0.12.0](https://docs.rs/regress/0.12.0/regress/), and
+[url 2.5.8](https://docs.rs/url/2.5.8/url/).

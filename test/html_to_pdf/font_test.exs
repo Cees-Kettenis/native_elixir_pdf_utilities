@@ -1896,13 +1896,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
   test "radicals resolve caller font bytes and device values and diagnose missing font data" do
     {:ok, registry} = Font.load_registry(system_font_discovery: false)
     {:ok, _, source} = Font.resolve("math", 400, :normal, registry)
-    <<_::32, count::16, _::48, records::binary-size(count * 16), _::binary>> = source.data
-
-    tables =
-      Map.new(
-        for <<tag::binary-size(4), _::32, offset::32, length::32 <- records>>,
-          do: {tag, binary_part(source.data, offset, length)}
-      )
+    tables = font_tables(source.data)
 
     math = tables["MATH"]
     <<_::32, constants_offset::16, _::binary>> = math
@@ -1989,6 +1983,213 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
           assert diagnostic.stage == if(expected == :variation, do: :layout, else: :font)
           assert diagnostic.operation == :measure_math
           assert diagnostic.message =~ if(expected == :variation, do: "variation", else: "MATH")
+      end
+    end
+  end
+
+  test "script and limit placement use caller MATH bytes and device values with public failures" do
+    # MathConstants offsets are fixed OpenType record positions, not limits.
+    constants =
+      default_constants()
+      |> replace_bytes(24, <<300::signed-16>>)
+      |> replace_bytes(36, <<400::signed-16>>)
+      |> replace_bytes(40, <<200::signed-16>>)
+      |> replace_bytes(60, <<50::signed-16>>)
+      |> replace_bytes(64, <<100::signed-16>>)
+      |> replace_bytes(68, <<700::signed-16>>)
+
+    for {records, expected} <- [
+          {constants, {:ok, 8.0}},
+          {replace_bytes(constants, 38, <<214::16>>) <> <<27::16, 27::16, 1::16, 0x4000::16>>,
+           {:ok, 8.75}},
+          {replace_bytes(constants, 38, <<214::16>>) <> <<1::16, 2::16, 0x8000::16>>, :variation},
+          {nil, :missing}
+        ] do
+      tables =
+        if records, do: Map.put(valid_tables(), "MATH", math_table(records)), else: valid_tables()
+
+      data = ttf_fixture(tables)
+      assert {:ok, registry} = Font.load_registry(fonts: [%{family: "STIX Two Math", data: data}])
+      assert {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
+
+      style = %{
+        display: :block,
+        font_face: font,
+        font_size: 20,
+        line_height: 24,
+        color: {0, 0, 1},
+        math_style: :normal,
+        math_shift: :normal
+      }
+
+      space = %{
+        type: :element,
+        namespace: :mathml,
+        tag: "mspace",
+        style: style,
+        children: [],
+        attributes: %{"width" => "3pt", "height" => "1pt"}
+      }
+
+      node = %{
+        type: :element,
+        namespace: :mathml,
+        tag: "msup",
+        style: style,
+        children: [space, space],
+        attributes: %{}
+      }
+
+      case expected do
+        {:ok, shift} ->
+          assert {:ok, prepared} = MathLayoutValidator.prepare_element(node, %{})
+          assert prepared.constants.superscript_shift_up == shift
+          assert prepared.constants.space_after_script == 1.0
+          assert {:ok, measured} = MathLayout.measure(node)
+          assert measured.width == 7.0 and measured.ascent == 1 + shift
+
+          assert {:ok, compact} =
+                   MathLayout.measure(%{node | style: %{style | math_shift: :compact}})
+
+          assert compact.ascent == 5.0
+          assert {:ok, limit} = MathLayout.measure(%{node | tag: "mover"})
+          assert limit.ink_ascent >= limit.ascent
+
+          assert {:ok, public} =
+                   HtmlToPdf.render(
+                     "<math style='font-size:20pt'><msup><mspace width='3pt' height='1pt'/><mspace width='3pt' height='1pt'/></msup></math>",
+                     fonts: [%{family: "STIX Two Math", data: data}],
+                     system_font_discovery: false
+                   )
+
+          assert is_binary(public)
+
+        _ ->
+          assert {:error, {_, diagnostic}} = MathLayout.measure(node)
+          assert diagnostic.operation == :measure_math
+          assert diagnostic.message =~ if(expected == :missing, do: "MATH", else: "variation")
+
+          assert {:error, {_, public_diagnostic}} =
+                   HtmlToPdf.render(
+                     "<math><msup><mspace width='3pt'/><mspace width='3pt'/></msup></math>",
+                     fonts: [%{family: "STIX Two Math", data: data}],
+                     system_font_discovery: false
+                   )
+
+          assert public_diagnostic.stage in [:font, :layout]
+          assert public_diagnostic.source != nil and public_diagnostic.reason != nil
+      end
+    end
+  end
+
+  test "script corner kern thresholds and devices use the selected caller glyph size" do
+    tables = ttf_font_path!() |> File.read!() |> font_tables()
+    cmap = cmap_format12_table([{?A, ?A, 3}])
+    tables = Map.put(tables, "cmap", <<0::16, 1::16, 3::16, 10::16, 12::32, cmap::binary>>)
+
+    for {shift, adjustment, expected} <- [
+          {99, :none, :lower},
+          {100, :none, :upper},
+          {101, :none, :upper},
+          {100, :kern_device, :lower},
+          {100, :height_device, :lower},
+          {100, :reordered_height_device, :height_error},
+          {100, :variation, :error}
+        ] do
+      device =
+        case adjustment do
+          :none -> <<>>
+          :variation -> <<1::16, 2::16, 0x8000::16>>
+          _ -> <<27::16, 27::16, 1::16, 0x4000::16>>
+        end
+
+      height_device = if adjustment == :height_device, do: 14, else: 0
+      value_device = if adjustment in [:kern_device, :variation], do: 14, else: 0
+
+      # Offsets follow the fixed OpenType MathKern record layout.
+      kern =
+        if adjustment == :reordered_height_device do
+          <<2::16, 100::signed-16, 22::16, 110::signed-16, 0::16, 10::signed-16, 0::16,
+            -30::signed-16, 0::16, 40::signed-16, 0::16, device::binary>>
+        else
+          <<1::16, 100::signed-16, height_device::16, 10::signed-16, 0::16, -30::signed-16,
+            value_device::16, device::binary>>
+        end
+
+      info =
+        <<0::16, 0::16, 0::16, 8::16, 12::16, 1::16, 18::16, 18::16, 18::16, 18::16, 1::16, 1::16,
+          3::16, kern::binary>>
+
+      constants = replace_bytes(default_constants(), 36, <<shift::signed-16>>)
+      data = tables |> Map.put("MATH", math_table(constants, info)) |> ttf_fixture()
+
+      {:ok, registry} =
+        Font.load_registry(
+          fonts: [%{family: "STIX Two Math", data: data}],
+          system_font_discovery: false
+        )
+
+      {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
+
+      style = %{
+        display: :block,
+        font_face: font,
+        font_size: 20,
+        line_height: 24,
+        color: {0, 0, 0},
+        math_style: :normal,
+        math_shift: :normal
+      }
+
+      token = fn size ->
+        token_style = %{style | font_size: size}
+
+        %{
+          type: :element,
+          namespace: :mathml,
+          tag: "mn",
+          style: token_style,
+          attributes: %{},
+          children: [%{type: :text, text: "A", style: token_style}]
+        }
+      end
+
+      node = %{
+        type: :element,
+        namespace: :mathml,
+        tag: "msup",
+        style: style,
+        attributes: %{},
+        children: [token.(20), token.(10)]
+      }
+
+      case expected do
+        :error ->
+          assert {:error, {:invalid_document, diagnostic}} = MathLayout.measure(node)
+          assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
+          assert diagnostic.message =~ "variation"
+          assert diagnostic.source =~ "glyph 3"
+
+        :height_error ->
+          assert {:error, {:invalid_document, diagnostic}} = MathLayout.measure(node)
+          assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
+          assert diagnostic.message =~ "height ranges"
+          assert diagnostic.source =~ "glyph 3"
+
+        _ ->
+          assert {:ok, natural} = MathLayout.measure(token.(20))
+          assert {:ok, measured} = MathLayout.measure(node)
+          assert [base, script] = measured.glyphs
+          assert base.glyph_id == 3 and script.glyph_id == 3
+          assert script.font_size == 10 and script.font_face.data == data
+
+          delta =
+            if expected == :lower,
+              do: (10 * 20 + 10 * 10) / font.units_per_em,
+              else: (-30 * 20 + 10 * 10) / font.units_per_em
+
+          assert_in_delta script.x, natural.width + delta, 1.0e-10
+          assert measured.actual_text == "AA"
       end
     end
   end
@@ -3107,6 +3308,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       nil -> flunk("No local TTF font fixture found")
       path -> path
     end
+  end
+
+  defp font_tables(data) do
+    <<_::32, count::16, _::48, records::binary-size(count * 16), _::binary>> = data
+
+    Map.new(
+      for <<tag::binary-size(4), _::32, offset::32, length::32 <- records>>,
+        do: {tag, binary_part(data, offset, length)}
+    )
   end
 
   defp valid_tables do

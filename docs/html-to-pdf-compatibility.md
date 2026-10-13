@@ -75,7 +75,10 @@ effect. Language selectors accept escaped identifiers, quoted strings, range
 lists and wildcard subtags, with canonical aliases and RFC extended filtering.
 An empty range matches untagged content; `"*"` does not. Language computation
 uses the existing CSS work budget and a cache scoped to each style computation.
-Foreign-content and shadow/slot language integration remain further work.
+Language selectors follow logical parents for assigned content and shadow hosts
+for shadow descendants. Unqualified foreign `lang` applies to SVG; genuine XML
+`lang` applies in foreign content. Qualified lookalike attributes retain their
+values without establishing language.
 
 Content-Language pragmas use the last successfully processed value in document
 order. Missing, empty and comma-containing values are ignored; otherwise the first
@@ -592,7 +595,7 @@ For PDF viewer bookmarks, see [outlines from headings](html-to-pdf-examples.md#c
 
 | Not supported | What to use instead |
 | --- | --- |
-| JavaScript, canvas, video, audio, plugin embeds and general framesets | Static HTML, supported images, authorized local HTML child viewports and bounded zero-border framesets |
+| JavaScript, canvas drawing APIs, video, audio, plugin embeds and general framesets | Static HTML, supported images, authorized local HTML child viewports and bounded zero-border framesets |
 | XFA, JavaScript form actions | Use supported AcroForm fields or static artwork |
 | Floats, fixed positioning, transforms, animations | Block, flex, grid, relative, or absolute layout |
 | Named pages and CSS page-margin boxes | Page options and header/footer templates |
@@ -829,3 +832,34 @@ editable widgets in one PDF radio field share the owner-scoped group requirement
 Readonly and disabled controls do not acquire a PDF Required flag. Empty required
 values remain renderable. Remaining input types, complete initial validity and
 submission behavior are separate unfinished requirements.
+
+
+Canvas elements render their authored fallback in the scripting-disabled static
+profile. Inline fallback, nested canvases, transparent block content in a flow
+context, author CSS boxes, and generated content use ordinary layout. Bitmap
+`width` and `height` attributes are preserved without reserving a bitmap or
+setting fallback dimensions. Canvas validates the standard's limited interactive
+fallback descendants. Executable scripts retain the existing diagnostic policy;
+unused template content and hidden data scripts do not become fallback text.
+
+Microdata and inert global interaction hints retain their exact authored values
+in logical trees, composed trees, selected-content clones, and styled owners.
+They remain available to attribute selectors and authored `attr()` content.
+Translation and editing inherit through logical parent elements; a shadow root
+starts a separate inheritance chain. Inertness follows the flat tree and removes
+interactive PDF links and fields while preserving static artwork. Foreign or
+namespace-qualified inert attributes do not establish HTML inertness. No metadata
+identifier is fetched or turned into a link or extra text. Translation services,
+editing actions, focus/drag handling, and microdata extraction remain outside this
+static rendering contract.
+
+Document styles use authored light-tree order, including styles in unassigned
+light content. Shadow styles stay scoped to their own roots and ignore document
+stylesheet-set titles and default-style metadata. Explicit caller stylesheets
+remain supported; discovered external stylesheets and imports remain excluded.
+
+
+Language pragmas use the authored document tree, excluding shadow metadata and
+unused template fragments. Shadow style `:lang()` selectors and slotted selectors
+resolve the actual node language; language does not inherit from a distribution
+slot. Selected-content clones inherit through their destination's logical parents.

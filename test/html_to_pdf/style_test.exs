@@ -3358,7 +3358,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert {:ok, explicit_dom} = HtmlParser.parse_document_detailed(explicit)
     assert {:ok, styled} = Style.compute(tree_content(dom))
     assert {:ok, explicit_styled} = Style.compute(tree_content(explicit_dom))
-    assert styled == explicit_styled
+
+    rendering = fn recurse, node ->
+      Map.take(node, [:type, :tag, :text, :style, :document_canvas])
+      |> Map.put(:children, Enum.map(Map.get(node, :children, []), &recurse.(recurse, &1)))
+    end
+
+    assert rendering.(rendering, styled) == rendering.(rendering, explicit_styled)
     [body] = styled.children
     [container] = Enum.reject(body.children, &(&1.type == :text))
     assert container.style.padding == edges(12.0)

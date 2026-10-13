@@ -31,7 +31,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
     select_stylesheets(nodes, media_context, [:html, :svg])
   end
 
-  defp select_stylesheets(nodes, media_context, namespaces) do
+  @doc "Selects shadow-root style blocks without document stylesheet-set titles or metadata pragmas."
+  @spec selected_shadow_style_nodes([map()], map() | nil | :unpositioned) :: [map()]
+  def selected_shadow_style_nodes(nodes, media_context) do
+    select_stylesheets(nodes, media_context, [:html, :svg], :shadow)
+  end
+
+  defp select_stylesheets(nodes, media_context, namespaces, tree_kind \\ :document) do
     scope =
       Enum.find_value(nodes, {nil, nil}, fn node ->
         if Map.has_key?(node, :document_id) and Map.has_key?(node, :tree_scope_id),
@@ -62,7 +68,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
       attrs = node.attributes
 
       node.tag == "style" and stylesheet_type?(attrs) and
-        Map.get(attrs, "title", "") in ["", preferred] and
+        (tree_kind == :shadow or Map.get(attrs, "title", "") in ["", preferred]) and
         NativeElixirPdfUtilities.Validators.PrintMediaValidator.matches_stylesheet?(
           Map.get(attrs, "media", "all"),
           Enum.map_join(node.children, "", fn child -> Map.get(child, :text, "") end),
@@ -322,6 +328,84 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
     else
       inherited?
     end
+  end
+
+  @doc "Resolves logical translation and editing inheritance on a composed projection without changing identities or authored attributes."
+  @spec prepare_composed_nodes(map(), [map()], map()) :: [map()]
+  def prepare_composed_nodes(logical, projection, clones) do
+    index =
+      NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator.logical_index(logical)
+      |> Map.merge(clones)
+
+    facts =
+      Enum.reduce(index, %{}, fn {id, node}, facts ->
+        {_modes, facts} = logical_modes(id, node, index, facts, 0)
+        facts
+      end)
+
+    project_logical_modes(projection, facts)
+  end
+
+  # Translation and editing use parent elements, not slot/flat-tree ancestry.
+  # A shadow or template fragment therefore starts with the initial modes.
+  defp logical_modes(id, node, index, facts, depth) do
+    HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
+
+    case Map.fetch(facts, id) do
+      {:ok, modes} ->
+        {modes, facts}
+
+      :error ->
+        HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+        parent = Map.get(index, Map.get(node, :parent_id))
+
+        {inherited, facts} =
+          if match?(%{type: :element}, parent),
+            do: logical_modes(parent.node_id, parent, index, facts, depth + 1),
+            else: {{true, false}, facts}
+
+        {translation, editing} = inherited
+
+        editing =
+          case HtmlValidator.html_editing_state(node) do
+            :editable -> true
+            :not_editable -> false
+            :inherit -> editing
+          end
+
+        translation =
+          if Map.get(node, :type) == :element,
+            do: translation_mode(node, translation),
+            else: translation
+
+        modes = {translation, editing}
+        {modes, Map.put(facts, id, modes)}
+    end
+  end
+
+  defp project_logical_modes(nodes, facts) do
+    Enum.map(nodes, fn node ->
+      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+
+      case node do
+        %{type: :element, children: children} ->
+          node =
+            case Map.get(facts, Map.get(node, :node_id)) do
+              {translation, editing} ->
+                node
+                |> Map.put(:_html_translate, translation)
+                |> Map.put(:_html_editable, editing)
+
+              nil ->
+                node
+            end
+
+          %{node | children: project_logical_modes(children, facts)}
+
+        _ ->
+          node
+      end
+    end)
   end
 
   # URL syntax is distinct from resource authorization and link support. Opaque

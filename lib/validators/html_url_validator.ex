@@ -22,6 +22,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlValidator do
         }
   @type destination :: {:uri, String.t()} | {:fragment, String.t()}
 
+  @doc "Tests an initial URL input through the WHATWG URL parser without a base or resource access."
+  @spec valid_initial_input_url?(term()) ::
+          {:ok, boolean()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def valid_initial_input_url?(value) do
+    with {:ok, request} <-
+           NativeElixirPdfUtilities.Validators.HtmlFormValueValidator.prepare(:url, value, []),
+         {:ok, state} <-
+           NativeElixirPdfUtilities.Validators.HtmlFormValueValidator.result(
+             NativeElixirPdfUtilities.HtmlToPdf.FormValueBackend.run(request)
+           ) do
+      {:ok, state == :valid_url}
+    end
+  end
+
   @doc "Classifies the HTML about:blank URL family without granting resource access."
   @spec blank_document_url(term()) :: {:ok, String.t()} | :not_blank
   def blank_document_url(reference) do

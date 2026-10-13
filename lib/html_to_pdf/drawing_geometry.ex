@@ -70,6 +70,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
           box
       end
 
+    box =
+      case Map.get(box, :link_quads) do
+        nil ->
+          box
+
+        quads ->
+          Map.put(
+            box,
+            :link_quads,
+            Enum.map(quads, fn quad ->
+              Enum.map(quad, fn {x, y} -> {x + delta_x, y + delta_y} end)
+            end)
+          )
+      end
+
     case Map.get(box, :link_rect) do
       %{x: x, y: y} = region ->
         Map.put(box, :link_rect, %{region | x: x + delta_x, y: y + delta_y})
@@ -77,6 +92,64 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
       _ ->
         box
     end
+  end
+
+  @doc "Clips validated native content to an actual containing viewport, retaining local group transforms."
+  @spec clip_boxes([map()], map()) :: [map()]
+  def clip_boxes(boxes, clip) do
+    Enum.flat_map(boxes, fn box ->
+      case box do
+        %{type: :drawing_group} ->
+          children = translate_boxes([box], -clip.x, -clip.y)
+
+          [
+            %{
+              type:
+                NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_layout_box(
+                  :drawing_group
+                ),
+              role: :overflow_clip,
+              x: clip.x,
+              y: clip.y,
+              width: clip.width,
+              height: clip.height,
+              transform: {1, 0, 0, 1, clip.x, clip.y},
+              clip: %{x: 0.0, y: 0.0, width: clip.width, height: clip.height},
+              boxes: children
+            }
+            |> Map.merge(Map.take(box, [:flow_id, :out_of_flow, :position_anchor, :break_inside]))
+          ]
+
+        %{type: :glyph_group, boxes: children} ->
+          [%{box | boxes: clip_boxes(children, clip)}]
+
+        _ ->
+          {left, bottom, right, top} =
+            intersect_clip(
+              {clip.x, clip.y, clip.x + clip.width, clip.y + clip.height},
+              box_clip_bounds(Map.get(box, :clip))
+            )
+
+          if right > left and top > bottom do
+            existing = Map.get(box, :clip)
+            prepared = %{x: left, y: bottom, width: right - left, height: top - bottom}
+
+            rounded =
+              case existing do
+                %{inner_clip: %{border_radius: radius} = inner} when radius > 0 -> inner
+                %{border_radius: radius} when radius > 0 -> Map.delete(existing, :inner_clip)
+                _ -> nil
+              end
+
+            prepared =
+              if rounded == nil, do: prepared, else: Map.put(prepared, :inner_clip, rounded)
+
+            [Map.put(box, :clip, prepared)]
+          else
+            []
+          end
+      end
+    end)
   end
 
   @doc false

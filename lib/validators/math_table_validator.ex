@@ -11,6 +11,32 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
     MathLayoutValidator
   }
 
+  # Fixed source transport fields preserve facts from real authored/generated
+  # nodes. They never issue source receipts or resource permissions.
+  @source_fields [
+    :type,
+    :namespace,
+    :tag,
+    :attributes,
+    :attribute_namespaces,
+    :_selector_id,
+    :_document_order,
+    :node_id,
+    :parent_id,
+    :document_id,
+    :tree_scope_id,
+    :source,
+    :cloned_from_node_id,
+    :clone_id,
+    :composed_parent_id,
+    :shadow_scope_id,
+    :shadow_host_id,
+    :shadow_root_id,
+    :assigned_slot_id,
+    :assigned_shadow_scope_id,
+    :assigned_shadow_host_id
+  ]
+
   @doc "Resolves MathML cell default padding using the final selected font metrics."
   @spec resolve_padding(term()) :: {:ok, map()} | {:error, Diagnostics.detailed_error()}
   def resolve_padding(style) do
@@ -247,15 +273,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
                       content: Map.delete(content, :root),
                       style: cell.style,
                       column: placement.column,
-                      source:
-                        Map.take(cell, [
-                          :namespace,
-                          :tag,
-                          :_selector_id,
-                          :_document_order,
-                          :document_id,
-                          :tree_scope_id
-                        ])
+                      source: Map.take(cell, @source_fields)
                     }
                     | cells
                   ]}}
@@ -276,15 +294,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
         {:ok, cells} ->
           row_box = %{
             style: row.row.style,
-            source:
-              Map.take(row.row, [
-                :namespace,
-                :tag,
-                :_selector_id,
-                :_document_order,
-                :document_id,
-                :tree_scope_id
-              ])
+            source: Map.take(row.row, @source_fields)
           }
 
           {:cont, {:ok, {[Enum.reverse(cells) | prepared], [row_box | row_boxes]}}}

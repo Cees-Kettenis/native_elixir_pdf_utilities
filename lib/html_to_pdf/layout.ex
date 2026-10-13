@@ -71,9 +71,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             with {:ok, style} <-
                    NativeElixirPdfUtilities.HtmlToPdf.Style.resolve_image(style, box.width) do
               paint = fitted_image_boxes(style, box.x, box.y, box.width, box.height, style.image)
-              metadata = Map.drop(box, [:type, :role, :responsive_style, :x, :y, :width, :height])
-              {:ok, Enum.map(paint, &Map.merge(&1, metadata))}
+
+              metadata =
+                Map.drop(box, [:type, :role, :responsive_style, :x, :y, :width, :height, :clip])
+
+              paint =
+                case Map.get(box, :clip) do
+                  nil ->
+                    paint
+
+                  clip ->
+                    NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(paint, clip)
+                end
+
+              resolve_image_boxes(Enum.map(paint, &Map.merge(&1, metadata)))
             end
+
+          %{type: :image, _image_map_geometry: geometry} ->
+            viewport = %{
+              x: box.x + geometry.dx,
+              y: box.y + geometry.dy,
+              width: geometry.width,
+              height: geometry.height
+            }
+
+            regions =
+              NativeElixirPdfUtilities.HtmlToPdf.ImageMapGeometry.regions(
+                geometry.model,
+                viewport,
+                box
+              )
+
+            metadata =
+              Map.take(box, [:flow_id, :out_of_flow, :position_anchor, :break_inside, :line_id])
+
+            {:ok,
+             [Map.delete(box, :_image_map_geometry) | Enum.map(regions, &Map.merge(&1, metadata))]}
 
           %{boxes: children} ->
             with {:ok, children} <- resolve_image_boxes(children),
@@ -203,7 +236,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
           positioned_children = Map.get(styled_tree, :positioned_children, [])
 
-          with {:ok, boxes} <- layout_blocks(children, layout_page_size, margins),
+          with {:ok, boxes, flow_bottom} <- layout_blocks(children, layout_page_size, margins),
                {:ok, boxes} <-
                  layout_positioned_children(
                    positioned_children,
@@ -245,7 +278,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                  margins: margins,
                  boxes: canvas_boxes ++ group_math_glyphs(boxes),
                  content_width: page_width - margins.left - margins.right,
-                 content_height: page_height - margins.top - margins.bottom
+                 content_height:
+                   max(
+                     page_height - margins.top - margins.bottom,
+                     page_height - margins.top - flow_bottom
+                   )
                },
                link_metadata
              )}
@@ -777,7 +814,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   @spec layout_blocks([term()], {number(), number()}, PageGeometry.margins()) ::
-          {:ok, [box()]} | {:error, :invalid_layout}
+          {:ok, [box()], number()} | {:error, :invalid_layout}
   defp layout_blocks(children, page_size, margins) do
     {page_width, page_height} = page_size
 
@@ -813,7 +850,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       end)
 
     case result do
-      {:ok, boxes, _y} -> {:ok, Enum.reverse(boxes)}
+      {:ok, boxes, y} -> {:ok, Enum.reverse(boxes), y}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -1143,6 +1180,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                   y: content_top - content_box_height,
                   width: content_width,
                   height: content_box_height
+                })
+
+              content_boxes =
+                clip_overflow_contents(content_boxes, style, %{
+                  x: content_x - padding.left,
+                  y: content_top - content_box_height - padding.bottom,
+                  width: content_width + padding.left + padding.right,
+                  height: content_box_height + padding.top + padding.bottom
                 })
 
               # Root bodies also fragment in the PDF page surface. Preserve
@@ -7261,6 +7306,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
+  # Ordinary CSS overflow uses the allocated padding box; native controls keep
+  # their separately validated client/scrollbar viewport.
+  defp clip_overflow_contents(boxes, style, clip) do
+    if Map.get(style, :overflow, :visible) == :hidden and
+         Map.get(style, :form_kind) not in [:text, :textarea, :select, :listbox] do
+      if clip.width > 0 and clip.height > 0,
+        do: NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(boxes, clip),
+        else: []
+    else
+      boxes
+    end
+  end
+
   # Block and atomic inline controls share one viewport. Offscreen artwork
   # must not enlarge a control's page allocation, while fields keep their value.
   defp clip_control_contents(boxes, style, clip) do
@@ -7730,6 +7788,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               y: content_top - content_height,
               width: content_width,
               height: content_height
+            })
+
+          content_boxes =
+            clip_overflow_contents(content_boxes, style, %{
+              x: content_x - padding.left,
+              y: content_top - content_height - padding.bottom,
+              width: content_width + padding.left + padding.right,
+              height: content_height + padding.top + padding.bottom
             })
 
           boxes = background ++ content_boxes
@@ -9975,6 +10041,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               _ ->
                 fitted_image_box(style, x, y, width, height, image)
             end
+        end
+
+      box =
+        case {box.type, Map.get(style, :_image_map)} do
+          {:image, model} when is_map(model) ->
+            Map.put(box, :_image_map_geometry, %{
+              model: model,
+              dx: x - box.x,
+              dy: y - box.y,
+              width: width,
+              height: height
+            })
+
+          _ ->
+            box
         end
 
       # Image inputs retain their content clip after issued SVG document paint.

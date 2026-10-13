@@ -235,10 +235,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
              %{
                stage: :html,
                reason: :unsupported_html,
-               source: "<canvas>"
+               source: "<video>"
              }}} =
              PageFurniture.decorate(pages(1), layout_tree(),
-               page_furniture: [header: "<canvas></canvas>"]
+               page_furniture: [header: "<video></video>"]
              )
   end
 

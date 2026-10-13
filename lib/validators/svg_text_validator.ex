@@ -10,6 +10,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
     SvgStyleValidator,
     SvgTransformValidator,
     SvgTextPositionValidator,
+    SvgTextPathValidator,
     SvgValidator
   }
 
@@ -34,7 +35,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
         end)
 
       Enum.reduce_while(summary.geometry, :ok, fn node, :ok ->
-        if node.tag in ~w(text tspan) do
+        if node.tag in ~w(text tspan textPath) do
           font = Map.get(fonts, Map.get(node.attributes, "font-family"))
 
           text =
@@ -65,9 +66,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
 
   defp prepare_tree_profile(root) do
     nodes = SvgSceneValidator.tree_nodes(root)
-    text? = Enum.any?(nodes, fn {node, _} -> node.tag in ~w(text tspan) end)
+    text? = Enum.any?(nodes, fn {node, _} -> node.tag in ~w(text tspan textPath) end)
 
-    with :ok <-
+    with :ok <- SvgTextPathValidator.validate_tree(root),
+         :ok <-
            if(text?,
              do: validate_original_fonts(root),
              else: :ok
@@ -80,16 +82,17 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
             attributes != :ok ->
               attributes
 
-            node.tag in ~w(text tspan) ->
+            node.tag in ~w(text tspan textPath) ->
               cond do
-                node.tag == "tspan" and List.first(ancestors) not in ~w(text tspan) ->
+                node.tag == "tspan" and List.first(ancestors) not in ~w(text tspan textPath) ->
                   invalid("SVG tspan requires a text or tspan parent", "tspan")
 
-                node.tag == "text" and Enum.any?(ancestors, &(&1 in ~w(text tspan))) ->
+                node.tag == "text" and Enum.any?(ancestors, &(&1 in ~w(text tspan textPath))) ->
                   invalid("SVG text roots cannot contain nested text roots", "text")
 
                 Enum.any?(node.children, fn child ->
-                  Map.get(child, :type) == :element and child.tag not in ~w(tspan title desc)
+                  Map.get(child, :type) == :element and
+                      child.tag not in ~w(tspan textPath title desc)
                 end) ->
                   unsupported(
                     "SVG text children require supported tspan or descriptive metadata",
@@ -109,11 +112,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
                 not Map.has_key?(node, :style) and Map.get(node.attributes, "style", "") != "" ->
                   unsupported("SVG text CSS requires host cascade preparation", node.tag)
 
-                node.tag == "tspan" and
+                node.tag in ~w(tspan textPath) and
                     SvgTransformValidator.parse(Map.get(node.attributes, "transform", "none")) !=
                       {:ok, {1.0, 0.0, 0.0, 1.0, 0.0, 0.0}} ->
                   unsupported(
-                    "SVG tspan transforms require a complete text positioning adapter",
+                    "SVG #{node.tag} transforms require a complete text positioning adapter",
                     node.tag
                   )
 
@@ -247,7 +250,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
                    node.tag <> " " <> property
                  )
 
-          property in ~w(rotate textLength lengthAdjust) and node.tag not in ~w(text tspan) ->
+          property in ~w(rotate textLength lengthAdjust) and
+              node.tag not in ~w(text tspan textPath) ->
             unsupported(
               "SVG inherited advanced text positioning requires a complete text adapter",
               node.tag
@@ -285,7 +289,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
 
     with {:ok, positions} <- prepare_tree_profile(root),
          {:ok, _summary} <-
-           if(Enum.any?(nodes, fn {node, _} -> node.tag in ~w(text tspan) end),
+           if(Enum.any?(nodes, fn {node, _} -> node.tag in ~w(text tspan textPath) end),
              do:
                SvgValidator.validate_processing(
                  NativeElixirPdfUtilities.HtmlToPdf.SvgScene.authored_source(root),
@@ -296,7 +300,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
          :ok <- validate_instance_fonts(nodes, ids),
          {:ok, selected} <-
            Enum.reduce_while(nodes, {:ok, []}, fn {node, _}, {:ok, selected} ->
-             if node.tag in ~w(text tspan use) and
+             if node.tag in ~w(text tspan textPath use) and
                   (node.tag != "use" or text_target?(node, ids)) do
                case node.style.font_face do
                  %{type: :embedded, data: data} = face when is_binary(data) ->
@@ -396,7 +400,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
 
     target &&
       Enum.any?(SvgSceneValidator.tree_nodes(target), fn {child, _} ->
-        child.tag in ~w(text tspan) or (child.tag == "use" and text_target?(child, ids))
+        child.tag in ~w(text tspan textPath) or (child.tag == "use" and text_target?(child, ids))
       end)
   end
 
@@ -441,7 +445,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
         %{type: :text, text: text} ->
           if(visibility == :visible, do: [text], else: [])
 
-        %{type: :element, tag: "tspan"} ->
+        %{type: :element, tag: tag} when tag in ~w(tspan textPath) ->
           if Map.get(child.style, :display) == :none,
             do: [],
             else:

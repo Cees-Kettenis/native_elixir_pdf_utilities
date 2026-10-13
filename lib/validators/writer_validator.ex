@@ -188,7 +188,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                       Diagnostics.error(
                         :pdf,
                         :invalid_pdf_input,
-                        "PDF writer requires non-empty valid pages; rectangle shape must be :rectangle, {:triangle, direction} with up/down/left/right direction, or {:chevron, :down}; select_arrow requires a chevron and clip rectangle; flow_marker requires zero width, non-negative height and no link/field; baseline_snap_depth must be non-negative numeric when supplied; rectangle text_baseline_offset must be numeric when supplied; paint_frame requires a finite bounded rectangle supplying the original page paint origin and height; clip requires numeric finite bounded x/y and nonnegative width/height, optional nonnegative border_radius and at most one inner_clip rectangle when supplied; border_cutout requires numeric offsets and positive dimensions when supplied; glyph_group requires valid UTF-8 actual_text and text-only boxes; explicit glyph_ids require an embedded font and one positive 16-bit glyph ID per Unicode scalar",
+                        "PDF writer requires non-empty valid pages; link_region requires bounded convex counterclockwise QuadPoints and a positive annotation rectangle; rectangle shape must be :rectangle, {:triangle, direction} with up/down/left/right direction, or {:chevron, :down}; select_arrow requires a chevron and clip rectangle; flow_marker requires zero width, non-negative height and no link/field; baseline_snap_depth must be non-negative numeric when supplied; rectangle text_baseline_offset must be numeric when supplied; paint_frame requires a finite bounded rectangle supplying the original page paint origin and height; clip requires numeric finite bounded x/y and nonnegative width/height, optional nonnegative border_radius and at most one inner_clip rectangle when supplied; border_cutout requires numeric offsets and positive dimensions when supplied; glyph_group requires valid UTF-8 actual_text and text-only boxes; explicit glyph_ids require an embedded font and one positive 16-bit glyph ID per Unicode scalar",
                         operation: :write_pdf,
                         module: __MODULE__
                       )
@@ -460,6 +460,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             &(Map.get(box, &1) == nil)
           ) and
           (Map.get(box, :link_url) != nil or Map.get(box, :link_destination) != nil) and
+          (not Map.has_key?(box, :link_quads) or
+             NativeElixirPdfUtilities.Validators.ImageMapValidator.valid_link_region?(box)) and
           valid_clip_rectangle?(Map.get(box, :clip), true) and valid_link_box?(box)
 
       %{type: :text, text: text, x: x, y: y, font_size: font_size, font: font, color: color}
@@ -875,6 +877,42 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
         {_sx, _sy, _tx, _ty, _clip, height} -> Map.put(box, :drawing_page_height, height)
       end
 
+    box =
+      case {Map.get(box, :type), composition} do
+        {:link_region, {sx, sy, tx, ty, clip, _height}} when is_map_key(box, :link_quads) ->
+          quads =
+            Enum.map(box.link_quads, fn quad ->
+              Enum.map(quad, fn {x, y} ->
+                DrawingGeometry.transform_point(x, y, {sx, sy, tx, ty})
+              end)
+            end)
+
+          clip =
+            DrawingGeometry.intersect_clip(
+              clip,
+              DrawingGeometry.transform_box_clip(Map.get(box, :clip), {sx, sy, tx, ty})
+            )
+
+          quads =
+            if clip == nil,
+              do: quads,
+              else: NativeElixirPdfUtilities.HtmlToPdf.ImageMapGeometry.clip_quads(quads, clip)
+
+          if quads == [] do
+            Map.drop(box, [:link_url, :link_destination])
+          else
+            box
+            |> Map.put(:link_quads, quads)
+            |> Map.put(
+              :drawing_annotation_rect,
+              NativeElixirPdfUtilities.HtmlToPdf.ImageMapGeometry.bounds(quads)
+            )
+          end
+
+        _ ->
+          box
+      end
+
     case {composition, box} do
       {{sx, sy, tx, ty, clip, page_height}, %{type: :text} = linked}
       when is_map_key(linked, :link_url) or is_map_key(linked, :link_destination) ->
@@ -898,7 +936,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           else: Map.drop(box, [:link_url, :link_destination])
 
       {{_sx, _sy, _tx, _ty, clip, _height}, %{type: type} = linked}
-      when type in [:image, :link_region] and
+      when type in [:image, :link_region] and not is_map_key(linked, :link_quads) and
              (is_map_key(linked, :link_url) or is_map_key(linked, :link_destination)) ->
         {sx, sy, tx, ty, _clip, _height} = composition
         region = Map.get(box, :link_rect, Map.take(box, [:x, :y, :width, :height]))

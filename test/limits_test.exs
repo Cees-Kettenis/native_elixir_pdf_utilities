@@ -120,7 +120,7 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
     assert defaults == Limits.defaults()
     assert Limits.effective() == Limits.defaults()
     assert defaults.max_svg_gradient_work == 100_000
-    assert map_size(defaults) == 142
+    assert map_size(defaults) == 155
     assert defaults.max_frameset_tracks == 1_024
     assert defaults.max_frameset_cells == 65_536
   end

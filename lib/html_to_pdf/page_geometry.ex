@@ -338,7 +338,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
   def box_vertical_bounds(box) do
     case box do
       %{type: type, y: y, height: height}
-      when type in [:rect, :image, :responsive_image, :flow_marker, :glyph_group, :drawing_group] and
+      when type in [
+             :rect,
+             :image,
+             :responsive_image,
+             :link_region,
+             :flow_marker,
+             :glyph_group,
+             :drawing_group
+           ] and
              is_number(y) and
              is_number(height) ->
         {y + height, y}

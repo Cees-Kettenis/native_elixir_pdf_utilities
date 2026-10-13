@@ -262,6 +262,271 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
     assert id == font.cmap[?A]
   end
 
+  test "unconstrained vertical operators retain natural paint and selected-font preferred widths",
+       %{node: n, font: font} do
+    assert {:ok, metrics} = Font.math_metrics(font)
+    operator = n.("mo", "(", %{})
+    assert {:ok, measured} = MathLayout.measure(operator)
+    assert {:ok, natural} = MathLayout.glyph("(", font, 20)
+    assert measured.glyphs == Enum.map(natural.glyphs, &Map.put(&1, :color, {0, 0, 0}))
+    assert measured.actual_text == "("
+    construction = metrics.variants.vertical[font.cmap[?(]]
+
+    ids =
+      [font.cmap[?(]] ++
+        Enum.map(construction.variants, & &1.glyph) ++
+        Enum.map(construction.assembly.parts, & &1.glyph)
+
+    preferred = Enum.max(Enum.map(ids, &(Enum.at(font.widths, &1) * 20 / font.units_per_em)))
+    assert_in_delta measured.min_content_width, preferred, 1.0e-10
+    assert_in_delta measured.max_content_width, preferred, 1.0e-10
+    assert measured.width < preferred
+  end
+
+  test "operator font lengths use the core face and size through outer embellishment", %{
+    node: n,
+    row: r,
+    font: font,
+    style: style
+  } do
+    attrs = %{"lspace" => " 2CH ", "rspace" => "0.5CAP", "minsize" => "1.5LH"}
+    operator = n.("mo", "(", attrs)
+    assert {:ok, prepared} = MathLayoutValidator.prepare_element(r.([operator]), %{})
+    core = prepared.core_operator
+    assert {:ok, zero} = MathLayout.glyph("0", font, 20)
+    assert {:ok, capital} = MathLayout.glyph("H", font, 20)
+    assert_in_delta core.lspace, 2 * zero.width, 1.0e-10
+    assert_in_delta core.rspace, capital.ascent / 2, 1.0e-10
+    assert core.minsize == 1.5 * style.line_height
+
+    wrapper = r.([operator])
+
+    assert {:ok, outer} =
+             MathLayoutValidator.prepare_element(
+               %{wrapper | style: %{style | font_size: 60}},
+               %{}
+             )
+
+    assert outer.core_operator == core
+
+    assert {:ok, resolved} =
+             MathLayoutValidator.prepare_operator_stretch(hd(prepared.children), {0, 0})
+
+    assert_in_delta resolved.target_ascent + resolved.target_descent, core.minsize, 1.0e-10
+  end
+
+  test "operator preferred-size and large-variant scans share the font work budget", %{
+    node: n,
+    style: style
+  } do
+    assert {:ok, vertical} = MathLayoutValidator.prepare_element(n.("mo", "(", %{}), %{})
+    sum = %{n.("mo", "∑", %{}) | style: %{style | math_style: :normal}}
+    assert {:ok, large} = MathLayoutValidator.prepare_element(sum, %{})
+    Limits.install(Map.put(Limits.effective(), :max_font_math_work, 1))
+
+    for prepared <- [vertical, large] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               MathLayoutValidator.prepare_operator_stretch(prepared, nil)
+
+      assert diagnostic.stage == :font
+      assert diagnostic.operation == :measure_math
+      assert diagnostic.message =~ "max_font_math_work"
+    end
+  end
+
+  test "font-relative attributes diagnose absent selected-face metric glyphs", %{
+    node: n,
+    font: font,
+    style: style
+  } do
+    for {unit, character} <- [{"ch", ?0}, {"cap", ?H}] do
+      missing_style = %{style | font_face: %{font | cmap: Map.delete(font.cmap, character)}}
+      operator = %{n.("mo", "+", %{"lspace" => "2#{unit}"}) | style: missing_style}
+      assert {:error, {:unsupported_glyph, diagnostic}} = MathLayout.measure(operator)
+      assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
+      assert diagnostic.source == <<character::utf8>>
+      assert diagnostic.message =~ "no usable glyph"
+    end
+  end
+
+  test "all-stretch rows use initial ink from each selected font face", %{
+    node: n,
+    row: r,
+    font: font,
+    style: style
+  } do
+    {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    {:ok, _, other} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    assert Base.encode16(:crypto.hash(:sha256, other.data), case: :lower) ==
+             "57f73e11f51999432bf7ab22ce55b6f945d5eca1bf824404cfa9ec2e3718c84e"
+
+    {:ok, other_bounds} = Font.glyph_bounds(other)
+    {:ok, other_metrics} = Font.math_metrics(other)
+    {_, bottom, _, top} = elem(other_bounds, other.cmap[?)])
+    height = (top - bottom) * 40 / other.units_per_em
+    axis = other_metrics.constants.axis_height.value * 40 / other.units_per_em
+    initial_ascent = height / 2 + axis
+    initial_descent = height / 2 - axis
+    {:ok, metrics} = Font.math_metrics(font)
+    small_axis = metrics.constants.axis_height.value * 20 / font.units_per_em
+    target = 2 * max(initial_ascent - small_axis, initial_descent + small_axis)
+
+    variant =
+      Enum.find(
+        metrics.variants.vertical[font.cmap[?(]].variants,
+        &(&1.advance * 20 / font.units_per_em >= target)
+      )
+
+    assert variant.glyph == 1307
+    other_style = %{style | font_face: other, font_size: 40}
+
+    right = %{
+      n.("mo", ")", %{})
+      | style: other_style,
+        children: [%{type: :text, text: ")", style: other_style}]
+    }
+
+    assert {:ok, measured} = MathLayout.measure(r.([n.("mo", "(", %{}), right]))
+    assert [left, right] = measured.glyphs
+    assert left.glyph_id == variant.glyph and left.font_face == font
+    assert right.glyph_id == other.cmap[?)] and right.font_face == other
+    assert_in_delta right.height, height, 1.0e-8
+    assert measured.actual_text == "()"
+  end
+
+  test "all-stretch rows relayout to the initial source ink maxima", %{
+    node: n,
+    row: r,
+    font: font,
+    style: style
+  } do
+    assert Base.encode16(:crypto.hash(:sha256, font.data), case: :lower) ==
+             "49b22767985171bce579307b21d98f4d35012fa39e316acc4ffcab8644dfb69b"
+
+    {:ok, bounds} = Font.glyph_bounds(font)
+    {:ok, metrics} = Font.math_metrics(font)
+    operators = [{?(, 20}, {?), 40}]
+
+    initial =
+      Enum.map(operators, fn {character, size} ->
+        {_, bottom, _, top} = elem(bounds, font.cmap[character])
+        height = (top - bottom) * size / font.units_per_em
+        axis = metrics.constants.axis_height.value * size / font.units_per_em
+        {height / 2 + axis, height / 2 - axis}
+      end)
+
+    ascent = Enum.max(Enum.map(initial, &elem(&1, 0)))
+    descent = Enum.max(Enum.map(initial, &elem(&1, 1)))
+
+    expected =
+      Enum.map(operators, fn {character, size} ->
+        scale = size / font.units_per_em
+        axis = metrics.constants.axis_height.value * scale
+        target = 2 * max(ascent - axis, descent + axis)
+        base = font.cmap[character]
+        {_, bottom, _, top} = elem(bounds, base)
+
+        id =
+          if (top - bottom) * scale >= target do
+            base
+          else
+            Enum.find(metrics.variants.vertical[base].variants, &(&1.advance * scale >= target)).glyph
+          end
+
+        {_, bottom, _, top} = elem(bounds, id)
+
+        %{
+          id: id,
+          width: Enum.at(font.widths, id) * scale,
+          height: (top - bottom) * scale,
+          y: axis - (top + bottom) * scale / 2
+        }
+      end)
+
+    assert Enum.map(expected, & &1.id) == [1306, 1065]
+    left = n.("mo", "(", %{"lspace" => "3pt", "rspace" => "7pt"})
+    large_style = %{style | font_size: 40}
+
+    right = %{
+      n.("mo", ")", %{})
+      | style: large_style,
+        children: [%{type: :text, text: ")", style: large_style}]
+    }
+
+    invisible = n.("mo", "\u2062", %{"stretchy" => "true"})
+
+    for children <- [[left, right], [r.([left]), invisible, right]] do
+      assert {:ok, measured} = MathLayout.measure(r.(children))
+      assert length(measured.glyphs) == 2
+
+      for {glyph, source} <- Enum.zip(measured.glyphs, expected) do
+        assert glyph.glyph_id == source.id
+        assert_in_delta glyph.width, source.width, 1.0e-8
+        assert_in_delta glyph.height, source.height, 1.0e-8
+        assert_in_delta glyph.y, source.y, 1.0e-8
+      end
+
+      assert_in_delta measured.width, Enum.sum(Enum.map(expected, & &1.width)) + 10, 1.0e-8
+      assert_in_delta hd(measured.glyphs).x, 3, 1.0e-8
+      assert_in_delta measured.ascent, 29.0, 1.0e-8
+      assert_in_delta measured.descent, 18.68, 1.0e-8
+      assert_in_delta measured.ink_ascent, measured.ascent, 1.0e-8
+      assert_in_delta measured.ink_descent, measured.descent, 1.0e-8
+
+      preferred =
+        Enum.sum(
+          Enum.map(operators, fn {character, size} ->
+            construction = metrics.variants.vertical[font.cmap[character]]
+
+            ids =
+              [font.cmap[character]] ++
+                Enum.map(construction.variants, & &1.glyph) ++
+                Enum.map(construction.assembly.parts, & &1.glyph)
+
+            ids |> Enum.map(&(Enum.at(font.widths, &1) * size / font.units_per_em)) |> Enum.max()
+          end)
+        ) + 10
+
+      assert_in_delta measured.min_content_width, preferred, 1.0e-8
+      assert_in_delta measured.max_content_width, preferred, 1.0e-8
+      assert preferred > measured.width
+
+      assert length(
+               Enum.uniq(
+                 Enum.map(
+                   Enum.filter(measured.drawing_items, &(&1.kind == :glyph)),
+                   & &1.logical_group
+                 )
+               )
+             ) == 2
+
+      assert measured.actual_text == if(length(children) == 2, do: "()", else: "(\u2062)")
+
+      assert :ok =
+               MathLayoutValidator.validate_flow_geometry(
+                 [%{style: %{_math_box: measured}}],
+                 250,
+                 250
+               )
+    end
+
+    # Empty ordinary boxes and nonstretchy invisible operators belong to the
+    # ordinary list even though their ink target is zero.
+    for ordinary <- [r.([]), n.("mo", "\u2062", %{})] do
+      assert {:ok, measured} = MathLayout.measure(r.([left, ordinary, right]))
+      assert Enum.map(measured.glyphs, & &1.glyph_id) == [1064, 1065]
+    end
+
+    assert {:ok, constrained} =
+             MathLayout.measure(r.([left, right]), %{block_stretch_size: {0, 0}})
+
+    assert Enum.map(constrained.glyphs, & &1.glyph_id) == [1064, 1065]
+    assert {:ok, empty} = MathLayout.measure(r.([invisible, invisible]))
+    assert empty.glyphs == [] and empty.actual_text == "\u2062\u2062"
+    assert length(empty.drawing_items) == 2
+  end
+
   test "large operators use variants only in normal math-style and keep movable-limits metadata",
        %{node: n, style: style, font: font} do
     sum = n.("mo", "∑", %{})

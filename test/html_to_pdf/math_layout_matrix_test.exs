@@ -180,11 +180,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
       assert diagnostic.source in ["mtable", "mtr", "mtd"]
     end
 
-    assert {:error, {:unsupported_html, _}} =
+    assert {:ok, pdf} =
              HtmlToPdf.render(
                "<math><mtable><mtr><mtd><msup><mn>1</mn><mn>2</mn></msup></mtd></mtr></mtable></math>",
                system_font_discovery: false
              )
+
+    assert {:ok, "12"} = Text.extract(pdf, layout: false)
+
+    assert {:error, {:unsupported_html, diagnostic}} =
+             HtmlToPdf.render(
+               "<math><mtable><mtr><mtd><mtext>אב</mtext></mtd></mtr></mtable></math>",
+               system_font_discovery: false
+             )
+
+    assert diagnostic.source == "אב" and diagnostic.message =~ "bidi"
+    assert diagnostic.operation == :measure_math and diagnostic.stage == :layout
 
     Limits.install(Map.put(Limits.effective(), :max_table_grid_work, 1))
 

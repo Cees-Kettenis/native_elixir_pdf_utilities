@@ -15,6 +15,13 @@ svgtypes = "=0.16.1"
 pdf-writer = "=0.12.1"
 ttf-parser = "=0.25.1"
 
+regress = { path = "vendor/regress", default-features = false, features = ["std", "utf16"] }
+url = "=2.5.8"
+
+[[bin]]
+name = "native_form_values"
+path = "src/form_values.rs"
+
 [profile.release]
 lto = true
 codegen-units = 1

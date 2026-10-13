@@ -407,6 +407,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutFractionsTest do
     end
   end
 
+  test "fraction validator owns malformed prepared shape and shared length parsing", c do
+    alias NativeElixirPdfUtilities.Validators.MathFractionValidator
+    assert {:error, {:invalid_document, diagnostic}} = MathFractionValidator.prepare(nil, %{})
+    assert diagnostic.stage == :layout
+    assert diagnostic.operation == :measure_math
+    assert diagnostic.source == "mfrac"
+    assert diagnostic.message =~ "prepared numerator and denominator"
+
+    assert {:ok, prepared} =
+             MathLayoutValidator.prepare_element(
+               fraction([token("mn", "1", c.style), token("mn", "2", c.style)], c.style),
+               %{}
+             )
+
+    assert {:ok, parsed} = MathLayoutValidator.math_length("1ex", c.style)
+    assert parsed > 0
+    assert prepared.rule_thickness > 0
+  end
+
   test "public malformed fraction state, oversized geometry and missing font metrics diagnose",
        c do
     children = [token("mn", "1", c.style), token("mn", "2", c.style)]

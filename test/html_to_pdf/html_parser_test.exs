@@ -2795,8 +2795,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert tree_content(HtmlParser.parse("\uFEFF<p>Text")) ==
              tree_content(HtmlParser.parse("<p>Text"))
 
-    assert {:error, {:unsupported_html, %{line: 2, column: 1, source: "<canvas>"}}} =
-             HtmlParser.parse_document_detailed("\uFEFF\n<canvas>")
+    assert {:error, {:unsupported_html, %{line: 2, column: 1, source: "<video>"}}} =
+             HtmlParser.parse_document_detailed("\uFEFF\n<video>")
   end
 
   test "table content order is validated independently of optional end tags" do

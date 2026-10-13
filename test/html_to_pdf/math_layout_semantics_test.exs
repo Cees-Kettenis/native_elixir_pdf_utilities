@@ -222,10 +222,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSemanticsTest do
   test "selected content retains shared input and font work diagnostics" do
     assert {:error, {:unsupported_html, diagnostic}} =
              HtmlToPdf.render(
-               "<math><semantics><msup/><annotation>Fallback</annotation></semantics></math>"
+               "<math><semantics><mtext>אב</mtext><annotation>Fallback</annotation></semantics></math>"
              )
 
-    assert diagnostic.stage == :layout and diagnostic.source == "msup"
+    assert diagnostic.stage == :layout and diagnostic.source == "אב"
     assert diagnostic.module == MathLayoutValidator and diagnostic.operation == :measure_math
 
     Limits.install(Map.put(Limits.effective(), :max_font_math_work, 1))

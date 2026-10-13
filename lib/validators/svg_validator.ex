@@ -473,7 +473,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
           end
 
         position_work =
-          if namespace == :svg and name in ~w(text tspan) do
+          if namespace == :svg and name in ~w(text tspan textPath) do
             case SvgTextPositionValidator.reserve_work(%{tag: name, attributes: attrs}, :style) do
               {:ok, work} -> work
               error -> throw({:svg_validation, error})
@@ -537,7 +537,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
                     namespace: :svg,
                     tag: name,
                     attributes:
-                      if(name == "use" and not Map.has_key?(attrs, "href") and hrefs != [],
+                      if(
+                        name in ~w(use textPath) and not Map.has_key?(attrs, "href") and
+                          hrefs != [],
                         do: Map.put(attrs, "href", hd(hrefs)),
                         else: attrs
                       ),

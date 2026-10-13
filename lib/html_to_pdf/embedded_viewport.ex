@@ -86,7 +86,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
   end
 
   @doc """
-  Parses and authorizes an iframe once, deferring Style and selected resources
+  Reads and authorizes an iframe once, dispatching HTML, literal text and PNG/JPEG
+  initial documents, deferring Style and selected resources
   until layout supplies its actual client viewport. The descriptor preserves
   the issued context, prepared DOM, options and document URL for viewport-aware
   styling. Existing prepare_html/3 surfaces still expose their styled tree.
@@ -94,7 +95,60 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
   @spec prepare_iframe_document(term(), ResourceContext.t(), keyword()) ::
           {:ok, prepared()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_iframe_document(source, context, opts \\ []) do
-    prepare_document(source, context, opts, :iframe)
+    with {:ok, resource} <- EmbeddedResource.load_initial(source, context, opts),
+         {:ok, html} <-
+           (case resource.kind do
+              :text ->
+                with {:ok, text} <- HtmlValidator.validate_html_source(resource.bytes),
+                     do: {:ok, text_html(text, :document)}
+
+              :raster ->
+                {:file, path} = resource.source
+                {:ok, image_html(path, :document)}
+
+              _ ->
+                {:ok, resource.bytes}
+            end),
+         {:ok, dom} <- HtmlParser.parse_document_detailed(html),
+         document <- %{context: resource.context, source: resource.source, html: html, dom: dom},
+         {:ok, document, urls} <-
+           EmbeddedViewportValidator.prepare_document_context(document, context),
+         opts <-
+           if(resource.kind == :raster,
+             do:
+               Keyword.put(
+                 opts,
+                 :assets,
+                 Map.put(
+                   Keyword.get(opts, :assets, %{}),
+                   elem(resource.source, 1),
+                   {:bytes, resource.bytes}
+                 )
+               ),
+             else: opts
+           ),
+         {:ok, opts} <- EmbeddedViewportValidator.prepare_options(opts, document.context) do
+      {:ok,
+       %{
+         prepared_dom: document.dom,
+         source: document.source,
+         options: opts,
+         document_url: urls.fallback_base,
+         context: document.context,
+         forms: Keyword.get(opts, :forms, :interactive),
+         host: :iframe
+       }}
+    else
+      {:error, {reason, diagnostic}} ->
+        {:error,
+         {reason,
+          Diagnostics.with_context(diagnostic,
+            operation: :load_embedded_resource,
+            module: __MODULE__,
+            source:
+              NativeElixirPdfUtilities.Validators.ResourceValidator.document_source_label(source)
+          )}}
+    end
   end
 
   @doc "Prepares selected local object HTML for its isolated layout viewport."
@@ -497,8 +551,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
     "<pre" <> style <> ">\n" <> escape_html(text) <> "</pre>"
   end
 
-  defp image_html(reference) do
-    "<body style='margin:0'><img src=\"" <> escape_html(reference) <> "\"></body>"
+  defp image_html(reference, mode \\ :replacement) do
+    display = if mode == :document, do: " style='display:block'", else: ""
+
+    "<body style='margin:0'><img" <>
+      display <> " src=\"" <> escape_html(reference) <> "\"></body>"
   end
 
   defp escape_html(text) do

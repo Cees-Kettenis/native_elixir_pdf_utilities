@@ -587,8 +587,28 @@ defmodule NativeElixirPdfUtilities.Validators.LanguageValidator do
   @doc false
   @spec with_document([map()], reference(), (-> result)) :: result when result: term()
   def with_document(children, cache, fun) do
+    with_language_context(children, cache, %{}, %{}, fun)
+  end
+
+  @doc "Resolves language through actual logical parents and shadow hosts while retaining document-only language pragmas."
+  @spec with_composed_document(map(), map(), map(), reference(), (-> result)) :: result
+        when result: term()
+  def with_composed_document(logical, roots, clones, cache, fun) do
+    if map_size(roots) == 0 and map_size(clones) == 0 do
+      with_document(logical.children, cache, fun)
+    else
+      index =
+        NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator.logical_index(logical)
+        |> Map.merge(clones)
+
+      hosts = Map.new(roots, fn {id, root} -> {id, root.host_id} end)
+      with_language_context(logical.children, cache, index, hosts, fun)
+    end
+  end
+
+  defp with_language_context(children, cache, index, hosts, fun) do
     key = {__MODULE__, :document}
-    previous = Process.put(key, {cache, children, make_ref()})
+    previous = Process.put(key, {cache, children, make_ref(), index, hosts})
 
     try do
       fun.()
@@ -603,24 +623,55 @@ defmodule NativeElixirPdfUtilities.Validators.LanguageValidator do
   @doc false
   @spec resolved_language(map(), [map()]) :: [binary()]
   def resolved_language(node, ancestors) do
-    {cache, children, document_scope} = Process.get({__MODULE__, :document})
+    {cache, children, document_scope, index, hosts} = Process.get({__MODULE__, :document})
 
     RenderCache.fetch(cache, {:selector_language, node._selector_id}, fn ->
+      if Map.has_key?(index, Map.get(node, :node_id)) do
+        logical_language(node.node_id, index, hosts, cache, children, document_scope, 0)
+      else
+        case language_attribute(node) do
+          {:ok, value} ->
+            canonicalize(value)
+
+          :inherit ->
+            case ancestors do
+              [parent | rest] -> resolved_language(parent, rest)
+              [] -> cached_document_language(children, cache, document_scope)
+            end
+        end
+      end
+    end)
+  end
+
+  # Shadow descendants inherit from their host; slot distribution does not
+  # change the assigned node's actual language parent. Cached logical records
+  # carry node IDs, not renderer selector IDs or resource permissions.
+  defp logical_language(id, index, hosts, cache, children, scope, depth) do
+    HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
+
+    RenderCache.fetch(cache, {:logical_language, scope, id}, fn ->
+      HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+      node = Map.fetch!(index, id)
+
       case language_attribute(node) do
         {:ok, value} ->
           canonicalize(value)
 
         :inherit ->
-          case ancestors do
-            [parent | rest] ->
-              resolved_language(parent, rest)
+          parent_id = Map.get(node, :parent_id)
+          parent = Map.get(index, parent_id)
+          parent_id = if Map.has_key?(hosts, parent_id), do: hosts[parent_id], else: parent_id
 
-            [] ->
-              RenderCache.fetch(cache, {:language_document_default, document_scope}, fn ->
-                canonicalize(document_default(%{children: children}))
-              end)
-          end
+          if Map.has_key?(hosts, Map.get(node, :parent_id)) or match?(%{type: :element}, parent),
+            do: logical_language(parent_id, index, hosts, cache, children, scope, depth + 1),
+            else: cached_document_language(children, cache, scope)
       end
+    end)
+  end
+
+  defp cached_document_language(children, cache, scope) do
+    RenderCache.fetch(cache, {:language_document_default, scope}, fn ->
+      canonicalize(document_default(%{children: children}))
     end)
   end
 
@@ -634,7 +685,8 @@ defmodule NativeElixirPdfUtilities.Validators.LanguageValidator do
       Map.get(namespaces, "xml:lang") == "http://www.w3.org/XML/1998/namespace" ->
         {:ok, Map.fetch!(attributes, "xml:lang")}
 
-      Map.has_key?(attributes, "lang") ->
+      Map.get(node, :namespace, :html) in [:html, :svg] and Map.has_key?(attributes, "lang") and
+          is_nil(Map.get(namespaces, "lang")) ->
         {:ok, Map.fetch!(attributes, "lang")}
 
       true ->
@@ -660,6 +712,8 @@ defmodule NativeElixirPdfUtilities.Validators.LanguageValidator do
 
         %{tag: "meta", attributes: %{"http-equiv" => pragma, "content" => content}} ->
           if Map.get(node, :namespace, :html) == :html and
+               is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "http-equiv")) and
+               is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "content")) and
                String.downcase(pragma, :ascii) == "content-language" and
                not String.contains?(content, ",") do
             case HtmlValidator.html_class_tokens(content) do

@@ -133,10 +133,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPhantomPaddingTest do
     end
   end
 
+  test "phantom scripts retain actual selected-font geometry while omitting paint" do
+    content = "<msup><mn>1</mn><mn>2</mn></msup>"
+    assert {:ok, visible} = styled_math("<math><mrow>#{content}</mrow></math>")
+    assert {:ok, phantom} = styled_math("<math><mphantom>#{content}</mphantom></math>")
+
+    assert Map.drop(phantom, [:actual_text, :glyphs, :drawing_items]) ==
+             Map.drop(visible, [:actual_text, :glyphs, :drawing_items])
+
+    assert phantom.actual_text == "" and phantom.drawing_items == []
+  end
+
   test "hidden content still uses semantic validation and selected-font work limits", %{
     style: style
   } do
-    for tag <- ~w(msup mstyle mpadded merror) do
+    for tag <- ~w(mstyle mpadded merror) do
       assert {:error, {:unsupported_html, diagnostic}} =
                HtmlToPdf.render("<math><mphantom><#{tag}/></mphantom></math>")
 

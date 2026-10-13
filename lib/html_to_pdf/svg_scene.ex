@@ -312,7 +312,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
       end)
 
     attributes =
-      if node.tag in ~w(text tspan use) and
+      if node.tag in ~w(text tspan textPath use) and
            Map.has_key?(fonts, Map.get(node.style.font_face, :data)) do
         alias = Map.fetch!(fonts, node.style.font_face.data)
 
@@ -326,7 +326,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
       end
 
     attributes =
-      if node.tag in ~w(text tspan) do
+      if node.tag in ~w(text tspan textPath) do
         plan = Map.fetch!(positions, SvgTextPositionValidator.plan_key(node))
 
         Enum.reduce(plan.lengths, attributes, fn {property, lengths}, attrs ->
@@ -349,7 +349,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
           %{type: :element, namespace: :svg} ->
             serialize(child, false, references, reference?, fonts, positions)
 
-          %{type: :text, text: text} when node.tag in ~w(text tspan) ->
+          %{type: :text, text: text} when node.tag in ~w(text tspan textPath) ->
             escape(text)
 
           _ ->

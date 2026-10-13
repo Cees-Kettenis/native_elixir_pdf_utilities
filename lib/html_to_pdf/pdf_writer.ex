@@ -559,6 +559,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         :image ->
           image_stream(box, image_resources)
 
+        :link_region ->
+          ""
+
         :actual_text_start ->
           {:ok, encoded} = box.text |> InfoCodec.encode_text() |> InfoCodec.serialize_value()
           IO.iodata_to_binary(["/Span << /ActualText ", encoded, " >> BDC"])
@@ -592,9 +595,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             end
 
           "q " <> matrix <> " cm " <> clip
-
-        :link_region ->
-          ""
 
         :drawing_group_end ->
           "Q"
@@ -655,14 +655,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       right = min(page_width, right)
       top = min(page_height, top)
 
-      if right > left and top > bottom,
-        do: [
-          %{
-            destination: Map.get(box, :link_destination) || {:uri, box.link_url},
-            rect: {left, bottom, right, top}
-          }
-        ],
-        else: []
+      if right > left and top > bottom do
+        quads =
+          case Map.get(box, :link_quads) do
+            nil ->
+              nil
+
+            quads ->
+              NativeElixirPdfUtilities.HtmlToPdf.ImageMapGeometry.clip_quads(
+                quads,
+                {left, bottom, right, top}
+              )
+          end
+
+        if quads == [] do
+          []
+        else
+          [
+            %{
+              destination: Map.get(box, :link_destination) || {:uri, box.link_url},
+              rect: {left, bottom, right, top},
+              quads: quads
+            }
+          ]
+        end
+      else
+        []
+      end
     end)
   end
 
@@ -685,9 +704,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       end
 
     """
-    << /Type /Annot /Subtype /Link /Rect [#{format_number(left)} #{format_number(bottom)} #{format_number(right)} #{format_number(top)}] /Border [0 0 0] #{action} >>
+    << /Type /Annot /Subtype /Link /Rect [#{format_number(left)} #{format_number(bottom)} #{format_number(right)} #{format_number(top)}]#{quad_points(annotation)} /Border [0 0 0] #{action} >>
     """
     |> String.trim()
+  end
+
+  defp quad_points(annotation) do
+    case Map.get(annotation, :quads) do
+      nil ->
+        ""
+
+      quads ->
+        numbers = for quad <- quads, {x, y} <- quad, number <- [x, y], do: format_number(number)
+        " /QuadPoints [" <> Enum.join(numbers, " ") <> "]"
+    end
   end
 
   defp text_stream(box, page_height, font_resources, graphics_state_resources) do

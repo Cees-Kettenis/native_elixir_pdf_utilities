@@ -59,30 +59,39 @@ accepted evidence.
 
 ## Rolling implementation update
 
-Waves 10 to 12 are now published, with the latest implementation source
-`1cbc7ab4a5876e31a902081cef533af83c0ebcd1`. The earlier statement that Wave 10
-was unpublished is historical. The last complete 38 to 46 batch estimate above
-predates these publications and must not be read as a refreshed schedule.
-Ten implementation workers now run focused checks; full acceptance and
-performance review wait until all features are implemented, as requested.
+Waves 10 through 13 are published. The current published source is
+`52deb4ed3dacce8177204da0a08e448f8ddb8e0e`. The planning range above is historical;
+it predates these waves and is not a current estimate of work remaining.
+Fourteen implementation workers now run focused checks. Full acceptance,
+coverage and performance review remain deferred until implementation is complete,
+as requested by the user.
 
-The current queue still contains template replacement and original-source
-completion, scoped font lookup and shadow clones, constraint state and remaining
-input applicability, genuine table/cell continuation, remaining replaced sizing,
-Ruby wrapping/pagination, responsive sizing/lazy-auto, positioning/image maps,
-legacy iframe canvas/child composition, SVG text lengths/paths/nested images,
-native foreignObject placement and filters, and remaining MathML operators,
-fractions/roots/scripts/grouping/matrices/equation flow. Delivered infrastructure
-and an unsupported diagnostic do not close an included behavior.
+Wave 14 combines initial constraint validation with a bounded native Unicode-v
+pattern/WHATWG URL helper, original-source MathML identity, SVG text paths and
+coordinate defaults, child-document MIME handling, script/multiscript geometry,
+fraction/radical validator preparation, image maps, canvas fallback, composed
+editability/translation, and light-tree style selection. These are implementation
+packets with focused evidence. Known original browser failures remain recorded;
+this wave does not claim final qualification.
 
-The table/layout owner currently identifies four coherent implementation packets
-plus remaining table-model diagnostics; the image owner identifies three further
-packets after metrics/media. Other owners are reporting their remaining scopes
-while continuing implementation. Their reports will update the planning range
-without turning source inventory counts into effort estimates.
+The layout owner identifies four substantial remaining packets: actual
+page-capacity span surfaces, cell and oversized-row continuation, block captions
+and decorated-table continuation, and remaining percentage/containing-height
+and positioned replaced sizing. Table model/presentation needs an audit afterward.
+The controls owner has one substantial batch active for modern color initial
+values. Cross-owner control/clone/label integration still needs review.
 
-Known original pattern/mask edges and MathML annotation/unknown-row browser
-comparisons remain unresolved. Wave 11 hosted coverage reached100 percent, then
-performance limits failed; Wave 12 full qualification remains deferred. Final
-review must restore the fixed performance baseline and100 percent coverage on
-both supported runtimes and reconcile every original specification obligation.
+Other active work includes actual template replacement, scoped font lookup,
+embedded controls/fragment and link transport, language/metadata applicability,
+responsive source-size grammar, SVG authorized images/cache accounting, actual
+HTML inputs to filters, selected-font stroke and hyperlink geometry, and remaining
+MathML operator contexts, schema CSS flow, grouping/padding and matrices. Counts
+from these owners are still being reconciled; no percentage or completion date
+is inferred from the number of workers or specification inventory rows.
+
+Original SVG pattern/mask/foreignObject edges and several complete MathML
+comparisons remain unresolved. Wave 11 hosted coverage reached 100 percent
+before performance limits failed. Later full qualification remains deferred.
+Final review must restore the fixed performance baseline, achieve 100 percent
+coverage on both supported runtimes, and reconcile every included specification
+obligation. Unsupported diagnostics alone do not complete an included behavior.

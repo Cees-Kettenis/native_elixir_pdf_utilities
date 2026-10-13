@@ -9,7 +9,55 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.ResourceContext
   alias NativeElixirPdfUtilities.Validators.HtmlUrlValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.MimeValidator
   alias NativeElixirPdfUtilities.Validators.ResourceValidator
+
+  @doc "Classifies an authorized initial file document using shared MIME evidence before parsing or decoding."
+  @spec prepare_initial_file(term(), term()) ::
+          {:ok, :html | :text | :raster | :svg, String.t()}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_initial_file(bytes, path) do
+    case {bytes, path} do
+      {bytes, path} when is_binary(bytes) and is_binary(path) ->
+        with {:ok, mime} <- MimeValidator.prepare(bytes, path, nil) do
+          case mime do
+            "text/html" ->
+              {:ok, :html, mime}
+
+            "text/plain" ->
+              {:ok, :text, mime}
+
+            "application/octet-stream" ->
+              {:ok, :text, "text/plain"}
+
+            mime when mime in ["image/png", "image/jpeg"] ->
+              {:ok, :raster, mime}
+
+            "image/svg+xml" ->
+              {:ok, :svg, mime}
+
+            _ ->
+              Diagnostics.error(
+                :resource,
+                :not_implemented,
+                "initial child file MIME #{mime} requires a document renderer outside the supported HTML, plain text and still-image profile",
+                module: __MODULE__,
+                operation: :load_embedded_resource,
+                source: path
+              )
+          end
+        end
+
+      _ ->
+        Diagnostics.error(
+          :resource,
+          :invalid_document,
+          "initial file requires bytes and an authorized path",
+          module: __MODULE__,
+          operation: :load_embedded_resource
+        )
+    end
+  end
 
   @doc false
   @spec prepare_options(term(), ResourceContext.t()) ::
@@ -289,16 +337,25 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
         {width, height}
       end
 
+    # Blink forces an automatic vertical scrollbar for its first layout with a
+    # body. The existing reflow state machine removes it when the laid-out
+    # document fits, including hidden overflow. Starting without it can select
+    # the wrong stable wrapping state for a document near its height boundary.
+    vertical =
+      surface.host in [:iframe, :object, :embed, :frame] and width > 0 and height > 0 and
+        (surface.host not in [:iframe, :frame] or
+           Map.get(surface, :frame_scrollbars, :auto) != :none)
+
     %{
       viewport_width: viewport_width,
       viewport_height: viewport_height,
-      client_width: viewport_width,
+      client_width: max(viewport_width - if(vertical, do: 11.25, else: 0), 0),
       client_height: viewport_height,
       horizontal: false,
-      vertical: false,
+      vertical: vertical,
       scroll_width: viewport_width,
       scroll_height: viewport_height,
-      seen: MapSet.new([{false, false}])
+      seen: MapSet.new([{false, vertical}])
     }
   end
 

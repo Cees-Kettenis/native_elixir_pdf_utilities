@@ -3,7 +3,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextPositionValidator do
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, SvgStyleValidator}
 
-  @properties ~w(x y dx dy rotate textLength)
+  @properties ~w(x y dx dy rotate textLength startOffset)
 
   @doc false
   @spec reserve_work(map(), atom()) :: {:ok, non_neg_integer()} | {:error, {atom(), map()}}
@@ -159,9 +159,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextPositionValidator do
                   end)
 
                 case result do
-                  {:ok, lengths} when property == "textLength" and length(lengths) != 1 ->
+                  {:ok, lengths}
+                  when property in ~w(textLength startOffset) and length(lengths) != 1 ->
                     {:halt,
-                     invalid("SVG textLength requires exactly one supported length", source)}
+                     invalid("SVG #{property} requires exactly one supported length", source)}
 
                   {:ok, lengths} ->
                     {:cont,

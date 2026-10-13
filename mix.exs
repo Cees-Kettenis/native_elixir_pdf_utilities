@@ -59,6 +59,15 @@ defmodule Mix.Tasks.Compile.SvgBackend do
 
         File.cp!(Path.join([target, "release", library]), staged_library)
         File.rename!(staged_library, Path.join(destination, nif_library))
+
+        form_executable =
+          if match?({:win32, _}, :os.type()),
+            do: "native_form_values.exe",
+            else: "native_form_values"
+
+        staged_form = Path.join(destination, "#{form_executable}.#{System.pid()}.tmp")
+        File.cp!(Path.join([target, "release", form_executable]), staged_form)
+        File.rename!(staged_form, Path.join(destination, form_executable))
         # Register the application before the private binding's on_load callback
         # resolves priv on a fresh build, before compile.app has run.
         compile_path = Mix.Project.compile_path()

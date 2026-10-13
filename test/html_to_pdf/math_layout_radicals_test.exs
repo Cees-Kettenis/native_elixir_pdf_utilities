@@ -110,6 +110,108 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutRadicalsTest do
     end
   end
 
+  test "caller-selected font without radical construction paints its original surd", c do
+    # Remove only optional variant coverage in real source bytes. All outlines,
+    # advances, constants and glyph IDs still come through the ordinary parser.
+    <<_version::32, count::16, _search::binary-size(6), directory::binary-size(count * 16),
+      _::binary>> = c.font.data
+
+    [{math_offset, math_length}] =
+      for <<tag::binary-size(4), _checksum::32, offset::32, length::32 <- directory>>,
+          tag == "MATH",
+          do: {offset, length}
+
+    <<_major::16, _minor::16, _constants::16, _glyphs::16, variants::16>> =
+      binary_part(c.font.data, math_offset, 10)
+
+    start = math_offset + variants
+    <<overlap::16, _::binary>> = binary_part(c.font.data, start, 10)
+    <<prefix::binary-size(^start), _old::binary-size(10), suffix::binary>> = c.font.data
+    data = prefix <> <<overlap::16, 0::16, 0::16, 0::16, 0::16>> <> suffix
+
+    checksum = fn bytes ->
+      padded = bytes <> :binary.copy(<<0>>, rem(4 - rem(byte_size(bytes), 4), 4))
+
+      Enum.reduce(for(<<word::32 <- padded>>, do: word), 0, fn word, sum ->
+        Bitwise.band(sum + word, 0xFFFFFFFF)
+      end)
+    end
+
+    records = for <<record::binary-size(16) <- directory>>, do: record
+    table_index = Enum.find_index(records, &match?(<<"MATH", _::binary>>, &1))
+    record_offset = 12 + table_index * 16 + 4
+    math_checksum = checksum.(binary_part(data, math_offset, math_length))
+    <<before_record::binary-size(^record_offset), _old_checksum::32, after_record::binary>> = data
+    data = before_record <> <<math_checksum::32>> <> after_record
+
+    [{head_offset, _}] =
+      for <<"head", _checksum::32, offset::32, length::32 <- directory>>, do: {offset, length}
+
+    adjustment_offset = head_offset + 8
+    <<before_head::binary-size(^adjustment_offset), _adjustment::32, after_head::binary>> = data
+    zeroed = before_head <> <<0::32>> <> after_head
+    adjustment = Bitwise.band(0xB1B0AFBA - checksum.(zeroed), 0xFFFFFFFF)
+    data = before_head <> <<adjustment::32>> <> after_head
+    assert checksum.(data) == 0xB1B0AFBA
+
+    assert {:ok, registry} =
+             Font.load_registry(
+               fonts: [%{family: "Selected natural radical", data: data}],
+               system_font_discovery: false
+             )
+
+    assert {:ok, _, font} = Font.resolve("Selected natural radical", 400, :normal, registry)
+    assert font.data == data
+    assert {:ok, metrics} = Font.math_metrics(font)
+    assert metrics.variants.vertical == %{}
+    style = %{c.style | font_face: font}
+    space = element("mspace", [], style, %{"width" => "30pt", "height" => "100pt"})
+    assert {:ok, measured} = MathLayout.measure(element("msqrt", [space], style))
+    assert [surd] = measured.glyphs
+    assert surd.glyph_id == font.cmap[0x221A]
+    assert surd.font_face.data == data
+
+    assert_in_delta surd.width,
+                    Enum.at(font.widths, surd.glyph_id) * 20 / font.units_per_em,
+                    1.0e-10
+
+    assert_in_delta measured.min_content_width, surd.width + 30, 1.0e-10
+    assert measured.actual_text == ""
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<math style='font-family:Selected natural radical'><msqrt><mn>2</mn></msqrt></math>",
+               fonts: [%{family: "Selected natural radical", data: data}],
+               system_font_discovery: false
+             )
+
+    assert {:ok, "2"} = Text.extract(pdf, layout: false)
+  end
+
+  test "square root anonymous base never repeats its owner's background or dimensions", c do
+    style =
+      c.style
+      |> Map.put(:background_color, {0.2, 0.4, 0.6})
+      |> Map.put(:width, 60)
+      |> Map.put(:height, 40)
+      |> Map.put(:padding, %{top: 2, right: 3, bottom: 4, left: 5})
+
+    root = element("msqrt", [token("2", c.style)], style)
+    assert {:ok, prepared} = MathLayoutValidator.prepare_element(root, %{})
+    refute Map.has_key?(prepared.base.style, :background_color)
+    refute Map.has_key?(prepared.base.style, :width)
+    refute Map.has_key?(prepared.base.style, :height)
+    assert {:ok, measured} = MathLayout.measure(element("mrow", [root], c.style))
+    assert measured.width == 68
+    assert_in_delta measured.ascent + measured.descent, 46, 1.0e-10
+
+    assert [%{width: width, height: height}] =
+             Enum.filter(measured.drawing_items, &(&1.kind == :background))
+
+    assert width == 68 and height == 46
+    assert measured.actual_text == "2"
+  end
+
   test "large bases use source assembly parts, one empty logical group and no row constraint",
        c do
     space =
@@ -284,6 +386,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutRadicalsTest do
       assert Process.delete(:radical_caller_resumed) == true
       Limits.install(limits)
     end
+  end
+
+  test "radical validator rejects malformed and excessive measured state with actionable diagnostics",
+       c do
+    alias NativeElixirPdfUtilities.Validators.MathRadicalValidator
+    assert {:error, {:invalid_document, diagnostic}} = MathRadicalValidator.prepare(nil, nil, nil)
+    assert diagnostic.stage == :layout
+    assert diagnostic.operation == :measure_math
+    assert diagnostic.source == "msqrt/mroot"
+    assert diagnostic.message =~ "prepared base"
+
+    assert {:ok, prepared} =
+             MathLayoutValidator.prepare_element(
+               element("msqrt", [token("2", c.style)], c.style),
+               %{}
+             )
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             MathRadicalValidator.prepare_stretch(prepared, %{
+               ink_ascent: Limits.get(:max_css_numeric_magnitude),
+               ink_descent: 1
+             })
+
+    assert diagnostic.message =~ "numeric bounds"
   end
 
   test "malformed states, unsupported CSS, missing glyphs and oversized roots diagnose", c do

@@ -134,8 +134,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
 
           links =
             case {node.tag, Map.get(attributes, "href")} do
-              {"a", href} when is_binary(href) -> Map.put_new(context.links, href, nil)
-              _ -> context.links
+              {tag, href} when tag in ["a", "area"] and is_binary(href) ->
+                Map.put_new(context.links, href, nil)
+
+              _ ->
+                context.links
             end
 
           collect(nested, %{context | names: names, links: links})
@@ -235,7 +238,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
                      false
                  end
                end) and valid_prepared_destination?(destination) and
-               (destination == nil or Map.get(box, :type) in [:text, :image])
+               (destination == nil or Map.get(box, :type) in [:text, :image, :link_region])
 
            _ ->
              false
@@ -647,7 +650,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
       Diagnostics.error(
         :pdf,
         :invalid_pdf_input,
-        "link_destination requires {:xyz, page_number, x, y} on a text or image link, with an existing page and coordinates inside its bounds; prepared HTML targets must be resolved after pagination",
+        "link_destination requires {:xyz, page_number, x, y} on a text, image or image-map region link, with an existing page and coordinates inside its bounds; prepared HTML targets must be resolved after pagination",
         operation: :write_pdf,
         module: __MODULE__,
         source: "link_destination"
@@ -671,7 +674,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
         when is_integer(number) and number > 0 and number <= tuple_size(sizes) ->
           {width, height} = elem(sizes, number - 1)
 
-          box.type in [:text, :image] and Map.get(box, :link_url) == nil and
+          box.type in [:text, :image, :link_region] and Map.get(box, :link_url) == nil and
             is_number(x) and is_number(y) and x >= 0 and x <= width and y >= 0 and y <= height
 
         _ ->

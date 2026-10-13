@@ -8,11 +8,15 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.MathOperatorValidator
   alias NativeElixirPdfUtilities.Validators.MathTableValidator
+  alias NativeElixirPdfUtilities.Validators.MathFractionValidator
+  alias NativeElixirPdfUtilities.Validators.MathRadicalValidator
 
-  @grouping_elements ~w(math mrow mphantom semantics maction)
+  @script_elements ~w(msub msup msubsup munder mover munderover mmultiscripts)
+  @grouping_elements ~w(math mrow mphantom semantics maction mprescripts)
   @core_elements ~w(annotation annotation-xml maction math merror mfrac mi mn mmultiscripts mo mover mpadded mphantom mprescripts mroot mrow ms mspace msqrt mstyle msub msubsup msup mtable mtd mtext mtr munder munderover semantics)
   @rendered_elements @grouping_elements ++
-                       ~w(mi mn mo mtext ms annotation annotation-xml mspace mfrac msqrt mroot mtable mtr mtd)
+                       ~w(mi mn mo mtext ms annotation annotation-xml mspace mfrac msqrt mroot mtable mtr mtd) ++
+                       @script_elements
 
   @doc false
   @spec validate_flow_geometry([term()], number(), number()) ::
@@ -269,6 +273,43 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   @spec schema_child_defaults(map(), map(), [map()]) :: map()
   def schema_child_defaults(node, inherited, ancestors) do
     case ancestors do
+      [%{namespace: :mathml, tag: tag, children: children, attributes: attributes} | _]
+      when tag in @script_elements ->
+        elements = Enum.filter(children, &(Map.get(&1, :type) == :element))
+        position = Enum.find_index(elements, &(Map.get(&1, :_selector_id) == node._selector_id))
+        marker = Enum.find_index(elements, &(Map.get(&1, :tag) == "mprescripts"))
+
+        multi_lower =
+          tag == "mmultiscripts" and position != nil and position > 0 and
+            if(marker != nil and position > marker,
+              do: rem(position, 2) == 0,
+              else: rem(position, 2) == 1 and position != marker
+            )
+
+        over = if tag == "munderover", do: 2, else: 1
+        accent = tag in ["mover", "munderover"] and accent?(attributes, "accent")
+        under = tag in ["munder", "munderover"] and accent?(attributes, "accentunder")
+
+        defaults =
+          if position != nil and position > 0 do
+            %{
+              math_depth: Map.get(inherited, :math_depth, 0) + 1,
+              math_style: :compact
+            }
+          else
+            %{}
+          end
+
+        defaults =
+          if (accent and position == over) or (under and position == 1),
+            do: Map.put(defaults, :font_size, inherited.font_size),
+            else: defaults
+
+        if multi_lower or (tag in ["msub", "msubsup"] and position == 1) or
+             (accent and position == 0),
+           do: Map.put(defaults, :math_shift, :compact),
+           else: defaults
+
       [%{namespace: :mathml, tag: "mroot", children: children} | _] ->
         first = Enum.find(children, &(Map.get(&1, :type) == :element))
 
@@ -673,16 +714,20 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
             tag == "mo" ->
               with {:ok, runs} <- token_runs(children, true),
                    {:ok, x_height} <- FontValidator.prepare_x_height(font),
+                   {:ok, length_context} <- prepare_operator_length_context(attributes, style),
                    {:ok, operator} <-
                      MathOperatorValidator.prepare(
                        runs |> token_characters() |> Enum.map_join(& &1.text),
                        attributes,
-                       Map.merge(Map.get(context, :operator_context, %{}), %{
-                         font_size: size,
-                         root_font_size: Map.get(style, :_root_font_size, size),
-                         x_height: x_height * size,
-                         text_only: Enum.all?(children, &(Map.get(&1, :type) == :text))
-                       })
+                       Map.merge(
+                         Map.merge(Map.get(context, :operator_context, %{}), length_context),
+                         %{
+                           font_size: size,
+                           root_font_size: Map.get(style, :_root_font_size, size),
+                           x_height: x_height * size,
+                           text_only: Enum.all?(children, &(Map.get(&1, :type) == :text))
+                         }
+                       )
                      ),
                    {:ok, content} <-
                      if(operator.invisible,
@@ -727,14 +772,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
               with {:ok, row} <- prepare_row_children(node, context) do
                 cond do
                   tag == "mfrac" and length(row.children) == 2 ->
-                    prepare_fraction(row, attributes)
+                    MathFractionValidator.prepare(row, attributes)
 
                   tag == "msqrt" ->
-                    prepare_radical(
+                    MathRadicalValidator.prepare(
                       %{
                         row
-                        | style:
-                            Map.drop(style, [:width, :height, :padding, :border_widths, :margin])
+                        | style: anonymous_box_style(style)
                       },
                       nil,
                       style
@@ -742,10 +786,27 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
                   tag == "mroot" and length(row.children) == 2 ->
                     [base, index] = row.children
-                    prepare_radical(base, index, style)
+                    MathRadicalValidator.prepare(base, index, style)
 
                   tag == "mphantom" ->
                     {:ok, Map.put(row, :hide_paint, true)}
+
+                  tag == "mprescripts" ->
+                    {:ok, Map.put(row, :prescript_marker, true)}
+
+                  tag == "mmultiscripts" ->
+                    case multiscript_roles(row.children) do
+                      {:ok, roles} ->
+                        with {:ok, prepared} <- prepare_script_schema(row, "msubsup", attributes),
+                             do: {:ok, Map.merge(prepared, %{kind: :multiscripts, roles: roles})}
+
+                      :row ->
+                        {:ok, row}
+                    end
+
+                  tag in @script_elements and
+                      length(row.children) == if(tag in ["msubsup", "munderover"], do: 3, else: 2) ->
+                    prepare_script_schema(row, tag, attributes)
 
                   true ->
                     {:ok, row}
@@ -761,60 +822,844 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     end
   end
 
-  # Core 3.3.3 resolves the selected face's values before geometry consumes them.
-  defp prepare_radical(base, index, style) do
+  defp accent?(attributes, name) do
+    String.downcase(Map.get(attributes, name, ""), :ascii) == "true"
+  end
+
+  # Child counts and movablelimits choose the schema before any measurement.
+  defp prepare_script_schema(row, tag, attributes) do
+    style = row.style
     mode = Map.get(style, :math_style, :normal)
+    shift = Map.get(style, :math_shift, :normal)
+    [base | _] = row.children
+    operator = Map.get(base, :core_operator)
+    movable? = operator != nil and operator.movablelimits and mode == :compact
+    side? = tag in ["msub", "msup", "msubsup"] or movable?
+    lower = if tag in ["msub", "msubsup", "munder", "munderover"], do: 1
+    upper = if tag in ["msup", "mover"], do: 1, else: if(tag in ["msubsup", "munderover"], do: 2)
 
-    if mode in [:normal, :compact] and style.font_size <= Limits.get(:max_css_numeric_magnitude) do
-      with {:ok, metrics} <- Font.math_metrics(style.font_face) do
-        gap =
-          if mode == :compact,
-            do: :radical_vertical_gap,
-            else: :radical_display_style_vertical_gap
+    names = script_constant_names(side?)
 
-        names = [
-          gap,
-          :radical_rule_thickness,
-          :radical_extra_ascender,
-          :radical_kern_before_degree,
-          :radical_kern_after_degree
-        ]
+    if mode in [:normal, :compact] and shift in [:normal, :compact] and
+         style.font_size <= Limits.get(:max_css_numeric_magnitude) do
+      with {:ok, metrics} <- Font.math_metrics(style.font_face),
+           {:ok, values} <- resolve_constants(metrics, names, style.font_size) do
+        stretching =
+          row.children
+          |> Enum.with_index()
+          |> Enum.flat_map(fn {child, index} ->
+            case Map.get(child, :core_operator) do
+              %{stretchy: true, stretch_axis: :horizontal} -> [index]
+              _ -> []
+            end
+          end)
 
-        FontValidator.reserve(:max_font_math_work, length(names))
+        {:ok,
+         %{
+           kind: if(side?, do: :scripts, else: :limits),
+           children: row.children,
+           lower: lower,
+           upper: upper,
+           style: style,
+           core_operator: row.core_operator,
+           constants: Map.new(Enum.zip(names, values)),
+           largeop: operator != nil and operator.largeop,
+           stretchy_base:
+             operator != nil and operator.stretchy and operator.stretch_axis == :horizontal,
+           accent: accent?(attributes, "accent"),
+           accentunder: accent?(attributes, "accentunder"),
+           inline_stretch_children: stretching
+         }}
+      end
+    else
+      failure("scripts require bounded font size and normal or compact math-style/math-shift")
+    end
+  end
 
-        values =
-          Enum.reduce_while(names, {:ok, []}, fn name, {:ok, values} ->
-            case prepare_value(Map.fetch!(metrics.constants, name), style.font_size) do
+  defp script_constant_names(side?) do
+    if side? do
+      [
+        :subscript_shift_down,
+        :subscript_top_max,
+        :subscript_baseline_drop_min,
+        :superscript_shift_up,
+        :superscript_shift_up_cramped,
+        :superscript_bottom_min,
+        :superscript_baseline_drop_max,
+        :sub_superscript_gap_min,
+        :superscript_bottom_max_with_subscript,
+        :space_after_script
+      ]
+    else
+      [
+        :upper_limit_gap_min,
+        :upper_limit_baseline_rise_min,
+        :lower_limit_gap_min,
+        :lower_limit_baseline_drop_min,
+        :stretch_stack_top_shift_up,
+        :stretch_stack_bottom_shift_down,
+        :stretch_stack_gap_above_min,
+        :stretch_stack_gap_below_min,
+        :overbar_vertical_gap,
+        :overbar_extra_ascender,
+        :underbar_vertical_gap,
+        :underbar_extra_descender,
+        :accent_base_height
+      ]
+    end
+  end
+
+  @doc "Resolves selected MATH value records to points, including device adjustments."
+  @spec resolve_constants(map(), [atom()], number()) ::
+          {:ok, [number()]} | {:error, Diagnostics.detailed_error()}
+  def resolve_constants(metrics, names, size) do
+    FontValidator.reserve(:max_font_math_work, length(names))
+
+    Enum.reduce_while(names, {:ok, []}, fn name, {:ok, values} ->
+      case prepare_value(Map.fetch!(metrics.constants, name), size) do
+        {:ok, {value, pixels}} ->
+          {:cont, {:ok, values ++ [value * size / metrics.units_per_em + pixels]}}
+
+        {:error, {reason, diagnostic}} ->
+          {:halt,
+           {:error,
+            {reason, Diagnostics.with_context(diagnostic, source: "selected font MATH #{name}")}}}
+      end
+    end)
+  end
+
+  @doc false
+  @spec prepare_limit_stretch(term(), term()) ::
+          {:ok, number()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_limit_stretch(prepared, measured) do
+    NativeElixirPdfUtilities.HtmlToPdf.MathLayout.with_context(fn ->
+      case {prepared, measured} do
+        {%{kind: :limits, children: children}, measured} when is_map(measured) ->
+          if Enum.all?(
+               Map.keys(measured),
+               &(is_integer(&1) and &1 >= 0 and &1 < length(children))
+             ) do
+            with :ok <- validate_script_children(Map.values(measured)) do
+              target = Enum.max(Enum.map(Map.values(measured), & &1.width), fn -> 0.0 end)
+              with :ok <- validate_operator_constraint(target), do: {:ok, target}
+            end
+          else
+            failure("limit stretching requires measured children keyed by their prepared indices")
+          end
+
+        _ ->
+          failure(
+            "limit stretching requires validator-prepared limit state and measured children"
+          )
+      end
+    end)
+  end
+
+  @doc false
+  @spec prepare_script_placement(term(), term()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_script_placement(prepared, measured) do
+    NativeElixirPdfUtilities.HtmlToPdf.MathLayout.with_context(fn ->
+      case {prepared, measured} do
+        {%{
+           kind: kind,
+           children: children,
+           lower: lower,
+           upper: upper,
+           constants: constants,
+           style: style,
+           largeop: largeop,
+           stretchy_base: stretchy_base,
+           accent: accent,
+           accentunder: accentunder
+         }, measured}
+        when kind in [:scripts, :limits] and is_list(children) and is_list(measured) and
+               length(measured) == length(children) and is_map(constants) and is_map(style) and
+               is_boolean(largeop) and is_boolean(stretchy_base) and is_boolean(accent) and
+               is_boolean(accentunder) ->
+          valid_state? =
+            {length(children), lower, upper} in [{2, 1, nil}, {2, nil, 1}, {3, 1, 2}] and
+              valid_script_constants?(constants, style, kind == :scripts)
+
+          with :ok <-
+                 if(valid_state?,
+                   do: :ok,
+                   else:
+                     failure(
+                       "script placement requires bounded prepared constants and valid child roles"
+                     )
+                 ),
+               :ok <- validate_script_children(measured) do
+            [base | _] = measured
+            sub = if lower, do: Enum.at(measured, lower)
+            sup = if upper, do: Enum.at(measured, upper)
+            constants = prepared.constants
+            large_italic = if prepared.largeop, do: base.italic_correction, else: 0.0
+            italic = if prepared.largeop, do: 0.0, else: base.italic_correction
+
+            {lower_shift, upper_shift, extra_under, extra_over} =
+              if kind == :scripts do
+                {down, up} = side_script_shifts(constants, prepared.style, base, sub, sup)
+                {down, up, 0.0, 0.0}
+              else
+                {down, under_extra} =
+                  cond do
+                    sub == nil ->
+                      {0.0, 0.0}
+
+                    prepared.largeop ->
+                      {max(
+                         constants.lower_limit_baseline_drop_min,
+                         constants.lower_limit_gap_min + sub.ascent
+                       ), 0.0}
+
+                    prepared.stretchy_base ->
+                      {max(
+                         constants.stretch_stack_bottom_shift_down,
+                         constants.stretch_stack_gap_above_min + sub.ascent
+                       ), 0.0}
+
+                    true ->
+                      {if(prepared.accentunder, do: 0.0, else: constants.underbar_vertical_gap),
+                       constants.underbar_extra_descender}
+                  end
+
+                {up, over_extra} =
+                  cond do
+                    sup == nil ->
+                      {0.0, 0.0}
+
+                    prepared.largeop ->
+                      {max(
+                         constants.upper_limit_baseline_rise_min,
+                         constants.upper_limit_gap_min + sup.descent
+                       ), 0.0}
+
+                    prepared.stretchy_base ->
+                      {max(
+                         constants.stretch_stack_top_shift_up,
+                         constants.stretch_stack_gap_below_min + sup.descent
+                       ), 0.0}
+
+                    true ->
+                      {if(prepared.accent,
+                         do: max(constants.accent_base_height - base.ascent, 0.0),
+                         else: constants.overbar_vertical_gap
+                       ), constants.overbar_extra_ascender}
+                  end
+
+                {down, up, under_extra, over_extra}
+              end
+
+            {sub_kern, sup_kern} =
+              if kind == :scripts do
+                with {:ok, base_glyph} <- prepare_script_kern_glyph(base),
+                     {:ok, sub_glyph} <- prepare_script_kern_glyph(sub),
+                     {:ok, sup_glyph} <- prepare_script_kern_glyph(sup),
+                     {:ok, sub_kern} <-
+                       prepare_script_pair_kern(
+                         base_glyph,
+                         sub_glyph,
+                         base,
+                         sub,
+                         -lower_shift,
+                         :sub
+                       ),
+                     {:ok, sup_kern} <-
+                       prepare_script_pair_kern(
+                         base_glyph,
+                         sup_glyph,
+                         base,
+                         sup,
+                         upper_shift,
+                         :sup
+                       ) do
+                  {sub_kern, sup_kern}
+                else
+                  {:error, _} = error -> throw({:math_layout_error, error})
+                end
+              else
+                {0.0, 0.0}
+              end
+
+            widths =
+              Map.new([:width, :min_content_width, :max_content_width], fn field ->
+                value = Map.fetch!(base, field)
+
+                if kind == :scripts do
+                  candidates =
+                    if(sub,
+                      do: [
+                        value - large_italic + sub_kern + Map.fetch!(sub, field) +
+                          constants.space_after_script
+                      ],
+                      else: []
+                    ) ++
+                      if sup,
+                        do: [
+                          value + italic + sup_kern + Map.fetch!(sup, field) +
+                            constants.space_after_script
+                        ],
+                        else: []
+
+                  {field, {Enum.max(candidates), 0.0}}
+                else
+                  accent =
+                    if sup,
+                      do: Map.get(sup, :top_accent_attachment) || Map.fetch!(sup, field) / 2,
+                      else: 0.0
+
+                  left =
+                    [-value / 2] ++
+                      if(sub, do: [-Map.fetch!(sub, field) / 2 - large_italic / 2], else: []) ++
+                      if(sup, do: [-accent + large_italic / 2], else: [])
+
+                  right =
+                    [value / 2] ++
+                      if(sub, do: [Map.fetch!(sub, field) / 2 - large_italic / 2], else: []) ++
+                      if(sup, do: [Map.fetch!(sup, field) - accent + large_italic / 2], else: [])
+
+                  minimum = Enum.min(left)
+                  {field, {abs(Enum.max(right) - minimum), minimum}}
+                end
+              end)
+
+            {width, minimum} = widths.width
+
+            offsets =
+              Enum.with_index(measured)
+              |> Enum.map(fn {child, index} ->
+                cond do
+                  kind == :scripts and index == 0 ->
+                    {0.0, 0.0}
+
+                  kind == :scripts and index == lower ->
+                    {base.width - large_italic + sub_kern, -lower_shift}
+
+                  kind == :scripts ->
+                    {base.width + italic + sup_kern, upper_shift}
+
+                  index == 0 ->
+                    {-minimum - base.width / 2, 0.0}
+
+                  index == lower ->
+                    {-minimum - child.width / 2 - large_italic / 2,
+                     -base.ink_descent - lower_shift}
+
+                  true ->
+                    {-minimum - child.width / 2 + large_italic / 2, base.ink_ascent + upper_shift}
+                end
+              end)
+
+            # Keep the dated Core line equations separate from translated ink.
+            ascent =
+              Enum.max(
+                [base.ascent] ++
+                  if(sub, do: [sub.ascent - lower_shift], else: []) ++
+                  if(sup, do: [sup.ascent + upper_shift + extra_over], else: [])
+              )
+
+            descent =
+              Enum.max(
+                [base.descent] ++
+                  if(sub, do: [sub.descent + lower_shift + extra_under], else: []) ++
+                  if(sup, do: [sup.descent - upper_shift], else: [])
+              )
+
+            placed = Enum.zip(measured, offsets)
+
+            result = %{
+              width: width,
+              min_content_width: elem(widths.min_content_width, 0),
+              max_content_width: elem(widths.max_content_width, 0),
+              ascent: ascent,
+              descent: descent,
+              ink_ascent:
+                Enum.max(Enum.map(placed, fn {child, {_, y}} -> child.ink_ascent + y end)),
+              ink_descent:
+                Enum.max(Enum.map(placed, fn {child, {_, y}} -> child.ink_descent - y end)),
+              offsets: offsets
+            }
+
+            validate_script_placement(result)
+          end
+
+        _ ->
+          failure("script placement requires validator-prepared state and every measured child")
+      end
+    end)
+  end
+
+  defp valid_script_constants?(constants, style, side?) do
+    Map.get(style, :math_shift, :normal) in [:normal, :compact] and
+      Enum.all?(script_constant_names(side?), fn name ->
+        value = Map.get(constants, name)
+        is_number(value) and abs(value) <= Limits.get(:max_css_numeric_magnitude)
+      end)
+  end
+
+  # Pairing is a Core structural rule. Invalid pairing is an ordinary mrow.
+  defp multiscript_roles(children) do
+    case children do
+      [base | scripts] ->
+        markers =
+          children
+          |> Enum.with_index()
+          |> Enum.filter(fn {child, _} -> Map.get(child, :prescript_marker, false) end)
+
+        if not Map.get(base, :prescript_marker, false) and length(markers) <= 1 do
+          marker =
+            case markers do
+              [{_, index}] -> index
+              [] -> nil
+            end
+
+          post_count = if marker, do: marker - 1, else: length(scripts)
+          pre_count = if marker, do: length(children) - marker - 1, else: 0
+
+          if rem(post_count, 2) == 0 and rem(pre_count, 2) == 0 do
+            pairs = fn first, count ->
+              if count == 0,
+                do: [],
+                else: Enum.map(0..(div(count, 2) - 1), &{first + &1 * 2, first + &1 * 2 + 1})
+            end
+
+            {:ok,
+             %{
+               post: pairs.(1, post_count),
+               pre: pairs.((marker || 0) + 1, pre_count),
+               marker: marker
+             }}
+          else
+            :row
+          end
+        else
+          :row
+        end
+
+      [] ->
+        :row
+    end
+  end
+
+  # Public prepared geometry accepts terms, so reserve proper links before any arrays.
+  defp validate_script_collection(children) do
+    case children do
+      [] ->
+        :ok
+
+      [child | rest] when is_map(child) ->
+        FontValidator.reserve(:max_font_math_work, 1)
+        validate_script_collection(rest)
+
+      _ ->
+        failure("script placement requires proper lists of prepared and measured child maps")
+    end
+  end
+
+  @doc false
+  @spec prepare_multiscript_placement(term(), term()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_multiscript_placement(prepared, measured) do
+    NativeElixirPdfUtilities.HtmlToPdf.MathLayout.with_context(fn ->
+      case prepared do
+        %{
+          kind: :multiscripts,
+          children: children,
+          roles: roles,
+          constants: constants,
+          style: style,
+          largeop: largeop
+        }
+        when is_map(constants) and is_map(style) and is_boolean(largeop) ->
+          with :ok <- validate_script_collection(children),
+               :ok <- validate_script_collection(measured),
+               :ok <-
+                 if(Enum.all?(children, &is_boolean(Map.get(&1, :prescript_marker, false))),
+                   do: :ok,
+                   else: failure("multiscript markers require validator-produced boolean roles")
+                 ),
+               {:ok, actual_roles} <-
+                 (case multiscript_roles(children) do
+                    {:ok, actual} ->
+                      {:ok, actual}
+
+                    :row ->
+                      failure(
+                        "multiscript placement requires a base and complete script pairs with at most one prescript marker"
+                      )
+                  end),
+               :ok <-
+                 if(
+                   actual_roles == roles and length(children) == length(measured) and
+                     valid_script_constants?(constants, style, true),
+                   do: :ok,
+                   else:
+                     failure(
+                       "multiscript placement requires matching child roles and bounded selected-font constants"
+                     )
+                 ),
+               :ok <-
+                 Enum.reduce_while(measured, :ok, fn child, :ok ->
+                   case validate_script_collection(Map.get(child, :glyphs)) do
+                     :ok -> {:cont, :ok}
+                     {:error, _} = error -> {:halt, error}
+                   end
+                 end),
+               :ok <- validate_script_children(measured) do
+            [base | _] = measured
+            measured_tuple = List.to_tuple(measured)
+            pairs = Enum.map(roles.pre, &{&1, :pre}) ++ Enum.map(roles.post, &{&1, :post})
+
+            shifts =
+              Enum.map(pairs, fn {{lower, upper}, _} ->
+                side_script_shifts(
+                  constants,
+                  style,
+                  base,
+                  elem(measured_tuple, lower),
+                  elem(measured_tuple, upper)
+                )
+              end)
+
+            down = Enum.reduce(shifts, 0.0, fn {value, _}, acc -> max(value, acc) end)
+            up = Enum.reduce(shifts, 0.0, fn {_, value}, acc -> max(value, acc) end)
+
+            with {:ok, base_glyph} <- prepare_script_kern_glyph(base),
+                 {:ok, kerns} <-
+                   Enum.reduce_while(pairs, {:ok, %{}}, fn {{lower, upper}, side}, {:ok, kerns} ->
+                     sub = elem(measured_tuple, lower)
+                     sup = elem(measured_tuple, upper)
+
+                     with {:ok, sub_glyph} <- prepare_script_kern_glyph(sub),
+                          {:ok, sup_glyph} <- prepare_script_kern_glyph(sup),
+                          {:ok, sub_kern} <-
+                            prepare_script_pair_kern(
+                              base_glyph,
+                              sub_glyph,
+                              base,
+                              sub,
+                              -down,
+                              if(side == :pre, do: :presub, else: :sub)
+                            ),
+                          {:ok, sup_kern} <-
+                            prepare_script_pair_kern(
+                              base_glyph,
+                              sup_glyph,
+                              base,
+                              sup,
+                              up,
+                              if(side == :pre, do: :presup, else: :sup)
+                            ) do
+                       {:cont,
+                        {:ok, kerns |> Map.put(lower, sub_kern) |> Map.put(upper, sup_kern)}}
+                     else
+                       {:error, _} = error -> {:halt, error}
+                     end
+                   end) do
+              large_italic = if largeop, do: base.italic_correction, else: 0.0
+              italic = if largeop, do: 0.0, else: base.italic_correction
+
+              pair_width = fn {lower, upper}, side, field ->
+                sub = Map.fetch!(elem(measured_tuple, lower), field) + Map.fetch!(kerns, lower)
+                sup = Map.fetch!(elem(measured_tuple, upper), field) + Map.fetch!(kerns, upper)
+                # Advance beyond the base, preserving the single-pair msubsup contract.
+                max(
+                  0.0,
+                  max(
+                    sub - if(side == :post, do: large_italic, else: 0.0),
+                    sup + if(side == :post, do: italic, else: 0.0)
+                  )
+                ) + constants.space_after_script
+              end
+
+              widths =
+                Map.new([:width, :min_content_width, :max_content_width], fn field ->
+                  width =
+                    Enum.reduce(pairs, Map.fetch!(base, field), fn {pair, side}, width ->
+                      width + pair_width.(pair, side, field)
+                    end)
+
+                  {field, width}
+                end)
+
+              pre_width =
+                Enum.reduce(roles.pre, 0.0, fn pair, x -> x + pair_width.(pair, :pre, :width) end)
+
+              offsets = %{0 => {pre_width, 0.0}}
+
+              offsets =
+                if roles.marker,
+                  do: Map.put(offsets, roles.marker, {pre_width, 0.0}),
+                  else: offsets
+
+              {offsets, _} =
+                Enum.reduce(roles.pre, {offsets, 0.0}, fn {lower, upper} = pair, {offsets, x} ->
+                  right = x + pair_width.(pair, :pre, :width)
+
+                  {offsets
+                   |> Map.put(
+                     lower,
+                     {right - elem(measured_tuple, lower).width - kerns[lower], -down}
+                   )
+                   |> Map.put(
+                     upper,
+                     {right - elem(measured_tuple, upper).width - kerns[upper], up}
+                   ), right}
+                end)
+
+              {offsets, _} =
+                Enum.reduce(roles.post, {offsets, pre_width + base.width}, fn {lower, upper} =
+                                                                                pair,
+                                                                              {offsets, x} ->
+                  {offsets
+                   |> Map.put(lower, {x - large_italic + kerns[lower], -down})
+                   |> Map.put(upper, {x + italic + kerns[upper], up}),
+                   x + pair_width.(pair, :post, :width)}
+                end)
+
+              offsets = Enum.map(0..(length(measured) - 1), &Map.fetch!(offsets, &1))
+
+              script_extents =
+                Enum.flat_map(pairs, fn {{lower, upper}, _} ->
+                  [{elem(measured_tuple, lower), -down}, {elem(measured_tuple, upper), up}]
+                end)
+
+              placed = Enum.zip(measured, offsets)
+
+              result =
+                Map.merge(widths, %{
+                  ascent:
+                    Enum.reduce(script_extents, base.ascent, fn {child, y}, a ->
+                      max(a, child.ascent + y)
+                    end),
+                  descent:
+                    Enum.reduce(script_extents, base.descent, fn {child, y}, d ->
+                      max(d, child.descent - y)
+                    end),
+                  ink_ascent:
+                    Enum.max(Enum.map(placed, fn {child, {_, y}} -> child.ink_ascent + y end)),
+                  ink_descent:
+                    Enum.max(Enum.map(placed, fn {child, {_, y}} -> child.ink_descent - y end)),
+                  offsets: offsets
+                })
+
+              validate_script_placement(result)
+            end
+          end
+
+        _ ->
+          failure(
+            "multiscript placement requires validator-prepared state and every measured child"
+          )
+      end
+    end)
+  end
+
+  defp validate_script_placement(result) do
+    if Enum.all?(
+         Map.values(Map.delete(result, :offsets)),
+         &(is_number(&1) and abs(&1) <= Limits.get(:max_css_numeric_magnitude))
+       ) and
+         result.width >= 0 and result.min_content_width >= 0 and
+         result.max_content_width >= result.min_content_width and
+         result.ascent + result.descent >= 0 and
+         Enum.all?(result.offsets, fn {x, y} ->
+           abs(x) <= Limits.get(:max_css_numeric_magnitude) and
+             abs(y) <= Limits.get(:max_css_numeric_magnitude)
+         end),
+       do: {:ok, result},
+       else: failure("script placement exceeds supported point geometry bounds")
+  end
+
+  # The six schemas and every tensor pair share the same selected-font clearance rule.
+  defp side_script_shifts(constants, style, base, sub, sup) do
+    down =
+      if sub do
+        Enum.max([
+          constants.subscript_shift_down,
+          sub.ink_ascent - constants.subscript_top_max,
+          constants.subscript_baseline_drop_min + base.ink_descent
+        ])
+      else
+        0.0
+      end
+
+    up =
+      if sup do
+        Enum.max([
+          constants[
+            if(Map.get(style, :math_shift, :normal) == :compact,
+              do: :superscript_shift_up_cramped,
+              else: :superscript_shift_up
+            )
+          ],
+          constants.superscript_bottom_min + sup.ink_descent,
+          base.ink_ascent - constants.superscript_baseline_drop_max
+        ])
+      else
+        0.0
+      end
+
+    {down, up} =
+      if sub != nil and sup != nil do
+        gap = down - sub.ink_ascent + up - sup.ink_descent
+        deficit = max(constants.sub_superscript_gap_min - gap, 0.0)
+
+        raise =
+          min(
+            max(
+              constants.superscript_bottom_max_with_subscript - (up - sup.ink_descent),
+              0.0
+            ),
+            deficit
+          )
+
+        {down + deficit - raise, up + raise}
+      else
+        {down, up}
+      end
+
+    {down, up}
+  end
+
+  # OpenType MATH MathKernInfo uses two bounding-box junction heights.
+  # This adds its corner spacing to the dated Core side-script equations;
+  # Core 2025 section 3.4 itself does not specify a MathKern step.
+  defp prepare_script_kern_glyph(child) do
+    case child do
+      %{width: width, glyphs: [glyph], drawing_items: [%{kind: :glyph}]}
+      when width == glyph.width ->
+        with {:ok, metrics} <- Font.math_metrics(glyph.font_face) do
+          {:ok,
+           Map.merge(glyph, %{
+             corner_kerns: Map.get(metrics.glyph_info.kerning, glyph.glyph_id, %{}),
+             kern_scale: glyph.font_size / metrics.units_per_em
+           })}
+        end
+
+      _ ->
+        {:ok, nil}
+    end
+  end
+
+  defp prepare_script_pair_kern(base_glyph, script_glyph, base, script, shift, side) do
+    if script == nil or (base_glyph == nil and script_glyph == nil) do
+      {:ok, 0.0}
+    else
+      {base_corner, script_corner, junctions} =
+        case side do
+          :sup ->
+            {:top_right, :bottom_left, [shift - script.ink_descent, base.ink_ascent]}
+
+          :sub ->
+            {:bottom_right, :top_left, [shift + script.ink_ascent, -base.ink_descent]}
+
+          :presup ->
+            {:top_left, :bottom_right, [shift - script.ink_descent, base.ink_ascent]}
+
+          :presub ->
+            {:bottom_left, :top_right, [shift + script.ink_ascent, -base.ink_descent]}
+        end
+
+      Enum.reduce_while(junctions, {:ok, []}, fn height, {:ok, values} ->
+        with {:ok, base_kern} <- prepare_corner_kern(base_glyph, base_corner, height),
+             {:ok, script_kern} <-
+               prepare_corner_kern(script_glyph, script_corner, height - shift) do
+          {:cont, {:ok, [base_kern + script_kern | values]}}
+        else
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+      |> case do
+        {:ok, values} -> {:ok, Enum.min(values)}
+        error -> error
+      end
+    end
+  end
+
+  defp prepare_corner_kern(glyph, corner, height) do
+    table = if glyph, do: Map.get(glyph.corner_kerns, corner)
+
+    if is_number(height) and abs(height) <= Limits.get(:max_css_numeric_magnitude) do
+      if table do
+        FontValidator.reserve(:max_font_math_work, length(table.heights) + 1)
+
+        heights =
+          Enum.reduce_while(table.heights, {:ok, []}, fn record, {:ok, values} ->
+            case prepare_value(record, glyph.font_size) do
               {:ok, {value, pixels}} ->
-                {:cont,
-                 {:ok, values ++ [value * style.font_size / metrics.units_per_em + pixels]}}
+                {:cont, {:ok, [value * glyph.kern_scale + pixels | values]}}
 
               error ->
                 {:halt, error}
             end
           end)
 
-        with {:ok, [gap, thickness, extra, before_degree, after_degree]} <- values do
-          if thickness > 0,
-            do: HtmlValidator.reserve_render_resource(:max_layout_boxes, 1, :layout)
+        result =
+          with {:ok, heights} <- heights,
+               heights = Enum.reverse(heights),
+               :ok <-
+                 if(heights == Enum.sort(heights),
+                   do: :ok,
+                   else:
+                     failure("selected MATH kern device adjustments reorder its height ranges")
+                 ),
+               height = height - glyph.y,
+               index = Enum.find_index(heights, &(height < &1)) || length(heights),
+               {:ok, {value, pixels}} <-
+                 prepare_value(Enum.at(table.values, index), glyph.font_size) do
+            {:ok, value * glyph.kern_scale + pixels}
+          end
 
-          {:ok,
-           %{
-             kind: :radical,
-             base: base,
-             index: index,
-             style: style,
-             gap: gap,
-             rule_thickness: max(thickness, 0.0),
-             extra_ascender: extra,
-             kern_before: max(before_degree, 0.0),
-             kern_after: after_degree,
-             degree_raise: metrics.constants.radical_degree_bottom_raise_percent / 100
-           }}
+        case result do
+          {:error, {reason, diagnostic}} ->
+            {:error,
+             {reason,
+              Diagnostics.with_context(diagnostic,
+                source: "selected font MATH glyph #{glyph.glyph_id} #{corner} kern"
+              )}}
+
+          result ->
+            result
         end
+      else
+        {:ok, 0.0}
       end
     else
-      failure("radicals require a bounded font size and normal or compact math-style")
+      failure("script corner kerning requires bounded point junction heights")
+    end
+  end
+
+  defp validate_script_children(children) do
+    with :ok <- validate_row(children) do
+      if Enum.all?(children, fn child ->
+           Enum.all?(
+             [
+               :width,
+               :ascent,
+               :descent,
+               :italic_correction,
+               :min_content_width,
+               :max_content_width,
+               :ink_ascent,
+               :ink_descent
+             ],
+             fn field ->
+               value = Map.get(child, field)
+               is_number(value) and abs(value) <= Limits.get(:max_css_numeric_magnitude)
+             end
+           ) and
+             Enum.all?(child.glyphs, &(&1.font_size <= Limits.get(:max_css_numeric_magnitude))) and
+             child.min_content_width >= 0 and child.max_content_width >= child.min_content_width and
+             (is_nil(Map.get(child, :top_accent_attachment)) or
+                is_number(child.top_accent_attachment))
+         end),
+         do: :ok,
+         else:
+           failure(
+             "script children require bounded point extents, intrinsic widths, ink and accent attachment"
+           )
     end
   end
 
@@ -822,28 +1667,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   @spec prepare_radical_stretch(term(), term()) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_radical_stretch(prepared, measured) do
-    case {prepared, measured} do
-      {%{
-         kind: :radical,
-         style: %{font_face: font, font_size: size},
-         gap: gap,
-         rule_thickness: thickness
-       }, %{ink_ascent: ascent, ink_descent: descent}}
-      when is_number(ascent) and is_number(descent) and is_number(gap) and is_number(thickness) ->
-        target = max(thickness + gap + ascent + descent, 0.0)
-
-        with {:ok, base} <- prepare_glyph("√", font, size, []),
-             {:ok, shape} <-
-               prepare_stretch("√", font, size, :vertical, target, []) do
-          construction = Map.fetch!(base.source.metrics.variants.vertical, base.glyph_id)
-          {:ok, %{shape: shape, intrinsic_width: preferred_vertical_width(base, construction)}}
-        end
-
-      _ ->
-        failure(
-          "radical stretching requires validator-prepared radical state and measured base ink"
-        )
-    end
+    MathRadicalValidator.prepare_stretch(prepared, measured)
   end
 
   defp prepare_row_children(node, context) do
@@ -863,7 +1687,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, [], 0}, fn {child, child_index}, {:ok, prepared, index} ->
       operator_context =
-        if embellished? and tag != "math" do
+        if embellished? and tag != "math" and
+             (tag not in ["mfrac" | @script_elements] or child_index == 0) do
           Map.get(context, :operator_context, %{})
         else
           %{
@@ -921,120 +1746,6 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
       error ->
         error
-    end
-  end
-
-  # Core 3.3.2 resolves font values and authored thickness before measurement.
-  defp prepare_fraction(row, attributes) do
-    style = row.style
-    math_style = Map.get(style, :math_style, :normal)
-
-    if math_style in [:normal, :compact] and is_number(style.font_size) and
-         style.font_size <= Limits.get(:max_css_numeric_magnitude) do
-      with {:ok, metrics} <- Font.math_metrics(style.font_face) do
-        names =
-          if math_style == :compact do
-            [
-              :axis_height,
-              :fraction_rule_thickness,
-              :fraction_numerator_shift_up,
-              :fraction_numerator_gap_min,
-              :fraction_denominator_shift_down,
-              :fraction_denominator_gap_min,
-              :stack_top_shift_up,
-              :stack_bottom_shift_down,
-              :stack_gap_min
-            ]
-          else
-            [
-              :axis_height,
-              :fraction_rule_thickness,
-              :fraction_numerator_display_style_shift_up,
-              :fraction_num_display_style_gap_min,
-              :fraction_denominator_display_style_shift_down,
-              :fraction_denom_display_style_gap_min,
-              :stack_top_display_style_shift_up,
-              :stack_bottom_display_style_shift_down,
-              :stack_display_style_gap_min
-            ]
-          end
-
-        FontValidator.reserve(:max_font_math_work, length(names))
-
-        values =
-          Enum.reduce_while(names, {:ok, []}, fn name, {:ok, values} ->
-            case prepare_value(Map.fetch!(metrics.constants, name), style.font_size) do
-              {:ok, {value, pixels}} ->
-                {:cont,
-                 {:ok, values ++ [value * style.font_size / metrics.units_per_em + pixels]}}
-
-              error ->
-                {:halt, error}
-            end
-          end)
-
-        with {:ok,
-              [
-                axis,
-                default,
-                numerator_shift,
-                numerator_gap,
-                denominator_shift,
-                denominator_gap,
-                stack_top,
-                stack_bottom,
-                stack_gap
-              ]} <- values do
-          default = max(default, 0.0)
-
-          thickness =
-            case Map.get(attributes, "linethickness") do
-              nil ->
-                {:ok, default}
-
-              value ->
-                case HtmlValidator.parse_css_number(value) do
-                  {number, "%"} ->
-                    {:ok, number * default / 100}
-
-                  _ ->
-                    case math_length(value, style) do
-                      {:ok, {:rem, ratio}} ->
-                        {:ok, ratio * Map.get(style, :_root_font_size, style.font_size)}
-
-                      {:ok, number} when is_number(number) ->
-                        {:ok, number}
-
-                      {:error, {_reason, _diagnostic}} = error ->
-                        error
-
-                      _ ->
-                        {:ok, default}
-                    end
-                end
-            end
-
-          with {:ok, thickness} <- thickness do
-            if thickness > 0,
-              do: HtmlValidator.reserve_render_resource(:max_layout_boxes, 1, :layout)
-
-            {:ok,
-             row
-             |> Map.put(:kind, :fraction)
-             |> Map.put(:axis, axis)
-             |> Map.put(:rule_thickness, max(thickness, 0.0))
-             |> Map.put(:numerator_shift, numerator_shift)
-             |> Map.put(:numerator_gap, numerator_gap)
-             |> Map.put(:denominator_shift, denominator_shift)
-             |> Map.put(:denominator_gap, denominator_gap)
-             |> Map.put(:stack_top, stack_top)
-             |> Map.put(:stack_bottom, stack_bottom)
-             |> Map.put(:stack_gap, stack_gap)}
-          end
-        end
-      end
-    else
-      failure("fractions require a bounded font size and normal or compact math-style")
     end
   end
 
@@ -1275,7 +1986,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
       %{namespace: :mathml, tag: "mo"} ->
         true
 
-      %{namespace: :mathml, tag: "mfrac", children: children} ->
+      %{namespace: :mathml, tag: tag, children: children}
+      when tag in ["mfrac" | @script_elements] ->
         case Enum.reject(children, fn child ->
                Map.get(child, :style, %{}) |> Map.get(:display) == :none or
                  (Map.get(child, :type) == :text and Regex.match?(~r/^[ \t\n\r\f]*$/u, child.text))
@@ -1299,6 +2011,45 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
       _ ->
         false
     end
+  end
+
+  # Only resolve additional font metrics when the authored operator uses them.
+  # CSS ch/cap use the ordinary selected face, without math-auto or ssty glyphs.
+  defp prepare_operator_length_context(attributes, style) do
+    units =
+      for property <- ~w(lspace rspace minsize maxsize),
+          value = Map.get(attributes, property),
+          value =
+            if(is_binary(value),
+              do: HtmlValidator.trim_ascii_whitespace(value) |> String.downcase(:ascii)
+            ),
+          {_number, unit} <- [HtmlValidator.parse_css_number(value)],
+          unit in ~w(ch cap lh),
+          uniq: true,
+          do: unit
+
+    Enum.reduce_while(units, {:ok, %{}}, fn unit, {:ok, context} ->
+      case unit do
+        "lh" ->
+          {:cont, {:ok, Map.put(context, :line_height, style.line_height)}}
+
+        unit ->
+          case prepare_glyph(
+                 if(unit == "ch", do: "0", else: "H"),
+                 style.font_face,
+                 style.font_size,
+                 []
+               ) do
+            {:ok, glyph} ->
+              metric = if unit == "ch", do: glyph.advance, else: elem(glyph.bounds, 3)
+              key = if unit == "ch", do: :zero_advance, else: :cap_height
+              {:cont, {:ok, Map.put(context, key, metric * glyph.font_size / glyph.units_per_em)}}
+
+            {:error, _} = error ->
+              {:halt, error}
+          end
+      end
+    end)
   end
 
   @doc false
@@ -1442,11 +2193,23 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           end
         end
 
+      operator.stretchy and construction != nil and operator.stretch_axis == :vertical ->
+        # Core's preferred inline size is independent of whether a containing
+        # row has supplied a block stretch target. Keep natural paint unchanged.
+        {:ok,
+         %{
+           shape: %{kind: :glyph, glyph: base},
+           target_ascent: nil,
+           target_descent: nil,
+           intrinsic_width: preferred_vertical_width(base, construction)
+         }}
+
       not operator.stretchy and operator.largeop and
           Map.get(style, :math_style, :normal) == :normal ->
         construction = Map.get(base.source.metrics.variants.vertical, base.glyph_id)
         variants = if construction, do: construction.variants, else: []
         minimum = base.source.metrics.constants.display_operator_min_height * scale
+        FontValidator.reserve(:max_font_math_work, length(variants))
         selected = Enum.find(variants, &(&1.advance * scale >= minimum)) || List.last(variants)
 
         if selected do
@@ -1468,7 +2231,9 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     end
   end
 
-  defp preferred_vertical_width(base, construction) do
+  @doc false
+  @spec preferred_vertical_width(map(), map()) :: number()
+  def preferred_vertical_width(base, construction) do
     scale = base.font_size / base.units_per_em
 
     ids =
@@ -1479,6 +2244,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           _ -> []
         end
 
+    FontValidator.reserve(:max_font_math_work, length(ids))
     Enum.max(Enum.map(ids, &(elem(base.source.advances, &1) * scale)))
   end
 
@@ -1491,7 +2257,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
   defp validate_box_style(tag, style) do
     unsupported? =
-      ((grouping_element?(tag) or tag in ~w(mspace mfrac msqrt mroot)) and
+      ((grouping_element?(tag) or tag in ~w(mspace mfrac msqrt mroot) or tag in @script_elements) and
          not Map.get(style, :_math_formatting, true)) or
         Map.get(style, :link_url) != nil or Map.get(style, :link_destination) != nil or
         (tag != "math" and Map.get(style, :html_target) != nil) or
@@ -1503,7 +2269,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
           value != nil and
             (not is_number(value) or
-               (tag in ["mfrac", "msqrt", "mroot"] and
+               (tag in ["mfrac", "msqrt", "mroot" | @script_elements] and
                   (value < 0 or value > Limits.get(:max_css_numeric_magnitude))))
         end) or
         Enum.any?(
@@ -1557,7 +2323,10 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     end
   end
 
-  defp math_length(value, style) do
+  @doc false
+  @spec math_length(term(), map()) ::
+          {:ok, term()} | :error | {:error, Diagnostics.detailed_error()}
+  def math_length(value, style) do
     case HtmlValidator.parse_css_number(value) do
       {_number, "ex"} ->
         with {:ok, x_height} <- FontValidator.prepare_x_height(style.font_face) do

@@ -11,7 +11,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgReferenceValidator do
     SvgViewportValidator
   }
 
-  @targets ~w(symbol svg use g path rect circle ellipse line polyline polygon)
+  @targets ~w(symbol svg use g path rect circle ellipse line polyline polygon text)
 
   @doc false
   @spec referenced_ids(map()) :: MapSet.t()

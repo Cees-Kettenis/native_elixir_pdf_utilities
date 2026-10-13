@@ -32,7 +32,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
   @length_properties [:lspace, :rspace, :minsize, :maxsize]
   # CSS units requiring viewport, container, or additional selected-font metrics.
   # These are syntax names, not configurable resource limits.
-  @contextual_units ~w(ch cap ic lh rlh rex rch rcap ric vw vh vi vb vmin vmax svw svh svi svb svmin svmax lvw lvh lvi lvb lvmin lvmax dvw dvh dvi dvb dvmin dvmax cqw cqh cqi cqb cqmin cqmax)
+  @font_units %{
+    "ex" => :x_height,
+    "cap" => :cap_height,
+    "ch" => :zero_advance,
+    "lh" => :line_height
+  }
+  @contextual_units ~w(ic rlh rex rch rcap ric vw vh vi vb vmin vmax svw svh svi svb svmin svmax lvw lvh lvi lvb lvmin lvmax dvw dvh dvi dvb dvmin dvmax cqw cqh cqi cqb cqmin cqmax)
   @context_keys [
     :parent,
     :index,
@@ -41,6 +47,9 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
     :font_size,
     :root_font_size,
     :x_height,
+    :cap_height,
+    :zero_advance,
+    :line_height,
     :text_only
   ]
 
@@ -85,7 +94,9 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
     It determines postfix form for a script child that is not the base.
   * `font_size` defaults to 12 points; `root_font_size` defaults to `font_size`.
     These sizes belong to the core operator. Optional `x_height` supplies the
-    selected core font's x-height in points for `ex` lengths.
+    selected core font's x-height in points for `ex` lengths. `cap_height`,
+    `zero_advance` and `line_height` supply the selected-font cap height, zero
+    advance and computed line height for `cap`, `ch` and `lh` lengths.
   * `text_only` defaults to true. Set false when the core contains element
     children, so it cannot use the text-keyed dictionary or single-glyph layout.
 
@@ -96,7 +107,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
   validator must resolve percentages and clamp min/max against natural glyph
   height; consumers must not independently reinterpret these constraints.
   Fence and separator are semantic metadata and do not change Core geometry.
-  This slice supports numeric percentages and absolute, em, rem and ex lengths.
+  Numeric percentages and absolute, em, rem, ex, cap, ch and lh lengths are resolved
+  against the core operator's selected font and computed style.
   CSS calculations and units requiring other geometry are diagnosed explicitly.
   `stretch_axis` uses the names accepted by `MathLayout.stretch/6`, even when
   `stretchy` is false. Multi-character operators need text layout, not stretch/6.
@@ -201,7 +213,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
       child_index = Map.get(context, :child_index, index)
       size = Map.get(context, :font_size, 12)
       root = Map.get(context, :root_font_size, size)
-      x_height = Map.get(context, :x_height)
+      font_lengths = Enum.map(Map.values(@font_units), &Map.get(context, &1))
       parent = Map.get(context, :parent)
 
       cond do
@@ -215,8 +227,9 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
                   (is_binary(parent) and String.valid?(parent))) and
                is_boolean(Map.get(context, :text_only, true)) and
                Enum.all?([size, root], &(is_number(&1) and &1 >= 0 and &1 <= limit)) and
-                 (is_nil(x_height) or
-                    (is_number(x_height) and x_height >= 0 and x_height <= limit))) ->
+                 Enum.all?(font_lengths, fn value ->
+                   is_nil(value) or (is_number(value) and value >= 0 and value <= limit)
+                 end)) ->
           failure(:invalid_document, "invalid operator position or core font context", text)
 
         count > Limits.get(:max_html_nodes) or child_index > Limits.get(:max_html_nodes) ->
@@ -292,18 +305,20 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
                 do: {:ok, default * size * (number / 100)},
                 else: {:ok, {:percentage, number}}
 
-            {_number, "ex"} ->
-              if is_number(Map.get(context, :x_height)) do
+            {_number, unit} when is_map_key(@font_units, unit) ->
+              metric = Map.fetch!(@font_units, unit)
+
+              if is_number(Map.get(context, metric)) do
                 case HtmlValidator.parse_css_length(
-                       String.replace_suffix(normalized, "ex", "em"),
+                       String.replace_suffix(normalized, unit, "em"),
                        :margin,
-                       context.x_height
+                       Map.fetch!(context, metric)
                      ) do
                   :error -> :numeric_limit
                   result -> result
                 end
               else
-                :missing_x_height
+                {:missing_font_metric, unit, metric}
               end
 
             {_number, unit} when unit in @contextual_units ->
@@ -352,11 +367,11 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
                value
              )}
 
-          :missing_x_height ->
+          {:missing_font_metric, unit, metric} ->
             {:halt,
              failure(
                :invalid_document,
-               "operator #{key} in ex requires selected-font x_height",
+               "operator #{key} in #{unit} requires selected-font #{metric}",
                value
              )}
 

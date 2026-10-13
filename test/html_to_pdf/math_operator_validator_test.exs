@@ -94,6 +94,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorValidatorTest do
     end
   end
 
+  test "selected-font cap, zero advance and line height resolve authored operator lengths" do
+    assert {:ok, operator} =
+             MathOperatorValidator.prepare(
+               "(",
+               %{
+                 "lspace" => "2ch",
+                 "rspace" => "-0.5cap",
+                 "minsize" => "1.5lh",
+                 "maxsize" => "3cap"
+               },
+               %{font_size: 20, zero_advance: 11, cap_height: 13, line_height: 24}
+             )
+
+    assert operator.lspace == 22
+    assert operator.rspace == -6.5
+    assert operator.minsize == 36
+    assert operator.maxsize == 39
+
+    for {unit, key} <- [{"ch", :zero_advance}, {"cap", :cap_height}, {"lh", :line_height}] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               MathOperatorValidator.prepare("(", %{"minsize" => "2#{unit}"})
+
+      assert diagnostic.stage == :layout and diagnostic.source == "2#{unit}"
+      assert diagnostic.message =~ "selected-font #{key}"
+
+      assert {:error, {:invalid_document, _}} =
+               MathOperatorValidator.prepare("(", %{}, %{key => -1})
+    end
+  end
+
   test "outer embellished position determines prefix, middle infix and postfix" do
     for parent <- [
           :grouping,
@@ -466,8 +496,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorValidatorTest do
 
   test "valid CSS lengths requiring unimplemented geometry diagnose instead of taking a dictionary fallback" do
     for value <- [
-          "2ch",
-          "1lh",
           "2vw",
           "1cqw",
           "calc(1em + 2px)",

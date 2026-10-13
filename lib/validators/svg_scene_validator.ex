@@ -10,7 +10,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
     SvgViewportValidator
   }
 
-  @paint_tags ~w(svg g defs symbol use pattern marker mask foreignObject linearGradient radialGradient stop clipPath rect circle ellipse line polyline polygon path text tspan title desc style)
+  @paint_tags ~w(svg g defs symbol use pattern marker mask foreignObject linearGradient radialGradient stop clipPath rect circle ellipse line polyline polygon path text tspan textPath title desc style)
   @length_attributes %{
     "rect" => ~w(x y width height rx ry),
     "circle" => ~w(cx cy r),
