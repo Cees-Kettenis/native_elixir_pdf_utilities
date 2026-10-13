@@ -360,13 +360,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
                ResourceValidator.file_identity("\0")
     end)
 
-    File.write!(Path.join(root, "unreadable.html"), "<p>Private</p>")
-    File.chmod!(Path.join(root, "unreadable.html"), 0o000)
+    unreadable = Path.join(root, "unreadable.html")
+    File.write!(unreadable, "<p>Private</p>")
+    File.chmod!(unreadable, 0o000)
 
-    assert {:error, {:invalid_document, %{stage: :resource, message: message}}} =
-             run(root, &EmbeddedResource.load_html("unreadable.html", &1))
+    # A privileged CI container can read mode-000 files. Match the actual OS
+    # result rather than treating permission bits as a separate resource policy.
+    case File.read(unreadable) do
+      {:error, :eacces} ->
+        assert {:error,
+                {:invalid_document,
+                 %{stage: :resource, source: "unreadable.html", message: message}}} =
+                 run(root, &EmbeddedResource.load_html("unreadable.html", &1))
 
-    assert message =~ "eacces"
+        assert message =~ "eacces"
+
+      {:ok, "<p>Private</p>"} ->
+        assert {:ok, %{html: "<p>Private</p>", source: {:file, ^unreadable}}} =
+                 run(root, &EmbeddedResource.load_html("unreadable.html", &1))
+
+      result ->
+        flunk("unexpected filesystem result for the permission fixture: #{inspect(result)}")
+    end
   end
 
   test "ancestor cycles include hard-link aliases but repeated sibling documents remain allowed",
