@@ -3238,7 +3238,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
       assert HtmlValidator.valid_form_attribute?(tag, name, value)
     end
 
-    refute HtmlValidator.valid_form_attribute?("input", "type", "range")
+    assert HtmlValidator.valid_form_attribute?("input", "type", "range")
     assert HtmlValidator.valid_form_attribute?("select", "multiple", "multiple")
 
     text = %{type: :text, text: "Choice"}
@@ -3412,18 +3412,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
           "button",
           "reset",
           "submit",
-          "number"
+          "number",
+          "date",
+          "month",
+          "week",
+          "time",
+          "datetime-local"
         ] do
       assert HtmlValidator.input_type(String.upcase(type)) == type
     end
 
     for type <- [
-          "date",
-          "month",
-          "week",
-          "time",
-          "datetime-local",
-          "range",
           "color",
           "file",
           "image"

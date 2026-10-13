@@ -5,6 +5,260 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.HtmlMetadataValidator
 
+  @doc "Reports whether a legacy table presentation attribute belongs to an HTML element."
+  @spec presentation_attribute?(String.t(), String.t()) :: boolean()
+  def presentation_attribute?(tag, name) do
+    case tag do
+      "table" -> name in ~w(width height bgcolor cellspacing cellpadding align)
+      "caption" -> name == "align"
+      "col" -> name == "width"
+      tag when tag in ~w(thead tbody tfoot tr) -> name in ~w(height bgcolor align valign)
+      tag when tag in ~w(td th) -> name in ~w(width height bgcolor align valign nowrap)
+      _ -> false
+    end
+  end
+
+  @doc "Prepares HTML table presentation hints before the authored CSS cascade."
+  @spec presentation_hints(map(), [map()], map()) ::
+          {:ok, map()} | {:error, Diagnostics.detailed_error()}
+  def presentation_hints(node, ancestors, inherited) do
+    case node do
+      %{tag: tag, attributes: attributes}
+      when tag in ~w(table caption col colgroup thead tbody tfoot tr td th) ->
+        if Map.get(node, :namespace, :html) == :html do
+          dimensions =
+            case tag do
+              "table" -> [{"width", :width}, {"height", :height}]
+              tag when tag in ~w(thead tbody tfoot tr) -> [{"height", :height}]
+              tag when tag in ~w(td th) -> [{"width", :width}, {"height", :height}]
+              "col" -> [{"width", :width}]
+              _ -> []
+            end
+
+          table =
+            Enum.find(ancestors, &(&1.tag == "table" and Map.get(&1, :namespace, :html) == :html))
+
+          table_attributes = if table == nil, do: %{}, else: table.attributes
+
+          result =
+            with {:ok, hints} <- HtmlValidator.html_dimension_hints(attributes, dimensions, tag),
+                 {:ok, spacing} <- legacy_pixel_attribute(attributes, "cellspacing", nil),
+                 {:ok, padding} <-
+                   legacy_pixel_attribute(
+                     if(tag == "table", do: attributes, else: table_attributes),
+                     "cellpadding",
+                     nil
+                   ) do
+              hints =
+                Map.reject(hints, fn {property, value} ->
+                  value in [0, 0.0, {:percent, 0.0}] and
+                    ((tag == "table" and property == :width) or tag in ~w(td th))
+                end)
+
+              hints =
+                case HtmlValidator.parse_html_legacy_color(Map.get(attributes, "bgcolor")) do
+                  {:ok, color} when tag in ~w(table thead tbody tfoot tr td th) ->
+                    Map.put(hints, :background_color, color)
+
+                  _ ->
+                    hints
+                end
+
+              hints =
+                if tag == "table" and spacing != nil,
+                  do: Map.put(hints, :border_spacing, {spacing, spacing}),
+                  else: hints
+
+              hints =
+                if tag in ~w(td th) and padding != nil,
+                  do:
+                    Map.put(
+                      hints,
+                      :padding,
+                      NativeElixirPdfUtilities.Validators.CssValueValidator.edges(padding)
+                    ),
+                  else: hints
+
+              align = String.downcase(Map.get(attributes, "align", ""), :ascii)
+              valign = String.downcase(Map.get(attributes, "valign", ""), :ascii)
+
+              hints =
+                cond do
+                  tag == "table" and align == "center" ->
+                    Map.put(hints, :margin, %{top: 0.0, right: :auto, bottom: 0.0, left: :auto})
+
+                  tag == "caption" and align == "bottom" ->
+                    Map.put(hints, :caption_side, :bottom)
+
+                  tag in ~w(thead tbody tfoot tr td th) and
+                      align in ~w(left right center middle absmiddle justify) ->
+                    align = if align in ~w(middle absmiddle), do: "center", else: align
+
+                    hints
+                    |> Map.put(:text_align, String.to_existing_atom(align))
+                    |> Map.put(:_text_align_initial, false)
+
+                  tag == "th" and not Map.get(inherited, :_text_align_initial, true) ->
+                    Map.put(hints, :text_align, Map.get(inherited, :text_align, :left))
+
+                  true ->
+                    hints
+                end
+
+              hints =
+                if tag in ~w(tr td th) do
+                  Map.put(
+                    hints,
+                    :vertical_align,
+                    Map.get(
+                      inherited,
+                      :_table_vertical_align,
+                      Map.get(inherited, :vertical_align, :middle)
+                    )
+                  )
+                else
+                  hints
+                end
+
+              hints =
+                if tag in ~w(thead tbody tfoot tr td th) and
+                     valign in ~w(top middle bottom baseline),
+                   do: Map.put(hints, :vertical_align, String.to_existing_atom(valign)),
+                   else: hints
+
+              hints =
+                if tag in ~w(td th) and Map.has_key?(attributes, "nowrap"),
+                  do: Map.put(hints, :white_space, :nowrap),
+                  else: hints
+
+              if tag == "table" and align in ~w(left right) do
+                Diagnostics.error(
+                  :style,
+                  :unsupported_html,
+                  "table align=#{align} requires float layout, which is not implemented; use align=center or authored margins for a non-floating table",
+                  operation: :compute_style,
+                  module: __MODULE__,
+                  source: "table align=" <> Map.fetch!(attributes, "align")
+                )
+              else
+                {:ok, hints}
+              end
+            end
+
+          case result do
+            {:error, {reason, diagnostic}} ->
+              context = Keyword.take(source_context(node), [:line, :column])
+
+              opts =
+                Map.to_list(Map.take(diagnostic, [:operation, :module, :source, :line, :column]))
+
+              Diagnostics.error(diagnostic.stage, reason, diagnostic.message, opts ++ context)
+
+            other ->
+              other
+          end
+        else
+          {:ok, %{}}
+        end
+
+      _ ->
+        {:ok, %{}}
+    end
+  end
+
+  @doc "Validates effective table presentation after authored CSS has overridden HTML hints."
+  @spec validate_presentation_style(map(), map()) :: :ok | {:error, Diagnostics.detailed_error()}
+  @spec validate_presentation_style(map(), map(), :style | :layout) ::
+          :ok | {:error, Diagnostics.detailed_error()}
+  def validate_presentation_style(node, style, stage \\ :style) do
+    case style do
+      %{display: :table_cell, vertical_align: :baseline} ->
+        if Map.get(node, :namespace, :html) == :html do
+          opts =
+            Keyword.merge(source_context(node),
+              operation: if(stage == :layout, do: :layout, else: :compute_style),
+              module: __MODULE__,
+              source: Map.get(node, :tag, "table cell") <> " effective vertical-align=baseline"
+            )
+
+          Diagnostics.error(
+            stage,
+            :unsupported_html,
+            "table-cell baseline alignment requires row baseline geometry, which is not implemented; use authored vertical-align:top, middle or bottom",
+            opts
+          )
+        else
+          :ok
+        end
+
+      %{text_align: :justify} ->
+        tag = Map.get(node, :tag, "table cell")
+
+        if Map.get(node, :namespace, :html) == :html and tag in ~w(thead tbody tfoot tr td th) and
+             Map.get(style, :display) not in [:none, :table_row, :table_row_group] do
+          attrs =
+            case Map.get(node, :attributes) do
+              attributes when is_map(attributes) -> attributes
+              _ -> %{}
+            end
+
+          source =
+            if Map.get(attrs, "align") == nil,
+              do: tag <> " inherited text-align=justify",
+              else: tag <> " align=justify"
+
+          opts =
+            Keyword.merge(source_context(node),
+              operation: if(stage == :layout, do: :layout, else: :compute_style),
+              module: __MODULE__,
+              source: source
+            )
+
+          Diagnostics.error(
+            stage,
+            :unsupported_html,
+            "table text alignment requires text justification, which is not implemented; use authored left, center or right alignment",
+            opts
+          )
+        else
+          :ok
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  # HTML pixel hints share integer grammar and the central CSS magnitude limit.
+  defp legacy_pixel_attribute(attributes, name, default) do
+    case Map.fetch(attributes, name) do
+      {:ok, value} ->
+        case HtmlValidator.parse_html_integer(value, :nonnegative) do
+          {:ok, integer} ->
+            case HtmlValidator.parse_css_number(Integer.to_string(integer)) do
+              {number, ""} ->
+                {:ok, number * 0.75}
+
+              :error ->
+                Diagnostics.error(
+                  :style,
+                  :resource_limit_exceeded,
+                  "table #{name} exceeds max_css_numeric_magnitude; reduce the pixel value",
+                  operation: :compute_style,
+                  module: __MODULE__,
+                  source: name <> "=" <> value
+                )
+            end
+
+          :error ->
+            {:ok, default}
+        end
+
+      :error ->
+        {:ok, nil}
+    end
+  end
+
   @doc """
   Prepares logical HTML table models and header associations on validated DOM nodes.
 
@@ -445,7 +699,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
         [source: text, line: line, column: column]
 
       _ ->
-        [source: "#{node.tag} #{inspect(node._document_order)}"]
+        [
+          source:
+            "#{Map.get(node, :tag, "table cell")} #{inspect(Map.get(node, :_document_order, []))}"
+        ]
     end
   end
 

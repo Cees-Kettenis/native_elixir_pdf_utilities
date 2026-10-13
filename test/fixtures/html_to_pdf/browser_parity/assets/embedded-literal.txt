@@ -1,0 +1,4 @@
+
+<literal> & text
+Second line
+Long plaintext wraps within the child viewport.

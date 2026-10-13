@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.HtmlTemporalValidator
 
   @initial_context {__MODULE__, :initial_context}
 
@@ -137,6 +138,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                 {"input", "number"} ->
                   Map.merge(state, prepare_initial_number(item.attributes))
 
+                {"input", "range"} ->
+                  Map.merge(state, prepare_initial_range(item.attributes))
+
+                {"input", type} when type in ~w(date month week time datetime-local) ->
+                  Map.merge(state, HtmlTemporalValidator.prepare_initial(item.attributes))
+
                 {"input", type} when type in ~w(button reset submit) ->
                   prepared = HtmlValidator.prepare_input_attributes(item.attributes)
                   Map.put(state, :value, Map.fetch!(prepared, "value"))
@@ -198,6 +205,231 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
       if is_nil(previous),
         do: Process.delete(@initial_context),
         else: Process.put(@initial_context, previous)
+    end
+  end
+
+  @doc false
+  @spec prepare_initial_range(map()) :: map()
+  def prepare_initial_range(attributes) do
+    parsed =
+      Map.new(~w(value min max step), fn name ->
+        value =
+          case HtmlValidator.parse_html_float(Map.get(attributes, name), :decimal) do
+            {:ok, decimal} -> decimal
+            :error -> nil
+          end
+
+        {name, value}
+      end)
+
+    # HTML defaults and the shared parser's decimal precision are fixed format
+    # rules. Integer arithmetic keeps decimal step ties exact, including negatives.
+    exponent =
+      Enum.reduce(parsed, 0, fn {_name, value}, acc ->
+        if value, do: min(acc, value.exponent), else: acc
+      end) - 1
+
+    integers =
+      Map.new(parsed, fn {name, value} ->
+        integer =
+          if value do
+            sign = if value.negative, do: -1, else: 1
+
+            if value.value == 0.0,
+              do: 0,
+              else: sign * value.coefficient * Integer.pow(10, value.exponent - exponent)
+          end
+
+        {name, integer}
+      end)
+
+    unit = Integer.pow(10, -exponent)
+    minimum = integers["min"] || 0
+    maximum = integers["max"] || 100 * unit
+    base = integers["min"] || integers["value"] || 0
+
+    step =
+      cond do
+        String.downcase(Map.get(attributes, "step", ""), :ascii) == "any" -> :any
+        integers["step"] && integers["step"] > 0 -> integers["step"]
+        true -> unit
+      end
+
+    default = if maximum < minimum, do: minimum, else: minimum + div(maximum - minimum, 2)
+
+    proposed =
+      if HtmlValidator.valid_html_float?(Map.get(attributes, "value")),
+        do: integers["value"],
+        else: default
+
+    value = max(proposed, minimum)
+    value = if maximum >= minimum, do: min(value, maximum), else: value
+
+    value =
+      if step == :any do
+        value
+      else
+        lower = base + Integer.floor_div(value - base, step) * step
+        upper = lower + step
+
+        candidates =
+          Enum.filter([lower, upper], fn candidate ->
+            candidate >= minimum and (maximum < minimum or candidate <= maximum) and
+              match?(
+                {:ok, _},
+                HtmlValidator.parse_html_float(range_decimal_string(candidate, exponent))
+              )
+          end)
+
+        Enum.min_by(candidates, &{abs(&1 - value), -&1}, fn -> value end)
+      end
+
+    lexical = range_decimal_string(value, exponent)
+    {:ok, numeric} = HtmlValidator.parse_html_float(lexical)
+    # HTML's best representation serializes the resulting finite double.
+    # Reuse the shared parsed token rather than another exponent grammar.
+    {:ok, shortest} =
+      HtmlValidator.parse_html_float(:erlang.float_to_binary(numeric, [:short]), :decimal)
+
+    lexical =
+      range_decimal_string(
+        if(shortest.negative, do: -shortest.coefficient, else: shortest.coefficient),
+        shortest.exponent
+      )
+
+    %{
+      value: lexical,
+      display: lexical,
+      readonly: false,
+      required: false,
+      range: %{
+        value: numeric,
+        min: if(parsed["min"], do: parsed["min"].value, else: 0.0),
+        max: if(parsed["max"], do: parsed["max"].value, else: 100.0),
+        step:
+          if(step == :any,
+            do: :any,
+            else: elem(HtmlValidator.parse_html_float(range_decimal_string(step, exponent)), 1)
+          ),
+        step_base:
+          if(parsed["min"],
+            do: parsed["min"].value,
+            else: if(parsed["value"], do: parsed["value"].value, else: 0.0)
+          ),
+        position:
+          if(maximum <= minimum,
+            do: 0.0,
+            else: div((value - minimum) * Integer.pow(10, 18), maximum - minimum) / 1.0e18
+          )
+      }
+    }
+  end
+
+  defp range_decimal_string(integer, exponent) do
+    if integer == 0 do
+      "0"
+    else
+      digits = Integer.to_string(abs(integer))
+      length = byte_size(digits)
+      trimmed = String.trim_trailing(digits, "0")
+      exponent = exponent + length - byte_size(trimmed)
+      point = byte_size(trimmed) + exponent
+      sign = if integer < 0, do: "-", else: ""
+
+      sign <>
+        cond do
+          point > 21 or point <= -6 ->
+            String.first(trimmed) <>
+              if(byte_size(trimmed) > 1, do: "." <> String.slice(trimmed, 1..-1//1), else: "") <>
+              "e" <> if(point > 0, do: "+", else: "") <> Integer.to_string(point - 1)
+
+          point <= 0 ->
+            "0." <> String.duplicate("0", -point) <> trimmed
+
+          exponent >= 0 ->
+            trimmed <> String.duplicate("0", exponent)
+
+          true ->
+            String.slice(trimmed, 0, point) <> "." <> String.slice(trimmed, point..-1//1)
+        end
+    end
+  end
+
+  @doc false
+  @spec valid_initial_range?(term(), term()) :: boolean()
+  def valid_initial_range?(state, attributes) do
+    is_map(state) and is_map(attributes) and
+      Enum.all?(attributes, fn {key, value} ->
+        is_binary(key) and String.valid?(key) and is_binary(value) and String.valid?(value)
+      end) and
+      Map.take(state, [:value, :display, :readonly, :required, :range]) ==
+        prepare_initial_range(attributes)
+  end
+
+  @doc false
+  @spec validate_initial_range_layout(map()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_initial_range_layout(node) do
+    valid? =
+      case node do
+        %{style: %{display: :none}} ->
+          true
+
+        %{style: %{_range_state: range} = style} ->
+          case Map.get(style, :_form_control, Map.get(style, :_range_control)) do
+            %{tag: "input", attributes: attributes, initial_state: state} ->
+              HtmlValidator.input_type(Map.get(attributes, "type", "text")) == "range" and
+                valid_initial_range?(state, attributes) and state.range == range and
+                is_boolean(Map.get(state, :disabled)) and
+                Map.get(style, :_range_disabled) == state.disabled
+
+            _ ->
+              false
+          end
+
+        %{style: style} when is_map(style) ->
+          case Map.get(style, :_form_control, Map.get(style, :_range_control)) do
+            %{tag: "input", attributes: attributes} ->
+              HtmlValidator.input_type(Map.get(attributes, "type", "text")) != "range"
+
+            _ ->
+              true
+          end
+
+        _ ->
+          true
+      end
+
+    if valid? do
+      :ok
+    else
+      Diagnostics.error(
+        :layout,
+        :invalid_layout,
+        "range layout requires canonical initial Range state; compute styles before layout",
+        module: __MODULE__,
+        operation: :layout,
+        source: "range"
+      )
+    end
+  end
+
+  @doc false
+  @spec validate_initial_range_attributes(map()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_initial_range_attributes(node) do
+    if Map.get(node, :namespace, :html) == :html and node.tag == "input" and
+         HtmlValidator.input_type(Map.get(node.attributes, "type", "text")) == "range" and
+         Map.has_key?(node.attributes, "list") do
+      Diagnostics.error(
+        :html,
+        :unsupported_html,
+        "Range datalist tick artwork is not yet supported; remove list or supply a static image of the control",
+        module: __MODULE__,
+        operation: :compute,
+        source: "range/list"
+      )
+    else
+      :ok
     end
   end
 
@@ -398,7 +630,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
   @doc false
   @spec readonly_input_type?(String.t()) :: boolean()
-  def readonly_input_type?(type), do: HtmlValidator.text_input_type?(type) or type == "number"
+  def readonly_input_type?(type),
+    do:
+      HtmlValidator.text_input_type?(type) or type == "number" or
+        HtmlTemporalValidator.temporal_type?(type)
 
   @doc false
   @spec valid_initial_input?(String.t(), map(), [term()]) :: boolean()
@@ -408,8 +643,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
       (not Map.has_key?(attributes, "readonly") or HtmlValidator.readonly_input_type?(type)) and
       (not Map.has_key?(attributes, "multiple") or type == "email") and
       (not Map.has_key?(attributes, "size") or HtmlValidator.text_input_type?(type)) and
-      (not Map.has_key?(attributes, "placeholder") or HtmlValidator.readonly_input_type?(type)) and
-      (not Enum.any?(~w(min max step), &Map.has_key?(attributes, &1)) or type == "number")
+      (not Map.has_key?(attributes, "placeholder") or
+         (HtmlValidator.readonly_input_type?(type) and
+            not HtmlTemporalValidator.temporal_type?(type))) and
+      (not Map.has_key?(attributes, "list") or type == "range") and
+      (not Enum.any?(~w(min max step), &Map.has_key?(attributes, &1)) or
+         type in ["number", "range"] or HtmlTemporalValidator.temporal_type?(type)) and
+      (type != "range" or
+         not Enum.any?(
+           ~w(accept alpha alt colorspace dirname formaction formenctype formmethod formnovalidate formtarget height maxlength minlength pattern required popovertarget popovertargetaction src width),
+           &Map.has_key?(attributes, &1)
+         ))
   end
 
   defp collect_initial_metadata(
@@ -854,7 +1098,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                   case control.tag do
                     "input" ->
                       type = HtmlValidator.input_type(Map.get(control.attributes, "type", "text"))
-                      if HtmlValidator.readonly_input_type?(type), do: "text", else: type
+
+                      if HtmlValidator.readonly_input_type?(type) or type == "range",
+                        do: "text",
+                        else: type
 
                     "textarea" ->
                       "text"
@@ -876,6 +1123,31 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           cond do
             mode == :static ->
               {:ok, pages, []}
+
+            Enum.any?(controls, fn item ->
+              Map.has_key?(item.control.initial_state, :range) and
+                  not item.control.initial_state.disabled
+            end) ->
+              error(
+                :unsupported_form,
+                "Mutable HTML Range cannot be represented by the existing PDF field types without slider actions; use forms: :static for initial Range artwork",
+                source: "range",
+                operation: :write_pdf,
+                module: __MODULE__
+              )
+
+            Enum.any?(controls, fn item ->
+              Map.has_key?(item.control.initial_state, :temporal) and
+                not item.control.initial_state.disabled and
+                  not item.control.initial_state.readonly
+            end) ->
+              error(
+                :unsupported_form,
+                "Mutable temporal controls require typed editing and picker actions unavailable in PDF text fields; use forms: :static for supplied initial artwork",
+                source: "temporal",
+                operation: :write_pdf,
+                module: __MODULE__
+              )
 
             length(controls) * 2 > Limits.get(:max_appearance_widgets) ->
               error(:resource_limit_exceeded, "HTML controls exceed the appearance count limit")
@@ -957,8 +1229,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
                 original_page_appearance? =
                   item.type == "choice" or
+                    Map.has_key?(item.control.initial_state, :temporal) or
                     (item.control.tag == "input" and
-                       HtmlValidator.input_type(Map.get(attributes, "type", "text")) == "number")
+                       HtmlValidator.input_type(Map.get(attributes, "type", "text")) in [
+                         "number",
+                         "range"
+                       ])
 
                 box =
                   if original_page_appearance? do
@@ -1081,7 +1357,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                   appearance: appearance
                 }
 
+                range_appearance =
+                  validate_initial_range_appearance(
+                    item.control,
+                    box,
+                    appearance_boxes,
+                    page_height
+                  )
+
                 cond do
+                  range_appearance != :ok ->
+                    {:halt, range_appearance}
+
                   byte_size(name) > Limits.get(:max_pdf_form_text_bytes) ->
                     {:halt,
                      error(
@@ -1221,7 +1508,22 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                      HtmlValidator.input_type(Map.get(attributes, "type", "text")) != "number" or
                      valid_initial_number?(state, attributes))
 
-              not number_valid? or not is_boolean(checked) or not is_boolean(disabled) or
+              range_valid? =
+                attributes_valid? and
+                  (tag != "input" or
+                     HtmlValidator.input_type(Map.get(attributes, "type", "text")) != "range" or
+                     valid_initial_range?(state, attributes))
+
+              temporal_valid? =
+                attributes_valid? and
+                  (tag != "input" or
+                     not HtmlTemporalValidator.temporal_type?(
+                       HtmlValidator.input_type(Map.get(attributes, "type", "text"))
+                     ) or HtmlTemporalValidator.valid_initial?(state, attributes))
+
+              not number_valid? or not range_valid? or not temporal_valid? or
+                not is_boolean(checked) or
+                not is_boolean(disabled) or
                 not (is_nil(owner) or is_reference(owner)) or not selection_valid? or
                 not attributes_valid? or
                 ((tag == "textarea" or
@@ -1252,6 +1554,46 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
         operation: :write_pdf,
         module: __MODULE__
       )
+    else
+      :ok
+    end
+  end
+
+  # Existing PDF appearance BBoxes clip at the widget. A fixed native thumb
+  # outside that rectangle cannot retain the initial source artwork safely.
+  defp validate_initial_range_appearance(control, widget, boxes, page_height) do
+    if Map.has_key?(control.initial_state, :range) do
+      Enum.reduce_while(boxes, :ok, fn box, status ->
+        if Map.get(box, :role) == :range_thumb do
+          if NativeElixirPdfUtilities.Validators.WriterValidator.valid_range_frame?(box) do
+            painted = NativeElixirPdfUtilities.HtmlToPdf.RangeArtwork.snap_box(box, page_height)
+
+            if painted.x >= widget.x and painted.y >= widget.y and
+                 painted.x + painted.width <= widget.x + widget.width and
+                 painted.y + painted.height <= widget.y + widget.height do
+              {:cont, status}
+            else
+              {:halt,
+               error(
+                 :unsupported_form,
+                 "Disabled Range thumb paints outside the PDF widget rectangle; use forms: :static to preserve overflowing initial artwork",
+                 module: __MODULE__,
+                 operation: :write_pdf,
+                 source: "range"
+               )}
+            end
+          else
+            {:halt,
+             error(:invalid_form, "Range appearance requires a validated native thumb frame",
+               module: __MODULE__,
+               operation: :write_pdf,
+               source: "range"
+             )}
+          end
+        else
+          {:cont, status}
+        end
+      end)
     else
       :ok
     end

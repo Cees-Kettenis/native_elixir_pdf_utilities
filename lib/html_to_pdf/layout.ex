@@ -45,7 +45,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {:ok, layout_tree()}
           | {:error, :invalid_layout | :invalid_margin | :invalid_page_size}
           | {:error,
-             {:invalid_layout | :resource_limit_exceeded,
+             {:invalid_layout | :unsupported_html | :resource_limit_exceeded,
               NativeElixirPdfUtilities.Diagnostics.diagnostic()}}
   def layout(styled_tree, opts \\ []) do
     layout_document(styled_tree, opts, nil)
@@ -257,6 +257,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   links, images, decorations and form metadata retain their native representation.
   No parsing, font registration, resource-context creation, pagination or implicit
   viewport clipping occurs. Atomic elements retain their existing baseline rules.
+  Prepared MathML retains its preferred widths independently of actual advance
+  and paint geometry.
   `first_alphabetic_baseline` records the first content baseline relative to the
   atomic alphabetic baseline, for MathML Core block-box composition.
   """
@@ -345,6 +347,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         if request.available_width == nil,
           do: maximum,
           else: min(maximum, request.available_width)
+
+      # The measured MathML box keeps preferred operator widths independently
+      # of its selected glyph advances. This adapter reports those intrinsic
+      # widths without changing the atomic width, baseline or drawing items.
+      {minimum, maximum} =
+        case node.style do
+          %{_math_box: measured} ->
+            {minimum + measured.min_content_width - measured.width,
+             maximum + measured.max_content_width - measured.width}
+
+          _ ->
+            {minimum, maximum}
+        end
 
       {boxes, baseline, first_baseline, height, layout_width} =
         case runs do
@@ -4296,8 +4311,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp layout_table(style, children, x, y, width) do
     margin = Map.get(style, :margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
-    padding = Map.get(style, :padding, edges(0.0))
-    borders = Map.get(style, :border_widths, edges(0.0))
     collapsed? = Map.get(style, :border_collapse, :separate) == :collapse
     box_x = x + margin.left
     box_top = y - margin.top
@@ -4305,12 +4318,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     box_width =
       case Map.get(style, :width) do
-        declared when not is_nil(declared) -> resolved_size(style, :width, width, available_width)
-        _ -> available_width
+        declared when not is_nil(declared) ->
+          declared_width = resolved_size(style, :width, width, available_width)
+
+          if not collapsed? and Map.get(style, :box_sizing, :content_box) == :content_box,
+            do: declared_width + horizontal_box_size(style),
+            else: declared_width
+
+        _ ->
+          available_width
       end
 
     with {:ok, %{rows: rows, columns: columns}} <-
            NativeElixirPdfUtilities.Validators.HtmlTableValidator.form(children) do
+      # With no columns there are no cell edges for collapsed table borders.
+      # Visible rows still contribute their declared height, but neither table
+      # padding nor collapsed borders contribute to this grid's geometry.
+      style =
+        if collapsed? and table_column_count(rows) == 0 and columns == [],
+          do: style |> Map.put(:border_widths, edges(0.0)) |> Map.put(:padding, edges(0.0)),
+          else: style
+
+      borders = Map.get(style, :border_widths, edges(0.0))
+      padding = Map.get(style, :padding, edges(0.0))
+
       outer =
         case collapsed? do
           true ->
@@ -4358,7 +4389,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       content_width =
         max(box_width - insets.left - insets.right - padding.left - padding.right, 0.0)
 
-      table_id = {:table, box_x, box_top}
       table_metadata = break_metadata(style)
 
       declared_height =
@@ -4385,8 +4415,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       box_width =
         max(box_width, tracks.width + insets.left + insets.right + padding.left + padding.right)
 
+      offset =
+        case Map.get(style, :margin_inline_auto) do
+          %{left: true, right: true} -> max(available_width - box_width, 0.0) / 2
+          %{left: true, right: false} -> max(available_width - box_width, 0.0)
+          _ -> 0.0
+        end
+
+      box_x = box_x + offset
+      content_x = content_x + offset
+      table_id = {:table, box_x, box_top}
+
       with {:ok, caption_boxes, table_top} <-
-             layout_table_caption(children, box_x, box_top, box_width, table_id),
+             layout_table_caption(children, box_x, box_top, box_width, table_id, :top),
            rows_top = table_top - padding.top - insets.top,
            {:ok, row_boxes, content_bottom, row_fragments} <-
              layout_table_rows(
@@ -4411,41 +4452,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             Map.merge(table_metadata, %{flow_id: table_id, table_id: table_id})
           )
 
-        case table_boxes.after do
-          [] ->
-            {:ok, table_boxes.before ++ caption_boxes ++ row_boxes, bottom - margin.bottom}
+        with {:ok, bottom_caption_boxes, next_y} <-
+               layout_table_caption(children, box_x, bottom, box_width, table_id, :bottom) do
+          case table_boxes.after do
+            [] ->
+              {:ok, table_boxes.before ++ caption_boxes ++ row_boxes ++ bottom_caption_boxes,
+               next_y - margin.bottom}
 
-          outer_border_boxes ->
-            # Keep decorations in their row's flow group until pagination has
-            # placed every row. Pagination joins the outline pieces per page.
-            last_row = length(row_fragments) - 1
+            outer_border_boxes ->
+              # Keep decorations in their row's flow group until pagination has
+              # placed every row. Pagination joins the outline pieces per page.
+              last_row = length(row_fragments) - 1
 
-            fragments =
-              row_fragments
-              |> Enum.with_index()
-              |> Enum.flat_map(fn {row, index} ->
-                top = if index == 0, do: table_top, else: row.top
-                bottom = if index == last_row, do: bottom, else: row.bottom
+              fragments =
+                row_fragments
+                |> Enum.with_index()
+                |> Enum.flat_map(fn {row, index} ->
+                  top = if index == 0, do: table_top, else: row.top
+                  bottom = if index == last_row, do: bottom, else: row.bottom
 
-                outlines =
-                  Enum.map(outer_border_boxes, fn outline ->
-                    outline
-                    |> Map.merge(row.metadata)
-                    |> Map.put(:type, HtmlValidator.reserve_layout_box(:rect))
-                    |> Map.put(:y, bottom)
-                    |> Map.put(:height, top - bottom)
-                  end)
+                  outlines =
+                    Enum.map(outer_border_boxes, fn outline ->
+                      outline
+                      |> Map.merge(row.metadata)
+                      |> Map.put(:type, HtmlValidator.reserve_layout_box(:rect))
+                      |> Map.put(:y, bottom)
+                      |> Map.put(:height, top - bottom)
+                    end)
 
-                {borders, content} =
-                  Enum.split_with(row.boxes, fn box ->
-                    Map.get(box, :role) == :table_border and Map.get(box, :table_id) == table_id
-                  end)
+                  {borders, content} =
+                    Enum.split_with(row.boxes, fn box ->
+                      Map.get(box, :role) == :table_border and Map.get(box, :table_id) == table_id
+                    end)
 
-                content ++ outlines ++ borders
-              end)
+                  content ++ outlines ++ borders
+                end)
 
-            fragments = if row_fragments == [], do: outer_border_boxes, else: fragments
-            {:ok, table_boxes.before ++ caption_boxes ++ fragments, bottom - margin.bottom}
+              fragments = if row_fragments == [], do: outer_border_boxes, else: fragments
+
+              {:ok, table_boxes.before ++ caption_boxes ++ fragments ++ bottom_caption_boxes,
+               next_y - margin.bottom}
+          end
         end
       end
     end
@@ -4479,8 +4526,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp layout_table_caption(children, x, y, width, table_id) do
-    case Enum.find(children, &match?(%{style: %{display: :table_caption}}, &1)) do
+  defp layout_table_caption(children, x, y, width, table_id, side) do
+    caption =
+      Enum.find(children, fn child ->
+        match?(%{style: %{display: :table_caption}}, child) and
+          Map.get(child.style, :caption_side, :top) == side
+      end)
+
+    case caption do
       nil ->
         {:ok, [], y}
 
@@ -4504,7 +4557,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp table_tracks(rows, columns, width, border_collapse, border_spacing, table_layout, outer) do
     case rows == [] or (table_column_count(rows) == 0 and columns == []) do
       true ->
-        %{rows: [], widths: [], spacing: {0.0, 0.0}, width: width}
+        # Empty visible rows keep their row sizing and flow metadata. A table
+        # without columns has no inter-cell spacing or row background area.
+        %{rows: rows, widths: [], spacing: {0.0, 0.0}, width: width}
 
       false ->
         grid_rows = rows
@@ -4781,19 +4836,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       |> Map.put(:row_group_avoid, Map.get(group_style || %{}, :break_inside) == :avoid)
 
     group_background_boxes =
-      case group_style do
-        nil ->
-          []
+      table_part_background_boxes(
+        group_style,
+        cells,
+        x,
+        y,
+        column_widths,
+        row_height,
+        horizontal_spacing,
+        row_metadata,
+        :table_row_group_background
+      )
 
-        group_style ->
-          row_width = Enum.sum(column_widths) + horizontal_spacing * (length(column_widths) + 1)
-
-          group_style
-          |> Map.put(:border_widths, edges(0.0))
-          |> background_box(x, y - row_height, row_width, row_height)
-          |> tag_boxes(row_metadata)
-          |> Enum.map(&Map.put(&1, :role, :table_row_group_background))
-      end
+    row_background_boxes =
+      table_part_background_boxes(
+        style,
+        cells,
+        x,
+        y,
+        column_widths,
+        row_height,
+        horizontal_spacing,
+        row_metadata,
+        :table_row_background
+      )
 
     boxes =
       Enum.reduce(cells, [], fn
@@ -4860,10 +4926,71 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       Enum.map(background_boxes ++ border_boxes, &Map.put(&1, :paint_ordered, true))
 
     boxes =
-      attach_html_target(style, group_background_boxes ++ paint_boxes ++ content_boxes, x, y)
+      attach_html_target(
+        style,
+        group_background_boxes ++ row_background_boxes ++ paint_boxes ++ content_boxes,
+        x,
+        y
+      )
 
     boxes = attach_html_target(group_style || %{}, boxes, x, y)
     {:ok, boxes, y - row_height, row_metadata}
+  end
+
+  # Row and group layers paint through transparent cells, leaving separated gaps
+  # to the table layer. A spanning cell covers its internal column spacing.
+  defp table_part_background_boxes(style, cells, x, y, widths, height, spacing, metadata, role) do
+    if style == nil or
+         (Map.get(style, :background_color) == nil and Map.get(style, :background_image) == nil) do
+      []
+    else
+      row_width = Enum.sum(widths) + spacing * (length(widths) + 1)
+
+      regions =
+        cond do
+          widths == [] ->
+            []
+
+          spacing == 0 ->
+            [{0.0, row_width}]
+
+          true ->
+            covered =
+              Enum.reduce(cells, MapSet.new(), fn cell, covered ->
+                Enum.reduce(
+                  cell.column..(cell.column + cell.colspan - 1),
+                  covered,
+                  &MapSet.put(&2, &1)
+                )
+              end)
+
+            cells = Enum.map(cells, &{&1.column, &1.colspan})
+
+            empty_tracks =
+              for index <- 0..(length(widths) - 1),
+                  not MapSet.member?(covered, index),
+                  do: {index, 1}
+
+            Enum.map(cells ++ empty_tracks, fn {column, span} ->
+              left = Enum.sum(Enum.take(widths, column)) + spacing * (column + 1)
+              width = Enum.sum(Enum.slice(widths, column, span)) + spacing * (span - 1)
+              {left, width}
+            end)
+        end
+
+      regions
+      |> Enum.reject(fn {_left, width} -> width <= 0 end)
+      |> Enum.flat_map(fn {left, width} ->
+        style
+        |> Map.put(:border_widths, edges(0.0))
+        |> background_box(x, y - height, row_width, height)
+        |> Enum.map(
+          &Map.put(&1, :clip, %{x: x + left, y: y - height, width: width, height: height})
+        )
+        |> tag_boxes(metadata)
+        |> Enum.map(&Map.put(&1, :role, role))
+      end)
+    end
   end
 
   defp layout_table_cell(
@@ -5709,11 +5836,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     case adjusted_heights do
       {:ok, heights} ->
+        heights =
+          stretch_table_row_group_heights(rows, heights, available_height, vertical_spacing)
+
         {:ok, stretch_table_row_heights(rows, heights, available_height, vertical_spacing)}
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp stretch_table_row_group_heights(rows, heights, available_height, vertical_spacing) do
+    HtmlValidator.reserve_render_resource(:max_table_grid_work, length(rows), :layout)
+
+    adjusted =
+      Enum.zip(rows, heights)
+      |> Enum.with_index()
+      |> Enum.group_by(fn {{row, _height}, _index} -> row.row_group end)
+      |> Enum.flat_map(fn {_group, entries} ->
+        {{first, _height}, _index} = hd(entries)
+        group_style = first.group_style || %{}
+        minimum = resolved_size(group_style, :height, available_height, nil)
+        group_rows = Enum.map(entries, fn {{row, _height}, _index} -> row end)
+        group_heights = Enum.map(entries, fn {{_row, height}, _index} -> height end)
+
+        # A group's height excludes spacing before its first and after its last row.
+        minimum = if is_number(minimum), do: minimum + 2 * vertical_spacing, else: nil
+
+        stretched =
+          stretch_table_row_heights(group_rows, group_heights, minimum, vertical_spacing)
+
+        Enum.zip(entries, stretched)
+        |> Enum.map(fn {{{_row, _height}, index}, height} -> {index, height} end)
+      end)
+      |> Map.new()
+
+    Enum.with_index(heights, fn _height, index -> Map.fetch!(adjusted, index) end)
   end
 
   defp stretch_table_row_heights(rows, heights, available_height, vertical_spacing) do
@@ -6152,6 +6310,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           line_metadata
           |> Map.put(:line_baseline_depth, baseline_depth)
           |> Map.put(:line_box_height, current_line_height)
+
+        line_metadata =
+          if Enum.any?(line_runs, &Map.has_key?(&1.style, :_range_state)) do
+            # An anonymous Range line has no enclosing block flow identity.
+            # Keep its artwork and line marker together so the source line's
+            # margin/strut bounds govern one pagination decision.
+            Map.put_new(line_metadata, :flow_id, {:inline_line, x, line_top})
+          else
+            line_metadata
+          end
 
         # Empty atomic boxes place their baseline at the bottom margin edge.
         # Keep that fractional depth after rasterizing the top edge, rather
@@ -6713,6 +6881,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             })
 
           boxes = background ++ content_boxes
+
+          boxes =
+            if Map.has_key?(style, :_range_state) do
+              # Range has no inner text box. Retain its source line's margin and
+              # strut bounds when Pagination moves the atomic line to a new page.
+              marker =
+                %{
+                  type: HtmlValidator.reserve_layout_box(:flow_marker),
+                  x: box_x,
+                  y: line_top - metadata.line_box_height,
+                  width: 0.0,
+                  height: metadata.line_box_height
+                }
+                |> Map.merge(metadata)
+
+              boxes ++ [marker]
+            else
+              boxes
+            end
+
           boxes = attach_html_target(style, boxes, box_x, box_top)
 
           case Map.get(run, :inline_positioning_contexts, []) do
@@ -8207,7 +8395,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     baseline =
       if bottom_baseline,
-        do: content_height + vertical_box_size(style) + margin.bottom,
+        do:
+          content_height + vertical_box_size(style) +
+            if(Map.has_key?(style, :_range_state), do: 0.0, else: margin.bottom),
         else: border.top + padding.top + baseline
 
     baseline =
@@ -8380,7 +8570,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   # Native gauge artwork shares the normal box path across inline, block, flex,
   # grid and positioned layout. The state is canonical validator output.
   defp background_box(style, x, y, width, height) do
-    background = css_background_box(style, x, y, width, height)
+    background_style =
+      if Map.has_key?(style, :_range_state) and style.appearance == :auto do
+        style
+        # Preserve the host rectangle after static embedded transport removes
+        # form metadata. Its transparent fill carries geometry without ink.
+        |> Map.put(:background_color, {0.0, 0.0, 0.0, 0.0})
+        |> Map.put(:background_image, nil)
+        |> Map.put(:border_styles, edges(:none))
+      else
+        style
+      end
+
+    background = css_background_box(background_style, x, y, width, height)
+
+    background =
+      if Map.has_key?(style, :_range_state) do
+        background ++
+          NativeElixirPdfUtilities.HtmlToPdf.RangeArtwork.boxes(
+            style,
+            x,
+            y,
+            width,
+            height
+          )
+      else
+        background
+      end
 
     background =
       if Map.get(style, :form_kind) == :select and width > 0 and height > 0 do
@@ -8577,7 +8793,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           image: image
         }
 
-      fit when fit in [:contain, :cover] ->
+      fit when fit in [:contain, :cover, :none, :scale_down] ->
         {natural_width, natural_height} =
           if image.height == 0 do
             # Density correction can zero natural dimensions without removing
@@ -8589,8 +8805,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
         scale =
           case fit do
-            :contain -> min(viewport_width / natural_width, viewport_height / natural_height)
-            :cover -> max(viewport_width / natural_width, viewport_height / natural_height)
+            :contain ->
+              min(viewport_width / natural_width, viewport_height / natural_height)
+
+            :cover ->
+              max(viewport_width / natural_width, viewport_height / natural_height)
+
+            :none ->
+              1.0
+
+            :scale_down ->
+              min(1.0, min(viewport_width / natural_width, viewport_height / natural_height))
           end
 
         rendered_width = natural_width * scale

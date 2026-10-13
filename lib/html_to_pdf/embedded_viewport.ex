@@ -5,7 +5,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
   alias NativeElixirPdfUtilities.HtmlToPdf.AssetLoader
   alias NativeElixirPdfUtilities.HtmlToPdf.EmbeddedResource
   alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback
+  alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
+  alias NativeElixirPdfUtilities.HtmlToPdf.PngDecoder
+  alias NativeElixirPdfUtilities.HtmlToPdf.SvgBackend
   alias NativeElixirPdfUtilities.HtmlToPdf.ResourceContext
   alias NativeElixirPdfUtilities.HtmlToPdf.ScrollbarPainter
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
@@ -21,7 +24,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
           tree: Style.styled_tree(),
           context: ResourceContext.t(),
           forms: :static | :interactive,
-          host: :surface | :iframe
+          host: :surface | :iframe | :object | :embed
         }
 
   @typedoc "Authorized child source awaiting its actual layout viewport before styling."
@@ -31,15 +34,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
           document_url: String.t() | nil,
           context: ResourceContext.t(),
           forms: :static | :interactive,
-          host: :iframe
+          host: :iframe | :object | :embed
         }
 
   @doc "Prepares authorized local or srcdoc HTML without a recursive public render or pagination."
   @spec prepare_html(term(), ResourceContext.t(), keyword()) ::
           {:ok, t()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_html(source, context, opts \\ []) do
-    with {:ok, document} <- EmbeddedResource.load_html(source, context, opts),
-         {:ok, document, urls} <-
+    with {:ok, document} <- EmbeddedResource.load_html(source, context, opts) do
+      style_document(document, context, opts)
+    end
+  end
+
+  defp style_document(document, context, opts) do
+    with {:ok, document, urls} <-
            EmbeddedViewportValidator.prepare_document_context(document, context) do
       ResourceContext.with_document(document.context, fn ->
         with {:ok, opts} <- EmbeddedViewportValidator.prepare_options(opts, document.context),
@@ -75,7 +83,127 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
   @spec prepare_iframe_document(term(), ResourceContext.t(), keyword()) ::
           {:ok, prepared()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_iframe_document(source, context, opts \\ []) do
-    with {:ok, document} <- EmbeddedResource.load_html(source, context, opts),
+    prepare_document(source, context, opts, :iframe)
+  end
+
+  @doc "Prepares selected local object HTML for its isolated layout viewport."
+  @spec prepare_object_document(term(), ResourceContext.t(), keyword()) ::
+          {:ok, prepared()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_object_document(source, context, opts \\ []) do
+    prepare_document(source, context, opts, :object)
+  end
+
+  @doc "Prepares selected local text/HTML viewports or still-image replacements without reauthorizing document mappings."
+  @spec prepare_selected(
+          NativeElixirPdfUtilities.Validators.ObjectValidator.selected(),
+          ResourceContext.t(),
+          keyword(),
+          :object | :embed
+        ) ::
+          {:ok, {:viewport, prepared()} | {:image, map()}}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_selected(selected, context, opts, host) do
+    with {:ok, kind, source, mime} <-
+           NativeElixirPdfUtilities.Validators.ObjectValidator.prepare_selection(selected, host) do
+      if kind == :blank do
+        with {:ok, prepared} <- prepare_iframe_document({:srcdoc, ""}, context, opts),
+             do: {:ok, {:viewport, %{prepared | host: host}}}
+      else
+        prepare_file(source, mime, kind, context, opts, host)
+      end
+    end
+  end
+
+  defp prepare_file(source, mime, kind, context, opts, host) do
+    with {:ok, resource} <- EmbeddedResource.load_file(source, mime, context, opts),
+         {:ok, html} <-
+           (case kind do
+              :image ->
+                {:file, path} = resource.source
+                {:ok, image_html(path)}
+
+              :document ->
+                if mime == "text/plain" do
+                  with {:ok, text} <- HtmlValidator.validate_html_source(resource.bytes),
+                       do: {:ok, text_html(text, :document)}
+                else
+                  {:ok, resource.bytes}
+                end
+            end),
+         {:ok, dom} <- HtmlParser.parse_document_detailed(html) do
+      document = %{context: resource.context, source: resource.source, html: html, dom: dom}
+
+      case kind do
+        :document ->
+          with {:ok, document, urls} <-
+                 EmbeddedViewportValidator.prepare_document_context(document, context),
+               {:ok, opts} <- EmbeddedViewportValidator.prepare_options(opts, document.context) do
+            {:ok,
+             {:viewport,
+              %{
+                prepared_dom: document.dom,
+                options: opts,
+                document_url: urls.fallback_base,
+                context: document.context,
+                forms: Keyword.get(opts, :forms, :interactive),
+                host: host
+              }}}
+          end
+
+        :image ->
+          if mime == "image/svg+xml" do
+            ResourceContext.with_document(resource.context, fn ->
+              with {:ok, _opts} <-
+                     EmbeddedViewportValidator.prepare_options(opts, resource.context),
+                   :ok <-
+                     HtmlValidator.reserve_image_source(
+                       context.image_budget,
+                       byte_size(resource.bytes)
+                     ),
+                   {:ok, png, root} <-
+                     SvgBackend.rasterize_with_metadata(
+                       resource.bytes,
+                       [],
+                       %{mode: :image},
+                       context.image_budget
+                     ),
+                   {:ok, image} <- PngDecoder.decode(png, context.image_budget, false),
+                   {:ok, fitting} <-
+                     NativeElixirPdfUtilities.Validators.ObjectValidator.prepare_svg_fitting(
+                       root,
+                       image
+                     ) do
+                {:ok, {:image, %{image: image, svg_document_fitting: fitting}}}
+              end
+            end)
+          else
+            {:file, path} = resource.source
+            # Only the exact bytes read from the authorized selected source enter
+            # this generated reference. Caller mappings cannot replace the object.
+            opts =
+              opts
+              |> Keyword.put(
+                :assets,
+                Map.put(Keyword.get(opts, :assets, %{}), path, {:bytes, resource.bytes})
+              )
+              |> Keyword.put(:stylesheets, [])
+
+            with {:ok, surface} <- style_document(document, context, opts) do
+              [body] = surface.tree.children
+              [image] = body.children
+              {:ok, {:image, image.style}}
+            end
+          end
+      end
+    end
+  end
+
+  defp prepare_document(source, context, opts, host) do
+    with {:ok, document} <-
+           if(host == :object,
+             do: EmbeddedResource.load_object_html(source, context, opts),
+             else: EmbeddedResource.load_html(source, context, opts)
+           ),
          {:ok, document, urls} <-
            EmbeddedViewportValidator.prepare_document_context(document, context),
          {:ok, opts} <- EmbeddedViewportValidator.prepare_options(opts, document.context) do
@@ -86,7 +214,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
          document_url: urls.fallback_base,
          context: document.context,
          forms: Keyword.get(opts, :forms, :interactive),
-         host: :iframe
+         host: host
        }}
     end
   end
@@ -143,7 +271,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
           {:ok, t()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_text(text, context, opts \\ []) do
     with {:ok, text} <- HtmlValidator.validate_html_source(text) do
-      prepare_html({:srcdoc, "<pre>" <> escape_html(text) <> "</pre>"}, context, opts)
+      prepare_html({:srcdoc, text_html(text, :literal)}, context, opts)
     end
   end
 
@@ -152,13 +280,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
           {:ok, t()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_image(reference, context, opts \\ []) do
     with {:ok, reference} <- HtmlValidator.validate_html_source(reference) do
-      prepare_html(
-        {:srcdoc,
-         "<body style='margin:0'><img src=\"" <>
-           escape_html(reference) <> "\"></body>"},
-        context,
-        opts
-      )
+      prepare_html({:srcdoc, image_html(reference)}, context, opts)
     end
   end
 
@@ -352,6 +474,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
           {:cont, {:ok, acc ++ [font]}}
       end
     end)
+  end
+
+  defp text_html(text, mode) do
+    style =
+      if mode == :document,
+        do:
+          " style='font-family:monospace;font-size:9.75pt;word-wrap:break-word;white-space:pre-wrap'",
+        else: ""
+
+    # The generated opening newline is consumed by HTML's pre parser. The
+    # source's own leading newline remains literal document content.
+    "<pre" <> style <> ">\n" <> escape_html(text) <> "</pre>"
+  end
+
+  defp image_html(reference) do
+    "<body style='margin:0'><img src=\"" <> escape_html(reference) <> "\"></body>"
   end
 
   defp escape_html(text) do

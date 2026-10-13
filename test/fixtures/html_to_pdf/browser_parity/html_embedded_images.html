@@ -1,0 +1,21 @@
+<!doctype html><html><head><style>
+@page {size:300pt 360pt;margin:12pt;}
+html,body {margin:0;padding:0;font-family:'DejaVu Sans';font-size:10pt;line-height:13pt;}
+p {margin:0;} .row {display:flex;gap:10pt;margin:5pt 0 9pt;}
+object,embed {display:block;width:80pt;height:44pt;border:1pt solid #26313b;background:#e8e8e8;object-fit:contain;}
+.cover {object-fit:cover;object-position:75% 25%;} .fill {object-fit:fill;} .none {object-fit:none;object-position:left top;}
+</style></head><body>
+<p>Selected PNG images</p><div class="row">
+<object data="__ASSET_ROOT__/iframe-bars.png" type="image/png">Unused PNG fallback</object>
+<embed src="__ASSET_ROOT__/iframe-bars.png" type="image/png" class="cover">
+</div><p>Selected JPEG images</p><div class="row">
+<object data="__ASSET_ROOT__/embedded-neutral.jpg" class="fill">Unused JPEG fallback</object>
+<embed src="__ASSET_ROOT__/embedded-neutral.jpg" class="none">
+</div><p>Selected static SVG images</p><div class="row">
+<object data="__ASSET_ROOT__/embedded-static.svg" type="image/svg+xml">Unused SVG fallback</object>
+<embed src="__ASSET_ROOT__/embedded-static.svg" type="image/svg+xml" class="cover">
+</div><p>Natural image dimensions</p>
+<object data="__ASSET_ROOT__/iframe-bars.png" style="display:inline;width:auto;height:auto;border:0;background:transparent;"></object>
+<embed src="__ASSET_ROOT__/embedded-neutral.jpg" style="display:inline;width:auto;height:auto;border:0;background:transparent;">
+<p>After image replacements</p>
+</body></html>

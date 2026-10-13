@@ -1,0 +1,22 @@
+<!doctype html><html lang=en><head><style>
+@page {size:240pt 240pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10.5pt;line-height:15pt;}
+body {padding:12pt;} p {margin:0 0 6pt;padding:1.5pt;}
+input.required:read-write:required,
+input.optional:read-write:optional,
+input.locked:read-only:optional,
+input.locked-required:read-only:required,
+input.legend:enabled:read-write,
+input.disabled:disabled:read-only {display:none;}
+fieldset {margin:0;padding:3pt;border:.75pt solid #777777;}
+legend {padding:0;}
+legend span {display:block;}
+</style></head><body>
+<input class=required type=date value=2000-02-29 required><p>Leap date, mutable and required</p>
+<input class=locked type=month value=2026-10 readonly><p>Month, readonly and optional</p>
+<input class=optional type=week value=2020-W53><p>ISO week 53, mutable and optional</p>
+<input class=optional type=time value=00:30 min=23:00 max=01:00><p>Time crossing midnight</p>
+<input class=locked-required type=datetime-local value="2026-10-13 01:02:03.100" readonly required><p>Local datetime, readonly and required</p>
+<fieldset disabled><legend><input class=legend type=date value=2026-10-13><span>First legend remains enabled</span></legend><input class=disabled type=time value=23:00><p>Fieldset time is disabled</p></fieldset>
+<p>After canonical temporal controls</p>
+</body></html>

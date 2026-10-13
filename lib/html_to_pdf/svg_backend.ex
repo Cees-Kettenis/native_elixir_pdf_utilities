@@ -7,19 +7,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend do
   @spec rasterize(term(), term(), term(), HtmlValidator.image_budget() | nil) ::
           {:ok, binary()} | {:error, {atom(), map()}}
   def rasterize(source, options, context, image_budget \\ nil) do
+    case rasterize_with_metadata(source, options, context, image_budget) do
+      {:ok, png, _root} -> {:ok, png}
+      error -> error
+    end
+  end
+
+  @doc "Renders through the same validated adapter and returns its canonical root attributes for host composition."
+  @spec rasterize_with_metadata(term(), term(), term(), HtmlValidator.image_budget() | nil) ::
+          {:ok, binary(), map()} | {:error, {atom(), map()}}
+  def rasterize_with_metadata(source, options, context, image_budget) do
     result =
       HtmlValidator.with_render_budget(fn ->
         with {:ok, request} <- SvgBackendValidator.prepare(source, options, context, image_budget),
-             :ok <- SvgBackendValidator.native_load_result(load_native()) do
-          NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.render(
-            request.source,
-            request.width,
-            request.height,
-            request.fonts,
-            request.resources,
-            request.mode == :inline
-          )
-          |> SvgValidator.conversion_result()
+             :ok <- SvgBackendValidator.native_load_result(load_native()),
+             {:ok, png} <-
+               NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.render(
+                 request.source,
+                 request.width,
+                 request.height,
+                 request.fonts,
+                 request.resources,
+                 request.mode == :inline
+               )
+               |> SvgValidator.conversion_result() do
+          {:ok, png, request.root}
         end
       end)
 

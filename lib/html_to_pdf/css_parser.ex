@@ -18,6 +18,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   alias NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.PrintMediaValidator
+  alias NativeElixirPdfUtilities.Validators.CssReferenceValidator
+  alias NativeElixirPdfUtilities.Validators.CssPageValidator
   alias NativeElixirPdfUtilities.Validators.CssFontFaceValidator
 
   @type declaration :: {String.t(), String.t()} | {String.t(), String.t(), :important}
@@ -77,95 +79,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           {:page_size, PageGeometry.page_size_input()}
           | {:margin, PageGeometry.margin_input()}
 
-  @page_context_properties [
-    "background",
-    "background-attachment",
-    "background-color",
-    "background-image",
-    "background-position",
-    "background-repeat",
-    "bleed",
-    "border",
-    "border-bottom",
-    "border-bottom-color",
-    "border-bottom-style",
-    "border-bottom-width",
-    "border-color",
-    "border-left",
-    "border-left-color",
-    "border-left-style",
-    "border-left-width",
-    "border-right",
-    "border-right-color",
-    "border-right-style",
-    "border-right-width",
-    "border-style",
-    "border-top",
-    "border-top-color",
-    "border-top-style",
-    "border-top-width",
-    "border-width",
-    "color",
-    "counter-increment",
-    "counter-reset",
-    "direction",
-    "font",
-    "font-family",
-    "font-size",
-    "math-style",
-    "math-shift",
-    "math-depth",
-    "font-style",
-    "font-variant",
-    "font-weight",
-    "height",
-    "letter-spacing",
-    "line-height",
-    "margin",
-    "margin-bottom",
-    "margin-left",
-    "margin-right",
-    "margin-top",
-    "marks",
-    "max-height",
-    "max-width",
-    "min-height",
-    "min-width",
-    "outline",
-    "outline-color",
-    "outline-style",
-    "outline-width",
-    "padding",
-    "padding-bottom",
-    "padding-left",
-    "padding-right",
-    "padding-top",
-    "page-orientation",
-    "quotes",
-    "size",
-    "text-align",
-    "text-decoration",
-    "text-indent",
-    "text-transform",
-    "visibility",
-    "white-space",
-    "width",
-    "word-spacing"
-  ]
-  @page_size_names ~w(a5 a4 a3 b5 b4 jis-b5 jis-b4 letter legal ledger)
-  @page_length_units ~w(cm mm q in pc pt px em ex ch rem lh rlh vw vh vmin vmax)
-  @page_number_pattern "(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?"
-  @page_length_pattern Enum.join(@page_length_units, "|")
-  @page_length_regex Regex.compile!(
-                       "^[+-]?#{@page_number_pattern}(?:#{@page_length_pattern})$",
-                       "u"
-                     )
-  @page_nonnegative_length_regex Regex.compile!(
-                                   "^\\+?#{@page_number_pattern}(?:#{@page_length_pattern})$",
-                                   "u"
-                                 )
-  @page_percentage_regex Regex.compile!("^[+-]?#{@page_number_pattern}%$", "u")
-  @css_wide_keywords ~w(initial inherit unset revert revert-layer)
   @css_opaque_pattern HtmlValidator.css_opaque_pattern()
   @page_rule_regex Regex.compile!(
                      "#{@css_opaque_pattern}(*SKIP)(*F)|@page\\s*\\{(?<declarations>(?:#{@css_opaque_pattern}|[^{}])*)\\}",
@@ -429,7 +342,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       with :ok <- HtmlCssSourceValidator.validate_descriptor(css, descriptor) do
         case parse_declarations_input(css, true) do
           {:ok, declarations} ->
-            {:ok, source_declarations(css, declarations, 0, projection, false)}
+            {:ok, source_declarations(css, declarations, 0, projection)}
 
           {:error, {reason, detail, offset}} ->
             source_parse_failure(projection, css, 0, reason, detail, offset)
@@ -489,54 +402,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   end
 
   defp source_reference_records(snippet, base, projection) do
-    regex =
-      Regex.compile!(
-        "#{@css_opaque_pattern}(*SKIP)(*F)|\\burl\\s*\\((?:#{@css_opaque_pattern}|[^)])*\\)",
-        "ui"
-      )
+    case CssReferenceValidator.scan(snippet, fn offset, length ->
+           source_record(projection, base + offset, length)
+         end) do
+      {:ok, references} ->
+        Enum.map(references, fn reference ->
+          source = source_record(projection, base + reference.offset, reference.length)
+          reference |> Map.drop([:offset, :length]) |> Map.put(:source, source)
+        end)
 
-    Regex.scan(regex, snippet, return: :index)
-    |> Enum.map(fn [{offset, length}] ->
-      url = binary_part(snippet, offset, length)
-      source = source_record(projection, base + offset, length)
-
-      case NativeElixirPdfUtilities.Validators.CssValueValidator.validate_source_reference(url) do
-        {:ok, reference} ->
-          %{
-            source: source,
-            reference: reference,
-            policy: :static_url_syntax_only,
-            authorization: :unresolved,
-            contents: :unresolved
-          }
-
-        {:error, {reason, diagnostic}} ->
-          throw(
-            {:render_resource_limit,
-             {:error,
-              {reason,
-               Map.merge(diagnostic, %{
-                 source: source.text,
-                 line: source.line,
-                 column: source.column
-               })}}}
-          )
-
-        {:error, reason} ->
-          throw(
-            {:render_resource_limit,
-             NativeElixirPdfUtilities.Diagnostics.error(
-               :css,
-               reason,
-               "authored CSS URL syntax is invalid",
-               source: source.text,
-               line: source.line,
-               column: source.column,
-               module: __MODULE__
-             )}
-          )
-      end
-    end)
+      {:error, {_reason, _diagnostic}} = error ->
+        throw({:render_resource_limit, error})
+    end
   end
 
   defp source_rules(sources, rules_css, projection, media) do
@@ -627,7 +504,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         {:ok, declarations} ->
           records = source_declarations(block, declarations, base, projection, false)
 
-          case CssFontFaceValidator.validate(declarations) do
+          case CssFontFaceValidator.validate_authored(declarations) do
             {:ok, face} ->
               font = %{
                 source: source_record(projection, offset, length),
@@ -635,7 +512,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                 candidates: source_font_candidates(records, block, base, projection),
                 face: face,
                 active: source_active?(offset, media),
-                policy: :descriptor_selection_only,
+                policy: :authored_descriptor_values_and_selection,
                 runtime: [:authorization, :font_bytes, :font_metrics]
               }
 
@@ -699,22 +576,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
               original = source_record(projection, base + at, bytes)
 
               info =
-                case CssFontFaceValidator.validate_source_candidate(candidate) do
+                case CssFontFaceValidator.validate_source_candidate(candidate, fn offset,
+                                                                                  length ->
+                       source_record(projection, base + at + offset, length)
+                     end) do
                   {:ok, info} ->
                     info
 
-                  {:error, {reason, diagnostic}} ->
-                    throw(
-                      {:render_resource_limit,
-                       {:error,
-                        {reason,
-                         Map.merge(diagnostic, %{
-                           source: original.text,
-                           line: original.line,
-                           column: original.column
-                         })}}}
-                    )
+                  {:error, {_reason, _diagnostic}} = error ->
+                    throw({:render_resource_limit, error})
                 end
+
+              references =
+                Enum.map(info.source_references, fn reference ->
+                  source =
+                    source_record(projection, base + at + reference.offset, reference.length)
+
+                  reference |> Map.drop([:offset, :length]) |> Map.put(:source, source)
+                end)
+
+              info = %{info | source_references: references}
 
               role =
                 cond do
@@ -751,26 +632,57 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     |> Enum.reduce_while({:ok, []}, fn [{offset, length}, {base, bytes}], {:ok, pages} ->
       block = binary_part(projected, base, bytes)
 
-      case page_options_from(block) do
-        {:ok, options} ->
-          page = %{
-            source: source_record(projection, offset, length),
-            options: options,
-            active: source_active?(offset, media),
-            policy: :unresolved_page_policy_ownership
-          }
+      with {:ok, declarations} <- parse_declarations_input(block, true) do
+        records = source_declarations(block, declarations, base, projection)
 
-          {:cont, {:ok, [page | pages]}}
+        result =
+          Enum.reduce_while(records, {:ok, [], []}, fn record, {:ok, options, checked} ->
+            HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
 
-        {:error, snippet} ->
-          {:halt,
-           source_parse_failure(
-             projection,
-             block,
-             base,
-             :invalid_css,
-             declaration_error_detail(block, snippet)
-           )}
+            case CssPageValidator.validate_declaration(record.declaration) do
+              {:ok, validated} ->
+                record =
+                  record
+                  |> Map.put(:value_policy, validated.policy)
+                  |> Map.put(:context_policy, :page_context)
+
+                {:cont, {:ok, merge_page_option(options, validated.option), [record | checked]}}
+
+              :error ->
+                source = record.source
+
+                {:halt,
+                 NativeElixirPdfUtilities.Diagnostics.error(
+                   :css,
+                   :invalid_css,
+                   "@page declaration is invalid or unsupported",
+                   module: CssPageValidator,
+                   source: source.text,
+                   line: source.line,
+                   column: source.column
+                 )}
+            end
+          end)
+
+        case result do
+          {:ok, options, checked} ->
+            page = %{
+              source: source_record(projection, offset, length),
+              declarations: Enum.reverse(checked),
+              options: options,
+              active: source_active?(offset, media),
+              policy: :validator_owned_page_declarations,
+              runtime: [:page_context, :resources]
+            }
+
+            {:cont, {:ok, [page | pages]}}
+
+          error ->
+            {:halt, error}
+        end
+      else
+        {:error, {reason, detail, failed_offset}} ->
+          {:halt, source_parse_failure(projection, block, base, reason, detail, failed_offset)}
       end
     end)
     |> case do
@@ -1085,190 +997,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   end
 
   defp put_page_option(options, property, value, source) do
-    case page_declaration_option(property, value) do
-      {:ok, nil} ->
-        {:cont, {:ok, options}}
+    case CssPageValidator.declaration_option(property, value) do
+      {:ok, option} -> {:cont, {:ok, merge_page_option(options, option)}}
+      :error -> {:halt, {:error, source}}
+    end
+  end
 
-      {:ok, {:margin_side, side, option}} ->
+  defp merge_page_option(options, option) do
+    case option do
+      nil ->
+        options
+
+      {:margin_side, side, margin} ->
         margin =
           options
           |> Keyword.get(:margin)
-          |> PageGeometry.merge_margin_defaults(%{side => option})
+          |> PageGeometry.merge_margin_defaults(%{side => margin})
 
-        {:cont, {:ok, Keyword.put(options, :margin, margin)}}
+        Keyword.put(options, :margin, margin)
 
-      {:ok, {key, option}} ->
-        {:cont, {:ok, Keyword.put(options, key, option)}}
-
-      :error ->
-        {:halt, {:error, source}}
-    end
-  end
-
-  defp page_declaration_option(property, value) do
-    case property do
-      "size" ->
-        case valid_page_size?(value) do
-          true ->
-            case page_size_option(value) do
-              nil -> {:ok, nil}
-              page_size -> {:ok, {:page_size, page_size}}
-            end
-
-          false ->
-            :error
-        end
-
-      "margin" ->
-        case valid_page_margin?(value, 4) do
-          true ->
-            case page_margin_option(value) do
-              nil -> {:ok, nil}
-              margin -> {:ok, {:margin, margin}}
-            end
-
-          false ->
-            :error
-        end
-
-      property when property in ["margin-top", "margin-right", "margin-bottom", "margin-left"] ->
-        case valid_page_margin?(value, 1) do
-          true ->
-            case PageGeometry.css_margin_option(value) do
-              nil -> {:ok, nil}
-              margin -> {:ok, {:margin_side, page_margin_side(property), margin}}
-            end
-
-          false ->
-            :error
-        end
-
-      "page-orientation" ->
-        case value |> String.trim() |> String.downcase() do
-          value when value in ["upright", "rotate-left", "rotate-right"] -> {:ok, nil}
-          value when value in @css_wide_keywords -> {:ok, nil}
-          value -> if valid_page_function?(value), do: {:ok, nil}, else: :error
-        end
-
-      "marks" ->
-        marks = value |> String.trim() |> String.downcase() |> String.split(~r/\s+/u, trim: true)
-
-        case marks do
-          ["none"] ->
-            {:ok, nil}
-
-          [value] when value in @css_wide_keywords ->
-            {:ok, nil}
-
-          [value] ->
-            if valid_page_function?(value), do: {:ok, nil}, else: page_marks_option(marks)
-
-          marks when length(marks) in 1..2 ->
-            page_marks_option(marks)
-
-          _ ->
-            :error
-        end
-
-      "bleed" ->
-        case value |> String.trim() |> String.downcase() do
-          "auto" ->
-            {:ok, nil}
-
-          value when value in @css_wide_keywords ->
-            {:ok, nil}
-
-          value ->
-            if valid_page_length?(value, true) or valid_page_function?(value),
-              do: {:ok, nil},
-              else: :error
-        end
-
-      property ->
-        case property in @page_context_properties and String.trim(value) != "" do
-          true -> {:ok, nil}
-          false -> :error
-        end
-    end
-  end
-
-  defp valid_page_size?(value) do
-    normalized = value |> String.trim() |> String.downcase()
-    tokens = String.split(normalized, ~r/\s+/u, trim: true)
-
-    case tokens do
-      ["auto"] ->
-        true
-
-      [value] when value in @css_wide_keywords ->
-        true
-
-      [orientation] when orientation in ["portrait", "landscape"] ->
-        true
-
-      [page_size] ->
-        page_size in @page_size_names or valid_page_length?(page_size, false) or
-          valid_page_function?(normalized)
-
-      [first, second] ->
-        (first in @page_size_names and second in ["portrait", "landscape"]) or
-          (second in @page_size_names and first in ["portrait", "landscape"]) or
-          (valid_page_length?(first, false) and valid_page_length?(second, false))
-
-      _ ->
-        false
-    end
-  end
-
-  defp valid_page_margin?(value, maximum_values) do
-    normalized = value |> String.trim() |> String.downcase()
-
-    values =
-      case valid_page_function?(normalized) do
-        true -> [normalized]
-        false -> String.split(normalized, ~r/\s+/u, trim: true)
-      end
-
-    length(values) in 1..maximum_values and
-      Enum.all?(values, fn value ->
-        value == "auto" or value in @css_wide_keywords or
-          Regex.match?(@page_percentage_regex, value) or valid_page_length?(value, true) or
-          valid_page_function?(value)
-      end)
-  end
-
-  defp valid_page_length?(value, allow_negative?) do
-    length_regex =
-      if allow_negative?, do: @page_length_regex, else: @page_nonnegative_length_regex
-
-    value == "0" or Regex.match?(length_regex, value)
-  end
-
-  defp valid_page_function?(value) do
-    Regex.match?(~r/^(?:calc|min|max|clamp|var|env)\(.+\)$/u, value)
-  end
-
-  defp page_marks_option(marks) do
-    case Enum.all?(marks, &(&1 in ["crop", "cross"])) and Enum.uniq(marks) == marks do
-      true -> {:ok, nil}
-      false -> :error
-    end
-  end
-
-  defp page_size_option(value) do
-    PageGeometry.css_page_size_option(value)
-  end
-
-  defp page_margin_option(value) do
-    PageGeometry.css_margin_option(value)
-  end
-
-  defp page_margin_side(property) do
-    case property do
-      "margin-top" -> :top
-      "margin-right" -> :right
-      "margin-bottom" -> :bottom
-      "margin-left" -> :left
+      {key, value} ->
+        Keyword.put(options, key, value)
     end
   end
 
@@ -1610,6 +1359,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           pseudo_element: nil,
           combinator: nil
         }
+
+        part =
+          if is_binary(tag) and tag != part.tag, do: Map.put(part, :source_tag, tag), else: part
 
         parse_selector_modifiers(modifiers, part)
 

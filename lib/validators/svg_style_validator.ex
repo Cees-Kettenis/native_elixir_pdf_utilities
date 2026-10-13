@@ -5,6 +5,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @inherited %{
+    svg_color_interpolation: "sRGB",
     svg_fill: {:color, {0, 0, 0}},
     svg_stroke: :none,
     svg_fill_rule: :nonzero,
@@ -22,10 +23,14 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
     svg_paint_order: "normal"
   }
   @properties %{
+    "color-interpolation" => :svg_color_interpolation,
+    "stop-color" => :svg_stop_color,
+    "stop-opacity" => :svg_stop_opacity,
     "fill" => :svg_fill,
     "stroke" => :svg_stroke,
     "fill-rule" => :svg_fill_rule,
     "clip-rule" => :svg_clip_rule,
+    "clip-path" => :svg_clip_path,
     "fill-opacity" => :svg_fill_opacity,
     "stroke-opacity" => :svg_stroke_opacity,
     "stroke-width" => :svg_stroke_width,
@@ -71,7 +76,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
   def defaults(inherited) do
     inherit(inherited)
     |> Map.merge(%{
+      _svg_specified: %{},
+      svg_stop_color: {:color, {0, 0, 0}},
+      svg_stop_opacity: 1.0,
       svg_opacity: 1.0,
+      svg_clip_path: :none,
       svg_width: :auto,
       svg_height: :auto,
       svg_x: {:user, 0.0},
@@ -97,6 +106,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
   def parent_properties(style), do: Map.take(style, Map.values(@properties))
 
   @doc false
+  @spec inherited_property?(atom()) :: boolean()
+  def inherited_property?(key), do: Map.has_key?(@inherited, key) or key == :color
+
+  @doc false
   @spec presentation_properties() :: %{String.t() => atom()}
   def presentation_properties, do: @properties
 
@@ -113,6 +126,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
   @spec presentation_declarations(map()) :: {:ok, list()} | {:error, {atom(), map()}}
   def presentation_declarations(node) do
     Enum.reduce_while(node.attributes, {:ok, []}, fn {property, value}, {:ok, declarations} ->
+      property =
+        if property == "gradientTransform" and node.tag in ~w(linearGradient radialGradient),
+          do: "transform",
+          else: property
+
       if presentation_property?(node, property) do
         if String.contains?(value, "!") do
           {:halt, invalid(property, "presentation attributes cannot contain !important")}
@@ -179,6 +197,39 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
   @spec parse(String.t(), term()) :: {:ok, term()} | :error
   def parse(property, value) do
     case {property, value} do
+      {"color-interpolation", value} ->
+        if value in ~w(sRGB auto linearRGB), do: {:ok, value}, else: :error
+
+      {"clip-path", "none"} ->
+        {:ok, :none}
+
+      {"clip-path", value} when is_binary(value) ->
+        case Regex.run(
+               ~r/\Aurl\(\s*(#[A-Za-z_][A-Za-z0-9_.:-]*|"#[A-Za-z_][A-Za-z0-9_.:-]*"|'#[A-Za-z_][A-Za-z0-9_.:-]*')\s*\)\z/,
+               value
+             ) do
+          [_, fragment] ->
+            {:ok,
+             {:fragment,
+              fragment |> String.trim("\"") |> String.trim("'") |> String.trim_leading("#")}}
+
+          _ ->
+            :error
+        end
+
+      {"offset", value} ->
+        case HtmlValidator.parse_css_number(value) do
+          {number, ""} -> {:ok, max(0.0, min(number, 1.0))}
+          {number, "%"} -> {:ok, max(0.0, min(number / 100, 1.0))}
+          _ -> :error
+        end
+
+      {property, "url(" <> _ = value} when property in ~w(fill stroke) ->
+        case parse("clip-path", value) do
+          {:ok, {:fragment, id}} -> {:ok, {:paint_server, id}}
+          _ -> :error
+        end
+
       {"stroke-linecap", value} ->
         if value in ~w(butt round square), do: {:ok, value}, else: :error
 
@@ -223,7 +274,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
       {"transform", value} ->
         NativeElixirPdfUtilities.Validators.SvgTransformValidator.parse(value)
 
-      {property, value} when property in ~w(fill stroke) and is_binary(value) ->
+      {property, value} when property in ~w(fill stroke stop-color) and is_binary(value) ->
         case String.downcase(value, :ascii) do
           "none" ->
             {:ok, :none}
@@ -253,7 +304,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
           _ -> :error
         end
 
-      {property, value} when property in ~w(opacity fill-opacity stroke-opacity) ->
+      {property, value} when property in ~w(opacity fill-opacity stroke-opacity stop-opacity) ->
         case HtmlValidator.parse_css_number(value) do
           {number, ""} -> {:ok, max(0.0, min(number, 1.0))}
           {number, "%"} -> {:ok, max(0.0, min(number / 100, 1.0))}

@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
   @moduledoc false
 
+  alias NativeElixirPdfUtilities.Validators.CssReferenceValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @doc false
@@ -49,6 +50,49 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
            index: Enum.find_index(declarations, &(&1 == declaration))
          }}
     end
+  end
+
+  @doc false
+  @spec validate_authored([NativeElixirPdfUtilities.HtmlToPdf.CssParser.declaration()]) ::
+          {:ok, NativeElixirPdfUtilities.HtmlToPdf.CssParser.font_face()}
+          | {:error, %{property: String.t(), index: non_neg_integer() | nil}}
+  def validate_authored(declarations) do
+    HtmlValidator.with_render_budget(fn ->
+      # Existing validation owns supported descriptors, font-display and final
+      # selection. Only earlier supported values need this additional check.
+      with {:ok, face} <- validate(declarations) do
+        last =
+          declarations
+          |> Enum.with_index()
+          |> Map.new(fn {declaration, index} -> {elem(declaration, 0), index} end)
+
+        result =
+          declarations
+          |> Enum.with_index()
+          |> Enum.reduce_while(:ok, fn {declaration, index}, :ok ->
+            HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+            property = elem(declaration, 0)
+
+            valid? =
+              if index != last[property] do
+                case property do
+                  "font-family" -> match?({:ok, _}, font_family_descriptor([declaration]))
+                  "font-weight" -> match?({:ok, _}, font_weight_descriptor([declaration]))
+                  "font-style" -> match?({:ok, _}, font_style_descriptor([declaration]))
+                  _ -> true
+                end
+              else
+                true
+              end
+
+            if valid?,
+              do: {:cont, :ok},
+              else: {:halt, {:error, %{property: property, index: index}}}
+          end)
+
+        with :ok <- result, do: {:ok, face}
+      end
+    end)
   end
 
   defp supported_font_descriptor?(declaration) do
@@ -100,20 +144,30 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
 
   @doc false
   @spec validate_source_candidate(String.t()) :: {:ok, map()} | {:error, {atom(), map()}}
-  def validate_source_candidate(candidate) do
+  @spec validate_source_candidate(
+          String.t(),
+          (non_neg_integer(), non_neg_integer() -> map()) | nil
+        ) ::
+          {:ok, map()} | {:error, {atom(), map()}}
+  def validate_source_candidate(candidate, mapper \\ nil) do
     info = candidate_info(candidate)
 
-    case Map.get(info, :url) do
-      nil ->
-        {:ok, Map.put(info, :reference_policy, :unresolved_syntax)}
+    with {:ok, references} <- CssReferenceValidator.scan(candidate, mapper) do
+      info = Map.put(info, :source_references, references)
 
-      url ->
-        with {:ok, decoded} <- HtmlValidator.parse_background_image_reference(url) do
+      case {Map.get(info, :url), references} do
+        {nil, []} ->
+          {:ok, Map.put(info, :reference_policy, :unresolved_syntax)}
+
+        {url, [reference | _]} when not is_nil(url) ->
           {:ok,
            info
-           |> Map.put(:decoded_reference, decoded)
+           |> Map.put(:decoded_reference, reference.decoded)
            |> Map.put(:reference_policy, :static_url_syntax_only)}
-        end
+
+        _ ->
+          {:ok, Map.put(info, :reference_policy, :static_url_syntax_only)}
+      end
     end
   end
 
@@ -133,11 +187,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
           url: captures["url"],
           reference: reference,
           format: format,
-          supported: supported_font_source?(reference, format)
+          supported: supported_font_source?(reference, format),
+          syntax_policy: :recognized_url_candidate_syntax
         }
 
       _ ->
-        %{supported: false}
+        %{supported: false, syntax_policy: :unresolved_candidate_syntax}
     end
   end
 

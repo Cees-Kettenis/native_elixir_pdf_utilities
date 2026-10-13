@@ -481,6 +481,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           end and
           valid_baseline_depth?(box) and
           valid_gauge_frame?(box) and
+          valid_range_frame?(box) and
           is_boolean(Map.get(box, :gauge_quantize_value, false)) and
           is_boolean(Map.get(box, :gauge_clip_track, false)) and
           case Map.get(box, :gauge_fraction) do
@@ -517,6 +518,29 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
 
   # The frame is relative to each rectangle, so pagination can translate paint
   # without reparsing state or losing the native widget's final page-grid phase.
+  @doc false
+  @spec valid_range_frame?(map()) :: boolean()
+  def valid_range_frame?(box) do
+    case Map.get(box, :range_frame) do
+      nil ->
+        Map.get(box, :role) not in [:range_track, :range_value, :range_border, :range_thumb]
+
+      {dx, dy, width, height, thumb_left, thumb_top} ->
+        Map.get(box, :role) in [:range_track, :range_value, :range_border, :range_thumb] and
+          Enum.all?(
+            [dx, dy, width, height, thumb_left, thumb_top, Map.get(box, :x), Map.get(box, :y)],
+            &match?({:ok, _}, HtmlValidator.normalize_geometry_number(&1))
+          ) and
+          Enum.all?(
+            [box.x - dx, box.y - dy, box.x - dx + width, box.y - dy + height],
+            &match?({:ok, _}, HtmlValidator.normalize_geometry_number(&1))
+          ) and width > 0 and height > 0
+
+      _ ->
+        false
+    end
+  end
+
   defp valid_gauge_frame?(box) do
     case Map.get(box, :gauge_frame) do
       nil ->

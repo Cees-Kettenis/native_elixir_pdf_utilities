@@ -76,8 +76,32 @@ defmodule Mix.Tasks.Compile.SvgBackend do
           )
 
         if File.read(binding_manifest) != {:ok, fingerprint} or not File.exists?(beam) do
-          for {module, binary} <- Code.compile_file(bindings) do
-            File.write!(Path.join(destination, Atom.to_string(module) <> ".beam"), binary)
+          # The private binding owns no persistent native state. Unload this
+          # compiler VM's old code before recompilation rather than attempting
+          # a NIF upgrade; other VMs retain their atomically published library.
+          :code.del_path(String.to_charlist(destination))
+          binding_module = NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes
+
+          try do
+            unless :code.soft_purge(binding_module),
+              do:
+                Mix.raise(
+                  "An older private SVG binding is still executing; finish native renders before rebuilding"
+                )
+
+            :code.delete(binding_module)
+
+            unless :code.soft_purge(binding_module),
+              do:
+                Mix.raise(
+                  "The private SVG binding is still executing; finish native renders before rebuilding"
+                )
+
+            for {module, binary} <- Code.compile_file(bindings) do
+              File.write!(Path.join(destination, Atom.to_string(module) <> ".beam"), binary)
+            end
+          after
+            :code.add_patha(String.to_charlist(destination))
           end
 
           File.write!(binding_manifest, fingerprint)

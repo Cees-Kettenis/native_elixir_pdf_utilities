@@ -3835,6 +3835,91 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert cover.clip == %{x: 0.0, y: 20.0, width: 100.0, height: 100.0}
   end
 
+  test "none preserves natural image ink and scale-down shrinks without enlarging inside the host clip" do
+    for {fit, width, height, ink_width, ink_height} <- [
+          {:none, 100.0, 100.0, 40.0, 20.0},
+          {:none, 20.0, 10.0, 40.0, 20.0},
+          {:scale_down, 100.0, 100.0, 40.0, 20.0},
+          {:scale_down, 20.0, 10.0, 20.0, 10.0}
+        ] do
+      style =
+        image_style(image_fixture(40.0, 20.0))
+        |> Map.merge(%{
+          width: width,
+          height: height,
+          object_fit: fit,
+          object_position: {{:percent, 0.5}, {:percent, 0.5}}
+        })
+
+      assert {:ok, layout} =
+               Layout.layout(document([%{type: :element, style: style, children: []}]),
+                 page_size: {200, 220},
+                 margin: 0
+               )
+
+      [image] = Enum.filter(layout.boxes, &(&1.type == :image))
+      assert_in_delta image.width, ink_width, 0.0001
+      assert_in_delta image.height, ink_height, 0.0001
+      assert_in_delta image.x, (width - ink_width) / 2, 0.0001
+      assert_in_delta image.y, 220 - height + (height - ink_height) / 2, 0.0001
+      assert image.clip == %{x: 0.0, y: 220 - height, width: width, height: height}
+    end
+
+    for fit <- [:none, :scale_down], {width, height} <- [{0.0, 10.0}, {10.0, 0.0}] do
+      style =
+        image_style(image_fixture(40.0, 20.0))
+        |> Map.merge(%{width: width, height: height, object_fit: fit})
+
+      assert {:ok, layout} =
+               Layout.layout(document([%{type: :element, style: style, children: []}]),
+                 page_size: {200, 220},
+                 margin: 0
+               )
+
+      refute Enum.any?(layout.boxes, &(&1.type == :image))
+    end
+  end
+
+  test "none and scale-down keep the clickable image host rectangle independent of fitted ink" do
+    for fit <- ["none", "scale-down"] do
+      html =
+        "<body style='margin:0'><a href='https://example.com'><img src='#{@inline_image}' style='width:6pt;height:3pt;object-fit:#{fit};object-position:left top;border:1pt solid blue'></a></body>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {200, 100}, margin: 10)
+      [image] = Enum.filter(layout.boxes, &(&1.type == :image))
+      assert image.clip.width == 6.0 and image.clip.height == 3.0
+      assert image.link_rect.width == 7.5 and image.link_rect.height == 4.5
+      assert image.link_url == "https://example.com"
+
+      if fit == "none",
+        do: assert(image.width > image.clip.width),
+        else: assert(image.width == image.clip.width)
+    end
+  end
+
+  test "inline anchor flex items validate their block image under the blockified context" do
+    html =
+      "<body style='margin:0'><div style='display:flex;gap:10pt'><a href='https://example.com'><img src='#{@inline_image}' style='display:block;width:12pt;height:6pt;object-fit:none'></a></div></body>"
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled} = Style.compute(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 100}, margin: 10)
+    [image] = Enum.filter(layout.boxes, &(&1.type == :image))
+    assert image.link_url == "https://example.com"
+    assert image.link_rect.width == 12.0 and image.link_rect.height == 6.0
+    assert image.clip.width == 12.0 and image.clip.height == 6.0
+    ordinary = String.replace(html, "display:flex;gap:10pt", "display:block")
+    assert {:ok, dom} = HtmlParser.parse(ordinary)
+    assert {:ok, styled} = Style.compute(dom)
+
+    assert {:error, {:invalid_layout, diagnostic}} =
+             Layout.layout(styled, page_size: {200, 100}, margin: 10)
+
+    assert diagnostic.message =~ "anonymous block"
+  end
+
   test "layout paints sized positioned and repeated backgrounds between color and border" do
     style =
       block_style()

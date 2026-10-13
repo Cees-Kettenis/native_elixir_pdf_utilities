@@ -98,6 +98,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   Native rectangles retain a relative `:gauge_frame` tuple of left/bottom offsets
   and outer width/height. This frame survives pagination and supplies final-page
   pixel alignment after its state and dimensions pass writer validation.
+
+  Native Range rectangles carry a validator-checked `:range_frame` tuple of
+  relative left/bottom offsets, host width/height and thumb left/top offsets.
+  Fixed source artwork snaps against the original page once and survives the
+  existing original-page appearance translation. Overflowing disabled thumbs
+  require static rendering because PDF widget BBoxes clip their appearance.
   """
   @spec render([page()], [render_option()]) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
@@ -932,21 +938,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp rect_stream(box, page_height, graphics_state_resources) do
     box = snap_gauge_box(box, page_height)
 
+    box =
+      if Map.has_key?(box, :range_frame),
+        do: NativeElixirPdfUtilities.HtmlToPdf.RangeArtwork.snap_box(box, page_height),
+        else: box
+
     if box.width <= 0 or box.height <= 0 do
       ""
     else
-      case Map.get(box, :clip) do
-        nil ->
-          rect_paint_stream(box, page_height, graphics_state_resources)
+      stream =
+        case Map.get(box, :clip) do
+          nil ->
+            rect_paint_stream(box, page_height, graphics_state_resources)
 
-        clip ->
-          [
-            "q ",
-            clip_rectangle_stream(clip),
-            rect_paint_stream(box, page_height, graphics_state_resources),
-            " Q"
-          ]
-      end
+          clip ->
+            [
+              "q ",
+              clip_rectangle_stream(clip),
+              rect_paint_stream(box, page_height, graphics_state_resources),
+              " Q"
+            ]
+        end
+
+      if Map.get(box, :role) == :range_value,
+        do: ["q ", clip_rectangle_stream(box.range_fill_clip), stream, " Q"],
+        else: stream
     end
   end
 
@@ -988,6 +1004,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
         :inline_background ->
           # Match Chromium's print-matrix ties at the left and top raster edges.
+          %{box | x: box.x - @raster_boundary_bias, y: box.y + @raster_boundary_bias}
+
+        role when role in [:range_track, :range_value, :range_border, :range_thumb] ->
+          # NativeTheme uses the same Chromium print-matrix raster edge rule.
           %{box | x: box.x - @raster_boundary_bias, y: box.y + @raster_boundary_bias}
 
         :table_border ->

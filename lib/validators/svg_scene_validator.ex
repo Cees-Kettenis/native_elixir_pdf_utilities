@@ -10,13 +10,14 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
     SvgViewportValidator
   }
 
-  @paint_tags ~w(svg g rect circle ellipse line polyline polygon path title desc style)
+  @paint_tags ~w(svg g defs symbol use linearGradient radialGradient stop clipPath rect circle ellipse line polyline polygon path title desc style)
   @length_attributes %{
     "rect" => ~w(x y width height rx ry),
     "circle" => ~w(cx cy r),
     "ellipse" => ~w(cx cy rx ry),
     "line" => ~w(x1 y1 x2 y2),
-    "svg" => ~w(x y width height)
+    "svg" => ~w(x y width height),
+    "use" => ~w(x y width height)
   }
 
   @doc false
@@ -27,7 +28,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
              :svg,
              node.tag,
              node.attributes
-           ) do
+           ),
+         :ok <- validate_structure(node) do
       validate_geometry_node(node)
     end
   end
@@ -35,7 +37,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
   defp validate_geometry_node(node) do
     cond do
       Enum.any?(node.attributes, fn {key, value} ->
-        key in ~w(filter mask clip-path marker marker-start marker-mid marker-end vector-effect transform-origin color-interpolation pathLength) and
+        key in ~w(filter mask marker marker-start marker-mid marker-end vector-effect transform-origin pathLength) and
             value != "none"
       end) ->
         unsupported(
@@ -49,22 +51,29 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
           node.tag
         )
 
-      node.tag in ~w(rect circle ellipse line polyline polygon path) and
-          Enum.any?(
-            node.children,
-            &(Map.get(&1, :type) == :element and Map.get(&1, :tag) not in ~w(title desc))
-          ) ->
-        invalid(
-          "SVG graphics elements may contain descriptive metadata, not nested artwork",
-          node.tag
-        )
-
       true ->
         with :ok <- validate_lengths(node),
              :ok <- validate_points(node),
              :ok <- validate_path(node) do
           :ok
         end
+    end
+  end
+
+  @doc false
+  @spec validate_structure(map()) :: :ok | {:error, {atom(), map()}}
+  def validate_structure(node) do
+    if node.tag in ~w(rect circle ellipse line polyline polygon path) and
+         Enum.any?(
+           node.children,
+           &(Map.get(&1, :type) == :element and Map.get(&1, :tag) not in ~w(title desc))
+         ) do
+      invalid(
+        "SVG graphics elements may contain descriptive metadata, not nested artwork",
+        node.tag
+      )
+    else
+      :ok
     end
   end
 
@@ -260,6 +269,37 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
       _ ->
         invalid("prepared SVG requires complete source, geometry and style", "svg scene")
     end
+  end
+
+  @doc false
+  @spec summary_tree(map()) :: map()
+  def summary_tree(summary) do
+    nodes = Map.new(summary.geometry, &{&1.svg_index, &1})
+    rebuild(1, nodes, summary.graph)
+  end
+
+  @doc false
+  @spec tree_nodes(map()) :: [{map(), [String.t()]}]
+  def tree_nodes(root), do: flatten(root, [])
+
+  defp rebuild(index, nodes, graph) do
+    node = Map.fetch!(nodes, index)
+
+    %{
+      node
+      | children: Enum.map(Enum.reverse(Map.fetch!(graph, index)), &rebuild(&1, nodes, graph))
+    }
+  end
+
+  defp flatten(node, ancestors) do
+    [
+      {node, ancestors}
+      | Enum.flat_map(node.children, fn child ->
+          if Map.get(child, :type) == :element,
+            do: flatten(child, [node.tag | ancestors]),
+            else: []
+        end)
+    ]
   end
 
   defp unsupported(message, source) do

@@ -1,0 +1,21 @@
+<!doctype html><html><head><style>
+@page {size:300pt 320pt;margin:12pt;}
+html,body {margin:0;padding:0;font-family:'DejaVu Sans';font-size:10pt;line-height:13pt;}
+p {margin:0;} a {color:black;text-decoration:none;} .row {display:flex;gap:10pt;margin:5pt 0 9pt;}
+img,object,embed {display:block;width:100pt;height:45pt;border:1pt solid #26313b;background:#e8e8e8;object-fit:scale-down;}
+.small {width:40pt;height:14pt;} .none {object-fit:none;object-position:left top;}
+</style></head><body>
+<p>Scale down preserves natural image size</p><div class="row">
+<img src="__ASSET_ROOT__/iframe-bars.png" alt="Large image">
+<object data="__ASSET_ROOT__/iframe-bars.png">Unused natural fallback</object>
+</div><p>Scale down reduces a smaller host</p><div class="row">
+<embed class="small" src="__ASSET_ROOT__/iframe-bars.png">
+<object class="small" data="__ASSET_ROOT__/iframe-bars.png">Unused small fallback</object>
+</div><p>None clips natural ink and keeps its host link</p><div class="row">
+<a href="https://example.com/none"><object class="small none" data="__ASSET_ROOT__/iframe-bars.png">Unused linked fallback</object></a>
+<a href="https://example.com/scale"><img class="small" src="__ASSET_ROOT__/iframe-bars.png" alt="Linked image"></a>
+</div><p>Zero area retains normal content flow</p>
+<object data="__ASSET_ROOT__/iframe-bars.png" style="width:0;height:20pt;border:0;"></object>
+<embed src="__ASSET_ROOT__/iframe-bars.png" style="width:20pt;height:0;border:0;">
+<p>After all fitting cases</p>
+</body></html>

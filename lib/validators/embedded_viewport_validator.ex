@@ -162,7 +162,7 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
     # physical host clip remains the authored point rectangle. Surface hosts
     # retain the caller's point dimensions and have no browsing-context UI.
     {viewport_width, viewport_height} =
-      if surface.host == :iframe do
+      if surface.host in [:iframe, :object, :embed] do
         {Float.ceil(width / 0.75) * 0.75, Float.ceil(height / 0.75) * 0.75}
       else
         {width, height}
@@ -241,7 +241,11 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
 
     scroll_width = max(layout.content_width, right)
     scroll_height = max(layout.content_height, elem(layout.page_size, 1) - bottom)
-    enabled? = surface.host == :iframe and width > 0 and height > 0 and overflow != :hidden
+
+    enabled? =
+      surface.host in [:iframe, :object, :embed] and width > 0 and height > 0 and
+        overflow != :hidden
+
     # There are four scrollbar-presence states. Track states rather than inventing a pass
     # ceiling; percentage sizing may also remove an axis after reflow.
     # Blink compares rounded scrolling extents against the unclamped client
@@ -271,10 +275,10 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
         Diagnostics.error(
           :layout,
           :not_implemented,
-          "iframe sizing cycles between scrollbar client areas; constrain percentage-dependent child sizes or author html/body overflow:hidden for a static clipped viewport",
+          "#{surface.host} sizing cycles between scrollbar client areas; constrain percentage-dependent child sizes or author html/body overflow:hidden for a static clipped viewport",
           module: __MODULE__,
           operation: :layout_embedded_viewport,
-          source: "iframe"
+          source: Atom.to_string(surface.host)
         )
 
       true ->
@@ -321,7 +325,7 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
   def prepare_layout(surface, width, height) do
     case surface do
       %{context: context, forms: _forms, host: host}
-      when host in [:surface, :iframe] ->
+      when host in [:surface, :iframe, :object, :embed] ->
         with :ok <- ResourceValidator.validate_context(context),
              {:ok, {width, height}} <- HtmlValidator.prepare_viewport_dimensions(width, height) do
           # Zero-area surfaces still validate and account for their entire tree.

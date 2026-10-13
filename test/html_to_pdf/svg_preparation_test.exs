@@ -101,7 +101,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPreparationTest do
 
   test "style failure diagnostics remain validator owned" do
     for declaration <- [
-          "fill:url(#g)",
+          "fill:url()",
           "stroke-width:-1",
           "opacity:bad",
           "fill-rule:wrong",

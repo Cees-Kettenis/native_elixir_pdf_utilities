@@ -168,8 +168,27 @@ fn render_bytes(
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn validate_shape_work<'a>(env: Env<'a>, source: String, ceiling: u64) -> Term<'a> {
-    match shape_tree(&source).and_then(|tree| vector_validator::work(tree.root(), ceiling)) {
+fn validate_shape_work<'a>(env: Env<'a>, source: String, ceilings: Term<'a>) -> Term<'a> {
+    // Retain the old scalar request/result for already-loaded older bindings.
+    // New validated callers issue both shared work ceilings in one request.
+    if let Ok(ceiling) = ceilings.decode::<u64>() {
+        return match shape_tree(&source)
+            .and_then(|tree| vector_validator::work(tree.root(), ceiling))
+        {
+            Ok(work) => (atoms::ok(), work).encode(env),
+            Err(message) => (atoms::error(), message).encode(env),
+        };
+    }
+    let ceilings = match ceilings.decode::<(u64, u64)>() {
+        Ok(ceilings) => ceilings,
+        Err(_) => return (atoms::error(), "invalid internal SVG work ceilings").encode(env),
+    };
+    let result = shape_tree(&source).and_then(|tree| {
+        let strokes = vector_validator::work(tree.root(), ceilings.0)?;
+        let gradients = vector_validator::gradient_work(tree.root(), ceilings.1)?;
+        Ok((strokes, gradients))
+    });
+    match result {
         Ok(work) => (atoms::ok(), work).encode(env),
         Err(message) => (atoms::error(), message).encode(env),
     }

@@ -5,6 +5,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
   alias NativeElixirPdfUtilities.Validators.{
     HtmlValidator,
     SvgFormValidator,
+    SvgClipValidator,
+    SvgReferenceValidator,
+    SvgPaintValidator,
     SvgSceneValidator,
     SvgStyleValidator
   }
@@ -44,7 +47,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
   @doc false
   @spec prepare(map(), HtmlValidator.image_budget()) :: {:ok, map()} | {:error, {atom(), map()}}
   def prepare(node, budget) do
-    with :ok <- SvgSceneValidator.validate_paint_style(node.style) do
+    with :ok <- SvgSceneValidator.validate_paint_style(node.style),
+         :ok <- SvgClipValidator.validate_tree(node),
+         :ok <- SvgReferenceValidator.validate_tree(node),
+         :ok <- SvgPaintValidator.validate_tree(node) do
       source = serialize(node)
 
       {:ok,
@@ -143,12 +149,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
     end
   end
 
-  defp serialize(node, root? \\ true) do
+  defp serialize(node, root? \\ true, references \\ nil, reference? \\ false) do
+    references = references || SvgReferenceValidator.referenced_ids(node)
+    reference? = reference? or MapSet.member?(references, Map.get(node.attributes, "id"))
+    specified = Map.get(node.style, :_svg_specified, %{})
+
     properties =
       Map.new(SvgStyleValidator.presentation_properties(), fn {name, key} -> {key, name} end)
 
     attributes =
-      node.attributes |> Map.drop(["style", "xmlns", "xmlns:xlink"] ++ Map.values(properties))
+      node.attributes
+      |> Map.drop(
+        ["style", "xmlns", "xmlns:xlink"] ++
+          Enum.flat_map(properties, fn {_, property} ->
+            if SvgStyleValidator.presentation_property?(node, property), do: [property], else: []
+          end)
+      )
 
     attributes =
       if root?, do: Map.drop(attributes, ["width", "height", "x", "y"]), else: attributes
@@ -156,7 +172,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
     attributes = Map.put(attributes, "xmlns", "http://www.w3.org/2000/svg")
 
     attributes =
-      if node.tag == "svg",
+      if root?,
+        do: Map.put(attributes, "xmlns:xlink", "http://www.w3.org/1999/xlink"),
+        else: attributes
+
+    attributes =
+      cond do
+        reference? and Map.get(specified, "color") in ~w(inherit unset) ->
+          Map.put(attributes, "color", "inherit")
+
+        not reference? or Map.has_key?(specified, "color") ->
+          Map.put(attributes, "color", property_value({:color, node.style.color}, node.style))
+
+        true ->
+          Map.delete(attributes, "color")
+      end
+
+    attributes =
+      cond do
+        reference? and Map.get(specified, "font-size") in ~w(inherit unset) ->
+          Map.put(attributes, "font-size", "inherit")
+
+        reference? and is_binary(Map.get(specified, "font-size")) and
+          String.ends_with?(specified["font-size"], "em") and
+            not String.ends_with?(specified["font-size"], "rem") ->
+          Map.put(attributes, "font-size", specified["font-size"])
+
+        not reference? or Map.has_key?(specified, "font-size") ->
+          Map.put(attributes, "font-size", "#{node.style.font_size / 0.75}px")
+
+        true ->
+          Map.delete(attributes, "font-size")
+      end
+
+    attributes =
+      if node.tag in ~w(svg symbol),
         do: Map.put(attributes, "overflow", to_string(node.style.overflow)),
         else: attributes
 
@@ -167,11 +217,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
 
         root_geometry? = root? and property in ~w(width height x y)
         value = Map.get(node.style, key)
+        inherited? = SvgStyleValidator.inherited_property?(key)
+
+        output_property =
+          if property == "transform" and node.tag in ~w(linearGradient radialGradient),
+            do: "gradientTransform",
+            else: property
 
         cond do
-          not eligible? or root_geometry? or is_nil(value) or value == :auto -> attrs
-          property == "opacity" and node.tag == "svg" -> attrs
-          true -> Map.put(attrs, property, property_value(value, node.style))
+          not eligible? or root_geometry? or is_nil(value) or value == :auto ->
+            attrs
+
+          reference? and inherited? and not Map.has_key?(specified, property) ->
+            attrs
+
+          reference? and inherited? and Map.get(specified, property) in ~w(inherit unset) ->
+            Map.put(attrs, output_property, "inherit")
+
+          reference? and match?({:svg_em, _}, value) ->
+            {:svg_em, number} = value
+            Map.put(attrs, output_property, "#{number}em")
+
+          reference? and value == :current_color ->
+            Map.put(attrs, output_property, "currentColor")
+
+          property == "opacity" and node.tag == "svg" ->
+            attrs
+
+          true ->
+            Map.put(attrs, output_property, property_value(value, node.style))
         end
       end)
 
@@ -183,7 +257,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
       Enum.map_join(node.children, "", fn child ->
         case child do
           %{type: :element, tag: tag} when tag in ~w(style title desc) -> ""
-          %{type: :element, namespace: :svg} -> serialize(child, false)
+          %{type: :element, namespace: :svg} -> serialize(child, false, references, reference?)
           _ -> ""
         end
       end)
@@ -203,6 +277,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
 
   defp property_value(value, style) do
     case value do
+      {:paint_server, id} ->
+        "url(##{id})"
+
+      {:fragment, id} ->
+        "url(##{id})"
+
       :current_color ->
         property_value({:color, style.color}, style)
 

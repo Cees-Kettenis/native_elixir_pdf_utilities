@@ -7,6 +7,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
   alias NativeElixirPdfUtilities.Validators.{
     CssValueValidator,
     HtmlCssSourceValidator,
+    CssSourceContextValidator,
     HtmlValidator
   }
 
@@ -115,7 +116,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
     assert length(fragments) == 2
     assert Enum.uniq(Enum.map(fragments, & &1.tree_scope_id)) |> length() == 2
     assert result.source_obligations.template_insertion_contexts == :unresolved
-    assert result.source_obligations.stylesheets == ["p{color:var(--unavailable)}"]
+
+    assert result.source_obligations.stylesheets == [
+             "p{color:var(--unavailable)}",
+             "p{width:var(--width)}"
+           ]
+
     assert Enum.any?(detached, fn {node, _, _} -> Map.get(node, :text) == "Detached" end)
     assert Enum.any?(detached, fn {node, _, _} -> Map.get(node, :target) == "marker" end)
   end
@@ -139,7 +145,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
           :validate ->
             assert {:ok, dom} =
                      HtmlParser.parse_document_detailed(
-                       "<style>/*original*/\r\np{color:blue}</style><div style='font-family:Missing;background-image:url(\"/missing.png\");text-decoration:underline'><img src='/missing.png' width='24'><details><p>Closed</p></details><template><img src='/other.png'></template></div>"
+                       "<style>/*original*/\r\np{color:blue}</style><div style='font-family:Missing;background-image:url(\"/missing.png\");text-decoration:underline'><img src='/missing.png' width='24'><details><p>Closed</p></details><template><style>@font-face{font-family:Detached;src:url('/other.ttf')}p{background-image:url('/other.png')}</style><p style='background-image:url(&quot;/inert.png&quot;)'>Inert</p><img src='/other.png'></template></div>"
                      )
 
             css =
@@ -766,6 +772,243 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
     after
       Enum.each(scans, &:erlang.trace_pattern(&1, false, [:local]))
     end
+  end
+
+  test "each authored declaration retains the original contexts that completed shared validation" do
+    html = "<div style='--x:5pt'><p style='width:var(--x)'>A</p><p>B</p></div>"
+    css = "p{color:red;color:blue}p::before{content:'Before'}.missing{width:var(--missing)}"
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    assert {:ok, result, _} = collect(dom, [css, css])
+    obligations = result.source_obligations.declaration_contexts
+    assert length(obligations) == 10
+
+    for index <- [0, 1] do
+      records = Enum.filter(obligations, &(&1.origin == {:stylesheet, index}))
+
+      assert Enum.map(records, & &1.source.text) == [
+               "color:red",
+               "color:blue",
+               "content:'Before'",
+               "width:var(--missing)"
+             ]
+
+      assert Enum.map(records, & &1.status) == [
+               :checked_in_original_context,
+               :checked_in_original_context,
+               :checked_in_original_context,
+               :unresolved
+             ]
+
+      [first, overwritten, pseudo, missing] = records
+      assert length(first.contexts) == 2 and length(overwritten.contexts) == 2
+      assert first.contexts |> Enum.map(& &1.owner.node_id) |> Enum.uniq() |> length() == 2
+      assert Enum.all?(first.contexts, &(&1.pseudo == nil and &1.tag == "p"))
+      assert length(pseudo.contexts) == 2 and Enum.all?(pseudo.contexts, &(&1.pseudo == :before))
+      assert missing.reason == :unmatched_original_context and missing.contexts == []
+      assert first.source.provenance == :unbound and first.source.owner == nil
+    end
+
+    [div] = dom.children |> hd() |> Map.fetch!(:children) |> List.last() |> Map.fetch!(:children)
+    [first, _second] = div.children
+    width = Enum.find(obligations, &(&1.declaration == {"width", "var(--x)"}))
+    assert width.origin == {:inline, first.node_id}
+    assert width.status == :checked_in_original_context
+    assert [context] = width.contexts
+    assert context.owner == Map.take(first, [:node_id, :document_id, :tree_scope_id, :parent_id])
+    assert context.source == first.source and context.pseudo == nil
+    assert width.source.owner == context.owner
+    refute Map.has_key?(width, :context_id)
+    refute Map.has_key?(context, :style)
+
+    refute Map.has_key?(
+             hd(result.source_obligations.authored).authored_rules
+             |> hd()
+             |> Map.fetch!(:source_declarations)
+             |> hd(),
+             :context_id
+           )
+  end
+
+  test "inactive and detached CSS records retain exact source without invented insertion inheritance" do
+    html =
+      "<html><head><style media='screen'>p{height:var(--screen)}</style></head><body><div style='--x:8pt'><template><style>p{color:var(--insertion)}</style><p style='width&colon;var(--x)'>Detached</p><template><p style='height:var(--nested)'>Nested</p></template></template></div></body></html>"
+
+    css = "@media screen{p{width:var(--screen)}}"
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    assert {:ok, result, contexts} = collect(dom, [css])
+    obligations = result.source_obligations.declaration_contexts
+    assert length(obligations) == 6
+    unresolved = Enum.filter(obligations, &(&1.status == :unresolved))
+    assert length(unresolved) == 5
+
+    assert Enum.map(unresolved, & &1.reason) == [
+             :inactive_media,
+             :inapplicable_stylesheet,
+             :template_insertion_context,
+             :template_insertion_context,
+             :template_insertion_context
+           ]
+
+    assert Enum.all?(unresolved, &(&1.contexts == []))
+    assert result.source_obligations.template_insertion_contexts == :unresolved
+
+    assert result.runtime_obligations == [
+             :font_selection,
+             :font_metrics,
+             :text_decorations,
+             :resources
+           ]
+
+    detached = Enum.find(unresolved, &(&1.source.text == "width&colon;var(--x)"))
+    assert detached.source.provenance == :original_html
+
+    assert binary_part(html, detached.source.offset, detached.source.length) ==
+             detached.source.text
+
+    {node, nil, context} =
+      Enum.find(contexts, fn {node, _, _} -> Map.get(node, :text) == "Detached" end)
+
+    assert context.status == :unresolved
+    assert detached.source.owner.tree_scope_id == node.tree_scope_id
+    assert detached.source.owner.document_id == dom.document_id
+    refute detached.source.owner.tree_scope_id == dom.tree_scope_id
+  end
+
+  test "detached source syntax and static URL failures retain original actionable diagnostics" do
+    for {html, reason, source, line, column} <- [
+          {"<template><p style='color:red;\r\n  color'>Inert</p></template>", :invalid_css,
+           "color", 2, 3},
+          {"<template><style>p{color:red;\r\n  color}</style></template>", :invalid_css, "color",
+           2, 3},
+          {"<template><style>p{background-image:url('javascript:run()')}</style></template>",
+           :unsupported_html, "url('javascript:run()')", 1, 37}
+        ] do
+      assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+      assert {:error, {^reason, diagnostic}} = collect(dom)
+      assert diagnostic.stage == :css and diagnostic.reason == reason
+      assert diagnostic.source == source and diagnostic.message != ""
+      assert diagnostic.line == line and diagnostic.column == column
+    end
+  end
+
+  test "context collectors isolate nested traversals and clean up after consumer failures" do
+    assert {:ok, outer} = HtmlParser.parse_document_detailed("<p style='width:3pt'>Outer</p>")
+    assert {:ok, inner} = HtmlParser.parse_document_detailed("<p style='height:4pt'>Inner</p>")
+    keys_before = Process.get_keys() |> MapSet.new()
+
+    assert {:ok, result} =
+             Style.with_source_style_contexts(outer, [], HtmlValidator.new_css_budget(), fn _,
+                                                                                            _,
+                                                                                            _ ->
+               assert {:ok, nested, _} = collect(inner)
+               assert [record] = nested.source_obligations.declaration_contexts
+               assert record.declaration == {"height", "4pt"}
+               :ok
+             end)
+
+    assert [record] = result.source_obligations.declaration_contexts
+    assert record.declaration == {"width", "3pt"} and length(record.contexts) == 1
+    assert MapSet.new(Process.get_keys()) == keys_before
+
+    error =
+      Diagnostics.error(:html, :invalid_document, "stop source traversal", source: "original")
+
+    assert ^error =
+             Style.with_source_style_contexts(outer, [], HtmlValidator.new_css_budget(), fn _,
+                                                                                            _,
+                                                                                            _ ->
+               error
+             end)
+
+    assert MapSet.new(Process.get_keys()) == keys_before
+
+    assert_raise RuntimeError, "consumer exception", fn ->
+      Style.with_source_style_contexts(outer, [], HtmlValidator.new_css_budget(), fn _, _, _ ->
+        raise "consumer exception"
+      end)
+    end
+
+    assert MapSet.new(Process.get_keys()) == keys_before
+    assert {:ok, _, _} = collect(outer)
+  end
+
+  test "unresolved MathML and empty inline blocks do not acquire a fabricated check" do
+    assert {:ok, dom} =
+             HtmlParser.parse_document_detailed(
+               "<p style=''>Empty</p><math><mi style='color:var(--math)'>x</mi></math>"
+             )
+
+    assert {:ok, result, _} = collect(dom)
+    assert [record] = result.source_obligations.declaration_contexts
+    assert record.declaration == {"color", "var(--math)"}
+    assert record.status == :unresolved and record.reason == :math_font_context
+    assert record.contexts == []
+
+    assert {:ok, dom} =
+             HtmlParser.parse_document_detailed(
+               "<template><p style='width:3pt'>Inert</p></template>"
+             )
+
+    [html] = dom.children
+    [head, body] = html.children
+    [template] = head.children
+    [child] = template.content.children
+    forged = %{child | attributes: %{child.attributes | "style" => "width:4pt"}}
+    template = %{template | content: %{template.content | children: [forged]}}
+    forged = %{dom | children: [%{html | children: [%{head | children: [template]}, body]}]}
+    assert {:error, {:invalid_document, diagnostic}} = collect(forged)
+    assert diagnostic.stage == :html and diagnostic.module == HtmlCssSourceValidator
+    assert diagnostic.source == child.source.text
+    assert diagnostic.message =~ "decoded attributes"
+  end
+
+  test "obligation allocation and every observation remain charged to the shared CSS work budget" do
+    record = %{declaration: {"color", "red"}, source: %{text: "color:red", offset: 0}}
+    id = make_ref()
+    provenance = %{records: %{id => [record]}, insertion_contexts: %{}}
+    node = %{tag: "p", node_id: id, source: %{text: "<p>"}}
+    limits = Limits.effective()
+    Limits.install(Map.put(limits, :max_css_work, 2))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             CssSourceContextValidator.with_context_obligations([], provenance, fn _,
+                                                                                   inline,
+                                                                                   observe ->
+               [record] = inline[id]
+               :ok = observe.(record, node, nil)
+               {:ok, :done}
+             end)
+
+    assert diagnostic.stage == :css and diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "max_css_work"
+
+    Limits.install(Map.put(limits, :max_css_work, 4))
+
+    assert {:ok, :done, [obligation]} =
+             HtmlValidator.with_render_budget(fn ->
+               CssSourceContextValidator.with_context_obligations([], provenance, fn _,
+                                                                                     inline,
+                                                                                     observe ->
+                 [record] = inline[id]
+                 :ok = observe.(record, node, nil)
+                 :ok = observe.({"generated", "hint"}, node, nil)
+                 {:ok, :done}
+               end)
+             end)
+
+    assert obligation.status == :checked_in_original_context and length(obligation.contexts) == 1
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             HtmlValidator.with_render_budget(fn ->
+               for _ <- 1..2 do
+                 CssSourceContextValidator.with_context_obligations([], provenance, fn _,
+                                                                                       inline,
+                                                                                       observe ->
+                   :ok = observe.(hd(inline[id]), node, nil)
+                   {:ok, :done}
+                 end)
+               end
+             end)
   end
 
   defp edit_elements(node, edit) do

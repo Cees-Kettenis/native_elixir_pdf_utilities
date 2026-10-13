@@ -3,7 +3,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
 
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.HtmlToPdf.{CssParser, HtmlParser, Style}
-  alias NativeElixirPdfUtilities.Validators.{CssFontFaceValidator, HtmlValidator}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    CssFontFaceValidator,
+    CssPageValidator,
+    CssReferenceValidator,
+    HtmlValidator
+  }
 
   setup do
     limits = Limits.effective()
@@ -219,7 +225,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
     end
   end
 
-  test "inherited reference failures map the actual declaration and preserve ordinary tuple diagnostics" do
+  test "original inline reference failures precede expansion and preserve ordinary tuple diagnostics" do
     assert {:ok, dom} =
              HtmlParser.parse_document_detailed(
                "<p style=\"--url:url('javascript:run()')\">Text</p>"
@@ -235,9 +241,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
                fn _, _, _ -> :ok end
              )
 
-    assert diagnostic.source == "background-image:var(--url)"
-    assert diagnostic.line == 2 and diagnostic.column == 3
-    assert diagnostic.operation == :source_style_contexts
+    # Inline original references now share the rule-source static URL policy.
+    # The authored malicious token fails before the inherited use is expanded.
+    assert diagnostic.source == "url('javascript:run()')"
+    assert diagnostic.line == 1 and diagnostic.column == 17
+    assert diagnostic.operation == :source_references
+    assert diagnostic.module == CssReferenceValidator
 
     assert {:error, {:unsupported_html, diagnostic}} =
              NativeElixirPdfUtilities.Validators.CssValueValidator.validate_source_cascade(
@@ -287,5 +296,242 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
              CssParser.prepare_source_stylesheet(css)
 
     assert diagnostic.message =~ "max_css_work"
+  end
+
+  test "superseded supported font values use the existing responsible descriptor rules" do
+    for {property, bad, good} <- [
+          {"font-family", "''", "X"},
+          {"font-weight", "950", "400"},
+          {"font-style", "oblique", "normal"}
+        ] do
+      declarations = [
+        {"font-family", "X"},
+        {property, bad},
+        {property, good},
+        {"src", "url(x.ttf)"}
+      ]
+
+      # Selection-only validation was already valid. The added original check
+      # addresses the earlier supported descriptor, not selection or display.
+      assert {:ok, _face} = CssFontFaceValidator.validate(declarations)
+
+      assert {:error, %{property: ^property, index: 1}} =
+               CssFontFaceValidator.validate_authored(declarations)
+
+      css =
+        "@media screen{@font-face{font-family:X;#{property}:#{bad};#{property}:#{good};src:url(x.ttf)}}"
+
+      assert {:error, {:invalid_css, diagnostic}} = CssParser.prepare_source_stylesheet(css)
+      assert diagnostic.source == "#{property}:#{bad}"
+      assert diagnostic.stage == :css and diagnostic.line == 1 and diagnostic.column == 40
+      assert diagnostic.message =~ "@font-face"
+
+      assert {:ok, dom} =
+               HtmlParser.parse_document_detailed("<template><style>#{css}</style></template>")
+
+      assert {:error, {:invalid_css, diagnostic}} =
+               Style.with_source_style_contexts(dom, [], HtmlValidator.new_css_budget(), fn _,
+                                                                                            _,
+                                                                                            _ ->
+                 :ok
+               end)
+
+      assert diagnostic.source == "#{property}:#{bad}" and diagnostic.column == 57
+    end
+
+    assert {:ok, prepared} =
+             CssParser.prepare_source_stylesheet(
+               "@font-face{font-family:A;font-family:B;font-weight:100;font-weight:400;font-style:italic;font-style:normal;src:url(x.ttf)}"
+             )
+
+    [font] = prepared.authored_fonts
+    assert font.face == %{family: "B", sources: ["x.ttf"], weight: 400, style: :normal}
+    assert font.policy == :authored_descriptor_values_and_selection
+    assert font.runtime == [:authorization, :font_bytes, :font_metrics]
+  end
+
+  test "page values have one validator owner and retain every original declaration" do
+    css =
+      "@media screen{@page{margin:1pt;margin-left:2pt;marks:crop;size:var(--page);color:var(--color)}}@page{size:a5;margin:3pt}"
+
+    assert {:ok, source} = CssParser.prepare_source_stylesheet(css)
+    [inactive, active] = source.authored_pages
+    assert inactive.policy == :validator_owned_page_declarations
+
+    assert Enum.map(inactive.declarations, & &1.source.text) == [
+             "margin:1pt",
+             "margin-left:2pt",
+             "marks:crop",
+             "size:var(--page)",
+             "color:var(--color)"
+           ]
+
+    assert Enum.map(inactive.declarations, & &1.value_policy) == [
+             :checked_static_page_value,
+             :checked_static_page_value,
+             :checked_page_descriptor_syntax,
+             :requires_page_context,
+             :requires_page_context
+           ]
+
+    assert Enum.all?(inactive.declarations, &(&1.context_policy == :page_context))
+    refute inactive.active
+    assert active.active
+    assert source.page_options == [margin: "3pt", page_size: "a5"]
+    assert {:ok, ordinary} = CssParser.prepare_stylesheet(css)
+    assert source.page_options == ordinary.page_options
+
+    for page <- source.authored_pages, record <- page.declarations do
+      assert binary_part(css, record.source.offset, record.source.length) == record.source.text
+      assert {:ok, _} = CssPageValidator.validate_declaration(record.declaration)
+    end
+
+    assert {:ok, %{policy: :checked_static_page_value}} =
+             CssPageValidator.validate_declaration({"margin-left", "4pt", :important})
+
+    assert {:ok, %{policy: :checked_page_descriptor_syntax}} =
+             CssPageValidator.validate_declaration({"size", "auto"})
+
+    assert :error = CssPageValidator.validate_declaration({"margin", "bananas"})
+  end
+
+  test "page failure provenance selects the actual declaration instead of matching an earlier string" do
+    css = "@page{font-family:'margin:bananas';\n  margin:bananas}"
+    assert {:error, {:invalid_css, diagnostic}} = CssParser.prepare_source_stylesheet(css)
+    assert diagnostic.module == CssPageValidator and diagnostic.source == "margin:bananas"
+    assert diagnostic.line == 2 and diagnostic.column == 3
+    html = "<template><style>#{css}</style></template>"
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+
+    assert {:error, {:invalid_css, diagnostic}} =
+             Style.with_source_style_contexts(dom, [], HtmlValidator.new_css_budget(), fn _,
+                                                                                          _,
+                                                                                          _ ->
+               :ok
+             end)
+
+    assert diagnostic.module == CssPageValidator and diagnostic.line == 2 and
+             diagnostic.column == 3
+
+    assert {:error, {:invalid_css, diagnostic}} =
+             CssParser.prepare_source_stylesheet("@media screen{@page{margin:1pt;\n  margin}}")
+
+    assert diagnostic.source == "margin" and diagnostic.line == 2 and diagnostic.column == 3
+  end
+
+  test "escaped URL function names and inline fallbacks cannot hide executable original references" do
+    for css <- [
+          ~S|.absent{--x:u\72l('javascript:run()')}|,
+          ~S|@media screen{.absent{background-image:U\000052L('javascript:run()')}}|,
+          ~S|@page{background-image:u\72l('javascript:run()')}|,
+          ~S|@font-face{font-family:X;src:u\72l('javascript:run()');src:url('safe.ttf')}|,
+          ~S|@font-face{font-family:X;src:other(u\72l('javascript:run()'));src:url('safe.ttf')}|
+        ] do
+      assert {:error, {:unsupported_html, diagnostic}} = CssParser.prepare_source_stylesheet(css)
+      assert diagnostic.stage == :css and diagnostic.operation == :source_references
+      assert diagnostic.module == CssReferenceValidator
+      assert diagnostic.source =~ "javascript:run()"
+      assert diagnostic.line == 1 and diagnostic.column > 1
+    end
+
+    for value <- [
+          ~S|--x:u\72l('javascript:run()')|,
+          ~S|background-image:var(--x,u\72l('javascript:run()'))|
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_document_detailed(
+                 "<template><p style=\"#{value}\">Inert</p></template>"
+               )
+
+      assert {:error, {:unsupported_html, diagnostic}} =
+               Style.with_source_style_contexts(dom, [], HtmlValidator.new_css_budget(), fn _,
+                                                                                            _,
+                                                                                            _ ->
+                 :ok
+               end)
+
+      assert diagnostic.source == ~S|u\72l('javascript:run()')|
+      assert diagnostic.line == 1 and diagnostic.column > 1
+    end
+
+    # URL text in strings and longer identifiers is opaque, including escapes.
+    assert {:ok, []} =
+             CssReferenceValidator.scan(
+               ~S|content:"u\72l('javascript:run()')";--x:noturl('javascript:run()')|
+             )
+
+    assert {:ok, []} = CssReferenceValidator.scan(~S|content:'\'url("javascript:run()")'|)
+  end
+
+  test "escaped source references retain exact spans and unsupported font candidates remain unresolved" do
+    css =
+      ~S|.absent{--x:var(--missing,u\72l('a\2c b.png'));background-image:url('next.png')}@font-face{font-family:X;src:u\72l('old.ttf');src:url('safe.ttf')}|
+
+    assert {:ok, source} = CssParser.prepare_source_stylesheet(css)
+    [rule] = source.authored_rules
+    [custom, background] = rule.source_declarations
+    assert [reference] = custom.references
+    assert reference.decoded == "a,b.png" and reference.policy == :static_url_syntax_only
+    assert reference.source.text == ~S|u\72l('a\2c b.png')|
+    assert reference.authorization == :unresolved and reference.contents == :unresolved
+    assert hd(background.references).decoded == "next.png"
+    [font] = source.authored_fonts
+    [superseded, selected] = font.candidates
+    refute superseded.supported
+
+    assert superseded.role == :superseded and
+             superseded.reference_policy == :static_url_syntax_only
+
+    assert hd(superseded.source_references).source.text == ~S|u\72l('old.ttf')|
+    assert selected.supported and selected.decoded_reference == "safe.ttf"
+    assert font.face.sources == ["safe.ttf"]
+
+    for reference <-
+          custom.references ++
+            background.references ++ superseded.source_references ++ selected.source_references do
+      assert binary_part(css, reference.source.offset, reference.source.length) ==
+               reference.source.text
+    end
+
+    html = ~S|<template><p style="--x:u\72l(&quot;/missing.png&quot;)">Inert</p></template>|
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+
+    assert {:ok, result} =
+             Style.with_source_style_contexts(dom, [], HtmlValidator.new_css_budget(), fn _,
+                                                                                          _,
+                                                                                          _ ->
+               :ok
+             end)
+
+    [record] = result.source_obligations.inline |> Map.values() |> List.flatten()
+    assert hd(record.references).source.text == ~S|u\72l(&quot;/missing.png&quot;)|
+    assert hd(result.source_obligations.declaration_contexts).status == :unresolved
+  end
+
+  test "source reference failures use grapheme columns and share cumulative pre-scan limits" do
+    source = "--x:'é🙂';\r\n  --y:u\\72l('javascript:run()')"
+    assert {:error, {:unsupported_html, diagnostic}} = CssReferenceValidator.scan(source)
+    assert diagnostic.source == ~S|u\72l('javascript:run()')|
+    assert diagnostic.line == 2 and diagnostic.column == 7
+    assert {:error, {:invalid_css, diagnostic}} = CssReferenceValidator.scan("url()")
+    assert diagnostic.source == "url()" and diagnostic.line == 1 and diagnostic.column == 1
+    assert {:error, {:invalid_css, _}} = CssReferenceValidator.scan("url('x.png') url(")
+    assert {:error, {:invalid_css, _}} = CssReferenceValidator.scan(<<255>>)
+    assert {:error, {:invalid_options, diagnostic}} = CssReferenceValidator.scan("none", :bad)
+    assert diagnostic.source == "source_mapper"
+    assert {:error, {:invalid_css, _}} = CssReferenceValidator.scan("url(calc(1))")
+    assert {:error, {:invalid_css, _}} = CssReferenceValidator.scan("url ('x.png')")
+    limits = Limits.effective()
+    good = "url('safe.png')"
+    Limits.install(Map.put(limits, :max_css_work, 4 * byte_size(good) - 1))
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = CssReferenceValidator.scan(good)
+    assert diagnostic.message =~ "max_css_work" and diagnostic.stage == :css
+    Limits.install(Map.put(limits, :max_css_work, 4 * byte_size(good) + 1))
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             HtmlValidator.with_render_budget(fn ->
+               assert {:ok, [_]} = CssReferenceValidator.scan(good)
+               CssReferenceValidator.scan(good)
+             end)
   end
 end

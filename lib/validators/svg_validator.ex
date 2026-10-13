@@ -209,7 +209,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
       text: [],
       geometry: [],
       opacity_layers: 0,
-      nested_viewports: 0
+      nested_viewports: 0,
+      clip_references: 0,
+      surface_costs: %{}
     }
 
     result =
@@ -386,6 +388,24 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
                line
              )
 
+        paint_hrefs =
+          if state.context.mode == :inline do
+            Enum.flat_map(~w(clip-path fill stroke), fn property ->
+              case NativeElixirPdfUtilities.Validators.SvgStyleValidator.parse(
+                     property,
+                     Map.get(attrs, property, "none")
+                   ) do
+                {:ok, {kind, id}} when kind in [:fragment, :paint_server] ->
+                  [{"#" <> id, property}]
+
+                _ ->
+                  []
+              end
+            end)
+          else
+            []
+          end
+
         paths = byte_size(Map.get(attrs, "d", "")) + byte_size(Map.get(attrs, "points", ""))
 
         index = state.nodes + 1
@@ -404,7 +424,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
 
         HtmlValidator.reserve_render_resource(
           :max_aggregate_svg_references,
-          length(hrefs),
+          length(hrefs) + length(paint_hrefs),
           :style
         )
 
@@ -415,19 +435,61 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
             geometry:
               if(state.context.mode == :inline and namespace == :svg,
                 do: [
-                  %{type: :element, namespace: :svg, tag: name, attributes: attrs, children: []}
+                  %{
+                    type: :element,
+                    namespace: :svg,
+                    tag: name,
+                    attributes:
+                      if(name == "use" and not Map.has_key?(attrs, "href") and hrefs != [],
+                        do: Map.put(attrs, "href", hd(hrefs)),
+                        else: attrs
+                      ),
+                    children: [],
+                    svg_index: index
+                  }
                   | state.geometry
                 ],
                 else: state.geometry
               ),
+            surface_costs:
+              Map.put(state.surface_costs, index, %{
+                opacity:
+                  if(
+                    namespace == :svg and Map.get(attrs, "clip-path", "none") == "none" and
+                      case HtmlValidator.parse_css_number(Map.get(attrs, "opacity", "1")) do
+                        {v, ""} -> v > 0 and v < 1
+                        _ -> false
+                      end,
+                    do: 1,
+                    else: 0
+                  ),
+                clip:
+                  if(namespace == :svg and Map.get(attrs, "clip-path", "none") != "none",
+                    do: 1,
+                    else: 0
+                  ),
+                viewport:
+                  if(
+                    namespace == :svg and
+                      (name == "symbol" or (name == "svg" and state.root != nil)),
+                    do: 1,
+                    else: 0
+                  )
+              }),
             opacity_layers:
               state.opacity_layers +
                 if(
-                  namespace == :svg and
+                  namespace == :svg and Map.get(attrs, "clip-path", "none") == "none" and
                     case HtmlValidator.parse_css_number(Map.get(attrs, "opacity", "1")) do
                       {value, ""} -> value > 0 and value < 1
                       _ -> false
                     end,
+                  do: 1,
+                  else: 0
+                ),
+            clip_references:
+              state.clip_references +
+                if(namespace == :svg and Map.get(attrs, "clip-path", "none") != "none",
                   do: 1,
                   else: 0
                 ),
@@ -439,17 +501,16 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
             graph: graph,
             path_costs: Map.put(state.path_costs, index, paths),
             text_costs: Map.put(state.text_costs, index, 0),
-            hrefs: Enum.map(hrefs, &{index, &1, line, name}) ++ state.hrefs,
+            hrefs:
+              Enum.map(hrefs, &{index, &1, line, name}) ++
+                Enum.map(paint_hrefs, fn {href, property} -> {index, href, line, property} end) ++
+                state.hrefs,
             depth: state.depth + 1,
             nodes: state.nodes + 1,
             styles: if(name == "style", do: [[] | state.styles], else: state.styles),
             paths: state.paths + paths,
             filters: state.filters + if(String.starts_with?(name, "fe"), do: 1, else: 0),
-            references:
-              state.references +
-                Enum.count(attributes, fn {_uri, _prefix, key, _value} ->
-                  to_string(key) == "href"
-                end),
+            references: state.references + length(hrefs) + length(paint_hrefs),
             root:
               state.root || Map.new(attrs, fn {key, value} -> {String.downcase(key), value} end)
         }
@@ -538,7 +599,20 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         counts: %{}
       })
 
-    {:ok, Map.merge(summary, %{expanded_work: work.nodes, expansion_counts: work.counts})}
+    costs =
+      Enum.reduce(work.counts, %{opacity: 0, clip: 0, viewport: 0}, fn {index, count}, total ->
+        cost = Map.fetch!(summary.surface_costs, index)
+        Map.new(total, fn {key, amount} -> {key, amount + Map.fetch!(cost, key) * count} end)
+      end)
+
+    {:ok,
+     Map.merge(summary, %{
+       expanded_work: work.nodes,
+       expansion_counts: work.counts,
+       opacity_layers: costs.opacity,
+       clip_references: costs.clip,
+       nested_viewports: costs.viewport
+     })}
   catch
     {:svg_validation, error} -> error
   end

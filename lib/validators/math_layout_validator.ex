@@ -24,8 +24,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
       result =
         case node do
           %{style: %{_math_box: measured}} ->
-            with :ok <- validate_row([measured]),
-                 :ok <- validate_measured_box(measured) do
+            with :ok <- validate_measured_geometry(measured) do
               if measured.width <= width and measured.ascent + measured.descent <= height do
                 :ok
               else
@@ -48,6 +47,29 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
         end
 
       if result == :ok, do: {:cont, :ok}, else: {:halt, result}
+    end)
+  end
+
+  @doc false
+  @spec validate_measured_geometry(term()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_measured_geometry(measured) do
+    NativeElixirPdfUtilities.HtmlToPdf.MathLayout.with_context(fn ->
+      with :ok <- validate_row([measured]),
+           :ok <- validate_measured_box(measured) do
+        Enum.reduce_while(measured.drawing_items, :ok, fn item, :ok ->
+          result =
+            case item do
+              %{kind: :native, box: box} ->
+                HtmlValidator.validate_measured_child_paint([box], %{})
+
+              _ ->
+                :ok
+            end
+
+          if result == :ok, do: {:cont, :ok}, else: {:halt, result}
+        end)
+      end
     end)
   end
 
@@ -84,9 +106,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                 %{kind: :logical, actual_text: text, x: x, y: y} ->
                   is_number(x) and is_number(y) and is_binary(text) and String.valid?(text)
 
-                %{kind: :native, box: box, x: x, y: y} ->
-                  is_number(x) and is_number(y) and
-                    HtmlValidator.validate_measured_child_paint([box], %{}) == :ok
+                %{kind: :native, box: _, x: x, y: y} ->
+                  is_number(x) and is_number(y)
 
                 %{kind: :background, x: x, y: y, width: width, height: height, style: style} ->
                   Enum.all?([x, y, width, height], &is_number/1) and width >= 0 and height >= 0 and
@@ -105,7 +126,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
       do: :ok,
       else:
         failure(
-          "math boxes require bounded layout/ink extents, original text and validated drawing items"
+          "math boxes require bounded layout/ink extents, ordered intrinsic widths, original text and validated drawing items"
         )
   end
 

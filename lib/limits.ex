@@ -74,6 +74,7 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_svg_transform_operations: 1_000,
     max_svg_path_segments: 100_000,
     max_svg_stroke_work: 1_000_000,
+    max_svg_gradient_work: 100_000,
     svg_raster_scale: 2,
     max_svg_depth: 128,
     max_svg_path_bytes: 1_000_000,
@@ -218,6 +219,7 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_svg_nodes
           | :max_svg_transform_operations
           | :max_svg_path_segments
+          | :max_svg_gradient_work
           | :max_svg_stroke_work
           | :svg_raster_scale
           | :max_svg_depth

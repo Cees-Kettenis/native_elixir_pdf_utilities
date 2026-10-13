@@ -13,7 +13,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
 
       with :ok <- NativeElixirPdfUtilities.Validators.HtmlTreeValidator.validate_transport(dom),
            {:ok, bound} <- if(canonical?, do: bind_tokens(dom), else: {:ok, %{}}) do
-        {inline, embedded} = descriptors(dom.children, bound, canonical?, dom, %{}, [])
+        {inline, embedded, insertion_contexts} =
+          descriptors(dom.children, bound, canonical?, dom, %{}, [], %{}, nil)
 
         records =
           inline
@@ -29,7 +30,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
           end)
 
         with {:ok, records} <- records,
-             do: {:ok, %{inline: inline, embedded: embedded, records: records}}
+             do:
+               {:ok,
+                %{
+                  inline: inline,
+                  embedded: embedded,
+                  records: records,
+                  insertion_contexts: insertion_contexts
+                }}
       end
     end)
   end
@@ -314,12 +322,21 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
     end
   end
 
-  defp descriptors(nodes, bound, canonical?, dom, inline, embedded) do
-    Enum.reduce(nodes, {inline, embedded}, fn node, {inline, embedded} ->
+  defp descriptors(nodes, bound, canonical?, dom, inline, embedded, contexts, insertion) do
+    Enum.reduce(nodes, {inline, embedded, contexts}, fn node, {inline, embedded, contexts} ->
       HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
 
       case node do
         %{type: :element, attributes: attributes, children: children} ->
+          id = Map.get(node, :node_id, Map.get(node, :_selector_id, node))
+
+          contexts =
+            Map.put(
+              contexts,
+              id,
+              insertion || if(Map.get(node, :namespace) == :mathml, do: :math_font_context)
+            )
+
           inline =
             case Map.fetch(attributes, "style") do
               {:ok, css} ->
@@ -395,13 +412,34 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
                 local(css)
               end
 
-            {inline, embedded ++ [%{css: css, descriptor: descriptor, node: node}]}
+            {inline,
+             embedded ++
+               [%{css: css, descriptor: descriptor, node: node, insertion_context: insertion}],
+             contexts}
           else
-            descriptors(children, bound, canonical?, dom, inline, embedded)
+            {inline, embedded, contexts} =
+              descriptors(children, bound, canonical?, dom, inline, embedded, contexts, insertion)
+
+            case Map.get(node, :content) do
+              %{type: :document_fragment, children: detached} ->
+                descriptors(
+                  detached,
+                  bound,
+                  canonical?,
+                  dom,
+                  inline,
+                  embedded,
+                  contexts,
+                  :template_insertion_context
+                )
+
+              _ ->
+                {inline, embedded, contexts}
+            end
           end
 
         _ ->
-          {inline, embedded}
+          {inline, embedded, contexts}
       end
     end)
   end

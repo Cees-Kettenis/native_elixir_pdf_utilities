@@ -2,7 +2,7 @@
 
 Prepared on 2026-10-12 from the previous agent's handoff and seven independent area audits. This execution plan records the permanent scopes and outstanding obligations; local orchestration plans remain review evidence.
 
-Work began from verified batch55, preserving the previous agent's unfinished batch56. Through checkpoint 8, eight combined waves passed their required gates and were copied into the original checkout. That verified integration is `871f2b5707eac05538af71b07bb3775c36f467fb`. Both supported runtimes passed 1,897 unit tests at 100% every-module and total coverage, 19 performance workloads, Dialyzer and 175 parity tests. Exact host parity also passed. The full milestone and final cumulative idle timing audit are unfinished.
+Work began from verified batch55, preserving the previous agent's unfinished batch56. Through checkpoint 9, nine combined waves passed their required gates and were copied into the original checkout. The current verified integration, including the full-font performance correction, is `3c91ae5c842f4f2efe063ffde37da7d71fc65c4e`. Both supported runtimes passed 1,970 unit tests at 100% every-module and total coverage, 19 performance workloads, Dialyzer and 185 parity tests. Exact host parity and hosted CI also passed. The full milestone and final cumulative idle timing audit are unfinished.
 
 The ninth source batch combines canonical select/listbox selection, bounded
 Number controls, shared rounded clipping and scrollbar geometry, and authored
@@ -16,11 +16,11 @@ source/performance hash checks are required before each publication.
 
 ## Checkpoint estimate
 
-The initial estimate is **47 remaining checkpoints: 45 feature batches and two final audits**. These are proposed scopes, not a promise that every large batch fits one agent turn. Split a batch when its changes cannot be reviewed or validated together. Merge related scopes when that improves implementation and verification. Assign accepted batch numbers centrally after integration; lane labels below avoid numbering collisions.
+The initial estimate was **47 remaining checkpoints: 45 feature batches and two final audits**. The refreshed estimate at verified checkpoint 9 is **38 to 46 feature batches plus two final audits**, approximately **10 to 14 combined waves** with six implementation workers and two independent validators. See the [remaining-work assessment](html-to-pdf-1.1.0-remaining-work.md). These are proposed scopes, not a promise that every large batch fits one agent turn. Split a batch when its changes cannot be reviewed or validated together. Merge related scopes when that improves implementation and verification. Assign accepted batch numbers centrally after integration; lane labels below avoid numbering collisions.
 
 Inventory record percentages do not measure development effort. Several broad inventory descriptions are stale even where narrow behavior is implemented. Neither bookkeeping nor a foundational API closes a broader feature.
 
-| Family | Proposed feature batches | Active ownership |
+| Family | Original proposed feature batches | Active ownership |
 | --- | ---: | --- |
 | HTML, controls, parsing and document metadata | 12 | controls, parsing and metadata links |
 | Layout, tables, lists, ruby and images | 8 | layout/images |
@@ -28,7 +28,7 @@ Inventory record percentages do not measure development effort. Several broad in
 | Complete static inline SVG | 8 | SVG |
 | MathML Core and HTML integration | 9 | MathML |
 | Combined-document acceptance and cumulative performance audit | 2 | coordinator after feature integration |
-| Total | 47 | Seven feature owners plus one integration validator |
+| Total | 47 | Six feature owners and two independent validators |
 
 ## Feature batches
 
@@ -99,7 +99,7 @@ Inventory record percentages do not measure development effort. Several broad in
 
 ## Execution and integration rules
 
-Seven feature agents own isolated worktrees under `/home/cees/Projects/native_elixir_pdf_utilities-110-orchestration/`. A dedicated integration validator checks preserved patches and combined checkpoints. Controls absorbs fieldsets, layout/images absorbs responsive images, document metadata absorbs metadata preservation, MathML absorbs operators, and composition absorbs viewport groups. Retired worktrees and their handoffs remain available. They work only on the first assigned bounded batch, then return reviewed commits and evidence. The coordinator integrates, supplies updated interfaces/base source, and assigns the next batch using a new delegated task ID. No agent writes into the original checkout or another lane.
+Six implementation agents own isolated worktrees under `/home/cees/Projects/native_elixir_pdf_utilities-110-orchestration/wave10/`. Two independent validators review semantic/resource contracts and combined acceptance. Current owners are controls, parsing/source policy, layout/images, SVG, MathML and composition/document plumbing. Retired worktrees and their handoffs remain read-only recovery evidence. Workers return one bounded candidate and focused evidence. The coordinator integrates reviewed candidates and supplies updated interfaces/base source. Acceptance requires the frozen combined source's full gates. No worker writes into the original checkout or another lane.
 
 The coordinator alone owns main progress/compatibility/changelog and canonical inventory edits. Agents report proposed row changes in ignored evidence. Broad records stay partial until all their included obligations pass. Explicit 1.2 typography/CSS, 1.3 accessibility, 1.5 PDF rendering and 1.6 full editing dependencies are preserved.
 
@@ -118,4 +118,4 @@ Only passing batches count as accepted. Preserve user changes and prior evidence
 - `tmp/1.1.0-audits/`: independent area and shared-contract audits.
 - `docs/html-to-pdf-1.1.0-progress.md`: accepted work and handoff history.
 
-Current status: audits complete; the team is consolidating to seven feature owners and one integration validator. Combined parser and editability checkpoint 648e5db passed both runtime matrices and exact host parity, with 100% coverage, no FAIL/WARN entries, and matching source guards. Its thirteen changed source/test/fixture paths are copied into the original checkout after hash checks. Other feature batches remain incomplete until their required gates pass.
+Current status: checkpoint 9 and its performance correction are published and verified. Wave 10 implementation and independent review are in progress with six feature owners and two validators. Range, empty-table and MathML continuation packages are recovery candidates, separate from the published source. No candidate counts as accepted until its reviewed combined source passes the required gates.

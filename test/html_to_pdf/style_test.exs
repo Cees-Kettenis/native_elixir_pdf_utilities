@@ -6170,6 +6170,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert style_for!("div", "z-index: auto").z_index == :auto
     assert style_for!("div", "object-fit: fill").object_fit == :fill
     assert style_for!("div", "object-fit: cover").object_fit == :cover
+    assert style_for!("div", "object-fit: none").object_fit == :none
+    assert style_for!("div", "object-fit: scale-down").object_fit == :scale_down
 
     assert style_for!("div", "object-position: left").object_position ==
              {{:percent, 0.0}, {:percent, 0.5}}
@@ -6195,7 +6197,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
           "background-repeat: space",
           "position: fixed",
           "z-index: front",
-          "object-fit: scale-down",
+          "object-fit: invalid",
           "object-position: nowhere",
           "object-position: left right",
           "object-position: left top center"
@@ -6935,7 +6937,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     for {attributes, children} <- [
           {%{"type" => "file"}, []},
-          {%{"type" => "range"}, []},
+          {%{"type" => "range", "required" => ""}, []},
           {%{"type" => "unknown", "checked" => ""}, []},
           {%{}, [%{type: :text, text: "Invalid child"}]}
         ] do

@@ -2001,7 +2001,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
 
   test "parse rejects invalid static form structures and attributes" do
     invalid_html = [
-      ~s(<div><input type="range" value="a@example.test"></div>),
+      ~s(<div><input type="range" placeholder="Range"></div>),
       ~s(<div><input type="text" checked></div>),
       ~s(<div><input type="hidden" checked></div>),
       ~s(<div><input type="search" checked></div>),
@@ -2952,7 +2952,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
       assert {:error, :unsupported_html} = HtmlParser.parse(~s(<input type="#{type}" checked>))
     end
 
-    for type <- ["FILE", "range", "date", "image"] do
+    for type <- ["FILE", "color", "image"] do
       assert {:error, :unsupported_html} =
                HtmlParser.parse(~s(<input type="#{type}" value="Initial">))
     end

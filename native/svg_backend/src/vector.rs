@@ -1,5 +1,6 @@
 //! Shape-only PDF composition over the same usvg tree as the raster adapter.
 //! Authorization and supported input semantics belong to the Elixir validators.
+use pdf_writer::types::FunctionShadingType;
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 use usvg::tiny_skia_path::{Path, PathSegment};
 
@@ -7,6 +8,7 @@ use usvg::tiny_skia_path::{Path, PathSegment};
 struct Resources {
     forms: Vec<(String, Ref)>,
     states: Vec<(String, Ref)>,
+    shadings: Vec<(String, Ref)>,
 }
 
 impl Resources {
@@ -21,6 +23,11 @@ impl Resources {
             states.pair(Name(name.as_bytes()), *id);
         }
         states.finish();
+        let mut shadings = resources.shadings();
+        for (name, id) in &self.shadings {
+            shadings.pair(Name(name.as_bytes()), *id);
+        }
+        shadings.finish();
     }
 }
 
@@ -55,21 +62,17 @@ impl Writer {
         content.save_state();
         let t = group.transform();
         content.transform([t.sx, t.ky, t.kx, t.sy, t.tx, t.ty]);
-        // Only usvg-generated nested viewport clips reach this shape subset.
+        // Validators admit one authored geometry child, or a generated viewport clip.
         if let Some(clip) = group.clip_path() {
-            for node in clip.root().children() {
-                if let usvg::Node::Path(path) = node {
-                    let data = path
-                        .data()
-                        .clone()
-                        .transform(clip.transform())
-                        .ok_or("SVG viewport clip transform failed")?;
-                    draw_path(&data, content);
-                } else {
-                    return Err("internal SVG viewport clip is not a path".into());
-                }
-            }
-            content.clip_nonzero().end_path();
+            // An empty PDF current path does not establish an empty clip.
+            // Keep a zero-area subpath so hidden geometry clips all artwork.
+            content.rect(0.0, 0.0, 0.0, 0.0);
+            let rule = draw_clip(clip.root(), clip.transform(), content)?;
+            match rule {
+                usvg::FillRule::NonZero => content.clip_nonzero(),
+                usvg::FillRule::EvenOdd => content.clip_even_odd(),
+            };
+            content.end_path();
         }
         if group.opacity().get() != 1.0 {
             let mut body = Content::new();
@@ -171,24 +174,135 @@ impl Writer {
         content: &mut Content,
         resources: &mut Resources,
     ) -> Result<(), String> {
-        let usvg::Paint::Color(color) = paint else {
-            return Err("internal SVG shape scene contains a paint server".into());
-        };
         content.save_state();
-        self.opacity(opacity, content, resources);
-        content.set_fill_rgb(
-            color.red as f32 / 255.0,
-            color.green as f32 / 255.0,
-            color.blue as f32 / 255.0,
-        );
-        draw_path(path, content);
-        match rule {
-            usvg::FillRule::NonZero => content.fill_nonzero(),
-            usvg::FillRule::EvenOdd => content.fill_even_odd(),
-        };
+        match paint {
+            usvg::Paint::Color(color) => {
+                self.opacity(opacity, content, resources);
+                content.set_fill_rgb(
+                    color.red as f32 / 255.0,
+                    color.green as f32 / 255.0,
+                    color.blue as f32 / 255.0,
+                );
+                draw_path(path, content);
+                match rule {
+                    usvg::FillRule::NonZero => content.fill_nonzero(),
+                    usvg::FillRule::EvenOdd => content.fill_even_odd(),
+                };
+            }
+            _ => {
+                let (gradient, kind, coords): (&usvg::BaseGradient, _, Vec<f32>) = match paint {
+                    usvg::Paint::LinearGradient(g) => (
+                        g,
+                        FunctionShadingType::Axial,
+                        vec![g.x1(), g.y1(), g.x2(), g.y2()],
+                    ),
+                    usvg::Paint::RadialGradient(g) => (
+                        g,
+                        FunctionShadingType::Radial,
+                        vec![g.fx(), g.fy(), 0.0, g.cx(), g.cy(), g.r().get()],
+                    ),
+                    _ => {
+                        return Err("internal SVG scene contains an unsupported paint server".into())
+                    }
+                };
+                self.opacity(
+                    opacity * gradient.stops()[0].opacity().get(),
+                    content,
+                    resources,
+                );
+                draw_path(path, content);
+                match rule {
+                    usvg::FillRule::NonZero => content.clip_nonzero(),
+                    usvg::FillRule::EvenOdd => content.clip_even_odd(),
+                };
+                content.end_path();
+                let t = gradient.transform();
+                content.transform([t.sx, t.ky, t.kx, t.sy, t.tx, t.ty]);
+                let function = self.gradient_function(gradient.stops());
+                let id = self.reference();
+                let mut shading = self.pdf.function_shading(id);
+                shading
+                    .shading_type(kind)
+                    .coords(coords)
+                    .function(function)
+                    .extend([true, true]);
+                shading.color_space().device_rgb();
+                shading.finish();
+                let name = format!("G{}", id.get());
+                content.shading(Name(name.as_bytes()));
+                resources.shadings.push((name, id));
+            }
+        }
         content.restore_state();
         Ok(())
     }
+    fn gradient_function(&mut self, stops: &[usvg::Stop]) -> Ref {
+        let mut functions = Vec::new();
+        for pair in stops.windows(2) {
+            let id = self.reference();
+            let a = pair[0].color();
+            let b = pair[1].color();
+            self.pdf
+                .exponential_function(id)
+                .domain([0.0, 1.0])
+                .c0([
+                    a.red as f32 / 255.0,
+                    a.green as f32 / 255.0,
+                    a.blue as f32 / 255.0,
+                ])
+                .c1([
+                    b.red as f32 / 255.0,
+                    b.green as f32 / 255.0,
+                    b.blue as f32 / 255.0,
+                ])
+                .n(1.0);
+            functions.push(id);
+        }
+        if functions.len() == 1 {
+            functions[0]
+        } else {
+            let id = self.reference();
+            self.pdf
+                .stitching_function(id)
+                .domain([0.0, 1.0])
+                .functions(functions)
+                .bounds(
+                    stops[1..stops.len() - 1]
+                        .iter()
+                        .map(|stop| stop.offset().get()),
+                )
+                .encode(stops.windows(2).flat_map(|_| [0.0, 1.0]));
+            id
+        }
+    }
+}
+
+// A transformed single clip shape may be wrapped in generated groups by usvg.
+fn draw_clip(
+    group: &usvg::Group,
+    transform: usvg::Transform,
+    content: &mut Content,
+) -> Result<usvg::FillRule, String> {
+    let mut rule = usvg::FillRule::NonZero;
+    for node in group.children() {
+        match node {
+            usvg::Node::Group(group) => {
+                rule = draw_clip(group, transform.pre_concat(group.transform()), content)?
+            }
+            usvg::Node::Path(path) if path.is_visible() => {
+                let data = path
+                    .data()
+                    .clone()
+                    .transform(transform)
+                    .ok_or("SVG clip transform failed")?;
+                draw_path(&data, content);
+                rule = path.fill().map(|fill| fill.rule()).unwrap_or_default();
+            }
+            usvg::Node::Path(_) => {}
+            _ => return Err("internal SVG geometry clip contains non-shape artwork".into()),
+        }
+    }
+    Ok(rule)
 }
 
 fn draw_path(path: &Path, content: &mut Content) {

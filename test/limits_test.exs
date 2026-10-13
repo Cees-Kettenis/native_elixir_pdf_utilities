@@ -119,7 +119,8 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
     assert {:ok, defaults} = LimitsValidator.validate([])
     assert defaults == Limits.defaults()
     assert Limits.effective() == Limits.defaults()
-    assert map_size(defaults) == 139
+    assert defaults.max_svg_gradient_work == 100_000
+    assert map_size(defaults) == 140
   end
 
   test "accepts a partial override for every configurable resource limit" do

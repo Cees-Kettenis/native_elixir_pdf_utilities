@@ -17,11 +17,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @flow_container_tags ~w(form article aside div footer header main nav section address blockquote figure figcaption hgroup search center li dt dd details fieldset)
   @block_tags @flow_container_tags ++
                 ~w(p h1 h2 h3 h4 h5 h6 ul ol dl dt pre listing xmp plaintext table img picture hr summary legend)
-  @text_inline_tags ~w(iframe label noscript noembed u s strong b em i span a br wbr nobr abbr cite dfn data time code samp kbd tt var big small mark ins del strike)
+  @text_inline_tags ~w(iframe object embed label noscript noembed u s strong b em i span a br wbr nobr abbr cite dfn data time code samp kbd tt var big small mark ins del strike)
   @form_control_tags ~w(input select textarea button)
   @text_input_types ~w(text search tel url email password)
   @button_input_types ~w(button reset submit)
-  @input_types @text_input_types ++ @button_input_types ++ ~w(checkbox radio hidden number)
+  @input_types @text_input_types ++
+                 @button_input_types ++
+                 ~w(checkbox radio hidden number range date month week time datetime-local)
   # Fixed HTML enumerated keywords, including recognized states still unsupported.
   @input_type_keywords Map.new(
                          ~w(hidden text search tel url email password date month week time datetime-local number range color checkbox radio file submit image reset button),
@@ -35,7 +37,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @inline_tags @text_inline_tags ++ @form_control_tags ++ ~w(progress meter)
   @list_tags ~w(ul ol)
   @table_content_tags ~w(caption th td)
-  @void_tags ~w(base meta br wbr img source col input hr)
+  @void_tags ~w(base meta br wbr img source col input hr embed)
   @supported_tags Map.new(
                     @structural_tags ++
                       @block_tags ++
@@ -618,6 +620,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         )
       else
         case tag do
+          "input" ->
+            NativeElixirPdfUtilities.Validators.HtmlFormValidator.validate_initial_range_attributes(
+              %{tag: tag, attributes: attributes}
+            )
+
           tag when tag in ~w(xmp plaintext noembed) ->
             NativeElixirPdfUtilities.Validators.ForeignContentValidator.validate_static_input(
               :html,
@@ -1305,7 +1312,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       tag == "a" and "a" in [context | ancestors] ->
         false
 
-      context in ["a", "ins", "del"] or custom_html_tag?(context) ->
+      context in ["a", "ins", "del", "object"] or custom_html_tag?(context) ->
         case ancestors do
           [parent | rest] ->
             valid_html_child?(if(is_tuple(parent), do: "div", else: parent), tag, rest)
@@ -1397,10 +1404,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         # Hidden controls and placeholder anchors are static phrasing content.
         interactive? =
           html? and
-            (tag in ~w(iframe button select textarea label details) or
+            (tag in ~w(iframe embed button select textarea label details) or
                (tag == "a" and Map.has_key?(attributes, "href")) or
                (tag == "input" and input_type(Map.get(attributes, "type", "text")) != "hidden") or
-               (tag == "img" and Map.has_key?(attributes, "usemap")))
+               (tag in ["img", "object"] and Map.has_key?(attributes, "usemap")))
 
         not interactive? and not Map.has_key?(attributes, "tabindex")
       else
@@ -3097,6 +3104,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         {name, "iframe", false} when name in ~w(src srcdoc width height name) ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
+        {name, "embed", false} when name in ~w(src type width height name) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, "object", false} when name in ~w(data type width height name usemap) ->
+          {:cont, {:ok, Map.put(acc, name, value)}}
+
         {"src", "img", false} ->
           {:cont, {:ok, Map.put(acc, name, value)}}
 
@@ -3136,6 +3149,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
         {"span", tag, false} when tag in ~w(colgroup col) ->
           {:cont, {:ok, Map.put(acc, name, value)}}
+
+        {name, tag, false}
+        when tag in ~w(table caption colgroup col thead tbody tfoot tr td th) ->
+          if NativeElixirPdfUtilities.Validators.HtmlTableValidator.presentation_attribute?(
+               tag,
+               name
+             ),
+             do: {:cont, {:ok, Map.put(acc, name, value)}},
+             else: {:halt, {:error, :unsupported_html}}
 
         {name, tag, false}
         when tag in ~w(input select textarea button form label option optgroup fieldset progress meter) ->
@@ -4060,6 +4082,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              "required",
              "size",
              "placeholder",
+             "list",
              "min",
              "max",
              "step"
@@ -4673,7 +4696,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec validate_layout_input(term(), term(), term(), term()) ::
           :ok
           | {:error, :invalid_layout | :invalid_margin | :invalid_page_size}
-          | {:error, {:invalid_layout | :resource_limit_exceeded, Diagnostics.diagnostic()}}
+          | {:error,
+             {:invalid_layout | :unsupported_html | :resource_limit_exceeded,
+              Diagnostics.diagnostic()}}
   def validate_layout_input(styled_tree, opts, page_size_result, margins_result) do
     with_render_budget(fn ->
       case {styled_tree, opts} do
@@ -4777,7 +4802,28 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
               with :ok <-
                      validate_unsupported_glyphs(
                        Map.get(constraints, :unsupported_glyphs, :replace)
-                     ) do
+                     ),
+                   :ok <-
+                     (case Map.fetch(style, :_math_box) do
+                        {:ok, measured} ->
+                          case NativeElixirPdfUtilities.Validators.MathLayoutValidator.validate_measured_geometry(
+                                 measured
+                               ) do
+                            {:error, {reason, diagnostic}} ->
+                              {:error,
+                               {reason,
+                                Diagnostics.with_context(diagnostic,
+                                  operation: :measure_child,
+                                  source: Map.get(node, :tag, "math")
+                                )}}
+
+                            result ->
+                              result
+                          end
+
+                        :error ->
+                          :ok
+                      end) do
                 case validate_layout_nodes([node]) do
                   :ok ->
                     {:ok,
@@ -5087,6 +5133,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                 {:ok,
                  %{
                    value: number,
+                   coefficient: if(zero?, do: 0, else: String.to_integer(coefficient)),
                    negative: sign == "-" and not zero?,
                    coefficient_digits: if(zero?, do: 1, else: digits),
                    exponent: if(zero?, do: 0, else: exponent)
@@ -5709,6 +5756,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                 html_tag = if Map.get(node, :namespace, :html) == :html, do: tag, else: nil
 
                 with :ok <- validate_static_url_attributes(attributes, html_tag),
+                     :ok <-
+                       NativeElixirPdfUtilities.Validators.HtmlFormValidator.validate_initial_range_attributes(
+                         node
+                       ),
                      :ok <- HtmlMetadataValidator.validate_attributes(node),
                      :ok <- HtmlMetadataValidator.validate_item_references(node, tree),
                      {:ok, custom?} <- validate_dom_html_element(node, parent, ancestors),
@@ -5939,6 +5990,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
         (custom? or custom_html_tag?(parent) or "a" in ancestors or "button" in ancestors or
            node.tag in [
+             "object",
              "mark",
              "ins",
              "del",
@@ -5960,6 +6012,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
            parent in [
              "a",
              "button",
+             "object",
              "mark",
              "ins",
              "del",
@@ -6169,7 +6222,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
             %{type: :element, style: style, children: children} ->
               if valid_layout_style?(style) and is_list(children) do
-                display = Map.get(style, :display)
+                # A direct flex item's outer inline display is blockified before
+                # its children establish their own formatting context.
+                display =
+                  if parent_display in [:flex, :inline_flex] and
+                       Map.get(style, :display) == :inline,
+                     do: :block,
+                     else: Map.get(style, :display)
 
                 case validate_layout_nodes(children, display) do
                   :block_flow when display == :inline ->
@@ -6210,6 +6269,21 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             _ ->
               :invalid_layout
           end
+        end
+
+      result =
+        case result do
+          valid when valid in [:ok, :block_flow] ->
+            with :ok <-
+                   NativeElixirPdfUtilities.Validators.HtmlTableValidator.validate_presentation_style(
+                     node,
+                     Map.get(node, :style, %{}),
+                     :layout
+                   ),
+                 do: valid
+
+          error ->
+            error
         end
 
       case result do
@@ -6287,12 +6361,35 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           :ok
       end
 
+    caption_result =
+      case node do
+        %{style: %{caption_side: side}} when side not in [:top, :bottom] ->
+          Diagnostics.error(
+            :layout,
+            :invalid_layout,
+            "caption_side requires the validated top or bottom placement; received #{inspect(side)}",
+            operation: :layout,
+            module: __MODULE__,
+            source: "caption-side"
+          )
+
+        _ ->
+          :ok
+      end
+
     with :ok <- gauge_result,
          :ok <- heading_result,
+         :ok <- caption_result,
          :ok <-
            NativeElixirPdfUtilities.Validators.HtmlFormValidator.validate_initial_number_layout(
              node
-           ) do
+           ),
+         :ok <-
+           NativeElixirPdfUtilities.Validators.HtmlFormValidator.validate_initial_range_layout(
+             node
+           ),
+         :ok <-
+           NativeElixirPdfUtilities.Validators.HtmlTemporalValidator.validate_initial_layout(node) do
       case node do
         %{style: style}
         when is_map(style) and not is_map_key(style, :line_break) and
@@ -6335,7 +6432,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
             if Map.get(node, :type) == :element and (left or right) and
                  display not in [:none, :inline, :inline_block, :soft_break] and
-                 not (display == :image and
+                 not (display in [:image, :table] and
                         parent_display not in [:flex, :inline_flex, :grid, :inline_grid] and
                         Map.get(style, :position, :static) != :absolute) and
                  (display != :block or

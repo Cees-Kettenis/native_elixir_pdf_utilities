@@ -360,6 +360,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   @spec validate_resolved(map(), String.t(), String.t()) ::
           {:ok, map()} | :error | {:error, atom() | {atom(), Diagnostics.diagnostic()}}
   def validate_resolved(style, property, value) do
+    style =
+      if Map.get(style, :_svg_element, false),
+        do:
+          Map.update(style, :_svg_specified, %{property => value}, &Map.put(&1, property, value)),
+        else: style
+
     svg_property =
       if Map.get(style, :_svg_prepare, false) and
            (Map.get(style, :_svg_element, false) or
@@ -667,6 +673,25 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
               {:ok, Map.put(style, :border_spacing, {horizontal, vertical})}
             end
 
+          "caption-side" ->
+            case value |> String.trim() |> String.downcase() do
+              "top" ->
+                {:ok, Map.put(style, :caption_side, :top)}
+
+              "bottom" ->
+                {:ok, Map.put(style, :caption_side, :bottom)}
+
+              "initial" ->
+                {:ok, Map.put(style, :caption_side, :top)}
+
+              value when value in ["inherit", "unset"] ->
+                {:ok,
+                 Map.put(style, :caption_side, Map.get(style, :_inherited_caption_side, :top))}
+
+              _ ->
+                {:error, :invalid_document}
+            end
+
           "table-layout" ->
             put_table_layout(style, value)
 
@@ -949,6 +974,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
       "fill" -> {:ok, Map.put(style, :object_fit, :fill)}
       "contain" -> {:ok, Map.put(style, :object_fit, :contain)}
       "cover" -> {:ok, Map.put(style, :object_fit, :cover)}
+      "none" -> {:ok, Map.put(style, :object_fit, :none)}
+      "scale-down" -> {:ok, Map.put(style, :object_fit, :scale_down)}
       _ -> {:error, :invalid_document}
     end
   end
@@ -1580,10 +1607,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
   defp put_text_align(style, value) do
     case String.downcase(String.trim(value)) do
-      "left" -> {:ok, Map.put(style, :text_align, :left)}
-      "center" -> {:ok, Map.put(style, :text_align, :center)}
-      "right" -> {:ok, Map.put(style, :text_align, :right)}
-      _ -> {:error, :invalid_document}
+      value when value in ["left", "center", "right"] ->
+        {:ok,
+         style
+         |> Map.put(:text_align, String.to_existing_atom(value))
+         |> Map.put(:_text_align_initial, false)}
+
+      _ ->
+        {:error, :invalid_document}
     end
   end
 

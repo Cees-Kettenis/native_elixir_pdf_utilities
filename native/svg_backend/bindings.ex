@@ -1,5 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes do
   @moduledoc false
+  # This generated private BEAM is also an explicit Dialyzer input.
+  @compile :debug_info
   @on_load :load_native
 
   @doc false
@@ -38,8 +40,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes do
   def vectorize(_source, _fonts, _resources), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc false
-  @spec validate_shape_work(binary(), pos_integer()) :: {:ok, non_neg_integer()} | {:error, binary()}
-  def validate_shape_work(_source, _ceiling), do: :erlang.nif_error(:nif_not_loaded)
+  @spec validate_shape_work(binary(), {pos_integer(), pos_integer()}) ::
+          {:ok, {non_neg_integer(), non_neg_integer()}} | {:error, binary()}
+  def validate_shape_work(_source, _ceilings), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc false
   @spec validate_path(binary(), pos_integer(), float()) ::

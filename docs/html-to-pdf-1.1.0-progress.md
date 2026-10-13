@@ -5,14 +5,65 @@ resources, controls and composition, inline SVG, embedded documents, and MathML.
 This file records delivered batches and remaining work. The full milestone is
 not complete.
 
-The earlier batch 55 handoff was resumed on 2026-10-12. Through checkpoint 8, eight combined integration
-waves passed the required gates. That verified integration is
-`871f2b5707eac05538af71b07bb3775c36f467fb`, with 1,897 units at 100% coverage and
-175 parity tests on each supported runtime and the host. Historical entries
-retain their original acceptance evidence and remaining scope. The milestone
-remains unfinished.
+The earlier batch 55 handoff was resumed on 2026-10-12. Nine combined integration
+waves are published. The verified source is
+`3c91ae5c842f4f2efe063ffde37da7d71fc65c4e`, including the subsequent full-font
+performance correction. Both supported runtimes passed 1,970 unit tests at
+100% coverage, the unchanged performance checks, Dialyzer and 185 browser parity
+cases. Exact host parity also passed. GitHub run
+[38329634380](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/actions/runs/38329634380)
+passed both Elixir 1.19 and 1.20. Historical entries retain their original
+acceptance evidence and remaining scope. The milestone remains unfinished.
 
-## Combined integration checkpoint 9 source
+Wave 10 continues from that source with six implementation workers and two
+independent validators. Candidates stay in isolated worktrees until reviewed
+and qualified together. The current planning estimate is 38 to 46 feature
+batches plus two final audits. Larger waves target eight to twelve combined
+freezes and audits if five to seven coherent batches qualify per wave;
+ten to fourteen remains the conservative estimate until throughput is proven.
+See [remaining work](html-to-pdf-1.1.0-remaining-work.md) for the scope and
+dependencies behind that estimate. Counts are planning units, not a completion
+percentage or a promised schedule.
+
+## Wave 10 candidate preparation
+
+The six workers now produce two or three adjacent slices per larger wave and
+continue while an immutable combined candidate is reviewed. Workers run quick
+compilation, focused Mix tests and their new browser fixtures. The validators
+own full matrix coverage, Dialyzer, performance and complete Chromium comparison.
+
+The larger candidate combines initial range artwork and temporal state,
+original-context CSS observations and declaration-policy fixes, empty-table and
+presentation rules, selected object/embed content, same-scene SVG clips/reuse
+and bounded native gradients, plus the independent Math measurement API fix.
+All-stretch relayout and script/limit candidates remain excluded because their
+original full-family browser comparisons still fail. SVG nested CSS sizing
+also remains an open disagreement.
+
+The first smaller prefix passed 2,019 tests on each runtime, then 2,020 after a
+test addition, but EmbeddedResource coverage remained 94.74 percent. The added
+default-options test had not entered its callback because a resolution base
+alone grants no permission. The larger candidate corrects explicit authorization,
+asserts the callback result and checks the actual owning diagnostic module.
+Those failed artifacts remain evidence. The first expanded candidate then ran
+2,077 tests on each runtime, with three failures and 99.92 percent coverage.
+An effective-table check preceded existing malformed-node/style validation, and
+the limits test still expected 139 defaults after the new central gradient
+ceiling added the 140th. The correction restores validation order and adds
+focused tests for source diagnostics, instance inheritance, presentation hints
+and public measurement-budget recovery. No ceiling, workload or coverage gate
+was weakened. The corrected expanded candidate then passed all 2,088 tests at
+100 percent coverage on both runtimes. Elixir 1.19 passed the 19 performance
+workloads, but Dialyzer could not read the private SVG binding after its compiler
+test produced a BEAM without debug information. Elixir 1.20's 100-row workload
+used 13,046,571 reductions against the unchanged 13,024,000 ceiling. The next
+correction preserves module-local binding debug metadata and builds table
+failure context only when its validator needs to return a diagnostic. The
+private binding regression also preserves caller compiler options and raster
+bytes. Neither failure is resolved by changing gates or baselines. These
+candidate results do not qualify wave 10 or reduce accepted remaining work.
+
+## Combined integration checkpoint 9
 
 Initial select state now preserves source-order selected identities, indices,
 exports and values. Menu and listbox artwork use that state; PDF Choice fields
@@ -49,11 +100,14 @@ Unmatched or inert insertion contexts, resource authorization and a complete
 removed-source certificate remain open.
 Template replacement remains unsupported.
 
-Both supported-runtime matrices, exact host parity, committed source hashes and
-unchanged performance guardrails are required before this source batch is
-published. All previous rendering disagreements and failed preflights remain
-identified separately. The full milestone and final cumulative idle timing audit
-remain open.
+The published batch passed both supported-runtime matrices and exact host
+parity with source hashes checked. A hosted full-font reduction failure was
+subsequently fixed by avoiding repeated decoding of five fixed ligature
+codepoints. Before and after PDFs were byte-identical. The correction passed
+local gates and hosted CI without changing workloads, baselines or thresholds.
+All previous rendering disagreements and failed preflights remain identified
+separately. The full milestone and final cumulative idle timing audit remain
+open.
 
 ## Combined integration checkpoint 8 source
 

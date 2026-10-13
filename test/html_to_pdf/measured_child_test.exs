@@ -55,6 +55,68 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildTest do
     refute Enum.any?(unbroken.boxes, &Map.has_key?(&1, :clip))
   end
 
+  test "prepared math retains preferred widths independently of its advance and baseline" do
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
+      html = """
+      <math style="font-family:'STIX Two Math';font-size:20pt"><mo>(</mo><mspace width="4pt" height="28pt" depth="8pt"/><mo>)</mo></math>
+      """
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, %{children: [atom]}} = Style.compute_detailed(dom, [], context.image_budget)
+      geometry = atom.style._math_box
+      assert geometry.min_content_width > geometry.width
+      assert geometry.max_content_width == geometry.min_content_width
+
+      for constraints <- [%{}, %{available_width: 1}] do
+        assert {:ok, child} = Layout.measure_child(atom, context, constraints)
+        assert_in_delta child.width, geometry.width, 1.0e-8
+        assert_in_delta child.min_content_width, geometry.min_content_width, 1.0e-8
+        assert_in_delta child.max_content_width, geometry.max_content_width, 1.0e-8
+        assert_in_delta child.ascent, geometry.ascent, 1.0e-8
+        assert_in_delta child.descent, geometry.descent, 1.0e-8
+        assert_in_delta child.ink_ascent, geometry.ink_ascent, 1.0e-8
+        assert_in_delta child.ink_descent, geometry.ink_descent, 1.0e-8
+        assert child.first_alphabetic_baseline == 0
+        assert [%{type: :glyph_group, actual_text: "()", boxes: glyphs}] = child.boxes
+
+        for {glyph, measured} <- Enum.zip(glyphs, geometry.glyphs) do
+          assert glyph.glyph_ids == [measured.glyph_id]
+          assert glyph.font_face == measured.font_face
+          assert_in_delta glyph.x, measured.x, 1.0e-8
+          assert_in_delta glyph.y, measured.y, 1.0e-8
+        end
+      end
+    end)
+  end
+
+  test "malformed prepared math intrinsic fields return validator diagnostics" do
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
+      assert {:ok, dom} = HtmlParser.parse_detailed("<math><mn>1</mn></math>")
+      assert {:ok, %{children: [atom]}} = Style.compute_detailed(dom, [], context.image_budget)
+      geometry = atom.style._math_box
+
+      for broken <- [
+            nil,
+            Map.delete(geometry, :min_content_width),
+            Map.delete(geometry, :max_content_width),
+            %{geometry | min_content_width: :invalid},
+            %{geometry | max_content_width: nil},
+            %{geometry | min_content_width: -1},
+            %{geometry | max_content_width: geometry.min_content_width - 1},
+            %{geometry | drawing_items: []}
+          ] do
+        node = %{atom | style: Map.put(atom.style, :_math_box, broken)}
+        assert {:error, {:invalid_document, diagnostic}} = Layout.measure_child(node, context)
+        assert diagnostic.reason == :invalid_document
+        assert diagnostic.stage == :layout
+        assert diagnostic.operation == :measure_math
+        assert diagnostic.source == "math"
+        assert diagnostic.module == NativeElixirPdfUtilities.Validators.MathLayoutValidator
+        assert diagnostic.message =~ "math"
+      end
+    end)
+  end
+
   test "atomic child baseline follows content independently of the declared height" do
     assert {:ok, child} =
              measured(
@@ -126,6 +188,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildTest do
 
     assert block.ascent == 12 and block.descent == 0
     assert hd(block.boxes).type == :image
+
+    assert {:ok, percentage} =
+             measured(
+               "<img src='data:image/png;base64,#{Base.encode64(bytes)}' style='width:50%;height:12pt'>",
+               %{available_width: 80}
+             )
+
+    assert percentage.width == 40
+    # The existing nil-width intrinsic pass caches the image's natural
+    # percentage width independently of its constrained painting width.
+    assert percentage.max_content_width == 48
+    assert hd(percentage.boxes).width == 40
   end
 
   test "font fallback uses the caller's requested policy" do

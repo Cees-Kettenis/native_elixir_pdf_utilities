@@ -232,6 +232,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   end
 
   @fixture_thresholds [
+    {"html_temporal_initial_state.html",
+     render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_initial_range_controls.html",
+     render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_disabled_range_controls.html",
+     render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_range_overflow_controls.html",
+     render_opts: [forms: :static, base_url: Path.expand(".")],
+     max_changed_ratio: 0.01,
+     max_average_delta: 0.01},
     {"html_svg_stylesheet_cascade.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"mathml_fractions.html",
      chromium_transform: &__MODULE__.math_fraction_core_reference/1,
@@ -243,6 +253,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
      max_changed_ratio: 0.01,
      max_average_delta: 0.01},
     {"mathml_html_children.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"inline_svg_reuse.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"inline_svg_gradients.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"inline_svg_path_clips_scoped.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_geometry.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_opacity_groups.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"inline_svg_atomic_pages.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
@@ -265,6 +278,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
      chromium_transform: &__MODULE__.local_iframe_reference/1,
      max_changed_ratio: 0.01,
      max_average_delta: 0.01},
+    {"html_table_baseline_override.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_table_legacy_center.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_table_legacy_hints.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_table_bottom_captions.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_table_background_layers.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_table_nonempty_sizing.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_table_zero_columns_sizing.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_table_zero_columns.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
+    {"html_table_zero_columns_decorations.html",
+     max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_table_caption_blocks.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_table_headers.html", max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_iframe_math_gauges.html",
@@ -279,6 +302,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     {"html_metadata_preservation.html",
      render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01},
     {"html_iframe_viewports.html",
+     native_renderer: &__MODULE__.render_embedded_fixture/2,
+     chromium_transform: &__MODULE__.local_iframe_reference/1,
+     max_changed_ratio: 0.01,
+     max_average_delta: 0.01},
+    {"html_object_selection.html",
+     native_renderer: &__MODULE__.render_embedded_fixture/2,
+     chromium_transform: &__MODULE__.local_iframe_reference/1,
+     max_changed_ratio: 0.01,
+     max_average_delta: 0.01},
+    {"html_embedded_images.html",
+     native_renderer: &__MODULE__.render_embedded_fixture/2,
+     chromium_transform: &__MODULE__.local_iframe_reference/1,
+     max_changed_ratio: 0.01,
+     max_average_delta: 0.01},
+    {"html_embedded_text.html",
+     native_renderer: &__MODULE__.render_plaintext_fixture/2,
+     chromium_transform: &__MODULE__.local_iframe_reference/1,
+     max_changed_ratio: 0.01,
+     max_average_delta: 0.01},
+    {"html_embed_sources.html",
+     native_renderer: &__MODULE__.render_embedded_fixture/2,
+     chromium_transform: &__MODULE__.local_iframe_reference/1,
+     max_changed_ratio: 0.01,
+     max_average_delta: 0.01},
+    {"html_image_scale_down.html",
      native_renderer: &__MODULE__.render_embedded_fixture/2,
      chromium_transform: &__MODULE__.local_iframe_reference/1,
      max_changed_ratio: 0.01,
@@ -812,6 +860,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     )
   end
 
+  @doc "Supplies the physical default monospace font used by untouched Chromium plaintext documents."
+  @spec render_plaintext_fixture(String.t(), keyword()) :: {:ok, binary()} | {:error, term()}
+  def render_plaintext_fixture(html, opts) do
+    {output, 0} = System.cmd("fc-match", ["--format=%{file}\n%{family}\n", "monospace"])
+    [path, family | _] = String.split(output, "\n")
+    bytes = File.read!(path)
+    font = %{family: "monospace", data: bytes, weight: 400}
+
+    proof = %{
+      physical_source: path,
+      physical_family: family,
+      generic_family: "monospace",
+      source_sha256: Base.encode16(:crypto.hash(:sha256, bytes), case: :lower),
+      elixir: System.version(),
+      otp: to_string(:erlang.system_info(:otp_release))
+    }
+
+    File.write!(
+      "tmp/browser_parity/html_embedded_text/native-monospace-source.exs",
+      inspect(proof, pretty: true)
+    )
+
+    render_embedded_fixture(html, Keyword.update!(opts, :fonts, &(&1 ++ [font])))
+  end
+
   @doc "Resolves local iframe fixture URLs for Chromium's relocated input file."
   @spec local_iframe_reference(String.t()) :: String.t()
   def local_iframe_reference(html) do
@@ -1214,6 +1287,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
   for {fixture_name, thresholds} <- @fixture_thresholds do
     @fixture_name fixture_name
     @thresholds thresholds
+    if fixture_name == "html_temporal_initial_state.html", do: @tag(:temporal_initial_state)
+
+    if fixture_name in [
+         "html_initial_range_controls.html",
+         "html_disabled_range_controls.html",
+         "html_range_overflow_controls.html"
+       ],
+       do: @tag(:range_controls)
+
     if fixture_name in [
          "html_initial_select_controls.html",
          "html_authored_select_controls.html",
@@ -1240,6 +1322,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     @tag math_operators:
            fixture_name in ["mathml_operators.html", "mathml_operators_ordinary.html"]
 
+    if fixture_name in [
+         "html_table_zero_columns.html",
+         "html_table_zero_columns_decorations.html",
+         "html_table_zero_columns_sizing.html"
+       ],
+       do: @tag(:table_zero_columns)
+
+    if fixture_name == "html_table_nonempty_sizing.html", do: @tag(:table_sizing)
+
+    if fixture_name == "html_table_baseline_override.html",
+      do: @tag(:table_presentation_correction)
+
+    if fixture_name in [
+         "html_table_legacy_hints.html",
+         "html_table_legacy_center.html",
+         "html_table_bottom_captions.html",
+         "html_table_background_layers.html"
+       ],
+       do: @tag(:table_presentation_phase2)
+
+    if String.starts_with?(fixture_name, ["html_table_", "table_", "nested_table_"]) or
+         fixture_name == "hidden_tables.html",
+       do: @tag(:table_presentation)
+
     if fixture_name in ["html_responsive_images.html", "html_inline_images.html"],
       do: @tag(:responsive_images)
 
@@ -1262,12 +1368,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
        do: @tag(:table_formation)
 
     if fixture_name == "drawing_group_viewports.html", do: @tag(:drawing_group)
+    if fixture_name == "html_object_selection.html", do: @tag(:object_selection)
+
+    if fixture_name in [
+         "html_embedded_images.html",
+         "html_embedded_text.html",
+         "html_embed_sources.html",
+         "html_image_scale_down.html"
+       ],
+       do: @tag(:embedded_dispatch)
+
     if String.starts_with?(fixture_name, "html_iframe_"), do: @tag(:embedded_viewport)
 
     if fixture_name in ["html_fragment_destinations.html", "html_base_relative_links.html"],
       do: @tag(:destinations)
 
     if fixture_name in [
+         "inline_svg_reuse.html",
+         "inline_svg_gradients.html",
+         "inline_svg_path_clips_scoped.html",
          "inline_svg_geometry.html",
          "inline_svg_atomic_pages.html",
          "inline_svg_opacity_groups.html",
@@ -1297,6 +1416,67 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
       assert length(pages) == page_count
       assert String.starts_with?(chromium_version, "Chromium ")
       assert String.starts_with?(rasterizer_version, "pdftoppm version ")
+
+      if @fixture_name == "html_object_selection.html" do
+        assert page_count == 1
+
+        for name <- ["native.pdf", "chromium.pdf"] do
+          assert {:ok, text} =
+                   NativeElixirPdfUtilities.Text.extract(
+                     File.read!(Path.join(artifact_dir, name)),
+                     layout: false
+                   )
+
+          compact = String.replace(text, ~r/\s/u, "")
+          assert compact =~ "inlinefallback"
+          assert compact =~ "Unsupportedtypefallback"
+          assert length(Regex.scan(~r/Objectchildscope/, compact)) == 2
+          refute compact =~ "Unselectedchildfallback"
+          # The native group keeps logical text beyond its clip. Chromium omits
+          # those instructions. The direct pixel comparison proves visibility.
+          if name == "native.pdf",
+            do: assert(compact =~ "Offscreenchild"),
+            else: refute(compact =~ "Offscreenchild")
+        end
+      end
+
+      if @fixture_name in [
+           "html_embedded_images.html",
+           "html_embedded_text.html",
+           "html_embed_sources.html"
+         ] do
+        assert page_count == if(@fixture_name == "html_embed_sources.html", do: 2, else: 1)
+
+        for name <- ["native.pdf", "chromium.pdf"] do
+          assert {:ok, text} =
+                   NativeElixirPdfUtilities.Text.extract(
+                     File.read!(Path.join(artifact_dir, name)),
+                     layout: false
+                   )
+
+          compact = String.replace(text, ~r/\s/u, "")
+          refute compact =~ "Unused"
+
+          case @fixture_name do
+            "html_embedded_images.html" ->
+              assert compact =~ "SelectedPNGimages"
+              assert compact =~ "SelectedJPEGimages"
+              assert compact =~ "SelectedstaticSVGimages"
+              assert compact =~ "Afterimagereplacements"
+
+            "html_embedded_text.html" ->
+              assert length(Regex.scan(~r/<literal>&text/, compact)) == 2
+              assert length(Regex.scan(~r/Secondline/, compact)) == 2
+              assert compact =~ "Afterliteraldocuments"
+
+            "html_embed_sources.html" ->
+              assert compact =~ "Absentsource"
+              assert compact =~ "Aboutblankviewport"
+              assert length(Regex.scan(~r/Objectchildscope/, compact)) == 2
+              assert compact =~ "Afterembeddeddocuments"
+          end
+        end
+      end
 
       if @fixture_name in [
            "html_initial_select_controls.html",
@@ -1394,6 +1574,156 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
 
         assert length(destinations) == 9
         refute File.read!(Path.join(artifact_dir, "native.pdf")) =~ "/URI (#"
+      end
+
+      if @fixture_name in [
+           "html_table_legacy_hints.html",
+           "html_table_legacy_center.html",
+           "html_table_bottom_captions.html",
+           "html_table_background_layers.html"
+         ] do
+        assert page_count == 1
+
+        for name <- ["native.pdf", "chromium.pdf"] do
+          pdf = File.read!(Path.join(artifact_dir, name))
+          assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+          text = String.replace(text, ~r/\s+/u, " ")
+
+          labels =
+            case @fixture_name do
+              "html_table_legacy_hints.html" ->
+                [
+                  "Legacy table presentation",
+                  "CSS overrides legacy hints",
+                  "Group minimum height",
+                  "End legacy hints"
+                ]
+
+              "html_table_legacy_center.html" ->
+                ["Centered", "CSS left margin", "CSS right margin", "End centered table"]
+
+              "html_table_bottom_captions.html" ->
+                [
+                  "Inherited bottom link",
+                  "Caption block",
+                  "Legacy bottom",
+                  "CSS top override",
+                  "Empty grid bottom",
+                  "Bottom captions after"
+                ]
+
+              "html_table_background_layers.html" ->
+                [
+                  "Separated background layers",
+                  "Collapsed background layers",
+                  "Row color",
+                  "Group color",
+                  "End background layers"
+                ]
+            end
+
+          for label <- labels, do: assert(text =~ label)
+          assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+
+          if @fixture_name == "html_table_bottom_captions.html" do
+            refute text =~ "Hidden caption"
+            assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+
+            links =
+              for {_ref, %{value: %{"Subtype" => {:name, "Link"}} = link}} <- document.objects,
+                  do: link
+
+            assert [
+                     %{
+                       "A" => %{"URI" => {:string, "https://example.com/bottom-caption"}},
+                       "Rect" => [left, bottom, right, top]
+                     }
+                   ] = links
+
+            assert right > left and top > bottom
+          end
+        end
+      end
+
+      if @fixture_name == "html_table_zero_columns.html" do
+        assert page_count == 1
+
+        for name <- ["native.pdf", "chromium.pdf"] do
+          pdf = File.read!(Path.join(artifact_dir, name))
+          assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+          text = String.replace(text, ~r/\s+/u, " ")
+
+          for label <- [
+                "Zero columns before.",
+                "Collapsed rows after.",
+                "Spaced rows after.",
+                "Grouped rows after.",
+                "Hidden cells after.",
+                "Declared height after.",
+                "Zero-height rows after.",
+                "Empty table caption",
+                "Zero columns after."
+              ],
+              do: assert(text =~ label)
+
+          refute text =~ ~r/\bHidden cell\b/u
+          assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+          assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+          assert length(document.pages) == 1
+
+          links =
+            for {_ref, %{value: %{"Subtype" => {:name, "Link"}} = link}} <- document.objects,
+                do: link
+
+          assert [
+                   %{
+                     "A" => %{"URI" => {:string, "https://example.com/empty-table"}},
+                     "Rect" => [left, bottom, right, top]
+                   }
+                 ] = links
+
+          assert right > left and top > bottom
+          assert Enum.all?(document.pages, &Map.has_key?(&1.resources, "Font"))
+          assert Enum.all?(document.pages, &(not Map.has_key?(&1.resources, "XObject")))
+        end
+      end
+
+      if @fixture_name in [
+           "html_table_zero_columns_decorations.html",
+           "html_table_zero_columns_sizing.html",
+           "html_table_nonempty_sizing.html"
+         ] do
+        assert page_count == 1
+
+        for name <- ["native.pdf", "chromium.pdf"] do
+          pdf = File.read!(Path.join(artifact_dir, name))
+          assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+
+          labels =
+            cond do
+              @fixture_name == "html_table_zero_columns_decorations.html" ->
+                ["collapsed-height", "separate-height", "After"]
+
+              @fixture_name == "html_table_nonempty_sizing.html" ->
+                [
+                  "Default border box",
+                  "Authored content box",
+                  "Authored border box cell",
+                  "After sizing"
+                ]
+
+              true ->
+                [
+                  "Default border box",
+                  "Authored content box",
+                  "Authored border box empty",
+                  "After sizing"
+                ]
+            end
+
+          for label <- labels, do: assert(text =~ label)
+          assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+        end
       end
 
       if @fixture_name == "html_table_caption_blocks.html" do
@@ -2693,7 +3023,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
              )
   end
 
-  @tag wave9_affected: true
+  @tag range_controls: true
+  test "disabled interactive ranges retain initial Chromium artwork and scalar fields" do
+    stats =
+      PdfVisualCompare.assert_browser_match!(
+        Path.join(@fixtures_dir, "html_disabled_range_controls.html"),
+        render_opts: [forms: :interactive],
+        artifact_dir: "tmp/browser_parity/html_disabled_range_controls-interactive",
+        max_changed_ratio: 0.01,
+        max_average_delta: 0.01
+      )
+
+    assert stats.scripting == :disabled and stats.page_count == 2
+
+    assert {:ok, fields} =
+             NativeElixirPdfUtilities.Forms.fields(
+               File.read!(Path.join(stats.artifact_dir, "native.pdf"))
+             )
+
+    assert Enum.map(fields, &{&1.name, &1.value}) == [
+             {"mid", "50"},
+             {"min", "0"},
+             {"tie", "60"},
+             {"tall", "75"},
+             {"fieldset", "25"},
+             {"none", "10"}
+           ]
+
+    assert Enum.all?(fields, & &1.read_only)
+  end
+
   test "interactive initial number heights match Chromium" do
     stats =
       PdfVisualCompare.assert_browser_match!(

@@ -17,7 +17,7 @@ effect; see [page declarations without an effect](#page-declarations-without-an-
 | Tables | `table`, `caption`, `colgroup`, `col`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td` |
 | Images | `img` with a `src` |
 | Custom containers | Valid unregistered HTML custom names with inline defaults and supported transparent contents |
-| Form controls | Text, search, telephone, URL, email, password, number, checkbox, radio, hidden, submit, reset, and button `input`; `select`, `option`, `textarea`, `button`, ordinary `form` and `label` containers |
+| Form controls | Text, search, telephone, URL, email, password, number, initial horizontal range, checkbox, radio, hidden, submit, reset, and button `input`; `select`, `option`, `textarea`, `button`, ordinary `form` and `label` containers |
 
 Preformatted text retains spaces, default eight-space tab stops, and line breaks.
 `pre` and `listing` discard one immediately following newline and default to bundled DejaVu
@@ -113,8 +113,50 @@ attributes, HTML integration points, and literal foreign CDATA. Foreign elements
 include `namespace` and `attribute_namespaces` fields. Use `"svg"` or `"math"`
 for a root fragment context, or a map such as
 `%{namespace: :mathml, tag: "annotation-xml", attributes: %{"encoding" => "text/html"}}`
-for an integration point. This is parser support. SVG and MathML layout remains
-under implementation, and rendering these trees returns an actionable diagnostic.
+for an integration point. Native rendering supports a bounded SVG shape/path
+profile and MathML tokens, rows, operators, fractions and roots. Complete SVG
+and MathML remain under implementation; other rendering contexts return
+actionable diagnostics. The separate [SVG](html-to-pdf-svg-1.1.0-checklist.md)
+and [MathML](html-to-pdf-mathml-1.1.0-checklist.md) checklists retain their open
+requirements and direct browser disagreements.
+
+SVG clips may reference a definition within the same SVG scene using
+`clip-path:url(#id)`. The supported `clipPath` has `userSpaceOnUse` units, one
+static geometry child, optional affine transformation and inherited clip rule.
+Visibility, empty clips and nested group transforms retain their paint behavior.
+Other units, multiple shapes, nested clip references and broader effects return
+diagnostics. Nested SVG CSS sizing still has a known Chromium disagreement;
+the clip comparison scopes its sizing rule to the outer SVG roots.
+
+Same-scene `defs`, `symbol` and `use` support bounded geometry reuse, nested
+instances, transforms, symbol viewports and inherited instance paints. Missing
+or ineligible targets, external references and cycles return diagnostics.
+Symbols currently require a direct `defs` parent. Linear and radial gradients
+produce native PDF shadings for static coordinates, pad spread, sRGB colors and
+constant stop opacity. Stops must increase strictly from zero to one, including
+in the native binary32 representation. Gradient templates, other spread modes,
+variable alpha, patterns and markers return diagnostics. SVG text, foreignObject,
+masks, filters and complete reference behavior remain separate work.
+
+Iframes accept authorized local HTML or inline `srcdoc` in isolated child
+viewports. Local HTML `object[data]` uses the same immutable permission root,
+document scopes, shared budgets and viewport clipping. Absent data or unsupported
+MIME hints select authored fallback. Once HTML is selected, authorization,
+read, MIME, parser and budget failures return diagnostics. Use `forms: :static`
+for child control artwork. Selected local plaintext preserves literal markup
+and browser pre-wrap defaults. Selected PNG/JPEG images reuse the existing
+decoders. Selected SVG uses the bounded byte-only image backend, with no font
+or external-resource access. It honors root aspect preservation for matching
+intrinsic/viewBox proportions or `preserveAspectRatio="none"`; no-viewBox and
+mismatched-aspect roots diagnose pending document viewport support.
+
+`embed` accepts authorized local HTML, plaintext and those still images. Missing
+`src` suppresses its box; an explicit empty source or exact `about:blank` creates
+a blank viewport. Unsupported plugin MIME types return diagnostics. Caller asset
+mappings and resolvers cannot replace selected local bytes. Framesets remain
+unfinished; embedded PDF rendering is a 1.5.0 dependency. Clipped native
+child groups retain offscreen logical text in PDF extraction, even when it has
+no visible ink.
 
 Hidden inputs retain their supported attributes in the parsed tree and produce
 no printed content, spacing, generated content, or AcroForm field. Their type
@@ -126,7 +168,7 @@ Input type keywords use ASCII case matching. Missing, empty, unknown, obsolete o
 untrimmed values select Text, so `type="hidden "` remains visible and
 `type="checKbox"` creates a text field. The original type string stays available to
 CSS. Recognized states whose rendering is unfinished still return diagnostics;
-these include dates, range, color, file and image inputs.
+these include dates, color, file and image inputs.
 Defaulted Text uses the same sanitation, readonly rules, values and generated names
 as explicit text inputs. Caller-supplied input trees use the same validator.
 
@@ -137,6 +179,18 @@ readonly/required/placeholder metadata. Out-of-range values still render.
 Full step-mismatch and constraint aggregation remain unfinished. Static and
 interactive artwork share original page geometry and clipped text; other Text
 appearances retain their existing path.
+
+Horizontal range inputs prepare initial midpoint/default, clamp and decimal
+step state centrally. `forms: :static` paints the native track and thumb with
+authored sizing, accent color, disabled state and supported clipping. Disabled
+interactive ranges can expose a read-only scalar field when their thumb fits
+the widget. Mutable interactive sliders, datalist ticks and overflowing disabled
+widget appearances return diagnostics. Date, month, week, time and local datetime
+inputs prepare canonical initial values, scalar bounds and exact step state.
+Hidden temporal controls retain this state for selectors; visible native pickers
+still return diagnostics. Full validity aggregation remains unfinished.
+Pinned numeric-prefix and reversed-bound rules
+retain documented differences from Chromium.
 
 Ordinary `form` containers render as blocks and `label` containers render inline.
 Submission metadata is retained without running actions. Supported controls use
@@ -373,6 +427,14 @@ page rules still return errors.
 
 ### Table page breaks
 
+Table width/height, spacing, cell padding, background color and supported
+alignment hints have lower priority than authored CSS. Captions support top and
+bottom placement. Row and group background layers preserve separated gaps and
+colspan coverage. Effective baseline cell alignment diagnoses its unfinished
+row-baseline geometry; authored top/middle/bottom alignment can override the
+hint. Complete legacy border conflicts and spanning-cell fragmentation remain
+unfinished.
+
 Page breaks use measured content height. The printable area is the page height minus its top and bottom margins.
 
 - `<thead>` repeats when a table continues onto another page and
@@ -399,7 +461,7 @@ See the [grouped table example](html-to-pdf-examples.md#paginate-a-table-with-ro
 
 | Image styling | Supported values or behavior |
 | --- | --- |
-| `object-fit` | `fill`, `contain`, or `cover` |
+| `object-fit` | `fill`, `contain`, `cover`, `none`, or `scale-down` |
 | `object-position` | Position an image within its box |
 | `background-size` | Explicit sizes, `cover`, or `contain` |
 | `background-position` | Position a background within its box |
@@ -495,7 +557,7 @@ For PDF viewer bookmarks, see [outlines from headings](html-to-pdf-examples.md#c
 
 | Not supported | What to use instead |
 | --- | --- |
-| JavaScript, canvas, video, audio, iframe | Static HTML and supported images |
+| JavaScript, canvas, video, audio, general embed/framesets | Static HTML, supported images and authorized local HTML child viewports |
 | XFA, JavaScript form actions | Use supported AcroForm fields or static artwork |
 | Floats, fixed positioning, transforms, animations | Block, flex, grid, relative, or absolute layout |
 | Named pages and CSS page-margin boxes | Page options and header/footer templates |
@@ -612,8 +674,9 @@ valid punctuation, and exclude the eight reserved custom names. CSS escapes can
 select punctuation names. A trailing slash does not close a nonvoid custom tag.
 Transparent contents obey the nearest ordinary ancestor's content model. A bare
 custom fragment context uses document-flow fallback. Supplied DOMs share name,
-namespace, structure and event validation. Active inline SVG/MathML painting still
-diagnoses; HTML integration points preserve their separate namespace.
+namespace, structure and event validation. Foreign rendering uses the bounded
+SVG and MathML profiles described above; HTML integration points preserve their
+separate namespace.
 
 The global `is` attribute remains selector-visible metadata. Builtin controls keep
 ordinary behavior. Custom attributes named `src`, `href`, `disabled`, `readonly`
