@@ -71,7 +71,9 @@ struct Writer<'a> {
     html_surfaces: HashMap<String, HtmlSurface>,
     slots: std::collections::HashSet<String>,
     clip: Option<[f32; 4]>,
+    clip_geometry: Vec<Vec<f32>>,
     fonts: HashMap<usvg::fontdb::ID, (String, Ref, u16)>,
+    programs: HashMap<(usvg::fontdb::ID, u16, Vec<u32>), (String, Ref, u16)>,
     mappings: HashMap<usvg::fontdb::ID, std::collections::BTreeMap<u16, String>>,
     clusters: HashMap<usize, Vec<crate::vector_validator::Cluster<'a>>>,
 }
@@ -116,9 +118,12 @@ impl Writer<'_> {
         let previous = self.transform;
         let previous_pattern = self.pattern_transform;
         let previous_clip = self.clip;
+        let previous_geometry = self.clip_geometry.len();
         self.transform = previous.pre_concat(t);
         self.pattern_transform = previous_pattern.pre_concat(t);
         if let Some(clip) = group.clip_path() {
+            self.clip_geometry
+                .push(resolved_clip_geometry(clip, self.transform)?);
             if let Some(bounds) = clip_bounds(clip, self.transform) {
                 self.clip = Some(match previous_clip {
                     Some(parent) => [
@@ -192,6 +197,7 @@ impl Writer<'_> {
         self.transform = previous;
         self.pattern_transform = previous_pattern;
         self.clip = previous_clip;
+        self.clip_geometry.truncate(previous_geometry);
         content.restore_state();
         Ok(())
     }
@@ -514,10 +520,14 @@ impl Writer<'_> {
                     usvg::Node::Text(text) => {
                         for span in text.layouted().iter().filter(|span| {
                             span.visible
-                                && span
+                                && (span
                                     .fill
                                     .as_ref()
-                                    .is_some_and(|fill| fill.opacity().get() != 0.0)
+                                    .is_some_and(|paint| paint.opacity().get() != 0.0)
+                                    || span
+                                        .stroke
+                                        .as_ref()
+                                        .is_some_and(|paint| paint.opacity().get() != 0.0))
                         }) {
                             let clusters = self
                                 .clusters
@@ -546,6 +556,50 @@ impl Writer<'_> {
                                                 transform.pre_concat(glyph.outline_transform()),
                                             )
                                         });
+                                        let bounds = if let Some(stroke) = span
+                                            .stroke
+                                            .as_ref()
+                                            .filter(|paint| paint.opacity().get() > 0.0)
+                                        {
+                                            let program = crate::glyph_program_validator::prepare(
+                                                glyph,
+                                                Some(stroke),
+                                                self.database,
+                                            )?;
+                                            let stroke_bounds = usvg::Rect::from_ltrb(
+                                                program.bbox[0],
+                                                program.bbox[1],
+                                                program.bbox[2],
+                                                program.bbox[3],
+                                            )
+                                            .and_then(|r| {
+                                                r.transform(
+                                                    transform
+                                                        .pre_concat(glyph.outline_transform())
+                                                        .pre_scale(
+                                                            program.units as f32 / 1000.0,
+                                                            program.units as f32 / 1000.0,
+                                                        ),
+                                                )
+                                            });
+                                            let fill_bounds = span
+                                                .fill
+                                                .as_ref()
+                                                .filter(|paint| paint.opacity().get() > 0.0)
+                                                .and(bounds);
+                                            match (fill_bounds, stroke_bounds) {
+                                                (Some(a), Some(b)) => usvg::Rect::from_ltrb(
+                                                    a.left().min(b.left()),
+                                                    a.top().min(b.top()),
+                                                    a.right().max(b.right()),
+                                                    a.bottom().max(b.bottom()),
+                                                ),
+                                                (Some(a), None) | (None, Some(a)) => Some(a),
+                                                (None, None) => None,
+                                            }
+                                        } else {
+                                            bounds
+                                        };
                                         if let Some(bounds) = bounds {
                                             let inside_region = bounds.right() > region.left()
                                                 && bounds.left() < region.right()
@@ -741,15 +795,59 @@ impl Writer<'_> {
                             .get(&(span as *const usvg::layout::Span as usize))
                             .cloned()
                             .ok_or("internal SVG text painter lost its issued cluster plan")?;
-                        // A server is shared by every real glyph in this span. Its
-                        // geometry was resolved against the whole text object's box,
-                        // never against one cluster or its PDF text matrix.
-                        content.save_state();
-                        self.text_paint(span.fill.as_ref().unwrap(), content, resources)?;
-                        for cluster in clusters {
-                            self.text_cluster(cluster, content, resources)?;
+                        let passes = match span.paint_order {
+                            usvg::PaintOrder::FillAndStroke => [false, true],
+                            usvg::PaintOrder::StrokeAndFill => [true, false],
+                        };
+                        let mut replacement = true;
+                        for stroke in passes {
+                            if if stroke {
+                                !span
+                                    .stroke
+                                    .as_ref()
+                                    .is_some_and(|paint| paint.opacity().get() > 0.0)
+                            } else {
+                                !span
+                                    .fill
+                                    .as_ref()
+                                    .is_some_and(|paint| paint.opacity().get() > 0.0)
+                            } {
+                                continue;
+                            }
+                            content.save_state();
+                            let (paint, opacity) = if stroke {
+                                let stroke = span
+                                    .stroke
+                                    .as_ref()
+                                    .ok_or("issued stroke pass lost its paint")?;
+                                (stroke.paint(), stroke.opacity().get())
+                            } else {
+                                let fill = span
+                                    .fill
+                                    .as_ref()
+                                    .ok_or("issued fill pass lost its paint")?;
+                                (fill.paint(), fill.opacity().get())
+                            };
+                            self.text_paint(
+                                paint,
+                                opacity,
+                                text.bounding_box(),
+                                content,
+                                resources,
+                            )?;
+                            for cluster in &clusters {
+                                self.text_cluster(
+                                    *cluster,
+                                    span,
+                                    stroke,
+                                    replacement,
+                                    content,
+                                    resources,
+                                )?;
+                            }
+                            content.restore_state();
+                            replacement = false;
                         }
-                        content.restore_state();
                     }
                 }
                 usvg::Node::Image(image) if image.is_visible() => {
@@ -809,6 +907,13 @@ impl Writer<'_> {
         if let Some(clip) = self.clip {
             form.insert(Name(b"NativeHtmlClip")).array().items(clip);
         }
+        if !self.clip_geometry.is_empty() {
+            let mut geometry = form.insert(Name(b"NativeHtmlClipGeometry")).array();
+            for codes in &self.clip_geometry {
+                geometry.items(codes.iter().copied());
+            }
+            geometry.items([21.0, self.clip_geometry.len() as f32]);
+        }
         form.resources().finish();
         form.finish();
         let name = format!("H{}", id.get());
@@ -826,6 +931,9 @@ impl Writer<'_> {
     fn text_cluster(
         &mut self,
         cluster: crate::vector_validator::Cluster<'_>,
+        span: &usvg::layout::Span,
+        stroke_pass: bool,
+        replacement: bool,
         content: &mut Content,
         resources: &mut Resources,
     ) -> Result<(), String> {
@@ -833,7 +941,25 @@ impl Writer<'_> {
             .glyphs
             .first()
             .ok_or("internal SVG text painter received an empty cluster plan")?;
-        let (name, id, units) = self.selected_font(first.font)?;
+        let program = stroke_pass;
+        if program {
+            let (source_name, source_id, _) = self.selected_font(first.font)?;
+            if !resources.fonts.iter().any(|(_, id)| *id == source_id) {
+                resources.fonts.push((source_name, source_id));
+            }
+        }
+        let (name, id, units) = if program {
+            self.glyph_program(
+                first,
+                if stroke_pass {
+                    span.stroke.as_ref()
+                } else {
+                    None
+                },
+            )?
+        } else {
+            self.selected_font(first.font)?
+        };
         if !resources.fonts.iter().any(|(_, resource)| *resource == id) {
             resources.fonts.push((name.clone(), id));
         }
@@ -853,7 +979,7 @@ impl Writer<'_> {
         content
             .begin_marked_content_with_properties(Name(b"Span"))
             .properties()
-            .actual_text(TextStr(cluster.text));
+            .actual_text(TextStr(if replacement { cluster.text } else { "" }));
         for (index, glyph) in cluster.glyphs.iter().enumerate() {
             if index != 0 {
                 let t = glyph.outline_transform();
@@ -866,12 +992,119 @@ impl Writer<'_> {
                     t.ty,
                 ]);
             }
-            content.show(Str(&glyph.id.0.to_be_bytes()));
+            if program {
+                let (name, id, _) = self.glyph_program(
+                    glyph,
+                    if stroke_pass {
+                        span.stroke.as_ref()
+                    } else {
+                        None
+                    },
+                )?;
+                if !resources.fonts.iter().any(|(_, resource)| *resource == id) {
+                    resources.fonts.push((name.clone(), id));
+                }
+                content.set_font(Name(name.as_bytes()), glyph.font_size());
+                content.show(Str(&[1]));
+            } else {
+                content.show(Str(&glyph.id.0.to_be_bytes()));
+            }
         }
         content.end_marked_content();
         content.end_text();
         content.restore_state();
         Ok(())
+    }
+
+    fn glyph_program(
+        &mut self,
+        glyph: &usvg::layout::PositionedGlyph,
+        stroke: Option<&usvg::Stroke>,
+    ) -> Result<(String, Ref, u16), String> {
+        let t = glyph.outline_transform();
+        let mut style = vec![
+            stroke.is_some() as u32,
+            glyph.font_size().to_bits(),
+            t.sx.to_bits(),
+            t.ky.to_bits(),
+            t.kx.to_bits(),
+            t.sy.to_bits(),
+        ];
+        if let Some(stroke) = stroke {
+            style.extend([
+                stroke.width().get().to_bits(),
+                stroke.miterlimit().get().to_bits(),
+                stroke.linecap() as u32,
+                stroke.linejoin() as u32,
+                stroke.dashoffset().to_bits(),
+            ]);
+            style.extend(
+                stroke
+                    .dasharray()
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|n| n.to_bits()),
+            );
+        }
+        let key = (glyph.font, glyph.id.0, style);
+        if let Some(font) = self.programs.get(&key) {
+            return Ok(font.clone());
+        }
+        let (_, source_font, units) = self.selected_font(glyph.font)?;
+        let charproc = self.reference()?;
+        let unicode = self.reference()?;
+        let id = self.reference()?;
+        let program = crate::glyph_program_validator::prepare(glyph, stroke, self.database)?;
+        let mut body = Content::new();
+        body.start_shape_glyph(
+            program.width,
+            program.bbox[0],
+            program.bbox[1],
+            program.bbox[2],
+            program.bbox[3],
+        );
+        if let Some(path) = program.path {
+            draw_path(&path, &mut body);
+            body.fill_nonzero();
+        }
+        self.pdf
+            .stream(charproc, &body.finish())
+            .pair(Name(b"NativeOriginalGID"), glyph.id.0 as i32);
+        let mut cmap = UnicodeCmap::<u8>::new(
+            Name(b"NativeSvgGlyphProgramUnicode"),
+            SystemInfo {
+                registry: Str(b"Adobe"),
+                ordering: Str(b"UCS"),
+                supplement: 0,
+            },
+        );
+        cmap.pair_with_multiple(1, self.mappings[&glyph.font][&glyph.id.0].chars());
+        self.pdf.stream(unicode, &cmap.finish());
+        let name = format!("G{}", id.get());
+        let mut font = self.pdf.type3_font(id);
+        font.name(Name(name.as_bytes()))
+            .bbox(Rect::new(
+                program.bbox[0],
+                program.bbox[1],
+                program.bbox[2],
+                program.bbox[3],
+            ))
+            .matrix([0.001, 0.0, 0.0, 0.001, 0.0, 0.0])
+            .first_char(1)
+            .last_char(1)
+            .widths([program.width])
+            .to_unicode(unicode);
+        font.pair(Name(b"NativeOriginalGID"), glyph.id.0 as i32);
+        font.pair(Name(b"NativeSourceFont"), source_font);
+        font.char_procs()
+            .pair(Name(b"NativeOriginalGlyph"), charproc);
+        font.encoding_custom()
+            .differences()
+            .consecutive(1, [Name(b"NativeOriginalGlyph")]);
+        font.resources().finish();
+        font.finish();
+        self.programs.insert(key, (name.clone(), id, units));
+        Ok((name, id, units))
     }
 
     fn selected_font(&mut self, selected: usvg::fontdb::ID) -> Result<(String, Ref, u16), String> {
@@ -993,7 +1226,7 @@ impl Writer<'_> {
                 };
             }
             usvg::Paint::Pattern(pattern) => {
-                let (name, id) = self.tiling_pattern(pattern)?;
+                let (name, id) = self.pattern_paint(pattern, path.bounds())?;
                 resources.patterns.push((name.clone(), id));
                 self.opacity(opacity, content, resources)?;
                 content.set_fill_color_space(Name(b"Pattern"));
@@ -1026,20 +1259,22 @@ impl Writer<'_> {
     // clipping-only text, or hidden logical text run is needed.
     fn text_paint(
         &mut self,
-        fill: &usvg::Fill,
+        paint: &usvg::Paint,
+        opacity: f32,
+        bounds: usvg::Rect,
         content: &mut Content,
         resources: &mut Resources,
     ) -> Result<(), String> {
-        let (name, id, opacity) = match fill.paint() {
+        let (name, id, opacity) = match paint {
             usvg::Paint::Color(color) => {
                 let [r, g, b] = self.rgb(*color);
                 content.set_fill_rgb(r, g, b);
-                self.opacity(fill.opacity().get(), content, resources)?;
+                self.opacity(opacity, content, resources)?;
                 return Ok(());
             }
             usvg::Paint::Pattern(pattern) => {
-                let (name, id) = self.tiling_pattern(pattern)?;
-                (name, id, fill.opacity().get())
+                let (name, id) = self.pattern_paint(pattern, bounds)?;
+                (name, id, opacity)
             }
             paint => {
                 let (shading, transform, alpha) = self.gradient_shading(paint)?;
@@ -1049,7 +1284,7 @@ impl Writer<'_> {
                     .shading_pattern(id)
                     .shading_ref(shading)
                     .matrix([t.sx, t.ky, t.kx, t.sy, t.tx, t.ty]);
-                (format!("P{}", id.get()), id, fill.opacity().get() * alpha)
+                (format!("P{}", id.get()), id, opacity * alpha)
             }
         };
         resources.patterns.push((name.clone(), id));
@@ -1057,6 +1292,67 @@ impl Writer<'_> {
         content.set_fill_color_space(Name(b"Pattern"));
         content.set_fill_pattern([], Name(name.as_bytes()));
         Ok(())
+    }
+
+    // A complete band tile is constant along one axis. Extend its real vector
+    // bands across the paint extent so repeating a cell never clips that axis
+    // inside the artwork. The authored period and origin in the other axis stay
+    // unchanged, and all ordinary pattern cells retain their original program.
+    fn pattern_paint(
+        &mut self,
+        pattern: &usvg::Pattern,
+        bounds: usvg::Rect,
+    ) -> Result<(String, Ref), String> {
+        let Some(plan) = crate::vector_validator::stripe_paint(pattern, bounds) else {
+            return self.tiling_pattern(pattern);
+        };
+        let mut body = Content::new();
+        let mut start = 0.0;
+        for (end, color) in plan.bands {
+            let [r, g, b] = self.rgb(color);
+            body.set_fill_rgb(r, g, b);
+            if plan.vertical {
+                body.rect(
+                    start,
+                    plan.cross_start,
+                    end - start,
+                    plan.cross_end - plan.cross_start,
+                );
+            } else {
+                body.rect(
+                    plan.cross_start,
+                    start,
+                    plan.cross_end - plan.cross_start,
+                    end - start,
+                );
+            }
+            body.fill_nonzero();
+            start = end;
+        }
+        let bbox = if plan.vertical {
+            Rect::new(0.0, plan.cross_start, plan.period, plan.cross_end)
+        } else {
+            Rect::new(plan.cross_start, 0.0, plan.cross_end, plan.period)
+        };
+        let cross_step = plan.cross_end - plan.cross_start;
+        let (x_step, y_step) = if plan.vertical {
+            (plan.period, cross_step)
+        } else {
+            (cross_step, plan.period)
+        };
+        let t = self.pattern_transform.pre_concat(plan.transform);
+        let id = self.reference()?;
+        let stream = body.finish();
+        let mut tile = self.pdf.tiling_pattern(id, &stream);
+        tile.paint_type(PaintType::Colored)
+            .tiling_type(TilingType::NoDistortion)
+            .bbox(bbox)
+            .x_step(x_step)
+            .y_step(y_step)
+            .matrix([t.sx, t.ky, t.kx, t.sy, t.tx, t.ty]);
+        Resources::default().write(tile.resources());
+        tile.finish();
+        Ok((format!("P{}", id.get()), id))
     }
 
     // Geometry and text share the exact same SVG tile and page-space matrix.
@@ -1155,6 +1451,84 @@ impl Writer<'_> {
             Ok(id)
         }
     }
+}
+
+/// Postorder clip expression over genuine resolved paths in page coordinates.
+/// 10 begins a path (fill rule, command count), 20 unions children and 21
+/// intersects them. Path commands are move/line/quad/cubic/close (0..4).
+/// Curves stay curves here; no raster-derived geometry enters annotation work.
+pub(crate) fn resolved_clip_geometry(
+    clip: &usvg::ClipPath,
+    transform: usvg::Transform,
+) -> Result<Vec<f32>, String> {
+    fn children(
+        group: &usvg::Group,
+        transform: usvg::Transform,
+        codes: &mut Vec<f32>,
+    ) -> Result<(), String> {
+        for node in group.children() {
+            match node {
+                usvg::Node::Group(group) => {
+                    let transform = transform.pre_concat(group.transform());
+                    children(group, transform, codes)?;
+                    if let Some(clip) = group.clip_path() {
+                        codes.extend(resolved_clip_geometry(clip, transform)?);
+                        codes.extend([21.0, 2.0]);
+                    }
+                }
+                usvg::Node::Text(text) => children(text.flattened(), transform, codes)?,
+                usvg::Node::Path(path) => {
+                    if path.is_visible() {
+                        let data = path
+                            .data()
+                            .clone()
+                            .transform(transform)
+                            .ok_or("SVG clip transform failed")?;
+                        codes.extend([
+                            10.0,
+                            if path.fill().map(|fill| fill.rule()).unwrap_or_default()
+                                == usvg::FillRule::EvenOdd
+                            {
+                                1.0
+                            } else {
+                                0.0
+                            },
+                            data.segments().count() as f32,
+                        ]);
+                        for segment in data.segments() {
+                            match segment {
+                                PathSegment::MoveTo(p) => codes.extend([0.0, p.x, p.y]),
+                                PathSegment::LineTo(p) => codes.extend([1.0, p.x, p.y]),
+                                PathSegment::QuadTo(a, b) => {
+                                    codes.extend([2.0, a.x, a.y, b.x, b.y])
+                                }
+                                PathSegment::CubicTo(a, b, c) => {
+                                    codes.extend([3.0, a.x, a.y, b.x, b.y, c.x, c.y])
+                                }
+                                PathSegment::Close => codes.push(4.0),
+                            }
+                        }
+                    } else {
+                        codes.extend([20.0, 0.0]);
+                    }
+                }
+                _ => return Err("internal resolved SVG clip contains non-geometry artwork".into()),
+            }
+        }
+        codes.extend([20.0, group.children().len() as f32]);
+        Ok(())
+    }
+    let mut codes = Vec::new();
+    children(
+        clip.root(),
+        transform.pre_concat(clip.transform()),
+        &mut codes,
+    )?;
+    if let Some(parent) = clip.clip_path() {
+        codes.extend(resolved_clip_geometry(parent, transform)?);
+        codes.extend([21.0, 2.0]);
+    }
+    Ok(codes)
 }
 
 // Bounds used for rectangular transport come from resolved clip geometry,
@@ -1349,6 +1723,7 @@ fn convert_prepared(
         object_ceiling,
         database: tree.fontdb(),
         fonts: HashMap::new(),
+        programs: HashMap::new(),
         mappings: prepared.mappings,
         clusters: prepared.clusters,
         transform: usvg::Transform::from_row(
@@ -1372,6 +1747,7 @@ fn convert_prepared(
         slot_probe,
         html_surfaces,
         slots,
+        clip_geometry: Vec::new(),
         clip: Some([
             0.0,
             0.0,

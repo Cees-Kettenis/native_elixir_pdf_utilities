@@ -171,7 +171,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
                       if Map.has_key?(cell, :content_layout_source) do
                         with {:ok, request} <-
                                MathTableValidator.prepare_cell_reflow(cell, elem(widths, index)) do
-                          measure_prepared(request.prepared, request.prepared.stretch_constraint)
+                          measured =
+                            measure_prepared(
+                              request.prepared,
+                              request.prepared.stretch_constraint
+                            )
+
+                          # Allocation gives the anonymous cell row its used
+                          # width before percentage children reflow. A narrower
+                          # painted child does not recenter that containing row.
+                          used_width = min(elem(intrinsic, index).width, elem(widths, index))
+                          %{measured | width: max(measured.width, used_width)}
                         else
                           error -> throw({:math_layout_error, error})
                         end
@@ -687,16 +697,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
       end
 
     measured =
-      if Map.get(prepared, :root, false) or Map.get(prepared, :native_owner, false),
-        do: measured,
-        else:
-          decorate_geometry(
-            measured,
-            if(prepared.kind == :matrix,
-              do: allocated_matrix_style(prepared.style),
-              else: prepared.style
-            )
-          )
+      if Map.get(prepared, :root, false) or Map.get(prepared, :native_owner, false) or
+           Map.get(prepared, :outer_box_measured, false),
+         do: measured,
+         else:
+           decorate_geometry(
+             measured,
+             if(prepared.kind == :matrix,
+               do: allocated_matrix_style(prepared.style),
+               else: prepared.style
+             )
+           )
 
     if Map.get(prepared, :hide_paint, false),
       do: %{measured | glyphs: [], drawing_items: [], actual_text: ""},

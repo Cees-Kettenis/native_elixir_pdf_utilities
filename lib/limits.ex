@@ -3,6 +3,10 @@ defmodule NativeElixirPdfUtilities.Limits do
   Runtime resource limits used by PDF parsing, information access, text
   extraction, merging, page transforms, splitting, and HTML-to-PDF rendering.
 
+  Native SVG link clipping uses `:max_svg_clip_projection_work` for contour
+  subdivision and planar arrangement work. `:svg_clip_curve_precision` is
+  the reciprocal of the maximum curve-to-chord deviation in PDF points.
+
   Applications can override individual defaults in `config/config.exs` or
   `config/runtime.exs`:
 
@@ -87,6 +91,8 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_svg_transform_operations: 1_000,
     max_svg_path_segments: 100_000,
     max_svg_stroke_work: 1_000_000,
+    max_svg_clip_projection_work: 2_000_000,
+    svg_clip_curve_precision: 1_024,
     max_svg_gradient_work: 100_000,
     max_svg_filter_work: 250_000_000,
     max_svg_filter_kernel_values: 1024,
@@ -242,6 +248,8 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_svg_filter_work
           | :max_svg_filter_kernel_values
           | :max_svg_filter_octaves
+          | :max_svg_clip_projection_work
+          | :svg_clip_curve_precision
           | :max_svg_stroke_work
           | :svg_raster_scale
           | :max_svg_depth

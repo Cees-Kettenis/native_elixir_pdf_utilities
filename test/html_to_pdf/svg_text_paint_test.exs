@@ -185,6 +185,84 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextPaintTest do
     assert {:ok, "Linked Ω"} = Text.extract(pdf)
   end
 
+  test "continuous authored stripe tiles fill genuine CID text in both axes", %{data: data} do
+    for {dimensions, artwork} <- [
+          {"width='12' height='10'",
+           "<rect width='12' height='10' fill='blue'/><rect width='6' height='10' fill='red'/>"},
+          {"width='10' height='12'",
+           "<rect width='10' height='12' fill='blue'/><rect width='10' height='6' fill='red'/>"}
+        ] do
+      source =
+        "<svg width='300' height='70'><defs><pattern id='p' patternUnits='userSpaceOnUse' x='-2' y='3' #{dimensions} patternTransform='rotate(12)'>#{artwork}</pattern></defs><g transform='translate(8 5)' opacity='.7'><text x='4' y='42' font-family='NativeSvgFont0' font-size='28' fill='url(#p)' fill-opacity='.6'>Stripe office Ω</text></g></svg>"
+
+      assert {:ok, pdf} =
+               SvgBackend.vectorize(source, [width: 300, height: 70], %{
+                 mode: :inline,
+                 fonts: [%{data: data}]
+               })
+
+      assert {:ok, "Stripe office Ω"} = Text.extract(pdf)
+      assert {:ok, document} = Reader.read(pdf)
+      objects = Map.values(document.objects)
+      assert Enum.count(objects, &(get_in(&1, [:value, "PatternType"]) == 1)) == 1
+      refute Enum.any?(objects, &(get_in(&1, [:value, "FunctionType"]) == 4))
+      tile = Enum.find(objects, &(get_in(&1, [:value, "PatternType"]) == 1))
+      assert [x0, y0, x1, y1] = tile.value["BBox"]
+      assert x1 - x0 > 20 or y1 - y0 > 20
+      assert data in Enum.map(objects, &Map.get(&1, :stream))
+      assert pdf =~ "/ca 0.6" and pdf =~ "/ca 0.7"
+      assert pdf =~ "/CIDToGIDMap /Identity"
+      refute pdf =~ "/Subtype /Image"
+      assert {:ok, %{pages: [page]}} = Text.extract_spans(pdf)
+      assert Enum.all?(page.spans, &(&1.paints_text? and &1.render_mode == 0))
+    end
+  end
+
+  test "overlapping opaque bands keep source painter order and charge their emitted paths", %{
+    limits: limits
+  } do
+    source =
+      "<svg width='120' height='70'><defs><pattern id='p' patternUnits='userSpaceOnUse' width='12' height='10'><rect width='12' height='10' fill='blue'/><rect x='3' width='6' height='10' fill='red'/></pattern></defs><rect x='5' y='5' width='100' height='50' fill='url(#p)'/></svg>"
+
+    assert {:ok, pdf} = SvgBackend.vectorize(source, [width: 120, height: 70], %{mode: :inline})
+    assert {:ok, document} = Reader.read(pdf)
+    tile = Enum.find(Map.values(document.objects), &(get_in(&1, [:value, "PatternType"]) == 1))
+    assert length(Regex.scan(~r/ re\n/, tile.stream)) == 3
+    assert length(Regex.scan(~r/0 0 1 rg/, tile.stream)) == 2
+    assert length(Regex.scan(~r/1 0 0 rg/, tile.stream)) == 1
+    Limits.install(Map.put(limits, :max_svg_stroke_work, 19))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             SvgBackend.vectorize(source, [width: 120, height: 70], %{mode: :inline})
+
+    assert diagnostic.stage == :limits
+    assert diagnostic.message =~ "max_svg_stroke_work"
+    assert diagnostic.source != ""
+  end
+
+  test "incomplete and translucent tiles retain their original vector cell semantics", %{
+    data: data
+  } do
+    for artwork <- [
+          "<rect width='6' height='10' fill='red'/>",
+          "<rect width='12' height='10' fill='blue'/><rect width='6' height='10' fill='red' fill-opacity='.5'/>",
+          "<rect width='12' height='10' fill='blue'/><circle cx='4' cy='5' r='3' fill='red'/>"
+        ] do
+      source =
+        "<svg width='240' height='60'><defs><pattern id='p' patternUnits='userSpaceOnUse' width='12' height='10'>#{artwork}</pattern></defs><text x='4' y='40' font-size='28' font-family='NativeSvgFont0' fill='url(#p)'>Tile Ω</text></svg>"
+
+      assert {:ok, pdf} =
+               SvgBackend.vectorize(source, [width: 240, height: 60], %{
+                 mode: :inline,
+                 fonts: [%{data: data}]
+               })
+
+      assert {:ok, "Tile Ω"} = Text.extract(pdf)
+      assert pdf =~ "/PatternType 1"
+      refute pdf =~ "/FunctionType 4"
+    end
+  end
+
   test "gradient, glyph and pattern quotas fail with shared actionable diagnostics before painting",
        %{limits: limits, data: data} do
     gradient =

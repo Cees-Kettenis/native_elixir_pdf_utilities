@@ -34,7 +34,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSchemaCssFlowTest do
     end
   end
 
-  test "ordinary block children use the shared CSS final line baseline" do
+  test "CSS schema Math items use their issued first line baseline" do
     for tag <- ["mfrac", "msqrt", "mroot"] do
       html =
         "<math style='font-size:20pt'><#{tag} style='display:inline-block;padding:0'><mn style='math-depth:0;font-size:20pt'>12</mn><mn style='math-depth:0;font-size:20pt'>34</mn></#{tag}></math>"
@@ -50,8 +50,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSchemaCssFlowTest do
       first_descent = -min(elem(one, 1), elem(two, 1)) * scale
       second_ascent = max(elem(three, 3), elem(four, 3)) * scale
       second_descent = -min(elem(three, 1), elem(four, 1)) * scale
-      assert_in_delta measured.ascent, first_ascent + first_descent + second_ascent, 1.0e-10
-      assert_in_delta measured.descent, second_descent, 1.0e-10
+      assert_in_delta measured.ascent, first_ascent, 1.0e-10
+      assert_in_delta measured.descent, first_descent + second_ascent + second_descent, 1.0e-10
       assert measured.actual_text == "1234"
     end
   end
@@ -75,7 +75,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSchemaCssFlowTest do
     assert constrained.actual_text == natural.actual_text
   end
 
-  test "ordinary inline schemas preserve CSS's ignored width and height behavior" do
+  test "source parent context determines inline schema used boxes and dimensions" do
     children =
       "<mn style='display:inline math;math-depth:0;font-size:20pt'>12</mn><mn style='display:inline math;math-depth:0;font-size:20pt'>34</mn>"
 
@@ -92,10 +92,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSchemaCssFlowTest do
 
       assert {:ok, ordinary} = styled_math(html)
       assert {:ok, authored} = styled_math(sized)
-      assert authored.width == ordinary.width
-      assert authored.ascent == ordinary.ascent
-      assert authored.descent == ordinary.descent
+      assert_in_delta authored.width, 104, 0.75 / 64
+      assert_in_delta authored.ascent + authored.descent, 84, 0.75 / 64
+      assert authored.width > ordinary.width
       assert authored.actual_text == ordinary.actual_text
+
+      flow =
+        "<math style='font-size:20pt'><msqrt style='display:inline-block;padding:0'>#{html |> String.replace("<math style='font-size:20pt'>", "") |> String.replace("</math>", "")}</msqrt></math>"
+
+      sized_flow =
+        String.replace(
+          flow,
+          "display:inline;padding:2pt",
+          "display:inline;padding:2pt;width:100pt;height:80pt"
+        )
+
+      assert {:ok, ordinary_flow} = styled_math(flow)
+      assert {:ok, authored_flow} = styled_math(sized_flow)
+      assert authored_flow.width == ordinary_flow.width
+      assert authored_flow.ascent == ordinary_flow.ascent
+      assert authored_flow.descent == ordinary_flow.descent
+      assert authored_flow.actual_text == ordinary_flow.actual_text
     end
   end
 

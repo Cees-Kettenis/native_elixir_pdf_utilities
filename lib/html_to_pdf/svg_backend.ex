@@ -137,7 +137,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend do
                SvgBackendValidator.prepare_vector(source, options, context, image_budget),
              :ok <- SvgBackendValidator.native_load_result(load_native()) do
           result =
-            if request.annotations? do
+            if request.annotations? or request.glyph_programs? do
               NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize_annotations(
                 request.source,
                 request.fonts,
@@ -205,7 +205,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend do
          {:ok, request} <- SvgBackendValidator.prepare_vector(source, options, context, budget),
          :ok <- SvgBackendValidator.native_load_result(load_native()) do
       result =
-        if request.annotations? do
+        if request.annotations? or request.glyph_programs? do
           NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize_annotations(
             request.source,
             request.fonts,

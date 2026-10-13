@@ -6,7 +6,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFormSlotValidator do
   alias NativeElixirPdfUtilities.Validators.{
     HtmlValidator,
     WriterValidator,
-    SvgForeignObjectValidator
+    SvgForeignObjectValidator,
+    SvgClipGeometryValidator
   }
 
   @doc false
@@ -26,6 +27,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFormSlotValidator do
           } ->
             clip = Map.get(object.value, "NativeHtmlClip")
 
+            geometry = Map.get(object.value, "NativeHtmlClipGeometry")
+
             result =
               with true <- Map.has_key?(issued, id),
                    {:ok, {width, height}} <-
@@ -42,7 +45,12 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFormSlotValidator do
                           Enum.all?(
                             clip,
                             &match?({:ok, _}, HtmlValidator.normalize_geometry_number(&1))
-                          )) do
+                          )),
+                   {:ok, geometry} <-
+                     if(is_nil(geometry),
+                       do: {:ok, nil},
+                       else: SvgClipGeometryValidator.prepare(geometry)
+                     ) do
                 HtmlValidator.reserve_render_resource(:max_layout_boxes, 1, :layout)
 
                 {:ok,
@@ -53,7 +61,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFormSlotValidator do
                    height: height,
                    transform: List.to_tuple(matrix),
                    original: issued[id],
-                   clip: clip
+                   clip: clip,
+                   clip_geometry: geometry
                  }}
               else
                 {:error, _} = error ->
@@ -102,48 +111,73 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFormSlotValidator do
       with {:ok, context} <- WriterValidator.prepare([frame], []) do
         [page] = context.pages
 
-        added =
-          page.boxes
-          |> Enum.filter(
-            &(Map.get(&1, :link_url) != nil or Map.get(&1, :link_destination) != nil)
-          )
-          |> Enum.flat_map(fn box ->
-            {left, bottom, right, top} = Map.fetch!(box, :drawing_annotation_rect)
-            {a, b, c, d, e, f} = placement.transform
+        page.boxes
+        |> Enum.filter(&(Map.get(&1, :link_url) != nil or Map.get(&1, :link_destination) != nil))
+        |> Enum.reduce_while({:ok, links}, fn box, {:ok, links} ->
+          {left, bottom, right, top} = Map.fetch!(box, :drawing_annotation_rect)
+          {a, b, c, d, e, f} = placement.transform
 
-            corners =
-              Enum.map([{left, bottom}, {left, top}, {right, bottom}, {right, top}], fn {x, y} ->
-                {a * x + c * y + e, b * x + d * y + f}
-              end)
+          polygons =
+            case Map.get(box, :drawing_link_quad_points) do
+              nil ->
+                [[{left, bottom}, {right, bottom}, {right, top}, {left, top}]]
 
-            xs = Enum.map(corners, &elem(&1, 0))
-            ys = Enum.map(corners, &elem(&1, 1))
+              points ->
+                points
+                |> Enum.chunk_every(8)
+                |> Enum.map(fn [x1, y1, x2, y2, x3, y3, x4, y4] ->
+                  [{x1, y1}, {x2, y2}, {x4, y4}, {x3, y3}]
+                end)
+            end
 
-            [clip_left, clip_bottom, clip_right, clip_top] =
-              Map.get(placement, :clip) || [0, 0, width, height]
+          [clip_left, clip_bottom, clip_right, clip_top] =
+            Map.get(placement, :clip) || [0, 0, width, height]
 
-            left = max(Enum.min(xs), max(clip_left, 0))
-            right = min(Enum.max(xs), min(clip_right, width))
-            bottom = max(Enum.min(ys), max(clip_bottom, 0))
-            top = min(Enum.max(ys), min(clip_top, height))
+          viewport =
+            {max(clip_left, 0), max(clip_bottom, 0), min(clip_right, width),
+             min(clip_top, height)}
 
-            if right > left and top > bottom do
-              [
-                %{
-                  type: :link_region,
-                  x: left,
-                  y: bottom,
-                  width: right - left,
-                  height: top - bottom
-                }
-                |> Map.merge(Map.take(box, [:link_url, :link_destination]))
-              ]
+          Enum.reduce_while(polygons, {:ok, links}, fn polygon, {:ok, links} ->
+            corners = Enum.map(polygon, fn {x, y} -> {a * x + c * y + e, b * x + d * y + f} end)
+
+            with {:ok, quads} <-
+                   SvgClipGeometryValidator.project(
+                     Map.get(placement, :clip_geometry),
+                     corners,
+                     viewport
+                   ) do
+              added =
+                Enum.map(quads, fn quad ->
+                  xs = Enum.take_every(quad, 2)
+                  ys = quad |> Enum.drop(1) |> Enum.take_every(2)
+                  left = Enum.min(xs)
+                  bottom = Enum.min(ys)
+
+                  %{
+                    type: :link_region,
+                    x: left,
+                    y: bottom,
+                    width: Enum.max(xs) - left,
+                    height: Enum.max(ys) - bottom,
+                    link_quad_points: quad
+                  }
+                  |> Map.merge(Map.take(box, [:link_url, :link_destination]))
+                end)
+
+              {:cont, {:ok, Enum.reverse(added, links)}}
             else
-              []
+              error -> {:halt, error}
             end
           end)
-
-        {:cont, {:ok, Enum.reverse(added, links)}}
+          |> case do
+            {:ok, links} -> {:cont, {:ok, links}}
+            error -> {:halt, error}
+          end
+        end)
+        |> case do
+          {:ok, links} -> {:cont, {:ok, links}}
+          error -> {:halt, error}
+        end
       else
         error -> {:halt, error}
       end

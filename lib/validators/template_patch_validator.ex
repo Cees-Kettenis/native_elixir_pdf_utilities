@@ -294,12 +294,27 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
           end)
           |> Kernel.++([:fragment_tree, "template"])
 
-        consumer.(%{
-          source: invocation.source,
-          plan: entry.context,
-          opening: prepared,
-          prospective_ancestors: ancestors
+        # The marker describes this exact consumed parse, never a caller option.
+        key = {__MODULE__, :candidate_capture}
+        previous = Process.get(key)
+
+        Process.put(key, %{
+          handle: handle,
+          tree: tree,
+          invocation: invocation.id,
+          offset: entry.context.source_offset
         })
+
+        try do
+          consumer.(%{
+            source: invocation.source,
+            plan: entry.context,
+            opening: prepared,
+            prospective_ancestors: ancestors
+          })
+        after
+          if previous, do: Process.put(key, previous), else: Process.delete(key)
+        end
       end
     end)
   end

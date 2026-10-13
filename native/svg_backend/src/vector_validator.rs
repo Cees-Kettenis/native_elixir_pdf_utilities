@@ -30,44 +30,7 @@ pub fn work(group: &usvg::Group, ceiling: u64) -> Result<u64, String> {
                 _ => 0,
             },
             usvg::Node::Path(path) => {
-                let mut length = 0.0f64;
-                let mut previous = Point::from_xy(0.0, 0.0);
-                let mut start = previous;
-                let mut segments = 0u64;
-                for segment in path.data().segments() {
-                    segments += 1;
-                    let points = match segment {
-                        PathSegment::MoveTo(p) => {
-                            previous = p;
-                            start = p;
-                            vec![]
-                        }
-                        PathSegment::LineTo(p) => vec![p],
-                        PathSegment::QuadTo(a, b) => vec![a, b],
-                        PathSegment::CubicTo(a, b, c) => vec![a, b, c],
-                        PathSegment::Close => vec![start],
-                    };
-                    // A Bezier's control polygon bounds its arc length.
-                    for p in points {
-                        length += ((p.x as f64 - previous.x as f64).powi(2)
-                            + (p.y as f64 - previous.y as f64).powi(2))
-                        .sqrt();
-                        previous = p;
-                    }
-                }
-                let repetitions = path
-                    .stroke()
-                    .and_then(|stroke| stroke.dasharray())
-                    .map(|dash| {
-                        let period: f64 = dash.iter().map(|n| *n as f64).sum();
-                        ((length / period).ceil() + 1.0) * dash.len() as f64
-                    })
-                    .unwrap_or(1.0);
-                let amount = segments as f64 * repetitions;
-                if !amount.is_finite() || amount > ceiling as f64 {
-                    return Err("max_svg_stroke_work".into());
-                }
-                let mut total = amount.ceil() as u64;
+                let mut total = path_work(path.data(), path.stroke(), ceiling)?;
                 for paint in path
                     .fill()
                     .map(|f| f.paint())
@@ -75,7 +38,11 @@ pub fn work(group: &usvg::Group, ceiling: u64) -> Result<u64, String> {
                     .chain(path.stroke().map(|s| s.paint()))
                 {
                     if let usvg::Paint::Pattern(pattern) = paint {
-                        total = total.saturating_add(work(pattern.root(), ceiling)?);
+                        let source = work(pattern.root(), ceiling)?;
+                        let bands = stripe_pattern(pattern)
+                            .map(|plan| plan.bands.len() as u64 * 5)
+                            .unwrap_or(0);
+                        total = total.saturating_add(source.max(bands));
                     }
                 }
                 total
@@ -96,6 +63,136 @@ fn clip_work(clip: &usvg::ClipPath, ceiling: u64) -> Result<u64, String> {
     }
     if total > ceiling {
         return Err("max_svg_stroke_work".into());
+    }
+    Ok(total)
+}
+
+pub fn path_work(
+    data: &usvg::tiny_skia_path::Path,
+    stroke: Option<&usvg::Stroke>,
+    ceiling: u64,
+) -> Result<u64, String> {
+    let mut length = 0.0f64;
+    let mut previous = Point::from_xy(0.0, 0.0);
+    let mut start = previous;
+    let mut segments = 0u64;
+    for segment in data.segments() {
+        segments += 1;
+        let points = match segment {
+            PathSegment::MoveTo(p) => {
+                previous = p;
+                start = p;
+                vec![]
+            }
+            PathSegment::LineTo(p) => vec![p],
+            PathSegment::QuadTo(a, b) => vec![a, b],
+            PathSegment::CubicTo(a, b, c) => vec![a, b, c],
+            PathSegment::Close => vec![start],
+        };
+        // A Bezier's control polygon bounds its arc length.
+        for p in points {
+            length += ((p.x as f64 - previous.x as f64).powi(2)
+                + (p.y as f64 - previous.y as f64).powi(2))
+            .sqrt();
+            previous = p;
+        }
+    }
+    let repetitions = stroke
+        .and_then(|stroke| stroke.dasharray())
+        .map(|dash| {
+            let period: f64 = dash.iter().map(|n| *n as f64).sum();
+            ((length / period).ceil() + 1.0) * dash.len() as f64
+        })
+        .unwrap_or(1.0);
+    let amount = segments as f64 * repetitions;
+    if !amount.is_finite() || amount > ceiling as f64 {
+        return Err("max_svg_stroke_work".into());
+    }
+    Ok(amount.ceil() as u64)
+}
+
+/// Charges the additional font-program geometry for every original expanded
+/// occurrence before either raster preflight or vector font emission.
+pub fn program_work(
+    group: &usvg::Group,
+    database: &usvg::fontdb::Database,
+    ceiling: u64,
+) -> Result<u64, String> {
+    let mut total = 0u64;
+    if let Some(mask) = group.mask() {
+        let mut mask = Some(mask);
+        while let Some(current) = mask {
+            total = total.saturating_add(program_work(
+                current.root(),
+                database,
+                ceiling.saturating_sub(total),
+            )?);
+            mask = current.mask();
+        }
+    }
+    for node in group.children() {
+        let amount = match node {
+            usvg::Node::Group(group) => {
+                program_work(group, database, ceiling.saturating_sub(total))?
+            }
+            usvg::Node::Image(image) => match image.kind() {
+                usvg::ImageKind::SVG(tree) => {
+                    program_work(tree.root(), tree.fontdb(), ceiling.saturating_sub(total))?
+                }
+                _ => 0,
+            },
+            usvg::Node::Path(path) => {
+                let mut cost = 0u64;
+                for paint in path
+                    .fill()
+                    .map(|fill| fill.paint())
+                    .into_iter()
+                    .chain(path.stroke().map(|stroke| stroke.paint()))
+                {
+                    if let usvg::Paint::Pattern(pattern) = paint {
+                        cost = cost.saturating_add(program_work(
+                            pattern.root(),
+                            database,
+                            ceiling.saturating_sub(total).saturating_sub(cost),
+                        )?);
+                    }
+                }
+                cost
+            }
+            usvg::Node::Text(text) => {
+                let mut cost = 0u64;
+                for span in text.layouted() {
+                    if let Some(stroke) = span.stroke.as_ref() {
+                        for glyph in &span.positioned_glyphs {
+                            if cost >= ceiling.saturating_sub(total) {
+                                return Err("max_svg_stroke_work".into());
+                            }
+                            let program = crate::glyph_program_validator::prepare_bounded(
+                                glyph,
+                                Some(stroke),
+                                database,
+                                ceiling.saturating_sub(total).saturating_sub(cost),
+                            )?;
+                            cost = cost.saturating_add(
+                                1 + program
+                                    .path
+                                    .as_ref()
+                                    .map(|path| path.segments().count() as u64)
+                                    .unwrap_or(0),
+                            );
+                            if cost > ceiling.saturating_sub(total) {
+                                return Err("max_svg_stroke_work".into());
+                            }
+                        }
+                    }
+                }
+                cost
+            }
+        };
+        total = total.saturating_add(amount);
+        if total > ceiling {
+            return Err("max_svg_stroke_work".into());
+        }
     }
     Ok(total)
 }
@@ -147,7 +244,12 @@ pub fn gradient_work(group: &usvg::Group, ceiling: u64) -> Result<u64, String> {
                         Ok(match paint {
                             usvg::Paint::LinearGradient(g) => g.stops().len() as u64,
                             usvg::Paint::RadialGradient(g) => g.stops().len() as u64,
-                            usvg::Paint::Pattern(p) => gradient_work(p.root(), ceiling)?,
+                            usvg::Paint::Pattern(p) => gradient_work(p.root(), ceiling)?
+                                .saturating_add(
+                                    stripe_pattern(p)
+                                        .map(|plan| plan.bands.len() as u64 + 1)
+                                        .unwrap_or(0),
+                                ),
                             _ => 0,
                         })
                     })
@@ -247,12 +349,15 @@ pub fn text_with_surfaces<'a>(
                     );
                 }
                 for span in text_node.layouted() {
-                    if span.stroke.is_some()
+                    if span
+                        .stroke
+                        .as_ref()
+                        .is_some_and(|stroke| !matches!(stroke.paint(), usvg::Paint::Color(_)))
                         || span.underline.is_some()
                         || span.overline.is_some()
                         || span.line_through.is_some()
                     {
-                        return Err("SVG text currently requires fill without stroke or decorations; native stroke text paint remains pending".into());
+                        return Err("SVG text currently requires solid RGB stroke without decorations; native gradient stroke paint remains pending".into());
                     }
                     let clusters = clusters(span, database)?;
                     for cluster in &clusters {
@@ -551,4 +656,191 @@ fn clusters<'a>(
         return Err("SVG glyph cluster has no matching original Unicode replacement".into());
     }
     Ok(clusters)
+}
+
+/// A complete opaque rectangle tile can repeat as continuous bands. This
+/// issued plan preserves painter order, including overlapping backgrounds.
+/// Other artwork retains its ordinary bounded vector tiling program.
+pub struct StripePattern {
+    pub vertical: bool,
+    pub period: f32,
+    pub bands: Vec<(f32, usvg::Color)>,
+}
+
+pub struct StripePaint {
+    pub vertical: bool,
+    pub period: f32,
+    pub bands: Vec<(f32, usvg::Color)>,
+    pub cross_start: f32,
+    pub cross_end: f32,
+    pub transform: usvg::Transform,
+}
+
+/// Derive the invariant-axis cell from the real paint extent. Singular or empty
+/// extents keep ordinary tiling semantics rather than creating a new failure.
+pub fn stripe_paint(pattern: &usvg::Pattern, bounds: usvg::Rect) -> Option<StripePaint> {
+    let plan = stripe_pattern(pattern)?;
+    let rect = pattern.rect();
+    let transform = pattern.transform().pre_translate(rect.x(), rect.y());
+    let extent = bounds.transform(transform.invert()?)?;
+    let (low, high) = if plan.vertical {
+        (extent.top(), extent.bottom())
+    } else {
+        (extent.left(), extent.right())
+    };
+    let length = high - low;
+    let cross_start = low - length;
+    let cross_end = high + length;
+    if length <= 0.0
+        || !cross_start.is_finite()
+        || !cross_end.is_finite()
+        || !(cross_end - cross_start).is_finite()
+    {
+        return None;
+    }
+    Some(StripePaint {
+        vertical: plan.vertical,
+        period: plan.period,
+        bands: plan.bands,
+        cross_start,
+        cross_end,
+        transform,
+    })
+}
+
+pub fn stripe_pattern(pattern: &usvg::Pattern) -> Option<StripePattern> {
+    let mut rectangles = Vec::new();
+    stripe_rectangles(pattern.root(), usvg::Transform::identity(), &mut rectangles)?;
+    let tile = pattern.rect();
+    for vertical in [true, false] {
+        let (period, cross) = if vertical {
+            (tile.width(), tile.height())
+        } else {
+            (tile.height(), tile.width())
+        };
+        if !rectangles.iter().all(|(rect, _)| {
+            let (low, high) = if vertical {
+                (rect.top(), rect.bottom())
+            } else {
+                (rect.left(), rect.right())
+            };
+            low <= 0.0 && high >= cross
+        }) {
+            continue;
+        }
+        // Sweep authored interval edges in O(n log n). The highest active
+        // source index wins, exactly matching SVG painter order.
+        let mut edges = Vec::new();
+        for (index, (rect, _)) in rectangles.iter().enumerate() {
+            let (low, high) = if vertical {
+                (rect.left(), rect.right())
+            } else {
+                (rect.top(), rect.bottom())
+            };
+            let low = low.clamp(0.0, period);
+            let high = high.clamp(0.0, period);
+            if low < high {
+                edges.push((low, true, index));
+                edges.push((high, false, index));
+            }
+        }
+        edges.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut active: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        let mut bands: Vec<(f32, usvg::Color)> = Vec::new();
+        let mut position = 0.0;
+        let mut index = 0;
+        let mut covered = true;
+        while index < edges.len() {
+            let boundary = edges[index].0;
+            if boundary > position {
+                let Some(source) = active.last().copied() else {
+                    covered = false;
+                    break;
+                };
+                let color = rectangles[source].1;
+                match bands.last_mut() {
+                    Some((end, previous)) if *previous == color => *end = boundary,
+                    _ => bands.push((boundary, color)),
+                }
+                position = boundary;
+            }
+            while index < edges.len() && edges[index].0 == boundary {
+                let (_, start, source) = edges[index];
+                if start {
+                    active.insert(source);
+                } else {
+                    active.remove(&source);
+                }
+                index += 1;
+            }
+        }
+        if covered && position == period && !bands.is_empty() {
+            return Some(StripePattern {
+                vertical,
+                period,
+                bands,
+            });
+        }
+    }
+    None
+}
+
+fn stripe_rectangles(
+    group: &usvg::Group,
+    transform: usvg::Transform,
+    rectangles: &mut Vec<(usvg::Rect, usvg::Color)>,
+) -> Option<()> {
+    if group.opacity().get() != 1.0
+        || group.clip_path().is_some()
+        || group.mask().is_some()
+        || !group.filters().is_empty()
+    {
+        return None;
+    }
+    let transform = transform.pre_concat(group.transform());
+    for node in group.children() {
+        match node {
+            usvg::Node::Group(group) => stripe_rectangles(group, transform, rectangles)?,
+            usvg::Node::Path(path) if !path.is_visible() => {}
+            usvg::Node::Path(path) => {
+                if path.stroke().is_some() {
+                    return None;
+                }
+                let fill = path.fill()?;
+                let usvg::Paint::Color(color) = fill.paint() else {
+                    return None;
+                };
+                if fill.opacity().get() != 1.0 {
+                    return None;
+                }
+                let data = path.data().clone().transform(transform)?;
+                let mut points = Vec::new();
+                let mut closed = false;
+                for segment in data.segments() {
+                    match segment {
+                        PathSegment::MoveTo(point) if points.is_empty() => points.push(point),
+                        PathSegment::LineTo(point) if !closed => points.push(point),
+                        PathSegment::Close if !closed => closed = true,
+                        _ => return None,
+                    }
+                }
+                if points.last() == points.first() {
+                    points.pop();
+                }
+                if !closed
+                    || points.len() != 4
+                    || !(0..4).all(|i| {
+                        let a = points[i];
+                        let b = points[(i + 1) % 4];
+                        (a.x == b.x) != (a.y == b.y)
+                    })
+                {
+                    return None;
+                }
+                rectangles.push((data.bounds(), *color));
+            }
+            _ => return None,
+        }
+    }
+    Some(())
 }

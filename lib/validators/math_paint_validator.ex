@@ -29,7 +29,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathPaintValidator do
                 |> FontValidator.prepare_text_ink_rectangle()
 
               %{kind: :native, box: box, x: x, y: y} ->
-                box |> DrawingGeometry.translate_box(x, y) |> native_geometry(nil)
+                [translated] = DrawingGeometry.translate_boxes([box], x, y)
+                native_geometry(translated, nil)
 
               %{kind: :background, x: x, y: y, width: width, height: height} ->
                 {:ok, if(width > 0 and height > 0, do: {x, y, x + width, y + height})}

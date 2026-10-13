@@ -3,6 +3,7 @@ mod annotation_validator;
 mod color_validator;
 mod effects_validator;
 mod filter_logic_validator;
+mod glyph_program_validator;
 mod html_surface;
 mod html_surface_validator;
 mod image_resources;
@@ -423,6 +424,12 @@ fn validate_shape_work<'a>(env: Env<'a>, source: String, ceilings: Term<'a>) -> 
                 &options,
             )?;
             let initial_strokes = vector_validator::work(initial.root(), strokes)?;
+            let initial_strokes = initial_strokes
+                + vector_validator::program_work(
+                    initial.root(),
+                    initial.fontdb(),
+                    strokes.saturating_sub(initial_strokes),
+                )?;
             let initial_gradients = vector_validator::gradient_work(initial.root(), gradients)?;
             let measurement_work = measurement
                 .as_ref()
@@ -468,12 +475,17 @@ fn validate_shape_work<'a>(env: Env<'a>, source: String, ceilings: Term<'a>) -> 
                 let final_tree = parse_shape_tree(&prepared.source, &options)?;
                 text_source_validator::verify(&prepared, &final_tree)?;
                 vector_validator::text(final_tree.root(), final_tree.fontdb())?;
+                let final_strokes = vector_validator::work(
+                    final_tree.root(),
+                    strokes.saturating_sub(initial_strokes),
+                )?;
+                let final_programs = vector_validator::program_work(
+                    final_tree.root(),
+                    final_tree.fontdb(),
+                    strokes.saturating_sub(initial_strokes + final_strokes),
+                )?;
                 (
-                    initial_strokes
-                        + vector_validator::work(
-                            final_tree.root(),
-                            strokes.saturating_sub(initial_strokes),
-                        )?,
+                    initial_strokes + final_strokes + final_programs,
                     initial_gradients
                         + vector_validator::gradient_work(
                             final_tree.root(),
@@ -536,6 +548,12 @@ fn validate_shape_work<'a>(env: Env<'a>, source: String, ceilings: Term<'a>) -> 
     .and_then(|tree| {
         vector_validator::text(tree.root(), tree.fontdb())?;
         let strokes = vector_validator::work(tree.root(), stroke_ceiling)?;
+        let strokes = strokes
+            + vector_validator::program_work(
+                tree.root(),
+                tree.fontdb(),
+                stroke_ceiling.saturating_sub(strokes),
+            )?;
         let gradients = vector_validator::gradient_work(tree.root(), gradient_ceiling)?;
         Ok((strokes, gradients))
     });

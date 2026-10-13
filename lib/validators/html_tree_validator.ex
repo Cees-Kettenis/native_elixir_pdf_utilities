@@ -50,7 +50,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
           end
 
       if valid?,
-        do: :ok,
+        do: HtmlValidator.validate_attribute_order(node),
         else:
           metadata_error(
             node,

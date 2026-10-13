@@ -292,25 +292,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                         _ ->
                           opts
                       end),
-                   {:ok, composition} <-
-                     NativeElixirPdfUtilities.HtmlToPdf.HtmlComposition.compose_validated(dom),
-                   children <- composition.composed.children,
-                   children <-
-                     if(initial_controls? or map_size(composition.roots) > 0,
-                       do:
-                         NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare_composed_initial_nodes(
-                           dom,
-                           composition.roots,
-                           children,
-                           %{}
-                         ),
-                       else: HtmlValidator.assign_render_metadata(children)
-                     ),
                    {:ok, composition, children} <-
-                     NativeElixirPdfUtilities.HtmlToPdf.HtmlSelectedContent.populate_composition_validated(
-                       composition,
-                       children,
-                       dom
+                     NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.prepare_composition(
+                       dom,
+                       initial_controls?
                      ),
                    {:ok, link_context} <-
                      HtmlLinkValidator.prepare_composition(
@@ -1022,6 +1007,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                     :attributes,
                     :namespace,
                     :attribute_namespaces,
+                    :attribute_order,
                     :node_id,
                     :document_id,
                     :tree_scope_id,
@@ -1457,8 +1443,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                    prepare_embedded_element(node, element_style, children, opts) do
               case Map.get(element_style, :display) do
                 _ when is_map_key(element_style, :_html_content_skipped) ->
-                  {:ok, [%{type: :element, tag: tag, style: element_style, children: []}],
-                   counters, counters}
+                  skipped =
+                    Map.merge(
+                      Map.take(node, [:_initial_form_state, :_initial_gauge_state]),
+                      %{type: :element, tag: tag, style: element_style, children: []}
+                    )
+
+                  {:ok, [skipped], counters, counters}
 
                 :none ->
                   {:ok, [%{type: :element, tag: tag, style: element_style, children: []}],
@@ -4682,7 +4673,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                      ),
                    do:
                      {:ok,
-                      Map.put(style, :_position_viewport, Map.get(rules, :position_viewport))}
+                      style
+                      |> Map.put(:_position_viewport, Map.get(rules, :position_viewport))
+                      |> then(
+                        &NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare_skipped_input_style(
+                          node,
+                          &1,
+                          declarations
+                        )
+                      )}
             end
           end
         end

@@ -59,6 +59,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   A `:link_region` has positive point dimensions and a URI or explicit destination.
   It creates an annotation over real content already painted by a Form and emits no drawing instructions.
+  Its optional `:link_quad_points` contains eight local coordinates in PDF viewer
+  order, top-left, top-right, bottom-left, bottom-right. The convex region must
+  fit its rectangle. Group transforms and clips preserve the actual hit region.
 
   A `:drawing_group` contains non-negative local `:width` and `:height`, a
   six-value `:transform` tuple, optional `:baseline` within its height, optional
@@ -659,10 +662,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             )
         end
 
-      left = max(0, left)
-      bottom = max(0, bottom)
-      right = min(page_width, right)
-      top = min(page_height, top)
+      {left, bottom, right, top} =
+        if Map.has_key?(box, :drawing_link_quad_points) do
+          {left, bottom, right, top}
+        else
+          {max(0, left), max(0, bottom), min(page_width, right), min(page_height, top)}
+        end
 
       if right > left and top > bottom do
         quads =
@@ -684,7 +689,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             %{
               destination: Map.get(box, :link_destination) || {:uri, box.link_url},
               rect: {left, bottom, right, top},
-              quads: quads
+              quads: quads,
+              quad_points:
+                Map.get(box, :drawing_link_quad_points, Map.get(box, :link_quad_points))
             }
           ]
         end
@@ -719,11 +726,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp quad_points(annotation) do
-    case Map.get(annotation, :quads) do
-      nil ->
+    case {Map.get(annotation, :quad_points), Map.get(annotation, :quads)} do
+      {points, _} when is_list(points) ->
+        " /QuadPoints [#{Enum.map_join(points, " ", &format_number/1)}]"
+
+      {nil, nil} ->
         ""
 
-      quads ->
+      {nil, quads} ->
         numbers = for quad <- quads, {x, y} <- quad, number <- [x, y], do: format_number(number)
         " /QuadPoints [" <> Enum.join(numbers, " ") <> "]"
     end

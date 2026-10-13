@@ -512,6 +512,101 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     end
   end
 
+  @doc "Resolves skipped initial input intrinsic dimensions without preparing internal artwork."
+  @spec prepare_skipped_input_style(map(), map(), [{String.t(), String.t()}]) :: map()
+  def prepare_skipped_input_style(node, style, declarations) do
+    if node.tag == "input" and Map.get(node, :namespace, :html) == :html and
+         Map.get(style, :content_visibility) == :hidden and
+         Map.get(style, :display) not in [:inline, :contents, :none] do
+      attributes = initial_control_attributes(node)
+      kind = HtmlValidator.input_type(Map.get(attributes, "type", "text"))
+      properties = MapSet.new(declarations, &elem(&1, 0))
+
+      style =
+        case kind do
+          kind when kind in ~w(date month week time datetime-local) ->
+            Enum.reduce([:width, :height], style, fn key, result ->
+              if result[key] in [nil, :auto], do: Map.put(result, key, 0.0), else: result
+            end)
+
+          "range" ->
+            if style.height in [nil, :auto] or not MapSet.member?(properties, "height"),
+              do: Map.put(style, :height, 0.0),
+              else: style
+
+          "file" ->
+            style =
+              if style.width in [nil, :auto] do
+                size = Float.floor(style.font_size / 0.75 * 64) / 64 * 0.75
+
+                width =
+                  Float.ceil(
+                    34 *
+                      NativeElixirPdfUtilities.HtmlToPdf.Font.text_width(
+                        "0",
+                        style.font_face,
+                        size,
+                        style.letter_spacing
+                      ) / 0.75
+                  ) * 0.75
+
+                HtmlValidator.check_render_resource(:max_css_numeric_magnitude, width, :style)
+                Map.put(style, :width, width)
+              else
+                style
+              end
+
+            if style.height in [nil, :auto], do: Map.put(style, :height, 0.0), else: style
+
+          "image" ->
+            {:ok, hints} =
+              HtmlValidator.html_dimension_hints(
+                attributes,
+                [{"width", :width}, {"height", :height}],
+                "input/image"
+              )
+
+            Enum.reduce([:width, :height], style, fn key, result ->
+              if result[key] in [nil, :auto] or
+                   (not MapSet.member?(properties, Atom.to_string(key)) and
+                      not Map.has_key?(hints, key)),
+                 do: Map.put(result, key, 0.0),
+                 else: result
+            end)
+            |> Map.drop([:image, :_responsive_image])
+            |> Map.put(
+              :display,
+              if(style.display == :image,
+                do:
+                  if(Map.get(style, :image_display) == :inline, do: :inline_block, else: :block),
+                else: style.display
+              )
+            )
+
+          _ ->
+            style
+        end
+
+      if kind in ~w(color range file image date month week time datetime-local) do
+        style = Map.drop(style, [:_temporal_state, :_image_input_state])
+
+        if kind in ~w(color range) do
+          Map.put(style, if(kind == "color", do: :_color_control, else: :_range_control), %{
+            tag: "input",
+            attributes: attributes,
+            initial_state: node._initial_form_state
+          })
+        else
+          Map.put(style, :form_kind, :skipped_input)
+        end
+      else
+        style
+      end
+    else
+      style
+    end
+  end
+
   @doc false
   @spec prepare_special_input_style(map(), map(), keyword()) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
@@ -521,6 +616,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
     cond do
       Map.get(node, :namespace, :html) != :html or node.tag != "input" or style.display == :none ->
+        {:ok, style}
+
+      Map.get(style, :_html_content_skipped, false) ->
         {:ok, style}
 
       type == "image" and style.border_radius > 0 and

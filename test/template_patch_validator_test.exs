@@ -704,7 +704,13 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorTest do
     [html] = dom.children
     [head, body] = html.children
     [template] = head.children
-    template = %{template | attributes: Map.put(template.attributes, "for", "A")}
+
+    template = %{
+      template
+      | attributes: Map.put(template.attributes, "for", "A"),
+        attribute_order: ["for"]
+    }
+
     dom = %{dom | children: [%{html | children: [%{head | children: [template]}, body]}]}
 
     assert {:error, {:unsupported_html, diagnostic}} = Style.compute_detailed(dom)

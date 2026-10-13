@@ -124,7 +124,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
           "<tspan>text</tspan>",
           "<defs><linearGradient id='g' /></defs>",
           "<image href='https://example.test/private.png' />",
-          "<a href='https://example.test/'><rect width=10 height=10 /></a>",
           "<clipPath id='clip'><rect width=10 height=10 /></clipPath>"
         ] do
       assert {:error, {_reason, diagnostic}} =
@@ -133,6 +132,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
       assert diagnostic.stage in [:html, :style, :layout, :asset]
       assert is_binary(diagnostic.message) and diagnostic.message != ""
     end
+
+    assert {:ok, linked_pdf} =
+             HtmlToPdf.render(
+               "<svg width=20 height=20><a href='https://example.test/'><rect width=10 height=10 /></a></svg>"
+             )
+
+    assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(linked_pdf)
+
+    [page] = document.pages
+    annotations = document.objects[page.ref].value["Annots"]
+    links = for {:ref, ref} <- annotations, do: document.objects[ref].value
+
+    assert [%{"A" => %{"URI" => {:string, "https://example.test/"}}, "Rect" => [l, b, r, t]}] =
+             links
+
+    assert r > l and t > b
+    assert linked_pdf =~ "/Subtype /Form"
 
     assert {:error, {:invalid_document, %{source: "rect mask"}}} =
              HtmlToPdf.render(

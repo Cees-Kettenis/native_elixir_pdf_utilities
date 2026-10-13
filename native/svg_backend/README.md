@@ -349,3 +349,30 @@ shape and nested viewport dependence remain to be implemented.
 The original inline_svg_filter_text_inputs case passes its unchanged1% gates.
 Exact nonlinear output-ink selection, per-cluster filter displacement and links,
 HTML/resource feImage inputs, filterRes and kernelUnitLength remain open.
+
+## Continuous band text patterns
+
+Complete opaque rectangle tiles resolve to continuous vector bands. The native
+validator sweeps authored interval edges in painter order, merges adjacent equal
+colors and extends the invariant axis across the actual paint extent. The other
+axis keeps its original period, origin and transform. This avoids clipping a
+stripe into short repeated cells while retaining a native PDF tiling program.
+Incomplete, translucent and nonrectangular tile artwork uses its existing native
+cell program. The emitted band paths reserve max_svg_stroke_work before painting.
+The interval sweep is O(n log n); the drawing program does not grow with the
+number of repetitions across a page.
+
+Selected CID text prepares its actual paint and opacity once per span before
+painting original clusters. The helper also receives the real text-object bounds
+for continuous bands. Full selected font bytes, GIDs and once-per-cluster
+ActualText stay in the existing authority. The shared paint helper can accept an
+issued stroke paint when the native glyph-program owner integrates an approved
+stroke pass. This batch does not import or qualify that owner's prototype.
+
+The exact published a172 pattern/marker baseline was rerun and reproduces its
+5.641865% changed-pixel ratio and 1.294033% average delta. Continuous bands reduce
+these to 4.613095% and .710057%; the unchanged 1% changed-pixel gate remains red.
+The new text stripe fixture and the earlier general text paint fixture also
+remain red at their original 1% gates. Original fixtures and all failed
+experiments remain preserved. Full acceptance is deferred by the current user
+workflow, and this batch does not close paint-server browser parity.

@@ -442,8 +442,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   viewport clipping occurs. Atomic elements retain their existing baseline rules.
   Prepared MathML retains its preferred widths independently of actual advance
   and paint geometry.
+  Ordinary block boxes use their allocated containing width, while their
+  preferred widths use the shared CSS intrinsic and min/max sizing rules with
+  an indefinite percentage basis. Authored box sizing applies to both axes.
   `first_alphabetic_baseline` records the first content baseline relative to the
   atomic alphabetic baseline, for MathML Core block-box composition.
+  The optional `:formatting_context` is `:flow` by default. `:math`, `:flex`
+  and `:grid` use CSS's block-container box for authored inline flow items;
+  the source node and its computed display remain unchanged.
   """
   @spec measure_child(term(), term(), term()) ::
           {:ok, map()} | {:error, {atom(), NativeElixirPdfUtilities.Diagnostics.diagnostic()}}
@@ -492,6 +498,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     node = request.node
     style = node.style
 
+    ordinary_box? =
+      style.display in [:block, :inline_block] and Map.has_key?(node, :children) and
+        not Enum.any?(
+          [
+            :_math_box,
+            :_ruby_box,
+            :svg_scene,
+            :svg_image,
+            :image,
+            :embedded_document,
+            :form_kind
+          ],
+          &Map.has_key?(style, &1)
+        ) and not Map.get(style, :_fieldset, false)
+
     neutral_style =
       style
       |> Map.put(:display, :block)
@@ -504,16 +525,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         else: node
 
     node =
+      if ordinary_box? and style.display == :block and request.available_width != nil do
+        margin = Map.get(style, :margin, edges(0.0))
+
+        available =
+          max(
+            request.available_width - horizontal_box_size(style) - margin.left - margin.right,
+            0.0
+          )
+
+        content_width = resolved_content_size(style, :width, request.available_width, available)
+
+        used_width =
+          if Map.get(style, :box_sizing, :content_box) == :border_box,
+            do: content_width + horizontal_box_size(style),
+            else: content_width
+
+        %{node | style: Map.put(style, :width, used_width)}
+      else
+        node
+      end
+
+    node =
       if request.atomic do
         display =
-          case style.display do
+          case request.used_display do
             :block -> :inline_block
             :flex -> :inline_flex
             :grid -> :inline_grid
             other -> other
           end
 
-        %{node | style: Map.put(style, :display, display)}
+        %{node | style: Map.put(node.style, :display, display)}
       else
         node
       end
@@ -527,6 +570,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         |> Enum.max(fn -> 0.0 end)
 
       minimum = inline_minimum_content_width(runs)
+
+      # An atomic wrapper has one advance, but its ordinary children still have
+      # independent preferred widths. Reuse the existing CSS intrinsic sizing
+      # and box constraint rules with an indefinite percentage basis.
+      {minimum, maximum} =
+        if ordinary_box? do
+          margin = Map.get(style, :margin, edges(0.0))
+          edges_width = horizontal_box_size(style) + margin.left + margin.right
+          minimum = fieldset_content_width(node.children, style, :min)
+          maximum = fieldset_content_width(node.children, style, :max)
+
+          {resolved_content_size(style, :width, nil, minimum) + edges_width,
+           resolved_content_size(style, :width, nil, maximum) + edges_width}
+        else
+          {minimum, maximum}
+        end
 
       width =
         if request.available_width == nil,
@@ -636,7 +695,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
         wrapper = %{type: :element, tag: "span", style: wrapper_style, children: [node]}
 
-        with {:ok, child} <- measure_prepared_child(%{request | node: wrapper, atomic: true}) do
+        with {:ok, child} <-
+               measure_prepared_child(%{
+                 request
+                 | node: wrapper,
+                   atomic: true,
+                   used_display: :inline_block
+               }) do
           first = child.first_alphabetic_baseline
 
           {:ok,
@@ -5631,7 +5696,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             end
 
           {:ok, cell_backgrounds} =
-            if tracks.baseline_policy == :fragmented_start and tracks.has_spanning_cells do
+            if tracks.has_spanning_cells do
               HtmlTableValidator.prepare_cell_background_geometry(
                 grid_rows,
                 row_heights,
@@ -9687,7 +9752,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           end
 
         style =
-          if (Map.has_key?(style, :_color_state) or Map.has_key?(style, :_file_display)) and
+          if ((Map.has_key?(style, :_color_state) and
+                 not Map.get(style, :_html_content_skipped, false)) or
+                Map.has_key?(style, :_file_display)) and
                Map.get(style, :vertical_align, :baseline) == :middle do
             case HtmlValidator.text_x_height(parent_style) do
               height when is_number(height) ->
@@ -10098,7 +10165,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     # The empty swatch contributes its margin-edge baseline. The fixed UA
     # wrapper's bottom padding remains below that baseline inside the host.
     baseline =
-      if Map.has_key?(style, :_color_state),
+      if Map.has_key?(style, :_color_state) and not Map.get(style, :_html_content_skipped, false),
         do:
           content_height -
             NativeElixirPdfUtilities.HtmlToPdf.ColorArtwork.wrapper_padding().vertical,
@@ -10114,14 +10181,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             border.top - padding.top,
         else: baseline
 
-    first_baseline = if Map.has_key?(style, :_color_state), do: baseline, else: first_baseline
+    first_baseline =
+      if Map.has_key?(style, :_color_state) and not Map.get(style, :_html_content_skipped, false),
+        do: baseline,
+        else: first_baseline
 
     bottom_baseline =
       baseline == nil or
         (Map.get(style, :overflow, :visible) != :visible and
            not Map.has_key?(style, :_number_state) and
            not Map.has_key?(style, :_temporal_display) and
-           not Map.has_key?(style, :_color_state) and
+           (not Map.has_key?(style, :_color_state) or
+              Map.get(style, :_html_content_skipped, false)) and
            not Map.has_key?(style, :_file_display))
 
     first_baseline =
@@ -10354,7 +10425,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         else: background
 
     background =
-      if Map.has_key?(style, :_color_state),
+      if Map.has_key?(style, :_color_state) and not Map.get(style, :_html_content_skipped, false),
         do:
           background ++
             NativeElixirPdfUtilities.HtmlToPdf.ColorArtwork.boxes(style, x, y, width, height),

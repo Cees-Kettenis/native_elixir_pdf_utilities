@@ -623,6 +623,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     end
   end
 
+  test "drawing groups count and remove valid flow markers before painting" do
+    marker = %{type: :flow_marker, x: 10, y: 20, width: 0, height: 12}
+
+    group = %{
+      type: :drawing_group,
+      width: 100,
+      height: 100,
+      transform: {1, 0, 0, 1, 0, 0},
+      boxes: [marker]
+    }
+
+    assert {:ok, with_marker} = PdfWriter.render([%{size: {100, 100}, boxes: [group]}])
+
+    assert {:ok, without_marker} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [%{group | boxes: []}]}])
+
+    assert with_marker == without_marker
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             PdfWriter.render([
+               %{size: {100, 100}, boxes: [%{group | boxes: [%{marker | width: 1}]}]}
+             ])
+
+    assert diagnostic.stage == :pdf
+    assert diagnostic.message =~ "drawing_group children"
+  end
+
   test "flow markers count toward the cumulative layout-box budget before removal" do
     alias NativeElixirPdfUtilities.Limits
     original = Limits.effective()

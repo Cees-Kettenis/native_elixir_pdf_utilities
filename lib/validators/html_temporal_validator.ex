@@ -296,7 +296,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTemporalValidator do
         kind = HtmlValidator.input_type(Map.get(attributes, "type", "text"))
 
         cond do
-          style.display == :none or not temporal_type?(kind) ->
+          style.display == :none or Map.get(style, :_html_content_skipped, false) or
+              not temporal_type?(kind) ->
             {:ok, style}
 
           LanguageValidator.resolved_language(node, ancestors) not in [

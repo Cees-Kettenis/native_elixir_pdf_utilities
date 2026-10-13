@@ -16,6 +16,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildTest do
     end)
   end
 
+  test "source formatting context gives inline flow its actual used box" do
+    html = "<span style='display:inline;width:100pt;height:80pt'>Size</span>"
+    assert {:ok, inline} = measured(html)
+    assert inline.width < 100
+    assert inline.ascent + inline.descent < 80
+
+    for parent <- [:math, :flex, :grid] do
+      assert {:ok, block_container} = measured(html, %{formatting_context: parent})
+      assert_in_delta block_container.width, 100, 0.75 / 64
+      assert_in_delta block_container.ascent + block_container.descent, 80, 0.75 / 64
+      assert Enum.any?(block_container.boxes, &(Map.get(&1, :text) == "Size"))
+    end
+
+    assert {:error, {:invalid_layout, diagnostic}} =
+             measured(html, %{formatting_context: :invented})
+
+    assert diagnostic.stage == :layout
+    assert diagnostic.operation == :measure_child
+    assert diagnostic.source == "span"
+    assert diagnostic.message =~ "formatting_context"
+  end
+
   test "atomic child measurement resolves real relative positioning before native paint validation" do
     for display <- ["inline-block", "inline-flex", "inline-grid"] do
       plain =
@@ -127,6 +149,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildTest do
 
     assert unbroken.width > 20
     refute Enum.any?(unbroken.boxes, &Map.has_key?(&1, :clip))
+  end
+
+  test "ordinary block allocation preserves independent intrinsic widths and authored constraints" do
+    html =
+      "<div style='font-family:DejaVu Sans;font-size:12pt;line-height:18pt'>Alpha beta gamma delta epsilon</div>"
+
+    assert {:ok, natural} = measured(html)
+    assert {:ok, allocated} = measured(html, %{available_width: 100})
+    assert_in_delta allocated.width, 100, 0.012
+    assert_in_delta allocated.max_content_width, natural.max_content_width, 1.0e-9
+    assert_in_delta allocated.min_content_width, natural.min_content_width, 1.0e-9
+    assert allocated.min_content_width < 100
+    assert allocated.max_content_width > 100
+    assert_in_delta allocated.ascent + allocated.descent, 54, 1.0e-9
+
+    assert {:ok, constrained} =
+             measured(
+               "<div style='width:120pt;max-width:80pt;padding:2pt;box-sizing:border-box'>Alpha beta</div>",
+               %{available_width: 200}
+             )
+
+    assert_in_delta constrained.width, 80, 0.012
+    assert_in_delta constrained.min_content_width, 80, 1.0e-9
+    assert_in_delta constrained.max_content_width, 80, 1.0e-9
   end
 
   test "prepared math retains preferred widths independently of its advance and baseline" do

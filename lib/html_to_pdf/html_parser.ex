@@ -9,6 +9,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   `data-*` and `aria-*` metadata used by attribute selectors and generated
   content. Unsupported or malformed markup returns an error instead of
   guessing at browser behavior.
+
+  Parsed elements retain accepted names in `:attribute_order`, normalized for
+  their namespace. Validators use this additive source fact for initial hints
+  whose result depends on original token order.
   """
 
   alias NativeElixirPdfUtilities.Diagnostics
@@ -53,6 +57,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
           required(:source) => %{text: String.t(), line: pos_integer(), column: pos_integer()},
           optional(:namespace) => :html | :svg | :mathml,
           optional(:attribute_namespaces) => map(),
+          optional(:attribute_order) => [String.t()],
           optional(:content) => %{
             type: :document_fragment,
             node_id: reference(),
@@ -382,6 +387,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         type: :element,
         tag: "template",
         attributes: capture.opening.attributes,
+        attribute_order: capture.opening.attribute_order,
         children: [],
         source: plan.source
       }
@@ -1007,6 +1013,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
                 type: :element,
                 tag: tag,
                 attributes: attributes,
+                attribute_order: prepared.attribute_order,
                 children: [],
                 source: source
               }

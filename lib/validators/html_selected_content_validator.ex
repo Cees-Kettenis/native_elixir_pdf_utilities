@@ -32,6 +32,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator do
       :namespace,
       :attributes,
       :attribute_namespaces,
+      :attribute_order,
       :source,
       :text,
       :target,

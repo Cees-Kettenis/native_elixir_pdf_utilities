@@ -88,6 +88,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
           )
       end
 
+    box =
+      case Map.get(box, :link_quad_points) do
+        points when is_list(points) ->
+          points =
+            points
+            |> Enum.chunk_every(2)
+            |> Enum.flat_map(fn [x, y] -> [x + delta_x, y + delta_y] end)
+
+          Map.put(box, :link_quad_points, points)
+
+        _ ->
+          box
+      end
+
     case Map.get(box, :link_rect) do
       %{x: x, y: y} = region ->
         Map.put(box, :link_rect, %{region | x: x + delta_x, y: y + delta_y})

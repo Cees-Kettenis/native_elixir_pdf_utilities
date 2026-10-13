@@ -336,6 +336,12 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
              NativeElixirPdfUtilities.HtmlToPdf.PdfWriter.appearance_objects(
                [%{size: {placement.width, placement.height}, boxes: [group]}],
                1
+             ),
+           {:ok, _links} <-
+             NativeElixirPdfUtilities.Validators.SvgFormSlotValidator.prepare_links(
+               [Map.put(placement, :group, group)],
+               painted.viewport.width,
+               painted.viewport.height
              ) do
         {:cont, :ok}
       else

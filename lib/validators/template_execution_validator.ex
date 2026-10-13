@@ -18,6 +18,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
     :namespace,
     :attributes,
     :attribute_namespaces,
+    :attribute_order,
     :text,
     :target,
     :data,
@@ -52,6 +53,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
         source_styles: %{},
         source_provenance: nil,
         source_view: nil,
+        capture: nil,
         fragment_views: [],
         declaration_contexts: [],
         css_budget: HtmlValidator.new_css_budget()
@@ -117,7 +119,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                    }),
                  :ok <- prepare_original_fragment_contexts(nodes, opts),
                  :ok <- complete_declaration_contexts(Process.get(@key).declaration_contexts),
-                 :ok <- validate_original_resource_contexts(nodes),
+                 :ok <- validate_original_runtime_contexts(nodes),
                  {:ok, prepared} <- prepare_runtime_view(original, opts, image_budget),
                  :ok <- validate_glyph_coverage(original, prepared.styled_tree),
                  :ok <- prepare_original_fragments(opts, image_budget),
@@ -168,7 +170,23 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                 match?(
                   %{id: id, source: ^source} when id == frame.parser,
                   Process.get({TemplatePatchValidator, :invocation})
-                )))
+                )) or
+             (mode == :execute and frame.busy and is_map(frame.capture) and
+                match?(
+                  %{id: id, source: ^source} when id == frame.parser,
+                  Process.get({TemplatePatchValidator, :invocation})
+                ) and
+                Process.get({TemplatePatchValidator, :candidate_capture}) == frame.capture and
+                case context do
+                  {tree, _parent, origin} ->
+                    tree.root == frame.capture.tree.root and
+                      origin.offset > frame.capture.offset and
+                      (origin.tokenizer_context == "template" or "template" in origin.ancestors) and
+                      validate_live() == :ok
+
+                  _ ->
+                    false
+                end))
 
       _ ->
         false
@@ -466,7 +484,14 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
         if context.target == nil do
           :ok
         else
-          Process.put(@key, %{frame | busy: true})
+          capture = %{
+            handle: handle,
+            tree: tree,
+            invocation: invocation.id,
+            offset: context.source_offset
+          }
+
+          Process.put(@key, %{frame | busy: true, capture: capture})
 
           try do
             TemplatePatchValidator.with_candidate_projection(handle, tree, fn captured ->
@@ -498,7 +523,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
               end)
             end)
           after
-            Process.put(@key, %{Process.get(@key) | busy: false})
+            Process.put(@key, %{Process.get(@key) | busy: frame.busy, capture: frame.capture})
           end
         end
       end
@@ -687,9 +712,9 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
     end)
   end
 
-  # Ordinary preparation skips hidden resource boxes. A skipped reference cannot
-  # certify the original resource obligation merely because the final tree omits it.
-  defp validate_original_resource_contexts(nodes) do
+  # Ordinary preparation skips hidden/conditional owners. Generated control text
+  # has no authored text child, so both glyph and resource ownership need this gate.
+  defp validate_original_runtime_contexts(nodes) do
     frame = Process.get(@key)
 
     Enum.reduce_while(nodes, :ok, fn node, :ok ->
@@ -697,10 +722,13 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
 
       resource? =
         Map.get(node, :tag) in ~w(img iframe frame object embed image use) or
+          Map.has_key?(style, :_image_input_state) or
           Enum.any?([:background_image_source, :list_style_image_source], &Map.get(style, &1))
 
+      control? = Map.has_key?(style, :form_kind) and style.form_kind != :hidden
+
       hidden? =
-        if resource? do
+        if resource? or control? do
           Stream.unfold(node.node_id, fn id ->
             case Map.get(frame.original.nodes, id) do
               nil ->
@@ -721,7 +749,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
         end
 
       conditional? =
-        if resource? do
+        if resource? or control? do
           Stream.unfold(node.parent_id, fn id ->
             case Map.get(frame.original.nodes, id) do
               nil ->
@@ -758,7 +786,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
            column: node.source.column
          )}
       else
-        if hidden? or conditional? or deferred? do
+        if resource? and (hidden? or conditional? or deferred?) do
           {:halt,
            Diagnostics.error(
              :asset,
@@ -771,7 +799,21 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
              column: node.source.column
            )}
         else
-          {:cont, :ok}
+          if control? and (hidden? or conditional?) do
+            {:halt,
+             Diagnostics.error(
+               :font,
+               :unsupported_html,
+               "template replacement has an unprepared original control context; selected glyph and runtime obligations remain pending",
+               module: __MODULE__,
+               operation: :parse,
+               source: node.source.text,
+               line: node.source.line,
+               column: node.source.column
+             )}
+          else
+            {:cont, :ok}
+          end
         end
       end
     end)

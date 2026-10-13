@@ -357,7 +357,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextTest do
     data: data
   } do
     for content <- [
-          "<text y='25' font-family='NativeSvgFont0' stroke='red'>A</text>"
+          "<defs><linearGradient id='stroke-gradient'><stop offset='0'/><stop offset='1'/></linearGradient></defs><text y='25' font-family='NativeSvgFont0' stroke='url(#stroke-gradient)'>A</text>"
         ] do
       assert {:error, {:invalid_document, diagnostic}} =
                SvgBackend.vectorize(source(content), [width: 200, height: 50], %{
@@ -365,7 +365,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextTest do
                  fonts: [%{data: data}]
                })
 
-      assert diagnostic.message =~ "fill without stroke"
+      assert diagnostic.message =~ "solid RGB stroke"
     end
 
     assert {:ok, gradient_pdf} =

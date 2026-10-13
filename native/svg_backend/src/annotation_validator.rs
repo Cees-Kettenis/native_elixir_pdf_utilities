@@ -270,7 +270,52 @@ fn walk(
                                 b.y_max as f32,
                             )
                             .ok_or("selected annotation glyph has invalid ink bounds")?;
-                            let bounds = mapped(rect, t.pre_concat(glyph.outline_transform()))?;
+                            let bounds = if let Some(stroke) = span
+                                .stroke
+                                .as_ref()
+                                .filter(|paint| paint.opacity().get() > 0.0)
+                            {
+                                let program = crate::glyph_program_validator::prepare(
+                                    glyph,
+                                    Some(stroke),
+                                    database,
+                                )?;
+                                let stroke_rect = Rect::from_ltrb(
+                                    program.bbox[0],
+                                    program.bbox[1],
+                                    program.bbox[2],
+                                    program.bbox[3],
+                                );
+                                let fill_bounds = span
+                                    .fill
+                                    .as_ref()
+                                    .filter(|paint| paint.opacity().get() > 0.0)
+                                    .map(|_| mapped(rect, t.pre_concat(glyph.outline_transform())))
+                                    .transpose()?;
+                                let stroke_bounds = stroke_rect
+                                    .map(|rect| {
+                                        mapped(
+                                            rect,
+                                            t.pre_concat(glyph.outline_transform()).pre_scale(
+                                                program.units as f32 / 1000.0,
+                                                program.units as f32 / 1000.0,
+                                            ),
+                                        )
+                                    })
+                                    .transpose()?;
+                                match (fill_bounds, stroke_bounds) {
+                                    (Some(a), Some(b)) => [
+                                        a[0].min(b[0]),
+                                        a[1].min(b[1]),
+                                        a[2].max(b[2]),
+                                        a[3].max(b[3]),
+                                    ],
+                                    (Some(a), None) | (None, Some(a)) => a,
+                                    (None, None) => continue,
+                                }
+                            } else {
+                                mapped(rect, t.pre_concat(glyph.outline_transform()))?
+                            };
                             if !text.id().is_empty() {
                                 if let Some(rect) =
                                     clip.and_then(|parent| intersect(parent, bounds))

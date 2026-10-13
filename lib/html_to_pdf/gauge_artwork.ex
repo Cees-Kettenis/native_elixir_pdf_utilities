@@ -87,6 +87,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.GaugeArtwork do
           width == 0 or track_height == 0 ->
             []
 
+          Map.get(style, :_html_content_skipped, false) ->
+            if native, do: [base], else: []
+
           gauge.position < 0 ->
             # A static unknown-progress mark conveys indeterminacy without sampling
             # an animation or suggesting a measured completion fraction.

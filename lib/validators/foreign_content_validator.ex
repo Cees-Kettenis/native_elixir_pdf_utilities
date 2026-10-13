@@ -58,8 +58,9 @@ defmodule NativeElixirPdfUtilities.Validators.ForeignContentValidator do
     namespace = namespace(context, tag)
 
     with true <- namespace != :html or HtmlValidator.supported_html_tag?(tag),
-         {:ok, attributes, self_closing?} <-
-           HtmlValidator.validate_html_attributes(source, tag, namespace),
+         {:ok, metadata} <- HtmlValidator.prepare_html_attributes(source, tag, namespace),
+         attributes = metadata.attributes,
+         self_closing? = metadata.self_closing?,
          :ok <- validate_element(namespace, tag, attributes) do
       {tag, attributes} =
         case namespace do
@@ -72,7 +73,7 @@ defmodule NativeElixirPdfUtilities.Validators.ForeignContentValidator do
           :mathml ->
             {tag,
              Map.new(attributes, fn {name, value} ->
-               {if(name == "definitionurl", do: "definitionURL", else: name), value}
+               {adjust_attribute_name(namespace, name), value}
              end)}
 
           :html ->
@@ -99,6 +100,8 @@ defmodule NativeElixirPdfUtilities.Validators.ForeignContentValidator do
        %{
          tag: tag,
          attributes: attributes,
+         attribute_order:
+           Enum.map(metadata.attribute_order, &adjust_attribute_name(namespace, &1)),
          namespace: namespace,
          attribute_namespaces: namespaced,
          self_closing?:
@@ -108,6 +111,15 @@ defmodule NativeElixirPdfUtilities.Validators.ForeignContentValidator do
     else
       false -> {:error, :unsupported_html}
       error -> error
+    end
+  end
+
+  # Source order and the attribute map share the same foreign-name adjustment.
+  defp adjust_attribute_name(namespace, name) do
+    case namespace do
+      :svg -> Map.get(@svg_attributes, name, name)
+      :mathml -> if(name == "definitionurl", do: "definitionURL", else: name)
+      :html -> name
     end
   end
 

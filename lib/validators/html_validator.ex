@@ -3201,9 +3201,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec validate_html_attributes(String.t(), String.t(), :html | :mathml | :svg) ::
           {:ok, map(), boolean()} | {:error, :unsupported_html}
   def validate_html_attributes(attributes, tag, namespace \\ :html) do
+    case prepare_html_attributes(attributes, tag, namespace) do
+      {:ok, prepared} -> {:ok, prepared.attributes, prepared.self_closing?}
+      error -> error
+    end
+  end
+
+  @doc false
+  @spec prepare_html_attributes(String.t(), String.t(), :html | :mathml | :svg) ::
+          {:ok, map()} | {:error, :unsupported_html}
+  def prepare_html_attributes(attributes, tag, namespace) do
     case attributes do
       "" ->
-        {:ok, %{}, false}
+        {:ok, %{attributes: %{}, attribute_order: [], self_closing?: false}}
 
       attributes ->
         captures =
@@ -3224,11 +3234,83 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                namespace == :html and tag in ~w(xmp plaintext noembed) and
                  String.contains?(remainder, "/"),
              {:ok, parsed} <- attributes_to_map(captures, tag, namespace) do
-          {:ok, parsed, String.contains?(remainder, "/")}
+          order =
+            Enum.map(captures, fn [_, name | _] ->
+              reserve_render_resource(:max_html_tree_work, byte_size(name) + 1, :html)
+              String.downcase(name, :ascii)
+            end)
+
+          {:ok,
+           %{
+             attributes: parsed,
+             attribute_order: order,
+             self_closing?: String.contains?(remainder, "/")
+           }}
         else
           _ -> {:error, :unsupported_html}
         end
     end
+  end
+
+  @doc false
+  @spec validate_attribute_order(term()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_attribute_order(node) do
+    with_render_budget(fn ->
+      case node do
+        %{attribute_order: order} ->
+          valid? =
+            case node do
+              %{type: :element, attributes: attributes}
+              when is_map(attributes) and is_list(order) ->
+                reserve_render_resource(
+                  :max_html_tree_work,
+                  length(order) + map_size(attributes),
+                  :html
+                )
+
+                result =
+                  Enum.reduce_while(order, {:ok, MapSet.new()}, fn name, {:ok, seen} ->
+                    if is_binary(name) do
+                      reserve_render_resource(:max_html_tree_work, byte_size(name) + 1, :html)
+
+                      if String.valid?(name) and Map.has_key?(attributes, name) and
+                           not MapSet.member?(seen, name),
+                         do: {:cont, {:ok, MapSet.put(seen, name)}},
+                         else: {:halt, :invalid}
+                    else
+                      {:halt, :invalid}
+                    end
+                  end)
+
+                case result do
+                  {:ok, seen} -> MapSet.size(seen) == map_size(attributes)
+                  _ -> false
+                end
+
+              _ ->
+                false
+            end
+
+          if valid?,
+            do: :ok,
+            else:
+              Diagnostics.error(
+                :style,
+                :invalid_document,
+                "attribute_order requires each validated element attribute name exactly once in original token order; omit it for a metadata-free caller tree",
+                module: __MODULE__,
+                operation: :compute,
+                source:
+                  case Map.get(node, :source) do
+                    %{text: text} when is_binary(text) -> text
+                    _ -> "attribute_order"
+                  end
+              )
+
+        _ ->
+          :ok
+      end
+    end)
   end
 
   defp attributes_to_map(captures, tag, namespace) do
@@ -5371,12 +5453,27 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         when type in [:text, :element] and is_map(font) and is_number(size) and size >= 0 and
                is_number(line_height) and line_height >= 0 and is_tuple(color) and
                is_map(constraints) ->
-          allowed = [:available_width, :available_height, :unsupported_glyphs]
+          allowed = [
+            :available_width,
+            :available_height,
+            :unsupported_glyphs,
+            :formatting_context
+          ]
+
           dimensions = Enum.map([:available_width, :available_height], &Map.get(constraints, &1))
           display = Map.get(style, :display, :inline)
+          formatting_context = Map.get(constraints, :formatting_context, :flow)
+
+          # CSS Display 3: inline flow produces an inline box only in flow
+          # contexts. Math, flex and grid items instead form block containers.
+          used_display =
+            if display == :inline and formatting_context in [:math, :flex, :grid],
+              do: :inline_block,
+              else: display
 
           valid? =
             Enum.all?(Map.keys(constraints), &(&1 in allowed)) and
+              formatting_context in [:flow, :math, :flex, :grid] and
               Enum.all?([size, line_height], &(&1 <= Limits.get(:max_css_numeric_magnitude))) and
               Enum.all?(
                 dimensions,
@@ -5387,7 +5484,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           cond do
             not valid? ->
               measured_child_failure(
-                "child measurement requires bounded nonnegative available dimensions",
+                "child measurement requires bounded nonnegative available dimensions and formatting_context in [:flow, :math, :flex, :grid]",
                 node
               )
 
@@ -5452,8 +5549,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                        context: context,
                        available_width: Map.get(constraints, :available_width),
                        available_height: Map.get(constraints, :available_height),
+                       used_display: used_display,
                        atomic:
-                         display in [
+                         used_display in [
                            :block,
                            :inline_block,
                            :flex,

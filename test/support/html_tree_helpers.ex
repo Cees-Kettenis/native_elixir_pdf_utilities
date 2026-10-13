@@ -7,7 +7,14 @@ defmodule NativeElixirPdfUtilities.HtmlTreeHelpers do
     case value do
       value when is_map(value) ->
         value
-        |> Map.drop([:node_id, :document_id, :tree_scope_id, :parent_id, :source])
+        |> Map.drop([
+          :node_id,
+          :document_id,
+          :tree_scope_id,
+          :parent_id,
+          :source,
+          :attribute_order
+        ])
         |> Map.new(fn {key, value} -> {key, tree_content(value)} end)
 
       values when is_list(values) ->

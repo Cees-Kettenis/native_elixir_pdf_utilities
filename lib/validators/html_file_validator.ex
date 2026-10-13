@@ -20,6 +20,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFileValidator do
          ) == "file" and
          style.display != :none do
       cond do
+        Map.get(style, :_html_content_skipped, false) ->
+          {:ok, style}
+
         Keyword.get(opts, :forms, :interactive) == :interactive and
           not node._initial_form_state.disabled and not Map.has_key?(node, :_html_inert) ->
           Diagnostics.error(

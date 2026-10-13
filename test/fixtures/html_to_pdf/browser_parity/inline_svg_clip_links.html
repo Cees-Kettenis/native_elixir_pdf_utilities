@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size: 400px 260px; margin: 12px; }
+html, body { margin: 0; padding: 0; font-family: "DejaVu Sans"; font-size: 12px; line-height: 18px; }
+p { margin: 0; } body > svg { display: block; width: 360px; height: 96px; }
+a { color: white; text-decoration: none; }
+</style></head><body>
+<p>Real HTML links follow native clip geometry</p>
+<svg viewBox="0 0 360 96"><defs>
+<clipPath id="ring"><path d="M4 4H112V88H4Z M36 32H80V62H36Z" clip-rule="evenodd"/></clipPath>
+<clipPath id="triangle"><polygon points="4,88 58,4 112,88"/></clipPath>
+<clipPath id="round" clipPathUnits="objectBoundingBox"><circle cx=".5" cy=".5" r=".48"/></clipPath>
+</defs>
+<foreignObject width="116" height="92" clip-path="url(#ring)"><div xmlns="http://www.w3.org/1999/xhtml" style="background:#174a86;height:92px"><a href="https://example.test/ring">Ring link café Ω<br/>Native clip holes<br/>Selected font<br/>Genuine HTML</a></div></foreignObject>
+<g transform="translate(120 0)"><foreignObject width="116" height="92" clip-path="url(#triangle)"><div xmlns="http://www.w3.org/1999/xhtml" style="background:#168250;height:92px"><a href="https://example.test/triangle">Triangle link<br/>Actual geometry<br/>Precise hit region<br/>Genuine HTML</a></div></foreignObject></g>
+<g transform="translate(240 0)"><foreignObject width="116" height="92" clip-path="url(#round)"><div xmlns="http://www.w3.org/1999/xhtml" style="background:#a03333;height:92px"><a href="https://example.test/curve">Curve link café Ω<br/>Bezier boundary<br/>Actual hit region<br/>Genuine HTML</a></div></foreignObject></g>
+</svg>
+<p>Linked intersections preserve actual hit regions</p>
+<svg viewBox="0 0 360 96"><defs><clipPath id="band"><rect x="12" y="12" width="94" height="68"/></clipPath><clipPath id="disk" clip-path="url(#band)"><circle cx="58" cy="46" r="44"/></clipPath></defs>
+<foreignObject width="116" height="92" clip-path="url(#disk)"><div xmlns="http://www.w3.org/1999/xhtml" style="background:#174a86;height:92px"><a href="https://example.test/intersection">Linked curve<br/>Bounded viewport<br/>Real intersection<br/>Genuine HTML</a></div></foreignObject>
+<g transform="translate(148 6) rotate(8 58 46)"><foreignObject width="116" height="92" clip-path="url(#disk)"><div xmlns="http://www.w3.org/1999/xhtml" style="background:#168250;height:92px"><a href="https://example.test/rotate">Rotated curve<br/>Actual transform<br/>Precise link region<br/>Genuine HTML</a></div></foreignObject></g></svg>
+</body></html>

@@ -27,7 +27,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlVisibilityValidator do
   @spec prepare_style(map()) :: map()
   def prepare_style(style) do
     if Map.get(style, :content_visibility, :visible) == :hidden and
-         Map.get(style, :display, :inline) not in [:inline, :contents],
+         if(Map.get(style, :display) == :image,
+           do: Map.get(style, :image_display, :inline),
+           else: Map.get(style, :display, :inline)
+         ) not in [:inline, :contents],
        do: Map.put(style, :_html_content_skipped, true),
        else: Map.delete(style, :_html_content_skipped)
   end
@@ -51,7 +54,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlVisibilityValidator do
       if Map.get(style, :content_visibility) in [nil, :visible, :hidden] and
            Map.fetch(style, :_html_content_skipped) == Map.fetch(expected, :_html_content_skipped) and
            (not Map.has_key?(expected, :_html_content_skipped) or
-              (Map.get(node, :children, []) == [] and not Map.has_key?(style, :_form_control))) do
+              (Map.get(node, :children, []) == [] and not Map.has_key?(style, :_form_control) and
+                 not Enum.any?(
+                   [
+                     :_temporal_state,
+                     :_temporal_display,
+                     :_file_display,
+                     :_image_input_state,
+                     :image
+                   ],
+                   &Map.has_key?(style, &1)
+                 ))) do
         :ok
       else
         Diagnostics.error(

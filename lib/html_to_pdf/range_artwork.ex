@@ -76,14 +76,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeArtwork do
       }
 
       parts =
-        if style.appearance == :none do
-          # html.css gives the thumb appearance:auto independently of its host.
-          [thumb]
+        if Map.get(style, :_html_content_skipped, false) do
+          if style.appearance == :none, do: [], else: [base, border]
         else
-          if base.width > 0 do
-            if thumb_left + 3.0 > 0, do: [base, fill, border, thumb], else: [base, border, thumb]
-          else
+          if style.appearance == :none do
+            # html.css gives the thumb appearance:auto independently of its host.
             [thumb]
+          else
+            if base.width > 0 do
+              if thumb_left + 3.0 > 0,
+                do: [base, fill, border, thumb],
+                else: [base, border, thumb]
+            else
+              [thumb]
+            end
           end
         end
 

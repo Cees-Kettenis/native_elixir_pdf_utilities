@@ -90,6 +90,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
        %{
          source: prepared_source,
          annotations?: links != [],
+         glyph_programs?:
+           MapSet.member?(summary.elements, {:svg, "text"}) and
+             Enum.any?(summary.geometry, fn node ->
+               Map.get(node.attributes, "stroke", "none") != "none"
+             end),
          root: summary.root,
          width: dimensions[:width],
          height: dimensions[:height],

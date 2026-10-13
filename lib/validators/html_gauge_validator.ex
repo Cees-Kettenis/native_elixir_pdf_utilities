@@ -20,7 +20,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlGaugeValidator do
       end)
 
     devolved =
-      style._gauge.kind == :progress and
+      (style._gauge.kind == :progress or Map.get(style, :_html_content_skipped, false)) and
         (Map.has_key?(style, :background_color) or Map.has_key?(style, :background_image_source) or
            author_border)
 

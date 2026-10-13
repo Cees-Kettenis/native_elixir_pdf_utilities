@@ -38,6 +38,15 @@ cell content width. Its row height and baseline are measured after column
 allocation, preserving the selected fonts, CSS whitespace and original logical
 text on the visible glyph groups.
 
+Ordinary-flow `mtext` retains its real source box. Math layout blockifies its
+outer inline display, and the shared HTML layout measures CSS width, height,
+min/max sizes, simple percentages and box sizing against the allocated cell.
+The resulting whole box supplies its first actual content baseline and paints
+its padding, borders and background once. The anonymous cell row retains its
+allocated used width when percentage content reflows to a narrower painted box.
+Preferred widths remain independent of the allocated width. True Math token glyph measurement uses its existing
+selected-font metrics.
+
 Fractions, radicals, native HTML text and nested matrices can participate in
 spaced cells. Continuous spacing uses its authored length without quantizing it
 to Chromium's pixel grid. Original full spacing and fraction comparison failures

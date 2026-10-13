@@ -121,9 +121,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgTextValidator do
                   )
 
                 Map.has_key?(node, :style) and
-                    Map.get(node.style, :svg_stroke, :none) != :none ->
+                    match?({:paint_server, _}, Map.get(node.style, :svg_stroke)) ->
                   unsupported(
-                    "SVG text currently requires fill without stroke; stroke text paint remains pending",
+                    "SVG text stroke currently requires solid RGB paint; gradient stroke paint remains pending",
                     node.tag
                   )
 

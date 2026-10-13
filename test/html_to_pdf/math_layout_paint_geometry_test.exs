@@ -59,6 +59,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPaintGeometryTest do
     assert box.actual_text == "jAV"
   end
 
+  test "positioned native glyph groups measure their original child ink at the issued offset" do
+    box =
+      measured(
+        "<math><mtable style='width:180pt'><mtr><mtd style='padding:0'><mtext style='display:inline;width:60pt;font-family:DejaVu Sans;font-size:12pt;line-height:18pt'><span>Alpha beta gamma delta epsilon</span></mtext></mtd></mtr></mtable></math>"
+      )
+
+    groups =
+      Enum.filter(box.drawing_items, &match?(%{kind: :native, box: %{type: :glyph_group}}, &1))
+
+    assert groups != []
+    box = %{box | drawing_items: groups}
+    assert {:ok, {left, bottom, right, top}} = MathPaintValidator.prepare_geometry(box)
+    shifted = %{box | drawing_items: Enum.map(groups, &%{&1 | x: &1.x + 11, y: &1.y - 20})}
+    assert {:ok, {sl, sb, sr, st}} = MathPaintValidator.prepare_geometry(shifted)
+    assert_in_delta sl, left + 11, 1.0e-9
+    assert_in_delta sr, right + 11, 1.0e-9
+    assert_in_delta sb, bottom - 20, 1.0e-9
+    assert_in_delta st, top - 20, 1.0e-9
+  end
+
   test "malformed real prepared glyph IDs delegate to actionable selected-font authority" do
     box = measured("<math><mn>7</mn></math>")
     [glyph] = box.glyphs

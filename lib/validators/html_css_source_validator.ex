@@ -368,12 +368,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
         if original_parent(node.parent_id, ownership) == actual_parent and
              prepared.tag == node.tag and prepared.attributes == node.attributes and
              prepared.namespace == Map.get(node, :namespace, :html) and
+             (not Map.has_key?(node, :attribute_order) or
+                node.attribute_order == prepared.attribute_order) and
              prepared.attribute_namespaces == Map.get(node, :attribute_namespaces, %{}) do
           stack = if prepared.self_closing?, do: stack, else: [{prepared, node.node_id} | stack]
           {:ok, stack, Map.put(bound, node.node_id, %{offset: offset, raw: raw, token: token})}
         else
           binding_error(
-            "original opening token does not match the node's actual parent, namespace, tag or decoded attributes",
+            "original opening token does not match the node's actual parent, namespace, tag, attribute order or decoded attributes",
             node.source
           )
         end

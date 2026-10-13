@@ -205,7 +205,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                       Diagnostics.error(
                         :pdf,
                         :invalid_pdf_input,
-                        "PDF writer requires non-empty valid pages; link_region requires bounded convex counterclockwise QuadPoints and a positive annotation rectangle; rectangle shape must be :rectangle, {:triangle, direction} with up/down/left/right direction, or {:chevron, :down}; select_arrow requires a chevron and clip rectangle; flow_marker requires zero width, non-negative height and no link/field; baseline_snap_depth must be non-negative numeric when supplied; rectangle text_baseline_offset must be numeric when supplied; paint_frame requires a finite bounded rectangle supplying the original page paint origin and height; clip requires numeric finite bounded x/y and nonnegative width/height, optional nonnegative border_radius and at most one inner_clip rectangle when supplied; border_cutout requires numeric offsets and positive dimensions when supplied; glyph_group requires valid UTF-8 actual_text and text-only boxes; explicit glyph_ids require an embedded font and one positive 16-bit glyph ID per Unicode scalar",
+                        "PDF writer requires non-empty valid pages; link_region requires bounded convex counterclockwise QuadPoints and a positive annotation rectangle; rectangle shape must be :rectangle, {:triangle, direction} with up/down/left/right direction, or {:chevron, :down}; select_arrow requires a chevron and clip rectangle; flow_marker requires zero width, non-negative height and no link/field; baseline_snap_depth must be non-negative numeric when supplied; rectangle text_baseline_offset must be numeric when supplied; paint_frame requires a finite bounded rectangle supplying the original page paint origin and height; clip requires numeric finite bounded x/y and nonnegative width/height, optional nonnegative border_radius and at most one inner_clip rectangle when supplied; border_cutout requires numeric offsets and positive dimensions when supplied; glyph_group requires valid UTF-8 actual_text and text-only boxes; link_quad_points requires eight finite coordinates forming a nonzero convex quadrilateral within its link_region rectangle; explicit glyph_ids require an embedded font and one positive 16-bit glyph ID per Unicode scalar",
                         operation: :write_pdf,
                         module: __MODULE__
                       )
@@ -314,7 +314,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                   {:cont,
                    if(
                      box.type in [:drawing_group, :glyph_group, :flow_marker] or
-                       is_map(Map.get(box, :clip)),
+                       is_map(Map.get(box, :clip)) or is_list(Map.get(box, :link_quad_points)),
                      do: :box_normalization,
                      else: validity
                    )}
@@ -341,10 +341,53 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
         page_height = Map.get(page, :paint_frame, %{height: elem(page.size, 1)}).height
         {boxes, count} = normalize_boxes(page.boxes, count, nil, page_height)
 
-        {%{page | boxes: List.flatten(boxes)}, count}
+        boxes = boxes |> List.flatten() |> Enum.map(&normalize_page_link_quad(&1, page.size))
+        {%{page | boxes: boxes}, count}
       end)
 
     pages
+  end
+
+  # Prepare final link hit geometry after all drawing transforms and clips,
+  # with the real PDF page bounds. The byte writer consumes this projection.
+  defp normalize_page_link_quad(box, {page_width, page_height}) do
+    case Map.get(box, :link_quad_points) do
+      nil ->
+        box
+
+      [x1, y1, x2, y2, x3, y3, x4, y4] ->
+        rect =
+          case Map.fetch(box, :drawing_annotation_rect) do
+            {:ok, prepared} ->
+              prepared
+
+            :error ->
+              DrawingGeometry.intersect_clip(
+                {box.x, box.y, box.x + box.width, box.y + box.height},
+                DrawingGeometry.box_clip_bounds(Map.get(box, :clip))
+              )
+          end
+
+        {left, bottom, right, top} =
+          DrawingGeometry.intersect_clip(rect, {0, 0, page_width, page_height})
+
+        case NativeElixirPdfUtilities.Validators.SvgClipGeometryValidator.project(
+               nil,
+               [{x1, y1}, {x2, y2}, {x4, y4}, {x3, y3}],
+               {left, bottom, right, top}
+             ) do
+          {:ok, []} ->
+            Map.drop(box, [:link_url, :link_destination])
+
+          {:ok, quads} ->
+            box
+            |> Map.put(:drawing_annotation_rect, {left, bottom, right, top})
+            |> Map.put(:drawing_link_quad_points, List.flatten(quads))
+
+          {:error, _} = error ->
+            throw({:render_resource_limit, error})
+        end
+    end
   end
 
   defp normalize_boxes(boxes, count, composition, parent_height \\ nil) do
@@ -469,6 +512,9 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
         false
 
       %{drawing_page_height: _} ->
+        false
+
+      %{drawing_link_quad_points: _} ->
         false
 
       %{type: :drawing_group} ->
@@ -790,16 +836,14 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                               :unsupported_form
                             )
 
-                          (child[:type] == :flow_marker and
-                             Map.get(child, :html_targets, []) == []) or
-                            child[:type] not in [
-                              :text,
-                              :rect,
-                              :image,
-                              :link_region,
-                              :glyph_group,
-                              :flow_marker
-                            ] or
+                          child[:type] not in [
+                            :text,
+                            :rect,
+                            :image,
+                            :link_region,
+                            :glyph_group,
+                            :flow_marker
+                          ] or
                             not is_boolean(Map.get(child, :snap_to_css_pixel_grid, false)) or
                               not valid_box?(child) ->
                             drawing_group_error(
@@ -1000,6 +1044,20 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           box
       end
 
+    box =
+      case {composition, Map.get(box, :link_quad_points)} do
+        {{sx, sy, tx, ty, _clip, _height}, points} when is_list(points) ->
+          points =
+            points
+            |> Enum.chunk_every(2)
+            |> Enum.flat_map(fn [x, y] -> [sx * x + tx, sy * y + ty] end)
+
+          Map.put(box, :link_quad_points, points)
+
+        _ ->
+          box
+      end
+
     case {composition, box} do
       {{sx, sy, tx, ty, clip, page_height}, %{type: :text} = linked}
       when is_map_key(linked, :link_url) or is_map_key(linked, :link_destination) ->
@@ -1057,9 +1115,13 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
 
         {left, bottom, right, top} = DrawingGeometry.intersect_clip(rect, clip)
 
-        if right > left and top > bottom,
-          do: Map.put(box, :drawing_annotation_rect, {left, bottom, right, top}),
-          else: Map.drop(box, [:link_url, :link_destination])
+        if right > left and top > bottom do
+          box = Map.put(box, :drawing_annotation_rect, {left, bottom, right, top})
+
+          box
+        else
+          Map.drop(box, [:link_url, :link_destination])
+        end
 
       _ ->
         box
@@ -1318,7 +1380,11 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     url = Map.get(box, :link_url)
     destination = Map.get(box, :link_destination)
 
-    valid_clip_rectangle?(Map.get(box, :link_rect)) and
+    NativeElixirPdfUtilities.Validators.SvgClipGeometryValidator.valid_quad?(
+      Map.get(box, :link_quad_points),
+      box
+    ) and
+      valid_clip_rectangle?(Map.get(box, :link_rect)) and
       case {url, destination} do
         {nil, nil} ->
           true
