@@ -49,7 +49,16 @@ defmodule Mix.Tasks.Compile.SvgBackend do
          ) do
       {output, 0} ->
         if output != "", do: Mix.shell().info(output)
-        File.cp!(Path.join([target, "release", library]), Path.join(destination, nif_library))
+        # Replace the file atomically so an already-loaded VM keeps its mapped
+        # native library when another Mix invocation republishes this build.
+        staged_library =
+          Path.join(
+            destination,
+            "#{nif_library}.#{System.pid()}.#{System.unique_integer([:positive])}.tmp"
+          )
+
+        File.cp!(Path.join([target, "release", library]), staged_library)
+        File.rename!(staged_library, Path.join(destination, nif_library))
         # Register the application before the private binding's on_load callback
         # resolves priv on a fresh build, before compile.app has run.
         compile_path = Mix.Project.compile_path()
