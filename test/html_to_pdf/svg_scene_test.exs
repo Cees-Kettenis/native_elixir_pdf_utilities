@@ -108,12 +108,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
       assert text =~ "Survives"
     end
 
-    assert {:error, {:unsupported_html, diagnostic}} =
+    assert {:error, {:invalid_document, diagnostic}} =
              HtmlToPdf.render(
                "<svg width=0 height=0><text><textPath>Cannot omit</textPath></text></svg>"
              )
 
-    assert diagnostic.message =~ "cannot omit"
+    assert diagnostic.stage == :layout and diagnostic.operation == :prepare
+    assert diagnostic.source == "textPath href"
+    assert diagnostic.message =~ "same-scene #id"
   end
 
   test "missing logical content and effects diagnose before successful artwork" do
@@ -128,7 +130,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
       assert {:error, {_reason, diagnostic}} =
                HtmlToPdf.render("<svg width=20 height=20>#{content}</svg>")
 
-      assert diagnostic.stage in [:html, :style, :layout]
+      assert diagnostic.stage in [:html, :style, :layout, :asset]
       assert is_binary(diagnostic.message) and diagnostic.message != ""
     end
 

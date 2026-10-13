@@ -222,14 +222,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialTemporalTest do
            |> Map.fetch!(:kind) == "date"
   end
 
-  test "temporal inapplicability and unsupported editing return public diagnostics" do
+  test "temporal inactive attributes preserve PDFs and unsupported editing retains diagnostics" do
     for kind <- @types do
       for attribute <- ~w(checked multiple size placeholder) do
-        assert {:error, {:unsupported_html, diagnostic}} =
-                 HtmlToPdf.render("<input type=#{kind} #{attribute}=x style=display:none>")
+        assert {:ok, pdf} =
+                 HtmlToPdf.render("<input type=#{kind} #{attribute}=x>", forms: :static)
 
-        assert diagnostic.stage == :html and diagnostic.operation == :render and
-                 diagnostic.message != ""
+        assert {:ok, reference} = HtmlToPdf.render("<input type=#{kind}>", forms: :static)
+        assert pdf == reference
       end
 
       assert {:ok, _} = HtmlToPdf.render("<input type=#{kind} value=bad>", forms: :static)

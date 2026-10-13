@@ -33,10 +33,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SpecialInputTest do
 
   test "color profile and applicability failures explain unsupported caller state" do
     for attrs <- [
-          "value='hsl(120,100%,50%)'",
-          "value='color(display-p3 1 0 0)'",
-          "alpha",
-          "colorspace=display-p3",
           "required",
           "multiple",
           "readonly",

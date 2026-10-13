@@ -101,7 +101,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
       svg_filter: :none,
       svg_flood_color: {:color, {0, 0, 0}},
       svg_flood_opacity: 1.0,
-      svg_lighting_color: {:color, {255, 255, 255}},
+      svg_lighting_color: {:color, {1.0, 1.0, 1.0}},
       svg_mask_type: "luminance",
       svg_width: :auto,
       svg_height: :auto,

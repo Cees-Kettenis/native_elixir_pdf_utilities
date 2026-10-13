@@ -14,5 +14,8 @@ issue C2 receipts or grant resource permissions. Original-source observation mus
 use its validator-owned immutable-source and clone-chain authority.
 
 A native fragment link can target a Math root containing a table. Enclosing HTML
-links around equations still require real Math glyph/native link geometry
-emission; their validator denial remains in place until that integration exists.
+links use the actual measured equation rectangle, with native glyph and child
+paint preserved. Math table row and cell paint retain their validated links.
+Ordinary block and embedded-document clipping apply to annotation geometry as
+well as paint. Scoped fragment destinations use the existing HTML link authority;
+source identity and resource permissions remain separate.

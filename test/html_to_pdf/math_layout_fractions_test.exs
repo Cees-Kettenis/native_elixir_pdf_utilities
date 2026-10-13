@@ -436,10 +436,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutFractionsTest do
     assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
     assert diagnostic.message =~ "normal or compact"
 
-    assert {:error, {:unsupported_html, _}} =
+    assert {:ok, ordinary} =
              HtmlToPdf.render(
                "<math><mfrac style='display:block'><mn>1</mn><mn>2</mn></mfrac></math>"
              )
+
+    assert {:ok, "12"} = Text.extract(ordinary, layout: false)
 
     assert {:error, {:invalid_layout, diagnostic}} =
              HtmlToPdf.render(

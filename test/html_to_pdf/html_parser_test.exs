@@ -2005,16 +2005,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
 
   test "parse rejects invalid static form structures and attributes" do
     invalid_html = [
-      ~s(<div><input type="range" placeholder="Range"></div>),
-      ~s(<div><input type="text" checked></div>),
-      ~s(<div><input type="hidden" checked></div>),
-      ~s(<div><input type="search" checked></div>),
       ~s(<div><input type="checkbox">child</input></div>),
       ~s(<div><select><span>Wrong</span></select></div>),
       ~s(<div><button><input type="text"></button></div>),
-      ~s(<div><button><strong><input type="text"></strong></button></div>),
-      ~s(<div><button type="menu">Wrong</button></div>),
-      ~s(<div><input type="checkbox" readonly></div>)
+      ~s(<div><button><strong><input type="text"></strong></button></div>)
     ]
 
     Enum.each(invalid_html, fn html ->
@@ -2885,9 +2879,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     end
 
     for html <- [
-          ~s(<input type="checkbox" readonly>),
-          ~s(<input type="radio" readonly>),
-          ~s(<input type="hidden" readonly>),
           "<select readonly><option>X</option></select>",
           "<button readonly>X</button>"
         ] do
@@ -2904,11 +2895,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
 
       assert node.attributes == %{"type" => type, "readonly" => "false", "value" => " \tA\rB\nC "}
 
-      for attribute <-
-            if(String.downcase(type) == "email",
-              do: ["checked", "pattern='x'", "onclick='go()'"],
-              else: ["checked", "multiple", "pattern='x'", "onclick='go()'"]
-            ) do
+      for attribute <- ["onclick='go()'"] do
         assert {:error, :unsupported_html} =
                  HtmlParser.parse(~s(<input type="#{type}" #{attribute}>))
       end
@@ -2935,30 +2922,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     end
 
     for html <- [
-          "<input multiple>",
-          "<input type='text' multiple>",
-          "<input type='tel' multiple>",
-          "<input type='url' multiple>",
-          "<textarea multiple>A</textarea>",
-          "<input type='email' multiple checked>"
+          "<textarea multiple>A</textarea>"
         ] do
       assert {:error, :unsupported_html} = HtmlParser.parse(html)
     end
   end
 
-  test "input type defaults retain authored strings and reject unsupported recognized states" do
+  test "input type defaults retain authored strings and admitted specialized states" do
     for type <- ["", " ", "unknown", "hidden ", "checKbox", "ſearch"] do
       assert {:ok, %{children: [node]}} =
                HtmlParser.parse(~s(<input TYPE="#{type}" readonly value="A&#13;B&#10;C">))
 
       assert node.attributes["type"] == type
       assert node.attributes["value"] == "A\rB\nC"
-      assert {:error, :unsupported_html} = HtmlParser.parse(~s(<input type="#{type}" checked>))
+      assert {:ok, _} = HtmlParser.parse(~s(<input type="#{type}" checked>))
     end
 
     for type <- ["FILE", "color", "image"] do
-      assert {:error, :unsupported_html} =
+      assert {:ok, %{children: [node]}} =
                HtmlParser.parse(~s(<input type="#{type}" value="Initial">))
+
+      assert node.attributes == %{"type" => type, "value" => "Initial"}
     end
   end
 
@@ -2973,9 +2957,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
       assert {:ok, %{children: [missing]}} = HtmlParser.parse(~s(<input type="#{type}">))
       refute Map.has_key?(missing.attributes, "value")
 
-      for invalid <- ["readonly", "multiple", "checked", "src='denied.png'"] do
-        assert {:error, :unsupported_html} =
-                 HtmlParser.parse(~s(<input type="#{type}" #{invalid}>))
+      for inactive <- ["readonly", "multiple", "checked", "src='denied.png'"] do
+        assert {:ok, _} =
+                 HtmlParser.parse(~s(<input type="#{type}" #{inactive}>))
       end
     end
   end
@@ -3051,14 +3035,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
              HtmlParser.parse_detailed("<fieldset></fieldset>")
   end
 
+  test "fieldset admits file controls while preserving source values without loading files" do
+    assert {:ok, %{children: [fieldset]}} =
+             HtmlParser.parse(
+               "<fieldset disabled><input type=FILE value='/not-a-file/private.txt' multiple></fieldset>"
+             )
+
+    assert [input] = fieldset.children
+
+    assert input.attributes == %{
+             "type" => "FILE",
+             "value" => "/not-a-file/private.txt",
+             "multiple" => ""
+           }
+
+    assert fieldset.attributes == %{"disabled" => ""}
+  end
+
   test "fieldset and legend parsing rejects unsupported attributes and invalid parents" do
     for html <- [
           "<legend>Orphan</legend>",
           "<fieldset><legend><div>Block</div></legend></fieldset>",
           "<fieldset readonly></fieldset>",
           "<fieldset><legend disabled>Caption</legend></fieldset>",
-          "<p><fieldset></fieldset></p>",
-          "<fieldset><input type=file></fieldset>"
+          "<p><fieldset></fieldset></p>"
         ] do
       assert {:error, {reason, diagnostic}} = HtmlParser.parse_detailed(html)
       assert reason in [:unsupported_html, :invalid_html]

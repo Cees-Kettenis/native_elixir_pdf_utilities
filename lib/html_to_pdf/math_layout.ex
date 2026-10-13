@@ -24,6 +24,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
     end)
   end
 
+  @doc "Remeasures a retained styled block Math atom using its actual allocated content width."
+  @spec resolve_block_flow(term(), term()) ::
+          {:ok, [map()]} | {:error, Diagnostics.detailed_error()}
+  def resolve_block_flow(children, width) do
+    with {:ok, request} <- MathLayoutValidator.prepare_block_flow(children, width),
+         {:ok, measured} <- measure(request.source, request.context) do
+      {:ok, [%{request.atom | style: Map.put(request.atom.style, :_math_box, measured)}]}
+    end
+  end
+
   defp measure_prepared(prepared, constraint \\ nil) do
     measured =
       case prepared do
@@ -165,7 +175,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
                   Enum.map(cell.measured.drawing_items, &%{&1 | x: &1.x + cell.inner_x})
                 )
 
-              %{cell | measured: decorate_geometry(inner, cell.style)}
+              %{cell | measured: decorate_geometry(inner, allocated_matrix_style(cell.style))}
             end)
 
           row_backgrounds =
@@ -182,7 +192,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
                 drawing_items: []
               }
 
-              decorated = decorate_geometry(empty, row.style)
+              decorated = decorate_geometry(empty, allocated_matrix_style(row.style))
               Enum.map(decorated.drawing_items, &%{&1 | x: &1.x + row.x, y: &1.y + row.y})
             end)
 
@@ -209,6 +219,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             drawing_items: row_backgrounds ++ positioned.(:drawing_items),
             actual_text: Enum.map_join(cells, & &1.measured.actual_text)
           })
+
+        %{kind: :padded} ->
+          inner = measure_prepared(prepared.inner, constraint)
+
+          placed =
+            case MathLayoutValidator.prepare_padded_placement(prepared, inner) do
+              {:ok, placed} -> placed
+              {:error, _} = error -> throw({:math_layout_error, error})
+            end
+
+          inner
+          |> Map.merge(
+            Map.take(placed, [:width, :min_content_width, :max_content_width, :ascent, :descent])
+          )
+          |> Map.put(:ink_ascent, inner.ink_ascent + placed.y)
+          |> Map.put(:ink_descent, inner.ink_descent - placed.y)
+          |> Map.put(
+            :glyphs,
+            Enum.map(inner.glyphs, &%{&1 | x: &1.x + placed.x, y: &1.y + placed.y})
+          )
+          |> Map.put(
+            :drawing_items,
+            Enum.map(inner.drawing_items, &%{&1 | x: &1.x + placed.x, y: &1.y + placed.y})
+          )
 
         %{kind: :radical} ->
           base = measure_prepared(prepared.base)
@@ -621,7 +655,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
     measured =
       if Map.get(prepared, :root, false),
         do: measured,
-        else: decorate_geometry(measured, prepared.style)
+        else:
+          decorate_geometry(
+            measured,
+            if(prepared.kind == :matrix,
+              do: allocated_matrix_style(prepared.style),
+              else: prepared.style
+            )
+          )
 
     if Map.get(prepared, :hide_paint, false),
       do: %{measured | glyphs: [], drawing_items: [], actual_text: ""},
@@ -697,6 +738,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
         result
       end
     end)
+  end
+
+  # Table allocation has already resolved dimensions. Decoration adds edges once.
+  defp allocated_matrix_style(style) do
+    Map.drop(style, [:width, :height, :min_width, :max_width, :min_height, :max_height])
   end
 
   defp decorate_geometry(measured, style) do

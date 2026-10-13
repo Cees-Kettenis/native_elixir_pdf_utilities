@@ -17,7 +17,7 @@ coverage includes the application adapter/validators; integration tests exercise
 the actual native bindings and Rust renderer. No coverage exclusions or lowered
 threshold are used. Dialyxir analyzes both application ebin and the private native
 binding directory. The quality image supplies Rust
-1.90.0. Each matrix run uses its own Docker tag so concurrent worktrees cannot
+1.92.0. Each matrix run uses its own Docker tag so concurrent worktrees cannot
 replace the native toolchain image between stages. Host builds require Cargo and a compatible Rust toolchain on PATH.
 Cargo registry sources remain checksum-verified; no patches in `deps/` are used.
 The adapter source is distributed under this repository's MIT license. Upstream
@@ -253,3 +253,33 @@ render budget. The execution adapter only handles framed byte transport.
 Relevant primary definitions are the [HTML pattern attribute](https://html.spec.whatwg.org/multipage/input.html#the-pattern-attribute),
 [regress 0.12.0](https://docs.rs/regress/0.12.0/regress/), and
 [url 2.5.8](https://docs.rs/url/2.5.8/url/).
+
+## Internal HTML filter inputs
+
+Filtered foreignObject content uses the original issued HTML drawing group and
+this library's own PdfWriter painting PDF. Pinned hayro 0.8.0 interprets only
+those bytes with embedded fonts, disabled annotations, and rejecting font/CMap
+fallback resolvers. No external PDF rendering/embedding API or filesystem
+resolver is introduced. This dependency requires Rust 1.92 or newer.
+
+Native preparation reserves actual source image dimensions, canvas/layer copies,
+transformed path coverage work and original embedded outline glyph plans before
+raster allocation. The pinned canvas uses u16 physical dimensions and the pinned
+interpreter has a 50-level interpretation stack; validators diagnose these
+representation bounds before execution. Caller-controlled resource ceilings
+remain in Limits. Ordinary unfiltered HTML remains a genuine PDF Form.
+
+Actual effect image marked content binds the original selected Unicode/GIDs,
+matrices and ink bounds to the painted group. Standard extraction reports the
+image region, while original glyph and link geometry stays attached to its
+issued scene placement. Rectangular ancestor and HTML viewport clips select
+actual glyphs before replacement text projection. More complex mask/clip ink
+selection, selected-cluster cases diagnosed by the validator, and transformed
+interactive HTML transport remain open.
+
+The new original inline_svg_html_filters fixture keeps the 1% gates. Its initial
+comparison is red at 3.516% changed pixels and .387% average delta. A 300-ppi
+sampling experiment remained red at 3.708% and .446%; the existing bounded
+sampling default is retained. Original inputs, references and both red artifacts
+are preserved. This implements real HTML SourceGraphic and logical input but
+does not close S6/S7 parity or the remaining static graph obligations.

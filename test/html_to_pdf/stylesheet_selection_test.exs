@@ -137,7 +137,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StylesheetSelectionTest do
           "20%",
           "calc(1px + 2)",
           "calc(1px*2px)",
-          "calc(1px/0)",
           "calc(1px,2px)",
           "clamp(1px,2px)",
           "min()",
@@ -151,18 +150,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StylesheetSelectionTest do
     end
   end
 
-  test "valid unsupported sizes and infinite arithmetic diagnose rather than silently choosing 100vw" do
+  test "infinite media arithmetic diagnoses rather than silently matching" do
     alias NativeElixirPdfUtilities.HtmlToPdf
-
-    for sizes <- ["1ch", "calc(sqrt(4)*1px)", "calc(abs(-1px))", "abs(-1px)"] do
-      assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render(
-                 "<style>@media (min-width:#{sizes}){p{color: red}}</style><p>Visible</p>"
-               )
-
-      assert diagnostic.stage == :style and diagnostic.source == sizes
-      assert diagnostic.message =~ "not implemented"
-    end
 
     for sizes <- ["calc(1px/1e-320)", "calc(1000000000px*1000000000)"] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =

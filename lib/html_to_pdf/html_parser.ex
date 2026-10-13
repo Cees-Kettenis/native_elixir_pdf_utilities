@@ -194,7 +194,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
       TemplatePatchValidator.with_parser_invocation(html, fn html ->
         HtmlValidator.reserve_render_resource(
           :max_aggregate_html_source_bytes,
-          byte_size(html),
+          NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.source_charge(html),
           :html
         )
 
@@ -220,6 +220,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
     source_context = %{
       original: html,
+      input: input,
       column_positions: column_positions,
       column_extras: column_extras,
       size: byte_size(input),
@@ -306,7 +307,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         context -> {context, :document, []}
       end
 
-    tree = HtmlTree.new(%{text: source_context.original, line: 1, column: 1}, root_type)
+    tree =
+      NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.parser_tree(
+        %{text: source_context.original, line: 1, column: 1},
+        root_type
+      )
 
     case HtmlValidator.html_text_mode(context) != :data do
       true ->
@@ -382,8 +387,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
       }
 
       HtmlValidator.reserve_render_resource(:max_html_nodes, 1, :html)
-      {original, host} = HtmlTree.insert(tree, plan.original.parent, element)
-      {original, fragment} = HtmlTree.open_fragment(original, host, plan.source)
+      {original, host} = attach_node(tree, plan.original.parent, element, source_context)
+
+      {original, fragment} =
+        HtmlTree.open_fragment(
+          original,
+          host,
+          plan.source,
+          NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.original_fragment_id(
+            host
+          )
+        )
 
       result =
         element_children(
@@ -958,74 +972,125 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
              :ok <- HtmlValidator.validate_html_element_attributes(tag, attributes, planning),
              false <- HtmlValidator.omitted_html_end_tag?(closing_tag, {:start, tag}, ancestors),
              true <- ForeignContentValidator.valid_child?(context, prepared, ancestors) do
-          element = %{
-            type: :element,
-            tag: tag,
-            attributes: attributes,
-            children: [],
-            source: source
-          }
+          case NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.take_action(
+                 tree,
+                 planning
+               ) do
+            {:replace, projected, finish} ->
+              HtmlValidator.reserve_render_resource(:max_html_tree_work, finish, :html)
 
-          element =
-            if prepared.namespace != :html or is_tuple(context),
-              do:
-                element
-                |> Map.put(:namespace, prepared.namespace)
-                |> Map.put(:attribute_namespaces, prepared.attribute_namespaces),
-              else: element
+              normalized_finish =
+                byte_size(
+                  HtmlValidator.preprocess_html(binary_part(source_context.original, 0, finish))
+                )
 
-          # Attach the opening element now. Recursive calls only track tokenizer
-          # context; the canonical table owns open and closed tree relationships.
-          {tree, id} = attach_node(tree, parent, element, source_context)
+              rest =
+                {:source,
+                 binary_part(
+                   source_context.input,
+                   normalized_finish,
+                   source_context.size - normalized_finish
+                 )}
 
-          {tree, child_parent} =
-            if tag == "template" and prepared.namespace == :html,
-              do: HtmlTree.open_fragment(tree, id, element.source),
-              else: {tree, id}
-
-          with {:ok, tree, rest} <-
-                 element_children(
-                   ForeignContentValidator.child_context(prepared),
-                   if(prepared.namespace == :svg, do: String.downcase(tag), else: tag),
-                   remaining,
-                   prepared.self_closing?,
-                   HtmlValidator.html_parent_stack(context, tag, ancestors),
-                   source_context,
-                   tree,
-                   child_parent
-                 ),
-               element_children <- HtmlTree.children(tree, child_parent),
-               true <-
-                 ForeignContentValidator.valid_element?(
-                   prepared,
-                   element_children,
-                   context,
-                   ancestors
-                 ) do
-            normalized =
-              HtmlValidator.normalize_html_element_children(
-                tag,
-                element_children,
-                stream_source(remaining)
+              parse_children(
+                rest,
+                context,
+                closing_tag,
+                ancestors,
+                source_context,
+                projected,
+                parent
               )
 
-            tree =
-              if normalized == element_children,
-                do: tree,
-                else: HtmlTree.replace_children(tree, child_parent, normalized)
+            :keep ->
+              element = %{
+                type: :element,
+                tag: tag,
+                attributes: attributes,
+                children: [],
+                source: source
+              }
 
-            {tree, _node} = HtmlTree.close(tree, child_parent)
-            {tree, _node} = if child_parent == id, do: {tree, nil}, else: HtmlTree.close(tree, id)
-            parse_children(rest, context, closing_tag, ancestors, source_context, tree, parent)
-          else
-            false ->
-              {:error, {:html_source, token, byte_size(stream_source(remaining))}}
+              element =
+                if prepared.namespace != :html or is_tuple(context),
+                  do:
+                    element
+                    |> Map.put(:namespace, prepared.namespace)
+                    |> Map.put(:attribute_namespaces, prepared.attribute_namespaces),
+                  else: element
 
-            {:error, :unsupported_html} ->
-              {:error, {:html_source, token <> stream_source(remaining), 0}}
+              # Attach the opening element now. Recursive calls only track tokenizer
+              # context; the canonical table owns open and closed tree relationships.
+              {tree, id} = attach_node(tree, parent, element, source_context)
 
-            error ->
-              error
+              {tree, child_parent} =
+                if tag == "template" and prepared.namespace == :html,
+                  do:
+                    HtmlTree.open_fragment(
+                      tree,
+                      id,
+                      element.source,
+                      NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.original_fragment_id(
+                        id
+                      )
+                    ),
+                  else: {tree, id}
+
+              with {:ok, tree, rest} <-
+                     element_children(
+                       ForeignContentValidator.child_context(prepared),
+                       if(prepared.namespace == :svg, do: String.downcase(tag), else: tag),
+                       remaining,
+                       prepared.self_closing?,
+                       HtmlValidator.html_parent_stack(context, tag, ancestors),
+                       source_context,
+                       tree,
+                       child_parent
+                     ),
+                   element_children <- HtmlTree.children(tree, child_parent),
+                   true <-
+                     ForeignContentValidator.valid_element?(
+                       prepared,
+                       element_children,
+                       context,
+                       ancestors
+                     ) do
+                normalized =
+                  HtmlValidator.normalize_html_element_children(
+                    tag,
+                    element_children,
+                    stream_source(remaining)
+                  )
+
+                tree =
+                  if normalized == element_children,
+                    do: tree,
+                    else: HtmlTree.replace_children(tree, child_parent, normalized)
+
+                {tree, _node} = HtmlTree.close(tree, child_parent)
+
+                {tree, _node} =
+                  if child_parent == id, do: {tree, nil}, else: HtmlTree.close(tree, id)
+
+                parse_children(
+                  rest,
+                  context,
+                  closing_tag,
+                  ancestors,
+                  source_context,
+                  tree,
+                  parent
+                )
+              else
+                false ->
+                  {:error, {:html_source, token, byte_size(stream_source(remaining))}}
+
+                {:error, :unsupported_html} ->
+                  {:error, {:html_source, token <> stream_source(remaining), 0}}
+
+                error ->
+                  error
+              end
           end
         else
           true ->
@@ -1196,7 +1261,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         _ -> nil
       end
 
-    HtmlTree.insert(tree, parent, node, before)
+    id =
+      NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.original_node_id(
+        node,
+        parent
+      )
+
+    if id,
+      do: HtmlTree.insert(tree, parent, node, before, id),
+      else: HtmlTree.insert(tree, parent, node, before)
   end
 
   defp token_source(context, token, remaining) do

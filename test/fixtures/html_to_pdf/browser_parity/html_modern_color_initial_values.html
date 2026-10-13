@@ -1,0 +1,18 @@
+<!doctype html><html lang=en-US><head><style>
+@page {size:300pt 520pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10.5pt;line-height:15pt;}
+body {padding:12pt;}p {margin:0 0 9pt;}input {display:block;}
+.wide {width:78pt;height:30pt;}.rounded {border-radius:3pt;width:78pt;height:30pt;}
+</style></head><body>
+<p>HSL green<input type=color value="hsl(120 100% 50%)"></p>
+<p>HWB yellow<input type=color value="hwb(60 10% 20%)"></p>
+<p>Lab purple<input type=color value="lab(50% 30% -30%)"></p>
+<p>Oklch orange<input type=color value="oklch(65% .2 40)"></p>
+<p>Linear Display P3<input type=color value="color(display-p3-linear .4 .5 .6)"></p>
+<p>Opaque alpha metadata<input type=color alpha colorspace=display-p3 value="color(display-p3 1 0 0 / .25)" class=wide></p>
+<p>Calculation channels<input type=color value="rgb(pow(2,3) sqrt(16) hypot(3,4))"></p>
+<p>System Highlight<input type=color value="Highlight" disabled></p>
+<p>Missing component<input type=color value="color(display-p3 none .2 .3)" class=rounded></p>
+<p>Invalid mixed units<input type=color value="rgba(0%,0,0%,.2)"></p>
+<p>After modern initial values</p>
+</body></html>

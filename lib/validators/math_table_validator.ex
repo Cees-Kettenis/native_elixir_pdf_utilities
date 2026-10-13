@@ -2,7 +2,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
-  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, MathLayout}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, Layout, MathLayout}
 
   alias NativeElixirPdfUtilities.Validators.{
     FontValidator,
@@ -108,6 +108,106 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
     end
   end
 
+  @doc "Validates prepared matrix, row and cell styles with the shared CSS size-expression authority."
+  @spec validate_style(term(), term()) :: :ok | {:error, Diagnostics.detailed_error()}
+  def validate_style(style, tag) do
+    case {style, tag} do
+      {style, tag} when is_map(style) and tag in ["mtable", "mtr", "mtd"] ->
+        with :ok <-
+               Enum.reduce_while(
+                 [:width, :height, :min_width, :max_width, :min_height, :max_height],
+                 :ok,
+                 fn property, :ok ->
+                   case HtmlValidator.validate_prepared_css_size(
+                          Map.get(style, property),
+                          property
+                        ) do
+                     :ok -> {:cont, :ok}
+                     error -> {:halt, error}
+                   end
+                 end
+               ) do
+          if tag == "mtable",
+            do: validate_table_style(style),
+            else: validate_cell_style(style, tag)
+        else
+          {:error, {reason, diagnostic}} ->
+            {:error, {reason, Diagnostics.with_context(diagnostic, source: tag)}}
+        end
+
+      _ ->
+        failure("matrix style requires a prepared style map and a MathML table role", "mtable")
+    end
+  end
+
+  @doc "Identifies table width expressions that depend on the actual enclosing Math block width."
+  @spec prepare_block_flow_dependency(term()) ::
+          {:ok, boolean()} | {:error, Diagnostics.detailed_error()}
+  def prepare_block_flow_dependency(node) do
+    MathLayout.with_context(fn -> inline_size_dependency(node, 0) end)
+  end
+
+  defp inline_size_dependency(node, depth) do
+    HtmlValidator.reserve_render_resource(:max_css_work, 1, :layout)
+
+    if depth > Limits.get(:max_html_depth) do
+      Diagnostics.error(
+        :layout,
+        :resource_limit_exceeded,
+        "Math block width dependency exceeds max_html_depth",
+        operation: :measure_math,
+        module: __MODULE__,
+        source: "math"
+      )
+    else
+      case node do
+        %{type: :element, namespace: :mathml, tag: "mtable", style: style} when is_map(style) ->
+          with :ok <- validate_style(style, "mtable") do
+            # Cell contents have their own allocated containing block. A nested
+            # table percentage must not use the outer Math block's width.
+            {:ok,
+             Enum.any?(
+               [:width, :min_width, :max_width],
+               &percentage_size?(Map.get(style, &1))
+             )}
+          end
+
+        %{type: :element, children: children} ->
+          inline_children_dependency(children, depth + 1, false)
+
+        %{type: :text} ->
+          {:ok, false}
+
+        _ ->
+          failure("Math block width dependency requires actual styled source nodes", "math")
+      end
+    end
+  end
+
+  defp inline_children_dependency(children, depth, dependent) do
+    case children do
+      [] ->
+        {:ok, dependent}
+
+      [node | rest] ->
+        with {:ok, child_dependent} <- inline_size_dependency(node, depth) do
+          inline_children_dependency(rest, depth, dependent or child_dependent)
+        end
+
+      _ ->
+        failure("Math block width dependency requires proper source child lists", "math")
+    end
+  end
+
+  # This consumes the size grammar already admitted by the shared validator.
+  defp percentage_size?(value) do
+    case value do
+      {:percent, _} -> true
+      {:min, values} -> Enum.any?(values, &percentage_size?/1)
+      _ -> false
+    end
+  end
+
   @doc "Prepares a natural MathML matrix using shared CSS table structure and span validation."
   @spec prepare(term(), map()) :: {:ok, map()} | {:error, Diagnostics.detailed_error()}
   def prepare(node, context) do
@@ -121,7 +221,11 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
          }, context}
         when is_list(children) and is_map(font) and is_number(size) and size >= 0 and
                is_map(context) ->
-          with :ok <- validate_table_style(style),
+          with :ok <-
+                 MathLayoutValidator.validate_available_inline_size(
+                   Map.get(context, :available_inline_size)
+                 ),
+               :ok <- validate_style(style, "mtable"),
                {:ok, projected} <- prepare_nodes(visible_nodes(children)),
                {:ok, table} <- HtmlTableValidator.form(projected),
                {:ok, {rows, row_boxes}} <- prepare_cells(table.rows, context),
@@ -132,7 +236,15 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
             FontValidator.reserve(:max_font_math_work, 1)
             axis = axis * size / metrics.units_per_em + pixels
 
-            {:ok, %{kind: :matrix, rows: rows, row_boxes: row_boxes, axis: axis, style: style}}
+            {:ok,
+             %{
+               kind: :matrix,
+               rows: rows,
+               row_boxes: row_boxes,
+               axis: axis,
+               style: style,
+               available_inline_size: Map.get(context, :available_inline_size)
+             }}
           end
 
         _ ->
@@ -167,7 +279,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
             style: %{display: :table_row} = style
           }
           when is_list(children) ->
-            with :ok <- validate_cell_style(style, "mtr"),
+            with :ok <- validate_style(style, "mtr"),
                  {:ok, cells} <-
                    Enum.reduce_while(visible_nodes(children), {:ok, []}, fn cell, {:ok, cells} ->
                      case cell do
@@ -189,7 +301,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
                              do: aliases,
                              else: Map.delete(aliases, "colspan")
 
-                         with :ok <- validate_cell_style(cell_style, "mtd"),
+                         with :ok <- validate_style(cell_style, "mtd"),
                               {:ok, colspan} <-
                                 HtmlValidator.validate_table_span_attribute(aliases, "colspan"),
                               {:ok, rowspan} <-
@@ -249,44 +361,39 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
     Enum.reduce_while(rows, {:ok, {[], []}}, fn row, {:ok, {prepared, row_boxes}} ->
       result =
         Enum.reduce_while(row.cells, {:ok, []}, fn placement, {:ok, cells} ->
-          if placement.colspan == 1 and placement.rowspan == 1 do
-            cell = placement.cell
-            # Core mtd owns an anonymous mrow. Its CSS cell padding is placed once
-            # by the matrix; authored children retain their complete final styles.
-            row_style = MathLayoutValidator.anonymous_box_style(cell.style)
+          cell = placement.cell
+          # Core mtd owns an anonymous mrow. Its CSS cell padding is placed once
+          # by the matrix; authored children retain their complete final styles.
+          row_style = MathLayoutValidator.anonymous_box_style(cell.style)
 
-            anonymous = %{cell | tag: "mrow", style: row_style}
+          anonymous = %{cell | tag: "mrow", style: row_style}
 
-            case MathLayoutValidator.prepare_element(
-                   anonymous,
-                   Map.drop(context, [
-                     :inline_stretch_size,
-                     :block_stretch_size,
-                     :operator_context
-                   ])
-                 ) do
-              {:ok, content} ->
-                {:cont,
-                 {:ok,
-                  [
-                    %{
-                      content: Map.delete(content, :root),
-                      style: cell.style,
-                      column: placement.column,
-                      source: Map.take(cell, @source_fields)
-                    }
-                    | cells
-                  ]}}
+          case MathLayoutValidator.prepare_element(
+                 anonymous,
+                 Map.drop(context, [
+                   :inline_stretch_size,
+                   :block_stretch_size,
+                   :operator_context,
+                   :available_inline_size
+                 ])
+               ) do
+            {:ok, content} ->
+              {:cont,
+               {:ok,
+                [
+                  %{
+                    content: Map.delete(content, :root),
+                    style: cell.style,
+                    column: placement.column,
+                    colspan: placement.colspan,
+                    rowspan: placement.rowspan,
+                    source: Map.take(cell, @source_fields)
+                  }
+                  | cells
+                ]}}
 
-              error ->
-                {:halt, error}
-            end
-          else
-            {:halt,
-             failure(
-               "MathML spanning cell geometry requires the later CSS table sizing batch",
-               "mtd"
-             )}
+            error ->
+              {:halt, error}
           end
         end)
 
@@ -309,40 +416,33 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
     end
   end
 
-  # Shared by authored preparation and the public measured-state boundary.
+  # The measured boundary checks proper prepared subtree shapes for spaced cells.
   defp validate_grid_spacing(rows, style) do
     if Map.get(style, :border_spacing, {0.0, 0.0}) == {0.0, 0.0} do
       :ok
     else
-      if Enum.all?(rows, &(&1 == [])) do
-        failure(
-          "nonzero MathML matrix spacing requires an authored nonempty grid; empty-grid spacing is pending",
-          "mtable"
-        )
-      else
-        Enum.reduce_while(rows, :ok, fn row, :ok ->
-          case Enum.reduce_while(row, :ok, fn cell, :ok ->
-                 case cell do
-                   %{content: content} ->
-                     case validate_spaced_content(content) do
-                       :ok -> {:cont, :ok}
-                       error -> {:halt, error}
-                     end
+      Enum.reduce_while(rows, :ok, fn row, :ok ->
+        case Enum.reduce_while(row, :ok, fn cell, :ok ->
+               case cell do
+                 %{content: content} ->
+                   case validate_spaced_content(content) do
+                     :ok -> {:cont, :ok}
+                     error -> {:halt, error}
+                   end
 
-                   _ ->
-                     {:halt, failure("spaced matrix cells require prepared content", "mtd")}
-                 end
-               end) do
-            :ok -> {:cont, :ok}
-            error -> {:halt, error}
-          end
-        end)
-      end
+                 _ ->
+                   {:halt, failure("matrix cells require prepared content", "mtd")}
+               end
+             end) do
+          :ok -> {:cont, :ok}
+          error -> {:halt, error}
+        end
+      end)
     end
   end
 
-  # This admission pass has its own actual traversal cost. Fraction/complex
-  # composition remains held, including when its paint is hidden by phantom.
+  # Each actual prepared subtree contributes to the same depth and work bounds,
+  # including nested matrices and content hidden by phantom.
   defp validate_spaced_content(content, depth \\ 0) do
     if depth > Limits.get(:max_html_depth) do
       Diagnostics.error(
@@ -360,14 +460,49 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
         %{kind: kind} when kind in [:glyph, :operator, :space] ->
           :ok
 
-        %{kind: kind, children: children} when kind in [:row, :token] ->
+        %{kind: kind, children: children}
+        when kind in [:row, :token, :flow, :fraction, :scripts, :limits] ->
           validate_spaced_children(children, depth + 1)
 
+        %{kind: :native_flow, children: [_ | _] = children} ->
+          with :ok <- reserve_input_collection(children, :cells) do
+            Enum.reduce_while(children, :ok, fn child, :ok ->
+              HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, :layout)
+
+              case child do
+                %{boxes: boxes} ->
+                  case HtmlValidator.validate_measured_child_paint(boxes, %{tag: "mtd"}) do
+                    :ok -> {:cont, :ok}
+                    error -> {:halt, error}
+                  end
+
+                _ ->
+                  {:halt, failure("matrix native flow requires measured child paint", "mtd")}
+              end
+            end)
+          end
+
+        %{kind: :radical, base: base, index: index} ->
+          validate_spaced_children(if(index == nil, do: [base], else: [base, index]), depth + 1)
+
+        %{kind: :matrix, rows: rows} when is_list(rows) ->
+          with :ok <- reserve_input_collection(rows, :rows) do
+            Enum.reduce_while(rows, :ok, fn row, :ok ->
+              contents =
+                Enum.map(row, fn
+                  %{content: content} -> content
+                  _ -> nil
+                end)
+
+              case validate_spaced_children(contents, depth + 1) do
+                :ok -> {:cont, :ok}
+                error -> {:halt, error}
+              end
+            end)
+          end
+
         _ ->
-          failure(
-            "nonzero MathML matrix spacing admits ordinary token/row content; fraction and complex cell composition remain pending",
-            "mtd"
-          )
+          failure("matrix content requires a supported prepared MathML subtree", "mtd")
       end
     end
   end
@@ -394,8 +529,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
       case spacing do
         {horizontal, vertical} ->
           Enum.all?([horizontal, vertical], fn length ->
-            is_number(length) and length >= 0 and length <= Limits.get(:max_css_numeric_magnitude) and
-              length / 0.75 == trunc(length / 0.75)
+            is_number(length) and length >= 0 and length <= Limits.get(:max_css_numeric_magnitude)
           end)
 
         _ ->
@@ -423,14 +557,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
     if not is_number(size) or size < 0 or size > Limits.get(:max_css_numeric_magnitude) or
          not bounded_spacing? or not bounded_edges? or not zero_margins? or
          Map.get(style, :border_collapse, :separate) != :separate or
-         Map.get(style, :width) != nil or Map.get(style, :height) != nil or
          Map.get(style, :background_image) != nil or Map.get(style, :table_layout, :auto) != :auto do
       failure(
-        "natural MathML matrices require bounded separate-border box edges, exact integer CSS-pixel spacing, zero margins and automatic unconstrained sizing; fractional spacing is pending",
+        "MathML matrices require bounded separate-border box edges, continuous spacing, zero margins and automatic table layout",
         "mtable"
       )
     else
-      :ok
+      MathLayoutValidator.validate_link_style(style, "mtable")
     end
   end
 
@@ -463,27 +596,20 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
       is_map(margin) and Enum.all?([:top, :right, :bottom, :left], &(Map.get(margin, &1) == 0))
 
     if not bounded_padding? or not bounded_border? or not zero_margins? or
-         Map.get(style, :width) != nil or
-         Map.get(style, :height) != nil or
-         Enum.any?(
-           [:min_width, :max_width, :min_height, :max_height],
-           &(Map.get(style, &1) != nil)
-         ) or
          (tag == "mtr" and Enum.any?(Map.values(padding), &(&1 != 0))) or
          Map.get(style, :background_image) != nil or
-         Map.get(style, :link_url) != nil or Map.get(style, :link_destination) != nil or
          Map.get(style, :html_target) != nil or
          Map.get(style, :position, :static) != :static or
          Map.get(style, :overflow, :visible) != :visible or
-         Map.get(style, :box_sizing, :content_box) != :content_box or
-         Map.get(style, :vertical_align, :baseline) != :baseline or
+         Map.get(style, :box_sizing, :content_box) not in [:content_box, :border_box] or
+         Map.get(style, :vertical_align, :baseline) not in [:baseline, :top, :middle, :bottom] or
          Map.get(style, :text_align, :center) not in [:left, :right, :center] do
       failure(
-        "MathML cells require bounded padding/borders and baseline alignment; row borders/images and constrained cell geometry are pending",
+        "MathML cells require bounded padding/borders and table alignment; row borders, images and positioned/clipped cells remain unsupported",
         tag
       )
     else
-      :ok
+      MathLayoutValidator.validate_link_style(style, tag)
     end
   end
 
@@ -505,7 +631,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
   def prepare_geometry(prepared, measured) do
     MathLayout.with_context(fn ->
       case {prepared, measured} do
-        {%{kind: :matrix, rows: rows, row_boxes: row_boxes, axis: axis, style: style}, measured}
+        {%{kind: :matrix, rows: rows, row_boxes: row_boxes, axis: axis, style: style} = prepared,
+         measured}
         when is_list(rows) and is_list(row_boxes) and is_list(measured) and is_number(axis) and
                is_map(style) ->
           reserved = reserve_input_collection(rows, :rows)
@@ -535,14 +662,14 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
                   end)
                 end)
 
-              with :ok <- validate_table_style(style),
+              with :ok <- validate_style(style, "mtable"),
                    :ok <- validate_grid_spacing(rows, style),
                    :ok <-
                      Enum.reduce_while(row_boxes, :ok, fn row_box, :ok ->
                        case row_box do
                          %{style: row_style, source: %{namespace: :mathml, tag: "mtr"}}
                          when is_map(row_style) ->
-                           case validate_cell_style(row_style, "mtr") do
+                           case validate_style(row_style, "mtr") do
                              :ok -> {:cont, :ok}
                              error -> {:halt, error}
                            end
@@ -555,15 +682,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
                             )}
                        end
                      end),
-                   :ok <-
-                     if(columns_valid?,
-                       do: :ok,
-                       else:
-                         failure(
-                           "prepared matrix rows must use contiguous zero-based columns; gaps and spanning geometry are unsupported",
-                           "mtd"
-                         )
-                     ),
+                   :ok <- validate_columns(rows, row_boxes, columns_valid?),
                    :ok <-
                      Enum.reduce_while(cells, :ok, fn cell, :ok ->
                        case {cell.prepared,
@@ -575,7 +694,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
                                     :table_span,
                                     column + 1
                                   ),
-                                :ok <- validate_cell_style(style, "mtd"),
+                                :ok <- validate_style(style, "mtd"),
                                 do: {:cont, :ok},
                                 else: (error -> {:halt, error})
 
@@ -592,7 +711,19 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
                             )}
                        end
                      end) do
-                geometry(rows, row_boxes, cells, axis, style)
+                with :ok <-
+                       MathLayoutValidator.validate_available_inline_size(
+                         Map.get(prepared, :available_inline_size)
+                       ) do
+                  geometry(
+                    rows,
+                    row_boxes,
+                    cells,
+                    axis,
+                    style,
+                    Map.get(prepared, :available_inline_size)
+                  )
+                end
               end
 
             true ->
@@ -606,6 +737,72 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
           failure("matrix measurement requires prepared state and measured rows", "mtable")
       end
     end)
+  end
+
+  defp validate_columns(rows, row_boxes, contiguous?) do
+    spanning? =
+      Enum.any?(rows, fn row ->
+        Enum.any?(row, fn cell ->
+          is_map(cell) and (Map.get(cell, :colspan, 1) != 1 or Map.get(cell, :rowspan, 1) != 1)
+        end)
+      end)
+
+    cond do
+      not spanning? and contiguous? ->
+        :ok
+
+      not spanning? ->
+        failure(
+          "prepared matrix rows require contiguous zero-based columns or actual span-covered slots",
+          "mtd"
+        )
+
+      not Enum.all?(rows, fn row ->
+        Enum.all?(row, fn cell ->
+          is_map(cell) and is_map(Map.get(cell, :style)) and is_integer(Map.get(cell, :column)) and
+              cell.column >= 0
+        end)
+      end) ->
+        failure(
+          "matrix span placements require cell style maps and contiguous zero-based columns",
+          "mtd"
+        )
+
+      true ->
+        projected =
+          Enum.zip_with(rows, row_boxes, fn cells, row ->
+            %{
+              style: row.style,
+              children:
+                Enum.map(cells, fn cell ->
+                  %{
+                    style:
+                      Map.merge(cell.style, %{
+                        colspan: Map.get(cell, :colspan, 1),
+                        rowspan: Map.get(cell, :rowspan, 1)
+                      }),
+                    children: []
+                  }
+                end)
+            }
+          end)
+
+        with {:ok, formed} <- HtmlTableValidator.form(projected) do
+          if Enum.all?(Enum.zip(rows, formed.rows), fn {cells, row} ->
+               Enum.all?(Enum.zip(cells, row.cells), fn {cell, placement} ->
+                 cell.column == placement.column and
+                   Map.get(cell, :colspan, 1) == placement.colspan and
+                   Map.get(cell, :rowspan, 1) == placement.rowspan
+               end)
+             end),
+             do: :ok,
+             else:
+               failure(
+                 "matrix spans require the actual shared nonoverlapping table placements",
+                 "mtd"
+               )
+        end
+    end
   end
 
   # Count proper list links without materializing row/cell pairs, stopping at
@@ -648,8 +845,11 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
 
   # CSS separate-border natural columns use each cell's preferred widths; row
   # baselines include cell padding. Core centers the resulting table on MathAxis.
-  defp geometry(rows, row_boxes, cells, axis, style) do
-    column_count = Enum.max(Enum.map(cells, &(&1.prepared.column + 1)), fn -> 0 end)
+  defp geometry(rows, row_boxes, cells, axis, style, available_inline_size) do
+    column_count =
+      Enum.max(Enum.map(cells, &(&1.prepared.column + Map.get(&1.prepared, :colspan, 1))), fn ->
+        0
+      end)
 
     HtmlValidator.reserve_render_resource(
       :max_table_grid_work,
@@ -657,21 +857,51 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
       :layout
     )
 
+    spanning = Enum.filter(cells, &(Map.get(&1.prepared, :colspan, 1) > 1))
+
+    if spanning != [] or Enum.any?(cells, &(Map.get(&1.prepared, :rowspan, 1) > 1)) do
+      # Reserve the actual full-column redistribution walks and linked-list
+      # slices before their arrays are allocated. The existing single-slot
+      # profile retains its original budget contract.
+      sorting = length(spanning) * ceil(:math.log2(max(length(spanning), 1)))
+      redistribution = length(spanning) * column_count * 2
+
+      slices =
+        Enum.sum(
+          Enum.map(cells, fn cell ->
+            cell.prepared.column + Map.get(cell.prepared, :colspan, 1) + cell.row +
+              Map.get(cell.prepared, :rowspan, 1)
+          end)
+        )
+
+      HtmlValidator.reserve_render_resource(
+        :max_table_grid_work,
+        sorting + redistribution + slices,
+        :layout
+      )
+    end
+
     zero = %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
     padding = Map.get(style, :padding, zero)
     border = Map.get(style, :border_widths, zero)
     # The shared decorator adds owner box edges after this content geometry.
     # Compensate asymmetric edges so the entire border box is axis centered.
     axis_offset = (padding.bottom + border.bottom - padding.top - border.top) / 2
-    by_column = Enum.group_by(cells, & &1.prepared.column)
+
+    by_column =
+      cells
+      |> Enum.filter(&(Map.get(&1.prepared, :colspan, 1) == 1))
+      |> Enum.group_by(& &1.prepared.column)
+
     by_row = Enum.group_by(cells, & &1.row)
-    {horizontal_spacing, vertical_spacing} = Map.get(style, :border_spacing, {0.0, 0.0})
+
+    {horizontal_spacing, vertical_spacing} =
+      if column_count == 0, do: {0.0, 0.0}, else: Map.get(style, :border_spacing, {0.0, 0.0})
 
     columns =
       for column <- 0..max(column_count - 1, 0), column < column_count do
-        # Every admitted row is a contiguous prefix. The longest row owns all
-        # natural columns, so these maxima always have at least one cell.
-        values = Map.fetch!(by_column, column)
+        # Spanning-only columns acquire their real intrinsic contribution below.
+        values = Map.get(by_column, column, [])
 
         preferred =
           for field <- [:min_content_width, :max_content_width], into: %{} do
@@ -679,13 +909,126 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
              Enum.max(
                Enum.map(values, fn cell ->
                  edges = cell_edges(cell.prepared.style)
-                 Map.fetch!(cell.measured, field) + edges.left + edges.right
-               end)
+                 preferred = Map.fetch!(cell.measured, field)
+
+                 max(
+                   preferred,
+                   Layout.resolve_content_size(
+                     cell.prepared.style,
+                     :width,
+                     Layout.resolve_content_size(style, :width, available_inline_size, nil),
+                     preferred
+                   )
+                 ) + edges.left + edges.right
+               end),
+               fn -> 0.0 end
              )}
           end
 
         Map.put(preferred, :width, preferred.max_content_width)
       end
+
+    columns =
+      spanning
+      |> Enum.sort_by(&Map.get(&1.prepared, :colspan))
+      |> Enum.reduce(columns, fn cell, columns ->
+        span = cell.prepared.colspan
+        HtmlValidator.reserve_render_resource(:max_table_grid_work, span, :layout)
+        edges = cell_edges(cell.prepared.style)
+
+        Enum.reduce([:min_content_width, :max_content_width], columns, fn field, columns ->
+          preferred = Map.fetch!(cell.measured, field)
+
+          required =
+            max(
+              preferred,
+              Layout.resolve_content_size(
+                cell.prepared.style,
+                :width,
+                Layout.resolve_content_size(style, :width, available_inline_size, nil),
+                preferred
+              )
+            ) + edges.left + edges.right - horizontal_spacing * (span - 1)
+
+          values = Enum.slice(columns, cell.prepared.column, span)
+          total = Enum.sum(Enum.map(values, &Map.fetch!(&1, field)))
+          extra = max(required - total, 0.0)
+
+          Enum.with_index(columns, fn column, index ->
+            if index >= cell.prepared.column and index < cell.prepared.column + span do
+              weight = if total > 0, do: Map.fetch!(column, field) / total, else: 1 / span
+              Map.update!(column, field, &(&1 + extra * weight))
+            else
+              column
+            end
+          end)
+        end)
+      end)
+      |> Enum.map(&Map.put(&1, :width, &1.max_content_width))
+
+    intrinsic = Enum.sum(Enum.map(columns, & &1.width))
+    minimum = Enum.sum(Enum.map(columns, & &1.min_content_width))
+    spacing_width = horizontal_spacing * if(column_count == 0, do: 0, else: column_count + 1)
+
+    target =
+      max(
+        Layout.resolve_content_size(
+          style,
+          :width,
+          available_inline_size,
+          intrinsic + spacing_width
+        ) - spacing_width,
+        minimum
+      )
+
+    table_basis = Layout.resolve_content_size(style, :width, available_inline_size, nil)
+
+    constrained_columns =
+      MapSet.new(cells, fn cell ->
+        if Map.get(cell.prepared, :colspan, 1) == 1 and
+             Map.get(cell.prepared.style, :width) not in [nil, :auto] and
+             Layout.resolve_content_size(cell.prepared.style, :width, table_basis, nil) != nil,
+           do: cell.prepared.column,
+           else: nil
+      end)
+      |> MapSet.delete(nil)
+
+    automatic_columns =
+      Enum.with_index(columns)
+      |> Enum.reject(fn {_column, index} -> MapSet.member?(constrained_columns, index) end)
+
+    expanding_columns =
+      if automatic_columns == [], do: Enum.with_index(columns), else: automatic_columns
+
+    expanding_indexes = MapSet.new(expanding_columns, &elem(&1, 1))
+    expanding_width = Enum.sum(Enum.map(expanding_columns, fn {column, _} -> column.width end))
+
+    columns =
+      Enum.with_index(columns, fn column, index ->
+        width =
+          cond do
+            target >= intrinsic and MapSet.member?(expanding_indexes, index) ->
+              column.width +
+                (target - intrinsic) *
+                  if(expanding_width > 0,
+                    do: column.width / expanding_width,
+                    else: 1 / max(length(expanding_columns), 1)
+                  )
+
+            target >= intrinsic ->
+              column.width
+
+            intrinsic > minimum ->
+              column.min_content_width +
+                (target - minimum) * (column.width - column.min_content_width) /
+                  (intrinsic - minimum)
+
+            true ->
+              column.width
+          end
+
+        Map.put(column, :width, width)
+      end)
 
     row_sizes =
       for {_row, index} <- Enum.with_index(rows) do
@@ -693,22 +1036,123 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
 
         ascent =
           Enum.max(
-            Enum.map(values, fn cell ->
-              cell.measured.ascent + cell_edges(cell.prepared.style).top
-            end),
+            Enum.map(values, &(&1.measured.ascent + cell_edges(&1.prepared.style).top)),
             fn -> 0.0 end
           )
 
         descent =
           Enum.max(
-            Enum.map(values, fn cell ->
-              cell.measured.descent + cell_edges(cell.prepared.style).bottom
-            end),
+            Enum.map(values, &(&1.measured.descent + cell_edges(&1.prepared.style).bottom)),
             fn -> 0.0 end
           )
 
         %{ascent: ascent, descent: descent}
       end
+
+    needs_baseline_allocation =
+      Enum.any?(
+        cells,
+        &(Map.get(&1.prepared, :rowspan, 1) > 1 or
+            Map.get(&1.prepared.style, :vertical_align, :baseline) != :baseline or
+            Enum.any?([:height, :min_height, :max_height], fn property ->
+              Map.get(&1.prepared.style, property) != nil
+            end))
+      ) or
+        Enum.any?(
+          row_boxes,
+          &Enum.any?([:height, :min_height, :max_height], fn property ->
+            Map.get(&1.style, property) != nil
+          end)
+        )
+
+    row_sizes =
+      if needs_baseline_allocation do
+        projected =
+          Enum.zip_with(rows, row_boxes, fn row, row_box ->
+            row_style =
+              Map.put(
+                row_box.style,
+                :height,
+                Layout.resolve_content_size(row_box.style, :height, nil, 0.0)
+              )
+
+            %{
+              row: %{style: row_style},
+              cells:
+                Enum.map(row, fn cell ->
+                  %{
+                    column: cell.column,
+                    colspan: Map.get(cell, :colspan, 1),
+                    rowspan: Map.get(cell, :rowspan, 1),
+                    cell: %{style: cell.style, children: []}
+                  }
+                end)
+            }
+          end)
+
+        metrics =
+          Map.new(cells, fn cell ->
+            edges = cell_edges(cell.prepared.style)
+
+            intrinsic_height =
+              cell.measured.ascent + cell.measured.descent + edges.top + edges.bottom
+
+            minimum_height =
+              max(
+                intrinsic_height,
+                Layout.resolve_content_size(
+                  cell.prepared.style,
+                  :height,
+                  Layout.resolve_content_size(style, :height, nil, nil),
+                  cell.measured.ascent + cell.measured.descent
+                ) + edges.top + edges.bottom
+              )
+
+            {{cell.row, cell.prepared.column},
+             %{
+               intrinsic_height: intrinsic_height,
+               minimum_height: minimum_height,
+               baseline: cell.measured.ascent + edges.top,
+               inset_bottom: edges.bottom,
+               has_flow: true
+             }}
+          end)
+
+        case HtmlTableValidator.prepare_baseline_geometry(projected, metrics, vertical_spacing) do
+          {:ok, allocated} ->
+            Enum.zip_with(
+              allocated.heights,
+              allocated.baselines,
+              &%{ascent: &2, descent: &1 - &2}
+            )
+
+          error ->
+            throw({:math_layout_error, error})
+        end
+      else
+        row_sizes
+      end
+
+    natural_height = Enum.sum(Enum.map(row_sizes, &(&1.ascent + &1.descent)))
+    spacing_height = vertical_spacing * if(column_count == 0, do: 0, else: length(rows) + 1)
+
+    target_height =
+      max(
+        Layout.resolve_content_size(style, :height, nil, natural_height + spacing_height) -
+          spacing_height,
+        natural_height
+      )
+
+    row_sizes =
+      Enum.map(row_sizes, fn row ->
+        height = row.ascent + row.descent
+
+        extra =
+          (target_height - natural_height) *
+            if(natural_height > 0, do: height / natural_height, else: 1 / max(length(rows), 1))
+
+        %{row | descent: row.descent + extra}
+      end)
 
     {column_offsets, _} =
       Enum.map_reduce(columns, horizontal_spacing, fn column, offset ->
@@ -720,9 +1164,10 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
         {offset, offset + row.ascent + row.descent + vertical_spacing}
       end)
 
+    height = if rows == [], do: target_height + spacing_height, else: height
+
     column_offsets = List.to_tuple(column_offsets)
     row_offsets = List.to_tuple(row_offsets)
-    column_sizes = List.to_tuple(columns)
     row_metrics = List.to_tuple(row_sizes)
     ascent = height / 2 + axis + axis_offset
     descent = height / 2 - axis - axis_offset
@@ -732,7 +1177,9 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
         column = cell.prepared.column
         style = cell.prepared.style
         edges = cell_edges(style)
-        width = elem(column_sizes, column).width
+        colspan = Map.get(cell.prepared, :colspan, 1)
+        width = columns |> Enum.slice(column, colspan) |> Enum.map(& &1.width) |> Enum.sum()
+        width = width + horizontal_spacing * (colspan - 1)
         content_width = width - edges.left - edges.right
         available = content_width - cell.measured.width
 
@@ -755,7 +1202,26 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
             )
 
         x = elem(column_offsets, column)
-        y = ascent - elem(row_offsets, cell.row) - row.ascent
+        rowspan = Map.get(cell.prepared, :rowspan, 1)
+
+        allocated_height =
+          row_sizes
+          |> Enum.slice(cell.row, rowspan)
+          |> Enum.map(&(&1.ascent + &1.descent))
+          |> Enum.sum()
+
+        allocated_height = allocated_height + vertical_spacing * (rowspan - 1)
+        content_height = allocated_height - edges.top - edges.bottom
+
+        content_ascent =
+          case Map.get(style, :vertical_align, :baseline) do
+            :top -> cell.measured.ascent
+            :bottom -> content_height - cell.measured.descent
+            :middle -> (content_height + cell.measured.ascent - cell.measured.descent) / 2
+            :baseline -> row.ascent - edges.top
+          end
+
+        y = ascent - elem(row_offsets, cell.row) - content_ascent - edges.top
 
         %{
           measured: cell.measured,
@@ -769,16 +1235,16 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
           y: y,
           inner_x: shift,
           content_width: content_width,
-          content_ascent: row.ascent - edges.top,
-          content_descent: row.descent - edges.bottom,
+          content_ascent: content_ascent,
+          content_descent: content_height - content_ascent,
           painted_ascent:
             if(painted?,
-              do: max(cell.measured.ink_ascent, row.ascent),
+              do: max(cell.measured.ink_ascent, content_ascent + edges.top),
               else: cell.measured.ink_ascent
             ),
           painted_descent:
             if(painted?,
-              do: max(cell.measured.ink_descent, row.descent),
+              do: max(cell.measured.ink_descent, content_height - content_ascent + edges.bottom),
               else: cell.measured.ink_descent
             )
         }
@@ -789,16 +1255,32 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
         HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, :layout)
 
         if Map.get(row_box.style, :background_color) not in [nil, :transparent] do
-          Enum.map(Map.get(by_row, index, []), fn cell ->
+          covered =
+            if Enum.any?(cells, &(Map.get(&1.prepared, :rowspan, 1) > 1)) do
+              HtmlValidator.reserve_render_resource(:max_table_grid_work, length(cells), :layout)
+
+              Enum.filter(
+                cells,
+                &(index >= &1.row and index < &1.row + Map.get(&1.prepared, :rowspan, 1))
+              )
+            else
+              Map.get(by_row, index, [])
+            end
+
+          Enum.map(covered, fn cell ->
             HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, :layout)
             column_index = cell.prepared.column
-            column = elem(column_sizes, column_index)
             row = elem(row_metrics, index)
 
             %{
               x: elem(column_offsets, column_index),
               y: ascent - elem(row_offsets, index) - row.ascent,
-              width: column.width,
+              width:
+                columns
+                |> Enum.slice(column_index, Map.get(cell.prepared, :colspan, 1))
+                |> Enum.map(& &1.width)
+                |> Enum.sum()
+                |> Kernel.+(horizontal_spacing * (Map.get(cell.prepared, :colspan, 1) - 1)),
               ascent: row.ascent,
               descent: row.descent,
               style: Map.put(row_box.style, :_math_source, row_box.source)
@@ -810,13 +1292,27 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
       end)
 
     result = %{
-      width: Enum.sum(Enum.map(columns, & &1.width)) + horizontal_spacing * (column_count + 1),
+      width: target + spacing_width,
       min_content_width:
-        Enum.sum(Enum.map(columns, & &1.min_content_width)) +
-          horizontal_spacing * (column_count + 1),
+        max(
+          minimum + spacing_width,
+          Layout.resolve_content_size(
+            style,
+            :width,
+            available_inline_size,
+            minimum + spacing_width
+          )
+        ),
       max_content_width:
-        Enum.sum(Enum.map(columns, & &1.max_content_width)) +
-          horizontal_spacing * (column_count + 1),
+        max(
+          minimum + spacing_width,
+          Layout.resolve_content_size(
+            style,
+            :width,
+            available_inline_size,
+            intrinsic + spacing_width
+          )
+        ),
       ascent: ascent,
       descent: descent,
       ink_ascent:

@@ -116,6 +116,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                           "su"
                         )
   @css_string_pattern "(?:\"(?:#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^\"\\\\\\r\\n\\f])*\"|'(?:#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^'\\\\\\r\\n\\f])*')"
+  @css_component_unit_regex Regex.compile!(
+                              "#{@css_string_pattern}|<=|>=|#{Regex.source(@css_syntax_unit_regex)}",
+                              "su"
+                            )
   @css_language_range_regex Regex.compile!(
                               "\\A[ \\t\\r\\n\\f]*(?<value>#{@css_string_pattern}|#{@css_identifier_pattern})[ \\t\\r\\n\\f]*(?<rest>.*)\\z",
                               "su"
@@ -209,6 +213,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     else
       String.codepoints(source)
     end
+  end
+
+  @doc "Returns CSS lexical units with quoted strings and escapes kept opaque for component parsing."
+  @spec css_component_units(String.t()) :: [String.t()]
+  def css_component_units(source) do
+    if String.contains?(source, ["\"", "'", "\\", "<=", ">="]),
+      do: @css_component_unit_regex |> Regex.scan(source) |> Enum.map(&hd/1),
+      else: String.codepoints(source)
   end
 
   @doc false
@@ -308,14 +320,21 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec document_metadata_options(map(), keyword()) :: keyword()
   def document_metadata_options(dom, opts) do
-    head_children =
-      case dom do
-        %{children: [%{tag: "html", children: [%{tag: "head", children: children} | _]}]} ->
-          children
+    html =
+      Enum.find(dom.children, fn node ->
+        Map.get(node, :type) == :element and Map.get(node, :tag) == "html" and
+          Map.get(node, :namespace, :html) == :html
+      end)
 
-        _ ->
-          []
+    head =
+      if html do
+        Enum.find(html.children, fn node ->
+          Map.get(node, :type) == :element and Map.get(node, :tag) == "head" and
+            Map.get(node, :namespace, :html) == :html
+        end)
       end
+
+    head_children = if head, do: head.children, else: []
 
     defaults = document_metadata_defaults(head_children, %{})
 
@@ -367,13 +386,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   defp document_title(node) do
     case node do
       %{type: :element, tag: "title", children: children} ->
-        title =
-          children
-          |> Enum.map_join("", & &1.text)
-          |> String.replace(~r/[ \t\n\f\r]+/u, " ")
-          |> String.trim(" ")
+        if Map.get(node, :namespace, :html) == :html do
+          title =
+            children
+            |> Enum.map_join("", & &1.text)
+            |> String.replace(~r/[ \t\n\f\r]+/u, " ")
+            |> String.trim(" ")
 
-        if title == "", do: nil, else: title
+          if title == "", do: nil, else: title
+        end
 
       %{children: children} when is_list(children) ->
         Enum.find_value(children, &document_title/1)
@@ -387,15 +408,21 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     Enum.reduce(nodes, metadata, fn node, metadata ->
       case node do
         %{tag: "noscript", children: children} ->
-          document_metadata_defaults(children, metadata)
+          if Map.get(node, :namespace, :html) == :html,
+            do: document_metadata_defaults(children, metadata),
+            else: metadata
 
         %{tag: "meta", attributes: %{"name" => name, "content" => content}} ->
           field =
-            case String.downcase(name) do
-              "author" -> :author
-              "description" -> :subject
-              "keywords" -> :keywords
-              _ -> nil
+            if Map.get(node, :namespace, :html) == :html and
+                 is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "name")) and
+                 is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "content")) do
+              case String.downcase(name, :ascii) do
+                "author" -> :author
+                "description" -> :subject
+                "keywords" -> :keywords
+                _ -> nil
+              end
             end
 
           case field do
@@ -569,6 +596,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec validate_static_url_attributes(map(), String.t() | nil) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_static_url_attributes(attributes, html_tag \\ nil) do
+    attributes =
+      if html_tag == "input",
+        do:
+          NativeElixirPdfUtilities.Validators.HtmlFormValidator.applicable_input_attributes(
+            attributes
+          ),
+        else: attributes
+
     case attributes do
       attributes
       when is_map_key(attributes, "href") or is_map_key(attributes, "src") or
@@ -1491,7 +1526,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
     (not html? or valid_html_child?(parent, tag, ancestors)) and
       if Enum.any?([context | ancestors], &(&1 in ["a", "button", "option", "canvas"])) do
-        attributes = element.attributes
+        attributes =
+          Map.reject(element.attributes, fn {name, _} ->
+            not is_nil(Map.get(Map.get(element, :attribute_namespaces, %{}), name))
+          end)
 
         # Interactive content is conditional for anchors, images and inputs.
         # Hidden controls and placeholder anchors are static phrasing content.
@@ -4436,7 +4474,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           case Map.get(node, :tag) do
             "input" ->
               type = input_type(Map.get(attributes, "type", "text"))
-              readonly_input_type?(type) or type in ["checkbox", "radio"]
+
+              NativeElixirPdfUtilities.Validators.HtmlFormValidator.input_attribute_applies?(
+                type,
+                "required"
+              )
 
             tag when tag in ["select", "textarea"] ->
               true
@@ -4545,7 +4587,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              "accept",
              "maxlength",
              "minlength",
-             "pattern"
+             "pattern",
+             "autocomplete",
+             "capture",
+             "dirname",
+             "formaction",
+             "formenctype",
+             "formmethod",
+             "formnovalidate",
+             "formtarget",
+             "popovertarget",
+             "popovertargetaction"
            ] ->
         true
 
@@ -4575,8 +4627,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
            ] ->
         true
 
-      {"button", "type", value} ->
-        String.downcase(value) in ["button", "submit", "reset"]
+      {"button", "type", _value} ->
+        true
 
       {"button", name, _value} when name in ["value", "name", "disabled"] ->
         true
@@ -5069,12 +5121,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec validate_source_style_input(term(), term(), term(), term()) ::
           {:ok, boolean()} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def validate_source_style_input(dom, sources, budget, consumer) do
+  @spec validate_source_style_input(term(), term(), term(), term(), term()) ::
+          {:ok, boolean()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_source_style_input(dom, sources, budget, consumer, opts \\ []) do
     with {:ok, controls?} <-
            prepare_style_input(
              dom,
-             [],
-             NativeElixirPdfUtilities.HtmlToPdf.Font.normalize_options([])
+             opts,
+             NativeElixirPdfUtilities.HtmlToPdf.Font.normalize_options(opts)
            ) do
       valid_budget? =
         try do
@@ -5822,6 +5876,65 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end
   end
 
+  @doc "Validates a prepared CSS size expression using the shared numeric, depth and work bounds."
+  @spec validate_prepared_css_size(term()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  @spec validate_prepared_css_size(term(), term()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_prepared_css_size(value, context \\ :width) do
+    if context in [:size, :width, :height, :min_width, :max_width, :min_height, :max_height] and
+         prepared_css_size?(value, 0, context) do
+      :ok
+    else
+      Diagnostics.error(
+        :layout,
+        :invalid_layout,
+        "prepared CSS sizes require nonnegative bounded point lengths, percentages, auto or proper min expressions",
+        operation: :validate_css_size,
+        module: __MODULE__
+      )
+    end
+  catch
+    {:render_resource_limit, error} -> error
+  end
+
+  defp prepared_css_size?(value, depth, context) do
+    check_render_resource(:max_html_depth, depth, :layout)
+    reserve_render_resource(:max_css_work, 1, :layout)
+
+    case value do
+      nil ->
+        depth == 0
+
+      :auto ->
+        depth == 0 and context in [:width, :height]
+
+      number when is_number(number) ->
+        number >= 0 and number <= Limits.get(:max_css_numeric_magnitude)
+
+      {:percent, ratio} when is_number(ratio) ->
+        ratio >= 0 and ratio <= Limits.get(:max_css_numeric_magnitude) / 100
+
+      {:min, [_ | _] = values} ->
+        prepared_css_sizes?(values, depth + 1)
+
+      _ ->
+        false
+    end
+  end
+
+  defp prepared_css_sizes?(values, depth) do
+    case values do
+      [] ->
+        true
+
+      [value | rest] ->
+        prepared_css_size?(value, depth, :size) and prepared_css_sizes?(rest, depth)
+
+      _ ->
+        false
+    end
+  end
+
   @doc false
   @spec parse_css_size(
           String.t(),
@@ -6353,7 +6466,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
               nil ->
                 html_tag = if Map.get(node, :namespace, :html) == :html, do: tag, else: nil
 
-                with :ok <- validate_static_url_attributes(attributes, html_tag),
+                with :ok <-
+                       validate_static_url_attributes(
+                         if(html_tag == "input",
+                           do:
+                             NativeElixirPdfUtilities.Validators.HtmlFormValidator.initial_control_attributes(
+                               node
+                             ),
+                           else: attributes
+                         ),
+                         html_tag
+                       ),
                      :ok <-
                        NativeElixirPdfUtilities.Validators.HtmlFormValidator.validate_initial_range_attributes(
                          node
@@ -6410,13 +6533,31 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                        ) do
                   semantic_attribute =
                     cond do
-                      Map.has_key?(attributes, "multiple") and not custom? -> "multiple"
-                      Map.has_key?(attributes, "readonly") and not custom? -> "readonly"
-                      tag == "input" -> "type"
-                      tag == "script" -> "script"
-                      tag == "select" -> "select"
-                      tag == "noscript" -> "noscript"
-                      true -> nil
+                      is_nil(html_tag) ->
+                        nil
+
+                      Map.has_key?(attributes, "multiple") and not custom? and
+                          is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "multiple")) ->
+                        "multiple"
+
+                      Map.has_key?(attributes, "readonly") and not custom? and
+                          is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "readonly")) ->
+                        "readonly"
+
+                      tag == "input" ->
+                        "type"
+
+                      tag == "script" ->
+                        "script"
+
+                      tag == "select" ->
+                        "select"
+
+                      tag == "noscript" ->
+                        "noscript"
+
+                      true ->
+                        nil
                     end
 
                   if semantic_attribute &&
@@ -6434,7 +6575,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                                    valid_noscript_element?(children, parent, ancestors)
 
                                  _ ->
-                                   valid_form_element?(tag, attributes, children)
+                                   valid_form_element?(
+                                     tag,
+                                     if(tag == "input",
+                                       do:
+                                         NativeElixirPdfUtilities.Validators.HtmlFormValidator.initial_control_attributes(
+                                           node
+                                         ),
+                                       else: attributes
+                                     ),
+                                     children
+                                   )
                                end)) do
                     message =
                       case semantic_attribute do
@@ -6971,11 +7122,27 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   defp valid_anonymous_inline_fragment?(node) do
     style = node.style
 
+    # Real Math block atoms already carry the enclosing link on their actual
+    # glyph/native/paint contributions. Keep other anonymous linked block
+    # formatting held, and retain the existing positioning/box restrictions.
+    linked_math? =
+      Map.get(node, :tag) == "a" and
+        Enum.any?(node.children, fn child ->
+          match?(%{namespace: :mathml, tag: "math", style: %{_math_flow: true}}, child)
+        end) and
+        Enum.all?(node.children, fn child ->
+          match?(%{type: :text}, child) or
+            match?(%{namespace: :mathml, tag: "math"}, child)
+        end) and
+        NativeElixirPdfUtilities.Validators.MathLayoutValidator.validate_link_style(style, "a") ==
+          :ok
+
     Map.get(style, :position, :static) == :static and
       Map.get(style, :background_color) == nil and Map.get(style, :background_image) == nil and
       Map.get(style, :overflow, :visible) == :visible and
       Map.get(style, :vertical_align, :baseline) == :baseline and
-      Map.get(style, :link_url) == nil and Map.get(style, :link_destination) == nil and
+      ((Map.get(style, :link_url) == nil and Map.get(style, :link_destination) == nil) or
+         linked_math?) and
       Map.get(style, :_form_control) == nil and
       Map.get(node, :positioned_children, []) == [] and
       Enum.all?([:padding, :margin, :border_widths], fn property ->
@@ -7754,8 +7921,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
          {hex_to_pdf_color(red <> red), hex_to_pdf_color(green <> green),
           hex_to_pdf_color(blue <> blue)}}
 
-      String.starts_with?(normalized, "rgb(") or String.starts_with?(normalized, "rgba(") ->
+      (String.starts_with?(normalized, "rgb(") or String.starts_with?(normalized, "rgba(")) and
+        String.contains?(normalized, ",") and
+          Regex.match?(~r/\A(?:rgb|rgba)\([^()]*\)\z/u, normalized) ->
         parse_rgb_color(normalized)
+
+      String.contains?(normalized, "(") or
+          Regex.match?(~r/\A#[0-9a-f]{4}\z/u, normalized) ->
+        NativeElixirPdfUtilities.Validators.CssColorValidator.parse_function_color(
+          normalized,
+          current_color
+        )
 
       true ->
         :error

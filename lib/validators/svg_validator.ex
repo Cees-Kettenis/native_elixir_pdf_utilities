@@ -445,7 +445,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         end)
 
         if Enum.any?(
-             resource_hrefs,
+             Enum.reject(
+               resource_hrefs,
+               &(Map.get(state.context.resources, &1) == :pending and
+                   not Regex.match?(~r/^(?:javascript|vbscript):/i, &1))
+             ),
              &Regex.match?(~r/^(?:javascript|vbscript|data|file|https?):|^\/\//i, &1)
            ),
            do:
@@ -538,7 +542,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
                     tag: name,
                     attributes:
                       if(
-                        name in ~w(use textPath) and not Map.has_key?(attrs, "href") and
+                        name in ~w(use image textPath) and not Map.has_key?(attrs, "href") and
                           hrefs != [],
                         do: Map.put(attrs, "href", hd(hrefs)),
                         else: attrs

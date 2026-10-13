@@ -289,7 +289,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTemporalValidator do
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_render_style(node, style, ancestors, opts) do
     case node do
-      %{tag: "input", attributes: attributes, _initial_form_state: state} ->
+      %{tag: "input", _initial_form_state: state} ->
+        attributes =
+          NativeElixirPdfUtilities.Validators.HtmlFormValidator.initial_control_attributes(node)
+
         kind = HtmlValidator.input_type(Map.get(attributes, "type", "text"))
 
         cond do

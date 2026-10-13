@@ -44,11 +44,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTree do
   end
 
   @doc false
-  @spec insert(t(), reference(), map(), reference() | nil) :: {t(), reference()}
-  def insert(tree, parent, node, before \\ nil) do
+  @spec insert(t(), reference(), map(), reference() | nil, reference() | nil) ::
+          {t(), reference()}
+  def insert(tree, parent, node, before \\ nil, original_id \\ nil) do
     tree = invalidate(tree, parent)
     owner = Map.fetch!(tree.nodes, parent)
-    id = make_ref()
+    id = original_id || make_ref()
 
     node =
       node
@@ -78,12 +79,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTree do
   end
 
   @doc false
-  @spec open_fragment(t(), reference(), map()) :: {t(), reference()}
-  def open_fragment(tree, template, source) do
+  @spec open_fragment(t(), reference(), map(), reference() | nil) :: {t(), reference()}
+  def open_fragment(tree, template, source, original_id \\ nil) do
     tree = invalidate(tree, template)
     owner = Map.fetch!(tree.nodes, template)
     content = HtmlValidator.construct_html_template(%{owner | children: []}).content
-    id = make_ref()
+    id = original_id || make_ref()
 
     fragment =
       Map.merge(content, %{

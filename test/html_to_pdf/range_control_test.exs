@@ -76,14 +76,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeControlTest do
              )
   end
 
-  test "Range rejects inapplicable attributes and diagnoses queued list artwork" do
+  test "Range ignores inapplicable attributes and diagnoses queued list artwork" do
     for attr <-
           ~w(checked multiple readonly required size placeholder accept alpha alt colorspace dirname formaction formenctype formmethod formnovalidate formtarget height maxlength minlength pattern popovertarget popovertargetaction src width) do
-      assert {:error, {reason, diagnostic}} =
-               HtmlToPdf.render("<input type=range #{attr}='x'>", forms: :static)
-
-      assert reason == diagnostic.reason and diagnostic.stage == :html
-      assert diagnostic.message != ""
+      assert {:ok, pdf} = HtmlToPdf.render("<input type=range #{attr}='x'>", forms: :static)
+      assert {:ok, reference} = HtmlToPdf.render("<input type=range>", forms: :static)
+      assert pdf == reference
     end
 
     assert {:error, {:unsupported_html, diagnostic}} =

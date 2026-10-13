@@ -82,9 +82,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutUnknownRowsTest do
     assert {:ok, "αβ12"} = Text.extract(pdf, layout: false)
   end
 
-  test "known unimplemented Core schemata cannot bypass semantic authority through unknown rows" do
+  test "detached Core table nodes cannot bypass semantic authority through unknown rows" do
     for tag <-
-          ~w(mstyle merror mpadded) do
+          ~w(mtr mtd) do
       assert {:error, {:unsupported_html, diagnostic}} =
                HtmlToPdf.render("<math><equation-data><#{tag}/></equation-data></math>")
 

@@ -187,33 +187,48 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
   end
 
   @doc "Resolves sizes in a validated print environment. Invalid entries and eager auto are skipped."
-  @spec source_size(String.t(), PrintMediaValidator.context(), number() | nil) :: float()
+  @spec source_size(String.t(), PrintMediaValidator.context(), number() | nil) ::
+          float() | {:error, {atom(), map()}}
   def source_size(sizes, context, auto_width \\ nil) do
-    sizes
-    |> NativeElixirPdfUtilities.HtmlToPdf.CssParser.strip_comments()
-    |> HtmlValidator.split_css_comma()
-    |> Enum.reduce_while(context.width, fn entry, default ->
-      # The last component is a length or math function, not a percentage.
-      case Regex.run(~r/\A(?:(.*?)\s+)?([a-zA-Z_-]+\(.*\)|[^\s()]+)\z/s, entry) do
-        [_, media, length] ->
-          result =
-            if String.downcase(length, :ascii) == "auto" and is_number(auto_width),
-              do: {:ok, auto_width},
-              else: PrintMediaValidator.source_length(length, context)
+    HtmlValidator.with_render_budget(fn ->
+      sizes
+      |> NativeElixirPdfUtilities.HtmlToPdf.CssParser.strip_comments()
+      |> HtmlValidator.split_css_comma()
+      |> Enum.reduce_while(context.width, fn entry, default ->
+        terms = NativeElixirPdfUtilities.Validators.CssMathValidator.component_terms(entry, false)
 
-          case result do
-            {:ok, value} ->
-              if PrintMediaValidator.matches?(media, context),
-                do: {:halt, value},
-                else: {:cont, default}
+        case List.last(terms) do
+          nil ->
+            {:cont, default}
 
-            _ ->
-              {:cont, default}
-          end
+          length ->
+            media = terms |> Enum.drop(-1) |> Enum.join(" ")
 
-        _ ->
-          {:cont, default}
-      end
+            auto? =
+              case HtmlValidator.parse_css_identifier(length) do
+                {:ok, name, ""} -> String.downcase(name, :ascii) == "auto"
+                _ -> false
+              end
+
+            result =
+              if auto? and is_number(auto_width),
+                do: {:ok, auto_width},
+                else: PrintMediaValidator.source_length(length, context)
+
+            case result do
+              {:ok, value} ->
+                if PrintMediaValidator.matches?(media, context),
+                  do: {:halt, value},
+                  else: {:cont, default}
+
+              {:error, {_reason, _diagnostic}} = error ->
+                throw({:render_resource_limit, error})
+
+              _ ->
+                {:cont, default}
+            end
+        end
+      end)
     end)
   end
 

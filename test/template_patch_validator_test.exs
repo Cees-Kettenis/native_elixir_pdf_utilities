@@ -243,14 +243,16 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorTest do
     assert diagnostic.module == HtmlValidator
   end
 
-  test "preparation does not enable template replacement in any public parser or renderer" do
+  test "direct parsing still denies replacement while the renderer prepares supported source" do
     source = "<?marker name='A'><template for='A'><p>Replacement</p></template>"
     assert {:error, {:unsupported_html, diagnostic}} = HtmlParser.parse_document_detailed(source)
     assert diagnostic.stage == :html and diagnostic.source =~ "template"
     assert diagnostic.line == 1 and diagnostic.column == 19
 
-    assert {:error, {:unsupported_html, _}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render(source)
+    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(source)
+    # The earlier marker is in the implied head. Its non-painted insertion
+    # remains distinct from body range replacement, covered by execution tests.
+    assert {:error, {:no_extractable_text, _}} = NativeElixirPdfUtilities.Text.extract(pdf)
   end
 
   test "parser plans the original earlier range at the opening token before the public source gate" do
@@ -306,10 +308,12 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorTest do
       refute_receive {:trace, _, :call, {HtmlTree, :adopt_content_patch, _}}
       refute_receive {:trace, _, :call, {HtmlTree, :finish_content_patch, _}}
 
-      assert {:error, {:unsupported_html, rendered}} =
+      assert {:error, {:invalid_css, rendered}} =
                NativeElixirPdfUtilities.HtmlToPdf.render(source)
 
-      assert rendered.module == TemplatePatchValidator and rendered.source == diagnostic.source
+      assert rendered.stage == :css and rendered.source == "width:bananas"
+      assert rendered.operation == :source_style_contexts
+      assert rendered.line == 1 and rendered.column == 65
     after
       Enum.each(traces, &:erlang.trace_pattern(&1, false, [:local]))
     end

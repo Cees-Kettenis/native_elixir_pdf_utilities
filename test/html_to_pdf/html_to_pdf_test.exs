@@ -194,7 +194,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert diagnostic.message =~ "same authored tree"
   end
 
-  test "XML PI getter prerequisite leaves public rendering and template-for diagnostics unchanged" do
+  test "XML PI getters retain inert behavior and standalone template-for diagnostic ownership" do
     html =
       "<?marker name='A&amp;B' src='missing.png' onclick='run()'?>" <>
         "<p>Visible</p><?start name='A' name='B'?>" <>
@@ -215,7 +215,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     token = "<template for='A&amp;B'>"
     source = "<?marker name='A&amp;B'?>\r\n  " <> token <> "<p>Replacement</p></template>"
-    assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(source)
+    assert {:ok, pdf} = HtmlToPdf.render(source)
+    # This marker belongs to the implied head, which remains non-painted.
+    assert {:error, {:no_extractable_text, _}} = Text.extract(pdf)
+
+    assert {:error, {:unsupported_html, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse_document_detailed(source)
+
     assert diagnostic.stage == :html and diagnostic.reason == :unsupported_html
     assert diagnostic.operation == :parse and diagnostic.source == token
     assert diagnostic.module == NativeElixirPdfUtilities.Validators.TemplatePatchValidator
@@ -263,7 +269,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
            "<template for=missing>", 2, 3, :parse},
           {"<table><tr><td>A</table>\r\n  <script>run()</script>", "<script>", 2, 3, :render}
         ] do
-      assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(source)
+      result =
+        if operation == :parse do
+          assert {:ok, actual} = HtmlToPdf.render(source)
+          assert {:ok, expected} = HtmlToPdf.render("<p>e\u0301</p>")
+          assert actual == expected
+          NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse_document_detailed(source)
+        else
+          HtmlToPdf.render(source)
+        end
+
+      assert {:error, {:unsupported_html, diagnostic}} = result
       assert diagnostic.reason == :unsupported_html
       assert diagnostic.stage == :html and diagnostic.operation == operation
 
@@ -1105,11 +1121,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     end
   end
 
-  test "MathML still diagnoses later features and unsupported token composition" do
+  test "MathML diagnoses detached table rows and unsupported token composition" do
     alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
 
     for tag <-
-          ~w(mstyle merror mpadded) do
+          ~w(mtr mtd) do
       assert {:error, {:unsupported_html, diagnostic}} =
                HtmlToPdf.render("<math><#{tag}/></math>")
 
@@ -1118,7 +1134,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       assert diagnostic.operation == :measure_math
       assert diagnostic.module == MathLayoutValidator
       assert diagnostic.source == tag
-      assert diagnostic.message =~ "cannot be rendered"
+      assert diagnostic.message =~ "containing mtable"
     end
 
     for content <- ["<br/>", "<span style='display:inline-block'>atomic</span>"] do
@@ -3170,7 +3186,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "search controls report unsupported attributes through HTML diagnostics" do
-    for attributes <- ["checked", ~s|onclick="run()"|] do
+    for attributes <- [~s|onclick="run()"|] do
       assert {:error, {reason, diagnostic}} =
                HtmlToPdf.render(~s(<input type="search" #{attributes}>))
 
@@ -3185,7 +3201,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
   test "hidden input validation still reports unsupported attributes and CSS" do
     for {html, stage} <- [
-          {~s(<input type="hidden" checked>), :html},
           {~s|<input type="hidden" onclick="run()">|, :html},
           {~s(<input type="hidden" style="unsupported-property:1">), :css}
         ] do
@@ -4888,14 +4903,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     end
   end
 
-  test "readonly applicability failures retain HTML source diagnostics" do
+  test "readonly on inapplicable input states preserves complete effective PDFs" do
     for type <- ["hidden", "checkbox", "radio"], forms <- [:static, :interactive] do
-      html = ~s(<input type="#{type}" readonly>)
-      assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, forms: forms)
-      assert diagnostic.stage == :html and diagnostic.reason == :unsupported_html
-      assert diagnostic.operation == :render and diagnostic.module == HtmlToPdf
-      assert diagnostic.source == html and diagnostic.line == 1
-      assert is_integer(diagnostic.column) and diagnostic.column > 0
+      assert {:ok, pdf} = HtmlToPdf.render(~s(<input type="#{type}" readonly>), forms: forms)
+      assert {:ok, reference} = HtmlToPdf.render(~s(<input type="#{type}">), forms: forms)
+      assert pdf == reference
     end
   end
 
@@ -4930,14 +4942,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     end
   end
 
-  test "telephone URL and email unsupported attributes return actionable diagnostics" do
+  test "telephone URL and email inactive attributes preserve their complete PDFs" do
     for type <- ["tel", "url", "email"],
         attribute <- if(type == "email", do: ["checked"], else: ["checked", "multiple"]),
         forms <- [:static, :interactive] do
-      html = ~s(<input type="#{type}" #{attribute}>)
-      assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, forms: forms)
-      assert diagnostic.stage == :html and diagnostic.operation == :render
-      assert diagnostic.source == html and diagnostic.line == 1 and diagnostic.column == 1
+      assert {:ok, pdf} = HtmlToPdf.render(~s(<input type="#{type}" #{attribute}>), forms: forms)
+      assert {:ok, reference} = HtmlToPdf.render(~s(<input type="#{type}">), forms: forms)
+      assert pdf == reference
     end
   end
 
@@ -4985,8 +4996,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     end
 
     for html <- [
-          "<input multiple>",
-          "<input type='tel' multiple>",
           "<textarea multiple>A</textarea>"
         ] do
       assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html)
@@ -5122,11 +5131,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
         attribute <- ["readonly", "checked", "multiple", "src='denied.png'"] do
       html = ~s(<input type="#{type}" #{attribute}>)
 
-      assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render(html, asset_resolver: resolver)
-
-      assert diagnostic.stage == :html and diagnostic.operation == :render
-      assert diagnostic.source == html and diagnostic.line == 1 and diagnostic.column == 1
+      assert {:ok, pdf} = HtmlToPdf.render(html, asset_resolver: resolver)
+      assert {:ok, reference} = HtmlToPdf.render(~s(<input type="#{type}">))
+      assert pdf == reference
     end
 
     refute_received {:unexpected_button_asset, _}

@@ -59,14 +59,14 @@ accepted evidence.
 
 ## Rolling implementation update
 
-Waves 10 through 13 are published. The current published source is
-`52deb4ed3dacce8177204da0a08e448f8ddb8e0e`. The planning range above is historical;
+Waves 10 through 14 are published. The current predecessor for Wave 15 is
+`83454f6d9395647456ef3c5107ed0afbff3bf019`. The planning range above is historical;
 it predates these waves and is not a current estimate of work remaining.
 Fourteen implementation workers now run focused checks. Full acceptance,
 coverage and performance review remain deferred until implementation is complete,
 as requested by the user.
 
-Wave 14 combines initial constraint validation with a bounded native Unicode-v
+Wave 14 delivered initial constraint validation with a bounded native Unicode-v
 pattern/WHATWG URL helper, original-source MathML identity, SVG text paths and
 coordinate defaults, child-document MIME handling, script/multiscript geometry,
 fraction/radical validator preparation, image maps, canvas fallback, composed
@@ -78,8 +78,8 @@ The layout owner identifies four substantial remaining packets: actual
 page-capacity span surfaces, cell and oversized-row continuation, block captions
 and decorated-table continuation, and remaining percentage/containing-height
 and positioned replaced sizing. Table model/presentation needs an audit afterward.
-The controls owner has one substantial batch active for modern color initial
-values. Cross-owner control/clone/label integration still needs review.
+Modern color initial values are implemented in Wave 15. Cross-owner inert
+control/clone/label integration still needs implementation and review.
 
 Other active work includes actual template replacement, scoped font lookup,
 embedded controls/fragment and link transport, language/metadata applicability,
@@ -95,3 +95,21 @@ before performance limits failed. Later full qualification remains deferred.
 Final review must restore the fixed performance baseline, achieve 100 percent
 coverage on both supported runtimes, and reconcile every included specification
 obligation. Unsupported diagnostics alone do not complete an included behavior.
+
+Wave 15 adds shared responsive CSS math and calculated image positions, ordinary
+fraction/root CSS flow, Math grouping/padding, real enclosing equation links,
+renderer-owned template replacement, continuous/span/percentage matrix sizing,
+input attribute applicability, modern color parsing, authorized SVG images and
+nested HTML Forms, actual HTML filter inputs and live-source filter text. Its
+combined native/Elixir focused run passed 412 tests. The subsequent overflow
+coordinate correction passed 142 affected tests, including the original child
+link and zero-viewport assertions. These results are focused implementation
+evidence; the complete matrix, coverage and original browser comparisons remain
+pending final review.
+
+The SVG text owner identifies nine remaining coherent families, including links,
+stroke, text paint, ancestral lengths, path profiles, complete clip geometry,
+host SVG CSS/transform behavior, processing/work propagation and expanded-instance
+logical geometry. Ancestral lengths and complex clipping are now assigned to
+additional workers. These family counts are broader than the individual packets
+already delivered. Remaining effort still requires multiple larger waves.

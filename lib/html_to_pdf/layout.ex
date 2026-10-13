@@ -16,6 +16,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   """
 
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.HtmlToPdf.MathLayout
   alias NativeElixirPdfUtilities.HtmlToPdf.ResourceContext
   alias NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
@@ -2031,7 +2032,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     Process.put(key, height)
 
     try do
-      do_layout_block_content(children, style, x, y, width, metadata)
+      resolved =
+        if Map.get(style, :_math_flow_requires_inline_size, false),
+          do: MathLayout.resolve_block_flow(children, width),
+          else: {:ok, children}
+
+      with {:ok, children} <- resolved do
+        do_layout_block_content(children, style, x, y, width, metadata)
+      end
     after
       if is_nil(previous), do: Process.delete(key), else: Process.put(key, previous)
     end
@@ -4595,6 +4603,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       end
 
     apply_size_constraints(style, property, size, available_size)
+  end
+
+  @doc "Resolves a validator-prepared CSS box content dimension with the shared min/max and box-sizing rules."
+  @spec resolve_content_size(map(), :width | :height, number() | nil, number() | nil) ::
+          number() | nil
+  def resolve_content_size(style, property, available_size, default) do
+    resolved_content_size(style, property, available_size, default)
   end
 
   defp resolved_content_size(style, property, available_size, default) do
@@ -7311,9 +7326,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp clip_overflow_contents(boxes, style, clip) do
     if Map.get(style, :overflow, :visible) == :hidden and
          Map.get(style, :form_kind) not in [:text, :textarea, :select, :listbox] do
-      if clip.width > 0 and clip.height > 0,
-        do: NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(boxes, clip),
-        else: []
+      NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(boxes, clip)
     else
       boxes
     end
@@ -7515,7 +7528,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
           backgrounds =
             Enum.flat_map(background_items, fn item ->
-              background_box(item.style, x + item.x, baseline_y + item.y, item.width, item.height)
+              region = %{
+                x: x + item.x,
+                y: baseline_y + item.y,
+                width: item.width,
+                height: item.height
+              }
+
+              item.style
+              |> background_box(region.x, region.y, region.width, region.height)
+              |> attach_math_link(item.style, region)
             end)
 
           native? = Enum.any?(glyph_items, &(&1.kind == :native))
@@ -7585,7 +7607,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               end
             end)
 
-          Enum.map(background ++ backgrounds ++ glyphs, fn box ->
+          decorations =
+            text_decoration_boxes(
+              %{
+                x: x,
+                y: baseline_y,
+                font_size: style.font_size,
+                annotation_width: measured.width
+              },
+              style,
+              metadata
+            )
+
+          link_region = %{
+            x: x,
+            y: baseline_y - measured.descent,
+            width: measured.width,
+            height: measured.ascent + measured.descent
+          }
+
+          boxes =
+            attach_math_link(
+              background ++ backgrounds ++ glyphs ++ decorations,
+              style,
+              link_region
+            )
+
+          Enum.map(boxes, fn box ->
             inherited =
               if Map.get(box, :_math_native_paint, false),
                 do:
@@ -7970,6 +8018,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     case run do
       %{outline_anchor: anchor} -> attach_outline_anchor(%{outline_anchor: anchor}, boxes)
       _ -> boxes
+    end
+  end
+
+  # An enclosing link uses the validated annotation surface of the actual
+  # measured equation. Glyph/native paint and source identities stay intact.
+  defp attach_math_link(boxes, style, region) do
+    if (Map.get(style, :link_url) != nil or Map.get(style, :link_destination) != nil) and
+         region.width > 0 and region.height > 0 do
+      annotation =
+        region
+        |> Map.put(:type, HtmlValidator.reserve_layout_box(:link_region))
+        |> Map.merge(Map.take(style, [:link_url, :link_destination]))
+
+      boxes ++ [annotation]
+    else
+      boxes
     end
   end
 
@@ -10126,10 +10190,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         %{
           type: HtmlValidator.reserve_layout_box(:image),
           snap_to_css_pixel_grid: true,
-          x: viewport_x + paint_position(horizontal, viewport_width - rendered_width),
+          x: viewport_x + paint_position(horizontal, viewport_width - rendered_width, style),
           y:
             viewport_y + viewport_height - rendered_height -
-              paint_position(vertical, viewport_height - rendered_height),
+              paint_position(vertical, viewport_height - rendered_height, style),
           width: rendered_width,
           height: rendered_height,
           image: image,
@@ -10145,10 +10209,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     area_height = max(height - border_widths.top - border_widths.bottom, 0.0)
     {tile_width, tile_height} = background_image_size(style, image, area_width, area_height)
     {horizontal, vertical} = Map.get(style, :background_position)
-    initial_x = area_x + paint_position(horizontal, area_width - tile_width)
+    initial_x = area_x + paint_position(horizontal, area_width - tile_width, style)
 
     initial_y =
-      area_y + area_height - tile_height - paint_position(vertical, area_height - tile_height)
+      area_y + area_height - tile_height -
+        paint_position(vertical, area_height - tile_height, style)
 
     repeat = Map.get(style, :background_repeat, :repeat)
 
@@ -10228,11 +10293,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp paint_position(position, remaining) do
-    case position do
-      {:percent, ratio} -> remaining * ratio
-      {:end, offset} -> remaining - paint_position(offset, remaining)
-      length -> length
+  defp paint_position(position, remaining, style) do
+    case NativeElixirPdfUtilities.Validators.CssPositionValidator.resolve(
+           position,
+           remaining,
+           style
+         ) do
+      {:ok, value} -> value
+      {:error, _} = error -> throw({:render_resource_limit, error})
     end
   end
 

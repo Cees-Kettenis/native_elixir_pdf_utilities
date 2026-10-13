@@ -49,6 +49,12 @@ impl Resources {
     }
 }
 
+pub struct HtmlSurface {
+    pub width: f32,
+    pub height: f32,
+    pub clusters: Vec<(String, [f32; 4])>,
+}
+
 struct Writer<'a> {
     pdf: Pdf,
     next: i32,
@@ -56,6 +62,8 @@ struct Writer<'a> {
     transform: usvg::Transform,
     luminance: bool,
     effect_scale: (f32, f32),
+    slot_probe: bool,
+    html_surfaces: HashMap<String, HtmlSurface>,
     slots: std::collections::HashSet<String>,
     clip: Option<[f32; 4]>,
     fonts: HashMap<usvg::fontdb::ID, (String, Ref, u16)>,
@@ -86,6 +94,9 @@ impl Writer<'_> {
         content: &mut Content,
         resources: &mut Resources,
     ) -> Result<(), String> {
+        if group.opacity().get() == 0.0 {
+            return Ok(());
+        }
         content.save_state();
         let t = group.transform();
         let previous = self.transform;
@@ -123,7 +134,7 @@ impl Writer<'_> {
             };
             content.end_path();
         }
-        if !group.filters().is_empty() {
+        if !group.filters().is_empty() && !self.slot_probe {
             self.filtered_group(group, content, resources)?;
         } else if group.opacity().get() != 1.0 || group.mask().is_some() {
             let mut body = Content::new();
@@ -192,6 +203,34 @@ impl Writer<'_> {
         if !pixmap.pixels().iter().any(|pixel| pixel.alpha() != 0) {
             return Ok(());
         }
+        let name = self.bitmap(&pixmap, resources);
+        content.save_state();
+        content.transform([
+            width as f32 / sx,
+            0.0,
+            0.0,
+            -(height as f32 / sy),
+            bbox.x(),
+            bbox.y() + height as f32 / sy,
+        ]);
+        let logical = self.effect_text(group, usvg::Transform::identity(), bbox)?;
+        if !logical.is_empty() {
+            content
+                .begin_marked_content_with_properties(Name(b"Span"))
+                .properties()
+                .actual_text(TextStr(&logical));
+        }
+        content.x_object(Name(name.as_bytes()));
+        if !logical.is_empty() {
+            content.end_marked_content();
+        }
+        content.restore_state();
+        Ok(())
+    }
+
+    fn bitmap(&mut self, pixmap: &tiny_skia::Pixmap, resources: &mut Resources) -> String {
+        let width = pixmap.width();
+        let height = pixmap.height();
         let mut rgb = Vec::with_capacity(width as usize * height as usize * 3);
         let mut alpha = Vec::with_capacity(width as usize * height as usize);
         for pixel in pixmap.pixels() {
@@ -226,26 +265,35 @@ impl Writer<'_> {
         image.finish();
         let name = format!("E{}", id.get());
         resources.forms.push((name.clone(), id));
+        name
+    }
+
+    fn image(
+        &mut self,
+        image: &usvg::Image,
+        content: &mut Content,
+        resources: &mut Resources,
+    ) -> Result<(), String> {
+        if let usvg::ImageKind::SVG(tree) = image.kind() {
+            return self.group(tree.root(), content, resources);
+        }
+        let size = image.size();
+        let mut pixmap = tiny_skia::Pixmap::new(size.width() as u32, size.height() as u32)
+            .ok_or("authorized SVG image allocation failed")?;
+        let bbox = image.abs_bounding_box();
+        // render_node removes the absolute bbox offset. The image's geometry
+        // is already present in its surrounding usvg group, so decode at its
+        // genuine intrinsic pixel size and cancel only that bookkeeping offset.
+        resvg::render_node(
+            &usvg::Node::Image(Box::new(image.clone())),
+            usvg::Transform::from_translate(bbox.x(), bbox.y()),
+            &mut pixmap.as_mut(),
+        )
+        .ok_or("authorized SVG raster image has no renderable pixels")?;
+        let name = self.bitmap(&pixmap, resources);
         content.save_state();
-        content.transform([
-            width as f32 / sx,
-            0.0,
-            0.0,
-            -(height as f32 / sy),
-            bbox.x(),
-            bbox.y() + height as f32 / sy,
-        ]);
-        let logical = self.effect_text(group, usvg::Transform::identity(), bbox)?;
-        if !logical.is_empty() {
-            content
-                .begin_marked_content_with_properties(Name(b"Span"))
-                .properties()
-                .actual_text(TextStr(&logical));
-        }
+        content.transform([size.width(), 0.0, 0.0, -size.height(), 0.0, size.height()]);
         content.x_object(Name(name.as_bytes()));
-        if !logical.is_empty() {
-            content.end_marked_content();
-        }
         content.restore_state();
         Ok(())
     }
@@ -258,6 +306,9 @@ impl Writer<'_> {
         transform: usvg::Transform,
         region: usvg::NonZeroRect,
     ) -> Result<String, String> {
+        if !crate::filter_logic_validator::retains_source(group) {
+            return Ok(String::new());
+        }
         let mut logical = String::new();
         for node in group.children() {
             match node {
@@ -267,6 +318,59 @@ impl Writer<'_> {
                         transform.pre_concat(child.transform()),
                         region,
                     )?);
+                }
+                usvg::Node::Image(image) if image.is_visible() => {
+                    if let usvg::ImageKind::SVG(tree) = image.kind() {
+                        logical.push_str(&self.effect_text(tree.root(), transform, region)?);
+                    }
+                    if let Some(input) = self.html_surfaces.get(group.id()) {
+                        if let Some(bounds) = image.bounding_box().transform(transform) {
+                            let inside_region = bounds.right() > region.left()
+                                && bounds.left() < region.right()
+                                && bounds.bottom() > region.top()
+                                && bounds.top() < region.bottom();
+                            let inside_clip = match (self.clip, bounds.transform(self.transform)) {
+                                (Some(clip), Some(bounds)) => {
+                                    bounds.right() > clip[0]
+                                        && bounds.left() < clip[2]
+                                        && bounds.bottom() > clip[1]
+                                        && bounds.top() < clip[3]
+                                }
+                                (None, _) => true,
+                                _ => false,
+                            };
+                            if inside_region && inside_clip {
+                                for (text, bounds) in &input.clusters {
+                                    let rect = usvg::Rect::from_ltrb(
+                                        bounds[0], bounds[1], bounds[2], bounds[3],
+                                    );
+                                    let Some(bounds) =
+                                        rect.and_then(|rect| rect.transform(transform))
+                                    else {
+                                        continue;
+                                    };
+                                    let inside_region = bounds.right() > region.left()
+                                        && bounds.left() < region.right()
+                                        && bounds.bottom() > region.top()
+                                        && bounds.top() < region.bottom();
+                                    let inside_clip =
+                                        match (self.clip, bounds.transform(self.transform)) {
+                                            (Some(clip), Some(bounds)) => {
+                                                bounds.right() > clip[0]
+                                                    && bounds.left() < clip[2]
+                                                    && bounds.bottom() > clip[1]
+                                                    && bounds.top() < clip[3]
+                                            }
+                                            (None, _) => true,
+                                            _ => false,
+                                        };
+                                    if inside_region && inside_clip {
+                                        logical.push_str(text);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 usvg::Node::Text(text) => {
                     for span in text.layouted().iter().filter(|span| {
@@ -417,6 +521,23 @@ impl Writer<'_> {
                 usvg::Node::Path(path) if self.slots.contains(path.id()) && path.is_visible() => {
                     self.html_slot(path, content, resources);
                 }
+                usvg::Node::Image(image)
+                    if self.slots.contains(group.id()) && image.is_visible() =>
+                {
+                    let input = self
+                        .html_surfaces
+                        .get(group.id())
+                        .ok_or("internal HTML image lost its issued source")?;
+                    let (width, height) = (input.width, input.height);
+                    self.html_slot_box(
+                        group.id(),
+                        image.bounding_box(),
+                        width,
+                        height,
+                        content,
+                        resources,
+                    );
+                }
                 usvg::Node::Path(path) if path.is_visible() => {
                     let stroke_first = path.paint_order() == usvg::PaintOrder::StrokeAndFill;
                     for stroke in [stroke_first, !stroke_first] {
@@ -483,8 +604,11 @@ impl Writer<'_> {
                         }
                     }
                 }
+                usvg::Node::Image(image) if image.is_visible() => {
+                    self.image(image, content, resources)?
+                }
+                usvg::Node::Image(_) => {}
                 usvg::Node::Path(_) => {}
-                _ => return Err("internal SVG shape scene contains non-shape artwork".into()),
             }
         }
         Ok(())
@@ -492,20 +616,40 @@ impl Writer<'_> {
 
     fn html_slot(&mut self, path: &usvg::Path, content: &mut Content, resources: &mut Resources) {
         let bbox = path.bounding_box();
-        let local =
-            usvg::Transform::from_row(1.0 / 0.75, 0.0, 0.0, -1.0 / 0.75, bbox.x(), bbox.bottom());
+        self.html_slot_box(
+            path.id(),
+            bbox,
+            bbox.width() * 0.75,
+            bbox.height() * 0.75,
+            content,
+            resources,
+        );
+    }
+
+    fn html_slot_box(
+        &mut self,
+        slot_id: &str,
+        bbox: usvg::Rect,
+        width: f32,
+        height: f32,
+        content: &mut Content,
+        resources: &mut Resources,
+    ) {
+        let local = usvg::Transform::from_row(
+            bbox.width() / width,
+            0.0,
+            0.0,
+            -bbox.height() / height,
+            bbox.x(),
+            bbox.bottom(),
+        );
         let t = self.transform.pre_concat(local);
         let id = self.reference();
         let mut form = self.pdf.form_xobject(id, &[]);
-        form.bbox(Rect::new(
-            0.0,
-            0.0,
-            bbox.width() * 0.75,
-            bbox.height() * 0.75,
-        ));
-        form.pair(Name(b"NativeHtmlSlot"), Str(path.id().as_bytes()));
-        form.pair(Name(b"NativeHtmlWidth"), bbox.width() * 0.75);
-        form.pair(Name(b"NativeHtmlHeight"), bbox.height() * 0.75);
+        form.bbox(Rect::new(0.0, 0.0, width, height));
+        form.pair(Name(b"NativeHtmlSlot"), Str(slot_id.as_bytes()));
+        form.pair(Name(b"NativeHtmlWidth"), width);
+        form.pair(Name(b"NativeHtmlHeight"), height);
         form.insert(Name(b"NativeHtmlTransform"))
             .array()
             .items([t.sx, t.ky, t.kx, t.sy, t.tx, t.ty]);
@@ -893,7 +1037,33 @@ pub fn convert_with_effects(
     slots: std::collections::HashSet<String>,
     effect_scale: (f32, f32),
 ) -> Result<Vec<u8>, String> {
-    let prepared = crate::vector_validator::text(tree.root(), tree.fontdb())?;
+    convert_prepared(tree, slots, effect_scale, false, HashMap::new())
+}
+
+pub fn probe_slots(
+    tree: &usvg::Tree,
+    slots: std::collections::HashSet<String>,
+) -> Result<Vec<u8>, String> {
+    convert_prepared(tree, slots, (1.0, 1.0), true, HashMap::new())
+}
+
+pub fn convert_with_html_surfaces(
+    tree: &usvg::Tree,
+    surfaces: HashMap<String, HtmlSurface>,
+    scale: (f32, f32),
+) -> Result<Vec<u8>, String> {
+    let slots = surfaces.keys().cloned().collect();
+    convert_prepared(tree, slots, scale, false, surfaces)
+}
+
+fn convert_prepared(
+    tree: &usvg::Tree,
+    slots: std::collections::HashSet<String>,
+    effect_scale: (f32, f32),
+    slot_probe: bool,
+    html_surfaces: HashMap<String, HtmlSurface>,
+) -> Result<Vec<u8>, String> {
+    let prepared = crate::vector_validator::text_with_surfaces(tree.root(), tree.fontdb(), &slots)?;
     let mut writer = Writer {
         pdf: Pdf::new(),
         next: 5,
@@ -911,6 +1081,8 @@ pub fn convert_with_effects(
         ),
         luminance: false,
         effect_scale,
+        slot_probe,
+        html_surfaces,
         slots,
         clip: Some([
             0.0,

@@ -38,7 +38,11 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
         Process.put(key, invocation)
 
         try do
-          consumer.(source)
+          NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.with_parser_scope(
+            invocation.id,
+            source,
+            fn -> consumer.(source) end
+          )
         after
           if prior, do: Process.put(key, prior), else: Process.delete(key)
         end
@@ -60,6 +64,13 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
         NativeElixirPdfUtilities.Validators.HtmlCompositionValidator.validate_attributes(
           attributes
         )
+
+      composition == "for" and
+          NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.inert_source_view?(
+            attributes,
+            context
+          ) ->
+        :ok
 
       context == nil or composition != "for" or
           Enum.any?(tl(@composition_attributes), &Map.has_key?(attributes, &1)) ->
@@ -191,7 +202,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
   end
 
   @doc false
-  @spec authorize_mutation(term(), HtmlTree.t()) :: {:error, {atom(), map()}}
+  @spec authorize_mutation(term(), HtmlTree.t()) :: :ok | {:error, {atom(), map()}}
   def authorize_mutation(handle, tree) do
     HtmlValidator.with_render_budget(fn ->
       with {:ok, _invocation, entry} <- live_entry(handle, tree),
@@ -215,16 +226,26 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
               "matched earlier #{tree.nodes[target.parent][:tag] || tree.nodes[target.parent].type} range with #{length(target.removed)} original subtree roots"
           end
 
-        Diagnostics.error(
-          :html,
-          :unsupported_html,
-          "template-for #{inspect(context.name)} prepared #{location}; validated parser composition and source removal are blocked pending #{Enum.join(context.pending_checks, ", ")}. Remove the for attribute to keep an ordinary inert template; no original source has been discarded",
-          module: __MODULE__,
-          operation: :parse,
-          source: context.source.text,
-          line: context.source.line,
-          column: context.source.column
-        )
+        case NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.authorize(
+               handle,
+               tree,
+               context
+             ) do
+          :not_owned ->
+            Diagnostics.error(
+              :html,
+              :unsupported_html,
+              "template-for #{inspect(context.name)} prepared #{location}; validated parser composition and source removal are blocked pending #{Enum.join(context.pending_checks, ", ")}. Remove the for attribute to keep an ordinary inert template; no original source has been discarded",
+              module: __MODULE__,
+              operation: :parse,
+              source: context.source.text,
+              line: context.source.line,
+              column: context.source.column
+            )
+
+          result ->
+            result
+        end
       end
     end)
   end

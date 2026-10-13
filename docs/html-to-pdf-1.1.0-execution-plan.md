@@ -118,9 +118,9 @@ Only passing batches count as accepted. Preserve user changes and prior evidence
 - `tmp/1.1.0-audits/`: independent area and shared-contract audits.
 - `docs/html-to-pdf-1.1.0-progress.md`: accepted work and handoff history.
 
-Current implementation status: waves 10 through 13 are pushed on
+Current implementation status: waves 10 through 14 are pushed on
 `milestone1-1-0`. The latest published source is
-`52deb4ed3dacce8177204da0a08e448f8ddb8e0e`. Wave 14 combines the next broad set of
+`83454f6d9395647456ef3c5107ed0afbff3bf019`. Wave 15 combines the next broad set of
 implementation packets while fourteen workers continue in isolated lanes.
 Both validator workers remain stopped. Twelve native workers and two app-owned
 child workers run focused checks in the shared twelve-CPU compute pool. Original

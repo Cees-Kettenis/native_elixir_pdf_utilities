@@ -69,7 +69,15 @@ pub fn pattern_pixels(
                 }
                 pixels
             }
-            _ => 0,
+            usvg::Node::Image(image) => match image.kind() {
+                usvg::ImageKind::SVG(tree) => canvas_pixels.saturating_add(pattern_pixels(
+                    tree.root(),
+                    transform,
+                    ceiling,
+                    canvas_pixels,
+                )?),
+                _ => 0,
+            },
         };
         total = total.saturating_add(amount);
         if total > ceiling {
@@ -224,7 +232,19 @@ pub fn filter_work(
                     }
                 }
             }
-            _ => {}
+            usvg::Node::Image(image) => {
+                if let usvg::ImageKind::SVG(tree) = image.kind() {
+                    let scale = image.abs_transform().get_scale();
+                    let (child_pixels, child_work) = filter_work(
+                        tree.root(),
+                        (root_scale.0 * scale.0, root_scale.1 * scale.1),
+                        pixel_ceiling,
+                        work_ceiling,
+                    )?;
+                    pixels = pixels.saturating_add(child_pixels);
+                    work = work.saturating_add(child_work);
+                }
+            }
         }
         check(pixels, work, pixel_ceiling, work_ceiling)?;
     }

@@ -59,7 +59,12 @@ The first nonempty `title` supplies the PDF title after ASCII whitespace
 collapse. Head `meta[name=author]` values combine in source order as PDF author
 text. The first description becomes the PDF subject. Keywords combine across
 head meta elements with comma-token trimming and duplicate removal. Explicit
-caller metadata takes precedence. Other supported metadata attributes remain
+caller metadata takes precedence. Processing instructions beside the document
+root or head do not suppress head metadata. Only HTML titles contribute the
+enclosing document title; SVG artwork titles, shadow metadata, child-document
+metadata and unused template contents remain local. Meta field names match with
+ASCII case folding, and qualified or foreign lookalike attributes establish no
+PDF information defaults. Other supported metadata attributes remain
 selector-visible and add no printed text. UTF-8 charset declarations are
 accepted; other declared charsets return a diagnostic under the UTF-8 input
 contract. `http-equiv` refresh, CSP enforcement/reporting, and cookie requests
@@ -198,6 +203,19 @@ these include dates, color, file and image inputs.
 Defaulted Text uses the same sanitation, readonly rules, values and generated names
 as explicit text inputs. Caller-supplied input trees use the same validator.
 
+HTML input attributes participate only in applicable input states. For example,
+`checked` affects checkbox/radio controls, `multiple` affects email/file controls,
+and `src`/`alt`/HTML dimensions affect image inputs. Ignored attributes stay intact
+on authored nodes and remain visible to CSS selectors, but do not change values,
+constraints, PDF field flags, geometry, or resource requests. Qualified attributes
+and foreign elements do not acquire unqualified HTML form semantics. Button type
+values retain their source strings, including unknown and obsolete keywords.
+Native checkbox/radio automatic dimensions use the pinned 13 CSS-pixel theme
+footprint independently of inherited font size; authored CSS dimensions win.
+Applicable resources and unsupported interactive control modes still use their
+existing diagnostics. Event-handler and scripting exclusions still apply.
+
+
 Number inputs sanitize invalid lexical values to empty and retain valid authored
 values for display and PDF Text fields. Their canonical initial state includes
 parsed value, min/max, positive step or `any`, step base and applicable
@@ -276,7 +294,7 @@ plus textareas, accept `readonly` by boolean presence, including
 with `:read_only_form_field`; flattening remains available. Readonly adds no
 disabled appearance to text controls. Their static artwork stays identical unless author CSS selects the
 attribute. Combined `readonly` and `disabled` set the read-only bit once and keep
-the textarea multiline bit. Other input types and control hosts reject `readonly`.
+the textarea multiline bit. Other input states preserve `readonly` as inactive metadata; unsupported non-input control hosts still reject it.
 Constraints, ownership and complete native widget themes remain unfinished.
 
 Telephone, URL and single-email inputs use the same text-field drawing, editable
@@ -288,8 +306,7 @@ remain unfinished; unsupported attributes return diagnostics.
 
 Email inputs also accept boolean `multiple`, including `multiple="false"`.
 Initial comma-separated tokens trim ASCII edge whitespace and rejoin in order;
-empty tokens remain. This rule preserves internal CR/LF inside invalid tokens,
-unlike single-email sanitation. The PDF field stays one text field whose value
+empty tokens remain. Initial CR/LF are removed before token sanitation. The PDF field stays one text field whose value
 is a string. Invalid initial list tokens still render; complete constraint state
 and IDN display conversion remain unfinished. HTML select controls also support boolean `multiple`. Other input states retain
 their own applicability rules.

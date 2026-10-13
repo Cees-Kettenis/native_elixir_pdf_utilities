@@ -26,7 +26,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgForeignObjectValidator do
         |> Map.new(fn {{node, _}, index} ->
           id =
             Enum.find_value(0..MapSet.size(authored_ids), fn suffix ->
-              candidate = "NativeHtmlSlot#{index}:#{suffix}"
+              scope = :crypto.hash(:sha256, :erlang.term_to_binary(context.document_id))
+              candidate = "NativeHtmlSlot#{Base.encode16(scope, case: :lower)}:#{index}:#{suffix}"
               if MapSet.member?(authored_ids, candidate), do: nil, else: candidate
             end)
 
@@ -59,6 +60,35 @@ defmodule NativeElixirPdfUtilities.Validators.SvgForeignObjectValidator do
       Map.update!(node, :children, fn children ->
         Enum.map(children, fn child ->
           if Map.get(child, :type) == :element, do: project(child, slots), else: child
+        end)
+      end)
+    end
+  end
+
+  @doc false
+  @spec project_surfaces(map(), map()) :: map()
+  def project_surfaces(root, slots) do
+    by_node = Map.new(slots, fn {id, slot} -> {Map.get(slot.node, :node_id) || slot.node, id} end)
+    project_images(root, by_node)
+  end
+
+  defp project_images(node, slots) do
+    if node.tag == "foreignObject" do
+      id = Map.fetch!(slots, Map.get(node, :node_id) || node)
+
+      node
+      |> Map.put(:tag, "image")
+      |> Map.put(:children, [])
+      |> Map.update!(
+        :attributes,
+        &(Map.put(&1, "id", id)
+          |> Map.put("href", "NativeHtmlSurface:" <> id)
+          |> Map.put("preserveAspectRatio", "none"))
+      )
+    else
+      Map.update!(node, :children, fn children ->
+        Enum.map(children, fn child ->
+          if Map.get(child, :type) == :element, do: project_images(child, slots), else: child
         end)
       end)
     end

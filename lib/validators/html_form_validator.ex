@@ -211,6 +211,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
             state = %{owner: item.owner, checked: checked, disabled: item.disabled}
 
             state =
+              if item.tag == "input",
+                do:
+                  Map.merge(state, %{
+                    readonly: Map.has_key?(item.attributes, "readonly"),
+                    required: Map.has_key?(item.attributes, "required")
+                  }),
+                else: state
+
+            state =
               if item.tag == "input" and Map.has_key?(item.attributes, "list") do
                 reference = Map.fetch!(item.attributes, "list")
 
@@ -337,10 +346,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                   })
 
                 {"input", "color"} ->
-                  case prepare_initial_color(item.attributes) do
-                    {:ok, color} -> Map.merge(state, color)
-                    {:error, _} = error -> throw({:render_resource_limit, error})
-                  end
+                  {:ok, color} = prepare_initial_color(item.attributes)
+                  Map.merge(state, color)
 
                 {"input", "image"} ->
                   Map.merge(state, %{
@@ -449,52 +456,29 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   end
 
   @doc false
-  @spec prepare_initial_color(map()) ::
-          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  @spec prepare_initial_color(map()) :: {:ok, map()}
   def prepare_initial_color(attributes) do
     value = Map.get(attributes, "value", "")
     HtmlValidator.reserve_render_resource(:max_html_tree_work, 2 * byte_size(value), :html)
-    parsed = HtmlValidator.parse_css_color(value, nil)
 
-    cond do
-      Map.has_key?(attributes, "alpha") or
-          (Map.has_key?(attributes, "colorspace") and
-             String.downcase(Map.fetch!(attributes, "colorspace"), :ascii) == "display-p3") ->
-        Diagnostics.error(
-          :html,
-          :unsupported_html,
-          "Color alpha and wide-gamut serialization are not yet supported; omit alpha and use limited-srgb for an opaque initial swatch",
-          module: __MODULE__,
-          source: "color"
-        )
+    parsed =
+      NativeElixirPdfUtilities.Validators.CssColorValidator.parse_initial_input_color(value)
 
-      parsed == :error and
-          (String.contains?(value, "(") or
-             String.downcase(HtmlValidator.trim_ascii_whitespace(value), :ascii) == "currentcolor" or
-             (String.starts_with?(value, "#") and byte_size(value) == 5)) ->
-        Diagnostics.error(
-          :html,
-          :unsupported_html,
-          "This color syntax is outside the shared color parser's initial swatch profile; use a named sRGB color, hexadecimal RGB/RGBA or comma-separated rgb/rgba",
-          module: __MODULE__,
-          source: "color"
-        )
+    channels =
+      case parsed do
+        {:ok, color} when is_tuple(color) ->
+          color |> Tuple.to_list() |> Enum.take(3) |> Enum.map(&round(&1 * 255))
 
-      true ->
-        channels =
-          case parsed do
-            {:ok, color} when is_tuple(color) ->
-              color |> Tuple.to_list() |> Enum.take(3) |> Enum.map(&round(&1 * 255))
+        _ ->
+          [0, 0, 0]
+      end
 
-            _ ->
-              [0, 0, 0]
-          end
-
-        # Opaque color input serializes three fixed 8-bit sRGB channels.
-        rgb = channels |> Enum.map(&(&1 / 255)) |> List.to_tuple()
-        canonical = "#" <> Base.encode16(:erlang.list_to_binary(channels), case: :lower)
-        {:ok, %{value: canonical, color_input: %{value: canonical, rgb: rgb}}}
-    end
+    # Pinned Chromium152 has InputTypeColorEnhancements disabled. Alpha and
+    # colorspace remain authored metadata; initial CSS colors become opaque
+    # 8-bit sRGB even when these attributes are present.
+    rgb = channels |> Enum.map(&(&1 / 255)) |> List.to_tuple()
+    canonical = "#" <> Base.encode16(:erlang.list_to_binary(channels), case: :lower)
+    {:ok, %{value: canonical, color_input: %{value: canonical, rgb: rgb}}}
   end
 
   @doc false
@@ -502,12 +486,29 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_initial_special_attributes(attributes) do
     if HtmlValidator.input_type(Map.get(attributes, "type", "text")) == "color" do
-      case prepare_initial_color(attributes) do
-        {:ok, _} -> :ok
-        error -> error
-      end
+      {:ok, _} = prepare_initial_color(attributes)
+      :ok
     else
       :ok
+    end
+  end
+
+  @doc "Resolves automatic checkbox/radio dimensions using the pinned native-theme footprint."
+  @spec prepare_initial_toggle_style(map(), map()) :: {:ok, map()}
+  def prepare_initial_toggle_style(node, style) do
+    attributes = initial_control_attributes(node)
+    type = HtmlValidator.input_type(Map.get(attributes, "type", "text"))
+
+    if Map.get(node, :namespace, :html) == :html and node.tag == "input" and
+         type in ~w(checkbox radio) and Map.get(style, :appearance, :auto) == :auto do
+      # Chromium's native checkbox/radio theme has a 13 CSS-pixel footprint;
+      # this is a pinned UA default, not a resource ceiling or font-relative size.
+      {:ok,
+       Enum.reduce([:width, :height], style, fn key, result ->
+         if Map.get(result, key) in [nil, :auto], do: Map.put(result, key, 9.75), else: result
+       end)}
+    else
+      {:ok, style}
     end
   end
 
@@ -516,7 +517,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_special_input_style(node, style, opts) do
     state = Map.get(node, :_initial_form_state, %{})
-    type = HtmlValidator.input_type(Map.get(node.attributes, "type", "text"))
+    type = HtmlValidator.input_type(Map.get(initial_control_attributes(node), "type", "text"))
 
     cond do
       Map.get(node, :namespace, :html) != :html or node.tag != "input" or style.display == :none ->
@@ -876,8 +877,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_initial_range_attributes(node) do
     if Map.get(node, :namespace, :html) == :html and node.tag == "input" and
-         HtmlValidator.input_type(Map.get(node.attributes, "type", "text")) == "range" and
-         Map.has_key?(node.attributes, "list") do
+         HtmlValidator.input_type(Map.get(initial_control_attributes(node), "type", "text")) ==
+           "range" and
+         Map.has_key?(initial_control_attributes(node), "list") do
       Diagnostics.error(
         :html,
         :unsupported_html,
@@ -1120,33 +1122,86 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
       HtmlValidator.text_input_type?(type) or type == "number" or
         HtmlTemporalValidator.temporal_type?(type)
 
+  @doc "Whether an input attribute participates in the effective HTML input state."
+  @spec input_attribute_applies?(String.t(), String.t()) :: boolean()
+  def input_attribute_applies?(type, name) do
+    # This fixed applicability table follows HTML input states, not resource limits.
+    case name do
+      "checked" ->
+        type in ~w(checkbox radio)
+
+      "readonly" ->
+        readonly_input_type?(type)
+
+      "multiple" ->
+        type in ~w(email file)
+
+      name when name in ~w(size maxlength minlength pattern) ->
+        HtmlValidator.text_input_type?(type)
+
+      "placeholder" ->
+        HtmlValidator.text_input_type?(type) or type == "number"
+
+      "list" ->
+        type in ~w(text search tel url email number range color date month week time datetime-local)
+
+      name when name in ~w(min max step) ->
+        type in ~w(number range) or HtmlTemporalValidator.temporal_type?(type)
+
+      name when name in ~w(src alt width height) ->
+        type == "image"
+
+      name when name in ~w(alpha colorspace) ->
+        type == "color"
+
+      name when name in ~w(accept capture) ->
+        type == "file"
+
+      "required" ->
+        readonly_input_type?(type) or type in ~w(checkbox radio file)
+
+      "autocomplete" ->
+        type in ~w(hidden text search tel url email password number range color date month week time datetime-local)
+
+      "dirname" ->
+        HtmlValidator.text_input_type?(type) or type in ~w(hidden submit)
+
+      name when name in ~w(formaction formenctype formmethod formnovalidate formtarget) ->
+        type in ~w(submit image)
+
+      name when name in ~w(popovertarget popovertargetaction) ->
+        type in ~w(submit image reset button)
+
+      _ ->
+        true
+    end
+  end
+
+  @doc "Prepares applicable input semantics without changing the authored attributes retained on the node."
+  @spec applicable_input_attributes(map(), map()) :: map()
+  def applicable_input_attributes(attributes, namespaces \\ %{}) do
+    HtmlValidator.reserve_render_resource(:max_html_tree_work, map_size(attributes), :html)
+    attributes = Map.reject(attributes, fn {name, _} -> not is_nil(Map.get(namespaces, name)) end)
+    type = HtmlValidator.input_type(Map.get(attributes, "type", "text"))
+    Map.reject(attributes, fn {name, _} -> not input_attribute_applies?(type, name) end)
+  end
+
+  @doc "Returns unqualified control attributes and effective input applicability for validated initial state."
+  @spec initial_control_attributes(map()) :: map()
+  def initial_control_attributes(node) do
+    attributes = Map.get(node, :attributes, %{})
+    namespaces = Map.get(node, :attribute_namespaces, %{})
+
+    cond do
+      Map.get(node, :namespace, :html) != :html -> attributes
+      Map.get(node, :tag) == "input" -> applicable_input_attributes(attributes, namespaces)
+      true -> Map.reject(attributes, fn {name, _} -> not is_nil(Map.get(namespaces, name)) end)
+    end
+  end
+
   @doc false
   @spec valid_initial_input?(String.t(), map(), [term()]) :: boolean()
-  def valid_initial_input?(type, attributes, children) do
-    children == [] and
-      (not Map.has_key?(attributes, "checked") or type in ["checkbox", "radio"]) and
-      (not Map.has_key?(attributes, "readonly") or HtmlValidator.readonly_input_type?(type)) and
-      (not Map.has_key?(attributes, "multiple") or type in ["email", "file"]) and
-      (not Map.has_key?(attributes, "size") or HtmlValidator.text_input_type?(type)) and
-      (not Enum.any?(~w(maxlength minlength pattern), &Map.has_key?(attributes, &1)) or
-         HtmlValidator.text_input_type?(type)) and
-      (not Map.has_key?(attributes, "placeholder") or
-         (HtmlValidator.readonly_input_type?(type) and
-            not HtmlTemporalValidator.temporal_type?(type))) and
-      (not Map.has_key?(attributes, "list") or
-         type in ~w(text search tel url email number range color date month week time datetime-local)) and
-      (not Enum.any?(~w(min max step), &Map.has_key?(attributes, &1)) or
-         type in ["number", "range"] or HtmlTemporalValidator.temporal_type?(type)) and
-      (not Enum.any?(~w(src alt width height), &Map.has_key?(attributes, &1)) or type == "image") and
-      (not Enum.any?(~w(alpha colorspace), &Map.has_key?(attributes, &1)) or type == "color") and
-      (not Map.has_key?(attributes, "accept") or type == "file") and
-      (type not in ["color", "image"] or not Map.has_key?(attributes, "required")) and
-      (type != "range" or
-         not Enum.any?(
-           ~w(accept alpha alt colorspace dirname formaction formenctype formmethod formnovalidate formtarget height maxlength minlength pattern required popovertarget popovertargetaction src width),
-           &Map.has_key?(attributes, &1)
-         ))
-  end
+  def valid_initial_input?(_type, _attributes, children), do: children == []
 
   defp collect_initial_metadata(
          nodes,
@@ -1224,7 +1279,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   # Metadata is already assigned. Collect only the ID/control facts needed
   # to resolve forward references, label targets and initial radio groups.
   defp register_initial_node(node, form_owner, label_ref, ancestor_disabled?, in_datalist?) do
-    attributes = node.attributes
+    attributes = initial_control_attributes(node)
     namespace = Map.get(node, :namespace, :html)
 
     relevant? =
@@ -2197,7 +2252,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                      HtmlValidator.input_type(Map.get(attributes, "type", "text")) != "color" or
                      case prepare_initial_color(attributes) do
                        {:ok, expected} -> Map.take(state, [:value, :color_input]) == expected
-                       _ -> false
                      end)
 
               not color_valid? or not number_valid? or not range_valid? or not temporal_valid? or

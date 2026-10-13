@@ -4,10 +4,10 @@ defmodule NativeElixirPdfUtilities.Validators.MediaConditionValidator do
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @doc "Evaluates a media query with parse-invalid propagation and bounded nesting."
-  @spec evaluate(String.t(), map(), (String.t(), map() -> boolean())) :: boolean()
+  @spec evaluate(String.t(), map(), (String.t(), map() -> boolean() | :unknown)) :: boolean()
   def evaluate(query, context, feature) do
     case parse(query, 0, true) do
-      {:ok, expression} -> resolve(expression, context, feature)
+      {:ok, expression} -> resolve(expression, context, feature) == true
       :invalid -> false
     end
   end
@@ -16,38 +16,30 @@ defmodule NativeElixirPdfUtilities.Validators.MediaConditionValidator do
     HtmlValidator.check_render_resource(:max_media_query_depth, depth, :style)
     source = HtmlValidator.trim_css_whitespace(query)
 
-    {terms, token, balance, valid?} =
-      source
-      |> String.codepoints()
-      |> Enum.reduce({[], [], 0, true}, fn char, {terms, token, balance, valid?} ->
-        cond do
-          char == "(" ->
-            {terms, [char | token], balance + 1, valid?}
-
-          char == ")" ->
-            {terms, [char | token], balance - 1, valid? and balance > 0}
-
-          char in [" ", "\t", "\n", "\r", "\f"] and balance == 0 ->
-            if token == [],
-              do: {terms, [], balance, valid?},
-              else: {[token |> Enum.reverse() |> Enum.join() | terms], [], balance, valid?}
-
-          true ->
-            {terms, [char | token], balance, valid?}
-        end
-      end)
+    tokens = NativeElixirPdfUtilities.Validators.CssMathValidator.component_tokens(source, false)
+    valid? = match?({:ok, _}, tokens)
 
     terms =
-      Enum.reverse(
-        if token == [], do: terms, else: [token |> Enum.reverse() |> Enum.join() | terms]
-      )
+      case tokens do
+        {:ok, terms} ->
+          Enum.map(terms, fn term ->
+            case HtmlValidator.parse_css_identifier(term) do
+              {:ok, identifier, ""} -> String.downcase(identifier, :ascii)
+              _ -> term
+            end
+          end)
+
+        _ ->
+          []
+      end
 
     cond do
-      not valid? or balance != 0 or terms == [] ->
+      not valid? or terms == [] ->
         :invalid
 
       query? and hd(terms) in ["not", "only"] and length(terms) > 1 and
-          not String.starts_with?(Enum.at(terms, 1), "(") ->
+        match?({:ok, _, ""}, HtmlValidator.parse_css_identifier(Enum.at(terms, 1))) and
+          Enum.at(terms, 1) not in ~w(not only and or) ->
         modifier = hd(terms)
 
         case parse(Enum.drop(terms, 1) |> Enum.join(" "), depth + 1, true) do
@@ -58,7 +50,7 @@ defmodule NativeElixirPdfUtilities.Validators.MediaConditionValidator do
             :invalid
         end
 
-      query? and Regex.match?(~r/\A[-a-z][a-z0-9-]*\z/, hd(terms)) and
+      query? and match?({:ok, _, ""}, HtmlValidator.parse_css_identifier(hd(terms))) and
           hd(terms) not in ~w(not only and or) ->
         case terms do
           [type] ->
@@ -116,13 +108,14 @@ defmodule NativeElixirPdfUtilities.Validators.MediaConditionValidator do
           |> String.slice(1, String.length(source) - 2)
           |> HtmlValidator.trim_css_whitespace()
 
-        if String.starts_with?(inside, ["(", "not "]),
-          do: parse(inside, depth + 1, false),
-          else:
-            if(inside != "",
-              do: {:ok, {:feature, inside}},
-              else: :invalid
-            )
+        case parse(inside, depth + 1, false) do
+          {:ok, expression} -> {:ok, expression}
+          :invalid -> if inside != "", do: {:ok, {:feature, inside}}, else: :invalid
+        end
+
+      match?({:ok, _, "(" <> _}, HtmlValidator.parse_css_identifier(source)) and
+          String.ends_with?(source, ")") ->
+        {:ok, {:feature, source}}
 
       true ->
         :invalid
@@ -131,11 +124,35 @@ defmodule NativeElixirPdfUtilities.Validators.MediaConditionValidator do
 
   defp resolve(expression, context, feature) do
     case expression do
-      {:type, type} -> type in ~w(all print)
-      {:feature, value} -> feature.(value, context)
-      {:not, child} -> not resolve(child, context, feature)
-      {:and, children} -> Enum.all?(children, &resolve(&1, context, feature))
-      {:or, children} -> Enum.any?(children, &resolve(&1, context, feature))
+      {:type, type} ->
+        type in ~w(all print)
+
+      {:feature, value} ->
+        feature.(value, context)
+
+      {:not, child} ->
+        case resolve(child, context, feature) do
+          :unknown -> :unknown
+          result -> not result
+        end
+
+      {:and, children} ->
+        results = Enum.map(children, &resolve(&1, context, feature))
+
+        cond do
+          false in results -> false
+          :unknown in results -> :unknown
+          true -> true
+        end
+
+      {:or, children} ->
+        results = Enum.map(children, &resolve(&1, context, feature))
+
+        cond do
+          true in results -> true
+          :unknown in results -> :unknown
+          true -> false
+        end
     end
   end
 end

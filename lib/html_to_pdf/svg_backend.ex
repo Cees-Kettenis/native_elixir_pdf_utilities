@@ -136,19 +136,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend do
                SvgBackendValidator.prepare_vector(source, options, context, image_budget),
              :ok <- SvgBackendValidator.native_load_result(load_native()) do
           result =
-            if request.effects? do
-              NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize_effects(
+            if map_size(request.resources) > 0 do
+              NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize_resources(
                 request.source,
                 request.fonts,
+                request.resources,
                 [],
                 request.effect_dimensions
               )
             else
-              NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize(
-                request.source,
-                request.fonts,
-                request.resources
-              )
+              if request.effects? do
+                NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize_effects(
+                  request.source,
+                  request.fonts,
+                  [],
+                  request.effect_dimensions
+                )
+              else
+                NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize(
+                  request.source,
+                  request.fonts,
+                  request.resources
+                )
+              end
             end
 
           SvgValidator.conversion_result(result)
@@ -179,22 +189,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackend do
          {:ok, request} <- SvgBackendValidator.prepare_vector(source, options, context, budget),
          :ok <- SvgBackendValidator.native_load_result(load_native()) do
       result =
-        if request.effects? do
-          NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize_effects(
+        if map_size(request.resources) > 0 do
+          NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize_resources(
             request.source,
             request.fonts,
+            request.resources,
             ids,
             request.effect_dimensions
           )
         else
-          NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize_slots(
-            request.source,
-            request.fonts,
-            ids
-          )
+          if request.effects? do
+            NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize_effects(
+              request.source,
+              request.fonts,
+              ids,
+              request.effect_dimensions
+            )
+          else
+            NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.vectorize_slots(
+              request.source,
+              request.fonts,
+              ids
+            )
+          end
         end
 
       SvgValidator.conversion_result(result)
+    end
+  end
+
+  @doc false
+  @spec probe_slots(term(), term(), term(), map(), HtmlValidator.image_budget() | nil) ::
+          {:ok, binary()} | {:error, {atom(), map()}}
+  def probe_slots(source, options, context, slots, budget) do
+    with {:ok, ids} <-
+           NativeElixirPdfUtilities.Validators.SvgForeignObjectValidator.validate_slots(slots),
+         {:ok, request} <- SvgBackendValidator.prepare_vector(source, options, context, budget),
+         :ok <- SvgBackendValidator.native_load_result(load_native()) do
+      NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.probe_html_slots(
+        request.source,
+        request.fonts,
+        ids,
+        request.resources
+      )
+      |> SvgValidator.conversion_result()
     end
   end
 

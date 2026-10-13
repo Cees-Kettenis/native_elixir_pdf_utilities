@@ -15,7 +15,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFileValidator do
           {:ok, map()} | {:error, {atom(), map()}}
   def prepare_render_style(node, style, ancestors, opts) do
     if node.tag == "input" and Map.get(node, :namespace, :html) == :html and
-         HtmlValidator.input_type(Map.get(node.attributes, "type", "text")) == "file" and
+         HtmlValidator.input_type(
+           Map.get(HtmlFormValidator.initial_control_attributes(node), "type", "text")
+         ) == "file" and
          style.display != :none do
       cond do
         Keyword.get(opts, :forms, :interactive) == :interactive and
@@ -64,7 +66,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFileValidator do
               source_id: node.node_id,
               scope: {node.document_id, node.tree_scope_id},
               tag: "input",
-              attributes: node.attributes,
+              attributes: HtmlFormValidator.initial_control_attributes(node),
               initial_state: node._initial_form_state
             }
 

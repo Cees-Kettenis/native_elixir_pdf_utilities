@@ -1,5 +1,10 @@
 //! Byte-only backend. Caller policy and resource budgets live in Elixir validators.
+mod color_validator;
 mod effects_validator;
+mod filter_logic_validator;
+mod html_surface;
+mod html_surface_validator;
+mod image_resources;
 mod text_source_validator;
 mod vector;
 mod vector_validator;
@@ -7,7 +12,34 @@ use rustler::{Binary, Encoder, Env, NifResult, OwnedBinary, Term};
 use std::{collections::HashMap, sync::Arc};
 
 mod atoms {
-    rustler::atoms! { ok, error, prepare_text }
+    rustler::atoms! { ok, error, prepare_text, currentcolor }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn css_color_math_components(source: Binary<'_>) -> Vec<(usize, String)> {
+    color_validator::color_math_components(source.as_slice())
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn parse_css_color<'a>(
+    env: Env<'a>,
+    source: Binary<'a>,
+    initial_input: bool,
+    math: Vec<(usize, u8, f64)>,
+) -> Term<'a> {
+    let color = match color_validator::parse_css_color(source.as_slice(), initial_input, &math) {
+        Some(color_validator::ValidatedColor::CurrentColor) => {
+            Some(atoms::currentcolor().encode(env))
+        }
+        Some(color_validator::ValidatedColor::Absolute(color)) => {
+            color_validator::srgb_channels(color).map(|channels| channels.encode(env))
+        }
+        _ => None,
+    };
+    match color {
+        Some(color) => (atoms::ok(), color).encode(env),
+        None => (atoms::error(), "invalid CSS color").encode(env),
+    }
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -119,11 +151,9 @@ fn vector_bytes(
     fonts: Vec<Binary>,
     resources: HashMap<String, Binary>,
 ) -> Result<Vec<u8>, String> {
-    if !resources.is_empty() {
-        return Err("SVG vector output requires image resource embedding support".to_string());
-    }
-
-    vector::convert(&shape_tree(source, fonts)?)
+    let mut options = shape_options(fonts)?;
+    options.image_href_resolver = image_resources::resolver(resources);
+    vector::convert(&parse_shape_tree(source, &options)?)
 }
 
 fn shape_tree(source: &str, fonts: Vec<Binary>) -> Result<usvg::Tree, String> {
@@ -141,6 +171,27 @@ fn parse_shape_tree(source: &str, options: &usvg::Options) -> Result<usvg::Tree,
     )
     .map_err(|error| error.to_string())?;
     usvg::Tree::from_xmltree(&xml, options).map_err(|error| error.to_string())
+}
+
+fn shape_tree_with_surfaces(
+    source: &str,
+    fonts: Vec<Binary>,
+    surfaces: HashMap<String, Arc<Vec<u8>>>,
+    resources: HashMap<String, Binary>,
+) -> Result<usvg::Tree, String> {
+    let mut options = shape_options(fonts)?;
+    let issued = image_resources::resolver(resources);
+    options.image_href_resolver = usvg::ImageHrefResolver {
+        resolve_data: Box::new(|_, _, _| None),
+        resolve_string: Box::new(move |name, options| {
+            if let Some(bytes) = surfaces.get(name) {
+                Some(usvg::ImageKind::PNG(bytes.clone()))
+            } else {
+                (issued.resolve_string)(name, options)
+            }
+        }),
+    };
+    parse_shape_tree(source, &options)
 }
 
 fn shape_options(fonts: Vec<Binary>) -> Result<usvg::Options<'static>, String> {
@@ -221,10 +272,6 @@ fn render_bytes(
     )
     .map_err(|error| error.to_string())?;
     let (fontdb, resolver) = selected_fonts(fonts, authored_hints)?;
-    let resources: HashMap<_, _> = resources
-        .into_iter()
-        .map(|(name, bytes)| (name, Arc::new(bytes.as_slice().to_vec())))
-        .collect();
     let options = usvg::Options {
         resources_dir: None,
         fontdb: Arc::new(fontdb),
@@ -232,14 +279,7 @@ fn render_bytes(
         // not load files or system fonts. No dynamic loader callback is installed.
         font_resolver: resolver,
         // Image data URLs are also disabled; only explicitly supplied bytes resolve.
-        image_href_resolver: usvg::ImageHrefResolver {
-            resolve_data: Box::new(|_, _, _| None),
-            resolve_string: Box::new(move |name, _| {
-                resources
-                    .get(name)
-                    .map(|bytes| usvg::ImageKind::PNG(bytes.clone()))
-            }),
-        },
+        image_href_resolver: image_resources::resolver(resources),
         // Preserve the restricted asset converter's default hints in this contract batch.
         shape_rendering: if authored_hints {
             usvg::ShapeRendering::default()
@@ -275,12 +315,28 @@ fn render_bytes(
 fn validate_shape_work<'a>(env: Env<'a>, source: String, ceilings: Term<'a>) -> Term<'a> {
     // New source preparation is explicitly tagged. Old scalar/tuple results
     // remain unchanged for loaded bindings and the byte-only public contracts.
-    if let Ok((tag, (strokes, gradients, bytes, expansion, expanded_source, nodes), fonts)) =
-        ceilings.decode::<(
+    let text_request = ceilings
+        .decode::<(
             rustler::Atom,
             (u64, u64, usize, u64, u64, usize),
             Vec<Binary>,
+            HashMap<String, Binary>,
         )>()
+        .or_else(|_| {
+            ceilings
+                .decode::<(
+                    rustler::Atom,
+                    (u64, u64, usize, u64, u64, usize),
+                    Vec<Binary>,
+                )>()
+                .map(|(tag, limits, fonts)| (tag, limits, fonts, HashMap::new()))
+        });
+    if let Ok((
+        tag,
+        (strokes, gradients, bytes, expansion, expanded_source, nodes),
+        fonts,
+        resources,
+    )) = text_request
     {
         if tag != atoms::prepare_text() {
             return (
@@ -291,7 +347,8 @@ fn validate_shape_work<'a>(env: Env<'a>, source: String, ceilings: Term<'a>) -> 
         }
         let result: Result<(u64, u64, String, u64, u64, u64), String> = (|| {
             let identified = text_source_validator::identify(&source, bytes)?;
-            let options = shape_options(fonts)?;
+            let mut options = shape_options(fonts)?;
+            options.image_href_resolver = image_resources::resolver(resources);
             let initial = parse_shape_tree(&identified.source, &options)?;
             let initial_strokes = vector_validator::work(initial.root(), strokes)?;
             let initial_gradients = vector_validator::gradient_work(initial.root(), gradients)?;
@@ -369,15 +426,25 @@ fn validate_shape_work<'a>(env: Env<'a>, source: String, ceilings: Term<'a>) -> 
             Err(message) => (atoms::error(), message).encode(env),
         };
     }
-    let (stroke_ceiling, gradient_ceiling, fonts) =
-        if let Ok((strokes, gradients, fonts)) = ceilings.decode::<(u64, u64, Vec<Binary>)>() {
-            (strokes, gradients, fonts)
+    let (stroke_ceiling, gradient_ceiling, fonts, resources) =
+        if let Ok((strokes, gradients, fonts, resources)) =
+            ceilings.decode::<(u64, u64, Vec<Binary>, HashMap<String, Binary>)>()
+        {
+            (strokes, gradients, fonts, resources)
+        } else if let Ok((strokes, gradients, fonts)) = ceilings.decode::<(u64, u64, Vec<Binary>)>()
+        {
+            (strokes, gradients, fonts, HashMap::new())
         } else if let Ok((strokes, gradients)) = ceilings.decode::<(u64, u64)>() {
-            (strokes, gradients, vec![])
+            (strokes, gradients, vec![], HashMap::new())
         } else {
             return (atoms::error(), "invalid internal SVG work ceilings").encode(env);
         };
-    let result = shape_tree(&source, fonts).and_then(|tree| {
+    let result = (|| {
+        let mut options = shape_options(fonts)?;
+        options.image_href_resolver = image_resources::resolver(resources);
+        parse_shape_tree(&source, &options)
+    })()
+    .and_then(|tree| {
         vector_validator::text(tree.root(), tree.fontdb())?;
         let strokes = vector_validator::work(tree.root(), stroke_ceiling)?;
         let gradients = vector_validator::gradient_work(tree.root(), gradient_ceiling)?;
@@ -470,6 +537,182 @@ fn vectorize_effects<'a>(
     }
 }
 
+#[rustler::nif(schedule = "DirtyCpu")]
+fn vectorize_resources<'a>(
+    env: Env<'a>,
+    source: String,
+    fonts: Vec<Binary<'a>>,
+    resources: HashMap<String, Binary<'a>>,
+    slots: Vec<String>,
+    dimensions: (u32, u32),
+) -> NifResult<Term<'a>> {
+    let result = (|| {
+        let mut options = shape_options(fonts)?;
+        options.image_href_resolver = image_resources::resolver(resources);
+        let tree = parse_shape_tree(&source, &options)?;
+        vector::convert_with_effects(
+            &tree,
+            slots.into_iter().collect(),
+            (
+                dimensions.0 as f32 / tree.size().width(),
+                dimensions.1 as f32 / tree.size().height(),
+            ),
+        )
+    })();
+    match result {
+        Ok(pdf) => {
+            let mut binary = OwnedBinary::new(pdf.len()).ok_or(rustler::Error::BadArg)?;
+            binary.as_mut_slice().copy_from_slice(&pdf);
+            Ok((atoms::ok(), binary.release(env)).encode(env))
+        }
+        Err(message) => Ok((atoms::error(), message).encode(env)),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn validate_resource_surfaces<'a>(
+    env: Env<'a>,
+    source: String,
+    dimensions: (u32, u32),
+    ceilings: (u64, u64),
+    fonts: Vec<Binary<'a>>,
+    resources: HashMap<String, Binary<'a>>,
+) -> Term<'a> {
+    let result = (|| {
+        let mut options = shape_options(fonts)?;
+        options.image_href_resolver = image_resources::resolver(resources);
+        let tree = parse_shape_tree(&source, &options)?;
+        let scale = usvg::Transform::from_scale(
+            dimensions.0 as f32 / tree.size().width(),
+            dimensions.1 as f32 / tree.size().height(),
+        );
+        let patterns = effects_validator::pattern_pixels(
+            tree.root(),
+            scale,
+            ceilings.0,
+            u64::from(dimensions.0).saturating_mul(u64::from(dimensions.1)),
+        )?;
+        let (pixels, work) = effects_validator::filter_work(
+            tree.root(),
+            (scale.sx, scale.sy),
+            ceilings.0.saturating_sub(patterns),
+            ceilings.1,
+        )?;
+        Ok::<_, String>((patterns.saturating_add(pixels), work))
+    })();
+    match result {
+        Ok(work) => (atoms::ok(), work).encode(env),
+        Err(message) => (atoms::error(), message).encode(env),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn prepare_html_surface<'a>(
+    env: Env<'a>,
+    source: Binary<'a>,
+    width: u32,
+    height: u32,
+    ceilings: (u64, u64),
+    source_pixels: u64,
+) -> Term<'a> {
+    match html_surface::prepare(source.as_slice(), width, height, ceilings, source_pixels) {
+        Ok(work) => (atoms::ok(), work).encode(env),
+        Err(message) => (atoms::error(), message).encode(env),
+    }
+}
+#[rustler::nif(schedule = "DirtyCpu")]
+fn render_html_surface<'a>(
+    env: Env<'a>,
+    source: Binary<'a>,
+    width: u32,
+    height: u32,
+) -> NifResult<Term<'a>> {
+    match html_surface::render(source.as_slice(), width, height) {
+        Ok(png) => {
+            let mut binary = OwnedBinary::new(png.len()).ok_or(rustler::Error::BadArg)?;
+            binary.as_mut_slice().copy_from_slice(&png);
+            Ok((atoms::ok(), binary.release(env)).encode(env))
+        }
+        Err(message) => Ok((atoms::error(), message).encode(env)),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn probe_html_slots<'a>(
+    env: Env<'a>,
+    source: String,
+    fonts: Vec<Binary<'a>>,
+    slots: Vec<String>,
+    resources: HashMap<String, Binary<'a>>,
+) -> NifResult<Term<'a>> {
+    let result = shape_tree_with_surfaces(&source, fonts, HashMap::new(), resources)
+        .and_then(|tree| vector::probe_slots(&tree, slots.into_iter().collect()));
+    match result {
+        Ok(pdf) => {
+            let mut binary = OwnedBinary::new(pdf.len()).ok_or(rustler::Error::BadArg)?;
+            binary.as_mut_slice().copy_from_slice(&pdf);
+            Ok((atoms::ok(), binary.release(env)).encode(env))
+        }
+        Err(message) => Ok((atoms::error(), message).encode(env)),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn vectorize_html_surfaces<'a>(
+    env: Env<'a>,
+    source: String,
+    fonts: Vec<Binary<'a>>,
+    surfaces: HashMap<
+        String,
+        (
+            Binary<'a>,
+            f64,
+            f64,
+            String,
+            Vec<(String, (f64, f64, f64, f64))>,
+        ),
+    >,
+    authorized: HashMap<String, Binary<'a>>,
+    dimensions: (u32, u32),
+    ceilings: (u64, u64),
+) -> NifResult<Term<'a>> {
+    let mut inputs = HashMap::new();
+    let mut resources = HashMap::new();
+    for (id, (png, width, height, _logical, clusters)) in surfaces {
+        resources.insert(
+            format!("NativeHtmlSurface:{id}"),
+            Arc::new(png.as_slice().to_vec()),
+        );
+        inputs.insert(
+            id,
+            vector::HtmlSurface {
+                width: width as f32,
+                height: height as f32,
+                clusters: clusters
+                    .into_iter()
+                    .map(|(text, b)| (text, [b.0 as f32, b.1 as f32, b.2 as f32, b.3 as f32]))
+                    .collect(),
+            },
+        );
+    }
+    let result = shape_tree_with_surfaces(&source, fonts, resources, authorized).and_then(|tree| {
+        let scale = (
+            dimensions.0 as f32 / tree.size().width(),
+            dimensions.1 as f32 / tree.size().height(),
+        );
+        effects_validator::filter_work(tree.root(), scale, ceilings.0, ceilings.1)?;
+        vector::convert_with_html_surfaces(&tree, inputs, scale)
+    });
+    match result {
+        Ok(pdf) => {
+            let mut binary = OwnedBinary::new(pdf.len()).ok_or(rustler::Error::BadArg)?;
+            binary.as_mut_slice().copy_from_slice(&pdf);
+            Ok((atoms::ok(), binary.release(env)).encode(env))
+        }
+        Err(message) => Ok((atoms::error(), message).encode(env)),
+    }
+}
+
 // Called only by the Elixir geometry validator. usvg otherwise drops malformed
 // paths; validation must diagnose them before visible rendering can succeed.
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -545,6 +788,8 @@ fn validate_path<'a>(
 rustler::init!(
     "Elixir.NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes",
     [
+        parse_css_color,
+        css_color_math_components,
         render,
         render_document,
         vectorize,
@@ -553,6 +798,12 @@ rustler::init!(
         validate_shape_work,
         validate_pattern_work,
         validate_filter_work,
-        vectorize_effects
+        vectorize_effects,
+        vectorize_resources,
+        validate_resource_surfaces,
+        prepare_html_surface,
+        render_html_surface,
+        probe_html_slots,
+        vectorize_html_surfaces
     ]
 );

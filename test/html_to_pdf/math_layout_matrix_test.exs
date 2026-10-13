@@ -155,7 +155,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
              )
 
     for node <- [
-          matrix([[%{ordinary | attributes: %{"columnspan" => "2"}}]], style),
           element("mtable", [ordinary], %{style | display: :inline_table}),
           ordinary,
           element(
@@ -168,11 +167,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
               )
             ],
             %{style | display: :inline_table}
-          ),
-          %{
-            matrix([[ordinary]], style)
-            | style: Map.put(%{style | display: :inline_table}, :width, 50)
-          }
+          )
         ] do
       assert {:error, {reason, diagnostic}} = MathLayout.measure(node)
       assert reason == diagnostic.reason
@@ -386,13 +381,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
     assert :ok == MathLayoutValidator.validate_measured_geometry(measured)
   end
 
-  test "owner placement validates final decorated bounds while spacing/wrapper geometry remains pending",
+  test "owner placement validates final decorated bounds and unsupported wrapper geometry",
        %{style: style} do
     zero = %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
     node = matrix([[cell("1", style, zero)]], style)
 
     for alteration <- [
-          %{border_spacing: {4.0, 2.0}},
           %{padding: nil},
           %{padding: %{zero | top: -1.0}},
           %{margin: %{zero | left: 1.0}}
@@ -529,7 +523,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
           %{border_widths: nil},
           %{border_widths: %{zero | left: -1.0}},
           %{margin: %{}},
-          %{width: 50.0},
           %{background_image: "blocked"}
         ] do
       assert {:error, {reason, diagnostic}} =
@@ -702,46 +695,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
     assert measured.actual_text == "11"
   end
 
-  test "fractional spacing, empty-grid gaps and oversized allocated extents retain shared diagnostics",
+  test "continuous spacing and empty grids retain exact lengths and numeric bounds",
        %{style: style} do
     zero = %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
     natural = matrix([[cell("1", style, zero)]], style)
     assert :error == CssValueValidator.validate_resolved(natural.style, "border-spacing", "-1px")
     assert :error == CssValueValidator.validate_resolved(natural.style, "border-spacing", "10%")
 
-    for spacing <- [{4.0, 2.0}, {0.375, 0.0}, {-0.75, 0.0}] do
-      assert {:error, {:unsupported_html, diagnostic}} =
+    assert {:ok, ordinary} = MathLayout.measure(natural)
+
+    for {horizontal, vertical} = spacing <- [{4.0, 2.0}, {0.375, 0.0}] do
+      assert {:ok, spaced} =
                MathLayout.measure(%{
                  natural
                  | style: Map.put(natural.style, :border_spacing, spacing)
                })
 
-      assert diagnostic.source == "mtable" and
-               diagnostic.message =~ "fractional spacing is pending"
+      assert_in_delta spaced.width, ordinary.width + 2 * horizontal, 1.0e-9
 
-      assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
+      assert_in_delta spaced.ascent + spaced.descent,
+                      ordinary.ascent + ordinary.descent + 2 * vertical,
+                      1.0e-9
     end
+
+    assert {:error, {:unsupported_html, diagnostic}} =
+             MathLayout.measure(%{
+               natural
+               | style: Map.put(natural.style, :border_spacing, {-0.75, 0.0})
+             })
+
+    assert diagnostic.source == "mtable" and diagnostic.operation == :measure_math
 
     for rows <- [[], [[]], [[], []]] do
       empty = matrix(rows, style)
+      assert {:ok, zero_spacing} = MathLayout.measure(empty)
 
-      assert {:error, {:unsupported_html, diagnostic}} =
+      assert {:ok, spaced} =
                MathLayout.measure(%{
                  empty
                  | style: Map.put(empty.style, :border_spacing, {3.0, 1.5})
                })
 
-      assert diagnostic.source == "mtable" and
-               diagnostic.message =~ "empty-grid spacing is pending"
+      assert spaced.width == zero_spacing.width
+      assert spaced.ascent == zero_spacing.ascent and spaced.descent == zero_spacing.descent
     end
-
-    assert {:ok, prepared} = MathLayoutValidator.prepare_element(matrix([], style), %{})
-    altered = %{prepared | style: Map.put(prepared.style, :border_spacing, {3.0, 1.5})}
-
-    assert {:error, {:unsupported_html, diagnostic}} =
-             MathTableValidator.prepare_geometry(altered, [])
-
-    assert diagnostic.message =~ "empty-grid spacing is pending"
 
     assert {:ok, prepared} = MathLayoutValidator.prepare_element(natural, %{})
     assert {:ok, child} = MathLayout.measure(token("1", style))
@@ -754,7 +751,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
     assert diagnostic.source == "mtable" and diagnostic.message =~ "bounds"
   end
 
-  test "nonzero spacing diagnoses held fraction composition through nested rows and phantom", %{
+  test "nonzero spacing composes fractions through nested rows and phantom", %{
     style: style
   } do
     for content <- [
@@ -762,15 +759,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
           "<mrow><mfrac><mn>1</mn><mn>2</mn></mfrac></mrow>",
           "<mphantom><mfrac><mn>1</mn><mn>2</mn></mfrac></mphantom>"
         ] do
-      assert {:error, {:unsupported_html, diagnostic}} =
+      assert {:ok, natural} =
+               styled_math("<math><mtable><mtr><mtd>#{content}</mtd></mtr></mtable></math>")
+
+      assert {:ok, spaced} =
                styled_math(
                  "<math><mtable style='border-spacing:4px 2px'><mtr><mtd>#{content}</mtd></mtr></mtable></math>"
                )
 
-      assert diagnostic.source == "mtd" and
-               diagnostic.message =~ "fraction and complex cell composition remain pending"
-
-      assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
+      assert_in_delta spaced.width, natural.width + 6, 1.0e-9
+      assert_in_delta spaced.ascent + spaced.descent, natural.ascent + natural.descent + 3, 1.0e-9
+      assert spaced.actual_text == natural.actual_text
     end
 
     assert {:ok, prepared} =

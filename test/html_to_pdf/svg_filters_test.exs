@@ -108,13 +108,109 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFiltersTest do
     end
   end
 
-  test "original HTML under an ancestor filter cannot be evaluated as an empty slot" do
-    assert {:error, {:unsupported_html, %{message: message}}} =
+  test "original HTML under an ancestor filter supplies actual painted content and text" do
+    assert {:ok, pdf} =
              HtmlToPdf.render(
                "<svg><defs><filter id='f'><feGaussianBlur/></filter></defs><g filter='url(#f)'><foreignObject width='100' height='30'><div>Original HTML</div></foreignObject></g></svg>"
              )
 
-    assert message =~ "actual issued surface"
+    assert pdf =~ "/Subtype /Image"
+    assert pdf =~ "/ActualText"
+    assert {:ok, "Original HTML"} = Text.extract(pdf, layout: false)
+  end
+
+  test "HTML filter inputs retain original Unicode, ordinary CID forms and clipped URI geometry" do
+    html =
+      File.read!(
+        Path.expand(
+          "../fixtures/html_to_pdf/browser_parity/inline_svg_html_filters.html",
+          __DIR__
+        )
+      )
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert pdf =~ "/Subtype /Image"
+    assert pdf =~ "/FontFile2"
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+
+    for original <- [
+          "selected café Ω",
+          "Two native lines",
+          "Rotated HTML",
+          "Genuine glyphs",
+          "Ordinary vector HTML",
+          "Original CID glyphs",
+          "Actual HTML opacity"
+        ] do
+      assert text =~ original
+    end
+
+    linked =
+      "<svg width='200' height='80'><defs><filter id='f'><feGaussianBlur stdDeviation='1'/></filter><clipPath id='clip'><rect x='10' y='10' width='90' height='45'/></clipPath></defs><g filter='url(#f)' clip-path='url(#clip)'><foreignObject x='10' y='10' width='100' height='50'><div style='font-family:DejaVu Sans;font-size:14px'><a href='https://example.test/native'>Native link café</a></div></foreignObject></g></svg>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(linked, page_size: "200pt 100pt", margin: 0)
+    assert {:ok, "Native link café"} = Text.extract(pdf, layout: false)
+    assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+
+    links =
+      document.objects
+      |> Map.values()
+      |> Enum.filter(&(is_map(&1.value) and &1.value["Subtype"] == {:name, "Link"}))
+
+    assert links != []
+
+    for link <- links do
+      assert link.value["A"]["URI"] == {:string, "https://example.test/native"}
+      [left, bottom, right, top] = link.value["Rect"]
+      assert left >= 7.5 and right <= 75
+      assert top <= 92.5 and bottom >= 58.75
+    end
+  end
+
+  test "hidden and fully clipped HTML effect inputs do not leak replacement text" do
+    for attributes <- [
+          "opacity='0'",
+          "visibility='hidden'",
+          "display='none'",
+          "transform='translate(500 0)'"
+        ] do
+      html =
+        "<svg width='200' height='60'><defs><filter id='f'><feGaussianBlur stdDeviation='1'/></filter></defs><g filter='url(#f)' #{attributes}><foreignObject width='150' height='40'><div style='background:red'>Hidden HTML</div></foreignObject></g></svg>"
+
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:error, {:no_extractable_text, _}} = Text.extract(pdf, layout: false)
+      refute pdf =~ "/ActualText"
+    end
+
+    for style <- ["display:none", "position:relative;left:500pt"] do
+      html =
+        "<svg width='200' height='60'><defs><filter id='f'><feGaussianBlur stdDeviation='1'/></filter></defs><g filter='url(#f)'><foreignObject width='150' height='40'><div style='background:red'><span style='#{style}'>Hidden HTML</span></div></foreignObject></g></svg>"
+
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:error, {:no_extractable_text, _}} = Text.extract(pdf, layout: false)
+      refute pdf =~ "/ActualText"
+    end
+  end
+
+  test "filtered HTML replacement follows actual selected glyph clipping inside and outside its viewport" do
+    defs =
+      "<defs><filter id='f'><feGaussianBlur stdDeviation='1'/></filter><clipPath id='clip'><rect width='32' height='30'/></clipPath></defs>"
+
+    content =
+      "<foreignObject width='80' height='20'><div style='font-family:DejaVu Sans;font-size:14px;white-space:nowrap'>Visible Original Hidden Tail</div></foreignObject>"
+
+    for clip <- ["", "clip-path='url(#clip)'"] do
+      html =
+        "<svg width='200' height='60'>#{defs}<g filter='url(#f)' #{clip}>#{content}<rect x='100' y='10' width='20' height='10' fill='blue'/></g></svg>"
+
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert pdf =~ "/Subtype /Image"
+      assert {:ok, text} = Text.extract(pdf, layout: false)
+      assert text =~ "Vis"
+      refute text =~ "Hidden"
+      refute text =~ "Tail"
+      if clip != "", do: refute(text =~ "Original")
+    end
   end
 
   defp svg(operations),

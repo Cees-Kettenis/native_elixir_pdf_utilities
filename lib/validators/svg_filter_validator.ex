@@ -1,7 +1,14 @@
 defmodule NativeElixirPdfUtilities.Validators.SvgFilterValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
-  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, SvgSceneValidator, SvgStyleValidator}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlValidator,
+    SvgSceneValidator,
+    SvgStyleValidator,
+    SvgForeignObjectValidator,
+    SvgImageValidator
+  }
 
   @primitives ~w(feBlend feColorMatrix feComponentTransfer feComposite feConvolveMatrix feDiffuseLighting feDisplacementMap feDropShadow feFlood feGaussianBlur feMerge feMorphology feOffset feSpecularLighting feTile feTurbulence)
   @children ~w(feMergeNode feFuncR feFuncG feFuncB feFuncA feDistantLight fePointLight feSpotLight)
@@ -41,7 +48,22 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFilterValidator do
 
   @doc false
   @spec validate_tree(map()) :: :ok | {:error, {atom(), map()}}
-  def validate_tree(root) do
+  @spec validate_tree(map(), map()) :: :ok | {:error, {atom(), map()}}
+  def validate_tree(root, issued \\ %{}) do
+    resource_map? =
+      is_map(issued) and map_size(issued) > 0 and
+        Enum.all?(issued, fn {_id, entry} -> is_map(entry) and Map.has_key?(entry, :data) end)
+
+    if resource_map? do
+      with :ok <- SvgImageValidator.validate_descriptors(issued),
+           do: validate_issued_tree(root, %{}, issued)
+    else
+      with {:ok, _ids} <- SvgForeignObjectValidator.validate_slots(issued),
+           do: validate_issued_tree(root, issued, %{})
+    end
+  end
+
+  defp validate_issued_tree(root, html_slots, resources) do
     nodes = SvgSceneValidator.tree_nodes(root)
     ids = Map.new(nodes, fn {node, _} -> {Map.get(node.attributes, "id"), node} end)
 
@@ -63,13 +85,16 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFilterValidator do
             {:ok, {:fragment, id}} ->
               case Map.get(ids, id) do
                 %{tag: "filter"} ->
-                  if foreign_surface?(node, ids, MapSet.new()),
-                    do:
-                      unsupported(
-                        "filtered HTML requires its actual issued surface before effect evaluation",
-                        node.tag
-                      ),
-                    else: :ok
+                  if foreign_surface?(node, ids, MapSet.new(), %{
+                       html_slots: html_slots,
+                       resources: resources
+                     }),
+                     do:
+                       unsupported(
+                         "filtered HTML requires its actual issued surface before effect evaluation",
+                         node.tag
+                       ),
+                     else: :ok
 
                 _ ->
                   invalid(
@@ -92,20 +117,50 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFilterValidator do
 
   # Filter SourceGraphic includes expanded local instances, not just authored
   # descendants. An issued HTML surface cannot be replaced by its empty slot.
-  defp foreign_surface?(node, ids, visited) do
+  defp foreign_surface?(node, ids, visited, inputs) do
     href = Map.get(node.attributes, "href", Map.get(node.attributes, "xlink:href", ""))
 
-    reference =
-      if node.tag == "use" and String.starts_with?(href, "#"), do: String.trim_leading(href, "#")
+    values =
+      case Map.get(node, :style) do
+        nil ->
+          Enum.flat_map(node.attributes, fn {property, value} ->
+            case SvgStyleValidator.parse(property, value) do
+              {:ok, parsed} -> [parsed]
+              _ -> []
+            end
+          end)
 
-    node.tag == "foreignObject" or
-      Enum.any?(
-        node.children,
-        &(Map.get(&1, :type) == :element and foreign_surface?(&1, ids, visited))
-      ) or
-      (reference != nil and not MapSet.member?(visited, reference) and
-         Map.has_key?(ids, reference) and
-         foreign_surface?(Map.fetch!(ids, reference), ids, MapSet.put(visited, reference)))
+        style ->
+          Map.values(style)
+      end
+
+    references =
+      for {kind, id} <- values, kind in [:paint_server, :fragment], do: id
+
+    references =
+      if node.tag == "use" and String.starts_with?(href, "#"),
+        do: [String.trim_leading(href, "#") | references],
+        else: references
+
+    if node.tag == "foreignObject" do
+      not Enum.any?(inputs.html_slots, fn {_id, slot} -> slot.node == node end)
+    else
+      (node.tag == "image" and
+         map_size(Map.get(Map.get(inputs.resources, href, %{}), :foreign_slots, %{})) > 0) or
+        Enum.any?(
+          node.children,
+          &(Map.get(&1, :type) == :element and foreign_surface?(&1, ids, visited, inputs))
+        ) or
+        Enum.any?(references, fn reference ->
+          not MapSet.member?(visited, reference) and Map.has_key?(ids, reference) and
+            foreign_surface?(
+              Map.fetch!(ids, reference),
+              ids,
+              MapSet.put(visited, reference),
+              inputs
+            )
+        end)
+    end
   end
 
   defp validate_structure(node, ancestors) do

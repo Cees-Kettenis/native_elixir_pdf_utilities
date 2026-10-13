@@ -10,14 +10,15 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
     SvgViewportValidator
   }
 
-  @paint_tags ~w(svg g defs symbol use pattern marker mask foreignObject linearGradient radialGradient stop clipPath rect circle ellipse line polyline polygon path text tspan textPath title desc style)
+  @paint_tags ~w(svg g defs symbol use pattern marker mask foreignObject linearGradient radialGradient stop clipPath image rect circle ellipse line polyline polygon path text tspan textPath title desc style)
   @length_attributes %{
     "rect" => ~w(x y width height rx ry),
     "circle" => ~w(cx cy r),
     "ellipse" => ~w(cx cy rx ry),
     "line" => ~w(x1 y1 x2 y2),
     "svg" => ~w(x y width height),
-    "use" => ~w(x y width height)
+    "use" => ~w(x y width height),
+    "image" => ~w(x y width height)
   }
 
   @doc false
@@ -55,7 +56,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
       true ->
         with :ok <- validate_lengths(node),
              :ok <- validate_points(node),
-             :ok <- validate_path(node) do
+             :ok <- validate_path(node),
+             :ok <- NativeElixirPdfUtilities.Validators.SvgImageValidator.validate_node(node) do
           :ok
         end
     end
@@ -88,7 +90,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
             source = NativeElixirPdfUtilities.HtmlToPdf.SvgScene.authored_source(node)
 
             case NativeElixirPdfUtilities.Validators.SvgValidator.validate_processing(source, %{
-                   mode: :inline
+                   mode: :inline,
+                   resources:
+                     NativeElixirPdfUtilities.Validators.SvgImageValidator.pending_references(
+                       node
+                     )
                  }) do
               {:ok, _} ->
                 NativeElixirPdfUtilities.Validators.SvgTextValidator.validate_original_fonts(node)
@@ -249,7 +255,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
              :ok <- validate_paint_style(style),
              {:ok, _} <-
                NativeElixirPdfUtilities.Validators.SvgValidator.validate_processing(source, %{
-                 mode: :inline
+                 mode: :inline,
+                 resources: Map.get(scene, :resources, %{})
                }) do
           valid_budget? =
             if is_nil(budget) do
@@ -272,6 +279,74 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
 
       _ ->
         invalid("prepared SVG requires complete source, geometry and style", "svg scene")
+    end
+  end
+
+  @doc false
+  @spec validate_paint_scope(map(), term()) :: :ok | {:error, {atom(), map()}}
+  def validate_paint_scope(scene, context) do
+    issued = Map.get(scene, :resource_context)
+
+    if is_nil(issued) and is_nil(context) do
+      :ok
+    else
+      with :ok <- NativeElixirPdfUtilities.Validators.ResourceValidator.validate_context(issued),
+           :ok <- NativeElixirPdfUtilities.Validators.ResourceValidator.validate_context(context) do
+        if issued.document_id == context.document_id and
+             issued.tree_scope_id == context.tree_scope_id and issued.image_budget == scene.budget do
+          :ok
+        else
+          invalid(
+            "SVG paint requires its issued source document scope and shared image budget",
+            "SVG"
+          )
+        end
+      end
+    end
+  end
+
+  @doc false
+  @spec reserve_paint_hit(map(), number(), number() | nil, term()) ::
+          :ok | {:error, {atom(), map()}}
+  def reserve_paint_hit(scene, width, height, result) do
+    with {:ok, viewport} <-
+           NativeElixirPdfUtilities.HtmlToPdf.SvgScene.measure(scene, width, height) do
+      if viewport.paint? and Map.get(scene.style, :display) != :none and match?({:ok, _}, result) do
+        scale = Limits.get(:svg_raster_scale)
+
+        dimensions = [
+          width: max(ceil(viewport.width / 0.75 * scale), 1),
+          height: max(ceil(viewport.height / 0.75 * scale), 1)
+        ]
+
+        source =
+          String.replace(
+            scene.source,
+            "<svg ",
+            "<svg width=\"#{viewport.width / 0.75}\" height=\"#{viewport.height / 0.75}\" ",
+            global: false
+          )
+
+        context = %{
+          mode: :inline,
+          fonts: scene.selected_fonts,
+          resources: Map.get(scene, :resources, %{})
+        }
+
+        with {:ok, _} <- SvgBackendValidator.prepare(source, dimensions, context, scene.budget) do
+          case result do
+            {:ok, %{image: nil}} ->
+              :ok
+
+            _ ->
+              with {:ok, _} <-
+                     SvgBackendValidator.prepare_vector(source, dimensions, context, scene.budget),
+                   do: :ok
+          end
+        end
+      else
+        :ok
+      end
     end
   end
 
@@ -299,7 +374,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
     [
       {node, ancestors}
       | Enum.flat_map(node.children, fn child ->
-          if Map.get(child, :type) == :element,
+          if node.tag != "foreignObject" and Map.get(child, :type) == :element,
             do: flatten(child, [node.tag | ancestors]),
             else: []
         end)

@@ -28,7 +28,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback
-  alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
   alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
@@ -311,8 +310,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           ResourceValidator.renderer_context_options(opts),
           image_budget,
           fn _context ->
-            with {:ok, dom} <- HtmlParser.parse_document_detailed(html),
-                 {:ok, prepared} <- prepare_document(dom, opts, image_budget),
+            with {:ok, prepared} <-
+                   NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.prepare_source(
+                     html,
+                     opts,
+                     image_budget
+                   ),
                  {:ok, pdf_binary} <- PdfWriter.render(prepared.pages, prepared.options) do
               {:ok, pdf_binary}
             end

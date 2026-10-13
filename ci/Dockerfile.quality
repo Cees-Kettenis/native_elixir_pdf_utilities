@@ -1,5 +1,5 @@
 ARG BASE_IMAGE=sigdevelopers/sigportal-ci:v2.6
-FROM rust:1.90.0-slim AS svg_rust
+FROM rust:1.92.0-slim AS svg_rust
 FROM ${BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive

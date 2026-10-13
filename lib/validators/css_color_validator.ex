@@ -159,4 +159,103 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
   def named_color(normalized_name) do
     Map.get(@named_colors, normalized_name)
   end
+
+  @doc false
+  @spec parse_initial_input_color(String.t()) :: {:ok, term()} | :error
+  def parse_initial_input_color(source), do: parse_native_color(source, nil, true)
+
+  @doc false
+  @spec parse_function_color(String.t(), term()) :: {:ok, term()} | :error
+  def parse_function_color(source, current_color),
+    do: parse_native_color(source, current_color, false)
+
+  defp parse_native_color(source, current_color, initial_input) do
+    NativeElixirPdfUtilities.Validators.HtmlValidator.check_render_resource(
+      :max_css_source_bytes,
+      byte_size(source),
+      :style
+    )
+
+    NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_render_resource(
+      :max_html_tree_work,
+      byte_size(source),
+      :style
+    )
+
+    try do
+      case NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.load_native() do
+        {:module, _} ->
+          backend = NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes
+          components = backend.css_color_math_components(source)
+
+          NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_render_resource(
+            :max_css_work,
+            length(components),
+            :style
+          )
+
+          math =
+            Enum.map(components, fn {position, expression} ->
+              case NativeElixirPdfUtilities.Validators.CssMathValidator.evaluate_color_component(
+                     expression
+                   ) do
+                {:ok, number, type}
+                when type == %{} or type == %{percentage: 1} or type == %{angle: 1} ->
+                  value =
+                    case number do
+                      :nan -> 0.0
+                      :infinity -> 1.0e100
+                      :negative_infinity -> -1.0e100
+                      number -> number * 1.0
+                    end
+
+                  {kind, value} =
+                    cond do
+                      type == %{percentage: 1} -> {1, value / 100}
+                      type == %{angle: 1} -> {2, value * 180 / :math.pi()}
+                      true -> {0, value}
+                    end
+
+                  {position, kind, value}
+
+                _ ->
+                  {position, 3, 0.0}
+              end
+            end)
+
+          case backend.parse_css_color(source, initial_input, math) do
+            {:ok, {red, green, blue, alpha}} ->
+              {:ok, if(alpha == 1.0, do: {red, green, blue}, else: {red, green, blue, alpha})}
+
+            {:ok, :currentcolor} ->
+              if is_nil(current_color), do: :error, else: {:ok, current_color}
+
+            _ ->
+              :error
+          end
+
+        {:error, reason} ->
+          throw(
+            {:render_resource_limit,
+             NativeElixirPdfUtilities.Diagnostics.error(
+               :style,
+               :unsupported_html,
+               "Native CSS color parser could not load: #{inspect(reason)}; rebuild the packaged native backend",
+               module: __MODULE__,
+               source: "CSS color"
+             )}
+          )
+      end
+    catch
+      {:render_resource_limit, {:error, {reason, diagnostic}}} ->
+        throw(
+          {:render_resource_limit,
+           {:error,
+            {reason,
+             NativeElixirPdfUtilities.Diagnostics.with_context(diagnostic,
+               source: if(initial_input, do: "input/color", else: "CSS color")
+             )}}}
+        )
+    end
+  end
 end

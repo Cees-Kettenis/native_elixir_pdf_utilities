@@ -421,10 +421,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutRadicalsTest do
 
     assert diagnostic.message =~ "normal or compact"
 
-    assert {:error, {:unsupported_html, diagnostic}} =
+    assert {:ok, ordinary} =
              HtmlToPdf.render("<math><msqrt style='display:block'><mn>2</mn></msqrt></math>")
 
-    assert diagnostic.source == "msqrt"
+    assert {:ok, "2"} = Text.extract(ordinary, layout: false)
 
     assert {:error, {:unsupported_glyph, diagnostic}} =
              HtmlToPdf.render("<math><msqrt><mn>\uE777</mn></msqrt></math>")

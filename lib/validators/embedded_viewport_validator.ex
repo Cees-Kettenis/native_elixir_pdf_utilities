@@ -297,7 +297,14 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
          ) do
       {:ok, [page], []} ->
         {:ok,
-         Enum.map(page.boxes, fn box ->
+         page.boxes
+         # Keep target-bearing markers for the document target transport.
+         # Extent and break markers only affect layout, not Form painting.
+         |> Enum.reject(fn box ->
+           box.type == :page_break or
+             (box.type == :flow_marker and not Map.has_key?(box, :html_targets))
+         end)
+         |> Enum.map(fn box ->
            box = Map.delete(box, :form_control)
            # The child canvas has its own clipped print origin. Keep its fill
            # above vertical raster ties without moving text or link geometry.

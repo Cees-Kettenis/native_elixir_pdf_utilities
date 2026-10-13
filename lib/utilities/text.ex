@@ -695,6 +695,10 @@ defmodule NativeElixirPdfUtilities.Text do
     end
   end
 
+  @doc false
+  @spec painted_projection([text_span()]) :: String.t()
+  def painted_projection(spans), do: plain_page(spans)
+
   defp plain_page(spans) do
     spans
     |> Enum.map_reduce(nil, fn span, previous_source_index ->

@@ -28,6 +28,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
     image_budget = image_budget || HtmlValidator.new_image_budget()
 
     with {:ok, summary} <- SvgValidator.validate_processing(source, context),
+         :ok <-
+           NativeElixirPdfUtilities.Validators.SvgImageValidator.validate_descriptors(
+             summary.context.resources
+           ),
          context = summary.context,
          :ok <- validate_capabilities(summary, context),
          :ok <- validate_inline_geometry(summary),
@@ -38,8 +42,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
          :ok <- SvgReferenceValidator.validate_summary(summary),
          :ok <- SvgTextValidator.validate_summary(summary),
          {:ok, fonts} <- validate_fonts(context.fonts, summary),
-         {:ok, prepared_source} <- validate_stroke_work(source, context.mode, fonts, summary),
-         {:ok, resources} <- validate_resources(context.resources, image_budget, summary),
+         {:ok, resources} <- validate_resources(context, image_budget, summary),
+         {:ok, prepared_source} <-
+           validate_stroke_work(source, context.mode, fonts, summary, resources),
          {:ok, dimensions} <-
            if(raster? == :document,
              do: SvgDocumentViewportValidator.prepare(summary),
@@ -47,14 +52,19 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
            ),
          :ok <-
            if(
-             raster? == true and
+             raster? == true and map_size(resources) == 0 and
                Enum.any?(~w(pattern mask marker), &MapSet.member?(summary.elements, {:svg, &1})),
              do: validate_pattern_surfaces(source, dimensions, fonts),
              else: :ok
            ),
          :ok <-
-           if(MapSet.member?(summary.elements, {:svg, "filter"}),
+           if(map_size(resources) == 0 and MapSet.member?(summary.elements, {:svg, "filter"}),
              do: validate_filter_surfaces(source, dimensions, fonts),
+             else: :ok
+           ),
+         :ok <-
+           if(map_size(resources) > 0,
+             do: validate_resource_surfaces(prepared_source, dimensions, fonts, resources),
              else: :ok
            ),
          # Pinned resvg's actual max_bbox is five canvas widths/heights (25× area).
@@ -184,13 +194,55 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
           {:ok, map()} | {:error, {atom(), map()}}
   def prepare_vector(source, options, context, image_budget) do
     with {:ok, request} <- prepare_request(source, options, context, image_budget, false) do
-      if request.mode == :inline and map_size(request.resources) == 0,
+      if request.mode == :inline,
         do: {:ok, request},
         else:
           unsupported(
-            "SVG vector output requires an inline shape/text scene without image resources",
+            "SVG vector output requires an inline shape/text scene using authorized image resources",
             :vectorize
           )
+    end
+  end
+
+  defp validate_resource_surfaces(source, dimensions, fonts, resources) do
+    with :ok <- native_load_result(NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.load_native()) do
+      case NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.validate_resource_surfaces(
+             source,
+             {dimensions[:width], dimensions[:height]},
+             {Limits.get(:max_aggregate_svg_surface_pixels), Limits.get(:max_svg_filter_work)},
+             fonts,
+             resources
+           ) do
+        {:ok, {pixels, work}} ->
+          HtmlValidator.reserve_render_resource(
+            :max_aggregate_svg_surface_pixels,
+            pixels,
+            :layout
+          )
+
+          HtmlValidator.reserve_render_resource(:max_svg_filter_work, work, :layout)
+
+        {:error, limit}
+        when limit in ["max_aggregate_svg_surface_pixels", "max_svg_filter_work"] ->
+          Diagnostics.error(
+            :limits,
+            :resource_limit_exceeded,
+            "SVG resource scene exceeds " <> limit,
+            source: "SVG",
+            module: __MODULE__,
+            operation: :prepare
+          )
+
+        {:error, message} ->
+          Diagnostics.error(
+            :layout,
+            :invalid_document,
+            "SVG resource scene preparation failed: " <> message,
+            source: "SVG",
+            module: __MODULE__,
+            operation: :prepare
+          )
+      end
     end
   end
 
@@ -275,7 +327,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
     end
   end
 
-  defp validate_stroke_work(source, mode, fonts, summary) do
+  defp validate_stroke_work(source, mode, fonts, summary, resources) do
     if mode == :inline do
       with :ok <- native_load_result(NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.load_native()) do
         request =
@@ -283,9 +335,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
             {:prepare_text,
              {Limits.get(:max_svg_stroke_work), Limits.get(:max_svg_gradient_work),
               Limits.get(:max_svg_bytes), Limits.get(:max_svg_expansion_work),
-              summary.expanded_work, Limits.get(:max_svg_nodes)}, fonts}
+              summary.expanded_work, Limits.get(:max_svg_nodes)}, fonts, resources}
           else
-            {Limits.get(:max_svg_stroke_work), Limits.get(:max_svg_gradient_work), fonts}
+            {Limits.get(:max_svg_stroke_work), Limits.get(:max_svg_gradient_work), fonts,
+             resources}
           end
 
         case NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.validate_shape_work(
@@ -374,7 +427,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
       context.mode == :inline and
           Enum.any?(summary.elements, fn {namespace, tag} ->
             namespace != :svg or
-                tag not in (~w(svg g defs symbol use pattern marker mask linearGradient radialGradient stop clipPath path rect circle ellipse line polyline polygon text tspan textPath title desc) ++
+                tag not in (~w(svg g defs symbol use pattern marker mask linearGradient radialGradient stop clipPath image path rect circle ellipse line polyline polygon text tspan textPath title desc) ++
                               SvgFilterValidator.tags())
           end) ->
         unsupported(
@@ -536,10 +589,15 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
     end)
   end
 
-  defp validate_resources(resources, image_budget, summary) do
-    budget = image_budget
+  defp validate_resources(context, budget, summary) do
+    selected =
+      Enum.filter(context.resources, fn {name, _} ->
+        Enum.any?(summary.hrefs, fn {_index, href, _line, tag} ->
+          tag == "image" and href == name
+        end)
+      end)
 
-    Enum.reduce_while(resources, {:ok, %{}}, fn {name, descriptor}, {:ok, validated} ->
+    Enum.reduce_while(selected, {:ok, %{}}, fn {name, descriptor}, {:ok, validated} ->
       occurrences =
         Enum.reduce(summary.hrefs, 0, fn {index, href, _line, tag}, count ->
           if tag == "image" and href == name,
@@ -548,68 +606,112 @@ defmodule NativeElixirPdfUtilities.Validators.SvgBackendValidator do
         end)
         |> max(1)
 
+      %{data: data, media_type: mime} = descriptor
+
       result =
-        case {name, descriptor} do
-          {name, %{data: data, media_type: "image/png"}}
-          when is_binary(name) and is_binary(data) ->
-            cond do
-              not Regex.match?(~r/\Asvg-resource:[A-Za-z0-9_.-]+\z/, name) ->
-                Diagnostics.error(
-                  :style,
-                  :invalid_document,
-                  "SVG resource keys must be opaque svg-resource: identifiers",
-                  source: "SVG"
-                )
+        with :ok <-
+               HtmlValidator.reserve_render_resource(
+                 :max_aggregate_svg_resource_bytes,
+                 byte_size(data),
+                 :style
+               ),
+             :ok <- HtmlValidator.reserve_image_source(budget, byte_size(data)) do
+          if mime == "image/svg+xml" do
+            Enum.reduce_while(1..occurrences, {:ok, %{}}, fn _, {:ok, nested} ->
+              case prepare_request(
+                     data,
+                     [],
+                     %{
+                       mode: :inline,
+                       fonts: context.fonts,
+                       resources: Map.delete(context.resources, name)
+                     },
+                     budget,
+                     false
+                   ) do
+                {:ok, request} ->
+                  {:cont,
+                   {:ok, Map.merge(nested, request.resources) |> Map.put(name, request.source)}}
 
-              byte_size(data) > Limits.get(:max_svg_resource_bytes) ->
-                Diagnostics.error(
-                  :limits,
-                  :resource_limit_exceeded,
-                  "SVG resource exceeds max_svg_resource_bytes",
-                  source: name
-                )
+                error ->
+                  {:halt, error}
+              end
+            end)
+          else
+            decode = fn ->
+              if mime == "image/png" do
+                PngDecoder.decode(data, budget, true)
+              else
+                case HtmlValidator.jpeg_metadata(data) do
+                  {:ok, image} ->
+                    {:ok, image}
 
-              true ->
-                HtmlValidator.reserve_render_resource(
-                  :max_aggregate_svg_resource_bytes,
-                  byte_size(data),
-                  :style
-                )
-
-                with :ok <- HtmlValidator.reserve_image_source(budget, byte_size(data)),
-                     {:ok, image} <- PngDecoder.decode(data, budget, true),
-                     :ok <-
-                       HtmlValidator.reserve_render_resource(
-                         :max_aggregate_svg_raster_pixels,
-                         image.width_px * image.height_px * occurrences,
-                         :style
-                       ),
-                     :ok <-
-                       Enum.reduce_while(1..occurrences, :ok, fn _occurrence, :ok ->
-                         case HtmlValidator.reserve_decoded_image(
-                                budget,
-                                image.width_px,
-                                image.height_px,
-                                4
-                              ) do
-                           :ok -> {:cont, :ok}
-                           error -> {:halt, error}
-                         end
-                       end),
-                     do: {:ok, data}
+                  :error ->
+                    Diagnostics.error(
+                      :style,
+                      :invalid_document,
+                      "SVG JPEG resource bytes are invalid",
+                      source: name,
+                      module: __MODULE__,
+                      operation: :prepare
+                    )
+                end
+              end
             end
 
-          _ ->
-            Diagnostics.error(
-              :style,
-              :invalid_document,
-              "SVG resources require PNG byte descriptors; paths and nested SVG are not supported by this adapter",
-              source: "SVG"
-            )
+            on_hit = fn
+              {:ok, image} when mime == "image/png" ->
+                HtmlValidator.reserve_decoded_image(
+                  budget,
+                  image.width_px,
+                  image.height_px,
+                  image.decoded_stride
+                )
+
+              _ ->
+                :ok
+            end
+
+            decoded =
+              case ResourceContext.current() do
+                nil ->
+                  decode.()
+
+                context ->
+                  RenderCache.fetch(
+                    context.scope,
+                    {:svg_resource_decode, mime, data},
+                    decode,
+                    on_hit
+                  )
+              end
+
+            with {:ok, image} <- decoded,
+                 :ok <-
+                   HtmlValidator.reserve_render_resource(
+                     :max_aggregate_svg_raster_pixels,
+                     image.width_px * image.height_px * occurrences,
+                     :style
+                   ),
+                 :ok <-
+                   Enum.reduce_while(1..occurrences, :ok, fn _, :ok ->
+                     case HtmlValidator.reserve_decoded_image(
+                            budget,
+                            image.width_px,
+                            image.height_px,
+                            4
+                          ) do
+                       :ok -> {:cont, :ok}
+                       error -> {:halt, error}
+                     end
+                   end) do
+              {:ok, %{name => data}}
+            end
+          end
         end
 
       case result do
-        {:ok, data} -> {:cont, {:ok, Map.put(validated, name, data)}}
+        {:ok, bytes} -> {:cont, {:ok, Map.merge(validated, bytes)}}
         error -> {:halt, error}
       end
     end)

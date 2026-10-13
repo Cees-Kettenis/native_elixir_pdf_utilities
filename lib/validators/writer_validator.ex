@@ -342,7 +342,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           composition =
             DrawingGeometry.compose_group(box, composition || {1, 1, 0, 0, nil, parent_height})
 
-          local_clip = DrawingGeometry.local_clip(box)
+          local_clip = DrawingGeometry.local_clip(box, parent_height)
           {children, count} = normalize_boxes(box.boxes, count, composition)
 
           start = %{type: :drawing_group_start, transform: transform, clip: local_clip}
@@ -618,6 +618,10 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           not is_boolean(Map.get(box, :snap_to_css_pixel_grid, false)) ->
             drawing_group_error("drawing_group snap_to_css_pixel_grid must be boolean")
 
+          Map.get(box, :role) == :overflow_clip and
+              (box.transform != {1, 0, 0, 1, 0, 0} or not is_map(clip)) ->
+            drawing_group_error("overflow clipping must preserve the containing coordinate plane")
+
           not Enum.all?([width, height, a, b, c, d, e, f, baseline], &bounded_number?/1) ->
             drawing_group_error(
               "drawing_group dimensions, baseline and affine values must be numeric and within max_pdf_numeric_magnitude"
@@ -657,13 +661,16 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             drawing_group_error("drawing_group links belong on child text boxes")
 
           true ->
-            {sx, sy, tx, ty, _clip, _height} =
+            {sx, sy, tx, ty, _clip, paint_height} =
               DrawingGeometry.compose_group(box, {sx, sy, tx, ty, nil, parent_height})
 
             transform = {sx, sy, tx, ty}
 
             clip_bounds =
-              case DrawingGeometry.transform_clip(clip, transform) do
+              case DrawingGeometry.transform_clip(
+                     DrawingGeometry.local_clip(box, parent_height),
+                     transform
+                   ) do
                 nil -> []
                 bounds -> Tuple.to_list(bounds)
               end
@@ -676,7 +683,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                 result =
                   case child do
                     %{type: :drawing_group} ->
-                      valid_drawing_group(child, depth + 1, transform, count, height)
+                      valid_drawing_group(child, depth + 1, transform, count, paint_height)
 
                     child when is_map(child) ->
                       HtmlValidator.check_render_resource(:max_layout_boxes, count + 1, :writer)
@@ -723,7 +730,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                             "drawing_group children must contain valid text, rectangle, image, link_region, glyph_group or drawing_group boxes"
                           )
 
-                        not Enum.all?(pieces, &valid_group_geometry?(&1, transform, height)) ->
+                        not Enum.all?(pieces, &valid_group_geometry?(&1, transform, paint_height)) ->
                           drawing_group_error(
                             "drawing_group child geometry and transformed bounds must be within max_pdf_numeric_magnitude"
                           )

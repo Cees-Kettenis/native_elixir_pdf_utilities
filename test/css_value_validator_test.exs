@@ -436,7 +436,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
     assert {:ok, <<"%PDF", _::binary>>} = HtmlToPdf.render(html)
   end
 
-  test "renderer diagnostics and public template-for exclusion remain unchanged" do
+  test "ordinary CSS failure authority remains intact when renderer-owned replacement succeeds" do
     assert {:error, {:invalid_css, diagnostic}} =
              HtmlToPdf.render("<p style='width:bananas'>A</p>")
 
@@ -444,9 +444,19 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
     assert diagnostic.operation == :render
     assert diagnostic.source == "width:bananas"
 
-    assert {:error, {:unsupported_html, diagnostic}} =
-             HtmlToPdf.render("<?marker name='a'?><template for='a'>B</template>")
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<body><?marker name='a'?><template for='a'><p>B</p></template></body>"
+             )
 
-    assert diagnostic.source =~ "template"
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+    assert text =~ "B"
+
+    assert {:error, {:unsupported_html, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse_document_detailed(
+               "<body><?marker name='a'?><template for='a'><p>B</p></template></body>"
+             )
+
+    assert diagnostic.operation == :parse and diagnostic.source == "<template for='a'>"
   end
 end

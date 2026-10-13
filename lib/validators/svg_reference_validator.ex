@@ -11,7 +11,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgReferenceValidator do
     SvgViewportValidator
   }
 
-  @targets ~w(symbol svg use g path rect circle ellipse line polyline polygon text)
+  @targets ~w(symbol svg use g image path rect circle ellipse line polyline polygon text)
 
   @doc false
   @spec referenced_ids(map()) :: MapSet.t()
@@ -154,7 +154,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgReferenceValidator do
         else
           Enum.reduce_while(node.children, :ok, fn child, :ok ->
             result =
-              if Map.get(child, :type) == :element,
+              if node.tag != "foreignObject" and Map.get(child, :type) == :element,
                 do:
                   validate_instance_inheritance(
                     child,

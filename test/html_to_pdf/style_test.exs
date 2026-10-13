@@ -6857,9 +6857,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   test "readonly caller trees delegate applicability to the validator" do
     for {tag, attributes} <- [
-          {"input", %{"type" => "checkbox", "readonly" => ""}},
-          {"input", %{"type" => "radio", "readonly" => ""}},
-          {"input", %{"type" => "hidden", "readonly" => ""}},
           {"button", %{"readonly" => ""}},
           {"select", %{"readonly" => ""}},
           {"p", %{"readonly" => ""}}
@@ -6909,7 +6906,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert node.style._form_control.attributes["value"] == " A ,\n B "
     assert hd(dom.children).attributes["value"] == " A ,\n B "
 
-    for tag <- ["input", "textarea", "button", "p"] do
+    for tag <- ["textarea", "button", "p"] do
       attributes =
         if tag == "input",
           do: %{"type" => "text", "multiple" => "", "readonly" => ""},
@@ -6948,8 +6945,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     end
 
     for {attributes, children} <- [
-          {%{"type" => "range", "required" => ""}, []},
-          {%{"type" => "unknown", "checked" => ""}, []},
           {%{}, [%{type: :text, text: "Invalid child"}]}
         ] do
       dom = %{
@@ -6981,10 +6976,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                )
 
       assert overridden.style.text_align == :left and overridden.style.box_sizing == :content_box
-      bad = put_in(dom, [:children, Access.at(0), :attributes, "readonly"], "")
-      assert {:error, {:invalid_document, diagnostic}} = Style.compute_detailed(bad)
-      assert diagnostic.stage == :style and diagnostic.operation == :compute
-      assert diagnostic.source == "input" and diagnostic.message =~ "readonly"
+      inactive = put_in(dom, [:children, Access.at(0), :attributes, "readonly"], "")
+      assert {:ok, %{children: [preserved]}} = Style.compute_detailed(inactive)
+      assert preserved.style.form_kind == :input_button
+      assert Enum.map(preserved.children, & &1.text) == [label]
+      refute Map.has_key?(preserved.style, :_form_control)
     end
 
     assert {:ok, dom} = HtmlParser.parse(~s(<button value="Submission value"></button>))

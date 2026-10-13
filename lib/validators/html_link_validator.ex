@@ -533,7 +533,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
       positions =
         Enum.reduce(Map.get(box, :html_targets, []), positions, fn target, positions ->
           position =
-            target_position(box.x + target.dx, box.y + target.dy, page, {sx, sy, tx, ty}, clip)
+            target_position(
+              box.x + target.dx,
+              box.y + target.dy,
+              page,
+              {sx, sy, tx, ty},
+              DrawingGeometry.intersect_clip(
+                clip,
+                DrawingGeometry.transform_box_clip(Map.get(box, :clip), {sx, sy, tx, ty})
+              )
+            )
 
           Map.put_new(positions, target.identity, position)
         end)

@@ -1,6 +1,12 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
   @moduledoc false
-  alias NativeElixirPdfUtilities.HtmlToPdf.{SvgBackend, SvgViewport, PngDecoder}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{
+    SvgBackend,
+    SvgViewport,
+    PngDecoder,
+    RenderCache,
+    ResourceContext
+  }
 
   alias NativeElixirPdfUtilities.Validators.{
     HtmlValidator,
@@ -14,6 +20,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
     SvgTextValidator,
     SvgTextPositionValidator,
     SvgSceneValidator,
+    SvgImageValidator,
     SvgStyleValidator
   }
 
@@ -59,26 +66,93 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
          :ok <- SvgReferenceValidator.validate_tree(node),
          :ok <- SvgPaintValidator.validate_tree(node),
          :ok <- SvgEffectsValidator.validate_tree(node),
-         :ok <- SvgFilterValidator.validate_tree(node),
          {:ok, text} <- SvgTextValidator.prepare_tree(node),
-         {:ok, projected, slots} <- SvgForeignObjectValidator.prepare_tree(node, options) do
+         {:ok, projected, slots} <- SvgForeignObjectValidator.prepare_tree(node, options),
+         :ok <- SvgFilterValidator.validate_tree(node, slots),
+         {:ok, projected, resources, fonts} <-
+           SvgImageValidator.prepare_tree(projected, budget, options, text.fonts),
+         :ok <- SvgFilterValidator.validate_tree(projected, resources),
+         # The SVG replaced-document default viewport is fixed at 300 x 150 CSS pixels.
+         {:ok, document_viewport} <-
+           SvgViewport.measure(node.attributes, node.style, %{width: 225.0, height: 112.5}) do
+      document_node = %{
+        projected
+        | style:
+            Map.merge(projected.style, %{
+              svg_width: {:points, document_viewport.width},
+              svg_height: {:points, document_viewport.height}
+            })
+      }
+
+      slots =
+        Enum.reduce(resources, slots, fn {_key, descriptor}, slots ->
+          Map.merge(slots, Map.get(descriptor, :foreign_slots, %{}))
+        end)
+
       source = serialize(projected, true, nil, false, text.aliases, text.positions)
+
+      effect_source =
+        if map_size(slots) > 0,
+          do:
+            serialize(
+              html_effect_tree(projected, slots),
+              true,
+              nil,
+              false,
+              text.aliases,
+              text.positions
+            ),
+          else: nil
+
+      html_effects? =
+        map_size(slots) > 0 and
+          Enum.any?(SvgSceneValidator.tree_nodes(node), fn {child, _} ->
+            Map.get(child.style, :svg_filter, :none) != :none
+          end)
 
       {:ok,
        %{
          source: source,
+         document_source:
+           serialize(document_node, false, nil, false, text.aliases, text.positions),
          original_tree: node,
          foreign_slots: slots,
+         html_effect_source: effect_source,
+         html_effects?: html_effects?,
          attributes: node.attributes,
          style: node.style,
          budget: budget,
          logical_text: text.logical_text,
          links: [],
-         selected_fonts: text.fonts,
+         selected_fonts: fonts,
+         resources: resources,
+         resource_context: ResourceContext.current(),
          node_id: Map.get(node, :node_id),
          document_id: Map.get(node, :document_id),
          tree_scope_id: Map.get(node, :tree_scope_id)
        }}
+    end
+  end
+
+  # The image validator has already resolved authored image identifiers and
+  # byte-font scopes. Replace only issued HTML slots in that execution tree.
+  defp html_effect_tree(node, slots) do
+    id = Map.get(node.attributes, "id")
+
+    if node.tag == "rect" and Map.has_key?(slots, id) do
+      node
+      |> Map.put(:tag, "image")
+      |> Map.update!(:attributes, fn attributes ->
+        attributes
+        |> Map.put("href", "NativeHtmlSurface:" <> id)
+        |> Map.put("preserveAspectRatio", "none")
+      end)
+    else
+      Map.update!(node, :children, fn children ->
+        Enum.map(children, fn child ->
+          if Map.get(child, :type) == :element, do: html_effect_tree(child, slots), else: child
+        end)
+      end)
     end
   end
 
@@ -90,6 +164,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
   @doc false
   @spec paint(map(), number(), number() | nil) :: {:ok, map()} | {:error, {atom(), map()}}
   def paint(scene, width, height \\ nil) do
+    context = ResourceContext.current()
+
+    with :ok <- SvgSceneValidator.validate_paint_scope(scene, context) do
+      if is_nil(context) or map_size(Map.get(scene, :foreign_slots, %{})) > 0 do
+        paint_scene(scene, width, height)
+      else
+        key =
+          {:svg_scene_paint, context.document_id, context.tree_scope_id, context.resolution_base,
+           context.authorization_root, scene.source, Map.get(scene, :resources, %{}),
+           scene.selected_fonts, scene.attributes, scene.style, width, height}
+
+        RenderCache.fetch(
+          context.scope,
+          key,
+          fn -> paint_scene(scene, width, height) end,
+          fn result -> SvgSceneValidator.reserve_paint_hit(scene, width, height, result) end
+        )
+      end
+    end
+  end
+
+  defp paint_scene(scene, width, height) do
     with {:ok, viewport} <- measure(scene, width, height) do
       if viewport.paint? and Map.get(scene.style, :display) != :none do
         scale = Limits.get(:svg_raster_scale)
@@ -101,20 +197,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
         source = String.replace(scene.source, "<svg ", "<svg#{dimensions} ", global: false)
 
         if map_size(Map.get(scene, :foreign_slots, %{})) > 0 do
-          with {:ok, skeleton} <-
-                 SvgBackend.vectorize_slots(
-                   source,
-                   [width: raster_width, height: raster_height],
-                   %{mode: :inline, fonts: scene.selected_fonts},
-                   scene.foreign_slots,
-                   scene.budget
-                 ),
-               {:ok, pdf, placements} <-
-                 NativeElixirPdfUtilities.HtmlToPdf.SvgFormComposition.compose(
-                   skeleton,
-                   scene.foreign_slots,
-                   &SvgForeignObjectValidator.layout_slot/1
-                 ),
+          assembled =
+            if Map.get(scene, :html_effects?, false) do
+              effect_source =
+                String.replace(scene.html_effect_source, "<svg ", "<svg#{dimensions} ",
+                  global: false
+                )
+
+              NativeElixirPdfUtilities.HtmlToPdf.SvgHtmlSurface.paint(
+                source,
+                effect_source,
+                scene.foreign_slots,
+                [width: raster_width, height: raster_height],
+                %{
+                  mode: :inline,
+                  fonts: scene.selected_fonts,
+                  resources: Map.get(scene, :resources, %{})
+                },
+                scene.budget
+              )
+            else
+              with {:ok, skeleton} <-
+                     SvgBackend.vectorize_slots(
+                       source,
+                       [width: raster_width, height: raster_height],
+                       %{
+                         mode: :inline,
+                         fonts: scene.selected_fonts,
+                         resources: Map.get(scene, :resources, %{})
+                       },
+                       scene.foreign_slots,
+                       scene.budget
+                     ) do
+                NativeElixirPdfUtilities.HtmlToPdf.SvgFormComposition.compose(
+                  skeleton,
+                  scene.foreign_slots,
+                  &SvgForeignObjectValidator.layout_slot/1
+                )
+              end
+            end
+
+          with {:ok, pdf, placements} <- assembled,
                {:ok, _form} <- SvgFormValidator.prepare_source(pdf),
                {:ok, html_links} <-
                  NativeElixirPdfUtilities.Validators.SvgFormSlotValidator.prepare_links(
@@ -145,7 +268,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
                  SvgBackend.rasterize(
                    source,
                    [width: raster_width, height: raster_height],
-                   %{mode: :inline, fonts: scene.selected_fonts},
+                   %{
+                     mode: :inline,
+                     fonts: scene.selected_fonts,
+                     resources: Map.get(scene, :resources, %{})
+                   },
                    scene.budget
                  ),
                {:ok, image} <- PngDecoder.decode(png, scene.budget, false) do
@@ -159,7 +286,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
                        SvgBackend.vectorize(
                          source,
                          [width: raster_width, height: raster_height],
-                         %{mode: :inline, fonts: scene.selected_fonts},
+                         %{
+                           mode: :inline,
+                           fonts: scene.selected_fonts,
+                           resources: Map.get(scene, :resources, %{})
+                         },
                          scene.budget
                        ),
                      {:ok, _form} <- SvgFormValidator.prepare_source(pdf) do

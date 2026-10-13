@@ -743,7 +743,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
           "20%",
           "calc(1px + 2)",
           "calc(1px*2px)",
-          "calc(1px/0)",
           "calc(1px,2px)",
           "clamp(1px,2px)",
           "min()",
@@ -757,16 +756,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     end
   end
 
-  test "valid unsupported sizes and infinite arithmetic diagnose rather than silently choosing 100vw" do
+  test "infinite source-size arithmetic diagnoses rather than silently choosing 100vw" do
     alias NativeElixirPdfUtilities.HtmlToPdf
-
-    for sizes <- ["calc(sqrt(4)*1px)", "calc(abs(-1px))", "abs(-1px)"] do
-      assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render("<img srcset='a 20w' sizes='#{sizes}'>")
-
-      assert diagnostic.stage == :style and diagnostic.source == sizes
-      assert diagnostic.message =~ "not implemented"
-    end
 
     for sizes <- ["calc(1px/1e-320)", "calc(1000000000px*1000000000)"] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -1682,8 +1673,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
               %{
                 type: :element,
                 tag: "input",
-                attributes: %{"type" => "text", "checked" => ""},
-                children: []
+                attributes: %{"type" => "text"},
+                children: [%{type: :text, text: "Invalid void contents"}]
               }
             ]
           }
@@ -3280,7 +3271,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     assert HtmlValidator.valid_form_element?("input", %{"readonly" => "false"}, [])
 
     for type <- ["hidden", "checkbox", "radio", "button", "reset", "submit"] do
-      refute HtmlValidator.valid_form_element?("input", %{"type" => type, "readonly" => ""}, [])
+      assert HtmlValidator.valid_form_element?("input", %{"type" => type, "readonly" => ""}, [])
     end
 
     assert HtmlValidator.valid_form_element?("textarea", %{"readonly" => ""}, [
@@ -3304,7 +3295,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
                []
              )
 
-      refute HtmlValidator.valid_form_element?("input", %{"type" => type, "checked" => ""}, [])
+      assert HtmlValidator.valid_form_element?("input", %{"type" => type, "checked" => ""}, [])
 
       for {value, stripped, trimmed} <- [
             {" \t\f\rA B\nC \r\n\t", " \t\fA BC \t", "A BC"},
@@ -3348,7 +3339,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
             {" , , ", ",,"},
             {" A,, B, ", "A,,B,"},
             {"\u00A0A\u00A0 , B\v", "\u00A0A\u00A0,B\v"},
-            {" A\nB , C\rD ", "A\nB,C\rD"}
+            {" A\nB , C\rD ", "AB,CD"}
           ] do
         attributes = %{"type" => type, "multiple" => multiple, "value" => value}
         assert HtmlValidator.prepare_input_attributes(attributes)["value"] == expected
@@ -3371,7 +3362,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
           "reset",
           "submit"
         ] do
-      refute HtmlValidator.valid_form_element?("input", %{"type" => type, "multiple" => ""}, [])
+      assert HtmlValidator.valid_form_element?("input", %{"type" => type, "multiple" => ""}, [])
     end
   end
 
@@ -3390,8 +3381,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
       assert HtmlValidator.input_type(value) == "text"
       assert HtmlValidator.valid_form_attribute?("input", "type", value)
       assert HtmlValidator.valid_form_element?("input", %{"type" => value, "readonly" => ""}, [])
-      refute HtmlValidator.valid_form_element?("input", %{"type" => value, "checked" => ""}, [])
-      refute HtmlValidator.valid_form_element?("input", %{"type" => value, "multiple" => ""}, [])
+      assert HtmlValidator.valid_form_element?("input", %{"type" => value, "checked" => ""}, [])
+      assert HtmlValidator.valid_form_element?("input", %{"type" => value, "multiple" => ""}, [])
 
       assert HtmlValidator.prepare_input_attributes(%{"type" => value, "value" => "A\rB\nC"})[
                "value"
@@ -3455,7 +3446,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
       end
 
       for name <- ["checked", "readonly", "multiple"] do
-        refute HtmlValidator.valid_form_element?("input", %{"type" => type, name => ""}, [])
+        assert HtmlValidator.valid_form_element?("input", %{"type" => type, name => ""}, [])
       end
 
       refute HtmlValidator.valid_form_element?("input", %{"type" => type}, [
@@ -3551,8 +3542,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     attrs = %{"type" => "PaSsWoRd", "value" => " A\rB\n é🦊 ", "readonly" => "false"}
     assert HtmlValidator.valid_form_element?("input", attrs, [])
     assert HtmlValidator.prepare_input_attributes(attrs)["value"] == " AB é🦊 "
-    refute HtmlValidator.valid_form_element?("input", Map.put(attrs, "multiple", ""), [])
-    refute HtmlValidator.valid_form_element?("input", Map.put(attrs, "checked", ""), [])
+    assert HtmlValidator.valid_form_element?("input", Map.put(attrs, "multiple", ""), [])
+    assert HtmlValidator.valid_form_element?("input", Map.put(attrs, "checked", ""), [])
 
     assert {:ok, "•••"} =
              NativeElixirPdfUtilities.Validators.FormValidator.password_display_text("Aé🦊")
@@ -3708,7 +3699,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
         %{type: :element, tag: "fieldset", attributes: %{}, children: []}
       ])
 
-    assert empty._initial_form_state == %{owner: nil, disabled: false, checked: false}
+    assert %{owner: nil, disabled: false, checked: false} = empty._initial_form_state
+    assert empty._initial_form_state.constraint_validation.valid
+    refute empty._initial_form_state.constraint_validation.will_validate
     assert HtmlValidator.valid_form_attribute?("fieldset", "name", "Group")
     assert HtmlValidator.valid_boolean_form_attribute?("fieldset", "disabled")
     refute HtmlValidator.valid_boolean_form_attribute?("legend", "disabled")
@@ -3888,33 +3881,62 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     options = Font.normalize_options([])
 
     assert :ok ==
-             HtmlValidator.with_render_budget(fn ->
-               assert {:ok, false} =
-                        HtmlValidator.prepare_style_input(dom, [], options, :prepare_svg)
+             NativeElixirPdfUtilities.HtmlToPdf.ResourceContext.run(
+               [],
+               HtmlValidator.new_image_budget(),
+               fn _context ->
+                 assert {:ok, false} =
+                          HtmlValidator.prepare_style_input(dom, [], options, :prepare_svg)
 
-               assert {:ok, false} = HtmlValidator.prepare_style_input(dom, [], options, :render)
+                 assert {:ok, false} =
+                          HtmlValidator.prepare_style_input(dom, [], options, :render)
 
-               assert {:ok, false} =
-                        HtmlValidator.prepare_style_input(filtered_dom, [], options, :prepare_svg)
+                 assert {:ok, false} =
+                          HtmlValidator.prepare_style_input(
+                            filtered_dom,
+                            [],
+                            options,
+                            :prepare_svg
+                          )
 
-               # Structural preparation cannot bypass the final styled scene's
-               # requirement for genuine HTML SourceGraphic before filtering.
-               assert {:error, {:unsupported_html, diagnostic}} =
-                        Style.compute_detailed(filtered_dom, [])
+                 assert {:ok, _styled} = Style.compute_detailed(filtered_dom, [])
 
-               assert diagnostic.source == "g"
-               assert diagnostic.stage == :layout and diagnostic.operation == :prepare
-               assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgFilterValidator
-               assert diagnostic.message =~ "actual issued surface"
+                 # Preparation cannot authorize invalid effect parameters in the
+                 # same budget, even when genuine HTML SourceGraphic is available.
+                 invalid = String.replace(filtered, "stdDeviation='1'", "stdDeviation='-1'")
+                 assert {:ok, invalid_dom} = HtmlParser.parse_detailed(invalid)
 
-               assert {:ok, false} =
-                        HtmlValidator.prepare_style_input(filtered_dom, [], options, :prepare_svg)
+                 assert {:ok, false} =
+                          HtmlValidator.prepare_style_input(
+                            invalid_dom,
+                            [],
+                            options,
+                            :prepare_svg
+                          )
 
-               assert {:error, {:invalid_document, _}} =
-                        HtmlValidator.prepare_style_input(dom, [], options, :unknown)
+                 assert {:error, {:invalid_document, diagnostic}} =
+                          Style.compute_detailed(invalid_dom, [])
 
-               :ok
-             end)
+                 assert diagnostic.source == "feGaussianBlur"
+                 assert diagnostic.stage == :layout and diagnostic.operation == :prepare
+
+                 assert diagnostic.module ==
+                          NativeElixirPdfUtilities.Validators.SvgFilterValidator
+
+                 assert {:ok, false} =
+                          HtmlValidator.prepare_style_input(
+                            filtered_dom,
+                            [],
+                            options,
+                            :prepare_svg
+                          )
+
+                 assert {:error, {:invalid_document, _}} =
+                          HtmlValidator.prepare_style_input(dom, [], options, :unknown)
+
+                 :ok
+               end
+             )
   end
 
   test "validated DOM reuse rejects changed contents and options with retained canonical IDs" do

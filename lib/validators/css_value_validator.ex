@@ -723,7 +723,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             end
 
           property when property in ["width", "height"] ->
-            put_size(style, length_property(property), value)
+            if property == "width" and Map.get(style, :_math_element) == {:mathml, "mpadded"} do
+              with {:ok, properties} <- MathLayoutValidator.parse_property(property, value, style),
+                   do: {:ok, Map.merge(style, properties)}
+            else
+              put_size(style, length_property(property), value)
+            end
 
           "position" ->
             put_position(style, value)
@@ -1793,8 +1798,23 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     normalized = String.trim(value)
 
     case HtmlValidator.parse_css_number(normalized) do
-      {number, "%"} -> {:ok, {:percent, number / 100.0}}
-      _ -> HtmlValidator.parse_css_length(normalized, :margin, font_size)
+      {number, "%"} ->
+        {:ok, {:percent, number / 100.0}}
+
+      _ ->
+        case HtmlValidator.parse_css_identifier(normalized) do
+          {:ok, _, "(" <> _} ->
+            NativeElixirPdfUtilities.Validators.CssPositionValidator.prepare_math(normalized)
+
+          _ ->
+            case HtmlValidator.parse_css_length(normalized, :margin, font_size) do
+              :error ->
+                NativeElixirPdfUtilities.Validators.CssPositionValidator.prepare_math(normalized)
+
+              result ->
+                result
+            end
+        end
     end
   end
 
@@ -1803,7 +1823,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
       value
       |> String.trim()
       |> String.downcase(:ascii)
-      |> String.split(~r/[ \t\n\r\f]+/, trim: true)
+      |> NativeElixirPdfUtilities.Validators.CssMathValidator.component_terms(false)
+      |> Enum.map(fn token ->
+        case HtmlValidator.parse_css_identifier(token) do
+          {:ok, identifier, ""} -> String.downcase(identifier, :ascii)
+          _ -> token
+        end
+      end)
 
     case tokens do
       [token] ->
@@ -1962,6 +1988,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_edge_length(style, property, length) do
+    style = ensure_box_style(style)
     [box_property, edge] = String.split(property, "-", parts: 2)
     key = String.to_existing_atom(edge)
     map_key = String.to_existing_atom(box_property)

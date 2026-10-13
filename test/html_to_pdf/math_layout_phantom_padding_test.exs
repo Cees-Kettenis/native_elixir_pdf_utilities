@@ -3,7 +3,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPhantomPaddingTest do
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, MathLayout, ResourceContext, Style}
-  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, MathLayoutValidator}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    CssValueValidator,
+    HtmlValidator,
+    MathLayoutValidator
+  }
 
   setup do
     limits = Limits.effective()
@@ -144,12 +149,233 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPhantomPaddingTest do
     assert phantom.actual_text == "" and phantom.drawing_items == []
   end
 
+  test "padding defaults and ignored percentage/legacy values preserve the inner row", %{
+    style: style
+  } do
+    content = [token("mn", "23", style), token("mi", "x", style)]
+    assert {:ok, row} = MathLayout.measure(element("mrow", content, style))
+
+    for attributes <- [
+          %{},
+          %{
+            "width" => "200%",
+            "height" => "50%",
+            "depth" => "40%",
+            "lspace" => "25%",
+            "voffset" => "-10%"
+          },
+          %{"width" => "2width", "height" => "nonsense", "depth" => "1depth"}
+        ] do
+      assert {:ok, padded} = MathLayout.measure(element("mpadded", content, style, attributes))
+      assert Map.delete(padded, :drawing_items) == Map.delete(row, :drawing_items)
+    end
+
+    assert {:ok, hidden} =
+             styled_math(
+               "<math><mn>2</mn><mphantom><mpadded width='40pt' height='15pt' depth='4pt'><mn>Hidden</mn></mpadded></mphantom><mn>3</mn></math>"
+             )
+
+    assert hidden.actual_text == "23"
+    assert length(hidden.glyphs) == 2
+  end
+
+  test "padding requested dimensions are independent from glyph translation and ink", %{
+    style: style
+  } do
+    content = [token("mn", "23", style)]
+    assert {:ok, inner} = MathLayout.measure(element("mrow", content, style))
+
+    for shift <- [-5, 4] do
+      attrs = %{
+        "width" => "40pt",
+        "height" => "22pt",
+        "depth" => "8pt",
+        "lspace" => "3pt",
+        "voffset" => "#{shift}pt"
+      }
+
+      assert {:ok, measured} = MathLayout.measure(element("mpadded", content, style, attrs))
+
+      assert measured.width == 40 and measured.min_content_width == 40 and
+               measured.max_content_width == 40
+
+      assert measured.ascent == 22 and measured.descent == 8
+      assert_in_delta measured.ink_ascent, inner.ink_ascent + shift, 1.0e-10
+      assert_in_delta measured.ink_descent, inner.ink_descent - shift, 1.0e-10
+
+      for {glyph, source} <- Enum.zip(measured.glyphs, inner.glyphs) do
+        assert_in_delta glyph.x, source.x + 3, 1.0e-10
+        assert_in_delta glyph.y, source.y + shift, 1.0e-10
+        assert glyph.glyph_id == source.glyph_id and glyph.font_face == source.font_face
+      end
+
+      assert measured.actual_text == "23"
+    end
+
+    attrs = %{
+      "width" => "-1pt",
+      "height" => "-2pt",
+      "depth" => "-3pt",
+      "lspace" => "-4pt",
+      "voffset" => "-5pt"
+    }
+
+    assert {:ok, measured} = MathLayout.measure(element("mpadded", content, style, attrs))
+    assert measured.width == inner.width and measured.ascent == 0 and measured.descent == 0
+    assert hd(measured.glyphs).x == 0 and hd(measured.glyphs).y == -5
+  end
+
+  test "padding width hints honor final selected font, CSS override and generic CSS boundaries",
+       %{style: style, font: font} do
+    {:ok, x_height} = NativeElixirPdfUtilities.Validators.FontValidator.prepare_x_height(font)
+
+    for {width, css, expected} <- [
+          {"2em", "font-size:18pt", 36},
+          {"2ex", "font-size:18pt", 36 * x_height},
+          {"3rem", "font-size:18pt", 36},
+          {"30pt", "width:17pt", 17},
+          {"30pt", "width:auto", nil},
+          {"30pt", "width:2em;font-size:18pt", 36}
+        ] do
+      assert {:ok, measured} =
+               styled_math(
+                 "<math style='font-size:20pt'><mpadded width='#{width}' style='#{css}'><mn>23</mn></mpadded></math>"
+               )
+
+      if expected,
+        do: assert_in_delta(measured.width, expected, 1.0e-10),
+        else: assert(measured.width < 30)
+    end
+
+    for attrs <- [
+          %{"lspace" => " 1EM ", "voffset" => " -1ex "},
+          %{"lspace" => "1rem", "voffset" => "2pt"}
+        ] do
+      assert {:ok, measured} =
+               MathLayout.measure(element("mpadded", [token("mn", "2", style)], style, attrs))
+
+      assert_in_delta hd(measured.glyphs).x, 20, 1.0e-10
+    end
+
+    {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    {:ok, _, selected} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    {:ok, selected_x_height} =
+      NativeElixirPdfUtilities.Validators.FontValidator.prepare_x_height(selected)
+
+    assert selected_x_height != x_height
+
+    assert {:ok, switched} =
+             styled_math(
+               "<math style='font-size:20pt'><mpadded width='2ex' style='font-size:18pt;font-family:DejaVu Sans'><mtext>word</mtext></mpadded></math>"
+             )
+
+    assert_in_delta switched.width, 36 * selected_x_height, 1.0e-10
+
+    assert :error == CssValueValidator.validate_resolved(style, "width", "2em")
+
+    assert {:ok, %{width: {:percent, 0.5}}} =
+             CssValueValidator.validate_resolved(style, "width", "50%")
+
+    assert :error ==
+             CssValueValidator.validate_resolved(
+               Map.put(style, :_math_element, {:mathml, "mpadded"}),
+               "width",
+               "-2pt"
+             )
+
+    assert {:error, {:unsupported_html, diagnostic}} =
+             HtmlToPdf.render("<math><mpadded style='width:50%'><mn>2</mn></mpadded></math>")
+
+    assert diagnostic.source == "mpadded" and diagnostic.message =~ "composition"
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             MathLayoutValidator.compute_style(%{width: {:math_padded_length, "1ex"}})
+
+    assert diagnostic.source == "mpadded" and diagnostic.message =~ "context"
+  end
+
+  test "padding retains native token content, fraction rules and original visible Unicode" do
+    html =
+      "<math style='font-size:18pt'><mpadded width='70pt' height='25pt' depth='8pt' lspace='4pt' voffset='3pt' style='background-color:lightblue;padding:2pt'><mtext><a href='https://visible.test'>Visible</a></mtext><mfrac><mn>2</mn><mn>3</mn></mfrac><mi>α</mi></mpadded></math>"
+
+    assert {:ok, measured} = styled_math(html)
+    assert measured.actual_text == "Visible23α"
+    assert hd(measured.drawing_items).kind == :background
+    assert Enum.any?(measured.drawing_items, &(Map.get(&1, :kind) == :native))
+    assert :ok == MathLayoutValidator.validate_measured_geometry(measured)
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert {:ok, "Visible23α"} = Text.extract(pdf, layout: false)
+    assert pdf =~ "visible.test"
+  end
+
+  test "padding placement rejects malformed preferred geometry and offset overflow through validators",
+       %{style: style} do
+    node = element("mpadded", [token("mn", "2", style)], style, %{"lspace" => "4pt"})
+    assert {:ok, prepared} = MathLayoutValidator.prepare_element(node, %{})
+    assert {:ok, inner} = MathLayout.measure(element("mrow", node.children, style))
+
+    for bad <- [Map.delete(inner, :min_content_width), Map.put(inner, :max_content_width, :bad)] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               MathLayoutValidator.prepare_padded_placement(prepared, bad)
+
+      assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
+      assert diagnostic.source == "mpadded"
+      assert diagnostic.message =~ "intrinsic"
+    end
+
+    for bad <- [
+          put_in(prepared.parameters.voffset, :bad),
+          put_in(prepared.parameters.lspace, 1.0e308),
+          %{}
+        ] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               MathLayoutValidator.prepare_padded_placement(bad, inner)
+
+      assert diagnostic.source == "mpadded" and diagnostic.message =~ "prepared"
+    end
+
+    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 30))
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             MathLayoutValidator.prepare_padded_placement(
+               put_in(prepared.parameters.voffset, 30),
+               inner
+             )
+
+    assert diagnostic.source == "mpadded" and diagnostic.message =~ "bounds"
+  end
+
+  test "padded space-like rows preserve authoritative outer operator form", %{style: style} do
+    padded = element("mpadded", [token("mtext", "word", style)], style, %{"width" => "30pt"})
+    root = element("math", [padded, token("mo", "+", style), token("mn", "1", style)], style)
+    assert {:ok, prepared} = MathLayoutValidator.prepare_element(root, %{})
+    assert Enum.at(prepared.children, 1).core_operator.form == :prefix
+    assert {:ok, measured} = MathLayout.measure(root)
+    assert measured.actual_text == "word+1"
+  end
+
+  test "padded inferred row shares one owner decoration with actual script and native content" do
+    html =
+      "<math style='font-size:18pt'><mpadded width='70pt' lspace='3pt' voffset='2pt' style='background-color:lightblue;padding:2pt'><msubsup><mn>7</mn><mn>1</mn><mn>2</mn></msubsup><mtext><a href='https://padded.test'>Link</a></mtext></mpadded></math>"
+
+    assert {:ok, measured} = styled_math(html)
+    assert Enum.count(measured.drawing_items, &(Map.get(&1, :kind) == :background)) == 1
+    assert measured.actual_text == "712Link"
+    assert Enum.any?(measured.drawing_items, &(Map.get(&1, :kind) == :native))
+    assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+    assert {:ok, "712Link"} = Text.extract(pdf, layout: false)
+    assert pdf =~ "padded.test"
+  end
+
   test "hidden content still uses semantic validation and selected-font work limits", %{
     style: style
   } do
-    for tag <- ~w(mstyle mpadded merror) do
+    for tag <- ~w(mpadded) do
       assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render("<math><mphantom><#{tag}/></mphantom></math>")
+               HtmlToPdf.render(
+                 "<math><mphantom><#{tag} style='position:absolute'/></mphantom></math>"
+               )
 
       assert diagnostic.stage == :layout and diagnostic.source == tag
       assert diagnostic.module == MathLayoutValidator and diagnostic.reason == :unsupported_html

@@ -304,29 +304,14 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
   end
 
   @doc "Resolves a nonnegative CSS source-size length to CSS pixels, or returns :error."
-  @spec source_length(String.t(), context()) :: {:ok, float()} | :error
+  @spec source_length(String.t(), context()) ::
+          {:ok, float()} | :error | {:error, {atom(), map()}}
   def source_length(value, context) do
-    evaluated_length(value, context, :nonnegative)
+    HtmlValidator.with_render_budget(fn -> evaluated_length(value, context, :nonnegative) end)
   end
 
   defp evaluated_length(value, context, sign_policy) do
     value = String.downcase(HtmlValidator.trim_css_whitespace(value), :ascii)
-
-    if Regex.match?(
-         ~r/\b(?:sin|cos|tan|asin|acos|atan|atan2|pow|sqrt|hypot|log|exp|abs|sign|round|mod|rem)\(/,
-         value
-       ) do
-      throw(
-        {:render_resource_limit,
-         Diagnostics.error(
-           :style,
-           :unsupported_html,
-           "source-size advanced math is not implemented; use absolute lengths, viewport units, em/rem, calc/min/max/clamp",
-           module: __MODULE__,
-           source: value
-         )}
-      )
-    end
 
     context =
       case NativeElixirPdfUtilities.Validators.SourceSizeValidator.prepare_context(
@@ -340,9 +325,11 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
 
     parsed =
       try do
-        if length(top_level_terms(value, true)) == 1,
-          do: length_value(value, context, 0),
-          else: :error
+        if length(
+             NativeElixirPdfUtilities.Validators.CssMathValidator.component_terms(value, true)
+           ) == 1,
+           do: NativeElixirPdfUtilities.Validators.CssMathValidator.evaluate(value, context),
+           else: :error
       rescue
         ArithmeticError ->
           throw(
@@ -355,6 +342,34 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
                source: value
              )}
           )
+      end
+
+    parsed =
+      case parsed do
+        {:ok, :nan, %{length: 1} = type} when map_size(type) == 1 ->
+          {:ok, 0.0}
+
+        {:ok, value, %{length: 1} = type} when is_number(value) and map_size(type) == 1 ->
+          {:ok, value}
+
+        {:ok, number, type} when number == 0 and map_size(type) == 0 ->
+          {:ok, 0.0}
+
+        {:ok, special, %{length: 1} = type}
+        when special in [:infinity, :negative_infinity] and map_size(type) == 1 ->
+          throw(
+            {:render_resource_limit,
+             Diagnostics.error(
+               :style,
+               :resource_limit_exceeded,
+               "source-size arithmetic is outside the finite numeric range",
+               module: __MODULE__,
+               source: value
+             )}
+          )
+
+        _ ->
+          :error
       end
 
     case parsed do
@@ -382,47 +397,26 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
     )
   end
 
-  # Spaces inside parenthesized components are retained for media conditions and math.
-  defp top_level_terms(value, math?) do
-    {terms, current, _depth} =
-      value
-      |> String.codepoints()
-      |> Enum.reduce({[], [], 0}, fn char, {terms, current, depth} ->
-        cond do
-          char == "(" ->
-            {terms, [char | current], depth + 1}
-
-          char == ")" ->
-            {terms, [char | current], depth - 1}
-
-          math? and char in ["*", "/"] and depth == 0 ->
-            terms =
-              if current == [],
-                do: terms,
-                else: [current |> Enum.reverse() |> Enum.join() | terms]
-
-            {[char | terms], [], depth}
-
-          char in [" ", "\t", "\n", "\r", "\f"] and depth == 0 ->
-            if current == [],
-              do: {terms, [], depth},
-              else: {[current |> Enum.reverse() |> Enum.join() | terms], [], depth}
-
-          true ->
-            {terms, [char | current], depth}
-        end
-      end)
-
-    terms = if current == [], do: terms, else: [current |> Enum.reverse() |> Enum.join() | terms]
-    Enum.reverse(terms)
-  end
-
   defp feature(value, context) do
     value = HtmlValidator.trim_css_whitespace(value)
 
+    value =
+      value
+      |> NativeElixirPdfUtilities.Validators.CssMathValidator.component_terms(:ranges)
+      |> Enum.map_join(" ", fn token ->
+        case HtmlValidator.parse_css_identifier(token) do
+          {:ok, identifier, ""} -> String.downcase(identifier, :ascii)
+          {:ok, identifier, ":" <> rest} -> String.downcase(identifier, :ascii) <> ":" <> rest
+          _ -> token
+        end
+      end)
+
     case Regex.run(~r/\A([a-z-]+)\s*:\s*(.+)\z/s, value) do
       [_, "orientation", orientation] ->
-        orientation == if(context.width > context.height, do: "landscape", else: "portrait")
+        if orientation in ~w(landscape portrait),
+          do:
+            orientation == if(context.width > context.height, do: "landscape", else: "portrait"),
+          else: :unknown
 
       [_, name, expected] ->
         {comparison, name} =
@@ -435,7 +429,7 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
         with {:ok, actual, expected} <- feature_values(name, expected, context) do
           compare(actual, expected, comparison)
         else
-          _ -> false
+          _ -> :unknown
         end
 
       _ ->
@@ -449,7 +443,7 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
         with {:ok, actual, expected} <- feature_values(name, expected, context) do
           compare(actual, expected, operator)
         else
-          _ -> false
+          _ -> :unknown
         end
 
       _ ->
@@ -462,14 +456,14 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
                  {:ok, _, second} <- feature_values(name, second_expected, context) do
               compare(first, actual, operator) and compare(actual, second, second_operator)
             else
-              _ -> false
+              _ -> :unknown
             end
 
           [_, expected, operator, name] ->
             with {:ok, actual, expected} <- feature_values(name, expected, context) do
               compare(expected, actual, operator)
             else
-              _ -> false
+              _ -> :unknown
             end
 
           _ ->
@@ -478,7 +472,7 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
               "height" -> context.height > 0
               "aspect-ratio" -> context.width > 0 and context.height > 0
               name when name in ~w(resolution color) -> true
-              _ -> false
+              _ -> :unknown
             end
         end
     end
@@ -528,152 +522,6 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
       ">" -> actual > expected
       "<" -> actual < expected
       _ -> actual == expected
-    end
-  end
-
-  defp length_value(value, context, depth) do
-    case math_value(value, context, depth) do
-      {:ok, value, :length} -> {:ok, value}
-      {:ok, value, :number} when value == 0 -> {:ok, value}
-      _ -> :error
-    end
-  end
-
-  defp math_value(value, context, depth) do
-    HtmlValidator.check_render_resource(:max_media_query_depth, depth, :style)
-    terms = top_level_terms(value, true)
-
-    additive =
-      terms |> Enum.with_index() |> Enum.filter(fn {t, _} -> t in ["+", "-"] end) |> List.last()
-
-    multiplicative =
-      terms |> Enum.with_index() |> Enum.filter(fn {t, _} -> t in ["*", "/"] end) |> List.last()
-
-    case additive || multiplicative do
-      {operator, index} ->
-        with true <- index > 0 and index < length(terms) - 1,
-             {:ok, left, left_kind} <-
-               math_value(terms |> Enum.take(index) |> Enum.join(" "), context, depth + 1),
-             {:ok, right, right_kind} <-
-               math_value(terms |> Enum.drop(index + 1) |> Enum.join(" "), context, depth + 1) do
-          case {operator, left_kind, right_kind} do
-            {op, kind, kind} when op in ["+", "-"] ->
-              {:ok, if(op == "+", do: left + right, else: left - right), kind}
-
-            {"*", :number, kind} ->
-              {:ok, left * right, kind}
-
-            {"*", kind, :number} ->
-              {:ok, left * right, kind}
-
-            {"/", kind, :number} when right != 0 ->
-              {:ok, left / right, kind}
-
-            _ ->
-              :error
-          end
-        else
-          _ -> :error
-        end
-
-      nil ->
-        case Regex.run(~r/\A(calc|min|max|clamp)\((.*)\)\z/s, value) do
-          [_, function, arguments] ->
-            parsed =
-              arguments
-              |> HtmlValidator.split_css_comma()
-              |> Enum.map(&math_value(&1, context, depth + 1))
-
-            kinds =
-              Enum.map(parsed, fn item -> if match?({:ok, _, _}, item), do: elem(item, 2) end)
-
-            if parsed != [] and Enum.uniq(kinds) in [[:length], [:number]] do
-              numbers = Enum.map(parsed, &elem(&1, 1))
-
-              result =
-                case {function, numbers} do
-                  {"min", [_ | _]} -> {:ok, Enum.min(numbers)}
-                  {"max", [_ | _]} -> {:ok, Enum.max(numbers)}
-                  {"clamp", [low, preferred, high]} -> {:ok, max(low, min(preferred, high))}
-                  {"calc", [number]} -> {:ok, number}
-                  _ -> :error
-                end
-
-              case result do
-                {:ok, number} -> {:ok, number, hd(kinds)}
-                _ -> :error
-              end
-            else
-              :error
-            end
-
-          _ ->
-            if String.starts_with?(value, "(") and String.ends_with?(value, ")") do
-              math_value(String.slice(value, 1, String.length(value) - 2), context, depth + 1)
-            else
-              case HtmlValidator.parse_css_number(value) do
-                {number, unit} ->
-                  scale =
-                    case unit do
-                      unit when unit in ~w(vw svw lvw dvw vi svi lvi dvi) ->
-                        context.width / 100
-
-                      unit when unit in ~w(vh svh lvh dvh vb svb lvb dvb) ->
-                        context.height / 100
-
-                      unit when unit in ~w(vmin svmin lvmin dvmin) ->
-                        min(context.width, context.height) / 100
-
-                      unit when unit in ~w(vmax svmax lvmax dvmax) ->
-                        max(context.width, context.height) / 100
-
-                      unit when unit in ~w(em rem) ->
-                        16.0
-
-                      unit when unit in ~w(ex rex ch rch cap rcap ic ric lh rlh) ->
-                        key = unit |> String.trim_leading("r") |> String.to_existing_atom()
-                        get_in(context, [:source_metrics, key])
-
-                      "px" ->
-                        1.0
-
-                      "pt" ->
-                        1 / 0.75
-
-                      "pc" ->
-                        16.0
-
-                      "in" ->
-                        96.0
-
-                      "cm" ->
-                        96 / 2.54
-
-                      "mm" ->
-                        96 / 25.4
-
-                      "q" ->
-                        96 / 101.6
-
-                      "" ->
-                        1.0
-
-                      _ ->
-                        nil
-                    end
-
-                  with true <- is_number(scale),
-                       {:ok, value} <- HtmlValidator.normalize_geometry_number(number * scale) do
-                    {:ok, value, if(unit == "", do: :number, else: :length)}
-                  else
-                    _ -> :error
-                  end
-
-                _ ->
-                  :error
-              end
-            end
-        end
     end
   end
 end
