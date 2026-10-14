@@ -70,6 +70,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialChildMimeTest do
     end)
   end
 
+  test "a fitting literal document uses its full initial width before wrapping", %{root: root} do
+    File.write!(Path.join(root, "fitting.txt"), "<b>Literal & markup</b>\nSecond line\n")
+
+    ResourceContext.run([authorization_root: root], HtmlValidator.new_image_budget(), fn parent ->
+      assert {:ok, prepared} = EmbeddedViewport.prepare_iframe_document("fitting.txt", parent)
+      assert prepared.initial_document_kind == :text
+      geometry = EmbeddedViewportValidator.initial_viewport(prepared, 90, 60)
+      refute geometry.vertical
+      assert geometry.client_width == 90
+      assert {:ok, group} = EmbeddedViewport.layout(prepared, 90, 60)
+      assert group.client_rect == %{x: 0.0, y: 0.0, width: 90.0, height: 60.0}
+      assert Enum.count(group.boxes, &(&1.type == :text)) == 3
+
+      assert Enum.map_join(Enum.filter(group.boxes, &(&1.type == :text)), & &1.text) =~
+               "Second line"
+    end)
+  end
+
   test "PNG and JPEG initial documents keep natural block geometry and exact authorized bytes", %{
     root: root,
     png: png
@@ -232,7 +250,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialChildMimeTest do
       assert {:ok, dom} = HtmlParser.parse_document_detailed(source)
       assert {:ok, tree} = Style.compute_detailed(dom)
       assert {:ok, layout} = Layout.layout_viewport(tree, 90, 30)
-      assert layout.boxes == []
+      assert [%{type: :flow_marker, role: :explicit_block_space, height: 30.0}] = layout.boxes
+
+      assert {:ok, blank_pdf} =
+               NativeElixirPdfUtilities.HtmlToPdf.PdfWriter.render([
+                 %{boxes: layout.boxes, size: {90, 30}}
+               ])
+
+      assert {:error, {:no_extractable_text, _}} = Text.extract(blank_pdf)
+
+      assert {:ok, blank_form} =
+               NativeElixirPdfUtilities.Validators.PdfFormValidator.prepare_source(blank_pdf)
+
+      assert String.trim(blank_form.stream) == ""
       assert layout.content_height == 45.0
       assert {:ok, prepared} = EmbeddedViewport.prepare_iframe_document({:srcdoc, source}, parent)
       assert {:ok, group} = EmbeddedViewport.layout(prepared, 90, 30)

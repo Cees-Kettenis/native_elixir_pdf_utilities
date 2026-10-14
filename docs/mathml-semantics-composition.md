@@ -13,3 +13,34 @@ The mathml_annotation_composition.html fixture checks sized multiline owners, HT
 Dependencies and remaining integration work are finite. MathML grouping/display-contents behavior, fractions/radicals with ordinary CSS schemata, matrix owner boxes and MathML link geometry remain with their assigned owners. SVG image/resource support uses the existing scene resource owner; this batch adds no SVG resolver. The original standalone-annotation Core/Blink disagreement still needs a milestone acceptance decision, while complete browser parity, the quality matrix, coverage and performance remain deferred until feature integration ends.
 
 References: [MathML Core semantics and presentation](https://www.w3.org/TR/mathml-core/#semantics-and-presentation), [MathML Core visual formatting](https://www.w3.org/TR/mathml-core/#visual-formatting-model), and the preserved original parity artifacts in the lane packet.
+
+Default math-formatting `mi`, `mn`, `mtext`, `ms`, `annotation` and
+`annotation-xml` owners now resolve shared CSS dimensions, min/max constraints
+and box sizing. Relative placement, clipping and decoded background images
+use the genuine source owner around unchanged token glyphs or HTML/SVG child
+paint. Definite owner content width supplies the descendant CSS percentage and
+line-wrapping basis. The first real child baseline remains authoritative;
+ordinary CSS groups consume completed token edges once. Hidden annotations
+retain initial-selection and no-asset-allocation behavior. Standalone annotation
+omission by Chromium remains the preserved original compatibility gap.
+
+Block-equation percentage owners now retain the actual source for placement
+remeasurement. The canonical Math layout validator discovers percentage
+dependencies in ordinary sizes and validated CSS calculations; table cells
+keep their separate allocated-width boundary. An enclosing 200pt box therefore
+supplies the real basis for a token `width:calc(50% + 10pt)`, producing 110pt.
+The table validator delegates this source-context policy instead of maintaining
+a second interpretation.
+
+Direct HTML children of default Math token owners use the canonical Math
+parent formatting context, including source-preserving blockification. Source
+fragment targets on token, group, operator and radical owners reach the actual
+native paint box and scoped PDF destination. The anonymous inner atom does
+not duplicate the target. Decoded image validity is checked by the shared
+writer validator for both token and table backgrounds.
+
+The new combined token-owner fixture retains the standard 1% browser gates.
+Its first row of sized and bordered token owners has no differing pixels, but
+the complete mixed HTML/SVG/nested-fraction fixture remains above the gate.
+That physical comparison remains open. The original annotation composition,
+alternatives and SVG/flex fixtures retain their logical and pixel checks.

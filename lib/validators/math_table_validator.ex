@@ -127,9 +127,11 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
                    end
                  end
                ) do
-          if tag == "mtable",
-            do: validate_table_style(style),
-            else: validate_cell_style(style, tag)
+          with :ok <- MathLayoutValidator.validate_background_style(style, tag) do
+            if tag == "mtable",
+              do: validate_table_style(style),
+              else: validate_cell_style(style, tag)
+          end
         else
           {:error, {reason, diagnostic}} ->
             {:error, {reason, Diagnostics.with_context(diagnostic, source: tag)}}
@@ -140,73 +142,11 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
     end
   end
 
-  @doc "Identifies table width expressions that depend on the actual enclosing Math block width."
+  @doc "Delegates actual Math block width dependencies to the canonical Math layout authority."
   @spec prepare_block_flow_dependency(term()) ::
           {:ok, boolean()} | {:error, Diagnostics.detailed_error()}
-  def prepare_block_flow_dependency(node) do
-    MathLayout.with_context(fn -> inline_size_dependency(node, 0) end)
-  end
-
-  defp inline_size_dependency(node, depth) do
-    HtmlValidator.reserve_render_resource(:max_css_work, 1, :layout)
-
-    if depth > Limits.get(:max_html_depth) do
-      Diagnostics.error(
-        :layout,
-        :resource_limit_exceeded,
-        "Math block width dependency exceeds max_html_depth",
-        operation: :measure_math,
-        module: __MODULE__,
-        source: "math"
-      )
-    else
-      case node do
-        %{type: :element, namespace: :mathml, tag: "mtable", style: style} when is_map(style) ->
-          with :ok <- validate_style(style, "mtable") do
-            # Cell contents have their own allocated containing block. A nested
-            # table percentage must not use the outer Math block's width.
-            {:ok,
-             Enum.any?(
-               [:width, :min_width, :max_width],
-               &percentage_size?(Map.get(style, &1))
-             )}
-          end
-
-        %{type: :element, children: children} ->
-          inline_children_dependency(children, depth + 1, false)
-
-        %{type: :text} ->
-          {:ok, false}
-
-        _ ->
-          failure("Math block width dependency requires actual styled source nodes", "math")
-      end
-    end
-  end
-
-  defp inline_children_dependency(children, depth, dependent) do
-    case children do
-      [] ->
-        {:ok, dependent}
-
-      [node | rest] ->
-        with {:ok, child_dependent} <- inline_size_dependency(node, depth) do
-          inline_children_dependency(rest, depth, dependent or child_dependent)
-        end
-
-      _ ->
-        failure("Math block width dependency requires proper source child lists", "math")
-    end
-  end
-
-  # This consumes the size grammar already admitted by the shared validator.
-  defp percentage_size?(value) do
-    case value do
-      {:percent, _} -> true
-      {:min, values} -> Enum.any?(values, &percentage_size?/1)
-      _ -> false
-    end
-  end
+  def prepare_block_flow_dependency(node),
+    do: MathLayoutValidator.prepare_block_flow_dependency(node)
 
   @doc "Prepares a natural MathML matrix using shared CSS table structure and span validation."
   @spec prepare(term(), map()) :: {:ok, map()} | {:error, Diagnostics.detailed_error()}
@@ -226,6 +166,20 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
                    Map.get(context, :available_inline_size)
                  ),
                :ok <- validate_style(style, "mtable"),
+               style =
+                 (if Map.get(style, :_math_element) == {:mathml, "mtable"} do
+                    # Match the existing ordinary CSS table used-value rule.
+                    # Blink stores CSS border-spacing as integral CSS pixels;
+                    # source declarations and symbolic point matrices stay raw.
+                    {horizontal, vertical} = Map.get(style, :border_spacing, {0.0, 0.0})
+
+                    Map.put(style, :border_spacing, {
+                      Float.floor(horizontal / 0.75) * 0.75,
+                      Float.floor(vertical / 0.75) * 0.75
+                    })
+                  else
+                    style
+                  end),
                {:ok, projected} <- prepare_nodes(visible_nodes(children)),
                {:ok, table} <- HtmlTableValidator.form(projected),
                {:ok, {rows, row_boxes}} <- prepare_cells(table.rows, context),
@@ -620,7 +574,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
     if not is_number(size) or size < 0 or size > Limits.get(:max_css_numeric_magnitude) or
          not bounded_spacing? or not bounded_edges? or not zero_margins? or
          Map.get(style, :border_collapse, :separate) != :separate or
-         Map.get(style, :background_image) != nil or Map.get(style, :table_layout, :auto) != :auto do
+         Map.get(style, :table_layout, :auto) != :auto do
       failure(
         "MathML matrices require bounded separate-border box edges, continuous spacing, zero margins and automatic table layout",
         "mtable"
@@ -630,8 +584,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
     end
   end
 
-  # Rows contribute solid backgrounds, while their CSS padding and borders do not
-  # participate in the admitted cell geometry.
+  # Separate-border rows paint backgrounds over occupied cell rectangles. Their
+  # CSS padding and borders do not participate in row or cell geometry.
   defp validate_cell_style(style, tag) do
     padding = Map.get(style, :padding, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0})
 
@@ -649,8 +603,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
         Enum.all?([:top, :right, :bottom, :left], fn edge ->
           value = Map.get(border, edge)
 
-          is_number(value) and value >= 0 and value <= Limits.get(:max_css_numeric_magnitude) and
-            (tag == "mtd" or value == 0)
+          is_number(value) and value >= 0 and value <= Limits.get(:max_css_numeric_magnitude)
         end)
 
     margin = Map.get(style, :margin, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0})
@@ -659,8 +612,6 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
       is_map(margin) and Enum.all?([:top, :right, :bottom, :left], &(Map.get(margin, &1) == 0))
 
     if not bounded_padding? or not bounded_border? or not zero_margins? or
-         (tag == "mtr" and Enum.any?(Map.values(padding), &(&1 != 0))) or
-         Map.get(style, :background_image) != nil or
          Map.get(style, :html_target) != nil or
          Map.get(style, :position, :static) != :static or
          Map.get(style, :overflow, :visible) != :visible or
@@ -668,7 +619,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
          Map.get(style, :vertical_align, :baseline) not in [:baseline, :top, :middle, :bottom] or
          Map.get(style, :text_align, :center) not in [:left, :right, :center] do
       failure(
-        "MathML cells require bounded padding/borders and table alignment; row borders, images and positioned/clipped cells remain unsupported",
+        "MathML cells require bounded padding/borders and table alignment; positioned/clipped cells remain unsupported",
         tag
       )
     else
@@ -1081,13 +1032,12 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
             target >= intrinsic ->
               column.width
 
-            intrinsic > minimum ->
+            true ->
+              # target >= minimum, so a target below intrinsic implies that
+              # intrinsic > minimum. There is no zero-denominator branch.
               column.min_content_width +
                 (target - minimum) * (column.width - column.min_content_width) /
                   (intrinsic - minimum)
-
-            true ->
-              column.width
           end
 
         Map.put(column, :width, width)
@@ -1181,17 +1131,17 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
              }}
           end)
 
-        case HtmlTableValidator.prepare_baseline_geometry(projected, metrics, vertical_spacing) do
-          {:ok, allocated} ->
-            Enum.zip_with(
-              allocated.heights,
-              allocated.baselines,
-              &%{ascent: &2, descent: &1 - &2}
-            )
+        # Canonical span placements and validated cell geometry establish this
+        # internal projection's shape. Resource failures propagate through the
+        # existing outer Math render scope, rather than returning a second result.
+        {:ok, allocated} =
+          HtmlTableValidator.prepare_baseline_geometry(projected, metrics, vertical_spacing)
 
-          error ->
-            throw({:math_layout_error, error})
-        end
+        Enum.zip_with(
+          allocated.heights,
+          allocated.baselines,
+          &%{ascent: &2, descent: &1 - &2}
+        )
       else
         row_sizes
       end
@@ -1217,7 +1167,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
         %{row | descent: row.descent + extra}
       end)
 
-    {column_offsets, _} =
+    {column_offsets, column_extent} =
       Enum.map_reduce(columns, horizontal_spacing, fn column, offset ->
         {offset, offset + column.width + horizontal_spacing}
       end)
@@ -1313,11 +1263,15 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
         }
       end)
 
+    background_x = if columns == [], do: 0.0, else: elem(column_offsets, 0)
+    background_width = max(column_extent - 2 * horizontal_spacing, 0.0)
+
     row_backgrounds =
       Enum.flat_map(Enum.with_index(row_boxes), fn {row_box, index} ->
         HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, :layout)
 
-        if Map.get(row_box.style, :background_color) not in [nil, :transparent] do
+        if Map.get(row_box.style, :background_color) not in [nil, :transparent] or
+             Map.get(row_box.style, :background_image) != nil do
           covered =
             if Enum.any?(cells, &(Map.get(&1.prepared, :rowspan, 1) > 1)) do
               HtmlValidator.reserve_render_resource(:max_table_grid_work, length(cells), :layout)
@@ -1337,6 +1291,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
 
             %{
               x: elem(column_offsets, column_index),
+              background_x: background_x,
+              background_width: background_width,
               y: ascent - elem(row_offsets, index) - row.ascent,
               width:
                 columns
@@ -1346,7 +1302,14 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
                 |> Kernel.+(horizontal_spacing * (Map.get(cell.prepared, :colspan, 1) - 1)),
               ascent: row.ascent,
               descent: row.descent,
-              style: Map.put(row_box.style, :_math_source, row_box.source)
+              background_style:
+                row_box.style
+                |> Map.put(:background_color, nil)
+                |> Map.put(:border_styles, %{top: :none, right: :none, bottom: :none, left: :none}),
+              style:
+                row_box.style
+                |> Map.merge(%{padding: zero, border_widths: zero})
+                |> Map.put(:_math_source, row_box.source)
             }
           end)
         else
@@ -1398,6 +1361,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
 
     owner_painted? =
       Map.get(style, :background_color) not in [nil, :transparent] or
+        Map.get(style, :background_image) != nil or
         Enum.any?(Map.values(border), &(&1 > 0))
 
     result =

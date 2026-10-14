@@ -182,6 +182,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyLayoutTest do
     assert diagnostic.message =~ "layout"
   end
 
+  test "ruby centers the source flow extent independently of relative child paint offsets" do
+    measured =
+      for offset <- [0, 7] do
+        assert {:ok, dom} =
+                 HtmlParser.parse_detailed(
+                   "<ruby><rb>A</rb><rb style='position:relative;left:#{offset}pt'>B</rb><rt>a</rt><rt>b</rt></ruby>"
+                 )
+
+        assert {:ok, %{children: [ruby]}} = Style.compute_detailed(dom)
+        assert {:ok, [group | _]} = RubyLayout.measure(ruby, nil)
+        group
+      end
+
+    [ordinary, shifted] = measured
+    assert ordinary.width == shifted.width
+    assert ordinary.base_width == shifted.base_width
+    assert ordinary.annotation_widths == shifted.annotation_widths
+    before = Map.new(ordinary.boxes, &{Map.get(&1, :text), &1})
+    after_boxes = Map.new(shifted.boxes, &{Map.get(&1, :text), &1})
+    assert_in_delta after_boxes["B"].x - before["B"].x, 7, 0.001
+    assert after_boxes["A"].x == before["A"].x
+    assert after_boxes["a"].x == before["a"].x
+  end
+
   test "explicit base sequences assign direct annotations in order" do
     assert {:ok, dom} =
              HtmlParser.parse_detailed(

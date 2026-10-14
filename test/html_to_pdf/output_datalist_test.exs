@@ -194,15 +194,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OutputDatalistTest do
     assert {:ok, _} = Forms.flatten(pdf)
   end
 
-  test "inapplicable output attributes and malformed content return public diagnostics" do
+  test "unsupported output attributes and malformed content retain public diagnostics" do
     for html <- [
           "<output value=1>2</output>",
-          "<output disabled>2</output>",
-          "<output required>2</output>",
           "<output><div>Block</div></output>",
           "<datalist name=choices></datalist>",
-          "<datalist><option value=x></option><span>Mixed</span></datalist>",
-          "<input type=password list=choices>"
+          "<datalist><option value=x></option><span>Mixed</span></datalist>"
         ] do
       assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, forms: :static)
       assert diagnostic.stage == :html and diagnostic.operation == :render
@@ -210,18 +207,182 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OutputDatalistTest do
     end
   end
 
-  test "visible datalist overrides, editable suggestion art and unresolved PDF actions remain diagnosed" do
-    for html <- [
-          "<datalist style=display:block><option value=x></option></datalist>",
-          "<input list=choices><datalist id=choices><option value=x></option></datalist>"
-        ] do
-      assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, forms: :static)
-      assert diagnostic.stage == :style and diagnostic.operation == :compute
+  test "inapplicable output booleans retain authored metadata and actual text without fields or resources" do
+    for html <- ["<output disabled>2</output>", "<output required>2</output>"] do
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, %{children: [output]}} = Style.compute_detailed(dom)
+      assert output.attributes == hd(dom.children).attributes
+      assert output.style._output_state.value == "2"
+      refute output.style._output_state.disabled
+      constraint = output.style._output_state.constraint_validation
+      assert constraint.valid
+      refute constraint.will_validate
+      assert Enum.all?(constraint.checks, fn {_name, violated?} -> not violated? end)
 
-      assert diagnostic.source in ["datalist", "input/list"] and
-               diagnostic.message =~ "not yet supported"
+      for mode <- [:static, :interactive] do
+        opts = [
+          forms: mode,
+          asset_resolver: fn request -> flunk("output metadata fetched #{inspect(request)}") end
+        ]
+
+        assert {:ok, pdf} = HtmlToPdf.render(html, opts)
+        assert {:ok, reference} = HtmlToPdf.render("<output>2</output>", opts)
+        assert pdf == reference
+        assert {:ok, []} = Forms.fields(pdf)
+        assert {:ok, text} = Text.extract(pdf, layout: false)
+        assert String.trim(text) == "2"
+      end
     end
+  end
 
+  test "password list is source metadata without a datalist association or selection action" do
+    html = "<input type=password list=choices>"
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert hd(dom.children).attributes["list"] == "choices"
+    refute Map.has_key?(HtmlFormValidator.initial_control_attributes(hd(dom.children)), "list")
+    assert {:ok, %{children: [password]}} = Style.compute_detailed(dom)
+    assert password.style._form_control.initial_state.value == ""
+    assert Map.get(password.style._form_control.initial_state, :datalist) == nil
+
+    for mode <- [:static, :interactive] do
+      opts = [
+        forms: mode,
+        asset_resolver: fn request -> flunk("password list fetched #{inspect(request)}") end
+      ]
+
+      assert {:ok, pdf} = HtmlToPdf.render(html, opts)
+      assert {:ok, reference} = HtmlToPdf.render("<input type=password>", opts)
+      assert pdf == reference
+      assert {:ok, fields} = Forms.fields(pdf)
+
+      if mode == :interactive do
+        assert [field] = fields
+        assert field.type == :text and field.value == ""
+      else
+        assert fields == []
+      end
+    end
+  end
+
+  test "closed mutable datalist inputs paint their authored value while interactive suggestion actions stay diagnosed" do
+    html =
+      "<input name=entry list=choices value=authored><datalist id=choices><option value=other>Other</option></datalist>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, %{children: [entry, list]}} = Style.compute_detailed(dom)
+    assert entry.style._form_control.initial_state.value == "authored"
+    refute entry.style._form_control.initial_state.readonly
+    assert entry.style._form_control.initial_state.datalist.source_id == list.node_id
+    assert list.style.display == :none and list.children == []
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(html,
+               forms: :static,
+               asset_resolver: fn request ->
+                 flunk("hidden suggestions fetched #{inspect(request)}")
+               end
+             )
+
+    assert {:ok, []} = Forms.fields(pdf)
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    assert String.trim(text) == "authored"
+    assert {:error, {:unsupported_form, diagnostic}} = HtmlToPdf.render(html)
+    assert diagnostic.stage == :forms and diagnostic.source == "input/list"
+    assert diagnostic.message =~ "suggestions" and diagnostic.operation == :write_pdf
+  end
+
+  test "authored visible datalist fallback retains real descendant controls and barred validity" do
+    html =
+      "<datalist id=choices style='display:block'><label>Fallback <input name=inner required value=Visible></label></datalist>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, %{children: [list]}} = Style.compute_detailed(dom)
+    assert list.style.display == :block
+    input = Enum.find(all_nodes(list.children), &(Map.get(&1, :tag) == "input"))
+    constraint = input.style._form_control.initial_state.constraint_validation
+    refute constraint.will_validate
+    assert constraint.valid
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert {:ok, [field]} = Forms.fields(pdf)
+    assert field.name == "inner" and field.value == "Visible" and not field.read_only
+    assert {:ok, flattened} = Forms.flatten(pdf)
+    assert {:ok, text} = Text.extract(flattened, layout: false)
+    assert text =~ "Fallback" and text =~ "Visible"
+  end
+
+  test "authored visible datalist options paint labels without inventing selection widgets" do
+    html =
+      "<datalist style='display:block'><option value=one label='One label'>Original text</option><option disabled value=two>Two label</option></datalist>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, %{children: [list]}} = Style.compute_detailed(dom)
+    assert Enum.map(list.style._datalist_state.options, & &1.value) == ["one", "two"]
+    assert Enum.map(list.style._datalist_state.suggestions, & &1.value) == ["one"]
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert {:ok, []} = Forms.fields(pdf)
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    assert text =~ "One label" and text =~ "Two label"
+    refute text =~ "Original text"
+  end
+
+  test "qualified option attributes stay source-visible while canonical labels values and states use unqualified metadata" do
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<datalist id=choices style='display:block'><option value=Wrong label=Wrong disabled selected>Right</option></datalist><input name=entry list=choices value=Free readonly>"
+             )
+
+    [list, entry] = dom.children
+    [option] = list.children
+
+    option =
+      Map.put(
+        option,
+        :attribute_namespaces,
+        Map.new(~w(value label disabled selected), &{&1, "urn:other"})
+      )
+
+    supplied = %{dom | children: [%{list | children: [option]}, entry]}
+    assert {:ok, %{children: [styled_list, styled_entry]}} = Style.compute_detailed(supplied)
+
+    assert [%{value: "Right", label: "Right", disabled: false}] =
+             styled_list.style._datalist_state.options
+
+    assert [%{value: "Right"}] = styled_list.style._datalist_state.suggestions
+    assert hd(styled_list.children).attributes == option.attributes
+    assert hd(hd(styled_list.children).children).text == "Right"
+    prepared = HtmlFormValidator.prepare_initial_nodes(supplied.children)
+    prepared_option = hd(hd(prepared).children)
+    assert prepared_option._initial_option_label == "Right"
+    refute prepared_option._initial_selected
+    refute prepared_option._initial_option_disabled
+    assert styled_entry.style._form_control.initial_state.value == "Free"
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<select name=choice><option value=a>A</option><option value=Wrong label=Wrong selected disabled>B</option></select>"
+             )
+
+    [select] = dom.children
+    [first, second] = select.children
+
+    second =
+      Map.put(
+        second,
+        :attribute_namespaces,
+        Map.new(~w(value label selected disabled), &{&1, "urn:other"})
+      )
+
+    supplied = %{dom | children: [%{select | children: [first, second]}]}
+    assert {:ok, %{children: [styled_select]}} = Style.compute_detailed(supplied)
+    assert styled_select.style._select_state.value == "a"
+
+    assert [
+             %{value: "a", selected: true},
+             %{value: "B", label: "B", selected: false, disabled: false}
+           ] = styled_select.style._select_state.choices
+  end
+
+  test "readonly prepared transport survives source-only mutation and unresolved associations keep text fields" do
     for html <- [
           "<input name=entry list=missing value=authored>",
           "<input name=entry list=blocked value=authored><span id=blocked></span><datalist id=blocked><option value=other></option></datalist>"
@@ -250,21 +411,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OutputDatalistTest do
 
     assert {:ok, pages} = NativeElixirPdfUtilities.HtmlToPdf.Pagination.paginate(layout)
 
-    assert {:error, {:unsupported_form, diagnostic}} =
-             HtmlFormValidator.prepare(pages, forms: :interactive)
+    # Serialization consumes the canonical initial state. A raw source-only
+    # mutation cannot reinterpret a control that was already prepared readonly.
+    assert mutable.style._form_control.initial_state.readonly
+    assert {:ok, _pages, [field]} = HtmlFormValidator.prepare(pages, forms: :interactive)
+    assert field.value == "authored" and Bitwise.band(field.flags, 1) == 1
 
-    assert diagnostic.stage == :forms and diagnostic.source == "input/list"
+    assert {:ok, pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.PdfWriter.render(pages, forms: :interactive)
+
+    assert {:ok, [serialized]} = Forms.fields(pdf)
+    assert serialized.value == "authored" and serialized.read_only
+    assert {:error, {:read_only_form_field, diagnostic}} = Forms.fill(pdf, %{"entry" => "other"})
+    assert diagnostic.stage == :forms and diagnostic.source == "entry"
+    assert {:ok, flattened} = Forms.flatten(pdf)
+    assert {:ok, text} = Text.extract(flattened, layout: false)
+    assert String.trim(text) == "authored"
 
     assert {:ok, _} =
              HtmlToPdf.render(
                "<input list=choices style=display:none><datalist id=choices><option value=x></option></datalist>"
              )
 
-    assert {:error, {:unsupported_html, %{source: "range/list"}}} =
+    assert {:ok, range_pdf} =
              HtmlToPdf.render(
                "<input type=range list=choices><datalist id=choices><option value=50></option></datalist>",
                forms: :static
              )
+
+    assert {:ok, []} = Forms.fields(range_pdf)
   end
 
   test "source-only style observation uses the same source associations without changing original identities" do

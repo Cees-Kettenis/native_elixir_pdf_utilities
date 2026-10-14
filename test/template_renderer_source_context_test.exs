@@ -316,6 +316,144 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererSourceContextTest 
     )
   end
 
+  test "actual unavailable font assets propagate source diagnostics without candidate ownership",
+       %{root: root, opts: opts} do
+    css = "@font-face{font-family:Chosen;src:url('missing.ttf')}p{font-family:Chosen}"
+    {source, tree, parent, origin} = fixture("<p>Chosen</p>", css)
+    opts = Keyword.put(opts, :asset_resolver, fn _ -> {:error, :unavailable} end)
+
+    assert {:error, {reason, diagnostic}} =
+             prepare(root, source, tree, parent, origin, opts, fn _, _ ->
+               flunk("unavailable font source must not issue evidence")
+             end)
+
+    assert diagnostic.reason == reason
+    assert diagnostic.stage == :asset
+    assert diagnostic.source == "missing.ttf"
+    assert diagnostic.message != ""
+    assert Process.get({TemplateRendererContextValidator, :preparation}) == nil
+  end
+
+  test "a genuine font loader policy change cannot issue expired candidate evidence", %{
+    root: root,
+    opts: opts
+  } do
+    alias NativeElixirPdfUtilities.Limits
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
+    css = "@font-face{font-family:Chosen;src:url('chosen.ttf')}p{font-family:Chosen}"
+    {source, tree, parent, origin} = fixture("<p>Chosen</p>", css)
+
+    opts =
+      Keyword.put(opts, :asset_resolver, fn _ ->
+        Limits.install(Map.update!(limits, :max_html_depth, &(&1 + 1)))
+        {:ok, data}
+      end)
+
+    assert {:error, {reason, diagnostic}} =
+             prepare(root, source, tree, parent, origin, opts, fn _, _ ->
+               flunk("expired font loading policy must not issue evidence")
+             end)
+
+    assert diagnostic.reason == reason
+    assert diagnostic.module == TemplateRendererContextValidator
+    assert diagnostic.stage == :font
+    assert diagnostic.message =~ "font"
+    assert Process.get({TemplateRendererContextValidator, :preparation}) == nil
+  end
+
+  test "font provider tickets expire when actual source preparation finishes", %{
+    root: root,
+    opts: opts
+  } do
+    data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
+    css = "@font-face{font-family:Chosen;src:url('chosen.ttf')}p{font-family:Chosen}"
+    {source, tree, parent, origin} = fixture("<p>Chosen</p>", css)
+
+    opts =
+      Keyword.put(opts, :asset_resolver, fn _ ->
+        preparation = Process.get({TemplateRendererContextValidator, :preparation})
+        [provider] = Map.keys(preparation.font_providers)
+        send(self(), {:issued_provider, provider})
+        {:ok, data}
+      end)
+
+    assert :checked =
+             prepare(root, source, tree, parent, origin, opts, fn _, evidence ->
+               assert Enum.any?(evidence.glyph_runs, fn {_, runs} ->
+                        Enum.any?(runs, &(&1.authored_text == "Chosen"))
+                      end)
+
+               :checked
+             end)
+
+    assert_received {:issued_provider, provider}
+    assert is_reference(provider)
+    assert Process.get({TemplateRendererContextValidator, :preparation}) == nil
+    config = %{family: "Chosen", data: [data]}
+
+    assert {:ok, {^config, nil}} =
+             TemplateRendererContextValidator.with_font_candidate(provider, 0, fn ->
+               {:ok, config}
+             end)
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             TemplateRendererContextValidator.font_registry_context(provider)
+
+    assert diagnostic.stage == :font and diagnostic.reason == :invalid_document
+    assert diagnostic.operation == :template_renderer_context
+    assert diagnostic.module == TemplateRendererContextValidator
+    assert diagnostic.message =~ "live normal preparation source owner"
+  end
+
+  test "a real resource callback cannot issue font candidate source ownership",
+       %{root: root, opts: opts, png: png} do
+    data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
+    css = "@font-face{font-family:Chosen;src:url('chosen.ttf')}p{font-family:Chosen}"
+    {source, tree, parent, origin} = fixture("<p>Chosen</p><img src='pixel.png'>", css)
+    config = %{family: "Chosen", data: [data]}
+
+    resolver = fn _ ->
+      preparation = Process.get({TemplateRendererContextValidator, :preparation})
+      [ticket] = Map.keys(preparation.font_providers)
+      assert is_map(preparation.resource_frame)
+
+      assert {:ok, {^config, nil}} =
+               TemplateRendererContextValidator.with_font_candidate(ticket, 99, fn ->
+                 {:ok, config}
+               end)
+
+      failed = {:error, :actual_candidate_failure}
+
+      assert ^failed =
+               TemplateRendererContextValidator.with_font_candidate(ticket, 0, fn -> failed end)
+
+      assert Process.get({TemplateRendererContextValidator, :preparation}).font_candidate_frame ==
+               nil
+
+      send(self(), :actual_font_candidate_checked)
+      {:ok, png}
+    end
+
+    opts =
+      opts
+      |> Keyword.put(:assets, %{"chosen.ttf" => {:bytes, data}})
+      |> Keyword.put(:asset_resolver, resolver)
+
+    assert :checked =
+             prepare(root, source, tree, parent, origin, opts, fn _plan, evidence ->
+               assert Enum.any?(evidence.glyph_runs, fn {_id, runs} ->
+                        Enum.any?(runs, &(&1.authored_text == "Chosen"))
+                      end)
+
+               :checked
+             end)
+
+    assert_received :actual_font_candidate_checked
+    assert Process.get({TemplateRendererContextValidator, :preparation}) == nil
+  end
+
   test "actual font selection keeps fallback candidate ordinals and original descriptor sources",
        %{root: root, opts: opts} do
     data =

@@ -1,0 +1,9 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@page{size:A4;margin:18px}html,body{margin:0;padding:0;font-family:"DejaVu Sans";font-size:14px;line-height:20px}
+.absent{flex:1 1 2em;display:inline math}
+@media screen{p{flex:1 2 calc(1rem + 2pt);display:block math}}
+.row{display:flex;width:200px;height:30px;gap:4px;margin-bottom:12px}
+.row div{height:30px;background-color:blue;flex:1 1 20px}.row .second{flex:2 1 20px;background-color:red}
+.mathbox{display:block math;width:60px;height:24px;background-color:orange;margin-bottom:12px}
+p{margin:0}
+</style></head><body><?marker name="A"><template for="A"><div class="row"><div></div><div class="second"></div></div><math class="mathbox"><mspace width="30px" height="12px"></mspace></math><p>Inserted</p></template></body></html>

@@ -1,0 +1,803 @@
+{
+  "family": "CJK Ruby Fixture",
+  "source_repository": "https://github.com/google/fonts",
+  "source_revision": "66928797f271fed5ee428544e7229685e2d90127",
+  "source_path": "ofl/notosansjp/NotoSansJP[wght].ttf",
+  "source_sha256": "c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f",
+  "static_instance_sha256": "6f78eeee7d1b287040f03b7619863b070736fe8144caf7d75c3a3bf5feadf4d4",
+  "fixture_sha256": "d521a73e436ea47876c2c8f165c7838dc0fa4f2a1d3218365916b6aab1a90fbb",
+  "license": "OFL-1.1",
+  "fonttools_version": "4.66.1",
+  "instance": {
+    "wght": 400
+  },
+  "units_per_em": 1000,
+  "glyphs": {
+    "U+0020": {
+      "advance": 224,
+      "left_side_bearing": 0,
+      "outline_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "outline_commands": 0
+    },
+    "U+0021": {
+      "advance": 323,
+      "left_side_bearing": 95,
+      "outline_sha256": "92f51957c82941b250d6b62943a55c662eef5877cc6ab216de96a9b8a2d9df05",
+      "outline_commands": 13
+    },
+    "U+0022": {
+      "advance": 474,
+      "left_side_bearing": 90,
+      "outline_sha256": "493f3dc998ad6557516985d18c2e55bc31fc3409b50ac43363efbb0ad1dd1bcf",
+      "outline_commands": 14
+    },
+    "U+0023": {
+      "advance": 555,
+      "left_side_bearing": 40,
+      "outline_sha256": "621ca7e3f81c78bd0160e96abf32b56f5206175adef2df82d46968f8cac000ba",
+      "outline_commands": 34
+    },
+    "U+0024": {
+      "advance": 555,
+      "left_side_bearing": 58,
+      "outline_sha256": "2e1435de234cd588a55c2bfc010645cd7af24e7364c7d804d667779a8e449208",
+      "outline_commands": 24
+    },
+    "U+0025": {
+      "advance": 921,
+      "left_side_bearing": 39,
+      "outline_sha256": "a52d648dbd62c1cd0a2bc078a4dc58d71a31b5e080b95b13ed17e8917e27f389",
+      "outline_commands": 29
+    },
+    "U+0026": {
+      "advance": 680,
+      "left_side_bearing": 36,
+      "outline_sha256": "a71051c94aaecf0adb2e47c1546528ae4a74977334f9e6631efd79f29bbb2f91",
+      "outline_commands": 20
+    },
+    "U+0027": {
+      "advance": 278,
+      "left_side_bearing": 90,
+      "outline_sha256": "8120b5e896d13ddf87d74b37b7ff9049142d85d2163f118c25f3f749ea4e73f1",
+      "outline_commands": 7
+    },
+    "U+0028": {
+      "advance": 338,
+      "left_side_bearing": 92,
+      "outline_sha256": "1580f9aafd1deeb8b291b841925e4de1c89437f5dd92b3e69daed0968e722e26",
+      "outline_commands": 7
+    },
+    "U+0029": {
+      "advance": 338,
+      "left_side_bearing": 42,
+      "outline_sha256": "544da2f298b03fcefe0185d77ebee43c81f78e3a934472a010feed00f98d1202",
+      "outline_commands": 8
+    },
+    "U+002A": {
+      "advance": 467,
+      "left_side_bearing": 65,
+      "outline_sha256": "05daa5e96cb84a5a28ddc85368740d476f473b5e2241a307b0cdf04597b4de42",
+      "outline_commands": 16
+    },
+    "U+002B": {
+      "advance": 555,
+      "left_side_bearing": 38,
+      "outline_sha256": "80181ba793c3816625c0e94813629f775cf33635da610f2680903e2ae38cd75e",
+      "outline_commands": 13
+    },
+    "U+002C": {
+      "advance": 278,
+      "left_side_bearing": 53,
+      "outline_sha256": "610c510bed2ca0a7e4eaef3cddacf211e8294f0fd3ff97c3ef346a44ddabbecb",
+      "outline_commands": 11
+    },
+    "U+002D": {
+      "advance": 347,
+      "left_side_bearing": 46,
+      "outline_sha256": "8bb8d6d05fe5465d273ad3118584ada7c65801c6071fd2dff49a21c0721dd71e",
+      "outline_commands": 5
+    },
+    "U+002E": {
+      "advance": 278,
+      "left_side_bearing": 73,
+      "outline_sha256": "de6452c6b0ad902d4d98d7d90fa01b161587ee75a764c0d15a18601140fda977",
+      "outline_commands": 6
+    },
+    "U+002F": {
+      "advance": 392,
+      "left_side_bearing": 11,
+      "outline_sha256": "28b4d7fde88e5f450e4b43caa9b242c488e295c393cd8d53fcf4e829754150f7",
+      "outline_commands": 5
+    },
+    "U+0030": {
+      "advance": 555,
+      "left_side_bearing": 50,
+      "outline_sha256": "8acede758eb667315abc3ae1bb3850b92649320d6ec6f07d989140d51fe2ffb0",
+      "outline_commands": 12
+    },
+    "U+0031": {
+      "advance": 555,
+      "left_side_bearing": 88,
+      "outline_sha256": "889fe58764485d74f6523aa52069a3739e50cf5fbfdd07e6db96fe8795575d65",
+      "outline_commands": 12
+    },
+    "U+0032": {
+      "advance": 555,
+      "left_side_bearing": 40,
+      "outline_sha256": "c27ac8b2451606e601f3ba4811aa395f6ca7fd0dd6c7c1cbfd93b7e444dd87e2",
+      "outline_commands": 13
+    },
+    "U+0033": {
+      "advance": 555,
+      "left_side_bearing": 29,
+      "outline_sha256": "87b576697f1ea7c8b32282c44e1fa98b0f47721a69f224dafe73d0b9e795d0b7",
+      "outline_commands": 18
+    },
+    "U+0034": {
+      "advance": 555,
+      "left_side_bearing": 20,
+      "outline_sha256": "9750eed6279c808362ba3008d345d699eb5c599b411a0e559a0857ef4af2fb6c",
+      "outline_commands": 14
+    },
+    "U+0035": {
+      "advance": 555,
+      "left_side_bearing": 27,
+      "outline_sha256": "644b4b67ebc1f51a005d1e319af0f6f93e153ce6e739bbef0da151b6c4a962ac",
+      "outline_commands": 17
+    },
+    "U+0036": {
+      "advance": 555,
+      "left_side_bearing": 56,
+      "outline_sha256": "686276efa366249aab8a685a59ae9cd472115b6fdd22501951fd1dccf2565698",
+      "outline_commands": 16
+    },
+    "U+0037": {
+      "advance": 555,
+      "left_side_bearing": 49,
+      "outline_sha256": "1ffec6170a3eb789d3a80a76af47f7339143f46ea596080de1714887e06045f2",
+      "outline_commands": 8
+    },
+    "U+0038": {
+      "advance": 555,
+      "left_side_bearing": 46,
+      "outline_sha256": "ab896ab49700762ce7825ff79bd802a90a73b81f6ddbb77b0d796dc50142ee84",
+      "outline_commands": 24
+    },
+    "U+0039": {
+      "advance": 555,
+      "left_side_bearing": 44,
+      "outline_sha256": "6f476b6772dc3f71eb3a8ddd7f899cd45b208120c96b652b5e437b486c24db80",
+      "outline_commands": 16
+    },
+    "U+003A": {
+      "advance": 278,
+      "left_side_bearing": 73,
+      "outline_sha256": "024047d0ad0833ee7b6ecc5c7dbcac9a875fb1301b2c1b7adfff83f525b1020b",
+      "outline_commands": 12
+    },
+    "U+003B": {
+      "advance": 278,
+      "left_side_bearing": 53,
+      "outline_sha256": "88d31574513dff0c049460a25787d28f4482c79ac35c163a26f41ce204774a76",
+      "outline_commands": 17
+    },
+    "U+003C": {
+      "advance": 555,
+      "left_side_bearing": 38,
+      "outline_sha256": "af01c7d98e526e59ecd241c7d3b1d9ec2b69c82634299ee0317cc57d7ee1411d",
+      "outline_commands": 11
+    },
+    "U+003D": {
+      "advance": 555,
+      "left_side_bearing": 38,
+      "outline_sha256": "3bc2e0569ceca20f413f80050616a08ea1c0700781c23107fb81066c3902c523",
+      "outline_commands": 10
+    },
+    "U+003E": {
+      "advance": 555,
+      "left_side_bearing": 38,
+      "outline_sha256": "677e5422e818d614fcc7bff8af6b6606ae6f5c9bfed5bb1f5cacfeb35bd47c2c",
+      "outline_commands": 11
+    },
+    "U+003F": {
+      "advance": 474,
+      "left_side_bearing": 43,
+      "outline_sha256": "47967328c5915907a32dabd23e2dc12783d5e2a6e8f012d8d05110b58f9d6f02",
+      "outline_commands": 15
+    },
+    "U+0040": {
+      "advance": 946,
+      "left_side_bearing": 56,
+      "outline_sha256": "14ef814f455824093ed1776ccb53f3fd38b55a11f0407e04cb1a159a1af054d0",
+      "outline_commands": 31
+    },
+    "U+0041": {
+      "advance": 608,
+      "left_side_bearing": 4,
+      "outline_sha256": "55d8e44888d77a33a4f9acf5ae2e7fa549ca75257ac75c30aa7008aaa66d602a",
+      "outline_commands": 16
+    },
+    "U+0042": {
+      "advance": 657,
+      "left_side_bearing": 101,
+      "outline_sha256": "08883c41bdebef29919d824db24429a24f00d841674fa1fe2d46a0bc372b109f",
+      "outline_commands": 21
+    },
+    "U+0043": {
+      "advance": 638,
+      "left_side_bearing": 58,
+      "outline_sha256": "46e856b2df2dcd894a00a8026a5ecc021f2a65ee41861cf2de2bdddf69ba5171",
+      "outline_commands": 12
+    },
+    "U+0044": {
+      "advance": 688,
+      "left_side_bearing": 101,
+      "outline_sha256": "a557349a8dc98cb5ff5a6f1b3fc7c14f605774414eecfbe5ec9da3552f69baec",
+      "outline_commands": 12
+    },
+    "U+0045": {
+      "advance": 589,
+      "left_side_bearing": 101,
+      "outline_sha256": "06c2dc03dacd04b39e37f10437e49aa8535086600569a459576aad7239ef9105",
+      "outline_commands": 13
+    },
+    "U+0046": {
+      "advance": 552,
+      "left_side_bearing": 101,
+      "outline_sha256": "1d49344d219a10d203a7116129cf13af8373fca8af6d93c18480d997e9fbf7ea",
+      "outline_commands": 11
+    },
+    "U+0047": {
+      "advance": 689,
+      "left_side_bearing": 58,
+      "outline_sha256": "26cef284432df2429da30cbe5afb31b0faa8b8c4bcbaa59c95625bdd9a88c700",
+      "outline_commands": 16
+    },
+    "U+0048": {
+      "advance": 728,
+      "left_side_bearing": 101,
+      "outline_sha256": "496197cd48f76d418564d31b6ee158f2acf4d4bc1225d19a29cd425c9bb3122f",
+      "outline_commands": 13
+    },
+    "U+0049": {
+      "advance": 293,
+      "left_side_bearing": 101,
+      "outline_sha256": "ceb6c13409114169dab18b5db3f6c510d6d481a0e18ca97d99a27522e4745940",
+      "outline_commands": 5
+    },
+    "U+004A": {
+      "advance": 535,
+      "left_side_bearing": 35,
+      "outline_sha256": "a808b347f7befb321c9a6ffcd41402bf3884f45274522988dc7984e826ea271f",
+      "outline_commands": 10
+    },
+    "U+004B": {
+      "advance": 646,
+      "left_side_bearing": 101,
+      "outline_sha256": "4408e761f6750e3fb082820435c3d1e85b95389389a02d5ebb87beb8eebe6263",
+      "outline_commands": 14
+    },
+    "U+004C": {
+      "advance": 543,
+      "left_side_bearing": 101,
+      "outline_sha256": "592f903aa443c65b4c89c601d110b9a73ff0c44c469687be52b3c6fe80f23f42",
+      "outline_commands": 7
+    },
+    "U+004D": {
+      "advance": 812,
+      "left_side_bearing": 101,
+      "outline_sha256": "fb7ff9a374ced4c8dea3d24dd5ab5a479ea104250a11169ce8bbd688fdfac57f",
+      "outline_commands": 23
+    },
+    "U+004E": {
+      "advance": 723,
+      "left_side_bearing": 101,
+      "outline_sha256": "65548054a75d534941d1afd95d32b8617e62e6f34151ad62cee0a66221429b29",
+      "outline_commands": 17
+    },
+    "U+004F": {
+      "advance": 742,
+      "left_side_bearing": 58,
+      "outline_sha256": "d8966e8851a1569fc9b34e8606e61a2daef0e7d6fb46ba3ed20a32de3111ed6e",
+      "outline_commands": 12
+    },
+    "U+0050": {
+      "advance": 633,
+      "left_side_bearing": 101,
+      "outline_sha256": "ccc25eb692e0d48db2fb5143e21c05b04edbd8cf4f8b3f2727de2475ac279ee9",
+      "outline_commands": 14
+    },
+    "U+0051": {
+      "advance": 742,
+      "left_side_bearing": 58,
+      "outline_sha256": "78eaadcccaf1ef07db5ce5c5a178a2e1b7ee51d07690b87848c1f9d65c65d11c",
+      "outline_commands": 20
+    },
+    "U+0052": {
+      "advance": 635,
+      "left_side_bearing": 101,
+      "outline_sha256": "ac607ff356b04d1306075b99cc73f765484b6706d062da538edc985c5c0564c6",
+      "outline_commands": 19
+    },
+    "U+0053": {
+      "advance": 596,
+      "left_side_bearing": 48,
+      "outline_sha256": "da80883f74fd3094eb6e3ae5ccb9b5932bc1505c05bfd62186661f767faf1023",
+      "outline_commands": 18
+    },
+    "U+0054": {
+      "advance": 599,
+      "left_side_bearing": 31,
+      "outline_sha256": "2fa8745cffe753e9ef450a39385b8ddb4eb406221879780753e7a32c3064bf70",
+      "outline_commands": 9
+    },
+    "U+0055": {
+      "advance": 721,
+      "left_side_bearing": 98,
+      "outline_sha256": "1609809f5bb40825dd49ef0f7218411c88983be26b34a296528e7b9a215dae47",
+      "outline_commands": 12
+    },
+    "U+0056": {
+      "advance": 575,
+      "left_side_bearing": 1,
+      "outline_sha256": "14ef7137957546549afe805413af38b4eab233736f22d3f73a153c00ab0ac656",
+      "outline_commands": 11
+    },
+    "U+0057": {
+      "advance": 878,
+      "left_side_bearing": 26,
+      "outline_sha256": "18ed8c1c1227d342b71486043dd57aaf167be5b2fccd948ef8ccb8a6e0dd5d92",
+      "outline_commands": 23
+    },
+    "U+0058": {
+      "advance": 573,
+      "left_side_bearing": 17,
+      "outline_sha256": "ba0b272c7a45160229900fc6854212805705b7efeacc283d069f0141a17d4bec",
+      "outline_commands": 19
+    },
+    "U+0059": {
+      "advance": 531,
+      "left_side_bearing": -1,
+      "outline_sha256": "fb368be06d3c308103cb65b2a807a92232c2fa75664301cd57234cf83a949959",
+      "outline_commands": 13
+    },
+    "U+005A": {
+      "advance": 603,
+      "left_side_bearing": 50,
+      "outline_sha256": "9a392bf128b4f1aa7a35603a0e7030f47bdf1bc58312797e1ebb71caf789c126",
+      "outline_commands": 11
+    },
+    "U+005B": {
+      "advance": 338,
+      "left_side_bearing": 106,
+      "outline_sha256": "05b2c74dda0bb93accd223ca3495a6b91c4559c487885b58a4cfd6319e2bf13b",
+      "outline_commands": 9
+    },
+    "U+005C": {
+      "advance": 392,
+      "left_side_bearing": 15,
+      "outline_sha256": "bf039d9d3d3e33f2f700b6cba18a6ed1845e59853c04a86bfcaaf2b5abad98c8",
+      "outline_commands": 5
+    },
+    "U+005D": {
+      "advance": 338,
+      "left_side_bearing": 34,
+      "outline_sha256": "a7a597d9b06d6944c7a7ce17ceb4b8d98639e3871a1b3026a28c5d1741306996",
+      "outline_commands": 9
+    },
+    "U+005E": {
+      "advance": 555,
+      "left_side_bearing": 68,
+      "outline_sha256": "582ecc0c2f2a4ba4d1876612a41500409272d4d1e39cf45a36ef46f1ff6a8fc7",
+      "outline_commands": 11
+    },
+    "U+005F": {
+      "advance": 559,
+      "left_side_bearing": 13,
+      "outline_sha256": "d7f0d1ee9741b6dfdac076b62d6e21fdf9a97d7a24443aefc02ea9d229ff52b7",
+      "outline_commands": 5
+    },
+    "U+0060": {
+      "advance": 606,
+      "left_side_bearing": 144,
+      "outline_sha256": "73dd982090730242d11a02ca8ea435a5defc98a1f617b946c1e9cb60967b0b3d",
+      "outline_commands": 5
+    },
+    "U+0061": {
+      "advance": 563,
+      "left_side_bearing": 59,
+      "outline_sha256": "43b97628c40c70507afe0c2a539e0616392842bfeaa27aa01e835aef808c1f7c",
+      "outline_commands": 20
+    },
+    "U+0062": {
+      "advance": 618,
+      "left_side_bearing": 92,
+      "outline_sha256": "a92790e1bb5e64800298f1511181e8c201f04aaafe6a06becad65ca90da55d36",
+      "outline_commands": 20
+    },
+    "U+0063": {
+      "advance": 510,
+      "left_side_bearing": 52,
+      "outline_sha256": "d464563e3593327ec6f51b74522c863e010b50ad3665b18cd365573c8d29cdb2",
+      "outline_commands": 12
+    },
+    "U+0064": {
+      "advance": 620,
+      "left_side_bearing": 53,
+      "outline_sha256": "64f59bed5d1672ed24fb206e58628f9f8eebd59c6acf6c88cf3ea575cb69a1d3",
+      "outline_commands": 20
+    },
+    "U+0065": {
+      "advance": 554,
+      "left_side_bearing": 52,
+      "outline_sha256": "61469449b9df80b497c29f0879e2d21c3e93fec9f35a9851e2520735e9ad1910",
+      "outline_commands": 16
+    },
+    "U+0066": {
+      "advance": 325,
+      "left_side_bearing": 33,
+      "outline_sha256": "a30a3819e95e2af8238c24b8afd4385ce7cb14c1a1122d901e72ee5c855c7996",
+      "outline_commands": 15
+    },
+    "U+0067": {
+      "advance": 564,
+      "left_side_bearing": 51,
+      "outline_sha256": "60599035dcd0b6478073db106831ff2299a42415670f76cd6b181e876deea333",
+      "outline_commands": 36
+    },
+    "U+0068": {
+      "advance": 607,
+      "left_side_bearing": 92,
+      "outline_sha256": "aef84c4bc12e9ec6fcdc0542c1f8577979fd4504df90e331a5388f76b13fd77c",
+      "outline_commands": 14
+    },
+    "U+0069": {
+      "advance": 275,
+      "left_side_bearing": 78,
+      "outline_sha256": "89289ee134862bcb1ab78034fb73c86a3816f52aab3e702ad47b96b32d85cd16",
+      "outline_commands": 11
+    },
+    "U+006A": {
+      "advance": 275,
+      "left_side_bearing": -44,
+      "outline_sha256": "aac48c2a07466f4aeb511c24d08811bd4cbc35b4371e973eafee37083d0a0f61",
+      "outline_commands": 16
+    },
+    "U+006B": {
+      "advance": 552,
+      "left_side_bearing": 92,
+      "outline_sha256": "3128d730d8e1dc59bfca952637df742e54d7ee72359f712659308c2a70a86022",
+      "outline_commands": 14
+    },
+    "U+006C": {
+      "advance": 284,
+      "left_side_bearing": 92,
+      "outline_sha256": "c62a20b7b44d629c127d5d37363e6814c1cd065f524293a361d62586fbaa72dc",
+      "outline_commands": 10
+    },
+    "U+006D": {
+      "advance": 926,
+      "left_side_bearing": 92,
+      "outline_sha256": "5d82e748baafe4bce62ae4f003b1f37f816952e1d186814f61b171024f954070",
+      "outline_commands": 21
+    },
+    "U+006E": {
+      "advance": 610,
+      "left_side_bearing": 92,
+      "outline_sha256": "a4db4b9c287915b6f0eb68511417ba5690074d411ad1b46b68109bd87ac6c77b",
+      "outline_commands": 14
+    },
+    "U+006F": {
+      "advance": 606,
+      "left_side_bearing": 52,
+      "outline_sha256": "0db0814f95813eeacc7f8428892b2d2577e2729f953e6c9b1f9f092c78db41c8",
+      "outline_commands": 12
+    },
+    "U+0070": {
+      "advance": 620,
+      "left_side_bearing": 92,
+      "outline_sha256": "d6242cc9b98a467c7e611fc4767892c09b841e1b4f25649d6605aaea34c2ce94",
+      "outline_commands": 19
+    },
+    "U+0071": {
+      "advance": 620,
+      "left_side_bearing": 53,
+      "outline_sha256": "478aae0d6e7e1d19ceefc010e5c4811a5b7f059974777396600be6918e71ad3d",
+      "outline_commands": 19
+    },
+    "U+0072": {
+      "advance": 388,
+      "left_side_bearing": 92,
+      "outline_sha256": "f51abdd9ff78124f15040084d92a071adaec6e876398054f816528a4280e49bc",
+      "outline_commands": 12
+    },
+    "U+0073": {
+      "advance": 468,
+      "left_side_bearing": 32,
+      "outline_sha256": "b49690fe901dc1e38e14d52040bc7be45346b066a5823b63ceb98c2ebb506d39",
+      "outline_commands": 16
+    },
+    "U+0074": {
+      "advance": 377,
+      "left_side_bearing": 27,
+      "outline_sha256": "07460ad5c6e98911eaacfa3c03103287751502ae6446a003e4c4daff6b930da7",
+      "outline_commands": 18
+    },
+    "U+0075": {
+      "advance": 607,
+      "left_side_bearing": 84,
+      "outline_sha256": "b6178e408db62614e78cd298d968b86eceb6eb98cf6212302a23f7ff921479c5",
+      "outline_commands": 15
+    },
+    "U+0076": {
+      "advance": 521,
+      "left_side_bearing": 13,
+      "outline_sha256": "cd957ea1d4b6e5d69b9db6d651eb0865f3f80dfdaf6fa6606552f88c2d815678",
+      "outline_commands": 11
+    },
+    "U+0077": {
+      "advance": 802,
+      "left_side_bearing": 27,
+      "outline_sha256": "9ad4219ac42430ae47f9ec17ded10bc43c4030a6e0a05a0d3573890d7ea9214b",
+      "outline_commands": 23
+    },
+    "U+0078": {
+      "advance": 498,
+      "left_side_bearing": 15,
+      "outline_sha256": "ae3404104902b89ebfb16371b3078a8c9bb49cf806506d431bf068a5e1b291ad",
+      "outline_commands": 19
+    },
+    "U+0079": {
+      "advance": 521,
+      "left_side_bearing": 13,
+      "outline_sha256": "c225cec2297a08be81ee97bb6c17b81b92dcb3477e0ae139f5ead69007456007",
+      "outline_commands": 17
+    },
+    "U+007A": {
+      "advance": 475,
+      "left_side_bearing": 35,
+      "outline_sha256": "8d1d544bce18817e8f0cc5234215a2798e1abcd2c8f1cb88fec23ed20f9f0fc8",
+      "outline_commands": 11
+    },
+    "U+007B": {
+      "advance": 338,
+      "left_side_bearing": 38,
+      "outline_sha256": "f89fc12a3352b95cbb149fd882f6ca9ab99cd3dcf2eff52d47d5b7d82ce12bfb",
+      "outline_commands": 21
+    },
+    "U+007C": {
+      "advance": 270,
+      "left_side_bearing": 103,
+      "outline_sha256": "4fa1d616ae654204ed86da19d620f64de1b6072cd6c8e2974b01b3e32986cc86",
+      "outline_commands": 5
+    },
+    "U+007D": {
+      "advance": 338,
+      "left_side_bearing": 34,
+      "outline_sha256": "6027e933ebfaf17c0ef07240e968c5b7398bb2e3568debf72897ca72881a8536",
+      "outline_commands": 21
+    },
+    "U+007E": {
+      "advance": 555,
+      "left_side_bearing": 41,
+      "outline_sha256": "1ce0e9de82cd6f610e7811bd3c041438f46550de82f3c5cd850fd8487f9c15ea",
+      "outline_commands": 10
+    },
+    "U+3001": {
+      "advance": 1000,
+      "left_side_bearing": 52,
+      "outline_sha256": "42fdf9cab724e60d94f9a8dc0e3a288ca10204c5a4a28aaae14ecd94abce9e5b",
+      "outline_commands": 5
+    },
+    "U+3002": {
+      "advance": 1000,
+      "left_side_bearing": 42,
+      "outline_sha256": "bd29b4f207101efaa8bca16b2af237dee3f63c30bd4aaee2a1822691e274562f",
+      "outline_commands": 12
+    },
+    "U+300C": {
+      "advance": 1000,
+      "left_side_bearing": 650,
+      "outline_sha256": "a9734001309cd40f613bf19b9220bf2cef10ff4e9f2545a817d2ccdb78f1150a",
+      "outline_commands": 7
+    },
+    "U+300D": {
+      "advance": 1000,
+      "left_side_bearing": 34,
+      "outline_sha256": "3ca1ab2b8ddd819c30d21dd19d8b5a91211b0479428b0aaad239dbce32148952",
+      "outline_commands": 7
+    },
+    "U+3046": {
+      "advance": 1000,
+      "left_side_bearing": 166,
+      "outline_sha256": "991ef3c7b6b90c23b412b6f65d7cf209bf649770ea37fe7e60ed12f4ab9feea1",
+      "outline_commands": 17
+    },
+    "U+304A": {
+      "advance": 1000,
+      "left_side_bearing": 105,
+      "outline_sha256": "343f317f5bf74534e9b95c9b06ffd72679b8b473dc651309086472c7cbe6214a",
+      "outline_commands": 35
+    },
+    "U+304B": {
+      "advance": 1000,
+      "left_side_bearing": 78,
+      "outline_sha256": "ebf8d78dfe593ea52d79835f023ccc9180dfd2639931ba415fab2d6d3eb56c0f",
+      "outline_commands": 28
+    },
+    "U+304C": {
+      "advance": 1000,
+      "left_side_bearing": 64,
+      "outline_sha256": "5ceb4a3144f108199a460dcf2c1b1a33fbfc39b4376f9e22b814255f982deff6",
+      "outline_commands": 38
+    },
+    "U+304D": {
+      "advance": 1000,
+      "left_side_bearing": 160,
+      "outline_sha256": "8972cef69ed4f980aa77da5626688751d9ec9d3b7ef86382de8e28b52a5d4bb0",
+      "outline_commands": 36
+    },
+    "U+3054": {
+      "advance": 1000,
+      "left_side_bearing": 155,
+      "outline_sha256": "bb3105b8579969e513bc2d566d759be2fd8842378eecbc4eb8cb5614c397c5a6",
+      "outline_commands": 26
+    },
+    "U+3055": {
+      "advance": 1000,
+      "left_side_bearing": 158,
+      "outline_sha256": "ed49655014a76d5ec9c7c01d27f6d02ec4b56a37dce377deaa8a184901878fcf",
+      "outline_commands": 29
+    },
+    "U+3058": {
+      "advance": 1000,
+      "left_side_bearing": 224,
+      "outline_sha256": "91454fd3df7ab478b0a39b49764b1f3edcb53015c9d849d409ca01ba3a1fda05",
+      "outline_commands": 21
+    },
+    "U+3068": {
+      "advance": 1000,
+      "left_side_bearing": 201,
+      "outline_sha256": "bf550c493624cb3a5134f15fb6577a3b4199f03426566af69a9347a9a626e15e",
+      "outline_commands": 18
+    },
+    "U+306A": {
+      "advance": 1000,
+      "left_side_bearing": 94,
+      "outline_sha256": "09599a664406c75df61cbecf31c9b041e3c6ed7913996a749a0ddc0094f3abc3",
+      "outline_commands": 33
+    },
+    "U+306B": {
+      "advance": 1000,
+      "left_side_bearing": 124,
+      "outline_sha256": "42c8395a6d8a663b7953872b29e1da18c50cdc4b44bcf268c905d3e126060c4e",
+      "outline_commands": 28
+    },
+    "U+3072": {
+      "advance": 1000,
+      "left_side_bearing": 109,
+      "outline_sha256": "2a0c4f80294510633eb4c444a3dabf2d032e4039c97f275393a507d04225cc89",
+      "outline_commands": 20
+    },
+    "U+307B": {
+      "advance": 1000,
+      "left_side_bearing": 115,
+      "outline_sha256": "ae92edc99ea4990e5ac96973f8315bf004e80a675c5c45ed3b9823896787b6cc",
+      "outline_commands": 39
+    },
+    "U+3087": {
+      "advance": 1000,
+      "left_side_bearing": 191,
+      "outline_sha256": "dab610f279d2d8b0045fe9f3a23bf7d9172b61de2a287b2bd02df81a90f52359",
+      "outline_commands": 22
+    },
+    "U+3089": {
+      "advance": 1000,
+      "left_side_bearing": 178,
+      "outline_sha256": "e24e960d841d255caf80f3e15230fed5c2e1628322a3908e839f0b067f18c520",
+      "outline_commands": 18
+    },
+    "U+3093": {
+      "advance": 1000,
+      "left_side_bearing": 76,
+      "outline_sha256": "cbdd5be0f8b1107294b8c50ea355c15bcd3dfb275a029f8df908b1ce5f122da8",
+      "outline_commands": 19
+    },
+    "U+4E2D": {
+      "advance": 1000,
+      "left_side_bearing": 96,
+      "outline_sha256": "bc98450b9ed3f31e260121bcfe96d3fb5891c0376df2dd05231cc08ea858d355",
+      "outline_commands": 19
+    },
+    "U+4EAC": {
+      "advance": 1000,
+      "left_side_bearing": 46,
+      "outline_sha256": "2a0205dbb821431be4285d28ec1ecbefda8e0837a99b21ad2d8317b8b08769ce",
+      "outline_commands": 41
+    },
+    "U+4EEE": {
+      "advance": 1000,
+      "left_side_bearing": 20,
+      "outline_sha256": "772ea20a6a7323e0d4138a984f2e2cca0883960a6816552d613ed4f55b7983d5",
+      "outline_commands": 42
+    },
+    "U+540D": {
+      "advance": 1000,
+      "left_side_bearing": 33,
+      "outline_sha256": "f0afe68b1ce8a268f521d1d99dc851537f5c0a3ea83c825f2ab0f53e73846347",
+      "outline_commands": 44
+    },
+    "U+5927": {
+      "advance": 1000,
+      "left_side_bearing": 43,
+      "outline_sha256": "c32ed08f3933be94162f1618030dadd9db020d00a1fd4a58e1213f9f895b1189",
+      "outline_commands": 16
+    },
+    "U+5B57": {
+      "advance": 1000,
+      "left_side_bearing": 71,
+      "outline_sha256": "fcb883c6608dbc5057d314fd811f30066bf3beebdc1c7e37f32ea26d5f431004",
+      "outline_commands": 41
+    },
+    "U+6587": {
+      "advance": 1000,
+      "left_side_bearing": 39,
+      "outline_sha256": "7e439b3aaaaae47a17c70752b719ffb0ac0f1188f080b3b2fbce11b1b8d2d118",
+      "outline_commands": 21
+    },
+    "U+65E5": {
+      "advance": 1000,
+      "left_side_bearing": 176,
+      "outline_sha256": "4b9dd955ff277da68b563ffee0737ead9cdd79456e336dde24ba68a4d350092e",
+      "outline_commands": 19
+    },
+    "U+672C": {
+      "advance": 1000,
+      "left_side_bearing": 31,
+      "outline_sha256": "a1f8148bba131e78283fb462dbd4af0431a798972ee7af1544fa863f521aea2d",
+      "outline_commands": 26
+    },
+    "U+6771": {
+      "advance": 1000,
+      "left_side_bearing": 41,
+      "outline_sha256": "624a1bfa9a8f874ba33ddae91915c565bcdb1b5716bf68e382579d7622295674",
+      "outline_commands": 36
+    },
+    "U+6F22": {
+      "advance": 1000,
+      "left_side_bearing": 38,
+      "outline_sha256": "c96d7d142442cc04463a6ccc2727a0bfd82951bf9ad2f0ca0cd7ac8c69ee46c4",
+      "outline_commands": 64
+    },
+    "U+8A9E": {
+      "advance": 1000,
+      "left_side_bearing": 38,
+      "outline_sha256": "3771680fb602e6e5ffe93911117561a20df1bb63df912b342f2712344d7b108c",
+      "outline_commands": 71
+    },
+    "U+90FD": {
+      "advance": 1000,
+      "left_side_bearing": 21,
+      "outline_sha256": "efbb04c7bfec8cb73a15e58e8e96be416f3b489467e6cd8ce50c2d166dbd656b",
+      "outline_commands": 68
+    },
+    "U+962A": {
+      "advance": 1000,
+      "left_side_bearing": 81,
+      "outline_sha256": "be071ea5cf73de43cfa6c713085e2445687bdacf8f10c72d6e6e4d4bbec0e36f",
+      "outline_commands": 53
+    },
+    "U+FF08": {
+      "advance": 1000,
+      "left_side_bearing": 695,
+      "outline_sha256": "446ae50c5068a8f720a5bd3dbace9a1b9b63569adb48ff97076bfdac1cc7fb71",
+      "outline_commands": 8
+    },
+    "U+FF09": {
+      "advance": 1000,
+      "left_side_bearing": 46,
+      "outline_sha256": "1ddd4fb506a47fcfd4fda112baa3ee835dd0704d59cc5b60c828cfa21489be1c",
+      "outline_commands": 8
+    }
+  }
+}

@@ -117,16 +117,6 @@ defmodule NativeElixirPdfUtilities.Validators.MathPaintValidator do
           else
             {:error, _} = error ->
               error
-
-            _ ->
-              Diagnostics.error(
-                :layout,
-                :invalid_layout,
-                "Math pagination requires bounded group and printable-top geometry",
-                operation: :paginate,
-                module: __MODULE__,
-                source: "math"
-              )
           end
 
         _ ->
@@ -257,7 +247,9 @@ defmodule NativeElixirPdfUtilities.Validators.MathPaintValidator do
   # Group viewport rectangles alone do not restrict visible child artwork.
   defp native_geometry(box, composition) do
     FontValidator.reserve(:max_font_math_work, 1)
-    {sx, sy, tx, ty, clip, _height} = composition || {1, 1, 0, 0, nil, nil}
+
+    {transform, clip, paint_height} =
+      DrawingGeometry.composition_parts(composition || {1, 1, 0, 0, nil, nil})
 
     result =
       case box do
@@ -270,8 +262,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathPaintValidator do
 
         %{type: :text} ->
           box =
-            case composition do
-              {_, _, _, _, _, height} when is_number(height) ->
+            case paint_height do
+              height when is_number(height) ->
                 {x, y} = DrawingGeometry.text_position(box, height)
                 %{box | x: x, y: y}
 
@@ -297,9 +289,11 @@ defmodule NativeElixirPdfUtilities.Validators.MathPaintValidator do
         result
 
       {_, {:ok, {left, bottom, right, top}}} ->
-        transform = {sx, sy, tx, ty}
-        {left, bottom} = DrawingGeometry.transform_point(left, bottom, transform)
-        {right, top} = DrawingGeometry.transform_point(right, top, transform)
+        polygon =
+          DrawingGeometry.transform_clip(
+            %{x: left, y: bottom, width: right - left, height: top - bottom},
+            transform
+          )
 
         clip =
           DrawingGeometry.intersect_clip(
@@ -307,7 +301,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathPaintValidator do
             DrawingGeometry.transform_box_clip(Map.get(box, :clip), transform)
           )
 
-        paint = DrawingGeometry.intersect_clip({left, bottom, right, top}, clip)
+        paint = DrawingGeometry.intersect_clip(polygon, clip) |> DrawingGeometry.clip_bounds()
         {left, bottom, right, top} = paint
         {:ok, if(right > left and top > bottom, do: paint)}
 

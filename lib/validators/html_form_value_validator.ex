@@ -113,7 +113,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
       _ ->
         failure(
           :native_form_backend_unavailable,
-          "native initial form-value parser failed; rebuild the pinned native/svg_backend artifacts"
+          "native initial form-value parser failed; rebuild the pinned native/html_backend artifacts"
         )
     end
   catch

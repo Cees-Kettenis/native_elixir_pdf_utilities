@@ -1,0 +1,11 @@
+<!doctype html><html lang=en><head><style>
+@page {size:300pt 360pt;margin:0;} html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt;} body {padding:12pt;} p {margin:0 0 3pt;} .row {margin:0 0 15pt;} input {width:200pt;}
+</style></head><body>
+<div class=row><p>Authored labels and default midpoint</p><input type=range list=values><datalist id=values><option value=0 label=Low><option value=25><option value=50 label=Middle><option value=75><option value=100 label=High></datalist></div>
+<div class=row><p>Disabled ticks retain text color</p><input type=range disabled list=values value=75></div>
+<div class=row><p>Step mismatches and invalid options</p><input type=range list=filtered min=-1 max=1 step=.5 value=.4><datalist id=filtered><option value=-1><option value=-.5><option value=-.25><option value=0><option value=.5 disabled><option value=1><option value=2><option value=bad><option value=".5suffix"></datalist></div>
+<div class=row><p>Tall content box and colored ticks</p><input type=range list=values value=25 style="height:30pt;color:#884422;accent-color:#446688;border:1.5pt solid #555;padding:3pt;background:#ffeedd;"></div>
+<div class=row><p>Appearance none suppresses ticks</p><input type=range list=values value=80 style="appearance:none;background:#ffeecc;"></div>
+<div class=row><p>Missing association has no ticks</p><input type=range list=missing value=10></div>
+<p>After initial suggested range artwork</p>
+</body></html>

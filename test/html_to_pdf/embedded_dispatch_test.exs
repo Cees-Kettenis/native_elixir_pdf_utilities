@@ -138,6 +138,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedDispatchTest do
                  EmbeddedViewport.prepare_selected({:image, source, mime}, parent, [], :object)
 
         assert style.image.width_px == width and style.image.height_px == height
+
+        if mime == "image/svg+xml" do
+          assert {:ok, request} =
+                   NativeElixirPdfUtilities.Validators.SvgDocumentImageValidator.request(
+                     style.image
+                   )
+
+          assert request.authored_source == File.read!(Path.join(root, source))
+
+          assert {:ok, image} =
+                   NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentImage.compose(
+                     style.image,
+                     60,
+                     30
+                   )
+
+          assert image.format == :png
+          assert {image.width_px, image.height_px} == {160, 80}
+          assert image.data == :binary.copy(<<0, 0, 255>>, image.width_px * image.height_px)
+
+          assert {:ok, pdf} =
+                   NativeElixirPdfUtilities.HtmlToPdf.PdfWriter.render(
+                     [
+                       %{
+                         size: {60, 30},
+                         boxes: [%{type: :image, image: image, x: 0, y: 0, width: 60, height: 30}]
+                       }
+                     ],
+                     compress_streams: false
+                   )
+
+          assert pdf =~ "/Subtype /Image"
+          assert pdf =~ "60 0 0 30 0 0 cm"
+        else
+          assert style.image.format == if(mime == "image/png", do: :png, else: :jpeg)
+        end
+
         assert ResourceContext.current() == parent
       end
     end)
@@ -153,7 +190,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedDispatchTest do
                )
 
       assert pdf =~ "/Subtype /Image"
+
       assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+      assert text =~ "Before image"
       refute text =~ "Fallback"
     end
   end
@@ -252,10 +291,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedDispatchTest do
       "<svg xmlns='http://www.w3.org/2000/svg' width='40' height='20'><text y='15'>Required text</text></svg>"
     )
 
-    assert {:error, {:unsupported_html, diagnostic}} =
+    assert {:error, {:invalid_font, diagnostic}} =
              HtmlToPdf.render("<embed src='child/image.svg'>", base_url: root)
 
-    assert diagnostic.message =~ "font database"
+    assert diagnostic.stage == :font and diagnostic.source == "child/image.svg"
+    assert diagnostic.message =~ "authorized independent font bytes"
 
     File.write!(
       Path.join(root, "child/image.svg"),
@@ -265,7 +305,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedDispatchTest do
     assert {:error, {_reason, diagnostic}} =
              HtmlToPdf.render("<object data='child/image.svg'></object>", base_url: root)
 
-    assert diagnostic.message =~ "not authorized"
+    assert diagnostic.message =~ "authorized local path"
   end
 
   test "source bytes are charged once and documents share depth and count budgets", %{
@@ -296,6 +336,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedDispatchTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<embed src='child/image.svg'>", base_url: root)
 
+    assert diagnostic.source == "child/image.svg"
+    assert diagnostic.operation == :rasterize_document
+    assert diagnostic.message =~ "max_aggregate_svg_surface_pixels"
+
+    File.write!(Path.join(root, "child/raster.svg"), """
+    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="20">
+    <a href="#target"><rect id="target" width="40" height="20" fill="blue"/></a></svg>
+    """)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render("<embed src='child/raster.svg'>", base_url: root)
+
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.source == "child/raster.svg"
+    assert diagnostic.operation == :rasterize_document
     assert diagnostic.message =~ "max_aggregate_svg_surface_pixels"
   end
 

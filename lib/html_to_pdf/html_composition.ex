@@ -200,9 +200,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlComposition do
 
       {node, state, claimed} =
         case {HtmlCompositionValidator.slot_element?(node), node} do
-          {_, %{tree_scope_id: node_scope}} when node_scope != scope ->
-            {node, state, claimed}
-
           {true, %{type: :element, tag: "slot", attributes: attributes, children: fallback}} ->
             name = Map.get(attributes, "name", "")
             first? = not MapSet.member?(claimed, name)
@@ -273,10 +270,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlComposition do
             {node, state, claimed}
         end
 
-      node =
-        if not Map.has_key?(node, :tree_scope_id) or node.tree_scope_id == scope,
-          do: node |> Map.put(:shadow_scope_id, scope) |> Map.put(:shadow_host_id, host),
-          else: node
+      # Authored root transport and clone_fragment/8 give every traversed node
+      # this scope. Assigned light subtrees and inert template contents are not
+      # traversed by distribute/8, so neither can cross this boundary.
+      node = node |> Map.put(:shadow_scope_id, scope) |> Map.put(:shadow_host_id, host)
 
       {[node | output], state, claimed}
     end)

@@ -364,9 +364,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlSelectedContent do
 
     node = Map.merge(node, Map.take(owner, [:shadow_scope_id, :shadow_host_id]))
 
-    case HtmlSelectedContentValidator.validate_clone_origin(node, source) do
-      :ok -> node
-      {:error, _} = error -> throw({:render_resource_limit, error})
-    end
+    # Only destination identity and attachment metadata change above. A failure
+    # here is an internal copying error, not a recoverable resource failure.
+    :ok = HtmlSelectedContentValidator.validate_clone_origin(node, source)
+    node
   end
 end

@@ -1,6 +1,8 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave7Test do
   use ExUnit.Case, async: false
 
+  alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
+
   alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
   alias NativeElixirPdfUtilities.Pdf.Reader
@@ -20,7 +22,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave7Test do
     assert first.style.svg_scene.source =~ "rgb(255,0,0)"
     assert second.style.svg_scene.source =~ "rgb(255,0,0)"
     assert {:ok, pdf} = HtmlToPdf.render(source)
-    assert pdf =~ "/Subtype /Form"
+    assert :ok = PdfVisualCompare.assert_svg_image_artwork!(pdf)
+    assert {:ok, document} = Reader.read(pdf)
+
+    rgb_images =
+      for {_ref,
+           %{value: %{"Subtype" => {:name, "Image"}, "ColorSpace" => {:name, "DeviceRGB"}}} =
+             image} <- document.objects do
+        # Inspect this bounded generated plane without changing reader safety limits.
+        pixels = :zlib.uncompress(image.stream)
+        assert byte_size(pixels) == image.value["Width"] * image.value["Height"] * 3
+        assert pixels == :binary.copy(<<255, 0, 0>>, image.value["Width"] * image.value["Height"])
+        image
+      end
+
+    assert length(rgb_images) == 1
     assert {:ok, text} = Text.extract(pdf, layout: false)
     assert text =~ "Before" and text =~ "After"
   end

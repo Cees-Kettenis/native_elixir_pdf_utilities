@@ -4,9 +4,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
     AssetLoader,
-    HtmlParser,
     ResourceContext,
-    Style,
     SvgScene
   }
 
@@ -14,9 +12,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
     HtmlValidator,
     ResourceValidator,
     SvgSceneValidator,
-    SvgForeignObjectValidator,
-    SvgViewportValidator,
-    SvgValidator
+    SvgViewportValidator
   }
 
   @doc "Collects authored image references for XML policy inspection without loading them."
@@ -24,7 +20,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
   def pending_references(node) do
     Map.new(
       for {image, _} <- SvgSceneValidator.tree_nodes(node),
-          image.tag == "image",
+          image.tag in ~w(image feImage),
+          not String.starts_with?(
+            Map.get(image.attributes, "href", Map.get(image.attributes, "xlink:href", "")),
+            "#"
+          ),
           do:
             {Map.get(image.attributes, "href", Map.get(image.attributes, "xlink:href", "")),
              :pending}
@@ -34,15 +34,25 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
   @doc false
   @spec validate_node(map()) :: :ok | {:error, {atom(), map()}}
   def validate_node(node) do
-    if node.tag == "image" do
+    if node.tag in ~w(image feImage) do
       href = Map.get(node.attributes, "href", Map.get(node.attributes, "xlink:href", ""))
 
-      if is_binary(href) and String.trim(href) != "" and not String.starts_with?(href, "#") do
-        with {:ok, _} <-
-               SvgViewportValidator.aspect_ratio(Map.get(node.attributes, "preserveAspectRatio")),
-             do: :ok
-      else
-        invalid("SVG image requires an explicit raster or SVG resource reference", "image href")
+      cond do
+        node.tag == "feImage" and is_binary(href) and String.starts_with?(href, "#") ->
+          :ok
+
+        is_binary(href) and String.trim(href) != "" and not String.starts_with?(href, "#") ->
+          with {:ok, _} <-
+                 SvgViewportValidator.aspect_ratio(
+                   Map.get(node.attributes, "preserveAspectRatio")
+                 ),
+               do: :ok
+
+        true ->
+          invalid(
+            "SVG image requires an explicit raster or SVG resource reference",
+            node.tag <> " href"
+          )
       end
     else
       :ok
@@ -55,7 +65,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
     Enum.reduce_while(resources, :ok, fn {name, descriptor}, :ok ->
       result =
         case {name, descriptor} do
-          {name, %{data: data, media_type: mime} = descriptor}
+          {name, %{data: data, media_type: mime}}
           when is_binary(name) and is_binary(data) and
                  mime in ["image/png", "image/jpeg", "image/svg+xml"] ->
             cond do
@@ -73,12 +83,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
                 )
 
               true ->
-                case SvgForeignObjectValidator.validate_slots(
-                       Map.get(descriptor, :foreign_slots, %{})
-                     ) do
-                  {:ok, _} -> :ok
-                  error -> error
-                end
+                :ok
             end
 
           _ ->
@@ -127,15 +132,17 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
         {Map.get(item.attributes, "id"), item}
       end)
 
-    references = expand_references(active_references(node), nodes, MapSet.new())
+    references = expand_references(active_references(node), nodes, :sets.new(version: 2))
     prepare_selected(node, budget, opts, references, true, false, %{}, fonts)
   end
 
   # Only reachable definitions participate in selected dependency loading.
+  @spec expand_references(MapSet.t(String.t()), map(), :sets.set(String.t())) ::
+          MapSet.t(String.t())
   defp expand_references(references, nodes, visited) do
-    pending = MapSet.difference(references, visited)
+    pending = Enum.reject(references, &:sets.is_element(&1, visited))
 
-    if MapSet.size(pending) == 0 do
+    if pending == [] do
       references
     else
       expanded =
@@ -146,7 +153,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
           end
         end)
 
-      expand_references(expanded, nodes, MapSet.union(visited, pending))
+      expand_references(
+        expanded,
+        nodes,
+        :sets.union(visited, :sets.from_list(pending, version: 2))
+      )
     end
   end
 
@@ -193,37 +204,17 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
     definition? = definition? and not referenced?
     visible? = visible? and Map.get(node.style, :display) != :none
 
-    if node.tag == "image" do
-      if visible? and not definition? do
-        reference = Map.get(node.attributes, "href", Map.get(node.attributes, "xlink:href"))
+    reference = Map.get(node.attributes, "href", Map.get(node.attributes, "xlink:href", ""))
+    external_input? = node.tag in ~w(image feImage) and not String.starts_with?(reference, "#")
 
+    if external_input? do
+      if visible? and not definition? do
         with {:ok, bytes} <- load(reference, budget, opts),
              {:ok, descriptor, nested_resources, nested_fonts} <-
                prepare_bytes(bytes, reference, budget, opts) do
-          offset = length(fonts)
-
-          rebase = fn descriptor ->
-            if descriptor.media_type == "image/svg+xml" do
-              source =
-                Regex.replace(~r/font-family="NativeSvgFont([0-9]+)"/, descriptor.data, fn _,
-                                                                                           index ->
-                  ~s(font-family="NativeSvgFont#{String.to_integer(index) + offset}")
-                end)
-
-              %{descriptor | data: source}
-            else
-              descriptor
-            end
-          end
-
-          descriptor = rebase.(descriptor)
-
-          nested_resources =
-            Map.new(nested_resources, fn {key, value} -> {key, rebase.(value)} end)
-
           key =
             "svg-resource:" <>
-              (:crypto.hash(:sha256, :erlang.term_to_binary({reference, descriptor, offset}))
+              (:crypto.hash(:sha256, :erlang.term_to_binary({reference, descriptor}))
                |> Base.encode16(case: :lower))
 
           attrs = node.attributes |> Map.delete("xlink:href") |> Map.put("href", key)
@@ -235,8 +226,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
       else
         # Preserve the original ID graph for hidden/unused use references.
         # The selected scene has no image resource at this nonpainting target.
-        {:ok, %{node | tag: "g", attributes: Map.take(node.attributes, ["id"]), children: []},
-         resources, fonts}
+        if node.tag == "feImage",
+          do: {:ok, nil, resources, fonts},
+          else:
+            {:ok, %{node | tag: "g", attributes: Map.take(node.attributes, ["id"]), children: []},
+             resources, fonts}
       end
     else
       Enum.reduce_while(node.children, {:ok, [], resources, fonts}, fn child,
@@ -326,25 +320,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
               end)
               |> Keyword.put(:base_url, child.resolution_base)
 
-            with {:ok, dom} <- HtmlParser.parse_detailed(bytes),
-                 [authored] <- Enum.filter(dom.children, &(Map.get(&1, :type) == :element)),
-                 {:ok, _} <-
-                   SvgValidator.validate_processing(bytes, %{
-                     mode: :inline,
-                     resources: pending_references(authored)
-                   }),
-                 {:ok, styled} <- Style.prepare_svg_detailed(dom, safe_opts),
-                 [root] <- Enum.filter(styled.children, &(Map.get(&1, :type) == :element)),
-                 true <- root.tag == "svg",
-                 {:ok, scene} <- SvgScene.prepare(root, budget, safe_opts) do
-              source = scene.document_source
-
-              {:ok,
-               %{data: source, media_type: "image/svg+xml", foreign_slots: scene.foreign_slots},
-               scene.resources, scene.selected_fonts}
-            else
-              {:error, _} = error -> error
-              _ -> invalid("SVG image bytes require one complete SVG document", reference)
+            with {:ok, scene} <- SvgScene.extract(bytes, budget, safe_opts) do
+              {:ok, %{data: scene.document_source, media_type: "image/svg+xml"}, scene.resources,
+               scene.selected_fonts}
             end
           end)
         end

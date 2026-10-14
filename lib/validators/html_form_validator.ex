@@ -1,7 +1,7 @@
 defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
-  alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
+  alias NativeElixirPdfUtilities.HtmlToPdf.{DrawingGeometry, PageGeometry}
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.HtmlTemporalValidator
 
@@ -371,7 +371,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                   Map.merge(state, prepare_initial_number(item.attributes))
 
                 {"input", "range"} ->
-                  Map.merge(state, prepare_initial_range(item.attributes))
+                  options =
+                    case Map.get(state, :datalist) do
+                      %{id: id} ->
+                        ids[{item.scope, id}].datalist_options
+                        |> Enum.filter(&(not &1.disabled and &1.value != ""))
+                        |> Enum.map(& &1.value)
+
+                      _ ->
+                        []
+                    end
+
+                  Map.merge(state, prepare_initial_range(item.attributes, options))
 
                 {"input", type} when type in ~w(date month week time datetime-local) ->
                   Map.merge(state, HtmlTemporalValidator.prepare_initial(item.attributes))
@@ -767,7 +778,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
   @doc false
   @spec prepare_initial_range(map()) :: map()
-  def prepare_initial_range(attributes) do
+  @spec prepare_initial_range(map(), [String.t()]) :: map()
+  def prepare_initial_range(attributes, options \\ []) do
+    HtmlValidator.reserve_render_resource(:max_html_tree_work, length(options), :html)
+
+    option_numbers =
+      Enum.map(options, fn value ->
+        if HtmlValidator.valid_html_float?(value) do
+          {:ok, decimal} = HtmlValidator.parse_html_float(value, :decimal)
+          decimal
+        end
+      end)
+
     parsed =
       Map.new(~w(value min max step), fn name ->
         value =
@@ -782,7 +804,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     # HTML defaults and the shared parser's decimal precision are fixed format
     # rules. Integer arithmetic keeps decimal step ties exact, including negatives.
     exponent =
-      Enum.reduce(parsed, 0, fn {_name, value}, acc ->
+      Enum.reduce(Map.values(parsed) ++ option_numbers, 0, fn value, acc ->
         if value, do: min(acc, value.exponent), else: acc
       end) - 1
 
@@ -860,6 +882,30 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
       readonly: false,
       required: false,
       range: %{
+        options: options,
+        ticks:
+          Enum.flat_map(option_numbers, fn decimal ->
+            if decimal && maximum > minimum do
+              tick =
+                if(decimal.negative, do: -1, else: 1) * decimal.coefficient *
+                  Integer.pow(10, decimal.exponent - exponent)
+
+              if tick >= minimum and tick <= maximum and
+                   (step == :any or rem(tick - base, step) == 0) do
+                [
+                  %{
+                    value: decimal.value,
+                    position:
+                      div((tick - minimum) * Integer.pow(10, 18), maximum - minimum) / 1.0e18
+                  }
+                ]
+              else
+                []
+              end
+            else
+              []
+            end
+          end),
         value: numeric,
         min: if(parsed["min"], do: parsed["min"].value, else: 0.0),
         max: if(parsed["max"], do: parsed["max"].value, else: 100.0),
@@ -919,8 +965,33 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
       Enum.all?(attributes, fn {key, value} ->
         is_binary(key) and String.valid?(key) and is_binary(value) and String.valid?(value)
       end) and
+      is_map(Map.get(state, :range)) and is_list(Map.get(state.range, :options)) and
+      HtmlValidator.check_render_resource(:max_html_tree_work, length(state.range.options), :html) ==
+        :ok and
+      Enum.all?(state.range.options, &(is_binary(&1) and String.valid?(&1))) and
       Map.take(state, [:value, :display, :readonly, :required, :range]) ==
-        prepare_initial_range(attributes)
+        prepare_initial_range(attributes, state.range.options)
+  rescue
+    ArgumentError -> false
+  end
+
+  # Tick candidates come from an actual same-tree datalist association. The
+  # numeric preparation helper also serves standalone canonical-value callers;
+  # layout and transport must retain the source association it was supplied.
+  defp valid_initial_range_association?(state, attributes) do
+    case state.range.options do
+      [] ->
+        true
+
+      _ ->
+        case Map.get(state, :datalist) do
+          %{id: id, ref: ref, scope: scope} ->
+            Map.get(attributes, "list") == id and is_reference(ref) and is_tuple(scope)
+
+          _ ->
+            false
+        end
+    end
   end
 
   @doc false
@@ -935,7 +1006,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           case Map.get(style, :_form_control, Map.get(style, :_range_control)) do
             %{tag: "input", attributes: attributes, initial_state: state} ->
               HtmlValidator.input_type(Map.get(attributes, "type", "text")) == "range" and
-                valid_initial_range?(state, attributes) and state.range == range and
+                valid_initial_range?(state, attributes) and
+                valid_initial_range_association?(state, attributes) and state.range == range and
                 is_boolean(Map.get(state, :disabled)) and
                 Map.get(style, :_range_disabled) == state.disabled
 
@@ -967,27 +1039,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
         operation: :layout,
         source: "range"
       )
-    end
-  end
-
-  @doc false
-  @spec validate_initial_range_attributes(map()) ::
-          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
-  def validate_initial_range_attributes(node) do
-    if Map.get(node, :namespace, :html) == :html and node.tag == "input" and
-         HtmlValidator.input_type(Map.get(initial_control_attributes(node), "type", "text")) ==
-           "range" and
-         Map.has_key?(initial_control_attributes(node), "list") do
-      Diagnostics.error(
-        :html,
-        :unsupported_html,
-        "Range datalist tick artwork is not yet supported; remove list or supply a static image of the control",
-        module: __MODULE__,
-        operation: :compute,
-        source: "range/list"
-      )
-    else
-      :ok
     end
   end
 
@@ -1140,17 +1191,23 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   end
 
   @doc false
-  @spec prepare_initial_number_style(map(), [{String.t(), term()}]) :: map()
+  @spec prepare_initial_number_style(map(), [
+          NativeElixirPdfUtilities.HtmlToPdf.CssParser.declaration()
+        ]) :: map()
   defdelegate prepare_initial_number_style(style, declarations),
     to: __MODULE__,
     as: :prepare_initial_textfield_style
 
   @doc false
-  @spec prepare_initial_textfield_style(map(), [{String.t(), term()}]) :: map()
+  @spec prepare_initial_textfield_style(map(), [
+          NativeElixirPdfUtilities.HtmlToPdf.CssParser.declaration()
+        ]) :: map()
   def prepare_initial_textfield_style(style, declarations) do
     native? =
       style.appearance == :auto and
-        not Enum.any?(declarations, fn {property, _value} ->
+        not Enum.any?(declarations, fn declaration ->
+          property = elem(declaration, 0)
+
           property in ["background", "background-color", "background-image", "box-shadow"] or
             (String.starts_with?(property, "border") and property != "border-radius")
         end)
@@ -1170,7 +1227,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   end
 
   @doc false
-  @spec prepare_initial_temporal_style(map(), [{String.t(), term()}]) :: map()
+  @spec prepare_initial_temporal_style(map(), [
+          NativeElixirPdfUtilities.HtmlToPdf.CssParser.declaration()
+        ]) :: map()
   def prepare_initial_temporal_style(style, declarations) do
     # Rounded corners defer TextField background/border paint to CSS. Preserve
     # the UA inset border instead of the native one-pixel frame in that case.
@@ -1181,13 +1240,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
     # The UA font shorthand resets inherited line height. An authored temporal
     # line-height or font shorthand still wins in the ordinary cascade.
-    if Enum.any?(declarations, fn {property, _} -> property in ["line-height", "font"] end),
-      do: style,
-      else:
-        style
-        |> Map.put(:line_height_normal, true)
-        |> Map.delete(:line_height_multiplier)
-        |> Map.delete(:line_height_explicit)
+    if Enum.any?(declarations, fn declaration ->
+         elem(declaration, 0) in ["line-height", "font"]
+       end),
+       do: style,
+       else:
+         style
+         |> Map.put(:line_height_normal, true)
+         |> Map.delete(:line_height_multiplier)
+         |> Map.delete(:line_height_explicit)
   end
 
   @doc false
@@ -1521,22 +1582,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
       HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :style)
 
       case node do
-        %{type: :element, tag: "option", attributes: attributes, children: nested} ->
+        %{type: :element, tag: "option", children: nested} ->
           if Map.get(node, :namespace, :html) == :html do
+            attributes = initial_control_attributes(node)
             text = HtmlValidator.initial_option_text(nested)
-
-            label =
-              case Map.get(attributes, "label", "") do
-                "" -> text
-                label -> label
-              end
 
             [
               %{
                 id: node._selector_id,
                 source_id: Map.get(node, :node_id),
                 value: Map.get(attributes, "value", text),
-                label: label,
+                label: initial_option_label(attributes, text),
                 disabled: ancestor_disabled? or Map.has_key?(attributes, "disabled")
               }
             ]
@@ -1544,7 +1600,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
             []
           end
 
-        %{type: :element, tag: tag, attributes: attributes, children: nested} ->
+        %{type: :element, tag: tag, children: nested} ->
+          attributes = initial_control_attributes(node)
+
           disabled? =
             ancestor_disabled? or
               (tag == "optgroup" and Map.get(node, :namespace, :html) == :html and
@@ -1558,6 +1616,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     end)
   end
 
+  # Both suggestion sources and visible options use the HTML label fallback.
+  defp initial_option_label(attributes, text) do
+    case Map.get(attributes, "label", "") do
+      "" -> text
+      label -> label
+    end
+  end
+
   @doc false
   @spec prepare_initial_auxiliary_style(map(), map()) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
@@ -1568,38 +1634,51 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
       Map.get(node, :namespace, :html) != :html ->
         {:ok, style}
 
-      node.tag == "datalist" and style.display != :none ->
-        Diagnostics.error(
-          :style,
-          :unsupported_html,
-          "Visible authored datalist contents are not yet supported; retain display:none and render fallback content as a separate ordinary element",
-          module: __MODULE__,
-          operation: :compute,
-          source: "datalist"
-        )
-
       node.tag == "datalist" ->
         {:ok, Map.put(style, :_datalist_state, state)}
 
       node.tag == "output" ->
         {:ok, Map.put(style, :_output_state, state)}
 
-      node.tag == "input" and style.display != :none and Map.get(state, :datalist) != nil and
-        not state.disabled and
-        not Map.get(state, :readonly, Map.has_key?(node.attributes, "readonly")) and
-          HtmlValidator.input_type(Map.get(node.attributes, "type", "text")) != "range" ->
-        Diagnostics.error(
-          :style,
-          :unsupported_html,
-          "Mutable datalist suggestion artwork is not yet supported; use readonly or disabled initial text, hide the input, or supply static artwork",
-          module: __MODULE__,
-          operation: :compute,
-          source: "input/list"
-        )
-
       true ->
         {:ok, style}
     end
+  end
+
+  @doc "Determines native select-row metrics from an option's validated HTML ancestor chain."
+  @spec native_select_option?([map()]) :: boolean()
+  def native_select_option?(ancestors) do
+    HtmlValidator.reserve_render_resource(:max_html_tree_work, length(ancestors), :html)
+
+    Enum.any?(ancestors, fn ancestor ->
+      Map.get(ancestor, :tag) == "select" and Map.get(ancestor, :namespace, :html) == :html
+    end)
+  end
+
+  @doc "Keeps native HTML controls as atomic inline boxes after the actual CSS cascade."
+  @spec prepare_initial_control_box(map(), map()) :: map()
+  def prepare_initial_control_box(node, style) do
+    native? =
+      Map.get(node, :namespace, :html) == :html and
+        Map.get(node, :tag) in ~w(input textarea select button) and
+        Map.get(style, :form_kind) not in [nil, :hidden, :base_select] and
+        not Map.has_key?(style, :_image_input_state)
+
+    if native? and style.display == :inline,
+      do: Map.put(style, :display, :inline_block),
+      else: style
+  end
+
+  @doc "Keeps normalized control fragments as root blocks while full HTML ancestry uses native inline flow."
+  @spec initial_control_display(map(), atom(), [map()]) :: atom()
+  def initial_control_display(node, display, ancestors) do
+    ordinary? =
+      Map.get(node, :namespace, :html) == :html and
+        (node.tag in ~w(textarea select button) or
+           (node.tag == "input" and
+              HtmlValidator.input_type(Map.get(initial_control_attributes(node), "type", "text")) in ~w(text search tel url email password checkbox radio button reset submit)))
+
+    if display == :inline_block and ancestors == [] and ordinary?, do: :block, else: display
   end
 
   defp labelable_initial_element?(item) do
@@ -1678,7 +1757,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           if multiple?, do: 4, else: 1
       end
 
-    authored = Enum.filter(options, &Map.has_key?(&1.attributes, "selected"))
+    authored = Enum.filter(options, &Map.has_key?(initial_control_attributes(&1), "selected"))
 
     selected =
       cond do
@@ -1702,19 +1781,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
       options
       |> Enum.with_index()
       |> Enum.map(fn {option, index} ->
+        attributes = initial_control_attributes(option)
         text = HtmlValidator.initial_option_text(option.children)
-
-        label =
-          case Map.get(option.attributes, "label", "") do
-            "" -> text
-            label -> label
-          end
 
         %{
           id: option._selector_id,
           index: index,
-          value: Map.get(option.attributes, "value", text),
-          label: label,
+          value: Map.get(attributes, "value", text),
+          label: initial_option_label(attributes, text),
           disabled: option._initial_option_disabled,
           selected: MapSet.member?(selected_set, option._selector_id)
         }
@@ -1794,16 +1868,30 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
           node =
             if node.tag == "option" and Map.get(node, :namespace, :html) == :html do
+              attributes = initial_control_attributes(node)
+
+              label =
+                case Map.fetch(selected_options, node._selector_id) do
+                  {:ok, choice} ->
+                    choice.label
+
+                  :error ->
+                    initial_option_label(
+                      attributes,
+                      HtmlValidator.initial_option_text(node.children)
+                    )
+                end
+
               node
               |> Map.put(
                 :_initial_selected,
                 Map.get(selected_options, node._selector_id, %{
-                  selected: Map.has_key?(node.attributes, "selected")
+                  selected: Map.has_key?(attributes, "selected")
                 }).selected
               )
               |> Map.put(
                 :_initial_option_label,
-                Map.get(selected_options, node._selector_id, %{label: nil}).label
+                label
               )
               |> Map.put(
                 :_initial_option_disabled,
@@ -1894,6 +1982,56 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     end
   end
 
+  @doc "Validates the shared static or interactive forms mode for rendering and field preparation."
+  @spec prepare_mode(term(), :forms | :options) ::
+          {:ok, :static | :interactive} | {:error, Diagnostics.detailed_error()}
+  def prepare_mode(mode, stage \\ :forms) do
+    case mode do
+      mode when mode in [:static, :interactive] ->
+        {:ok, mode}
+
+      _ ->
+        Diagnostics.error(stage, :invalid_options, "forms must be :interactive or :static",
+          module: __MODULE__,
+          operation: :prepare_forms_mode,
+          source: "forms"
+        )
+    end
+  end
+
+  @doc "Runs nested native layout with its validated forms mode, restoring the enclosing document afterward."
+  @spec with_layout_mode(term(), (-> term())) :: term()
+  def with_layout_mode(mode, callback) do
+    with {:ok, mode} <- prepare_mode(mode), true <- is_function(callback, 0) do
+      key = {__MODULE__, :layout_forms_mode}
+      previous = Process.get(key)
+      Process.put(key, mode)
+
+      try do
+        callback.()
+      after
+        if previous == nil, do: Process.delete(key), else: Process.put(key, previous)
+      end
+    else
+      false ->
+        Diagnostics.error(
+          :forms,
+          :invalid_options,
+          "native forms layout requires a zero-argument callback",
+          module: __MODULE__,
+          operation: :with_layout_mode,
+          source: "forms"
+        )
+
+      failure ->
+        failure
+    end
+  end
+
+  @doc false
+  @spec layout_mode() :: :static | :interactive
+  def layout_mode, do: Process.get({__MODULE__, :layout_forms_mode}, :interactive)
+
   @doc "Prepares child controls in an issued document scope, retaining their actual HTML owner and control identity for final composition."
   @spec prepare_scoped([map()], keyword(), NativeElixirPdfUtilities.HtmlToPdf.ResourceContext.t()) ::
           {:ok, [map()], [map()]} | {:error, {atom(), map()}}
@@ -1901,21 +2039,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     with :ok <- NativeElixirPdfUtilities.Validators.ResourceValidator.validate_context(context) do
       prepare(pages, Keyword.put(opts, :__retain_html_identity__, true))
     end
-  catch
-    {:render_resource_limit, {:error, {reason, diagnostic}}} ->
-      {:error,
-       {reason,
-        Diagnostics.with_context(diagnostic,
-          module: __MODULE__,
-          operation: :compose_child_widgets
-        )}}
   end
 
   @doc false
   @spec prepare([map()], keyword()) :: {:ok, [map()], [map()]} | {:error, {atom(), map()}}
   def prepare(pages, opts) do
-    case Keyword.get(opts, :forms, :interactive) do
-      mode when mode in [:static, :interactive] ->
+    case prepare_mode(Keyword.get(opts, :forms, :interactive)) do
+      {:ok, mode} ->
         with :ok <- validate_initial_controls(pages) do
           controls =
             pages
@@ -1947,6 +2077,44 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
                 %{box: box, control: control, type: type, page: number, index: index}
               end)
+            end)
+
+          # Rounded dashed native menus and disabled native selects share their
+          # real control surface. Composite its background/arrow/border once.
+          select_groups =
+            controls
+            |> Enum.filter(
+              &(&1.control.tag == "select" and
+                  Map.get(&1.box, :role) in [:native_menu, :css_menu, :native_listbox] and
+                  (&1.control.initial_state.disabled or is_map(Map.get(&1.box, :native_menu_clip))))
+            )
+            |> Map.new(fn item ->
+              opacity = %{
+                owner: item.control.id,
+                alpha: if(item.control.initial_state.disabled, do: 0.7, else: 1.0)
+              }
+
+              opacity =
+                case Map.get(item.box, :native_menu_clip) do
+                  nil -> opacity
+                  clip -> Map.put(opacity, :clip, clip)
+                end
+
+              {item.control.id, opacity}
+            end)
+
+          pages =
+            Enum.map(pages, fn page ->
+              %{
+                page
+                | boxes:
+                    Enum.map(page.boxes, fn box ->
+                      case Map.get(select_groups, Map.get(box, :form_owner)) do
+                        nil -> box
+                        group -> Map.put(box, :initial_select_opacity, group)
+                      end
+                    end)
+              }
             end)
 
           explicit =
@@ -2071,11 +2239,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                     _ ->
                       base = "#{String.upcase(item.type)}_#{item.page}_#{item.index}"
 
-                      Stream.iterate(0, &(&1 + 1))
-                      |> Enum.find_value(fn suffix ->
-                        candidate = if suffix == 0, do: base, else: "#{base}_#{suffix}"
-                        if MapSet.member?(names, candidate), do: nil, else: candidate
-                      end)
+                      available_field_name(base, names)
                   end
 
                 choices =
@@ -2123,6 +2287,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                          "range"
                        ])
 
+                source_page_appearance? =
+                  original_page_appearance? or
+                    Keyword.get(opts, :__retain_html_identity__, false)
+
                 box =
                   if original_page_appearance? do
                     snapped =
@@ -2142,55 +2310,33 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                   end
 
                 appearance_boxes =
-                  page.boxes
-                  |> Enum.filter(&(Map.get(&1, :form_owner) == item.control.id))
-                  |> Enum.map(fn box ->
-                    if original_page_appearance? do
-                      box
-                    else
-                      box
-                      |> Map.put(:x, box.x - item.box.x)
-                      |> Map.put(:y, box.y - item.box.y)
-                      |> Map.delete(:form_owner)
-                      |> then(fn box ->
-                        case Map.get(box, :clip) do
-                          nil ->
-                            box
+                  Enum.filter(page.boxes, &(Map.get(&1, :form_owner) == item.control.id))
 
-                          clip ->
-                            clip = %{clip | x: clip.x - item.box.x, y: clip.y - item.box.y}
+                appearance_boxes =
+                  if source_page_appearance? do
+                    appearance_boxes
+                  else
+                    appearance_boxes
+                    |> DrawingGeometry.translate_boxes(-box.x, -box.y)
+                    |> Enum.map(&Map.delete(&1, :form_owner))
+                  end
 
-                            clip =
-                              case Map.get(clip, :inner_clip) do
-                                nil ->
-                                  clip
-
-                                inner ->
-                                  Map.put(clip, :inner_clip, %{
-                                    inner
-                                    | x: inner.x - item.box.x,
-                                      y: inner.y - item.box.y
-                                  })
-                              end
-
-                            Map.put(box, :clip, clip)
-                        end
-                      end)
-                    end
-                  end)
-
-                appearance = %{size: {box.width, box.height}, boxes: appearance_boxes}
+                appearance = %{
+                  size: {box.width, box.height},
+                  boxes: appearance_boxes
+                }
 
                 appearance =
-                  if original_page_appearance?,
-                    do:
-                      Map.put(appearance, :paint_frame, %{
-                        x: box.x,
-                        y: box.y,
-                        width: page_width,
-                        height: page_height
-                      }),
-                    else: appearance
+                  if source_page_appearance? do
+                    Map.put(appearance, :paint_frame, %{
+                      x: box.x,
+                      y: box.y,
+                      width: page_width,
+                      height: page_height
+                    })
+                  else
+                    appearance
+                  end
 
                 visible_options =
                   MapSet.new(Enum.map(appearance_boxes, &Map.get(&1, :initial_option_id)))
@@ -2222,6 +2368,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                   name: name,
                   html_owner: item.control.initial_state.owner,
                   html_control_id: item.control.id,
+                  html_name_explicit: Map.get(attributes, "name") not in [nil, ""],
                   type: String.to_existing_atom(item.type),
                   value: value,
                   choices: choices,
@@ -2245,6 +2392,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                   appearance: appearance
                 }
 
+                field =
+                  Map.put(
+                    field,
+                    :source_editor,
+                    NativeElixirPdfUtilities.Validators.FormAppearanceValidator.capture(
+                      field,
+                      item.control
+                    )
+                  )
+
                 range_appearance =
                   validate_initial_range_appearance(
                     item.control,
@@ -2252,6 +2409,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                     appearance_boxes,
                     page_height
                   )
+
+                name_validation = validate_field_identity(field, fields)
 
                 cond do
                   range_appearance != :ok ->
@@ -2268,35 +2427,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                     {:halt,
                      error(:invalid_form, "HTML field names cannot contain a period or NUL")}
 
-                  Enum.any?(
-                    fields,
-                    &(&1.name == name and (&1.type != :radio or field.type != :radio))
-                  ) ->
-                    {:halt,
-                     error(
-                       :invalid_form,
-                       "duplicate HTML name #{inspect(name)}; only radio groups may share a name"
-                     )}
-
-                  field.type == :radio and
-                      Enum.any?(fields, &(&1.name == name and &1.html_owner != field.html_owner)) ->
-                    {:halt,
-                     error(
-                       :unsupported_form,
-                       "radio name #{inspect(name)} belongs to different HTML form owners; " <>
-                         "use unique names or forms: :static instead of merging independent groups",
-                       source: name
-                     )}
-
-                  field.type == :radio and
-                      Enum.any?(fields, &(&1.name == name and &1.flags != field.flags)) ->
-                    {:halt,
-                     error(
-                       :unsupported_form,
-                       "radio group #{inspect(name)} mixes enabled and disabled controls; " <>
-                         "make all members enabled or all disabled, or use forms: :static",
-                       source: name
-                     )}
+                  name_validation != :ok ->
+                    {:halt, name_validation}
 
                   field.type == :radio and field.export in ["", "Off"] ->
                     {:halt, error(:invalid_form, "radio export values cannot be empty or Off")}
@@ -2307,18 +2439,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                      error(
                        :invalid_form,
                        "select options require unique export values for interactive PDF choices; use distinct value attributes or forms: :static"
-                     )}
-
-                  field.type == :radio and
-                      Enum.any?(
-                        fields,
-                        &(&1.name == name and
-                              &1.export == field.export)
-                      ) ->
-                    {:halt,
-                     error(
-                       :invalid_form,
-                       "radio groups require unique export values"
                      )}
 
                   true ->
@@ -2336,14 +2456,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                               if is_nil(Map.get(box, :form_owner)) do
                                 [box]
                               else
-                                case Map.get(box, :html_targets, []) do
-                                  [] ->
+                                case {Map.get(box, :html_targets, []),
+                                      Map.get(box, :css_transform_scopes, [])} do
+                                  {[], []} ->
                                     []
 
                                   _targets ->
                                     [
                                       box
-                                      |> Map.take([:x, :y, :html_targets])
+                                      |> Map.take([:x, :y, :html_targets, :css_transform_scopes])
                                       |> Map.merge(%{
                                         type: HtmlValidator.reserve_layout_box(:flow_marker),
                                         width: 0.0,
@@ -2365,21 +2486,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
                   HtmlValidator.reserve_render_resource(:max_appearance_text_bytes, bytes, :forms)
 
-                  if bytes <= Limits.get(:max_appearance_text_bytes),
-                    do:
-                      {:ok, cleaned,
-                       fields
-                       |> Enum.reverse()
-                       |> Enum.map(fn field ->
-                         if Keyword.get(opts, :__retain_html_identity__, false),
-                           do: field,
-                           else: Map.drop(field, [:html_owner, :html_control_id])
-                       end)},
-                    else:
-                      error(
-                        :resource_limit_exceeded,
-                        "HTML control appearance text exceeds the aggregate limit"
-                      )
+                  {:ok, cleaned,
+                   fields
+                   |> Enum.reverse()
+                   |> Enum.map(fn field ->
+                     if Keyword.get(opts, :__retain_html_identity__, false),
+                       do: field,
+                       else: Map.drop(field, [:html_owner, :html_control_id, :html_name_explicit])
+                   end)}
 
                 failure ->
                   failure
@@ -2387,8 +2501,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           end
         end
 
-      _ ->
-        error(:invalid_options, "forms must be :interactive or :static")
+      failure ->
+        failure
     end
   catch
     {:render_resource_limit, failure} -> failure
@@ -2406,7 +2520,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
         |> Enum.flat_map(fn box ->
           case Map.get(box, :embedded_widgets) do
             %{fields: [_ | _]} = record ->
-              [%{record | fields: Enum.map(record.fields, &Map.put(&1, :page, number))}]
+              [
+                %{
+                  record
+                  | fields:
+                      Enum.map(record.fields, fn field ->
+                        field
+                        |> Map.put(:page, number)
+                        |> Map.put(
+                          :html_slice_identity,
+                          {record.document_id, record.source_token, field.html_control_id}
+                        )
+                      end)
+                }
+              ]
 
             _ ->
               []
@@ -2414,10 +2541,30 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
         end)
       end)
 
+    context = NativeElixirPdfUtilities.HtmlToPdf.ResourceContext.current()
+    root_document = if context == nil, do: nil, else: context.document_id
+    {same_document, records} = Enum.split_with(records, &(&1.document_id == root_document))
+
+    root_fields =
+      normalize_required_group_flags(root_fields ++ Enum.flat_map(same_document, & &1.fields))
+      |> normalize_generated_names()
+
     count = length(root_fields) + Enum.reduce(records, 0, &(length(&1.fields) + &2))
 
+    identities =
+      Enum.reduce_while(root_fields, {:ok, []}, fn field, {:ok, previous} ->
+        case validate_field_identity(field, previous) do
+          :ok -> {:cont, {:ok, [field | previous]}}
+          failure -> {:halt, failure}
+        end
+      end)
+
     cond do
-      records != [] and Keyword.get(opts, :forms, :interactive) == :static ->
+      identities |> elem(0) == :error ->
+        identities
+
+      (records != [] or same_document != []) and
+          Keyword.get(opts, :forms, :interactive) == :static ->
         error(
           :unsupported_form,
           "interactive child fields require surfaces prepared with forms: :interactive; recompute static child artwork for forms: :static"
@@ -2429,7 +2576,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           "composed HTML controls exceed the shared field or appearance count limit"
         )
 
-      length(Enum.uniq_by(records, & &1.token)) != length(records) ->
+      length(Enum.uniq_by(records ++ same_document, & &1.token)) !=
+          length(records) + length(same_document) ->
         error(
           :unsupported_form,
           "a child control document cannot repeat across pages or page furniture"
@@ -2442,7 +2590,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
         Enum.reduce_while(document_order, {:ok, [root_fields], names}, fn id,
                                                                           {:ok, chunks, names} ->
-          own = documents[id] |> Enum.flat_map(& &1.fields)
+          own =
+            documents[id]
+            |> Enum.flat_map(& &1.fields)
+            |> normalize_required_group_flags()
+            |> normalize_generated_names()
+
           name_work = Enum.reduce(own, 0, &(byte_size(&1.name) + &2))
 
           prefix =
@@ -2470,33 +2623,25 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                  "child PDF field name exceeds max_pdf_form_text_bytes"
                )}
 
-            length(Enum.uniq_by(own, & &1.html_control_id)) != length(own) ->
+            own
+            |> Enum.group_by(& &1.html_control_id)
+            |> Enum.any?(fn {_id, fields} ->
+              length(Enum.uniq_by(fields, & &1.html_slice_identity)) != 1
+            end) ->
               {:halt,
                error(:unsupported_form, "a child control cannot repeat in composed artwork")}
 
             true ->
-              groups = Enum.group_by(own, & &1.name)
-
-              invalid =
-                Enum.find(groups, fn {_name, members} ->
-                  first = hd(members)
-
-                  length(members) > 1 and
-                    (first.type != :radio or
-                       Enum.any?(
-                         members,
-                         &(&1.type != :radio or &1.html_owner != first.html_owner or
-                             &1.flags != first.flags)
-                       ) or
-                       length(Enum.uniq_by(members, & &1.export)) != length(members))
+              identities =
+                Enum.reduce_while(own, {:ok, []}, fn field, {:ok, previous} ->
+                  case validate_field_identity(field, previous) do
+                    :ok -> {:cont, {:ok, [field | previous]}}
+                    failure -> {:halt, failure}
+                  end
                 end)
 
-              if invalid do
-                {:halt,
-                 error(
-                   :invalid_form,
-                   "composed child fields must retain unique names or one consistent radio owner and export group"
-                 )}
+              if elem(identities, 0) == :error do
+                {:halt, identities}
               else
                 own = Enum.map(own, &Map.put(&1, :name, prefix <> &1.name))
                 names = Enum.reduce(own, names, &MapSet.put(&2, &1.name))
@@ -2511,6 +2656,87 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     end
   catch
     {:render_resource_limit, failure} -> failure
+  end
+
+  # Canonical name and radio ownership rules apply before and after native
+  # document composition. Fields retain the HTML identities until this point.
+  defp validate_field_identity(field, previous) do
+    members =
+      Enum.filter(previous, fn member ->
+        member.name == field.name and
+          (Map.get(field, :html_slice_identity) == nil or
+             Map.get(member, :html_slice_identity) != field.html_slice_identity)
+      end)
+
+    cond do
+      members != [] and (field.type != :radio or Enum.any?(members, &(&1.type != :radio))) ->
+        error(
+          :invalid_form,
+          "duplicate HTML name #{inspect(field.name)}; only radio groups may share a name"
+        )
+
+      field.type == :radio and Enum.any?(members, &(&1.html_owner != field.html_owner)) ->
+        error(
+          :unsupported_form,
+          "radio name #{inspect(field.name)} belongs to different HTML form owners; " <>
+            "use unique names or forms: :static instead of merging independent groups",
+          source: field.name
+        )
+
+      field.type == :radio and Enum.any?(members, &(&1.flags != field.flags)) ->
+        error(
+          :unsupported_form,
+          "radio group #{inspect(field.name)} mixes enabled and disabled controls; " <>
+            "make all members enabled or all disabled, or use forms: :static",
+          source: field.name
+        )
+
+      field.type == :radio and Enum.any?(members, &(&1.export == field.export)) ->
+        error(:invalid_form, "radio groups require unique export values")
+
+      true ->
+        :ok
+    end
+  end
+
+  defp available_field_name(base, names) do
+    Stream.iterate(0, &(&1 + 1))
+    |> Enum.find_value(fn suffix ->
+      candidate = if suffix == 0, do: base, else: "#{base}_#{suffix}"
+      if MapSet.member?(names, candidate), do: nil, else: candidate
+    end)
+  end
+
+  defp normalize_generated_names(fields) do
+    names =
+      fields |> Enum.filter(&Map.get(&1, :html_name_explicit, true)) |> MapSet.new(& &1.name)
+
+    fields
+    |> Enum.map_reduce({names, %{}}, fn field, {names, slices} ->
+      identity = Map.get(field, :html_slice_identity)
+
+      if Map.get(field, :html_name_explicit, true) do
+        {field, {names, slices}}
+      else
+        name = Map.get(slices, identity) || available_field_name(field.name, names)
+        slices = if identity == nil, do: slices, else: Map.put(slices, identity, name)
+        {Map.put(field, :name, name), {MapSet.put(names, name), slices}}
+      end
+    end)
+    |> elem(0)
+  end
+
+  defp normalize_required_group_flags(fields) do
+    required =
+      fields
+      |> Enum.filter(&(&1.type == :radio and Bitwise.band(&1.flags, 2) != 0))
+      |> MapSet.new(&{&1.name, &1.html_owner})
+
+    Enum.map(fields, fn field ->
+      if field.type == :radio and MapSet.member?(required, {field.name, field.html_owner}),
+        do: Map.update!(field, :flags, &Bitwise.bor(&1, 2)),
+        else: field
+    end)
   end
 
   defp validate_initial_controls(pages) do
@@ -2550,7 +2776,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                 attributes_valid? and
                   (tag != "input" or
                      HtmlValidator.input_type(Map.get(attributes, "type", "text")) != "range" or
-                     valid_initial_range?(state, attributes))
+                     (valid_initial_range?(state, attributes) and
+                        valid_initial_range_association?(state, attributes)))
 
               temporal_valid? =
                 attributes_valid? and
@@ -2617,7 +2844,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   defp validate_initial_range_appearance(control, widget, boxes, page_height) do
     if Map.has_key?(control.initial_state, :range) do
       Enum.reduce_while(boxes, :ok, fn box, status ->
-        if Map.get(box, :role) == :range_thumb do
+        if Map.get(box, :role) in [:range_thumb, :range_tick] do
           if NativeElixirPdfUtilities.Validators.WriterValidator.valid_range_frame?(box) do
             painted = NativeElixirPdfUtilities.HtmlToPdf.RangeArtwork.snap_box(box, page_height)
 
@@ -2629,7 +2856,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
               {:halt,
                error(
                  :unsupported_form,
-                 "Disabled Range thumb paints outside the PDF widget rectangle; use forms: :static to preserve overflowing initial artwork",
+                 "Disabled Range artwork paints outside the PDF widget rectangle; use forms: :static to preserve overflowing initial artwork",
                  module: __MODULE__,
                  operation: :write_pdf,
                  source: "range"
@@ -2637,7 +2864,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
             end
           else
             {:halt,
-             error(:invalid_form, "Range appearance requires a validated native thumb frame",
+             error(:invalid_form, "Range appearance requires a validated native artwork frame",
                module: __MODULE__,
                operation: :write_pdf,
                source: "range"

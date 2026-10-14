@@ -107,6 +107,27 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternValidatorTest do
     assert diagnostic.message =~ "max_html_form_native_allocation_bytes"
   end
 
+  test "early native allocation exhaustion preserves the caller and the actual limit diagnostic" do
+    Limits.install(Map.put(Limits.effective(), :max_html_form_native_allocation_bytes, 100))
+    flags = Process.info(self(), :trap_exit)
+    marker = make_ref()
+    send(self(), {:caller_message, marker})
+
+    for _ <- 1..8 do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlPatternValidator.initial_pattern("a+", [String.duplicate("a", 500_000)])
+
+      assert diagnostic.stage == :html
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.operation == :initial_form_value
+      assert diagnostic.message =~ "max_html_form_native_allocation_bytes"
+    end
+
+    assert Process.info(self(), :trap_exit) == flags
+    assert_receive {:caller_message, ^marker}
+    refute_receive {:EXIT, _port, _reason}
+  end
+
   test "character scans consume interpreter fuel even without exponential backtracking" do
     Limits.install(Map.put(Limits.effective(), :max_html_pattern_match_work, 100))
 

@@ -78,7 +78,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCellPageFragmentTest do
     paints = Enum.flat_map(pages, &artwork(&1.boxes))
     assert Enum.count(paints, &(Map.get(&1, :text) == "Line16")) == 1
     link = Enum.find(paints, &(Map.get(&1, :text) == "Jump"))
-    assert {:xyz, 2, _x, _y} = link.link_destination
+    assert {:xyz, 2, x, y} = link.link_destination
 
     first_band =
       Enum.filter(layout.boxes, fn box ->
@@ -91,10 +91,105 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCellPageFragmentTest do
     assert {:ok, first_paint, _state} =
              HtmlTableValidator.prepare_cell_page_fragments(first_band, %{}, 12.0)
 
-    assert Enum.any?(
+    refute Enum.any?(
              artwork(first_paint),
-             &(Map.get(&1, :type) == :flow_marker and Map.get(&1, :html_targets, []) != [])
+             &(Map.get(&1, :html_targets, []) != [])
            )
+
+    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.PdfWriter.render(pages)
+    assert {:ok, %{pages: [first, second]}} = NativeElixirPdfUtilities.Text.extract_spans(pdf)
+    refute Enum.any?(first.spans, &(&1.text == "Line16"))
+    assert [target] = Enum.filter(second.spans, &(&1.text == "Line16"))
+    assert target.paints_text? and target.render_mode == 0
+    assert target.font_size == 12.0
+    [a, b, _c, _d, _x, _y] = target.ctm
+    assert_in_delta target.font_size * :math.sqrt(a * a + b * b), 9.0, 0.0001
+    assert_in_delta target.x, x, 0.0001
+    assert y >= 160.0 - target.y and y <= 148.0
+    assert target.y >= 12.0
+
+    assert {:ok, context} = NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf)
+    source_font = Enum.find(paints, &(Map.get(&1, :text) == "Line16")).font_face
+    assert source_font.family == "DejaVu Sans"
+
+    glyph_ids =
+      for %{type: :text, text: text, font_face: ^source_font} <- paints,
+          codepoint <- String.to_charlist(text),
+          do: Map.fetch!(source_font.cmap, codepoint)
+
+    assert {:ok, subset} =
+             NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubset.subset(source_font, glyph_ids)
+
+    fontfiles =
+      for {_, %{value: value}} <- context.document.objects,
+          is_map(value),
+          {:ref, _} = ref <- [value["FontFile2"]] do
+        assert {:ok, bytes} =
+                 NativeElixirPdfUtilities.Pdf.Reader.decoded_stream(context.document, ref)
+
+        bytes
+      end
+
+    assert subset in fontfiles
+
+    destinations =
+      for {_ref, %{value: %{"Subtype" => {:name, "Link"}, "Dest" => dest}}} <-
+            context.document.objects,
+          do: dest
+
+    assert [[page_ref, {:name, "XYZ"}, dest_x, dest_y, _zoom]] = destinations
+    assert page_ref == {:ref, Enum.at(context.pages, 1).ref}
+    assert_in_delta dest_x, x, 0.0001
+    assert_in_delta dest_y, y, 0.0001
+
+    root = Path.join(System.tmp_dir!(), "table-target-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf!(root) end)
+    path = Path.join(root, "target.pdf")
+    File.write!(path, pdf)
+    assert {_, 0} = System.cmd("qpdf", ["--check", path], stderr_to_stdout: true)
+    assert {bbox, 0} = System.cmd("pdftotext", ["-bbox", path, "-"], stderr_to_stdout: true)
+
+    assert [_, min_x, min_y, max_x, max_y] =
+             Regex.run(
+               ~r/<word xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">Line16<\/word>/,
+               bbox
+             )
+
+    assert length(Regex.scan(~r/>Line16<\/word>/, bbox)) == 1
+    [min_x, min_y, max_x, max_y] = Enum.map([min_x, min_y, max_x, max_y], &String.to_float/1)
+    assert_in_delta min_x, x, 0.0001
+    assert min_y >= 12.0 and max_y <= 148.0
+
+    assert {_, 0} =
+             System.cmd(
+               "pdftoppm",
+               [
+                 "-r",
+                 "72",
+                 "-f",
+                 "2",
+                 "-l",
+                 "2",
+                 "-singlefile",
+                 "-x",
+                 Integer.to_string(floor(min_x)),
+                 "-y",
+                 Integer.to_string(floor(min_y)),
+                 "-W",
+                 Integer.to_string(ceil(max_x) - floor(min_x)),
+                 "-H",
+                 Integer.to_string(ceil(max_y) - floor(min_y)),
+                 path,
+                 Path.join(root, "target")
+               ],
+               stderr_to_stdout: true
+             )
+
+    ppm = File.read!(Path.join(root, "target.ppm"))
+    [header] = Regex.run(~r/^P6\s+\d+\s+\d+\s+255\s/, ppm)
+    pixels = binary_part(ppm, byte_size(header), byte_size(ppm) - byte_size(header))
+    assert Enum.any?(:binary.bin_to_list(pixels), &(&1 < 128))
   end
 
   test "direct fragment preparation uses actual available space and validates coherent state", %{

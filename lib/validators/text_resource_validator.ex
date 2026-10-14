@@ -305,7 +305,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
                        page,
                        depth + 1
                      ) do
-                {:ok, %{instructions: instructions, matrix: matrix}, state.preparation}
+                {:ok, %{instructions: instructions, matrix: matrix, source_ref: xobject_ref},
+                 state.preparation}
               end
 
             false ->
@@ -402,7 +403,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
           {:ok, {prepared_font, stream_uses}} ->
             case TextValidator.charge_stream_uses(preparation_context, stream_uses, page) do
               {:ok, preparation_context} ->
-                {:ok, Map.put(prepared_font, :name, font_name), preparation_context}
+                {:ok, Map.merge(prepared_font, %{name: font_name, source_ref: font_ref}),
+                 preparation_context}
 
               {:error, {reason, diagnostic}} ->
                 {:error, {reason, with_debug_details(diagnostic, page: page, font: font_name)}}
@@ -422,7 +424,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
                 | prepared_fonts: Map.put(preparation_context.prepared_fonts, ref, cached)
               }
 
-              {:ok, prepared_font, preparation_context}
+              {:ok, Map.put(prepared_font, :source_ref, font_ref), preparation_context}
             end
         end
 

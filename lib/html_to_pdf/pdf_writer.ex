@@ -18,7 +18,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.WriterValidator
-  alias NativeElixirPdfUtilities.Validators.SvgFormValidator
+  alias NativeElixirPdfUtilities.Validators.PdfFormValidator
 
   # CSS defines one pixel as 1/96 inch, which is a fixed 0.75 PDF points.
   @css_pixel_points 0.75
@@ -66,13 +66,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   A `:drawing_group` contains non-negative local `:width` and `:height`, a
   six-value `:transform` tuple, optional `:baseline` within its height, optional
   rectangular `:clip`, and child `:boxes`. Coordinates are PDF points measured
-  from the local bottom-left. This bounded slice accepts positive axis-aligned
-  scaling and translation, `{scale_x, 0, 0, scale_y, x, y}`. It composes text,
+  from the local bottom-left. Nondegenerate affine matrices support translation,
+  scaling, rotation, skew and reflection. It composes text,
   rectangles, images, glyph groups and nested drawing groups. Clips use local
   coordinates and intersect ancestor clips; linked text receives the same
   transform and visible intersection. A zero dimension prepares an empty clip.
-  Dimensions alone do not clip nondegenerate groups. Rotation, skew, reflection
-  and raw grouped form controls return explicit diagnostics. Prepared child
+  Dimensions alone do not clip nondegenerate groups. Rotation, skew and
+  reflection retain actual transformed clips and link quadrilaterals. Raw
+  grouped form controls return explicit diagnostics. Prepared child
   viewports carry validator-issued fields separately, preserving their document
   names, owners, actual clipped widgets and genuine appearance paint.
   Group depth and all nested drawing instructions use shared resource limits.
@@ -92,12 +93,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   supplies an open down chevron for native menu strokes. `{:diagonal, :up}`
   supplies an open rising stroke for native textarea resize artwork.
 
+  Embedded CSS source text whose baseline is already resolved may set
+  `:css_source_positioned` to true with `:snap_to_css_pixel_grid` false. The
+  writer preserves supplied point coordinates while retaining the CSS print
+  canvas, selected font and CSS glyph advance plan. This paint flag does not
+  confer source ownership.
+
   Text, rectangle and image boxes may carry an absolute `:clip` rectangle with
   finite bounded `x`/`y` and positive `width`/`height`. It may supply a
   nonnegative `border_radius` and one `inner_clip` rectangle with the same numeric
   fields and optional radius. Radii are normalized to half the smaller dimension;
   only rounded or nested clips may have zero area, which paints nothing.
   Each intersected clip is scoped to its box.
+
+  Validator-prepared disabled native select paint carries its actual owner and
+  fixed UA opacity. The writer composites its complete artwork in an isolated
+  transparency Form, shared by page paint and original-page widget appearances.
+  Child paint retains its native alpha; opacity is applied once to the group.
 
   Gauge rectangles can carry a validator-checked `:gauge_fraction`, boolean
   `:gauge_quantize_value` and `:gauge_clip_track` paint flags, and a
@@ -111,53 +123,57 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   Native Range rectangles carry a validator-checked `:range_frame` tuple of
   relative left/bottom offsets, host width/height and thumb left/top offsets.
   Fixed source artwork snaps against the original page once and survives the
-  existing original-page appearance translation. Overflowing disabled thumbs
-  require static rendering because PDF widget BBoxes clip their appearance.
+  existing original-page appearance translation. Tick rectangles also carry a
+  validated `:range_tick_frame` tuple of content left/width and suggested-value
+  fraction for Chromium's integer track placement. Overflowing disabled artwork
+  requires static rendering because PDF widget BBoxes clip its appearance.
   """
   @spec render([page()], [render_option()]) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def render(pages, opts \\ []) do
-    HtmlValidator.with_render_budget(fn ->
-      case WriterValidator.prepare(pages, opts) do
-        {:ok, context} ->
-          with {:ok, pages, controls} <-
-                 NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare(
-                   context.pages,
-                   opts
-                 ),
-               {:ok, controls} <-
-                 NativeElixirPdfUtilities.Validators.HtmlFormValidator.merge_composition(
-                   pages,
-                   controls,
-                   opts
-                 ),
-               {font_resources, next_object_id} <- font_resources(pages, 3),
-               {:ok, font_resources} <-
-                 subset_font_resources(font_resources, context.subset_fonts) do
-            pdf =
-              pages_to_pdf(
-                pages,
-                context.metadata,
-                context.outlines,
-                context.compress_streams,
-                font_resources,
-                next_object_id
-              )
+    Font.with_measurement_cache(fn ->
+      HtmlValidator.with_render_budget(fn ->
+        case WriterValidator.prepare(pages, opts) do
+          {:ok, context} ->
+            with {:ok, pages, controls} <-
+                   NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare(
+                     context.pages,
+                     Keyword.put(opts, :__retain_html_identity__, true)
+                   ),
+                 {:ok, controls} <-
+                   NativeElixirPdfUtilities.Validators.HtmlFormValidator.merge_composition(
+                     pages,
+                     controls,
+                     opts
+                   ),
+                 {font_resources, next_object_id} <- font_resources(pages, 3),
+                 {:ok, font_resources} <-
+                   subset_font_resources(font_resources, context.subset_fonts) do
+              pdf =
+                pages_to_pdf(
+                  pages,
+                  context.metadata,
+                  context.outlines,
+                  context.compress_streams,
+                  font_resources,
+                  next_object_id
+                )
 
-            case controls do
-              [] ->
-                {:ok, pdf}
+              case controls do
+                [] ->
+                  {:ok, pdf}
 
-              _ ->
-                with {:ok, document} <- NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf) do
-                  NativeElixirPdfUtilities.Pdf.FormWriter.create(document, controls)
-                end
+                _ ->
+                  with {:ok, document} <- NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf) do
+                    NativeElixirPdfUtilities.Pdf.FormWriter.create(document, controls)
+                  end
+              end
             end
-          end
 
-        {:error, {reason, diagnostic}} ->
-          {:error, {reason, Map.put(diagnostic, :module, __MODULE__)}}
-      end
+          {:error, {reason, diagnostic}} ->
+            {:error, {reason, Map.put(diagnostic, :module, __MODULE__)}}
+        end
+      end)
     end)
   end
 
@@ -176,53 +192,64 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
            [NativeElixirPdfUtilities.Pdf.Reader.value()], pos_integer()}
           | {:error, {atom(), Diagnostics.diagnostic()}}
   def appearance_objects(frames, first_object_id) do
-    HtmlValidator.with_render_budget(fn ->
-      with {:ok, context} <- WriterValidator.prepare_appearances(frames, first_object_id),
-           {fonts, next} <- font_resources(context.pages, first_object_id),
-           {:ok, fonts} <- subset_font_resources(fonts, context.subset_fonts) do
-        frames = prepare_images(context.pages)
-        images = image_resources(frames, next)
-        states_start = next + image_object_count(images)
-        states = graphics_state_resources(frames, states_start)
-        first_form_id = states_start + map_size(states)
+    Font.with_measurement_cache(fn ->
+      HtmlValidator.with_render_budget(fn ->
+        with {:ok, context} <- WriterValidator.prepare_appearances(frames, first_object_id),
+             {fonts, next} <- font_resources(context.pages, first_object_id),
+             {:ok, fonts} <- subset_font_resources(fonts, context.subset_fonts) do
+          frames = prepare_images(context.pages)
+          images = image_resources(frames, next)
+          states_start = next + image_object_count(images)
+          states = graphics_state_resources(frames, states_start)
+          first_form_id = states_start + map_size(states)
 
-        {forms, next} =
-          Enum.map_reduce(frames, first_form_id, fn frame, id ->
-            {fonts, images, states} = page_resources(frame, fonts, images, states)
-            {width, height} = frame.size
+          {forms, next} =
+            Enum.map_reduce(frames, first_form_id, fn frame, id ->
+              {fonts, images, states} = page_resources(frame, fonts, images, states)
+              {width, height} = frame.size
 
-            content =
-              case Map.get(frame, :paint_frame) do
-                nil ->
-                  content_stream(frame.boxes, height, fonts, images, states)
+              content =
+                case Map.get(frame, :paint_frame) do
+                  nil ->
+                    content_stream(frame.boxes, height, fonts, images, states)
 
-                origin ->
-                  "q 1 0 0 1 #{format_number(-origin.x)} #{format_number(-origin.y)} cm\n" <>
-                    content_stream(frame.boxes, origin.height, fonts, images, states) <> "\nQ"
-              end
+                  origin ->
+                    "q 1 0 0 1 #{format_number(-origin.x)} #{format_number(-origin.y)} cm\n" <>
+                      content_stream(
+                        frame.boxes,
+                        origin.height,
+                        fonts,
+                        images,
+                        states
+                      ) <> "\nQ"
+                end
 
-            dictionary =
-              "<< /Type /XObject /Subtype /Form /BBox [0 0 #{format_number(width)} #{format_number(height)}] /Resources << /Font << #{font_resource_dictionary(fonts)} >>#{xobject_resource_dictionary(images)}#{graphics_state_resource_dictionary(states)}#{gauge_gradient_dictionary(frame.boxes)} >> /Length #{byte_size(content)} >>"
+              dictionary =
+                "<< /Type /XObject /Subtype /Form /BBox [0 0 #{format_number(width)} #{format_number(height)}] /Resources << /Font << #{font_resource_dictionary(fonts)} >>#{xobject_resource_dictionary(images)}#{graphics_state_resource_dictionary(states)}#{gauge_gradient_dictionary(frame.boxes)} >> /Length #{byte_size(content)} >>"
 
-            {{id, dictionary <> "\nstream\n" <> content <> "\nendstream"}, id + 1}
+              {{id, dictionary <> "\nstream\n" <> content <> "\nendstream"}, id + 1}
+            end)
+
+          HtmlValidator.check_render_resource(:max_pdf_objects, next, :writer)
+
+          serialized =
+            font_objects(fonts, context.compress_streams) ++
+              image_objects(images) ++
+              select_opacity_objects(images, fonts, states) ++
+              graphics_state_objects(states) ++ forms
+
+          Enum.reduce(serialized, 0, fn {_id, body}, bytes ->
+            bytes = bytes + byte_size(body)
+            HtmlValidator.check_render_resource(:max_rendered_pdf_bytes, bytes, :writer)
+            bytes
           end)
 
-        HtmlValidator.check_render_resource(:max_pdf_objects, next, :writer)
-
-        serialized =
-          font_objects(fonts, context.compress_streams) ++
-            image_objects(images) ++ graphics_state_objects(states) ++ forms
-
-        Enum.reduce(serialized, 0, fn {_id, body}, bytes ->
-          bytes = bytes + byte_size(body)
-          HtmlValidator.check_render_resource(:max_rendered_pdf_bytes, bytes, :writer)
-          bytes
-        end)
-
-        with {:ok, objects} <- NativeElixirPdfUtilities.Pdf.Reader.parse_object_bodies(serialized) do
-          {:ok, objects, Enum.map(forms, fn {id, _body} -> {:ref, {id, 0}} end), next}
+          with {:ok, objects} <-
+                 NativeElixirPdfUtilities.Pdf.Reader.parse_object_bodies(serialized) do
+            {:ok, objects, Enum.map(forms, fn {id, _body} -> {:ref, {id, 0}} end), next}
+          end
         end
-      end
+      end)
     end)
   end
 
@@ -295,6 +322,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       ] ++
         font_objects(font_resources, compress_streams?) ++
         image_objects(image_resources) ++
+        select_opacity_objects(image_resources, font_resources, graphics_state_resources) ++
         graphics_state_objects(graphics_state_resources) ++
         page_objects ++ serialized_outline_objects(outline_objects.objects)
 
@@ -358,9 +386,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp prepare_images(pages) do
-    Enum.map(pages, fn page ->
+    pages
+    |> Enum.with_index()
+    |> Enum.map(fn {page, page_index} ->
       boxes =
-        Enum.map(page.boxes, fn box ->
+        page.boxes
+        |> Enum.with_index()
+        |> Enum.map(fn {box, box_index} ->
+          box =
+            if Map.has_key?(box, :css_border_surface),
+              do:
+                Map.put(
+                  box,
+                  :select_opacity_resource_key,
+                  {:css_border_surface, page_index, box_index}
+                ),
+              else: box
+
+          box =
+            case Map.get(box, :initial_select_opacity) do
+              nil ->
+                box
+
+              %{owner: owner} ->
+                Map.put(box, :select_opacity_resource_key, {:select_opacity, page_index, owner})
+            end
+
           case box.type do
             :image -> Map.put(box, :image_resource_key, image_key(box.image))
             _ -> box
@@ -392,6 +443,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                    :drawing_group_end
                  ] ->
               {fonts, images}
+          end
+
+        images =
+          case Map.get(box, :select_opacity_resource_key) do
+            nil -> images
+            key -> [key | images]
           end
 
         {fonts, images, box_graphics_state_keys(box) ++ states}
@@ -517,7 +574,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp content_object(page, font_resources, image_resources, graphics_state_resources, compress?) do
+  defp content_object(
+         page,
+         font_resources,
+         image_resources,
+         graphics_state_resources,
+         compress?
+       ) do
     content =
       content_stream(
         page.boxes,
@@ -551,67 +614,128 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
          image_resources,
          graphics_state_resources
        ) do
-    Enum.map_join(boxes, "\n", fn box ->
-      case box.type do
-        :text ->
-          text_stream(
-            box,
-            Map.get(box, :drawing_page_height, page_height),
-            font_resources,
-            graphics_state_resources
-          )
+    {pieces, _groups} =
+      Enum.map_reduce(boxes, MapSet.new(), fn box, groups ->
+        {piece, groups} =
+          case Map.get(box, :select_opacity_resource_key) do
+            nil ->
+              {box_content_stream(
+                 box,
+                 page_height,
+                 font_resources,
+                 image_resources,
+                 graphics_state_resources
+               ), groups}
 
-        :rect ->
-          rect_stream(
-            box,
-            Map.get(box, :drawing_page_height, page_height),
-            graphics_state_resources
-          )
+            key ->
+              if MapSet.member?(groups, key) do
+                {"", groups}
+              else
+                resource = Map.fetch!(image_resources, key)
+                state = Map.fetch!(graphics_state_resources, {:group, resource.alpha})
 
-        :image ->
-          image_stream(box, image_resources)
+                clip =
+                  case resource.clip do
+                    nil ->
+                      ""
 
-        :link_region ->
-          ""
+                    clip ->
+                      clip =
+                        clip
+                        |> Map.put(:snap_to_css_pixel_grid, true)
+                        |> Map.put(:y, resource.page_height - clip.y - clip.height)
+                        |> PageGeometry.snap_box_to_css_pixel_grid()
 
-        :actual_text_start ->
-          {:ok, encoded} = box.text |> InfoCodec.encode_text() |> InfoCodec.serialize_value()
-          IO.iodata_to_binary(["/Span << /ActualText ", encoded, " >> BDC"])
+                      clip = %{clip | y: resource.page_height - clip.y - clip.height}
+                      rect_path(clip) <> " W n "
+                  end
 
-        :actual_text_end ->
-          "EMC"
+                {"q /#{state.name} gs #{clip}/#{resource.name} Do Q", MapSet.put(groups, key)}
+              end
+          end
 
-        :drawing_group_start ->
-          transform =
-            if Map.get(box, :role) in [:frameset_viewport, :iframe_viewport] do
-              {a, b, c, d, x, y} = box.transform
-              # Original Chromium clips use .23999999 * 3.125 rather than an
-              # exact .75 scale. Keep only paint below those half-pixel ties.
-              # Iframe client clipping needs the vertical tie adjustment too.
-              # Layout and transported annotation geometry retain their real bounds.
-              {a, b, c, d, x - @raster_boundary_bias,
-               if(Map.get(box, :role) == :iframe_viewport, do: y + @raster_boundary_bias, else: y)}
-            else
-              box.transform
-            end
+        {IO.iodata_to_binary(piece), groups}
+      end)
 
-          matrix = transform |> Tuple.to_list() |> Enum.map_join(" ", &format_number/1)
+    Enum.join(pieces, "\n")
+  end
 
-          clip =
-            case box.clip do
-              nil ->
-                ""
+  defp box_content_stream(
+         box,
+         page_height,
+         font_resources,
+         image_resources,
+         graphics_state_resources
+       ) do
+    case box.type do
+      :text ->
+        text_stream(
+          box,
+          Map.get(box, :drawing_page_height, page_height),
+          font_resources,
+          graphics_state_resources
+        )
 
-              %{x: x, y: y, width: width, height: height} ->
-                Enum.map_join([x, y, width, height], " ", &format_number/1) <> " re W n"
-            end
+      :rect ->
+        rect_stream(
+          box,
+          Map.get(box, :drawing_page_height, page_height),
+          graphics_state_resources
+        )
 
-          "q " <> matrix <> " cm " <> clip
+      :image ->
+        paint =
+          image_stream(box, Map.get(box, :drawing_page_height, page_height), image_resources)
 
-        :drawing_group_end ->
-          "Q"
-      end
-    end)
+        case Map.get(box.image, :logical_text) do
+          nil ->
+            paint
+
+          text ->
+            {:ok, encoded} = text |> InfoCodec.encode_text() |> InfoCodec.serialize_value()
+            ["/Span << /ActualText ", encoded, " >> BDC\n", paint, "\nEMC"]
+        end
+
+      :link_region ->
+        ""
+
+      :actual_text_start ->
+        {:ok, encoded} = box.text |> InfoCodec.encode_text() |> InfoCodec.serialize_value()
+        IO.iodata_to_binary(["/Span << /ActualText ", encoded, " >> BDC"])
+
+      :actual_text_end ->
+        "EMC"
+
+      :drawing_group_start ->
+        transform =
+          if Map.get(box, :role) in [:frameset_viewport, :iframe_viewport] do
+            {a, b, c, d, x, y} = box.transform
+            # Original Chromium clips use .23999999 * 3.125 rather than an
+            # exact .75 scale. Keep only paint below those half-pixel ties.
+            # Iframe client clipping needs the vertical tie adjustment too.
+            # Layout and transported annotation geometry retain their real bounds.
+            {a, b, c, d, x - @raster_boundary_bias,
+             if(Map.get(box, :role) == :iframe_viewport, do: y + @raster_boundary_bias, else: y)}
+          else
+            box.transform
+          end
+
+        matrix = transform |> Tuple.to_list() |> Enum.map_join(" ", &format_number/1)
+
+        clip =
+          case box.clip do
+            nil ->
+              ""
+
+            %{x: x, y: y, width: width, height: height} ->
+              Enum.map_join([x, y, width, height], " ", &format_number/1) <> " re W n"
+          end
+
+        "q " <> matrix <> " cm " <> clip
+
+      :drawing_group_end ->
+        "Q"
+    end
   end
 
   defp link_annotations(page) do
@@ -750,33 +874,72 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       {_text, font_size} ->
         {red, green, blue} = color_channels(box.color)
         font_resource = Map.fetch!(font_resources, font_key(box))
-        text_operator = text_operator(box, font_resource)
-
-        {text_x, text_y} = DrawingGeometry.text_position(box, page_height)
+        paint = WriterValidator.prepare_text_paint(box, page_height)
+        coordinate_scale = if paint == nil, do: 1.0, else: paint.css_pixels_per_point
+        text_operator = text_operator(box, font_resource, coordinate_scale)
 
         text =
-          [
-            "BT",
-            " /",
-            font_resource.name,
-            " ",
-            format_number(font_size),
-            " Tf",
-            " ",
-            format_number(red),
-            " ",
-            format_number(green),
-            " ",
-            format_number(blue),
-            " rg",
-            " ",
-            format_number(text_x),
-            " ",
-            format_number(text_y),
-            " Td",
-            text_operator,
-            " ET"
-          ]
+          case paint do
+            nil ->
+              {text_x, text_y} = DrawingGeometry.text_position(box, page_height)
+
+              [
+                "BT",
+                " /",
+                font_resource.name,
+                " ",
+                format_number(font_size),
+                " Tf",
+                " ",
+                format_number(red),
+                " ",
+                format_number(green),
+                " ",
+                format_number(blue),
+                " rg",
+                " ",
+                format_number(text_x),
+                " ",
+                format_number(text_y),
+                " Td",
+                text_operator,
+                " ET"
+              ]
+
+            paint ->
+              scale = :erlang.float_to_binary(paint.point_scale, decimals: 8)
+
+              [
+                "q ",
+                scale,
+                " 0 0 -",
+                scale,
+                " 0 ",
+                format_number(page_height),
+                " cm ",
+                format_number(paint.css_scale),
+                " 0 0 ",
+                format_number(paint.css_scale),
+                " 0 0 cm BT /",
+                font_resource.name,
+                " ",
+                format_number(paint.size),
+                " Tf ",
+                format_number(red),
+                " ",
+                format_number(green),
+                " ",
+                format_number(blue),
+                " rg ",
+                "1 0 0 -1 ",
+                format_number(paint.x),
+                " ",
+                format_number(paint.y),
+                " Tm",
+                text_operator,
+                " ET Q"
+              ]
+          end
 
         text =
           case opacity_resource(box.color, :fill, graphics_state_resources) do
@@ -800,21 +963,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp painted_font_size(box) do
-    case Map.get(box, :snap_to_css_pixel_grid, false) do
+    case WriterValidator.css_source_text?(box) do
       true ->
-        size = Float.floor(box.font_size / @css_pixel_points * 100) / 100 * @css_pixel_points
-        # Explicit math forms can land on a font-size raster tie. Bias below it;
-        # glyph_text_operator compensates advances to retain the measured width.
-        if Map.has_key?(box, :glyph_ids) and size > 0,
-          do: size - @raster_boundary_bias,
-          else: size
+        Float.floor(box.font_size / @css_pixel_points * 100) / 100 * @css_pixel_points
 
       false ->
         box.font_size
     end
   end
 
-  defp text_operator(box, font_resource) do
+  defp text_operator(box, font_resource, coordinate_scale) do
     operator =
       case {Map.get(font_resource, :font_face), Map.fetch(box, :glyph_ids)} do
         {%{type: :embedded}, {:ok, glyph_ids}} ->
@@ -822,36 +980,62 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
         {%{type: :embedded} = font, :error} ->
           size = box.font_size
-          shaped_text = Font.shape_ligatures(box.text, font, Map.get(box, :letter_spacing, 0))
+          css_advances? = WriterValidator.css_source_text?(box)
+
+          shaped_text =
+            if css_advances?,
+              do: box.text,
+              else: Font.shape_ligatures(box.text, font, Map.get(box, :letter_spacing, 0))
 
           shaped_size =
-            if Map.get(box, :snap_to_css_pixel_grid, false),
+            if css_advances?,
               do: Float.floor(size / 0.75 * 64) / 64 * 0.75,
               else: size
 
           painted_size = painted_font_size(box)
 
           case painted_size > 0 and
-                 (shaped_size != painted_size or map_size(Map.get(font, :kerning, %{})) > 0) do
+                 (css_advances? or shaped_size != painted_size or
+                    map_size(Map.get(font, :kerning, %{})) > 0) do
             true ->
-              glyphs =
-                shaped_text
-                |> String.to_charlist()
-                |> Enum.chunk_every(2, 1, [nil])
-                |> Enum.map(fn [codepoint, next] ->
-                  glyph_id = Map.get(font.cmap, codepoint, 0)
-                  next_id = Map.get(font.cmap, next, 0)
+              advances =
+                if css_advances? do
+                  Font.css_glyph_advances(
+                    box.text,
+                    font,
+                    size,
+                    Map.get(box, :letter_spacing, 0)
+                  )
+                else
+                  shaped_text
+                  |> String.to_charlist()
+                  |> Enum.chunk_every(2, 1, [nil])
+                  |> Enum.map(fn [codepoint, next] ->
+                    glyph = Map.get(font.cmap, codepoint, 0)
+                    next_glyph = Map.get(font.cmap, next, 0)
+                    kerning = Map.get(Map.get(font, :kerning, %{}), {glyph, next_glyph}, 0)
+                    {codepoint, glyph, {:design, kerning}}
+                  end)
+                end
 
+              glyphs =
+                Enum.map(advances, fn {codepoint, glyph_id, advance} ->
                   width =
                     if glyph_id < tuple_size(font_resource.widths),
                       do: elem(font_resource.widths, glyph_id),
                       else: font.default_width
 
-                  kerning = Map.get(Map.get(font, :kerning, %{}), {glyph_id, next_id}, 0)
-
                   adjustment =
-                    (width * (1 - shaped_size / painted_size) -
-                       kerning * shaped_size / painted_size) * 1000 / font.units_per_em
+                    case advance do
+                      {:design, kerning} ->
+                        (width * (1 - shaped_size / painted_size) -
+                           kerning * shaped_size / painted_size) * 1000 / font.units_per_em
+
+                      advance ->
+                        # PDF CID widths retain design units. TJ supplies the
+                        # genuine selected-font CSS pen advance at this size.
+                        width * 1000 / font.units_per_em - advance * 1000 / painted_size
+                    end
 
                   {Font.encode_embedded_text(<<codepoint::utf8>>, font_resource.encoding),
                    format_number(adjustment)}
@@ -898,7 +1082,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
     case Map.get(box, :letter_spacing, 0.0) do
       letter_spacing when is_number(letter_spacing) and letter_spacing != 0.0 ->
-        " " <> format_number(letter_spacing) <> " Tc" <> operator <> " 0 Tc"
+        " " <> format_number(letter_spacing * coordinate_scale) <> " Tc" <> operator <> " 0 Tc"
 
       _ ->
         operator
@@ -1068,13 +1252,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
     box =
       case Map.get(box, :role) do
+        :math_bar ->
+          # MathMLPainter centers its already pixel-snapped bar using integer
+          # CSS-pixel division. Preserve that print contract after placement.
+          %{box | y: box.y + Float.floor(box.height / @css_pixel_points / 2) * @css_pixel_points}
+
         :fieldset ->
           %{box | x: box.x - @raster_boundary_bias}
 
         :frameset_canvas ->
           %{box | y: box.y + @raster_boundary_bias}
 
-        role when role in [:inline_background, :frameset_border, :scrollbar, :text_decoration] ->
+        role
+        when role in [
+               :inline_background,
+               :frameset_border,
+               :scrollbar,
+               :text_decoration,
+               :embedded_host_background
+             ] ->
           # Match Chromium's print-matrix ties at the left and top raster edges.
           %{box | x: box.x - @raster_boundary_bias, y: box.y + @raster_boundary_bias}
 
@@ -1101,11 +1297,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
           # Collapsed table borders straddle grid edges. Expand only the paint
           # rectangle so pagination retains the original cell bounds.
+          left = box.x - borders.left / 2
+          right = box.x + box.width + borders.right / 2
+
+          {left, right} =
+            if Map.get(box, :snap_to_css_pixel_grid, false),
+              do: {PageGeometry.snap_css_pixel(left), PageGeometry.snap_css_pixel(right)},
+              else: {left, right}
+
           %{
             box
-            | x: box.x - borders.left / 2,
+            | x: left,
               y: box.y - borders.bottom / 2,
-              width: box.width + (borders.left + borders.right) / 2,
+              width: right - left,
               height: box.height + (borders.top + borders.bottom) / 2
           }
 
@@ -1191,9 +1395,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                       ]
                     else
                       fill_box =
-                        if Map.get(box, :role) in [:native_color_button, :native_file_button],
-                          do: inset_stroke_box(box),
-                          else: box
+                        if Map.get(box, :role) in [:native_color_button, :native_file_button] or
+                             (Map.get(box, :role) == :native_menu and
+                                Map.has_key?(box, :initial_select_opacity)),
+                           do: inset_stroke_box(box),
+                           else: box
+
+                      fill_box =
+                        if (Map.get(box, :role) == :css_menu and
+                              is_map(get_in(box, [:initial_select_opacity, :clip]))) or
+                             Map.has_key?(box, :css_border_surface),
+                           do: %{fill_box | border_radius: 0.0},
+                           else: fill_box
 
                       [rect_path(fill_box), "f", "Q"]
                     end
@@ -1212,86 +1425,113 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         stroke_stream =
           case WriterValidator.visible_border?(box) and border_style not in [:none, :hidden] do
             true ->
-              stroke_box =
-                if Map.get(box, :shape) in [{:chevron, :down}, {:diagonal, :up}],
-                  do: box,
-                  else: inset_stroke_box(box)
-
-              stroke_box =
-                if Map.get(box, :snap_to_css_pixel_grid, false) and border_style == :solid and
-                     (box.border_radius == 0 or
-                        Map.get(box, :role) in [:native_listbox, :native_menu, :css_menu]) and
-                     color_alpha(box.stroke_color) == 1.0 and
-                     (is_nil(Map.get(box, :form_control)) or
-                        not is_nil(Map.get(box, :form_owner))) do
-                  # Chromium's 0.23999999 print matrix places edge ties just
-                  # below exact CSS-pixel coordinates, as for inline backgrounds.
-                  # Control appearances use their own local coordinate system.
-                  %{
-                    stroke_box
-                    | x: stroke_box.x - @raster_boundary_bias,
-                      y: stroke_box.y + @raster_boundary_bias
-                  }
-                else
-                  stroke_box
-                end
-
-              scale = @css_pixel_points
-
-              stroke_box = %{
-                stroke_box
-                | x: stroke_box.x / scale,
-                  y: stroke_box.y / scale,
-                  width: stroke_box.width / scale,
-                  height: stroke_box.height / scale,
-                  border_radius: stroke_box.border_radius / scale
-              }
-
-              contours = PageGeometry.rounded_border_contours(box, page_height)
-
-              if contours do
-                # CSS BoxBorderPainter's rounded solid fast path fills the
-                # independently snapped outer and inner contours (drawDRRect).
-                paths =
-                  Enum.map(contours, fn contour ->
-                    contour
-                    |> Map.update!(:x, &(&1 / scale))
-                    |> Map.update!(:y, &(&1 / scale))
-                    |> Map.update!(:width, &(&1 / scale))
-                    |> Map.update!(:height, &(&1 / scale))
-                    |> Map.update!(:border_radius, &(&1 / scale))
-                    |> rect_path()
-                  end)
-
-                ["q", "#{format_number(scale)} 0 0 #{format_number(scale)} 0 0 cm"]
-                |> put_opacity(box.stroke_color, :fill, graphics_state_resources)
-                |> put_fill_color(box.stroke_color)
-                |> Kernel.++(paths ++ ["f*", "Q"])
+              if box.border_radius > 0 and border_style in [:dashed, :dotted] and
+                   Map.get(box, :shape, :rectangle) == :rectangle do
+                curved_border_stream(box, page_height, border_style, graphics_state_resources)
               else
-                (["q"] ++
-                   if(Map.get(box, :gauge_clip_track, false),
-                     do: [rect_path(box), "W n"],
-                     else: []
-                   ) ++
-                   ["#{format_number(scale)} 0 0 #{format_number(scale)} 0 0 cm"])
-                |> put_opacity(box.stroke_color, :stroke, graphics_state_resources)
-                |> put_stroke_color(
-                  box.stroke_color,
-                  if(Map.get(box, :role) in [:native_menu, :textarea_resizer],
-                    do: 0.0,
-                    else: box.stroke_width / scale
-                  )
-                )
-                |> put_stroke_pattern(border_style, box.stroke_width / scale, nil)
-                |> Kernel.++(
-                  if(Map.get(box, :role) in [:native_color_button, :native_file_button],
+                stroke_box =
+                  if Map.get(box, :shape) in [{:chevron, :down}, {:diagonal, :up}],
+                    do: box,
+                    else: inset_stroke_box(box)
+
+                stroke_box =
+                  if Map.get(box, :snap_to_css_pixel_grid, false) and border_style == :solid and
+                       (box.border_radius == 0 or
+                          Map.get(box, :role) in [:native_listbox, :native_menu, :css_menu]) and
+                       color_alpha(box.stroke_color) == 1.0 and
+                       (is_nil(Map.get(box, :form_control)) or
+                          not is_nil(Map.get(box, :form_owner))) do
+                    # Chromium's 0.23999999 print matrix places edge ties just
+                    # below exact CSS-pixel coordinates, as for inline backgrounds.
+                    # Control appearances use their own local coordinate system.
+                    %{
+                      stroke_box
+                      | x: stroke_box.x - @raster_boundary_bias,
+                        y: stroke_box.y + @raster_boundary_bias
+                    }
+                  else
+                    stroke_box
+                  end
+
+                scale = @css_pixel_points
+
+                canvas =
+                  if Map.get(box, :role) == :fieldset,
+                    do: DrawingGeometry.css_print_canvas(page_height)
+
+                stroke_box = %{
+                  stroke_box
+                  | x: stroke_box.x / scale,
+                    y: stroke_box.y / scale,
+                    width: stroke_box.width / scale,
+                    height: stroke_box.height / scale,
+                    border_radius: stroke_box.border_radius / scale
+                }
+
+                stroke_box =
+                  if canvas,
+                    do: %{stroke_box | y: page_height / scale - stroke_box.y - stroke_box.height},
+                    else: stroke_box
+
+                stroke_canvas =
+                  if canvas,
                     do: [
-                      "/#{Map.fetch!(graphics_state_resources, {:stroke_adjust, 1.0}).name} gs"
+                      "#{:erlang.float_to_binary(canvas.point_scale, decimals: 8)} 0 0 -#{:erlang.float_to_binary(canvas.point_scale, decimals: 8)} 0 #{format_number(canvas.height)} cm",
+                      "#{format_number(canvas.css_scale)} 0 0 #{format_number(canvas.css_scale)} 0 0 cm"
                     ],
-                    else: []
+                    else: ["#{format_number(scale)} 0 0 #{format_number(scale)} 0 0 cm"]
+
+                contours = PageGeometry.rounded_border_contours(box, page_height)
+
+                if contours do
+                  # CSS BoxBorderPainter's rounded solid fast path fills the
+                  # independently snapped outer and inner contours (drawDRRect).
+                  paths =
+                    Enum.map(contours, fn contour ->
+                      contour
+                      |> Map.update!(:x, &(&1 / scale))
+                      |> Map.update!(:y, &(&1 / scale))
+                      |> Map.update!(:width, &(&1 / scale))
+                      |> Map.update!(:height, &(&1 / scale))
+                      |> Map.update!(:border_radius, &(&1 / scale))
+                      |> rect_path()
+                    end)
+
+                  ["q", "#{format_number(scale)} 0 0 #{format_number(scale)} 0 0 cm"]
+                  |> put_opacity(box.stroke_color, :fill, graphics_state_resources)
+                  |> put_fill_color(box.stroke_color)
+                  |> Kernel.++(paths ++ ["f*", "Q"])
+                else
+                  (["q"] ++
+                     if(Map.get(box, :gauge_clip_track, false),
+                       do: [rect_path(box), "W n"],
+                       else: []
+                     ) ++
+                     stroke_canvas)
+                  |> put_opacity(box.stroke_color, :stroke, graphics_state_resources)
+                  |> put_stroke_color(
+                    box.stroke_color,
+                    if(Map.get(box, :role) in [:native_menu, :textarea_resizer],
+                      do: 0.0,
+                      else: box.stroke_width / scale
+                    )
                   )
-                )
-                |> Kernel.++([rect_path(stroke_box), "S", "Q"])
+                  |> put_stroke_pattern(border_style, box.stroke_width / scale, nil)
+                  |> Kernel.++(
+                    if(
+                      Map.get(box, :role) in [
+                        :native_color_button,
+                        :native_file_button,
+                        :fieldset
+                      ],
+                      do: [
+                        "/#{Map.fetch!(graphics_state_resources, {:stroke_adjust, 1.0}).name} gs"
+                      ],
+                      else: []
+                    )
+                  )
+                  |> Kernel.++([rect_path(stroke_box), "S", "Q"])
+                end
               end
 
             false ->
@@ -1300,6 +1540,166 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
         Enum.join(fill_stream ++ border_cutout_stream(stroke_stream, box), " ")
     end
+  end
+
+  # Rounded dashes are drawn around the snapped center contour, with a wide
+  # stroke clipped between the true outer/inner curves. This is the same fixed
+  # BoxBorderPainter/StyledStrokeData geometry used by the browser source.
+  defp curved_border_stream(box, page_height, _border_style, states) do
+    geometry = WriterValidator.prepare_curved_border_paint(box, page_height)
+
+    commands = fn contour ->
+      radii = Map.values(contour.radii)
+
+      if length(Enum.uniq(radii)) == 1 and elem(hd(radii), 0) == elem(hd(radii), 1) do
+        radius = min(elem(hd(radii), 0), min(contour.width, contour.height) / 2)
+
+        DrawingGeometry.rounded_rect_commands(
+          contour.x,
+          contour.y,
+          contour.width,
+          contour.height,
+          radius
+        )
+      else
+        DrawingGeometry.elliptical_rect_commands(
+          contour.x,
+          contour.y,
+          contour.width,
+          contour.height,
+          contour.radii
+        )
+      end
+    end
+
+    path = fn contour ->
+      commands.(contour)
+      |> Enum.map_join(" ", fn {operation, coordinates} ->
+        case operation do
+          4 ->
+            "h"
+
+          _ ->
+            Enum.map_join(coordinates, " ", &format_number/1) <>
+              " " <> Enum.at(["m", "l", "", "c"], operation)
+        end
+      end)
+    end
+
+    center = geometry.center
+    measure = NativeElixirPdfUtilities.HtmlToPdf.CssBorderArtwork.measure(center)
+    length = trunc(measure.length)
+    uniform_width? = length(Enum.uniq(Map.values(geometry.widths))) == 1
+
+    inner =
+      if geometry.inner.width > 0 and geometry.inner.height > 0,
+        do: [path.(geometry.inner)],
+        else: []
+
+    outer =
+      if is_map(get_in(box, [:initial_select_opacity, :clip])) or
+           Map.has_key?(box, :css_border_surface),
+         do:
+           "#{format_number(geometry.outer.x)} #{format_number(geometry.outer.y)} #{format_number(geometry.outer.width)} #{format_number(geometry.outer.height)} re",
+         else: path.(geometry.outer)
+
+    common =
+      [
+        "q",
+        "#{:erlang.float_to_binary(geometry.canvas.point_scale, decimals: 8)} 0 0 -#{:erlang.float_to_binary(geometry.canvas.point_scale, decimals: 8)} 0 #{format_number(geometry.canvas.height)} cm",
+        "#{format_number(geometry.canvas.css_scale)} 0 0 #{format_number(geometry.canvas.css_scale)} 0 0 cm",
+        outer
+      ] ++ inner ++ ["W* n"]
+
+    uniform? =
+      uniform_width? and
+        not side_specific_border_colors?(Map.get(box, :border_colors), box.stroke_color) and
+        length(Enum.uniq(Enum.map([:top, :right, :bottom, :left], &border_side_style(box, &1)))) ==
+          1
+
+    sides = if uniform?, do: [:top], else: [:top, :right, :bottom, :left]
+
+    strokes =
+      Enum.flat_map(sides, fn side ->
+        width = geometry.widths[side]
+        style = border_side_style(box, side)
+        color = border_side_color(box, side)
+
+        if width > 0 and style not in [:none, :hidden] and color != nil do
+          clip =
+            if uniform?,
+              do: [],
+              else: [
+                geometry.sides[side]
+                |> Enum.with_index()
+                |> Enum.map_join(" ", fn {{x, y}, index} ->
+                  "#{format_number(x)} #{format_number(y)} " <> if(index == 0, do: "m", else: "l")
+                end),
+                "h W n"
+              ]
+
+          parts = ["q"] ++ clip
+
+          if style in [:dashed, :dotted] do
+            adjacent =
+              case side do
+                side when side in [:top, :bottom] -> [:left, :right]
+                _ -> [:top, :bottom]
+              end
+
+            stroke_width = max(width, Enum.max(Enum.map(adjacent, &geometry.widths[&1])))
+            dashed? = style == :dashed or width <= 3
+
+            pattern =
+              NativeElixirPdfUtilities.HtmlToPdf.CssBorderArtwork.pattern(style, width, length)
+
+            paint_width = if(dashed?, do: stroke_width * 2.2, else: width)
+            paths = NativeElixirPdfUtilities.HtmlToPdf.CssBorderArtwork.paths(measure, pattern)
+
+            if pattern.cap == :round do
+              parts
+              |> put_opacity(color, :fill, states)
+              |> put_fill_color(color)
+              |> Kernel.++(
+                Enum.flat_map(paths, fn {:dot, {x, y}} ->
+                  radius = width / 2
+                  [rounded_rect_path(x - radius, y - radius, width, width, radius), "f"]
+                end) ++ ["Q"]
+              )
+            else
+              parts
+              |> put_opacity(color, :stroke, states)
+              |> put_stroke_color(color, paint_width)
+              |> Kernel.++(
+                ["0 J"] ++
+                  Enum.flat_map(paths, fn {:stroke, commands} ->
+                    [
+                      Enum.map_join(commands, " ", fn {operation, coords} ->
+                        Enum.map_join(coords, " ", &format_number/1) <>
+                          " " <> Enum.at(["m", "l", "", "c"], operation)
+                      end),
+                      "S"
+                    ]
+                  end) ++ ["Q"]
+              )
+            end
+          else
+            # Solid curved sides fill the actual border band already limited by
+            # the outer/inner contour and the source corner miter polygon.
+            parts
+            |> put_opacity(color, :fill, states)
+            |> put_fill_color(color)
+            |> Kernel.++([
+              "#{format_number(geometry.outer.x)} #{format_number(geometry.outer.y)} #{format_number(geometry.outer.width)} #{format_number(geometry.outer.height)} re f",
+              "Q"
+            ])
+          end
+        else
+          []
+        end
+      end)
+
+    common ++ strokes ++ ["Q"]
   end
 
   defp inset_stroke_box(box) do
@@ -1347,23 +1747,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp image_stream(box, image_resources) do
-    box = PageGeometry.snap_box_to_css_pixel_grid(box)
+  defp image_stream(box, page_height, image_resources) do
+    image_cell_stream(box, page_height, image_resources)
+  end
 
+  defp image_cell_stream(box, page_height, image_resources) do
+    # CSS image edges are snapped in the source's top-down canvas, including
+    # pages whose height is a fractional CSS pixel.
     box =
-      case Map.get(box, :snap_to_css_pixel_grid, false) do
-        true ->
-          # Keep the far edges inside the CSS rectangle. Exact integer boundaries
-          # otherwise make PDF rasterizers allocate an extra resampling pixel.
-          %{
-            box
-            | width: max(box.width - 0.0001, 0.0),
-              height: max(box.height - 0.0001, 0.0),
-              y: box.y + 0.0001
-          }
-
-        false ->
-          box
+      if Map.get(box, :snap_to_css_pixel_grid, false) do
+        box
+        |> Map.put(:y, page_height - box.y - box.height)
+        |> PageGeometry.snap_box_to_css_pixel_grid()
+        |> then(&Map.put(&1, :y, page_height - &1.y - &1.height))
+      else
+        box
       end
 
     image_resource = Map.fetch!(image_resources, box.image_resource_key)
@@ -1377,16 +1775,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           clip_rectangle_stream(clip)
       end
 
+    paint = WriterValidator.prepare_image_paint(box, page_height)
+
+    matrix =
+      case paint do
+        nil ->
+          Enum.map_join([box.width, 0, 0, box.height, box.x, box.y], " ", &format_number/1)
+
+        canvas ->
+          scale = :erlang.float_to_binary(canvas.point_scale, decimals: 8)
+
+          [
+            scale,
+            " 0 0 -",
+            scale,
+            " 0 ",
+            format_number(canvas.height),
+            " cm ",
+            clip_rectangle_stream(canvas.clip),
+            Enum.map_join(canvas.transform, " ", &format_number/1)
+          ]
+      end
+
     [
       "q ",
       clip,
-      format_number(box.width),
-      " 0 0 ",
-      format_number(box.height),
-      " ",
-      format_number(box.x),
-      " ",
-      format_number(box.y),
+      matrix,
       " cm /",
       image_resource.name,
       " Do Q"
@@ -1512,23 +1926,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp rounded_rect_path(x, y, width, height, radius) do
-    right = x + width
-    top = y + height
-    control = radius * 0.552_284_7498
+    DrawingGeometry.rounded_rect_commands(x, y, width, height, radius)
+    |> Enum.map_join(" ", fn {operation, coordinates} ->
+      case operation do
+        4 ->
+          "h"
 
-    [
-      "#{format_number(x + radius)} #{format_number(y)} m",
-      "#{format_number(right - radius)} #{format_number(y)} l",
-      "#{format_number(right - radius + control)} #{format_number(y)} #{format_number(right)} #{format_number(y + radius - control)} #{format_number(right)} #{format_number(y + radius)} c",
-      "#{format_number(right)} #{format_number(top - radius)} l",
-      "#{format_number(right)} #{format_number(top - radius + control)} #{format_number(right - radius + control)} #{format_number(top)} #{format_number(right - radius)} #{format_number(top)} c",
-      "#{format_number(x + radius)} #{format_number(top)} l",
-      "#{format_number(x + radius - control)} #{format_number(top)} #{format_number(x)} #{format_number(top - radius + control)} #{format_number(x)} #{format_number(top - radius)} c",
-      "#{format_number(x)} #{format_number(y + radius)} l",
-      "#{format_number(x)} #{format_number(y + radius - control)} #{format_number(x + radius - control)} #{format_number(y)} #{format_number(x + radius)} #{format_number(y)} c",
-      "h"
-    ]
-    |> Enum.join(" ")
+        _ ->
+          Enum.map_join(coordinates, " ", &format_number/1) <>
+            " " <>
+            Enum.at(["m", "l", "", "c"], operation)
+      end
+    end)
   end
 
   defp side_specific_border?(box) do
@@ -1579,14 +1988,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           ["q"]
           |> put_opacity(box.fill_color, :fill, graphics_state_resources)
           |> put_fill_color(box.fill_color)
-          |> Kernel.++([rect_path(box), "f", "Q"])
+          |> Kernel.++([
+            rect_path(
+              if Map.has_key?(box, :css_border_surface), do: %{box | border_radius: 0}, else: box
+            ),
+            "f",
+            "Q"
+          ])
       end
 
     stroke_parts =
-      box.border_widths
-      |> Enum.flat_map(fn {side, stroke_width} ->
-        border_side_stream(box, side, stroke_width, graphics_state_resources)
-      end)
+      if box.border_radius > 0 and
+           Enum.all?(
+             Enum.map([:top, :right, :bottom, :left], &border_side_style(box, &1)),
+             &(&1 in [:none, :hidden, :solid, :dotted, :dashed])
+           ) and
+           Enum.any?(
+             Enum.map([:top, :right, :bottom, :left], &border_side_style(box, &1)),
+             &(&1 in [:dotted, :dashed])
+           ) do
+        curved_border_stream(box, box.raster_page_height, :dashed, graphics_state_resources)
+      else
+        box.border_widths
+        |> Enum.flat_map(fn {side, stroke_width} ->
+          border_side_stream(box, side, stroke_width, graphics_state_resources)
+        end)
+      end
 
     contours =
       if Map.get(box, :role) == :temporal_host,
@@ -1724,6 +2151,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
          graphics_state_resources
        ) do
     scale = @css_pixel_points
+    source_edges = %{top: box.y + box.height - inset, bottom: box.y + inset + stroke_width}
 
     box = %{
       box
@@ -1741,12 +2169,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       case {Map.get(box, :role), border_style, side, Map.get(box, :raster_page_height)} do
         {:table_border, :solid, side, page_height}
         when side in [:top, :bottom] and is_number(page_height) ->
-          painted_edge =
-            if side == :top,
-              do: box.y + box.height - inset,
-              else: box.y + inset + stroke_width
-
-          top_down = page_height / scale - painted_edge
+          # Subtract in the original point space before converting to CSS
+          # pixels, retaining exact half-pixel source edges across conversion.
+          top_down = (page_height - Map.fetch!(source_edges, side)) / scale
           fractional_pixel = top_down - Float.floor(top_down)
           # Chromium snaps solid table edges on the CSS pixel grid. Bottom
           # edges occupy the preceding pixel except at an exact half pixel.
@@ -1765,6 +2190,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
     if Map.get(box, :role) in [
          :fieldset,
+         :block_fragment_paint,
          :iframe_border,
          :table_border,
          :table_cell_background,
@@ -2003,41 +2429,48 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp box_graphics_state_keys(box) do
-    case box.type do
-      :text ->
-        opacity_resource_keys(box.color, :fill)
+    group_keys =
+      case Map.get(box, :initial_select_opacity, Map.get(box, :css_border_surface)) do
+        nil -> []
+        %{alpha: alpha} -> [{:group, alpha}]
+      end
 
-      :rect ->
-        border_colors =
-          case Map.get(box, :border_colors) do
-            colors when is_map(colors) -> Map.values(colors)
-            _ -> []
-          end
+    group_keys ++
+      case box.type do
+        :text ->
+          opacity_resource_keys(box.color, :fill)
 
-        if(Map.get(box, :role) in [:native_color_button, :native_file_button],
-          do: [{:stroke_adjust, 1.0}],
-          else: []
-        ) ++
-          opacity_resource_keys(box.fill_color, :fill) ++
-          Enum.flat_map([box.stroke_color | border_colors], fn color ->
-            opacity_resource_keys(color, :stroke) ++
-              if(Map.get(box, :role) == :fieldset,
-                do: opacity_resource_keys(color, :fill),
-                else: []
-              )
-          end)
+        :rect ->
+          border_colors =
+            case Map.get(box, :border_colors) do
+              colors when is_map(colors) -> Map.values(colors)
+              _ -> []
+            end
 
-      type
-      when type in [
-             :image,
-             :link_region,
-             :actual_text_start,
-             :actual_text_end,
-             :drawing_group_start,
-             :drawing_group_end
-           ] ->
-        []
-    end
+          if(Map.get(box, :role) in [:native_color_button, :native_file_button, :fieldset],
+            do: [{:stroke_adjust, 1.0}],
+            else: []
+          ) ++
+            opacity_resource_keys(box.fill_color, :fill) ++
+            Enum.flat_map([box.stroke_color | border_colors], fn color ->
+              opacity_resource_keys(color, :stroke) ++
+                if(Map.get(box, :role) == :fieldset,
+                  do: opacity_resource_keys(color, :fill),
+                  else: []
+                )
+            end)
+
+        type
+        when type in [
+               :image,
+               :link_region,
+               :actual_text_start,
+               :actual_text_end,
+               :drawing_group_start,
+               :drawing_group_end
+             ] ->
+          []
+      end
   end
 
   defp opacity_resource_keys(color, kind) do
@@ -2058,8 +2491,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           # adjustment. Keep this graphics state local to the button paint.
           "<< /Type /ExtGState /SA true >>"
         else
-          alpha_key = if resource.kind == :fill, do: "/ca", else: "/CA"
-          "<< /Type /ExtGState #{alpha_key} #{format_number(resource.alpha)} >>"
+          if resource.kind == :group do
+            "<< /Type /ExtGState /ca #{format_number(resource.alpha)} /CA #{format_number(resource.alpha)} >>"
+          else
+            alpha_key = if resource.kind == :fill, do: "/ca", else: "/CA"
+            "<< /Type /ExtGState #{alpha_key} #{format_number(resource.alpha)} >>"
+          end
         end
 
       {resource.object_id, body}
@@ -2423,7 +2860,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       resource =
         case image.format do
           :pdf_form ->
-            {:ok, form} = SvgFormValidator.prepare_source(image.data)
+            {:ok, form} = PdfFormValidator.prepare_source(image.data)
 
             %{
               name: "Im#{index}",
@@ -2454,7 +2891,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
       {Map.put(resources, key, resource), object_id + resource.object_count, index + 1}
     end)
-    |> elem(0)
+    |> then(fn {resources, next_id, index} ->
+      pages
+      |> Enum.flat_map(fn page ->
+        page.boxes
+        |> Enum.with_index()
+        |> Enum.filter(fn {box, _index} -> Map.has_key?(box, :select_opacity_resource_key) end)
+        |> Enum.group_by(fn {box, _index} -> box.select_opacity_resource_key end)
+        |> Enum.sort_by(fn {_key, boxes} -> elem(hd(boxes), 1) end)
+        |> Enum.map(fn {key, boxes} -> {key, Enum.map(boxes, &elem(&1, 0)), page} end)
+      end)
+      |> Enum.reduce({resources, next_id, index}, fn {key, boxes, page}, {resources, id, index} ->
+        resource = %{
+          name: "Select#{index}",
+          object_id: id,
+          object_count: 1,
+          image: %{format: :select_opacity},
+          boxes:
+            Enum.map(
+              boxes,
+              &Map.delete(&1, :select_opacity_resource_key)
+            ),
+          page_height: Map.get(page, :paint_frame, %{height: elem(page.size, 1)}).height,
+          size:
+            Map.get(page, :paint_frame, %{width: elem(page.size, 0), height: elem(page.size, 1)}),
+          clip:
+            Map.get(
+              Map.get(
+                hd(boxes),
+                :initial_select_opacity,
+                Map.get(hd(boxes), :css_border_surface)
+              ),
+              :clip
+            ),
+          alpha:
+            Map.get(hd(boxes), :initial_select_opacity, Map.get(hd(boxes), :css_border_surface)).alpha
+        }
+
+        {Map.put(resources, key, resource), id + 1, index + 1}
+      end)
+      |> elem(0)
+    end)
   end
 
   defp image_object_count(image_resources) do
@@ -2467,7 +2944,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     image_resources
     |> Enum.sort_by(fn {_key, resource} -> resource.object_id end)
     |> Enum.flat_map(fn {_key, resource} ->
-      image_objects_for_resource(resource)
+      if resource.image.format == :select_opacity,
+        do: [],
+        else: image_objects_for_resource(resource)
+    end)
+  end
+
+  defp select_opacity_objects(images, fonts, states) do
+    images
+    |> Enum.filter(fn {_key, resource} -> resource.image.format == :select_opacity end)
+    |> Enum.sort_by(fn {_key, resource} -> resource.object_id end)
+    |> Enum.map(fn {_key, resource} ->
+      resources =
+        Map.reject(images, fn {_key, entry} -> entry.image.format == :select_opacity end)
+
+      content =
+        content_stream(
+          resource.boxes,
+          resource.page_height,
+          fonts,
+          resources,
+          states
+        )
+
+      bounds =
+        case WriterValidator.prepare_paint_group_bounds(resource.size, resource.boxes) do
+          {:ok, bounds} -> bounds
+          {:error, _} = failure -> throw({:render_resource_limit, failure})
+        end
+
+      bbox = bounds |> Tuple.to_list() |> Enum.map_join(" ", &format_number/1)
+
+      dictionary =
+        "<< /Type /XObject /Subtype /Form /BBox [#{bbox}] /Group << /S /Transparency /I true /CS /DeviceRGB >> /Resources << /Font << #{font_resource_dictionary(fonts)} >>#{xobject_resource_dictionary(resources)}#{graphics_state_resource_dictionary(states)} >> /Length #{byte_size(content)} >>"
+
+      {resource.object_id, dictionary <> "\nstream\n" <> content <> "\nendstream"}
     end)
   end
 
@@ -2499,10 +3010,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
       objects =
         Enum.map(source_objects, fn {ref, object} ->
-          {Map.fetch!(mapping, ref), svg_form_object(object.value, object.stream, mapping)}
+          {Map.fetch!(mapping, ref), pdf_form_object(object.value, object.stream, mapping)}
         end)
 
-      [{resource.object_id, svg_form_object(form_dictionary, form.stream, mapping)} | objects]
+      [{resource.object_id, pdf_form_object(form_dictionary, form.stream, mapping)} | objects]
     else
       image_object = {resource.object_id, image_object(resource)}
 
@@ -2512,30 +3023,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           mask_object_id -> [image_object, {mask_object_id, image_mask_object(resource.image)}]
         end
 
-      case resource.tint_object_id do
-        nil ->
-          objects
+      objects =
+        case resource.tint_object_id do
+          nil ->
+            objects
 
-        object_id ->
-          # Multilinear interpolation reproduces the unprofiled JPEG conversion
-          # R=(1-C)*(1-K), G=(1-M)*(1-K), B=(1-Y)*(1-K).
-          samples =
-            for black <- 0..1, yellow <- 0..1, magenta <- 0..1, cyan <- 0..1, into: <<>> do
-              <<255 * (1 - cyan) * (1 - black), 255 * (1 - magenta) * (1 - black),
-                255 * (1 - yellow) * (1 - black)>>
-            end
+          object_id ->
+            # Multilinear interpolation reproduces the unprofiled JPEG conversion
+            # R=(1-C)*(1-K), G=(1-M)*(1-K), B=(1-Y)*(1-K).
+            samples =
+              for black <- 0..1, yellow <- 0..1, magenta <- 0..1, cyan <- 0..1, into: <<>> do
+                <<255 * (1 - cyan) * (1 - black), 255 * (1 - magenta) * (1 - black),
+                  255 * (1 - yellow) * (1 - black)>>
+              end
 
-          tint =
-            "<< /FunctionType 0 /Domain [0 1 0 1 0 1 0 1] /Range [0 1 0 1 0 1] /Size [2 2 2 2] /BitsPerSample 8 /Length 48 >>\nstream\n" <>
-              samples <> "\nendstream"
+            tint =
+              "<< /FunctionType 0 /Domain [0 1 0 1 0 1 0 1] /Range [0 1 0 1 0 1] /Size [2 2 2 2] /BitsPerSample 8 /Length 48 >>\nstream\n" <>
+                samples <> "\nendstream"
 
-          objects ++ [{object_id, tint}]
-      end
+            objects ++ [{object_id, tint}]
+        end
+
+      objects
     end
   end
 
-  defp svg_form_object(value, stream, mapping) do
-    value = remap_svg_form_refs(value, mapping)
+  defp pdf_form_object(value, stream, mapping) do
+    value = remap_pdf_form_refs(value, mapping)
 
     if is_binary(stream) do
       value = Map.put(value, "Length", byte_size(stream))
@@ -2547,16 +3061,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp remap_svg_form_refs(value, mapping) do
+  defp remap_pdf_form_refs(value, mapping) do
     case value do
       {:ref, ref} ->
         {:ref, {Map.fetch!(mapping, ref), 0}}
 
       values when is_list(values) ->
-        Enum.map(values, &remap_svg_form_refs(&1, mapping))
+        Enum.map(values, &remap_pdf_form_refs(&1, mapping))
 
       values when is_map(values) ->
-        Map.new(values, fn {key, entry} -> {key, remap_svg_form_refs(entry, mapping)} end)
+        Map.new(values, fn {key, entry} -> {key, remap_pdf_form_refs(entry, mapping)} end)
 
       value ->
         value
@@ -2661,7 +3175,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         :erlang.term_to_binary(
           {image.format, image.width_px, image.height_px, image.color_space,
            image.bits_per_component, Map.get(image, :color_transform),
-           Map.get(image, :inverted_cmyk, false)}
+           Map.get(image, :inverted_cmyk, false), Map.get(image, :layer)}
         ),
         image.data,
         Map.get(image, :alpha_data, "")

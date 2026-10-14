@@ -217,10 +217,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChildLinkDestinationsTest do
 
       assert {:ok, _pdf} = PdfWriter.render([page])
 
-      assert {:error, {:invalid_pdf_input, %{message: message}}} =
-               HtmlLinkValidator.validate_boxes([%{group | transform: {1, 1, 0, 1, 10, 20}}], nil)
-
-      assert message =~ "rotations"
+      assert :ok =
+               NativeElixirPdfUtilities.Validators.WriterValidator.validate_drawing_group(%{
+                 group
+                 | transform: {1, 1, 0, 1, 10, 20}
+               })
     end)
   end
 

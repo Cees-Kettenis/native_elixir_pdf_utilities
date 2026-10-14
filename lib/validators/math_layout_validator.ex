@@ -3,20 +3,21 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
-  alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, Layout}
   alias NativeElixirPdfUtilities.Validators.CssValueValidator
+  alias NativeElixirPdfUtilities.Validators.WriterValidator
   alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.HtmlLinkValidator
-  alias NativeElixirPdfUtilities.Validators.CssCalculationValidator
   alias NativeElixirPdfUtilities.Validators.PrintMediaValidator
   alias NativeElixirPdfUtilities.Validators.MathOperatorValidator
   alias NativeElixirPdfUtilities.Validators.MathTableValidator
   alias NativeElixirPdfUtilities.Validators.MathFractionValidator
   alias NativeElixirPdfUtilities.Validators.MathRadicalValidator
 
+  @token_elements ~w(mi mn mtext ms)
   @script_elements ~w(msub msup msubsup munder mover munderover mmultiscripts)
-  @grouping_elements ~w(math mrow mphantom semantics maction mprescripts mstyle merror)
+  @grouping_elements ~w(math mrow mphantom semantics maction mprescripts mstyle merror annotation annotation-xml)
   @core_elements ~w(annotation annotation-xml maction math merror mfrac mi mn mmultiscripts mo mover mpadded mphantom mprescripts mroot mrow ms mspace msqrt mstyle msub msubsup msup mtable mtd mtext mtr munder munderover semantics)
   @rendered_elements @grouping_elements ++
                        ~w(mi mn mo mtext ms annotation annotation-xml mspace mfrac msqrt mroot mpadded mtable mtr mtd) ++
@@ -119,7 +120,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
             |> Enum.filter(&(is_map(&1) and Map.get(&1, :kind) == :glyph))
             |> Enum.map(&Map.drop(&1, [:kind, :logical_group, :logical_text]))
 
-          String.valid?(text) and is_number(width) and width >= 0 and
+          is_boolean(Map.get(measured, :css_math_owner, false)) and
+            String.valid?(text) and is_number(width) and width >= 0 and
             Enum.all?([minimum, maximum, ink_ascent, ink_descent], &is_number/1) and
             ascent + descent >= 0 and minimum >= 0 and maximum >= minimum and
             drawing_glyphs == glyphs and
@@ -418,6 +420,53 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     |> Map.put(:display, :block)
   end
 
+  @doc "Returns the atomic adapter style after the validated source owner has measured its complete box."
+  @spec owner_atom_style(map()) :: map()
+  def owner_atom_style(%{tag: tag, style: style}) do
+    if grouping_element?(tag) or tag in ~w(msqrt mroot) or
+         (tag in ["mo" | @token_elements] and Map.get(style, :_math_formatting, true)) or
+         css_schema?(tag, style),
+       do: anonymous_box_style(style),
+       else: style
+  end
+
+  @doc "Prepares the real Math owner around its measured content for shared CSS paint and clipping."
+  @spec prepare_owner_paint(map(), map()) :: {:ok, map()} | {:error, Diagnostics.detailed_error()}
+  def prepare_owner_paint(prepared, measured) do
+    case prepared do
+      %{source_node: %{style: style} = source, source_context: context}
+      when is_map(style) and is_map(context) ->
+        with :ok <- validate_measured_geometry(measured) do
+          style = Map.put(style, :_math_flow, true)
+
+          atom = %{
+            type: :element,
+            tag: "span",
+            children: [],
+            style:
+              style
+              |> anonymous_box_style()
+              |> Map.delete(:html_target)
+              |> Map.put(:display, :inline_block)
+              |> Map.put(:_math_box, measured)
+          }
+
+          context = Map.put(context, :native_formatting_context, :math)
+
+          with {:ok, native} <-
+                 prepare_native_token([atom], style, [], context, false, :inline, %{
+                   source
+                   | style: style
+                 }) do
+            {:ok, Map.put(native, :actual_text, measured.actual_text)}
+          end
+        end
+
+      _ ->
+        failure("Math owner paint requires a prepared source node and its measurement context")
+    end
+  end
+
   @doc false
   @spec style_hints(map()) :: [{String.t(), String.t()}]
   def style_hints(node) do
@@ -567,17 +616,31 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
       {"font-size", _} ->
         with {:ok, size} <- parse_font_size(value, style), do: {:ok, %{font_size: size}}
 
-      {"display", "inline math"} ->
-        if Map.has_key?(style, :_math_context),
-          do: {:ok, %{display: :inline, _math_display: :inline, _math_formatting: true}},
-          else: :error
-
-      {"display", value} when value in ["math", "block math"] ->
-        if Map.has_key?(style, :_math_context),
-          do: {:ok, %{display: :block, _math_display: :block, _math_formatting: true}},
-          else: :error
+      {"display", value} ->
+        with {:ok, display} <- parse_display(value),
+             true <- Map.has_key?(style, :_math_context) do
+          {:ok, %{display: display, _math_display: display, _math_formatting: true}}
+        else
+          _ -> :error
+        end
 
       _ ->
+        :error
+    end
+  end
+
+  @doc "Parses the supported Math display keywords without creating an element or font context."
+  @spec parse_display(term()) :: {:ok, :inline | :block} | :error
+  def parse_display(value) do
+    case is_binary(value) and String.valid?(value) do
+      true ->
+        case value |> String.trim() |> String.downcase() do
+          "inline math" -> {:ok, :inline}
+          keyword when keyword in ["math", "block math"] -> {:ok, :block}
+          _ -> :error
+        end
+
+      false ->
         :error
     end
   end
@@ -622,72 +685,78 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     end
   end
 
+  @doc "Resolves the inherited selected-font MATH size while retaining its cascade context."
+  @spec compute_font_size(map()) :: {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def compute_font_size(style) do
+    case {Map.get(style, :_math_context), style} do
+      {nil, style} ->
+        {:ok, style}
+
+      {parent, style} ->
+        depth = Map.get(style, :math_depth, parent.depth)
+
+        if style.font_size == :math do
+          FontValidator.reserve(:max_font_math_work, abs(depth - parent.depth))
+
+          with {:ok, metrics} <- Font.math_metrics(parent.font) do
+            if metrics.constants.script_percent_scale_down <= 0 or
+                 metrics.constants.script_script_percent_scale_down <= 0 do
+              failure("selected font MATH script scaling percentages must be positive")
+            else
+              a = min(parent.depth, depth)
+              b = max(parent.depth, depth)
+
+              {factor, remainder} =
+                cond do
+                  a == b ->
+                    {1.0, 0}
+
+                  a <= 0 and b >= 2 ->
+                    {metrics.constants.script_script_percent_scale_down / 100, b - a - 2}
+
+                  a == 1 ->
+                    {metrics.constants.script_script_percent_scale_down /
+                       metrics.constants.script_percent_scale_down, b - a - 1}
+
+                  b == 1 ->
+                    {metrics.constants.script_percent_scale_down / 100, b - a - 1}
+
+                  true ->
+                    {1.0, b - a}
+                end
+
+              logarithm = :math.log(factor) + remainder * :math.log(0.71)
+              logarithm = if depth < parent.depth, do: -logarithm, else: logarithm
+
+              # IEEE-754 binary64's normal exponent range is a numeric invariant,
+              # not a configurable work limit. Validate before exp can overflow.
+              if logarithm < :math.log(2.2250738585072014e-308) or
+                   logarithm > :math.log(Limits.get(:max_css_numeric_magnitude)) or
+                   (parent.size > 0 and
+                      :math.log(parent.size) + logarithm >
+                        :math.log(Limits.get(:max_css_numeric_magnitude))) do
+                failure(
+                  "math-depth scales the inherited font size outside supported numeric bounds"
+                )
+              else
+                {:ok,
+                 style
+                 |> Map.put(:font_size, parent.size * :math.exp(logarithm))
+                 |> Map.put(:math_depth, depth)}
+              end
+            end
+          end
+        else
+          {:ok, Map.put(style, :math_depth, depth)}
+        end
+    end
+  end
+
   @doc false
   @spec compute_style(map()) :: {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def compute_style(style) do
     computed =
-      case Map.pop(style, :_math_context) do
-        {nil, style} ->
-          {:ok, style}
-
-        {parent, style} ->
-          depth = Map.get(style, :math_depth, parent.depth)
-
-          if style.font_size == :math do
-            FontValidator.reserve(:max_font_math_work, abs(depth - parent.depth))
-
-            with {:ok, metrics} <- Font.math_metrics(parent.font) do
-              if metrics.constants.script_percent_scale_down <= 0 or
-                   metrics.constants.script_script_percent_scale_down <= 0 do
-                failure("selected font MATH script scaling percentages must be positive")
-              else
-                a = min(parent.depth, depth)
-                b = max(parent.depth, depth)
-
-                {factor, remainder} =
-                  cond do
-                    a == b ->
-                      {1.0, 0}
-
-                    a <= 0 and b >= 2 ->
-                      {metrics.constants.script_script_percent_scale_down / 100, b - a - 2}
-
-                    a == 1 ->
-                      {metrics.constants.script_script_percent_scale_down /
-                         metrics.constants.script_percent_scale_down, b - a - 1}
-
-                    b == 1 ->
-                      {metrics.constants.script_percent_scale_down / 100, b - a - 1}
-
-                    true ->
-                      {1.0, b - a}
-                  end
-
-                logarithm = :math.log(factor) + remainder * :math.log(0.71)
-                logarithm = if depth < parent.depth, do: -logarithm, else: logarithm
-
-                # IEEE-754 binary64's normal exponent range is a numeric invariant,
-                # not a configurable work limit. Validate before exp can overflow.
-                if logarithm < :math.log(2.2250738585072014e-308) or
-                     logarithm > :math.log(Limits.get(:max_css_numeric_magnitude)) or
-                     (parent.size > 0 and
-                        :math.log(parent.size) + logarithm >
-                          :math.log(Limits.get(:max_css_numeric_magnitude))) do
-                  failure(
-                    "math-depth scales the inherited font size outside supported numeric bounds"
-                  )
-                else
-                  {:ok,
-                   style
-                   |> Map.put(:font_size, parent.size * :math.exp(logarithm))
-                   |> Map.put(:math_depth, depth)}
-                end
-              end
-            end
-          else
-            {:ok, Map.put(style, :math_depth, depth)}
-          end
-      end
+      with {:ok, style} <- compute_font_size(style), do: {:ok, Map.delete(style, :_math_context)}
 
     # CSS Display3's MathML appendix computes contents to none for every
     # Math namespace element. HTML integration children have their own defaults.
@@ -895,6 +964,103 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     end
   end
 
+  @doc "Identifies source Math owner dimensions that require the actual enclosing block width."
+  @spec prepare_block_flow_dependency(term()) ::
+          {:ok, boolean()} | {:error, Diagnostics.detailed_error()}
+  def prepare_block_flow_dependency(node) do
+    NativeElixirPdfUtilities.HtmlToPdf.MathLayout.with_context(fn ->
+      inline_size_dependency(node, 0)
+    end)
+  end
+
+  defp inline_size_dependency(node, depth) do
+    HtmlValidator.reserve_render_resource(:max_css_work, 1, :layout)
+
+    if depth > Limits.get(:max_html_depth) do
+      Diagnostics.error(
+        :layout,
+        :resource_limit_exceeded,
+        "Math block width dependency exceeds max_html_depth",
+        operation: :measure_math,
+        module: __MODULE__,
+        source: "math"
+      )
+    else
+      case node do
+        %{type: :element, namespace: :mathml, tag: "mtable", style: style} when is_map(style) ->
+          with :ok <- MathTableValidator.validate_style(style, "mtable") do
+            # Cell contents have their own allocated containing block. A nested
+            # table percentage must not use the outer Math block's width.
+            {:ok,
+             Enum.any?(
+               [:width, :min_width, :max_width],
+               &percentage_size?(Map.get(style, &1))
+             )}
+          end
+
+        %{type: :element, namespace: :mathml, tag: tag, style: style, children: children}
+        when is_map(style) ->
+          with :ok <-
+                 Enum.reduce_while([:width, :min_width, :max_width], :ok, fn property, :ok ->
+                   # mpadded's admitted semantic width uses the Math content's
+                   # natural size, rather than a CSS containing-block basis.
+                   result =
+                     case Map.get(style, property) do
+                       {:math_padded_length, _} when property == :width and tag == "mpadded" ->
+                         :ok
+
+                       value ->
+                         HtmlValidator.validate_prepared_css_size(value, property)
+                     end
+
+                   case result do
+                     :ok -> {:cont, :ok}
+                     error -> {:halt, error}
+                   end
+                 end) do
+            dependent =
+              Enum.any?([:width, :min_width, :max_width], &percentage_size?(Map.get(style, &1)))
+
+            inline_children_dependency(children, depth + 1, dependent)
+          end
+
+        %{type: :element, children: children} ->
+          inline_children_dependency(children, depth + 1, false)
+
+        %{type: :text} ->
+          {:ok, false}
+
+        _ ->
+          failure("Math block width dependency requires actual styled source nodes", "math")
+      end
+    end
+  end
+
+  defp inline_children_dependency(children, depth, dependent) do
+    case children do
+      [] ->
+        {:ok, dependent}
+
+      [node | rest] ->
+        with {:ok, child_dependent} <- inline_size_dependency(node, depth) do
+          inline_children_dependency(rest, depth, dependent or child_dependent)
+        end
+
+      _ ->
+        failure("Math block width dependency requires proper source child lists", "math")
+    end
+  end
+
+  # This consumes the size grammar already admitted by the shared validator.
+  defp percentage_size?(value) do
+    case value do
+      {:percent, _} -> true
+      {:min, values} -> Enum.any?(values, &percentage_size?/1)
+      {:css_size_math, {_source, percentage?}} -> percentage?
+      _ -> false
+    end
+  end
+
   @doc "Validates the definite inline-size basis supplied by actual Math block placement."
   @spec validate_available_inline_size(term()) :: :ok | {:error, Diagnostics.detailed_error()}
   def validate_available_inline_size(size) do
@@ -1027,7 +1193,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
             display == :none ->
               {:ok, %{kind: :space, width: 0.0, ascent: 0.0, descent: 0.0, style: style}}
 
-            Map.get(style, :background_image) != nil and not css_schema?(tag, style) ->
+            Map.get(style, :background_image) != nil and not css_schema?(tag, style) and
+              not grouping_element?(tag) and tag not in ["mo", "msqrt", "mroot" | @token_elements] ->
               Diagnostics.error(
                 :layout,
                 :unsupported_html,
@@ -1122,6 +1289,15 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                  %{
                    kind: :operator,
                    content: content,
+                   css_math_owner: Map.get(style, :_math_formatting, true),
+                   available_inline_size:
+                     Map.get(
+                       context,
+                       :available_content_width,
+                       Map.get(context, :available_inline_size)
+                     ),
+                   source_node: node,
+                   source_context: context,
                    style: style,
                    actual_text: content.actual_text,
                    core_operator: operator,
@@ -1130,9 +1306,26 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                  }}
               end
 
-            tag in ~w(mi mn mtext ms annotation annotation-xml) ->
+            tag in @token_elements ->
               with {:ok, runs} <- token_runs(children, true),
-                   do: prepare_token_content(node, children, style, runs, context)
+                   {:ok, token} <- prepare_token_content(node, children, style, runs, context) do
+                if Map.get(style, :_math_formatting, true) do
+                  {:ok,
+                   Map.merge(token, %{
+                     css_math_owner: true,
+                     available_inline_size:
+                       Map.get(
+                         context,
+                         :available_content_width,
+                         Map.get(context, :available_inline_size)
+                       ),
+                     source_node: node,
+                     source_context: context
+                   })}
+                else
+                  {:ok, token}
+                end
+              end
 
             true ->
               with {:ok, row} <- prepare_row_children(node, context) do
@@ -1140,19 +1333,28 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                   tag == "mfrac" and length(row.children) == 2 ->
                     MathFractionValidator.prepare(row, attributes)
 
-                  tag == "msqrt" ->
-                    MathRadicalValidator.prepare(
-                      %{
-                        row
-                        | style: anonymous_box_style(style)
-                      },
-                      nil,
-                      style
-                    )
+                  tag == "msqrt" or (tag == "mroot" and length(row.children) == 2) ->
+                    {base, index} =
+                      if tag == "msqrt",
+                        do:
+                          {%{row | style: anonymous_box_style(style), css_math_owner: false}, nil},
+                        else: {Enum.at(row.children, 0), Enum.at(row.children, 1)}
 
-                  tag == "mroot" and length(row.children) == 2 ->
-                    [base, index] = row.children
-                    MathRadicalValidator.prepare(base, index, style)
+                    with {:ok, radical} <- MathRadicalValidator.prepare(base, index, style) do
+                      {:ok,
+                       Map.merge(
+                         radical,
+                         Map.take(
+                           row,
+                           [
+                             :css_math_owner,
+                             :available_inline_size,
+                             :source_node,
+                             :source_context
+                           ]
+                         )
+                       )}
+                    end
 
                   tag == "mphantom" ->
                     {:ok, Map.put(row, :hide_paint, true)}
@@ -1363,7 +1565,11 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
             sub = if lower, do: Enum.at(measured, lower)
             sup = if upper, do: Enum.at(measured, upper)
             constants = prepared.constants
-            large_italic = if prepared.largeop, do: base.italic_correction, else: 0.0
+            css_limits? = kind == :limits and Map.has_key?(style, :_math_element)
+
+            large_italic =
+              if prepared.largeop and not css_limits?, do: base.italic_correction, else: 0.0
+
             italic = if prepared.largeop, do: 0.0, else: base.italic_correction
 
             {lower_shift, upper_shift, extra_under, extra_over} =
@@ -1417,11 +1623,19 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                        ), constants.overbar_extra_ascender}
                   end
 
+                down =
+                  if css_limits? and sub != nil and not prepared.largeop and
+                       not prepared.stretchy_base, do: down + sub.ascent, else: down
+
+                up =
+                  if css_limits? and sup != nil and not prepared.largeop and
+                       not prepared.stretchy_base, do: up + sup.descent, else: up
+
                 {down, up, under_extra, over_extra}
               end
 
             {sub_kern, sup_kern} =
-              if kind == :scripts do
+              if kind == :scripts and not Map.has_key?(style, :_math_element) do
                 with {:ok, base_glyph} <- prepare_script_kern_glyph(base),
                      {:ok, sub_glyph} <- prepare_script_kern_glyph(sub),
                      {:ok, sup_glyph} <- prepare_script_kern_glyph(sup),
@@ -1455,41 +1669,49 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
               Map.new([:width, :min_content_width, :max_content_width], fn field ->
                 value = Map.fetch!(base, field)
 
-                if kind == :scripts do
-                  candidates =
-                    if(sub,
-                      do: [
-                        value - large_italic + sub_kern + Map.fetch!(sub, field) +
-                          constants.space_after_script
-                      ],
-                      else: []
-                    ) ++
-                      if sup,
+                if css_limits? do
+                  width = Enum.max(Enum.map(measured, &Map.fetch!(&1, field)))
+                  {field, {width, -width / 2}}
+                else
+                  if kind == :scripts do
+                    candidates =
+                      if(sub,
                         do: [
-                          value + italic + sup_kern + Map.fetch!(sup, field) +
+                          value - large_italic + sub_kern + Map.fetch!(sub, field) +
                             constants.space_after_script
                         ],
                         else: []
+                      ) ++
+                        if sup,
+                          do: [
+                            value + italic + sup_kern + Map.fetch!(sup, field) +
+                              constants.space_after_script
+                          ],
+                          else: []
 
-                  {field, {Enum.max(candidates), 0.0}}
-                else
-                  accent =
-                    if sup,
-                      do: Map.get(sup, :top_accent_attachment) || Map.fetch!(sup, field) / 2,
-                      else: 0.0
+                    {field, {Enum.max(candidates), 0.0}}
+                  else
+                    accent =
+                      if sup,
+                        do: Map.get(sup, :top_accent_attachment) || Map.fetch!(sup, field) / 2,
+                        else: 0.0
 
-                  left =
-                    [-value / 2] ++
-                      if(sub, do: [-Map.fetch!(sub, field) / 2 - large_italic / 2], else: []) ++
-                      if(sup, do: [-accent + large_italic / 2], else: [])
+                    left =
+                      [-value / 2] ++
+                        if(sub, do: [-Map.fetch!(sub, field) / 2 - large_italic / 2], else: []) ++
+                        if(sup, do: [-accent + large_italic / 2], else: [])
 
-                  right =
-                    [value / 2] ++
-                      if(sub, do: [Map.fetch!(sub, field) / 2 - large_italic / 2], else: []) ++
-                      if(sup, do: [Map.fetch!(sup, field) - accent + large_italic / 2], else: [])
+                    right =
+                      [value / 2] ++
+                        if(sub, do: [Map.fetch!(sub, field) / 2 - large_italic / 2], else: []) ++
+                        if(sup,
+                          do: [Map.fetch!(sup, field) - accent + large_italic / 2],
+                          else: []
+                        )
 
-                  minimum = Enum.min(left)
-                  {field, {abs(Enum.max(right) - minimum), minimum}}
+                    minimum = Enum.min(left)
+                    {field, {abs(Enum.max(right) - minimum), minimum}}
+                  end
                 end
               end)
 
@@ -1513,14 +1735,16 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
                   index == lower ->
                     {-minimum - child.width / 2 - large_italic / 2,
-                     -base.ink_descent - lower_shift}
+                     -if(css_limits?, do: base.descent, else: base.ink_descent) - lower_shift}
 
                   true ->
-                    {-minimum - child.width / 2 + large_italic / 2, base.ink_ascent + upper_shift}
+                    {-minimum - child.width / 2 + large_italic / 2,
+                     if(css_limits?, do: base.ascent, else: base.ink_ascent) + upper_shift}
                 end
               end)
 
-            # Keep the dated Core line equations separate from translated ink.
+            # Chromium allocates the limits from the actual translated child
+            # fragments. Its baseline includes the base ascent/descent too.
             ascent =
               Enum.max(
                 [base.ascent] ++
@@ -1534,6 +1758,24 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                   if(sub, do: [sub.descent + lower_shift + extra_under], else: []) ++
                   if(sup, do: [sup.descent - upper_shift], else: [])
               )
+
+            ascent =
+              if css_limits?,
+                do:
+                  Enum.max(
+                    Enum.zip(measured, offsets)
+                    |> Enum.map(fn {child, {_, y}} -> child.ascent + y end)
+                  ) + extra_over,
+                else: ascent
+
+            descent =
+              if css_limits?,
+                do:
+                  Enum.max(
+                    Enum.zip(measured, offsets)
+                    |> Enum.map(fn {child, {_, y}} -> child.descent - y end)
+                  ) + extra_under,
+                else: descent
 
             placed = Enum.zip(measured, offsets)
 
@@ -1700,30 +1942,34 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                      sub = elem(measured_tuple, lower)
                      sup = elem(measured_tuple, upper)
 
-                     with {:ok, sub_glyph} <- prepare_script_kern_glyph(sub),
-                          {:ok, sup_glyph} <- prepare_script_kern_glyph(sup),
-                          {:ok, sub_kern} <-
-                            prepare_script_pair_kern(
-                              base_glyph,
-                              sub_glyph,
-                              base,
-                              sub,
-                              -down,
-                              if(side == :pre, do: :presub, else: :sub)
-                            ),
-                          {:ok, sup_kern} <-
-                            prepare_script_pair_kern(
-                              base_glyph,
-                              sup_glyph,
-                              base,
-                              sup,
-                              up,
-                              if(side == :pre, do: :presup, else: :sup)
-                            ) do
-                       {:cont,
-                        {:ok, kerns |> Map.put(lower, sub_kern) |> Map.put(upper, sup_kern)}}
+                     if Map.has_key?(style, :_math_element) do
+                       {:cont, {:ok, kerns |> Map.put(lower, 0.0) |> Map.put(upper, 0.0)}}
                      else
-                       {:error, _} = error -> {:halt, error}
+                       with {:ok, sub_glyph} <- prepare_script_kern_glyph(sub),
+                            {:ok, sup_glyph} <- prepare_script_kern_glyph(sup),
+                            {:ok, sub_kern} <-
+                              prepare_script_pair_kern(
+                                base_glyph,
+                                sub_glyph,
+                                base,
+                                sub,
+                                -down,
+                                if(side == :pre, do: :presub, else: :sub)
+                              ),
+                            {:ok, sup_kern} <-
+                              prepare_script_pair_kern(
+                                base_glyph,
+                                sup_glyph,
+                                base,
+                                sup,
+                                up,
+                                if(side == :pre, do: :presup, else: :sup)
+                              ) do
+                         {:cont,
+                          {:ok, kerns |> Map.put(lower, sub_kern) |> Map.put(upper, sup_kern)}}
+                       else
+                         {:error, _} = error -> {:halt, error}
+                       end
                      end
                    end) do
               large_italic = if largeop, do: base.italic_correction, else: 0.0
@@ -1843,12 +2089,15 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
   # The six schemas and every tensor pair share the same selected-font clearance rule.
   defp side_script_shifts(constants, style, base, sub, sup) do
+    ascent = if Map.has_key?(style, :_math_element), do: :ascent, else: :ink_ascent
+    descent = if Map.has_key?(style, :_math_element), do: :descent, else: :ink_descent
+
     down =
       if sub do
         Enum.max([
           constants.subscript_shift_down,
-          sub.ink_ascent - constants.subscript_top_max,
-          constants.subscript_baseline_drop_min + base.ink_descent
+          Map.fetch!(sub, ascent) - constants.subscript_top_max,
+          constants.subscript_baseline_drop_min + Map.fetch!(base, descent)
         ])
       else
         0.0
@@ -1863,8 +2112,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
               else: :superscript_shift_up
             )
           ],
-          constants.superscript_bottom_min + sup.ink_descent,
-          base.ink_ascent - constants.superscript_baseline_drop_max
+          constants.superscript_bottom_min + Map.fetch!(sup, descent),
+          Map.fetch!(base, ascent) - constants.superscript_baseline_drop_max
         ])
       else
         0.0
@@ -1872,13 +2121,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
     {down, up} =
       if sub != nil and sup != nil do
-        gap = down - sub.ink_ascent + up - sup.ink_descent
+        gap = down - Map.fetch!(sub, ascent) + up - Map.fetch!(sup, descent)
         deficit = max(constants.sub_superscript_gap_min - gap, 0.0)
 
         raise =
           min(
             max(
-              constants.superscript_bottom_max_with_subscript - (up - sup.ink_descent),
+              constants.superscript_bottom_max_with_subscript - (up - Map.fetch!(sup, descent)),
               0.0
             ),
             deficit
@@ -2042,12 +2291,16 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   defp prepare_row_children(node, context) do
     %{tag: tag, children: children, style: style} = node
 
+    available =
+      Map.get(context, :available_content_width, Map.get(context, :available_inline_size))
+
+    owner? = grouping_element?(tag) or tag in ~w(msqrt mroot)
+    used_width = if owner?, do: Layout.resolve_content_size(style, :width, available, nil)
+
+    child_basis = if used_width == nil, do: available, else: used_width
+
     in_flow =
-      Enum.reject(children, fn child ->
-        Map.get(child, :style, %{}) |> Map.get(:display) == :none or
-          (Map.get(child, :type) == :text and
-             Regex.match?(~r/^[ \t\n\r\f]*$/u, child.text))
-      end)
+      math_block_children(children)
 
     count = Enum.count(in_flow, &(not space_like?(&1)))
     embellished? = embellished?(node)
@@ -2072,28 +2325,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
         context
         |> Map.put(:operator_context, operator_context)
         |> Map.put(:containing_formatting_context, :math)
+        |> then(fn child_context ->
+          if used_width == nil,
+            do: child_context,
+            else: Map.put(child_context, :available_content_width, child_basis)
+        end)
 
-      result =
-        case child do
-          %{type: :text} ->
-            prepare_node(
-              %{
-                type: :element,
-                namespace: :mathml,
-                tag: "mtext",
-                attributes: %{},
-                style: anonymous_box_style(style),
-                children: [child]
-              },
-              child_context
-            )
-
-          %{namespace: namespace} when namespace != :mathml ->
-            prepare_native_element(child, child_context)
-
-          _ ->
-            prepare_node(child, child_context)
-        end
+      result = prepare_node(child, child_context)
 
       case result do
         {:ok, result} ->
@@ -2116,7 +2354,12 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
            children: children,
            style: style,
            core_operator: core,
-           add_operator_space: tag == "math" or not embellished?
+           add_operator_space: tag == "math" or not embellished?,
+           css_math_owner:
+             owner? and not (tag == "math" and Map.get(style, :_math_display) == :block),
+           available_inline_size: available,
+           source_node: node,
+           source_context: context
          }}
 
       error ->
@@ -2128,6 +2371,22 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   # the other tokens, including blockification of original direct child boxes.
   defp prepare_token_content(node, children, style, runs, context) do
     math_formatting? = Map.get(style, :_math_formatting, style.display != :inline_block)
+
+    available =
+      Map.get(context, :available_content_width, Map.get(context, :available_inline_size))
+
+    used_width =
+      if math_formatting?, do: Layout.resolve_content_size(style, :width, available, nil)
+
+    # Native descendants use their real token owner's content width. The source
+    # owner itself retains its original enclosing context for CSS paint placement.
+    context =
+      if used_width == nil,
+        do: context,
+        else: Map.put(context, :available_content_width, used_width)
+
+    context =
+      if math_formatting?, do: Map.put(context, :native_formatting_context, :math), else: context
 
     native? =
       Enum.any?(children, &native_token_child?(&1, style.font_face)) or
@@ -2143,7 +2402,19 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     with :ok <- validate_token_text(runs, native?) do
       if native? do
         if node.tag == "mtext" and not math_formatting? do
-          prepare_native_token(children, style, runs, context, math_formatting?, :inline, node)
+          prepare_native_token(
+            children,
+            style,
+            runs,
+            Map.put(
+              context,
+              :native_formatting_context,
+              Map.get(context, :containing_formatting_context, :math)
+            ),
+            math_formatting?,
+            :inline,
+            node
+          )
         else
           prepare_native_token(children, style, runs, context, math_formatting?)
         end
@@ -2156,7 +2427,11 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
           Enum.reduce_while(lines, {:ok, []}, fn line, {:ok, prepared} ->
             with {:ok, runs} <- token_runs(line, true),
-                 {:ok, glyphs, text} <- prepare_token_glyphs(runs) do
+                 {:ok, glyphs, text} <-
+                   prepare_token_glyphs(
+                     runs,
+                     if(Map.has_key?(style, :_math_element), do: :ink, else: :advance)
+                   ) do
               if glyphs == [] do
                 {:cont, {:ok, prepared}}
               else
@@ -2191,15 +2466,21 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
               error
           end
         else
-          with {:ok, glyphs, actual_text} <- prepare_token_glyphs(runs),
-               do:
-                 {:ok,
-                  %{
-                    kind: :token,
-                    children: glyphs,
-                    style: style,
-                    actual_text: actual_text
-                  }}
+          with {:ok, glyphs, actual_text} <-
+                 prepare_token_glyphs(
+                   runs,
+                   if(Map.has_key?(style, :_math_element), do: :ink, else: :advance)
+                 ),
+               {:ok, ink} <- prepare_token_layout_ink(runs, glyphs, style) do
+            {:ok,
+             %{
+               kind: :token,
+               children: glyphs,
+               style: style,
+               actual_text: actual_text,
+               layout_ink: ink
+             }}
+          end
         end
       end
     end
@@ -2208,14 +2489,14 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   # Flex and grid are unambiguously nonmath displays, including when the
   # CSS parser retains inherited Math context for their descendants.
   defp css_schema?(tag, style) do
-    tag in ~w(mfrac msqrt mroot) and
+    (tag in ~w(mfrac msqrt mroot mrow mstyle merror) or tag not in @core_elements) and
       (not Map.get(style, :_math_formatting, true) or
          Map.get(style, :display) in [:flex, :inline_flex, :grid, :inline_grid])
   end
 
   # A schema with ordinary CSS display uses HTML flow, while each MathML
   # child keeps its own math formatting, selected glyphs and original text.
-  defp prepare_css_schema(%{children: children, style: style}, context) do
+  defp prepare_css_schema(%{children: children, style: style} = source_node, context) do
     containing_context = Map.get(context, :containing_formatting_context, :math)
 
     # This source owner lays its children out in its own CSS formatting
@@ -2254,7 +2535,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
               # CSS schemas already include their complete native owner box.
               # Other Math boxes leave owner decoration to this CSS wrapper.
               child_style =
-                if css_schema?(child.tag, child_style) do
+                if css_schema?(child.tag, child_style) or
+                     Map.get(measured, :css_math_owner, false) do
                   child_style
                   |> anonymous_box_style()
                   |> Map.put(:display, if(block?, do: :block, else: :inline))
@@ -2295,7 +2577,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                    :grid -> :inline_grid
                    :block -> :inline_block
                    display -> display
-                 end
+                 end,
+                 source_node
                ),
              do: {:ok, %{prepared | style: anonymous_box_style(style), actual_text: text}}
 
@@ -2361,10 +2644,9 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
         Enum.reject(children, &(Map.get(&1.style, :display) == :none))
       else
         if source_node != nil do
-          # Math layout blockifies ordinary CSS children. Keep the real styled
-          # source and let shared CSS measurement resolve its complete box.
-          display = if style.display in [:inline, :inline_block], do: :block, else: style.display
-          [%{source_node | style: Map.put(style, :display, display), children: children}]
+          # The shared adapter derives used display from the actual containing
+          # context. Preserve the source owner and its computed display.
+          [%{source_node | children: children}]
         else
           [
             %{
@@ -2439,6 +2721,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   # box. Its paint, size, baseline and resource checks belong to the shared
   # child adapter; the MathML measurer must not add the owner's edges twice.
   defp prepare_native_element(node, context) do
+    context =
+      Map.put_new(
+        context,
+        :native_formatting_context,
+        Map.get(context, :containing_formatting_context, :math)
+      )
+
     with {:ok, runs} <- token_runs(node.children),
          :ok <- validate_token_text(runs, true),
          {:ok, prepared} <- prepare_native_token([node], node.style, runs, context, true) do
@@ -2488,6 +2777,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           |> Map.put(:_math_native_group, make_ref())
           |> Map.put(:_math_native_actual_source, text)
           |> Map.put(
+            :_source_glyph_characters,
+            NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator.source_characters(
+              node,
+              displayed
+            )
+          )
+          |> Map.put(
             :_math_original_characters,
             Map.new(Enum.zip(String.codepoints(displayed), String.codepoints(text)))
           )
@@ -2506,6 +2802,24 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   defp grouping_element?(tag),
     do: is_binary(tag) and (tag in @grouping_elements or tag not in @core_elements)
 
+  # Blink's LayoutMathMLBlock admits MathMLElement children only. Character
+  # data and HTML integration children belong to token or ordinary CSS flow,
+  # not anonymous token boxes in a default Math row.
+  defp math_block_children(children) do
+    Enum.filter(children, fn child ->
+      case child do
+        %{namespace: :mathml, type: :element} ->
+          Map.get(Map.get(child, :style, %{}), :display) != :none
+
+        %{type: type} when type in [:element, :text, :comment, :processing_instruction] ->
+          false
+
+        _ ->
+          throw({:math_layout_error, failure("Math rows require actual typed source children")})
+      end
+    end)
+  end
+
   defp space_like?(node) do
     case node do
       %{namespace: :mathml, tag: tag} when tag in ~w(mtext mspace annotation annotation-xml) ->
@@ -2513,17 +2827,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
       %{namespace: :mathml, tag: tag, children: children} ->
         (tag == "mpadded" or grouping_element?(tag)) and
-          Enum.all?(children, fn child ->
-            Map.get(child, :style, %{}) |> Map.get(:display) == :none or space_like?(child)
-          end)
-
-      %{type: :text} ->
-        # Straight row text is prepared as anonymous mtext below; classify that
-        # prescribed result before computing the outer operator's form.
-        true
-
-      _ ->
-        false
+          Enum.all?(math_block_children(children), &space_like?/1)
     end
   end
 
@@ -2534,28 +2838,20 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
       %{namespace: :mathml, tag: tag, children: children}
       when tag in ["mfrac" | @script_elements] ->
-        case Enum.reject(children, fn child ->
-               Map.get(child, :style, %{}) |> Map.get(:display) == :none or
-                 (Map.get(child, :type) == :text and Regex.match?(~r/^[ \t\n\r\f]*$/u, child.text))
-             end) do
+        case math_block_children(children) do
           [first | _] -> embellished?(first)
           [] -> false
         end
 
       %{namespace: :mathml, tag: tag, children: children} ->
         if tag == "mpadded" or grouping_element?(tag) do
-          case Enum.reject(children, fn child ->
-                 Map.get(child, :style, %{}) |> Map.get(:display) == :none or space_like?(child)
-               end) do
+          case Enum.reject(math_block_children(children), &space_like?/1) do
             [child] -> embellished?(child)
             _ -> false
           end
         else
           false
         end
-
-      _ ->
-        false
     end
   end
 
@@ -2576,7 +2872,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   end
 
   # CSS metric units use the ordinary selected face, without math-auto or ssty.
-  # Discover units inside calculations as well as standalone numeric attributes.
+  # Calculated Math attributes are ignored by Blink before font metrics resolve.
   defp prepare_operator_length_context(attributes, style, context) do
     units =
       Enum.reduce_while(~w(lspace rspace minsize maxsize), {:ok, []}, fn property, {:ok, units} ->
@@ -2585,9 +2881,14 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
             {:cont, {:ok, units}}
 
           value ->
-            case CssCalculationValidator.referenced_units(value) do
-              {:ok, found} -> {:cont, {:ok, Enum.uniq(units ++ found)}}
-              error -> {:halt, error}
+            case HtmlValidator.parse_css_number(
+                   if(is_binary(value),
+                     do: HtmlValidator.trim_ascii_whitespace(value) |> String.downcase(:ascii),
+                     else: value
+                   )
+                 ) do
+              {_number, unit} -> {:cont, {:ok, Enum.uniq(units ++ [unit])}}
+              :error -> {:cont, {:ok, units}}
             end
         end
       end)
@@ -2758,7 +3059,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                   {ascent, descent}
                 end
 
-              natural = (elem(base.bounds, 3) - elem(base.bounds, 1)) * scale
+              {_left, bottom, _right, top} = base.ink_bounds
+              natural = top - bottom
               minimum = max(resolve_operator_size(operator.minsize, natural), 0)
 
               maximum =
@@ -2790,14 +3092,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
             end
 
           with {:ok, shape} <-
-                 prepare_stretch(
-                   base.text,
-                   base.font_face,
-                   base.font_size,
-                   operator.stretch_axis,
-                   target,
-                   script_feature_level: min(max(Map.get(style, :math_depth, 0), 0), 2)
-                 ) do
+                 prepare_selected_stretch(base, operator.stretch_axis, target) do
             preferred =
               if operator.stretch_axis == :vertical do
                 preferred_vertical_width(base, construction)
@@ -2827,25 +3122,45 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
          }}
 
       not operator.stretchy and operator.largeop and
-          Map.get(style, :math_style, :normal) == :normal ->
+          (Map.get(style, :math_style, :normal) == :normal or
+             Map.get(base.source, :stretch_metrics) == :ink) ->
         construction = Map.get(base.source.metrics.variants.vertical, base.glyph_id)
         variants = if construction, do: construction.variants, else: []
-        minimum = base.source.metrics.constants.display_operator_min_height * scale
-        FontValidator.reserve(:max_font_math_work, length(variants))
-        selected = Enum.find(variants, &(&1.advance * scale >= minimum)) || List.last(variants)
 
-        if selected do
-          with {:ok, glyph} <- selected_glyph(selected.glyph, base.source),
-               do:
-                 {:ok,
-                  %{
-                    shape: %{kind: :glyph, glyph: glyph},
-                    target_ascent: nil,
-                    target_descent: nil,
-                    intrinsic_width: glyph.advance * scale
-                  }}
-        else
-          {:ok, nil}
+        minimum =
+          if Map.get(style, :math_style, :normal) == :normal,
+            do: base.source.metrics.constants.display_operator_min_height * scale,
+            else: 0.0
+
+        FontValidator.reserve(:max_font_math_work, length(variants))
+
+        selected =
+          Enum.find(variants, fn variant ->
+            {_left, bottom, _right, top} =
+              glyph_ink_bounds(
+                elem(base.source.bounds, variant.glyph),
+                base.source,
+                variant.glyph
+              )
+
+            top - bottom >= minimum
+          end) || List.last(variants)
+
+        id = if selected, do: selected.glyph, else: base.glyph_id
+
+        with {:ok, glyph} <- selected_glyph(id, base.source),
+             {:ok, [axis]} <-
+               resolve_constants(base.source.metrics, [:axis_height], base.font_size) do
+          {_left, bottom, _right, top} = glyph.ink_bounds
+          centered? = operator.symmetric and Map.get(base.source, :stretch_metrics) == :ink
+
+          {:ok,
+           %{
+             shape: %{kind: :glyph, glyph: glyph},
+             target_ascent: if(centered?, do: (top - bottom) / 2 + axis),
+             target_descent: if(centered?, do: (top - bottom) / 2 - axis),
+             intrinsic_width: glyph.advance * scale
+           }}
         end
 
       true ->
@@ -2874,12 +3189,6 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     case value do
       {:percentage, number} ->
         natural * (number / 100)
-
-      {:css_calculation, _} = expression ->
-        case CssCalculationValidator.resolve(expression, natural) do
-          {:ok, number} -> number
-          {:error, _} = error -> throw({:math_layout_error, error})
-        end
 
       number ->
         number
@@ -2923,8 +3232,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           MathTableValidator.validate_style(style, tag)
         end
 
-      tag == "mtext" and not Map.get(style, :_math_formatting, true) ->
+      css_schema?(tag, style) or grouping_element?(tag) or tag in ~w(msqrt mroot) or
+        (tag in ["mo" | @token_elements] and Map.get(style, :_math_formatting, true)) or
+        tag not in @core_elements or
+          (tag == "mtext" and not Map.get(style, :_math_formatting, true)) ->
         with :ok <- validate_link_style(style, tag),
+             :ok <- validate_background_style(style, tag),
+             :ok <- validate_math_owner_style(tag, style),
              :ok <-
                Enum.reduce_while(
                  [:width, :height, :min_width, :max_width, :min_height, :max_height],
@@ -2970,12 +3284,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                Enum.any?(
                  [:min_width, :max_width, :min_height, :max_height],
                  &(Map.get(style, &1) != nil)
-               )) or
-            (tag == "math" and
-               (Map.get(style, :width) != nil or Map.get(style, :height) != nil or
-                  Enum.any?([:margin, :padding, :border_widths], fn property ->
-                    Enum.any?(Map.values(Map.get(style, property, %{})), &(&1 != 0))
-                  end)))
+               ))
 
         link_validation = validate_link_style(style, tag)
 
@@ -2996,6 +3305,82 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           true ->
             :ok
         end
+    end
+  end
+
+  @doc "Validates Math source backgrounds through the canonical decoded writer-image authority."
+  @spec validate_background_style(term(), String.t()) ::
+          :ok | {:error, Diagnostics.detailed_error()}
+  def validate_background_style(style, tag) do
+    case style do
+      style when is_map(style) ->
+        images =
+          case Map.get(style, :background_image) do
+            nil -> []
+            image -> [%{type: :image, image: image, x: 0.0, y: 0.0, width: 1.0, height: 1.0}]
+          end
+
+        case WriterValidator.validate_native_boxes(images) do
+          :ok ->
+            :ok
+
+          {:error, {:invalid_pdf_input, _}} ->
+            Diagnostics.error(
+              :layout,
+              :unsupported_html,
+              "MathML background images require validated decoded image data",
+              operation: :measure_math,
+              module: __MODULE__,
+              source: tag
+            )
+
+          {:error, {reason, diagnostic}} ->
+            {:error, {reason, Diagnostics.with_context(diagnostic, source: tag)}}
+        end
+
+      _ ->
+        failure("Math backgrounds require a prepared style map", tag)
+    end
+  end
+
+  # Native CSS schemata use their canonical child adapter. Math owners retain
+  # atomic source boxes, so clipping and positioning need a separate paint path.
+  defp validate_math_owner_style(tag, style) do
+    ordinary? =
+      css_schema?(tag, style) or
+        (tag == "mtext" and not Map.get(style, :_math_formatting, true))
+
+    edges? =
+      Enum.all?([:margin, :padding, :border_widths], fn property ->
+        case Map.get(style, property, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}) do
+          edges when is_map(edges) ->
+            Enum.all?([:top, :right, :bottom, :left], fn edge ->
+              value = Map.get(edges, edge)
+
+              is_number(value) and abs(value) <= Limits.get(:max_css_numeric_magnitude) and
+                (property == :margin or value >= 0)
+            end)
+
+          _ ->
+            false
+        end
+      end)
+
+    if ordinary? or
+         (edges? and Map.get(style, :_math_formatting, true) and
+            Map.get(style, :position, :static) in [:static, :relative] and
+            Map.get(style, :overflow, :visible) in [:visible, :hidden] and
+            Map.get(style, :box_sizing, :content_box) in [:content_box, :border_box]) do
+      :ok
+    else
+      Diagnostics.error(
+        :layout,
+        :unsupported_html,
+        "Math formatting owner boxes require bounded box edges and CSS box sizing; Math owner placement requires static or relative positioned boxes and visible or hidden overflow",
+        operation: :measure_math,
+        module: __MODULE__,
+        source: tag
+      )
     end
   end
 
@@ -3056,7 +3441,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
             # applies math-auto to original single-character text nodes.
             style = if math_text?, do: Map.put(style, :white_space, :nowrap), else: style
             style = Map.put(style, :_math_auto_scalar, length(String.codepoints(text)) == 1)
-            {:ok, [%{text: text, style: style}]}
+            {:ok, [%{text: text, style: style, source_node: child}]}
 
           %{type: :element, style: %{display: :none}} ->
             {:ok, []}
@@ -3064,8 +3449,10 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           %{type: :element, style: %{_math_box: %{actual_text: text}} = style} ->
             {:ok, [%{text: text, style: style}]}
 
-          %{type: :element, style: %{svg_scene: %{logical_text: text}} = style} ->
-            {:ok, [%{text: Enum.join(text), style: style}]}
+          %{type: :element, style: %{svg_scene: _}} ->
+            # Converted SVG is a single image. Its internal text and links do
+            # not become ordinary Math token text or PDF annotations.
+            {:ok, []}
 
           %{type: :element, style: %{_math_flow: true}, children: children} ->
             token_runs(children)
@@ -3092,19 +3479,38 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     # NBSP and other authored Unicode spacing remain part of the token.
     {characters, _space} =
       Enum.reduce(runs, {[], true}, fn run, {characters, previous_space} ->
-        Enum.reduce(String.codepoints(run.text), {characters, previous_space}, fn character,
-                                                                                  {characters,
-                                                                                   previous_space} ->
-          space? = character in [" ", "\t", "\n", "\r", "\f"]
-          preserve? = Map.get(run.style, :white_space) in [:pre, :pre_wrap, :break_spaces]
+        Enum.reduce(
+          Enum.with_index(String.codepoints(run.text)),
+          {characters, previous_space},
+          fn {character, offset}, {characters, previous_space} ->
+            space? = character in [" ", "\t", "\n", "\r", "\f"]
+            preserve? = Map.get(run.style, :white_space) in [:pre, :pre_wrap, :break_spaces]
 
-          if space? and previous_space and not preserve? do
-            {characters, true}
-          else
-            {[%{text: if(space?, do: " ", else: character), style: run.style} | characters],
-             space?}
+            if space? and previous_space and not preserve? do
+              {characters, true}
+            else
+              {[
+                 %{
+                   text: if(space?, do: " ", else: character),
+                   style: run.style,
+                   source_fragments:
+                     if(
+                       Map.has_key?(run, :source_node) and Map.has_key?(run.source_node, :node_id),
+                       do: [
+                         %{
+                           owner: Map.drop(run.source_node, [:style, :children]),
+                           text: character,
+                           offset: offset
+                         }
+                       ],
+                       else: []
+                     )
+                 }
+                 | characters
+               ], space?}
+            end
           end
-        end)
+        )
       end)
 
     characters
@@ -3114,7 +3520,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     |> Enum.reverse()
   end
 
-  defp prepare_token_glyphs(runs) do
+  defp prepare_token_glyphs(runs, metrics) do
     characters = token_characters(runs)
 
     Enum.reduce_while(characters, {:ok, []}, fn character, {:ok, glyphs} ->
@@ -3126,10 +3532,22 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
       case prepare_glyph(character.text, style.font_face, style.font_size,
              text_transform: transform,
+             stretch_metrics: metrics,
              script_feature_level: min(max(Map.get(style, :math_depth, 0), 0), 2)
            ) do
-        {:ok, glyph} -> {:cont, {:ok, [%{kind: :glyph, glyph: glyph, style: style} | glyphs]}}
-        error -> {:halt, error}
+        {:ok, glyph} ->
+          glyph = %{
+            glyph
+            | source:
+                glyph.source
+                |> Map.put(:source_fragments, character.source_fragments)
+                |> Map.put(:stretch_metrics, Map.get(glyph.source, :stretch_metrics, :advance))
+          }
+
+          {:cont, {:ok, [%{kind: :glyph, glyph: glyph, style: style} | glyphs]}}
+
+        error ->
+          {:halt, error}
       end
     end)
     |> case do
@@ -3141,6 +3559,36 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
       error ->
         error
+    end
+  end
+
+  # MathTokenLayoutAlgorithm measures PlainTextPainter with the original
+  # characters, without inline math-auto/ssty glyph substitutions. The real
+  # selected substitute glyphs remain the only emitted paint/source bindings.
+  defp prepare_token_layout_ink(runs, glyphs, style) do
+    if Map.has_key?(style, :_math_element) do
+      # Glyph preparation already validated and retained these exact source
+      # outlines. Reuse them for the original-character metric request.
+      sources = Map.new(glyphs, fn %{glyph: glyph} -> {glyph.font_face.id, glyph.source} end)
+
+      ink =
+        Enum.reduce(token_characters(runs), nil, fn character, bounds ->
+          font = character.style.font_face
+          <<codepoint::utf8>> = character.text
+          source = Map.fetch!(sources, font.id)
+          glyph = Map.get(font.cmap, codepoint, 0)
+
+          {_left, bottom, _right, top} =
+            glyph_ink_bounds(elem(source.bounds, glyph), source, glyph)
+
+          if bounds == nil,
+            do: {top, -bottom},
+            else: {max(elem(bounds, 0), top), max(elem(bounds, 1), -bottom)}
+        end)
+
+      {:ok, ink}
+    else
+      {:ok, nil}
     end
   end
 
@@ -3166,19 +3614,42 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
         if shaped == text do
           {:ok, run}
         else
-          Enum.reduce_while(String.codepoints(shaped), {:ok, []}, fn text, {:ok, glyphs} ->
+          characters =
+            Enum.map(run, fn glyph ->
+              %{
+                displayed: <<glyph.glyph.source.displayed::utf8>>,
+                fragments: Map.get(glyph.glyph.source, :source_fragments, [])
+              }
+            end)
+
+          plan =
+            NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator.shape_characters(
+              characters,
+              first.glyph.font_face,
+              Map.get(first.style, :letter_spacing, 0.0)
+            )
+
+          Enum.reduce_while(plan, {:ok, [], run}, fn character, {:ok, glyphs, remaining} ->
+            text = character.displayed
+            {_consumed, remaining} = Enum.split(remaining, character.consumed)
+            fragments = character.fragments
+
             case prepare_glyph(text, first.glyph.font_face, first.glyph.font_size,
+                   stretch_metrics: first.glyph.source.stretch_metrics,
                    script_feature_level: min(max(Map.get(first.style, :math_depth, 0), 0), 2)
                  ) do
               {:ok, glyph} ->
-                {:cont, {:ok, [%{kind: :glyph, glyph: glyph, style: first.style} | glyphs]}}
+                glyph = %{glyph | source: Map.put(glyph.source, :source_fragments, fragments)}
+
+                {:cont,
+                 {:ok, [%{kind: :glyph, glyph: glyph, style: first.style} | glyphs], remaining}}
 
               error ->
                 {:halt, error}
             end
           end)
           |> case do
-            {:ok, glyphs} -> {:ok, Enum.reverse(glyphs)}
+            {:ok, glyphs, []} -> {:ok, Enum.reverse(glyphs)}
             error -> error
           end
         end
@@ -3355,9 +3826,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
       is_integer(codepoint) and
         is_number(size) and size >= 0 and size <= Limits.get(:max_css_numeric_magnitude) and
         Keyword.keyword?(opts) and
-        Enum.all?(Keyword.keys(opts), &(&1 in [:text_transform, :script_feature_level])) and
+        Enum.all?(
+          Keyword.keys(opts),
+          &(&1 in [:text_transform, :script_feature_level, :stretch_metrics])
+        ) and
         Keyword.get(opts, :text_transform, :none) in [:none, :math_auto] and
-        Keyword.get(opts, :script_feature_level, 0) in [0, 1, 2]
+        Keyword.get(opts, :script_feature_level, 0) in [0, 1, 2] and
+        Keyword.get(opts, :stretch_metrics, :advance) in [:advance, :ink]
 
     case {valid?, font} do
       {true, %{type: :embedded, units_per_em: units, cmap: cmap, widths: widths}}
@@ -3402,6 +3877,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
               displayed: displayed,
               font: font,
               size: size,
+              stretch_metrics: Keyword.get(opts, :stretch_metrics, :advance),
               metrics: metrics,
               bounds: bounds,
               advances: Font.glyph_widths(font, tuple_size(bounds) - 1)
@@ -3431,89 +3907,122 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   @spec prepare_stretch(term(), term(), term(), term(), term(), term()) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_stretch(text, font, size, axis, target, opts) do
+    with {:ok, base} <- prepare_glyph(text, font, size, opts),
+         do: prepare_selected_stretch(base, axis, target)
+  end
+
+  # Both authored operators and public scalar measurements stretch their actual
+  # selected glyph. Authored provenance survives variants and assembly parts.
+  defp prepare_selected_stretch(base, axis, target) do
+    text = base.text
+    size = base.font_size
+
     if axis in [:horizontal, :vertical] and is_number(target) and target >= 0 and
          target <= Limits.get(:max_css_numeric_magnitude) do
-      with {:ok, base} <- prepare_glyph(text, font, size, opts) do
-        source = base.source
-        construction = Map.get(source.metrics.variants[axis], base.glyph_id)
+      source = base.source
+      construction = Map.get(source.metrics.variants[axis], base.glyph_id)
 
-        case construction do
-          nil ->
-            Diagnostics.error(
-              :layout,
-              :unsupported_glyph,
-              "selected math font has no #{axis} stretch construction for #{inspect(text)}",
-              operation: :measure_math,
-              module: __MODULE__,
-              source: text
-            )
+      case construction do
+        nil ->
+          Diagnostics.error(
+            :layout,
+            :unsupported_glyph,
+            "selected math font has no #{axis} stretch construction for #{inspect(text)}",
+            operation: :measure_math,
+            module: __MODULE__,
+            source: text
+          )
 
-          construction ->
-            FontValidator.reserve(:max_font_math_work, length(construction.variants))
-            scale = size / base.units_per_em
-            {_xmin, ymin, _xmax, ymax} = base.bounds
+        construction ->
+          FontValidator.reserve(:max_font_math_work, length(construction.variants))
+          scale = size / base.units_per_em
+          {_xmin, ymin, _xmax, ymax} = base.bounds
 
-            natural_size =
-              if axis == :horizontal, do: base.advance * scale, else: (ymax - ymin) * scale
-
-            if natural_size >= target do
-              {:ok, %{kind: :glyph, glyph: base}}
+          natural_size =
+            if Map.get(source, :stretch_metrics) == :ink do
+              {left, bottom, right, top} = base.ink_bounds
+              if axis == :horizontal, do: right - left, else: top - bottom
             else
-              selected = Enum.find(construction.variants, &(&1.advance * scale >= target))
+              if axis == :horizontal, do: base.advance * scale, else: (ymax - ymin) * scale
+            end
 
-              case selected do
-                %{glyph: id} ->
-                  with {:ok, glyph} <- selected_glyph(id, source),
-                       do: {:ok, %{kind: :glyph, glyph: glyph}}
+          if natural_size >= target do
+            {:ok, %{kind: :glyph, glyph: base}}
+          else
+            selected =
+              Enum.find(construction.variants, fn variant ->
+                extent =
+                  if Map.get(source, :stretch_metrics) == :ink do
+                    {left, bottom, right, top} =
+                      glyph_ink_bounds(elem(source.bounds, variant.glyph), source, variant.glyph)
 
-                nil ->
-                  case prepare_assembly(
-                         construction.assembly,
-                         source.metrics.variants.min_connector_overlap,
-                         scale,
-                         target
-                       ) do
-                    {:ok, assembly} ->
-                      with {:ok, metric_parts} <- prepare_parts(assembly.metric_parts, source),
-                           {:ok, italic} <- prepare_value(assembly.italic, size) do
-                        metrics = Map.new(metric_parts, &{&1.glyph, &1.metric})
+                    if axis == :horizontal, do: right - left, else: top - bottom
+                  else
+                    variant.advance * scale
+                  end
 
-                        parts =
-                          Enum.map(
-                            assembly.parts,
-                            &Map.put(&1, :metric, Map.fetch!(metrics, &1.glyph))
-                          )
+                extent >= target
+              end)
 
-                        {:ok,
-                         Map.merge(assembly, %{
-                           kind: :assembly,
-                           parts: parts,
-                           metric_parts: metric_parts,
-                           axis: axis,
-                           source: source,
-                           italic: italic
-                         })}
+            case selected do
+              %{glyph: id} ->
+                with {:ok, glyph} <- selected_glyph(id, source),
+                     do: {:ok, %{kind: :glyph, glyph: glyph}}
+
+              nil ->
+                case prepare_assembly(
+                       construction.assembly,
+                       source.metrics.variants.min_connector_overlap,
+                       scale,
+                       target
+                     ) do
+                  {:ok, assembly} ->
+                    with {:ok, metric_parts} <- prepare_parts(assembly.metric_parts, source),
+                         {:ok, italic} <- prepare_value(assembly.italic, size) do
+                      metrics = Map.new(metric_parts, &{&1.glyph, &1.metric})
+
+                      parts =
+                        Enum.map(
+                          assembly.parts,
+                          &Map.put(&1, :metric, Map.fetch!(metrics, &1.glyph))
+                        )
+
+                      {:ok,
+                       Map.merge(assembly, %{
+                         kind: :assembly,
+                         parts: parts,
+                         metric_parts: metric_parts,
+                         axis: axis,
+                         source: source,
+                         italic: italic
+                       })}
+                    end
+
+                  :unusable ->
+                    id =
+                      case List.last(construction.variants) do
+                        nil -> base.glyph_id
+                        variant -> variant.glyph
                       end
 
-                    :unusable ->
-                      id =
-                        case List.last(construction.variants) do
-                          nil -> base.glyph_id
-                          variant -> variant.glyph
-                        end
-
-                      with {:ok, glyph} <- selected_glyph(id, source),
-                           do: {:ok, %{kind: :glyph, glyph: glyph}}
-                  end
-              end
+                    with {:ok, glyph} <- selected_glyph(id, source),
+                         do: {:ok, %{kind: :glyph, glyph: glyph}}
+                end
             end
-        end
+          end
       end
     else
       failure(
         "math stretching requires a horizontal or vertical axis and a bounded nonnegative target"
       )
     end
+  end
+
+  # Existing Font APIs expose exact selected TrueType outline bounds. Keep
+  # those source metrics; hinted platform masks require a different API.
+  defp glyph_ink_bounds({left, bottom, right, top}, source, _glyph_id) do
+    scale = source.size / source.metrics.units_per_em
+    {left * scale, bottom * scale, right * scale, top * scale}
   end
 
   defp selected_glyph(id, source) do
@@ -3542,6 +4051,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
            units_per_em: source.metrics.units_per_em,
            advance: advance,
            bounds: elem(source.bounds, id),
+           ink_bounds: glyph_ink_bounds(elem(source.bounds, id), source, id),
            italic: italic,
            accent: accent,
            source: source

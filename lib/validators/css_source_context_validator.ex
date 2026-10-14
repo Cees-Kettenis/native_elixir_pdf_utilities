@@ -1,7 +1,7 @@
 defmodule NativeElixirPdfUtilities.Validators.CssSourceContextValidator do
   @moduledoc false
 
-  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.{CssValueValidator, HtmlValidator}
 
   @doc """
   Collects completed declaration checks and outstanding original-context obligations.
@@ -10,13 +10,23 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceContextValidator do
   an observer for successful CssValueValidator checks. Every authored declaration
   keeps its exact source and source owner. The observer records the original
   node identity and pseudo-element without copying styles or granting authority.
-  Missing contexts remain unresolved; this is neither a removed-source
-  certificate nor resource authorization. Nested invocations have separate
+  Context-free literals use canonical value validation with the same budget.
+  They carry no element contexts or invented owners. The four-argument runner
+  also observes actual selector matches before computation. Unapplied stylesheet
+  values use canonical symbolic syntax/type and URL policy with no resource reads.
+  Matching declarations awaiting computation remain unresolved. This grants no source-removal or resource authorization. Nested invocations have separate
   collectors and retain the enclosing invocation's resource reservations.
   """
   @spec with_context_obligations([map()], map(), function()) ::
           {:ok, term(), [map()]} | {:error, {atom(), map()}}
-  def with_context_obligations(entries, provenance, runner) do
+  @spec with_context_obligations([map()], map(), function(), :atomics.atomics_ref()) ::
+          {:ok, term(), [map()]} | {:error, {atom(), map()}}
+  def with_context_obligations(
+        entries,
+        provenance,
+        runner,
+        budget \\ HtmlValidator.new_css_budget()
+      ) do
     HtmlValidator.with_render_budget(fn ->
       {entries, stylesheet_records} =
         entries
@@ -68,6 +78,21 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceContextValidator do
 
       key = {__MODULE__, make_ref()}
       Process.put(key, %{})
+      selection_key = {key, :selection}
+      Process.put(selection_key, MapSet.new())
+
+      select = fn declaration, _node, _pseudo ->
+        case declaration do
+          %{context_id: id} ->
+            HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+            Process.put(selection_key, MapSet.put(Process.get(selection_key), id))
+
+          _ ->
+            :ok
+        end
+
+        :ok
+      end
 
       observe = fn declaration, node, pseudo ->
         case declaration do
@@ -94,32 +119,98 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceContextValidator do
       end
 
       try do
-        with {:ok, result} <- runner.(entries, Map.new(inline), observe) do
+        selected_runner? = is_function(runner, 4)
+
+        execution =
+          if selected_runner?,
+            do: runner.(entries, Map.new(inline), observe, select),
+            else: runner.(entries, Map.new(inline), observe)
+
+        with {:ok, result} <- execution do
           checked = Process.get(key)
+          selected = Process.get(selection_key)
 
           obligations =
-            Enum.map(
-              List.flatten(Enum.reverse(stylesheet_records) ++ Enum.reverse(inline_records)),
-              fn record ->
-                HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
-                matches = Map.get(checked, record.context_id, %{})
-                HtmlValidator.reserve_render_resource(:max_css_work, map_size(matches), :css)
-                contexts = Map.values(matches)
+            List.flatten(Enum.reverse(stylesheet_records) ++ Enum.reverse(inline_records))
+            |> Enum.reduce_while({:ok, []}, fn record, {:ok, records} ->
+              HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+              matches = Map.get(checked, record.context_id, %{})
+              HtmlValidator.reserve_render_resource(:max_css_work, map_size(matches), :css)
+              contexts = Map.values(matches)
+              original = Map.drop(record, [:context_id, :reason])
 
-                context =
-                  case contexts do
-                    [] -> %{status: :unresolved, reason: record.reason, contexts: []}
-                    _ -> %{status: :checked_in_original_context, contexts: contexts}
+              case contexts do
+                [] ->
+                  case CssValueValidator.validate_source_literal(record, budget) do
+                    :ok ->
+                      literal =
+                        Map.merge(original, %{
+                          status: :checked_without_element_context,
+                          contexts: []
+                        })
+
+                      {:cont, {:ok, [literal | records]}}
+
+                    :requires_element_context ->
+                      value =
+                        if selected_runner? and match?({:stylesheet, _}, record.origin) and
+                             record.reason in [
+                               :unmatched_original_context,
+                               :inactive_media,
+                               :inapplicable_stylesheet
+                             ] and
+                             not MapSet.member?(selected, record.context_id),
+                           do: CssValueValidator.prepare_unapplied_declaration(record, budget),
+                           else: :requires_element_context
+
+                      case value do
+                        {:ok, symbolic} ->
+                          prepared =
+                            Map.merge(original, %{
+                              status: :checked_symbolically,
+                              contexts: [],
+                              source_value: symbolic,
+                              selection: %{kind: :unapplied_stylesheet, basis: record.reason}
+                            })
+
+                          {:cont, {:ok, [prepared | records]}}
+
+                        :requires_element_context ->
+                          pending =
+                            Map.merge(original, %{
+                              status: :unresolved,
+                              reason: record.reason,
+                              contexts: []
+                            })
+
+                          {:cont, {:ok, [pending | records]}}
+
+                        error ->
+                          {:halt, error}
+                      end
+
+                    error ->
+                      {:halt, error}
                   end
 
-                record |> Map.drop([:context_id, :reason]) |> Map.merge(context)
-              end
-            )
+                _ ->
+                  checked =
+                    Map.merge(original, %{
+                      status: :checked_in_original_context,
+                      contexts: contexts
+                    })
 
-          {:ok, result, obligations}
+                  {:cont, {:ok, [checked | records]}}
+              end
+            end)
+
+          with {:ok, records} <- obligations do
+            {:ok, result, Enum.reverse(records)}
+          end
         end
       after
         Process.delete(key)
+        Process.delete(selection_key)
       end
     end)
   end

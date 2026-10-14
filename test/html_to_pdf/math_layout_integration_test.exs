@@ -51,17 +51,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutIntegrationTest do
     end
   end
 
-  test "CSS alternatives preserve direct SVG atomic artwork and selected scene text" do
+  test "CSS alternatives preserve SVG images and surrounding selected text" do
     for display <- ["inline-flex", "inline-grid"] do
       html =
         "<math><annotation-xml encoding='text/html' style='display:#{display};width:90pt;gap:3pt;grid-template-columns:42pt 42pt'><span>α</span><svg width='48' height='24'><rect width='48' height='24' fill='#ffff80'/><text x='2' y='16' font-family='DejaVu Sans' font-size='12'>Scene</text></svg></annotation-xml><mn>1</mn></math>"
 
       assert {:ok, box} = measured(html)
-      assert box.actual_text == "αScene1"
+      assert box.actual_text == "α1"
       assert :ok == MathLayoutValidator.validate_measured_geometry(box)
       assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert pdf =~ "/Subtype /Image"
       assert {:ok, text} = Text.extract(pdf, layout: false)
-      assert String.replace(text, ~r/\s/u, "") == "αScene1"
+      assert String.replace(text, ~r/\s/u, "") == "α1"
     end
   end
 
@@ -109,17 +110,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutIntegrationTest do
     end
   end
 
-  test "SVG scene text and nested math contribute their original logical content" do
+  test "SVG images keep surrounding HTML and nested math logical content" do
     html = """
     <math><annotation-xml style="display:inline-block" encoding="text/html"><span>α</span><svg width="60" height="24"><rect width="60" height="24" fill="#ffff80"/><text x="2" y="16" font-family="DejaVu Sans" font-size="12">Scene</text></svg><math><mn>2</mn></math><span>β</span></annotation-xml><mn>3</mn></math>
     """
 
     assert {:ok, box} = measured(html)
-    assert box.actual_text == "αScene2β3"
+    assert box.actual_text == "α2β3"
     assert :ok == MathLayoutValidator.validate_measured_geometry(box)
     assert {:ok, pdf} = HtmlToPdf.render(html)
     assert {:ok, text} = Text.extract(pdf, layout: false)
-    assert String.replace(text, ~r/\s/u, "") == "αScene2β3"
+    assert String.replace(text, ~r/\s/u, "") == "α2β3"
   end
 
   test "unselected mixed trees do not measure unavailable math, fonts or remote resources" do

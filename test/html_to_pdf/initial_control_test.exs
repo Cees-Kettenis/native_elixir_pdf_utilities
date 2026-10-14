@@ -219,7 +219,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialControlTest do
     end
   end
 
-  test "initial control dimensions and unsupported applicability retain actionable diagnostics" do
+  test "initial control dimensions and malformed transport retain actionable diagnostics" do
     for html <- [
           "<textarea cols=1000000001></textarea>",
           "<textarea rows=1000000001></textarea>",
@@ -236,15 +236,88 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialControlTest do
     assert diagnostic.stage == :style and diagnostic.operation == :compute
     assert diagnostic.source == "initial control width"
 
-    for html <- ["<input type=checkbox size=5>", "<input type=radio placeholder=Ignored>"] do
-      assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html)
-      assert diagnostic.stage == :html and diagnostic.message != ""
-    end
-
     assert {:error, {:invalid_document, diagnostic}} =
              HtmlFormValidator.validate_initial_control_dimension(-1, :height)
 
     assert diagnostic.source == "initial control height" and diagnostic.message =~ "nonnegative"
+  end
+
+  test "inapplicable checkbox size and radio placeholder preserve physical and field semantics" do
+    for {html, reference, kind} <- [
+          {"<input type=checkbox size=5>", "<input type=checkbox>", :checkbox},
+          {"<input type=radio placeholder=Ignored>", "<input type=radio>", :radio}
+        ] do
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      authored = hd(dom.children)
+      effective = HtmlFormValidator.initial_control_attributes(authored)
+      refute Map.has_key?(effective, "size")
+      refute Map.has_key?(effective, "placeholder")
+      assert {:ok, %{children: [styled]}} = Style.compute_detailed(dom)
+      assert styled.attributes == authored.attributes
+      assert styled.style._form_control.initial_state.checked == false
+      refute Map.has_key?(styled.style._form_control.initial_state, :placeholder)
+
+      for mode <- [:static, :interactive] do
+        opts = [
+          forms: mode,
+          asset_resolver: fn request -> flunk("inactive control fetched #{inspect(request)}") end
+        ]
+
+        assert {:ok, pdf} = HtmlToPdf.render(html, opts)
+        assert {:ok, reference_pdf} = HtmlToPdf.render(reference, opts)
+        assert pdf == reference_pdf
+        assert {:ok, context} = Reader.read_validated(pdf)
+        assert {:ok, %{fields: fields}} = FormValidator.inspect_document(context)
+
+        if mode == :interactive do
+          assert [field] = fields
+          assert field.type == kind
+          assert field.flags == if(kind == :radio, do: 32_768, else: 0)
+          assert [widget] = field.widgets
+          assert [left, bottom, right, top] = widget.rect
+          assert right > left and top > bottom
+        else
+          assert fields == []
+        end
+      end
+    end
+  end
+
+  test "ordinary controls use native inline flow in HTML ancestry and preserve normalized fragment roots" do
+    for {tag, source} <- [
+          {"input", "<input value=Value>"},
+          {"textarea", "<textarea>Value</textarea>"},
+          {"select", "<select><option>Value</option></select>"},
+          {"button", "<button>Value</button>"}
+        ] do
+      assert {:ok, fragment} = HtmlParser.parse_detailed(source)
+      assert {:ok, %{children: [root]}} = Style.compute_detailed(fragment)
+      assert root.style.display == :block
+      assert {:ok, dom} = HtmlParser.parse_detailed("<p>Before " <> source <> " After</p>")
+      assert {:ok, %{children: [paragraph]}} = Style.compute_detailed(dom)
+      control = Enum.find(paragraph.children, &(Map.get(&1, :tag) == tag))
+      assert control.style.display == :inline_block
+    end
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<p>Before<input value=Value style='display:block'>After</p>"
+             )
+
+    assert {:ok, %{children: [paragraph]}} = Style.compute_detailed(dom)
+    control = Enum.find(paragraph.children, &(Map.get(&1, :tag) == "input"))
+    assert control.style.display == :block
+    assert {:ok, hidden} = HtmlParser.parse_detailed("<input type=hidden>")
+    assert {:ok, %{children: [control]}} = Style.compute_detailed(hidden)
+    assert control.style.display == :none
+
+    for namespace <- [:svg, :mathml] do
+      assert HtmlFormValidator.initial_control_display(
+               %{tag: "input", namespace: namespace, attributes: %{}},
+               :inline_block,
+               []
+             ) == :inline_block
+    end
   end
 
   test "primitive clips validate text and rectangle transport before emitting scoped artwork" do
@@ -282,12 +355,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialControlTest do
 
     assert length(Regex.scan(~r/5 6 12 14 re W n/, pdf)) == 2
 
-    for box <- [rectangle, text], malformed <- [%{}, %{clip | width: 0}, %{clip | height: -1}] do
+    for box <- [rectangle, text], empty <- [%{clip | width: 0}, %{clip | height: 0}] do
+      assert {:ok, empty_pdf} =
+               PdfWriter.render([%{size: {100, 100}, boxes: [Map.put(box, :clip, empty)]}],
+                 compress_streams: false
+               )
+
+      assert empty_pdf =~ "#{empty.x} #{empty.y} #{empty.width} #{empty.height} re W n"
+    end
+
+    for box <- [rectangle, text],
+        malformed <- [
+          %{},
+          %{clip | width: -1},
+          %{clip | height: -1},
+          Map.put(clip, :inner_clip, Map.put(clip, :inner_clip, clip)),
+          %{clip | x: NativeElixirPdfUtilities.Limits.get(:max_pdf_numeric_magnitude) * 2}
+        ] do
       assert {:error, {:invalid_pdf_input, diagnostic}} =
                PdfWriter.render([%{size: {100, 100}, boxes: [Map.put(box, :clip, malformed)]}])
 
       assert diagnostic.stage == :pdf and diagnostic.operation == :write_pdf
-      assert diagnostic.message =~ "clip requires numeric"
+      assert diagnostic.message =~ "clip requires"
     end
 
     control = %{

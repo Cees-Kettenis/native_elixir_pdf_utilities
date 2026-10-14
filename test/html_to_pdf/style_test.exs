@@ -259,7 +259,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert {:error, {:unsupported_html, diagnostic}} =
              Style.compute_detailed(%{
                dom
-               | children: [put_in(progress.attributes, %{"onclick" => "run()"})]
+               | children: [
+                   %{progress | attributes: %{"onclick" => "run()"}, attribute_order: ["onclick"]}
+                 ]
              })
 
     assert diagnostic.reason == :unsupported_html and diagnostic.source == "progress"
@@ -1261,6 +1263,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
         [:children, Access.at(0), :attributes],
         &Map.put(&1, "headingoffset", "1")
       )
+
+    supplied = put_in(supplied, [:children, Access.at(0), :attribute_order], ["headingoffset"])
 
     assert {:ok, %{children: [heading]}} = Style.compute_detailed(supplied)
     assert heading.style.heading_level == 3
@@ -2859,7 +2863,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     ] = Enum.reject(container.children, &match?(%{type: :text}, &1))
 
     assert text.style.form_kind == :text
-    assert text.style.width == 138.75
+    # The original default DejaVu source typeface allocates 179 CSS pixels.
+    # Its six-point native border/padding leaves this content allocation.
+    assert text.style.width == 179 * 0.75 - 6.0
     assert Enum.map(text.children, & &1.text) == ["Alice"]
     assert Enum.map(checked_box.children, & &1.text) == ["☒"]
     assert checked_box.style.color == {0.4666666666666667, 0.4666666666666667, 0.4666666666666667}
@@ -5972,7 +5978,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     end)
   end
 
-  test "compute rejects invalid style branches" do
+  test "compute rejects invalid style branches and resolves original font-relative width" do
     invalid_styles = [
       "display: unknown",
       "flex-direction: sideways",
@@ -6022,7 +6028,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     ]
 
     Enum.each(invalid_styles, fn style ->
-      assert style_for("div", style) == {:error, :invalid_document}
+      case style do
+        "width: 2em" ->
+          assert {:ok, computed} = style_for("div", style)
+          assert computed.width == 2 * computed.font_size
+
+        _ ->
+          assert style_for("div", style) == {:error, :invalid_document}
+      end
     end)
 
     assert style_for("div", "break-before: auto") ==
@@ -6442,8 +6455,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert height_sized_svg.style.image.format == :png
     assert height_sized_svg.style.aspect_ratio == 2.0
     assert height_sized_svg.style.height == 7.5
-    assert height_sized_svg.style.image.width_px == 10
+    assert height_sized_svg.style.image.width_px == 20
     assert height_sized_svg.style.image.height_px == 10
+
+    assert {:ok, %{boxes: height_sized_boxes}} =
+             NativeElixirPdfUtilities.HtmlToPdf.Layout.layout(height_sized_svg_tree)
+
+    [height_sized_paint] = Enum.filter(height_sized_boxes, &(&1.type == :image))
+    assert height_sized_paint.width == 15.0 and height_sized_paint.height == 7.5
 
     malformed_sources = [
       {"data:image/svg+xml;base64,#{Base.encode64("<svg></svg>")}"},
@@ -6976,6 +6995,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
       assert overridden.style.text_align == :left and overridden.style.box_sizing == :content_box
       inactive = put_in(dom, [:children, Access.at(0), :attributes, "readonly"], "")
+
+      inactive =
+        update_in(inactive, [:children, Access.at(0), :attribute_order], &(&1 ++ ["readonly"]))
+
       assert {:ok, %{children: [preserved]}} = Style.compute_detailed(inactive)
       assert preserved.style.form_kind == :input_button
       assert Enum.map(preserved.children, & &1.text) == [label]

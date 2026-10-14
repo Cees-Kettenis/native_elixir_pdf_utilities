@@ -19,7 +19,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCaptionTest do
     [table] = styled.children
     [caption, _row] = table.children
     assert {:ok, %{boxes: boxes}} = Layout.layout(styled)
-    caption_boxes = Enum.filter(boxes, &match?({:table_caption, _}, Map.get(&1, :flow_id)))
+    caption_boxes = Enum.filter(boxes, &(Map.get(&1, :table_caption_side) == :top))
+    [table_id] = caption_boxes |> Enum.map(& &1.table_id) |> Enum.uniq()
+    assert match?({:table, _, _}, table_id)
+    assert Enum.any?(caption_boxes, &(Map.get(&1, :flow_id) == {:table_caption, table_id}))
+    refute Enum.any?(caption_boxes, &(Map.get(&1, :text) == "Cell"))
+    assert Enum.any?(boxes, &(Map.get(&1, :text) == "Cell" and &1.table_id == table_id))
 
     assert Enum.any?(
              caption_boxes,
@@ -33,7 +38,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCaptionTest do
              "After"
            ]
 
-    refute Enum.any?(caption_boxes, &Map.has_key?(&1, :fragment_id))
+    refute Enum.any?(caption_boxes, fn box ->
+             Map.get(box, :flow_id) == {:table_caption, table_id} and
+               Map.has_key?(box, :fragment_id)
+           end)
+
+    assert Enum.any?(
+             Enum.filter(caption_boxes, &(&1.type == :text)),
+             &Map.has_key?(&1, :fragment_id)
+           )
 
     assert {:ok, %{boxes: ordinary}} =
              Layout.layout(%{
@@ -42,17 +55,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCaptionTest do
              })
 
     for {actual, expected} <- Enum.zip(caption_boxes, ordinary) do
-      for key <- [:type, :x, :y, :width, :height, :text, :color, :fill_color, :stroke_color] do
+      for key <- [
+            :type,
+            :x,
+            :y,
+            :width,
+            :height,
+            :text,
+            :color,
+            :fill_color,
+            :stroke_color,
+            :fragment_id,
+            :fragment_lines
+          ] do
         assert Map.get(actual, key) == Map.get(expected, key)
       end
     end
 
     assert length(caption_boxes) == length(ordinary)
 
-    assert {:ok, _pdf} =
+    assert {:ok, pdf} =
              HtmlToPdf.render(
                "<table><caption>#{content}</caption><tr><td>Body</td></tr></table>"
              )
+
+    assert {:ok, "Before Block one Block two After Body"} =
+             NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
   end
 
   test "empty and zero-height captions retain authored box geometry and visible overflowing content" do

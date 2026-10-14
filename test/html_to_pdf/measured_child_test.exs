@@ -16,6 +16,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildTest do
     end)
   end
 
+  test "typographic endpoints retain occupied source fragments independently of relative paint" do
+    for offset <- [0, 7] do
+      html = """
+      <span style='font-family:DejaVu Sans;font-size:12pt'><span style='color:red'>A</span><span style='color:blue;position:relative;left:#{offset}pt'>B</span></span>
+      """
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+
+      assert {:ok, %{children: [node]}} =
+               Style.compute_detailed(dom, system_font_discovery: false)
+
+      ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
+        assert {:ok, child} = Layout.measure_child(node, context)
+        assert_in_delta child.width, 16.44140625, 1.0e-9
+        assert_in_delta child.typographic_width, 16.447265625, 1.0e-9
+        [a, b] = Enum.filter(child.boxes, &(&1.type == :text))
+        assert a.text == "A" and b.text == "B"
+        assert_in_delta b.x - offset + b.annotation_width, child.typographic_width, 1.0e-9
+        assert a.font_face.data == b.font_face.data
+      end)
+    end
+
+    assert {:ok, atomic} = measured("<span style='display:inline-block;width:21pt'>A</span>")
+    assert atomic.typographic_width == atomic.width
+    assert {:ok, empty} = measured("<span></span>")
+    assert empty.typographic_width == 0
+  end
+
   test "source formatting context gives inline flow its actual used box" do
     html = "<span style='display:inline;width:100pt;height:80pt'>Size</span>"
     assert {:ok, inline} = measured(html)
@@ -175,7 +203,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildTest do
     assert_in_delta constrained.max_content_width, 80, 1.0e-9
   end
 
-  test "prepared math retains preferred widths independently of its advance and baseline" do
+  test "prepared math retains Chrome operator preferred width and independent glyph geometry" do
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
       html = """
       <math style="font-family:'STIX Two Math';font-size:20pt"><mo>(</mo><mspace width="4pt" height="28pt" depth="8pt"/><mo>)</mo></math>
@@ -184,8 +212,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildTest do
       assert {:ok, dom} = HtmlParser.parse_detailed(html)
       assert {:ok, %{children: [atom]}} = Style.compute_detailed(dom, [], context.image_budget)
       geometry = atom.style._math_box
-      assert geometry.min_content_width > geometry.width
+      # Chrome reserves the preferred operator width in this unchanged STIX
+      # fixture, rather than shrinking the used box to its selected ink width.
+      assert geometry.min_content_width == geometry.width
       assert geometry.max_content_width == geometry.min_content_width
+      assert Enum.sum(Enum.map(geometry.glyphs, & &1.width)) + 4 < geometry.width
 
       for constraints <- [%{}, %{available_width: 1}] do
         assert {:ok, child} = Layout.measure_child(atom, context, constraints)
@@ -533,16 +564,55 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildTest do
                )
 
       assert zero_child.ink_ascent == 0 and zero_child.ink_descent == 0
-      bad = %{group | transform: {1, 1, 0, 1, 0, 0}}
-      geometry = %{geometry | drawing_items: [%{kind: :native, box: bad, x: 0.0, y: 0.0}]}
+      shear = %{group | transform: {1, 1, 0, 1, 0, 0}}
+      geometry = %{geometry | drawing_items: [%{kind: :native, box: shear, x: 0.0, y: 0.0}]}
 
-      assert {:error, {:invalid_pdf_input, diagnostic}} =
+      assert {:ok, sheared_child} =
                Layout.measure_child(
                  %{atom | style: Map.put(atom.style, :_math_box, geometry)},
                  context
                )
 
-      assert diagnostic.stage == :layout and diagnostic.message =~ "skews"
+      [sheared_paint] = sheared_child.boxes
+      assert sheared_paint.transform == shear.transform
+      assert sheared_paint.html_targets == group.html_targets
+      assert hd(sheared_paint.boxes).link_rect == text.link_rect
+      assert hd(sheared_paint.boxes).font_face.data == text.font_face.data
+      assert sheared_child.ink_ascent > 0
+
+      clipped_shear = Map.put(shear, :clip, %{x: 0, y: 0, width: 50, height: 2})
+
+      clipped_geometry = %{
+        geometry
+        | drawing_items: [%{kind: :native, box: clipped_shear, x: 0.0, y: 0.0}]
+      }
+
+      assert {:ok, clipped_shear_child} =
+               Layout.measure_child(
+                 %{atom | style: Map.put(atom.style, :_math_box, clipped_geometry)},
+                 context
+               )
+
+      assert clipped_shear_child.ink_ascent == 0 and clipped_shear_child.ink_descent == 0
+
+      for transform <- [{1, 1, 1, 1, 0, 0}, {1, :invalid, 0, 1, 0, 0}] do
+        invalid = %{group | transform: transform}
+
+        invalid_geometry = %{
+          geometry
+          | drawing_items: [%{kind: :native, box: invalid, x: 0.0, y: 0.0}]
+        }
+
+        assert {:error, {:invalid_pdf_input, diagnostic}} =
+                 Layout.measure_child(
+                   %{atom | style: Map.put(atom.style, :_math_box, invalid_geometry)},
+                   context
+                 )
+
+        assert diagnostic.stage == :layout
+        assert diagnostic.operation == :measure_math
+        assert diagnostic.message =~ "drawing_group"
+      end
 
       assert {:error, {:invalid_layout, _}} =
                HtmlValidator.validate_measured_child_paint(nil, node)

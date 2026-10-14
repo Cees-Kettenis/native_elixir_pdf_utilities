@@ -212,9 +212,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapGeometry do
         [] ->
           []
 
-        [_] ->
-          []
-
         [_, _] ->
           []
 

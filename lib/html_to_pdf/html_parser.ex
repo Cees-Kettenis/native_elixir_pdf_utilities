@@ -1109,8 +1109,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
           {:error, {reason, diagnostic}} when is_map(diagnostic) ->
             diagnostic = Diagnostics.with_context(diagnostic, source: token)
 
-            {:error,
-             {:html_diagnostic, reason, diagnostic, byte_size(stream_source(remaining)), token}}
+            if Map.has_key?(diagnostic, :line) and Map.has_key?(diagnostic, :column) do
+              # Nested validators already mapped their own original token. The
+              # enclosing template opening must not replace those coordinates.
+              {:error, {reason, diagnostic}}
+            else
+              {:error,
+               {:html_diagnostic, reason, diagnostic, byte_size(stream_source(remaining)), token}}
+            end
 
           {:error, :unsupported_html} ->
             {:error, {:html_source, token <> stream_source(remaining), 0}}

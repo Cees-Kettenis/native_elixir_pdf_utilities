@@ -45,9 +45,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCaptionPlacementTest do
       assert {:ok, dom} = HtmlParser.parse_detailed(html)
       assert {:ok, styled} = Style.compute_detailed(dom)
 
-      assert {:ok, %{boxes: [caption, following]}} =
+      assert {:ok, %{boxes: [caption, caption_space, following, space]}} =
                Layout.layout(styled, page_size: {240, 240}, margin: 0)
 
+      assert %{type: :flow_marker, role: :explicit_block_space, height: 12.0} = caption_space
+      assert caption_space.width == 0.0 and space.width == 0.0
+      assert caption_space.y == caption.y
+      assert caption.fieldset_paint_id in caption_space.fieldset_ancestors
+      assert %{type: :flow_marker, role: :explicit_block_space, height: 6.0} = space
+      assert space.y == following.y
+      assert following.fieldset_paint_id in space.fieldset_ancestors
       assert caption.fill_color == {0, 0, 1} and caption.height == 12.0
       assert following.y + following.height == 228.0
     end

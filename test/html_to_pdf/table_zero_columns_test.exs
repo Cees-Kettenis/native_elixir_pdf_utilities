@@ -21,9 +21,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableZeroColumnsTest do
 
       assert first.cells == [] and second.cells == []
 
-      assert {:ok, %{boxes: [background, following]}} =
+      assert {:ok, %{boxes: [background, following, space]}} =
                Layout.layout(styled, page_size: {240, 240}, margin: 0)
 
+      assert_flow_space(space, following)
       assert_in_delta background.height, expected_height, 0.0001
       assert background.width == 100.0
       assert_in_delta following.y + following.height, 240 - expected_height, 0.0001
@@ -49,9 +50,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableZeroColumnsTest do
     assert {:ok, %{rows: rows, columns: []}} = HtmlTableValidator.form(table.children)
     assert length(rows) == 3 and Enum.all?(rows, &(&1.cells == []))
 
-    assert {:ok, %{boxes: [background, following]}} =
+    assert {:ok, %{boxes: [background, following, space]}} =
              Layout.layout(styled, page_size: {240, 240}, margin: 0)
 
+    assert_flow_space(space, following)
     assert background.height == 27.0 and background.fill_color == {1, 0, 0}
     assert background.stroke_width == 0.0
     assert following.y + following.height == 213.0
@@ -97,14 +99,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableZeroColumnsTest do
       assert {:ok, dom} = HtmlParser.parse(html)
       assert {:ok, styled} = Style.compute_detailed(dom)
       assert {:ok, %{boxes: boxes}} = Layout.layout(styled, page_size: {240, 240}, margin: 0)
-      following = List.last(boxes)
+      following = Enum.find(Enum.reverse(boxes), &(Map.get(&1, :type) == :rect))
       expected = if collapse == "separate", do: row_height + 12, else: row_height
       assert following.y + following.height == 240 - expected
 
       cond do
-        collapse == "collapse" and expected == 0 -> assert boxes == [following]
-        collapse == "collapse" -> assert hd(boxes).stroke_width == 0.0
-        true -> assert hd(boxes).stroke_width == 3.0
+        collapse == "collapse" and expected == 0 ->
+          assert [^following, space] = boxes
+          assert_flow_space(space, following)
+
+        collapse == "collapse" ->
+          assert hd(boxes).stroke_width == 0.0
+
+        true ->
+          assert hd(boxes).stroke_width == 3.0
       end
 
       assert {:ok, _pdf} = HtmlToPdf.render(html)
@@ -131,9 +139,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableZeroColumnsTest do
       assert table.style.box_sizing == expected_sizing
       assert table.style._table_model.width == if(String.contains?(rows, "<td"), do: 1, else: 0)
 
-      assert {:ok, %{boxes: [background, following]}} =
+      assert {:ok, %{boxes: [background, following, space]}} =
                Layout.layout(styled, page_size: {240, 240}, margin: 0)
 
+      assert_flow_space(space, following)
       assert background.height == expected_height
       assert background.width == if(expected_sizing == :content_box, do: 112.0, else: 100.0)
       assert following.y + following.height == 240 - expected_height
@@ -163,8 +172,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableZeroColumnsTest do
     background = Enum.find(boxes, &(&1.type == :rect and &1.fill_color == {1, 0, 0}))
     assert caption.text == "Caption" and caption.link_url == "https://example.com/empty-table"
     assert {background.y, background.height} == {219.0, 9.0}
-    following = List.last(boxes)
+    following = Enum.find(Enum.reverse(boxes), &(Map.get(&1, :type) == :rect))
     assert following.y + following.height == 219.0
     assert {:ok, _pdf} = HtmlToPdf.render(html)
+  end
+
+  defp assert_flow_space(space, following) do
+    assert %{type: :flow_marker, role: :explicit_block_space} = space
+    assert space.width == 0.0
+    assert space.y == following.y and space.height == following.height
+    assert following.fieldset_paint_id in space.fieldset_ancestors
+    assert match?({:explicit_block_space, reference} when is_reference(reference), space.flow_id)
   end
 end

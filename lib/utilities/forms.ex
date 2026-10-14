@@ -3,7 +3,8 @@ defmodule NativeElixirPdfUtilities.Forms do
   Inspects, fills and flattens supported AcroForm fields in existing PDFs.
 
   Values use fully qualified field names. Filling generates self-contained
-  appearances using bundled DejaVu Sans, black text, and automatic sizing.
+  appearances using validated embedded HTML editor fonts and style when available.
+  Other PDFs use bundled DejaVu Sans, black text, and automatic sizing.
   Flattening removes active interactivity, not historical data or revisions.
   XFA and changes to signed documents are unsupported.
   """
@@ -75,7 +76,7 @@ defmodule NativeElixirPdfUtilities.Forms do
            {:ok, context} <- Reader.read_validated(pdf),
            {:ok, form} <- FormValidator.inspect_document(context),
            {:ok, fields} <- FormValidator.prepare_write(context, form, %{}, opts, :flatten),
-           {:ok, placements} <- FormValidator.prepare_flatten(context, fields) do
+           {:ok, placements} <- FormValidator.prepare_flatten(context, fields, form) do
         case fields do
           [] -> {:ok, pdf}
           _ -> FormWriter.flatten(context, form, fields, placements)

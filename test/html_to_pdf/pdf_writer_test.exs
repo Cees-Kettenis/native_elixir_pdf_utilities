@@ -1239,13 +1239,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     }
 
     assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box]}], [])
-    assert pdf =~ "/F1 9.9975 Tf"
-    assert pdf =~ "0 80.5001 Td ["
+    assert pdf =~ "/F1 13.33 Tf"
+    assert pdf =~ "0.23999999 0 0 -0.23999999 0 100 cm"
+    assert pdf =~ "1 0 0 -1 0 26 Tm ["
     assert pdf =~ "] TJ"
     assert {:ok, "AV"} = Text.extract(pdf, layout: false)
   end
 
-  test "CSS images keep far raster edges inside their allocated rectangle" do
+  test "CSS images preserve their actual snapped source canvas without shrinking raster edges" do
     image = image_fixture(:png, <<0, 0, 0>>, 1, 1, :device_rgb)
 
     box = %{
@@ -1259,7 +1260,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     }
 
     assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box]}], [])
-    assert pdf =~ "q 20.9999 0 0 11.9999 0 0.0001 cm /Im1 Do Q"
+
+    assert pdf =~
+             "q 0.23999999 0 0 -0.23999999 0 100 cm 0 365.625 87.5 50 re W n 87.5 0 0 -50 0 415.625 cm /Im1 Do Q"
+
     assert pdf =~ "/Width 1 /Height 1"
   end
 
@@ -1321,7 +1325,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert {:ok, pdf} = PdfWriter.render(pages)
     assert pdf =~ "q 10 20 40 20 re W n 80 0 0 40 -10 10 cm /Im1 Do Q"
 
-    invalid = put_in(pages, [Access.at(0), :boxes, Access.at(0), :clip, :width], 0)
+    empty = put_in(pages, [Access.at(0), :boxes, Access.at(0), :clip, :width], 0)
+    assert {:ok, empty_pdf} = PdfWriter.render(empty)
+    assert empty_pdf =~ "q 10 20 0 20 re W n"
+    invalid = put_in(pages, [Access.at(0), :boxes, Access.at(0), :clip, :width], -1)
     assert {:error, {:invalid_pdf_input, %{stage: :pdf}}} = PdfWriter.render(invalid)
   end
 
@@ -2276,12 +2283,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
       assert {:ok, pdf} =
                PdfWriter.render([%{size: {100, 100}, boxes: [snapped]}], compress_streams: false)
 
+      assert pdf =~ "/F1 40 Tf"
+      assert pdf =~ "<0001> Tj"
+      refute pdf =~ "] TJ"
+      advance = Enum.at(font.widths, font.cmap[?x]) / font.units_per_em
+      assert_in_delta 40 * 0.75 * advance, 30 * advance, 0.00001
+
+      fractional = %{snapped | font_size: 10.3}
+
+      assert {:ok, pdf} =
+               PdfWriter.render([%{size: {100, 100}, boxes: [fractional]}],
+                 compress_streams: false
+               )
+
       [_, painted, adjustment] = Regex.run(~r{/F1 ([0-9.]+) Tf.*\[<0001> (-?[0-9.]+)\] TJ}, pdf)
       painted = String.to_float(painted)
       adjustment = String.to_float(adjustment)
-      assert painted == 29.9999
-      advance = Enum.at(font.widths, font.cmap[?x]) / font.units_per_em
-      assert_in_delta painted * (advance - adjustment / 1000), 30 * advance, 0.00001
+      assert painted == 13.73
+      shaped_size = Float.floor(10.3 / 0.75 * 64) / 64 * 0.75
+
+      assert_in_delta painted * 0.75 * (advance - adjustment / 1000),
+                      shaped_size * advance,
+                      0.00001
 
       empty = %{explicit | text: "", glyph_ids: []}
 

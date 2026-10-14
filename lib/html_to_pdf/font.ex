@@ -144,6 +144,55 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     end)
   end
 
+  @doc "Loads only explicit caller TrueType configurations, without bundled fonts or system discovery."
+  @spec load_configured_faces(term()) :: {:ok, [embedded_font()]} | {:error, {atom(), map()}}
+  def load_configured_faces(configs) do
+    FontValidator.with_budget(fn ->
+      with {:ok, normalized} <- normalize_configs(configs),
+           :ok <- HtmlValidator.validate_font_configs(normalized),
+           {:ok, faces} <- load_fonts(normalized, :configured) do
+        {:ok, faces}
+      else
+        {:error, _} = error ->
+          error
+
+        :error ->
+          NativeElixirPdfUtilities.Diagnostics.error(
+            :font,
+            :invalid_font,
+            "caller fonts require valid explicit TrueType configurations",
+            module: __MODULE__,
+            operation: :load_configured_faces
+          )
+      end
+    end)
+  end
+
+  @doc "Loads validated embedded byte faces without bundled font loading or system discovery."
+  @spec load_byte_faces(term()) :: {:ok, [embedded_font()]} | {:error, {atom(), map()}}
+  def load_byte_faces(descriptors) do
+    FontValidator.with_budget(fn ->
+      with {:ok, configs} <- FontValidator.prepare_byte_faces(descriptors),
+           {:ok, normalized} <- normalize_configs(configs),
+           :ok <- HtmlValidator.validate_font_configs(normalized),
+           {:ok, faces} <- load_fonts(normalized, :configured) do
+        {:ok, faces}
+      else
+        {:error, _} = error ->
+          error
+
+        _ ->
+          NativeElixirPdfUtilities.Diagnostics.error(
+            :font,
+            :unsupported_font,
+            "embedded source editor font could not be loaded",
+            module: __MODULE__,
+            operation: :load_byte_faces
+          )
+      end
+    end)
+  end
+
   @doc """
   Loads explicit TTF font options into a registry.
 
@@ -287,13 +336,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   """
   @spec text_width(String.t(), map(), number(), number()) :: number()
   def text_width(text, font, font_size, letter_spacing \\ 0) do
+    measure_text_result(text, font, font_size, letter_spacing, :design)
+  end
+
+  @doc "Measures a validated selected font's CSS linear advances with fixed FreeType precision."
+  @spec css_text_width(String.t(), font_face(), number(), number()) :: number()
+  @spec css_text_width(String.t(), font_face(), number()) :: number()
+  def css_text_width(text, font, font_size, letter_spacing \\ 0) do
+    metrics =
+      case font do
+        %{type: :embedded, units_per_em: units} ->
+          FontValidator.css_advance_scale(units, font_size)
+
+        _ ->
+          :design
+      end
+
+    measure_text_result(text, font, font_size, letter_spacing, metrics)
+  end
+
+  @doc "Returns selected-font CSS glyph advances for validated text, sharing shaping, caches and work budgets."
+  @spec css_glyph_advances(String.t(), embedded_font(), number(), number()) ::
+          [{non_neg_integer(), non_neg_integer(), number()}]
+  @spec css_glyph_advances(String.t(), embedded_font(), number()) ::
+          [{non_neg_integer(), non_neg_integer(), number()}]
+  def css_glyph_advances(text, font, font_size, letter_spacing \\ 0) do
+    metrics = FontValidator.css_advance_scale(font.units_per_em, font_size)
+    measure_text_result(text, font, font_size, letter_spacing, {:css_glyph_advances, metrics})
+  end
+
+  # The CSS and design-unit APIs share shaping, selected-font caches and work accounting.
+  defp measure_text_result(text, font, font_size, letter_spacing, metrics) do
     case font do
       %{type: :embedded, units_per_em: units_per_em} ->
         {width, work} =
           case Process.get(@measurement_cache_key) do
             {table, _bytes, _fonts} ->
               identity = measurement_font_identity(font)
-              cache_key = {identity, font_size, letter_spacing, text}
+              cache_key = {identity, font_size, letter_spacing, text, metrics}
 
               case :ets.lookup(table, cache_key) do
                 [{^cache_key, width, work}] ->
@@ -301,22 +381,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
                 [] ->
                   measured =
-                    embedded_text_width(text, font, units_per_em, font_size, letter_spacing)
+                    embedded_text_width(
+                      text,
+                      font,
+                      units_per_em,
+                      font_size,
+                      letter_spacing,
+                      metrics
+                    )
 
                   {^table, bytes, fonts} = Process.get(@measurement_cache_key)
 
+                  # Glyph plans retain a list, unlike scalar widths. Account
+                  # for it through the shared font-cache byte measurement.
+                  plan_bytes =
+                    if is_list(elem(measured, 0)),
+                      do: FontValidator.cache_bytes(elem(measured, 0)),
+                      else: 0
+
+                  allocated = byte_size(text) + plan_bytes
+
                   if :ets.info(table, :size) + map_size(fonts) <
                        Limits.get(:max_layout_measurement_cache_entries) and
-                       bytes + byte_size(text) <= Limits.get(:max_layout_measurement_cache_bytes) do
+                       bytes + allocated <= Limits.get(:max_layout_measurement_cache_bytes) do
                     :ets.insert(table, {cache_key, elem(measured, 0), elem(measured, 1)})
-                    Process.put(@measurement_cache_key, {table, bytes + byte_size(text), fonts})
+                    Process.put(@measurement_cache_key, {table, bytes + allocated, fonts})
                   end
 
                   measured
               end
 
             nil ->
-              embedded_text_width(text, font, units_per_em, font_size, letter_spacing)
+              embedded_text_width(text, font, units_per_em, font_size, letter_spacing, metrics)
           end
 
         HtmlValidator.reserve_render_resource(:max_layout_text_work, work, :layout)
@@ -330,33 +426,92 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     end
   end
 
-  defp embedded_text_width(text, font, units_per_em, font_size, letter_spacing) do
+  defp embedded_text_width(text, font, units_per_em, font_size, letter_spacing, metrics) do
+    {metric_mode, paint?} =
+      case metrics do
+        {:css_glyph_advances, mode} -> {mode, true}
+        mode -> {mode, false}
+      end
+
     {glyphs, maximum_glyph} =
       text
       |> shape_ligatures(font, letter_spacing)
       |> String.to_charlist()
       |> Enum.map_reduce(-1, fn codepoint, maximum ->
         glyph = Map.get(font.cmap, codepoint, 0)
-        {glyph, max(glyph, maximum)}
+        {if(paint?, do: {codepoint, glyph}, else: glyph), max(glyph, maximum)}
       end)
 
     widths = measurement_widths(font, maximum_glyph)
 
-    width =
-      glyphs
-      |> Enum.reduce({0, nil}, fn glyph_id, {acc, previous} ->
-        adjustment = Map.get(Map.get(font, :kerning, %{}), {previous, glyph_id}, 0)
+    measured =
+      if paint? do
+        advances =
+          glyphs
+          |> Enum.map_reduce(nil, fn {codepoint, glyph_id}, previous ->
+            adjustment = Map.get(Map.get(font, :kerning, %{}), {previous, glyph_id}, 0)
 
+            width =
+              if glyph_id < tuple_size(widths),
+                do: elem(widths, glyph_id),
+                else: font.default_width
+
+            base = selected_glyph_advance(width, metric_mode)
+
+            combined =
+              if adjustment == 0,
+                do: base,
+                else: selected_glyph_advance(width + adjustment, metric_mode)
+
+            {{codepoint, glyph_id, base, combined - base}, glyph_id}
+          end)
+          |> elem(0)
+
+        # Pair kerning moves the next glyph origin. Transfer its contribution
+        # to the preceding pen advance while retaining the same measured sum.
+        advances
+        |> Enum.chunk_every(2, 1, [nil])
+        |> Enum.map(fn [{codepoint, glyph, base, _}, next] ->
+          kerning = if next == nil, do: 0, else: elem(next, 3)
+          {codepoint, glyph, (base + kerning) / 65_536 * metric_mode.correction * 0.75}
+        end)
+      else
+        # Scalar layout and Math measurements keep their existing compact
+        # integer reduction; only callers requesting a paint plan own a list.
         width =
-          if glyph_id < tuple_size(widths), do: elem(widths, glyph_id), else: font.default_width
+          glyphs
+          |> Enum.reduce({0, nil}, fn glyph_id, {acc, previous} ->
+            adjustment = Map.get(Map.get(font, :kerning, %{}), {previous, glyph_id}, 0)
 
-        {acc + width + adjustment, glyph_id}
-      end)
-      |> elem(0)
-      |> Kernel./(units_per_em)
-      |> Kernel.*(font_size)
+            width =
+              if glyph_id < tuple_size(widths),
+                do: elem(widths, glyph_id),
+                else: font.default_width
 
-    {width, length(glyphs)}
+            {acc + selected_glyph_advance(width + adjustment, metric_mode), glyph_id}
+          end)
+          |> elem(0)
+
+        case metric_mode do
+          :design -> width / units_per_em * font_size
+          %{correction: correction} -> width / 65_536 * correction * 0.75
+        end
+      end
+
+    {measured, length(glyphs)}
+  end
+
+  # Measurement and paint share the exact signed FT_MulDiv operation; design
+  # measurements retain their original integer advances and final normalization.
+  defp selected_glyph_advance(advance, metrics) do
+    case metrics do
+      :design ->
+        advance
+
+      %{scale: scale} ->
+        scaled = div(abs(advance) * scale + 32, 64)
+        if advance < 0, do: -scaled, else: scaled
+    end
   end
 
   defp measurement_font_identity(font) do

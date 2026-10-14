@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutUnknownRowsTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  alias NativeElixirPdfUtilities.TestSupport.MathPaintGeometry
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, MathLayout, ResourceContext, Style}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, MathLayoutValidator}
 
@@ -41,12 +42,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutUnknownRowsTest do
             :max_content_width,
             :ink_ascent,
             :ink_descent,
-            :actual_text,
-            :glyphs
+            :actual_text
           ] do
         assert Map.fetch!(unknown, field) == Map.fetch!(expected, field)
       end
 
+      assert MathPaintGeometry.glyphs(unknown) == MathPaintGeometry.glyphs(expected)
       assert :ok == MathLayoutValidator.validate_measured_geometry(unknown)
     end
   end
@@ -59,13 +60,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutUnknownRowsTest do
                )
 
       assert {:ok, ordinary} = styled_math("<math><mo>+</mo><mn>1</mn></math>")
-      assert measured.width == ordinary.width and measured.glyphs == ordinary.glyphs
+      assert measured.width == ordinary.width
+      assert MathPaintGeometry.glyphs(measured) == MathPaintGeometry.glyphs(ordinary)
 
       assert {:ok, spaced} =
                styled_math("<math><#{tag}><mtext>α</mtext></#{tag}><mo>+</mo><mn>1</mn></math>")
 
       assert {:ok, ordinary} = styled_math("<math><mtext>α</mtext><mo>+</mo><mn>1</mn></math>")
-      assert spaced.width == ordinary.width and spaced.glyphs == ordinary.glyphs
+      assert spaced.width == ordinary.width
+      assert MathPaintGeometry.glyphs(spaced) == MathPaintGeometry.glyphs(ordinary)
     end
   end
 
@@ -94,7 +97,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutUnknownRowsTest do
     end
   end
 
-  test "anonymous row text inherits font properties while owner boxes paint once" do
+  test "Chromium Math rows discard character data while owner boxes paint once" do
     for tag <- ["mrow", "equation-data"],
         css <- [
           "padding:2pt;border:1px solid blue;background-color:lightyellow",
@@ -102,7 +105,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutUnknownRowsTest do
         ] do
       assert {:ok, explicit} =
                styled_math(
-                 "<math style='font-size:20pt'><#{tag} style='#{css}'><mtext>12</mtext><mn>3</mn><mtext>α</mtext></#{tag}></math>"
+                 "<math style='font-size:20pt'><#{tag} style='#{css}'><mn>3</mn></#{tag}></math>"
                )
 
       assert {:ok, anonymous} =
@@ -110,8 +113,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutUnknownRowsTest do
                  "<math style='font-size:20pt'><#{tag} style='#{css}'>12<mn>3</mn>α</#{tag}></math>"
                )
 
-      assert anonymous.actual_text == "123α"
-      assert anonymous.glyphs == explicit.glyphs
+      assert anonymous.actual_text == "3"
+      assert MathPaintGeometry.glyphs(anonymous) == MathPaintGeometry.glyphs(explicit)
 
       for field <- [
             :width,
@@ -152,14 +155,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutUnknownRowsTest do
     end
   end
 
-  test "unknown rows obey shared font work and ordinary-flow diagnostics" do
-    assert {:error, {:unsupported_html, diagnostic}} =
+  test "unknown rows use ordinary CSS flow and retain shared font work diagnostics" do
+    assert {:ok, pdf} =
              HtmlToPdf.render(
                "<math><equation-data style='display:inline-block'><mn>1</mn></equation-data></math>"
              )
 
-    assert diagnostic.source == "equation-data" and diagnostic.stage == :layout
-    assert diagnostic.message =~ "ordinary flow"
+    assert {:ok, "1"} = Text.extract(pdf, layout: false)
 
     Limits.install(Map.put(Limits.effective(), :max_font_math_work, 1))
 

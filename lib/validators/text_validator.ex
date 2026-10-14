@@ -385,11 +385,11 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   end
 
   defp content_tokens(tokenizer, tokens, page_number) do
-    case Tokenizer.next(tokenizer) do
-      {{:eof, nil}, _tokenizer} ->
+    case Tokenizer.next_with_span(tokenizer) do
+      {{{:eof, nil}, _span}, _tokenizer} ->
         {:ok, Enum.reverse(tokens)}
 
-      {{:op, "BI"}, _tokenizer} ->
+      {{{:op, "BI"}, _span}, _tokenizer} ->
         error(
           :content,
           :unsupported_pdf_feature,
@@ -409,7 +409,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
               module: __MODULE__
           }}}
 
-      {token, tokenizer} ->
+      {{token, _span}, tokenizer} ->
         content_tokens(tokenizer, [token | tokens], page_number)
     end
   end
@@ -448,8 +448,11 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
              )}
           else
             case prepare_instruction(operator, Enum.reverse(operands), page_number) do
-              {:ok, operation} -> {:cont, {:ok, [operation | operations], []}}
-              {:error, _} = instruction_error -> {:halt, instruction_error}
+              {:ok, operation} ->
+                {:cont, {:ok, [operation | operations], []}}
+
+              {:error, _} = instruction_error ->
+                {:halt, instruction_error}
             end
           end
 

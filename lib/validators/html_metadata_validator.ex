@@ -14,6 +14,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
+  @doc "Returns unqualified semantic attributes without changing authored source or selector metadata."
+  @spec unqualified_attributes(map()) :: map()
+  def unqualified_attributes(node) do
+    attributes = node.attributes
+    namespaces = Map.get(node, :attribute_namespaces, %{})
+
+    if map_size(namespaces) == 0 do
+      attributes
+    else
+      HtmlValidator.reserve_render_resource(:max_html_tree_work, map_size(attributes), :html)
+      Map.reject(attributes, fn {name, _} -> not is_nil(Map.get(namespaces, name)) end)
+    end
+  end
+
   @doc "Selects initially enabled HTML style blocks in authored tree order without fetching resources."
   @spec selected_style_nodes(
           [map()],
@@ -76,7 +90,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
   defp stylesheet_nodes(nodes, {document, tree} = scope, namespaces) do
     Enum.flat_map(nodes, fn node ->
       case node do
-        %{type: :element, tag: tag, attributes: attrs, children: children} ->
+        %{type: :element, tag: tag, children: children} ->
           if {Map.get(node, :document_id, document), Map.get(node, :tree_scope_id, tree)} == scope do
             namespace = Map.get(node, :namespace, :html)
             stylesheet? = namespace in namespaces and tag == "style"
@@ -90,10 +104,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
                 do: [
                   %{
                     node
-                    | attributes:
-                        Map.reject(attrs, fn {name, _} ->
-                          not is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), name))
-                        end)
+                    | attributes: unqualified_attributes(node)
                   }
                 ],
                 else: []
@@ -128,12 +139,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
     if Map.get(node, :namespace, :html) == :html and
          (Map.has_key?(attributes, "itemtype") or Map.has_key?(attributes, "itemid") or
             Map.has_key?(attributes, "itemprop") or Map.has_key?(attributes, "itemref")) do
-      namespaces = Map.get(node, :attribute_namespaces, %{})
-
       attributes =
-        node.attributes
+        unqualified_attributes(node)
         |> Map.take(~w(itemscope itemtype itemid itemprop itemref))
-        |> Map.reject(fn {name, _value} -> not is_nil(Map.get(namespaces, name)) end)
 
       scope? = Map.has_key?(attributes, "itemscope")
       type? = Map.has_key?(attributes, "itemtype")

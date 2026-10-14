@@ -69,17 +69,21 @@ defmodule NativeElixirPdfUtilities.Validators.MathRadicalValidator do
     case {prepared, measured} do
       {%{
          kind: :radical,
-         style: %{font_face: font, font_size: size},
+         style: %{font_face: font, font_size: size} = style,
          gap: gap,
          rule_thickness: thickness
-       }, %{ink_ascent: ascent, ink_descent: descent}}
+       }, %{ascent: ascent, descent: descent}}
       when is_number(ascent) and is_number(descent) and is_number(gap) and is_number(thickness) ->
         target = max(thickness + gap + ascent + descent, 0.0)
 
         if target > Limits.get(:max_css_numeric_magnitude) do
           failure("radical target exceeds shared numeric bounds")
         else
-          with {:ok, base} <- MathLayoutValidator.prepare_glyph("√", font, size, []) do
+          opts = [
+            stretch_metrics: if(Map.has_key?(style, :_math_element), do: :ink, else: :advance)
+          ]
+
+          with {:ok, base} <- MathLayoutValidator.prepare_glyph("√", font, size, opts) do
             construction = Map.get(base.source.metrics.variants.vertical, base.glyph_id)
 
             if construction == nil do
@@ -90,7 +94,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathRadicalValidator do
                }}
             else
               with {:ok, shape} <-
-                     MathLayoutValidator.prepare_stretch("√", font, size, :vertical, target, []) do
+                     MathLayoutValidator.prepare_stretch("√", font, size, :vertical, target, opts) do
                 width = MathLayoutValidator.preferred_vertical_width(base, construction)
                 {:ok, %{shape: shape, intrinsic_width: width}}
               end

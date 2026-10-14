@@ -53,6 +53,130 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
   end
 
   @doc false
+  @spec prepare_original_resources([map()]) ::
+          {:ok, [map()]} | {:error, {atom(), map()}}
+  def prepare_original_resources(entries) do
+    Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, selected} ->
+      HtmlValidator.reserve_render_resource(:max_css_work, 1, :font)
+
+      case entry do
+        %{prepared: %{authored_fonts: records} = prepared} when is_list(records) ->
+          result =
+            Enum.reduce_while(records, {:ok, selected}, fn record, {:ok, selected} ->
+              HtmlValidator.reserve_render_resource(:max_css_work, 1, :font)
+
+              Enum.reduce_while(record.declarations, {:ok, selected}, fn declaration,
+                                                                         {:ok, selected} ->
+                HtmlValidator.reserve_render_resource(:max_css_work, 1, :font)
+
+                if elem(declaration.declaration, 0) == "src" do
+                  # Every original src descriptor keeps its normal ordered fallback
+                  # policy, including superseded descriptors and inactive faces.
+                  case font_source_descriptor([declaration.declaration]) do
+                    {:ok, sources} ->
+                      face = Map.put(record.face, :sources, sources)
+
+                      prepared =
+                        prepared
+                        |> Map.put(:font_faces, [face])
+                        |> Map.delete(:font_source_tickets)
+
+                      font_entry =
+                        entry
+                        |> Map.put(:prepared, prepared)
+                        |> Map.put(:original_font_source, declaration.source)
+
+                      {:cont, {:ok, [font_entry | selected]}}
+
+                    _ ->
+                      {:halt,
+                       original_resource_error(
+                         declaration.source,
+                         "original font source has no supported normal loading context; authorization and contents remain pending"
+                       )}
+                  end
+                else
+                  {:cont, {:ok, selected}}
+                end
+              end)
+              |> case do
+                {:ok, selected} -> {:cont, {:ok, selected}}
+                error -> {:halt, error}
+              end
+            end)
+
+          case result do
+            {:ok, selected} -> {:cont, {:ok, selected}}
+            error -> {:halt, error}
+          end
+
+        _ ->
+          {:halt,
+           original_resource_error(
+             %{},
+             "original font resources require validated authored stylesheet records"
+           )}
+      end
+    end)
+    |> case do
+      {:ok, selected} -> {:ok, Enum.reverse(selected)}
+      error -> error
+    end
+  end
+
+  @doc false
+  @spec with_original_resource(map(), (-> term())) :: :ok | {:error, {atom(), map()}}
+  def with_original_resource(entry, loader) do
+    try do
+      case loader.() do
+        :ok -> :ok
+        failure -> original_resource_failure(entry, failure)
+      end
+    catch
+      {:font_resource_limit, failure} -> original_resource_failure(entry, failure)
+      {:render_resource_limit, failure} -> original_resource_failure(entry, failure)
+    end
+  end
+
+  @doc false
+  @spec original_resource_failure(map(), term()) :: {:error, {atom(), map()}}
+  def original_resource_failure(entry, failure) do
+    case failure do
+      {:error, {reason, diagnostic}} when is_map(diagnostic) ->
+        source = entry.original_font_source
+
+        {:error,
+         {reason,
+          NativeElixirPdfUtilities.Diagnostics.diagnostic(
+            diagnostic.stage,
+            reason,
+            diagnostic.message,
+            operation: Map.get(diagnostic, :operation, :original_font_sources),
+            module: Map.get(diagnostic, :module, __MODULE__),
+            source: Map.get(source, :text),
+            line: Map.get(source, :line),
+            column: Map.get(source, :column)
+          )}}
+
+      _ ->
+        original_resource_error(
+          entry.original_font_source,
+          "original CSS font source could not be resolved, parsed or embedded; provide supported authorized font bytes before template replacement"
+        )
+    end
+  end
+
+  defp original_resource_error(source, message) do
+    NativeElixirPdfUtilities.Diagnostics.error(:font, :invalid_document, message,
+      module: __MODULE__,
+      operation: :original_font_sources,
+      source: Map.get(source, :text),
+      line: Map.get(source, :line),
+      column: Map.get(source, :column)
+    )
+  end
+
+  @doc false
   @spec validate_authored([NativeElixirPdfUtilities.HtmlToPdf.CssParser.declaration()]) ::
           {:ok, NativeElixirPdfUtilities.HtmlToPdf.CssParser.font_face()}
           | {:error, %{property: String.t(), index: non_neg_integer() | nil}}

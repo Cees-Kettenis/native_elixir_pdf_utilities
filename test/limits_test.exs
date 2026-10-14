@@ -119,10 +119,13 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
     assert {:ok, defaults} = LimitsValidator.validate([])
     assert defaults == Limits.defaults()
     assert Limits.effective() == Limits.defaults()
-    assert defaults.max_svg_gradient_work == 100_000
-    assert map_size(defaults) == 158
-    assert defaults.max_svg_clip_projection_work == 2_000_000
-    assert defaults.svg_clip_curve_precision == 1_024
+    assert defaults.max_svg_bytes == 5_000_000
+    assert map_size(defaults) == 153
+    assert defaults.max_clip_expression_depth == 256
+    assert defaults.max_css_transform_operations == 1_000
+    assert defaults.max_svg_raster_pixels == 16_777_216
+    assert defaults.max_clip_projection_work == 2_000_000
+    assert defaults.clip_curve_precision == 1_024
     assert defaults.max_frameset_tracks == 1_024
     assert defaults.max_frameset_cells == 65_536
   end

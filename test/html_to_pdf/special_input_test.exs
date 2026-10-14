@@ -31,18 +31,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SpecialInputTest do
     end
   end
 
-  test "color profile and applicability failures explain unsupported caller state" do
+  test "inactive color attributes preserve source without changing the canonical swatch" do
+    assert {:ok, expected} =
+             HtmlToPdf.render("<input type=color>", forms: :static, compress_streams: false)
+
     for attrs <- [
           "required",
           "multiple",
           "readonly",
           "src=x"
         ] do
-      assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render("<input type=color #{attrs}>", forms: :static)
+      source = "<input type=color #{attrs}>"
+      assert {:ok, %{children: [node]}} = HtmlParser.parse_detailed(source)
+      assert node.source.text == source
+      assert map_size(node.attributes) == 2
+      assert {:ok, canonical} = HtmlFormValidator.prepare_initial_color(node.attributes)
+      assert canonical.value == "#000000"
 
-      assert diagnostic.stage == :html and diagnostic.operation == :render
-      assert diagnostic.message != ""
+      assert {:ok, pdf} =
+               HtmlToPdf.render(source,
+                 forms: :static,
+                 compress_streams: false,
+                 asset_resolver: fn request ->
+                   flunk("inactive color resource #{inspect(request)}")
+                 end
+               )
+
+      assert pdf == expected
     end
 
     assert {:error, {:unsupported_html, %{stage: :style, source: "color"}}} =

@@ -309,14 +309,30 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
   end
 
   @doc "Prepares native child paint and an opaque descriptor for real interactive fields after shared form validation."
-  @spec prepare_composition(map(), EmbeddedViewport.t(), number(), number()) ::
+  @spec prepare_composition(
+          map(),
+          EmbeddedViewport.t()
+          | %{
+              forms: :static | :interactive,
+              host: :surface | :iframe | :object | :embed | :frame,
+              context: ResourceContext.t()
+            },
+          number(),
+          number()
+        ) ::
           {:ok, [map()],
            NativeElixirPdfUtilities.Validators.EmbeddedFormValidator.descriptor() | nil}
           | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_composition(layout, surface, _width, _height) do
     page = %{size: layout.page_size, boxes: layout.boxes}
 
-    with {:ok, [page], controls} <-
+    with {:ok, [page]} <-
+           NativeElixirPdfUtilities.Validators.CssTransformValidator.materialize(
+             [page],
+             [forms: surface.forms],
+             surface.context
+           ),
+         {:ok, [page], controls} <-
            NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare_scoped(
              [page],
              [forms: surface.forms],
@@ -364,8 +380,13 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
     # body. The existing reflow state machine removes it when the laid-out
     # document fits, including hidden overflow. Starting without it can select
     # the wrong stable wrapping state for a document near its height boundary.
+    # Plain-text initial documents lay out their preformatted root at the full
+    # viewport first; a provisional gutter would create an extra wrapped line
+    # and incorrectly retain scrolling for an otherwise fitting text document.
     vertical =
       surface.host in [:iframe, :object, :embed, :frame] and width > 0 and height > 0 and
+        not match?({:blank, _url}, Map.get(surface, :source)) and
+        Map.get(surface, :initial_document_kind) != :text and
         (surface.host not in [:iframe, :frame] or
            Map.get(surface, :frame_scrollbars, :auto) != :none)
 
@@ -378,6 +399,7 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
       vertical: vertical,
       scroll_width: viewport_width,
       scroll_height: viewport_height,
+      frozen_scrollbars: MapSet.new(),
       seen: MapSet.new([{false, vertical}])
     }
   end
@@ -404,7 +426,7 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
 
   @doc false
   @spec prepare_scroll_geometry(map(), EmbeddedViewport.t(), number(), number(), map()) ::
-          {:paint, map()} | {:relayout, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+          {:paint, map()} | {:relayout, map()}
   def prepare_scroll_geometry(layout, surface, width, height, previous) do
     overflow =
       Enum.find_value(surface.tree.children, :visible, fn node ->
@@ -440,8 +462,24 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
         end
       end)
 
-    scroll_width = max(layout.content_width, right)
-    scroll_height = max(layout.content_height, elem(layout.page_size, 1) - bottom)
+    # The initial about:blank document has no scrolling body allocation. An
+    # empty srcdoc is a parsed document and retains its ordinary body margins.
+    # The full child tree has already been styled and laid out in its issued
+    # scope; only a genuinely empty initial document has this viewport extent.
+    initial_empty? =
+      match?({:blank, _url}, Map.get(surface, :source)) and
+        Enum.all?(layout.boxes, fn box ->
+          box.type == :flow_marker and Map.get(box, :role) == :embedded_extent and
+            Map.get(box, :html_targets, []) == []
+        end)
+
+    scroll_width =
+      if initial_empty?, do: previous.viewport_width, else: max(layout.content_width, right)
+
+    scroll_height =
+      if initial_empty?,
+        do: previous.viewport_height,
+        else: max(layout.content_height, elem(layout.page_size, 1) - bottom)
 
     enabled? =
       surface.host in [:iframe, :object, :embed, :frame] and width > 0 and height > 0 and
@@ -449,15 +487,41 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
         (surface.host not in [:iframe, :frame] or
            Map.get(surface, :frame_scrollbars, :auto) != :none)
 
-    # There are four scrollbar-presence states. Track states rather than inventing a pass
-    # ceiling; percentage sizing may also remove an axis after reflow.
-    # Blink compares rounded scrolling extents against the unclamped client
-    # size. A gutter wider than the host can therefore require the other axis
-    # even though the exposed client width has already clamped to zero.
+    # Auto gutters are provisional. When both extents fit the full viewport,
+    # remove them together before reflow, as Blink's TryRemovingAutoScrollbars
+    # does. Scrollbars which subsequently appear stay frozen for this layout
+    # lifecycle so width-dependent heights cannot alternate client areas.
+    frozen = Map.get(previous, :frozen_scrollbars, MapSet.new())
+
+    fits_viewport? =
+      DrawingGeometry.snap_css_pixel(scroll_width) <= previous.viewport_width and
+        DrawingGeometry.snap_css_pixel(scroll_height) <= previous.viewport_height
+
+    # Compare rounded extents against the unclamped client dimension. A gutter
+    # wider than a tiny host can still require the other scrollbar axis.
     available_width = previous.viewport_width - if(previous.vertical, do: 11.25, else: 0)
     available_height = previous.viewport_height - if(previous.horizontal, do: 11.25, else: 0)
-    horizontal = enabled? and DrawingGeometry.snap_css_pixel(scroll_width) > available_width
-    vertical = enabled? and DrawingGeometry.snap_css_pixel(scroll_height) > available_height
+
+    horizontal =
+      enabled? and
+        (MapSet.member?(frozen, :horizontal) or
+           (not (fits_viewport? and MapSet.size(frozen) == 0) and
+              DrawingGeometry.snap_css_pixel(scroll_width) > available_width))
+
+    vertical =
+      enabled? and
+        (MapSet.member?(frozen, :vertical) or
+           (not (fits_viewport? and MapSet.size(frozen) == 0) and
+              DrawingGeometry.snap_css_pixel(scroll_height) > available_height))
+
+    frozen =
+      Enum.reduce([:horizontal, :vertical], frozen, fn axis, frozen ->
+        next = if axis == :horizontal, do: horizontal, else: vertical
+
+        if next and not Map.fetch!(previous, axis),
+          do: MapSet.put(frozen, axis),
+          else: frozen
+      end)
 
     geometry = %{
       previous
@@ -469,23 +533,14 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
         scroll_height: scroll_height
     }
 
-    cond do
-      geometry.client_width == previous.client_width and
-          geometry.client_height == previous.client_height ->
-        {:paint, geometry}
-
-      MapSet.member?(previous.seen, {horizontal, vertical}) ->
-        Diagnostics.error(
-          :layout,
-          :not_implemented,
-          "#{surface.host} sizing cycles between scrollbar client areas; constrain percentage-dependent child sizes or author html/body overflow:hidden for a static clipped viewport",
-          module: __MODULE__,
-          operation: :layout_embedded_viewport,
-          source: Atom.to_string(surface.host)
-        )
-
-      true ->
-        {:relayout, %{geometry | seen: MapSet.put(previous.seen, {horizontal, vertical})}}
+    if geometry.client_width == previous.client_width and
+         geometry.client_height == previous.client_height do
+      {:paint, geometry}
+    else
+      {:relayout,
+       geometry
+       |> Map.put(:frozen_scrollbars, frozen)
+       |> Map.put(:seen, MapSet.put(previous.seen, {horizontal, vertical}))}
     end
   end
 
@@ -493,7 +548,9 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
   @spec prepare_scrollbar_parts(map()) ::
           {:ok, [map()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_scrollbar_parts(geometry) do
-    NativeElixirPdfUtilities.Validators.ScrollbarValidator.prepare(Map.drop(geometry, [:seen]))
+    NativeElixirPdfUtilities.Validators.ScrollbarValidator.prepare(
+      Map.drop(geometry, [:seen, :frozen_scrollbars])
+    )
   end
 
   @doc false
@@ -533,6 +590,8 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
              true <-
                host not in [:iframe, :frame] or
                  Map.get(surface, :frame_scrollbars, :auto) in [:auto, :none],
+             true <-
+               Map.get(surface, :initial_document_kind) in [nil, :html, :text, :raster, :svg],
              {:ok, {width, height}} <- HtmlValidator.prepare_viewport_dimensions(width, height) do
           # Zero-area surfaces still validate and account for their entire tree.
           size = {if(width == 0, do: 0.75, else: width), if(height == 0, do: 0.75, else: height)}
@@ -544,7 +603,7 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
             Diagnostics.error(
               :layout,
               :invalid_layout,
-              "frame/iframe viewport requires a validated initial scrollbar policy",
+              "child viewport requires a validated initial scrollbar policy and document kind",
               module: __MODULE__,
               operation: :layout_embedded_viewport
             )

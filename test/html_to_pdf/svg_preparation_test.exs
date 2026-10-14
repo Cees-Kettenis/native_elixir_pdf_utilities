@@ -1,13 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPreparationTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, SvgViewport, Layout}
-
-  alias NativeElixirPdfUtilities.Validators.{
-    SvgStyleValidator,
-    SvgViewportValidator,
-    SvgTransformValidator
-  }
-
+  alias NativeElixirPdfUtilities.Validators.{SvgStyleValidator, SvgViewportValidator}
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
 
   setup do
@@ -17,14 +11,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPreparationTest do
   end
 
   test "preparation reuses host cascade, specificity, source order and currentColor inheritance" do
-    html = """
-    <style>div{color:blue;fill:red} svg rect{fill:yellow} .paint{fill:green}
-    #ink{fill:currentColor} #ink{color:red} .paint{stroke:blue!important}</style>
-    <div><svg width=120 height=40 fill=purple><g fill=currentColor color=green>
-    <rect id=ink class=paint fill=black style='fill:currentColor;stroke:red' />
-    <circle fill=none /><rect class=paint />
-    </g></svg></div>
-    """
+    html =
+      "<style>div{color:blue;fill:red} svg rect{fill:yellow} .paint{fill:green}\n#ink{fill:currentColor} #ink{color:red} .paint{stroke:blue!important}</style>\n<div><svg width=120 height=40 fill=purple><g fill=currentColor color=green>\n<rect id=ink class=paint fill=black style='fill:currentColor;stroke:red' />\n<circle fill=none /><rect class=paint />\n</g></svg></div>\n"
 
     assert {:ok, dom} = HtmlParser.parse_detailed(html)
 
@@ -105,8 +93,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPreparationTest do
           "stroke-width:-1",
           "opacity:bad",
           "fill-rule:wrong",
-          "visibility:maybe",
-          "transform:rotate(bad)"
+          "visibility:maybe"
         ] do
       assert {:ok, dom} = HtmlParser.parse_detailed("<svg style='#{declaration}' />")
       assert {:error, {:invalid_css, diagnostic}} = Style.prepare_svg_detailed(dom)
@@ -200,7 +187,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPreparationTest do
       }
 
       assert {:ok, m} = SvgViewport.measure(attrs, %{}, %{width: 300.0, height: 200.0})
-      scale = if mode == "meet", do: 0.75, else: 1.5
+
+      scale =
+        if mode == "meet" do
+          0.75
+        else
+          1.5
+        end
 
       assert m.ctm ==
                {scale, +0.0, +0.0, scale, -10 * scale + (150 - 100 * scale) * xf,
@@ -257,7 +250,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPreparationTest do
                  %{width: 200.0, height: 100.0, nested: nested}
                )
 
-      assert {font.width, font.height} == if(nested, do: {40.0, 16.0}, else: {30.0, 12.0})
+      assert {font.width, font.height} ==
+               (if nested do
+                  {40.0, 16.0}
+                else
+                  {30.0, 12.0}
+                end)
 
       assert {:ok, physical} =
                SvgViewport.measure(%{"width" => "1pc", "height" => "1q"}, %{}, %{
@@ -266,7 +264,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPreparationTest do
                  nested: nested
                })
 
-      assert physical.width == if(nested, do: 16.0, else: 12.0)
+      assert physical.width ==
+               (if nested do
+                  16.0
+                else
+                  12.0
+                end)
     end
 
     assert {:ok, css} =
@@ -316,54 +319,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPreparationTest do
 
     assert {:ok, {+0.0, +0.0, 1.0, 2.0}} = SvgViewportValidator.view_box("0. 0. 1. 2.")
     assert {:ok, {0.5, 0.5, :meet}} = SvgViewportValidator.aspect_ratio("defer xMidYMid")
-  end
-
-  test "affine transform preparation retains rotation skew reflection and authored order" do
-    assert {:ok, {2.0, +0.0, +0.0, -3.0, 10.0, 20.0}} =
-             SvgTransformValidator.parse("translate(10,20) scale(2,-3)")
-
-    assert {:ok, {a, b, c, d, e, f}} = SvgTransformValidator.parse("rotate(90,10,20)")
-    assert_in_delta a, +0.0, 1.0e-14
-    assert_in_delta b, 1.0, 1.0e-14
-    assert_in_delta c, -1.0, 1.0e-14
-    assert_in_delta d, +0.0, 1.0e-14
-    assert_in_delta e, 30.0, 1.0e-14
-    assert_in_delta f, 10.0, 1.0e-14
-
-    for source <- [
-          "none",
-          "",
-          "scale (2.) , rotate(30)",
-          "translate(1)",
-          "scale(2)",
-          "matrix(1 2 3 4 5 6)",
-          "rotate(1rad)",
-          "rotate(1grad)",
-          "rotate(1turn)",
-          "skewX(30)",
-          "skewY(30)"
-        ] do
-      assert {:ok, _} = SvgTransformValidator.parse(source)
-    end
-
-    for bad <- [
-          :bad,
-          "rotate(1,2)",
-          "bad(1)",
-          "translate(1,,2)",
-          "scale(,1)",
-          "scale(1,)",
-          "scale(1) junk",
-          "rotate(1px)",
-          "matrix(1 0 0 1 1e308 0)"
-        ] do
-      assert :error = SvgTransformValidator.parse(bad)
-    end
-  end
-
-  test "affine transform counts respect shared Limits", %{limits: limits} do
-    Limits.install(%{limits | max_svg_transform_operations: 1})
-    assert :error = SvgTransformValidator.parse("scale(1) translate(1)")
-    assert {:ok, _} = SvgTransformValidator.parse("scale(-1)")
   end
 end

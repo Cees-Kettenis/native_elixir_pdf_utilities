@@ -16,15 +16,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TablePresentationNamespaceTest do
 
     node = %{tag: "td", namespace: :html, attributes: %{}}
 
-    assert {:error, {:unsupported_html, baseline}} =
+    assert {:error, {:unsupported_html, baseline_justify}} =
              HtmlTableValidator.validate_presentation_style(node, %{
                display: :table_cell,
                vertical_align: :baseline,
                text_align: :justify
              })
 
-    assert baseline.stage == :style
-    assert baseline.source == "td effective vertical-align=baseline"
+    assert baseline_justify.stage == :style
+    assert baseline_justify.source == "td inherited text-align=justify"
+    assert baseline_justify.message =~ "text justification"
+
+    assert :ok =
+             HtmlTableValidator.validate_presentation_style(node, %{
+               display: :table_cell,
+               vertical_align: :baseline
+             })
 
     assert {:error, {:unsupported_html, justify}} =
              HtmlTableValidator.validate_presentation_style(

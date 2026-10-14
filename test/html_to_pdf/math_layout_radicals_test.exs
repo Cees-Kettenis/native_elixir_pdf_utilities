@@ -235,7 +235,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutRadicalsTest do
     assert_in_delta first.y + ymin * 20 / c.metrics.units_per_em, -measured.ink_descent, 1.0e-10
   end
 
-  test "index kern clamps, baseline raise and dated Core line metrics use selected constants",
+  test "index kern clamps and Chromium degree raise use actual selected surd height",
        c do
     base = token("16", c.style)
     index_style = %{c.style | font_size: 10}
@@ -249,7 +249,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutRadicalsTest do
 
     raise =
       c.metrics.constants.radical_degree_bottom_raise_percent / 100 *
-        (square.ascent + square.descent)
+        hd(square.glyphs).height
 
     [surd | _] = root.glyphs
     index_glyph = List.last(root.glyphs)
@@ -258,11 +258,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutRadicalsTest do
     assert_in_delta index_glyph.y, -square.descent + raise + degree.descent, 1.0e-10
 
     assert_in_delta root.ascent,
-                    max(square.ascent, -square.descent + raise + degree.ascent),
+                    max(square.ascent, -square.descent + raise + degree.ascent + degree.descent),
                     1.0e-10
 
     assert_in_delta root.descent,
-                    max(square.descent, square.descent - raise + degree.ascent),
+                    max(square.descent, square.descent - raise + degree.ascent + degree.descent),
                     1.0e-10
 
     assert root.actual_text == "163"
@@ -311,7 +311,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutRadicalsTest do
 
     assert hidden.actual_text == "12" and hd(hidden.glyphs).text == "√"
     assert {:ok, anonymous} = styled_math("<math><msqrt>1<mo>+</mo><mn>2</mn></msqrt></math>")
-    assert anonymous.actual_text == "1+2"
+    assert anonymous.actual_text == "+2"
   end
 
   test "square anonymous row decoration stays local and empty roots have no invented text", c do
@@ -405,8 +405,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutRadicalsTest do
 
     assert {:error, {:invalid_document, diagnostic}} =
              MathRadicalValidator.prepare_stretch(prepared, %{
-               ink_ascent: Limits.get(:max_css_numeric_magnitude),
-               ink_descent: 1
+               ascent: Limits.get(:max_css_numeric_magnitude),
+               descent: 1
              })
 
     assert diagnostic.message =~ "numeric bounds"

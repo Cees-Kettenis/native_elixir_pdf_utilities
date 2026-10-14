@@ -241,14 +241,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutFractionsTest do
            )
   end
 
-  test "nested compact fraction matches independently decoded source outline geometry" do
-    # Pinned STIX/Core, independently calculated with fontTools 4.60.1. The
-    # calculation uses source ssty glyph outlines, advances, and MATH constants;
-    # no native measured values or browser raster metrics feed these expectations.
-    html =
-      "<math style='font-size:24pt'><mfrac><mfrac><mn>1</mn><mn>2</mn></mfrac><mrow><mn>34</mn><mo>+</mo><mn>5</mn></mrow></mfrac></math>"
+  test "nested compact fraction matches independently decoded source outline geometry", c do
+    # The standalone design API retains the pinned source-outline contract;
+    # DOM Math separately follows the Chromium print fragment metrics.
+    root_style = Map.merge(c.style, %{font_size: 24, math_depth: 0})
+    script = Map.merge(root_style, %{font_size: 16.8, math_depth: 1})
+    small = Map.merge(script, %{font_size: 13.2, math_depth: 2})
+    padding = %{top: 0.0, right: 0.75, bottom: 0.0, left: 0.75}
 
-    assert {:ok, measured} = styled_math(html)
+    upper =
+      fraction(
+        [token("mn", "1", small), token("mn", "2", small)],
+        Map.put(script, :padding, padding)
+      )
+
+    lower = %{
+      token("mn", "", script)
+      | tag: "mrow",
+        children: [token("mn", "34", script), token("mo", "+", script), token("mn", "5", script)]
+    }
+
+    equation = %{
+      token("mn", "", root_style)
+      | tag: "math",
+        children: [fraction([upper, lower], Map.put(root_style, :padding, padding))]
+    }
+
+    assert {:ok, measured} = MathLayout.measure(equation)
     assert_in_delta measured.width, 48.64826666666666, 1.0e-10
     assert_in_delta measured.ascent, 37.3908, 1.0e-10
     assert_in_delta measured.descent, 14.8128, 1.0e-10
@@ -269,6 +288,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutFractionsTest do
       assert_in_delta glyph.x, x, 1.0e-10
       assert_in_delta glyph.y, y, 1.0e-10
     end
+
+    html =
+      "<math style='font-size:24pt;math-style:compact'><mfrac><mfrac><mn>1</mn><mn>2</mn></mfrac><mrow><mn>34</mn><mo>+</mo><mn>5</mn></mrow></mfrac></math>"
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
     assert {:ok, "1234+5"} = Text.extract(pdf, layout: false)
@@ -316,7 +338,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutFractionsTest do
                "<math><mfrac>text</mfrac><mfrac><mn>1</mn><mn>2</mn><mn>3</mn></mfrac></math>"
              )
 
-    assert {:ok, "text123"} = Text.extract(pdf, layout: false)
+    assert {:ok, "123"} = Text.extract(pdf, layout: false)
   end
 
   test "public fractions preserve nested logical text, colors and HTML link composition" do

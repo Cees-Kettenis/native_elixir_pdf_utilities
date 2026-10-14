@@ -16,6 +16,299 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     :ok
   end
 
+  describe "configured font isolation and internal family identity" do
+    test "independent text image defaults resolve the actual permitted serif bytes" do
+      assert {:ok, registry} = Font.load_registry(system_font_discovery: true)
+      assert {:ok, ["serif"], selected} = Font.resolve("serif", 400, :normal, registry)
+      assert {:ok, [face]} = FontValidator.prepare_svg_image_fonts([], [])
+      assert face == Map.take(selected, [:data, :family, :weight, :style])
+      assert {:ok, family} = FontValidator.prepare_font_family_name(face.data)
+      assert is_binary(family) and family != ""
+
+      Limits.install(%{Limits.effective() | max_font_source_bytes: 0, max_font_count: 0})
+      assert {:ok, []} = FontValidator.prepare_svg_image_fonts([])
+      assert {:ok, []} = FontValidator.prepare_svg_image_fonts([], system_font_discovery: false)
+
+      for opts <- [nil, [system_font_discovery: :enabled]] do
+        assert {:error, {:invalid_options, diagnostic}} =
+                 FontValidator.prepare_svg_image_fonts([], opts)
+
+        assert diagnostic.stage == :options
+        assert diagnostic.message != ""
+      end
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               FontValidator.prepare_svg_image_fonts([], system_font_discovery: true)
+
+      assert diagnostic.stage == :font
+    end
+
+    test "explicit image font bytes stay configured-only even when discovery is permitted" do
+      bytes = File.read!("priv/fonts/dejavu/DejaVuSansMono.ttf")
+      configs = [%{family: "Actual Caller Alias", data: bytes}]
+      assert {:ok, [face]} = FontValidator.prepare_svg_image_fonts(configs, [])
+      assert face.data == bytes
+      assert face.family == "Actual Caller Alias"
+    end
+
+    test "an incomplete installed default font package returns genuine load diagnostics" do
+      application = :native_elixir_pdf_utilities
+      original = application |> :code.lib_dir() |> List.to_string() |> Path.join("ebin")
+      root = Path.join(System.tmp_dir!(), "font-package-#{System.unique_integer([:positive])}")
+      package = Path.join(root, "native_elixir_pdf_utilities-0.0.0")
+      ebin = Path.join(package, "ebin")
+      File.mkdir_p!(ebin)
+
+      try do
+        assert true == :code.replace_path(application, String.to_charlist(ebin))
+        assert Application.app_dir(application) == package
+
+        assert {:error, {:unsupported_font, diagnostic}} =
+                 FontValidator.prepare_svg_image_fonts([], system_font_discovery: true)
+
+        assert diagnostic.operation == :prepare_svg_image_fonts
+
+        directory = Path.join(package, "priv/fonts/dejavu")
+        File.mkdir_p!(directory)
+        malformed = valid_tables() |> Map.put("GSUB", <<0>>) |> ttf_fixture()
+        File.write!(Path.join(directory, "DejaVuSans.ttf"), malformed)
+
+        assert {:error, {:invalid_document, diagnostic}} =
+                 FontValidator.prepare_svg_image_fonts([], system_font_discovery: true)
+
+        assert diagnostic.stage == :font
+        assert diagnostic.message =~ "GSUB"
+      after
+        :code.replace_path(application, String.to_charlist(original))
+        File.rm_rf!(root)
+      end
+    end
+
+    test "configured-only loading uses the exact caller byte snapshot and reads no default fonts" do
+      data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
+      assert {:ok, [face]} = Font.load_configured_faces([%{family: "Alias", data: data}])
+      assert face.data == data
+      assert face.family == "Alias"
+      assert face.source == :configured
+      assert {:ok, "DejaVu Sans"} = FontValidator.prepare_font_family_name(face.data)
+
+      Limits.install(%{Limits.effective() | max_font_source_bytes: 0, max_font_count: 0})
+      assert {:ok, []} = Font.load_configured_faces([])
+    end
+
+    test "configured-only paths use the canonical loader and invalid configurations return diagnostics" do
+      assert {:ok, [face]} =
+               Font.load_configured_faces([
+                 {"OnlyCaller", "priv/fonts/dejavu/DejaVuSansMono.ttf"}
+               ])
+
+      assert face.family == "OnlyCaller"
+      assert {:ok, "DejaVu Sans Mono"} = FontValidator.prepare_font_family_name(face.data)
+
+      for configs <- [
+            nil,
+            [%{}],
+            [%{family: "Broken", data: <<1, 2>>}],
+            [%{family: "Missing", path: "/nonexistent/explicit-font.ttf"}]
+          ] do
+        assert {:error, {reason, diagnostic}} = Font.load_configured_faces(configs)
+        assert is_atom(reason)
+        assert diagnostic.reason == reason
+        assert is_atom(diagnostic.stage)
+        assert is_binary(diagnostic.message)
+      end
+    end
+
+    test "name selection follows genuine typographic and English family records, without CSS aliases" do
+      unicode = fn name -> :unicode.characters_to_binary(name, :utf8, {:utf16, :big}) end
+
+      for {records, expected} <- [
+            {[
+               {3, 1, 0x0409, 1, unicode.("Legacy")},
+               {3, 1, 0x0411, 16, unicode.("Localized")},
+               {3, 1, 0x0409, 16, unicode.("Typographic")}
+             ], "Typographic"},
+            {[{0, 4, 0, 1, unicode.("Unicode")}, {1, 0, 0, 1, "MacFamily"}], "MacFamily"},
+            {[
+               {0, 4, 0, 1, unicode.("Unicode")},
+               {3, 1, 0x0409, 1, unicode.("English")},
+               {1, 0, 0, 1, "MacFamily"}
+             ], "English"},
+            {[{7, 9, 0, 16, "unsupported"}, {1, 0, 0, 1, <<"Mono", 0xCA, "Family">>}],
+             "Mono\u00A0Family"},
+            {[{1, 0, 0, 1, <<0x80, "Family">>}], "ÄFamily"},
+            {[{1, 0, 0, 1, <<0x11, 0xDB, 0xAD, 0xB0, 0xDE>>}], "⌘€≠∞ﬁ"},
+            {[{1, 0, 0, 16, <<0xF0>>}, {0, 4, 0, 1, unicode.("Valid")}], "\uF8FF"},
+            {[{3, 1, 0x0409, 16, <<0xD800::16>>}, {0, 4, 0, 1, unicode.("Valid")}], "Valid"}
+          ] do
+        data = valid_tables() |> Map.put("name", family_name_table(records)) |> ttf_fixture()
+        assert {:ok, ^expected} = FontValidator.prepare_font_family_name(data)
+      end
+    end
+
+    test "closed byte-face admission rejects malformed and extra metadata without loading defaults" do
+      bytes = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
+      face = %{family: "Actual", data: bytes, weight: 400, style: :normal}
+
+      for faces <- [[nil], [Map.put(face, :extra, true)], []] do
+        assert {:error, {:invalid_font, diagnostic}} = FontValidator.prepare_byte_faces(faces)
+        assert diagnostic.stage == :font
+        assert diagnostic.operation == :prepare_byte_faces
+      end
+
+      assert {:error, {:unsupported_font, diagnostic}} =
+               Font.load_byte_faces([%{face | data: <<1>>}])
+
+      assert diagnostic.operation == :load_byte_faces
+    end
+
+    test "name lookup preserves genuine malformed substitution diagnostics" do
+      data =
+        valid_tables()
+        |> Map.put("name", family_name_table([{1, 0, 0, 1, "Family"}]))
+        |> Map.put("GSUB", <<0>>)
+        |> ttf_fixture()
+
+      assert {:error, {:invalid_document, diagnostic}} =
+               FontValidator.prepare_font_family_name(data)
+
+      assert diagnostic.stage == :font
+      assert diagnostic.message =~ "GSUB"
+
+      assert {:error, {:invalid_document, _}} =
+               Font.load_configured_faces([%{family: "Malformed", data: data}])
+    end
+
+    test "missing, truncated and unsupported name tables fail through the font diagnostic contract" do
+      for data <- [
+            nil,
+            <<>>,
+            ttf_fixture(valid_tables()),
+            ttf_fixture(Map.put(valid_tables(), "name", <<0::16, 1::16, 18::16>>)),
+            ttf_fixture(Map.put(valid_tables(), "name", <<2::16, 0::16, 6::16>>)),
+            ttf_fixture(
+              Map.put(valid_tables(), "name", family_name_table([{3, 1, 0x0409, 1, <<>>}]))
+            )
+          ] do
+        assert {:error, {:invalid_font, diagnostic}} =
+                 FontValidator.prepare_font_family_name(data)
+
+        assert diagnostic.stage == :font
+        assert diagnostic.operation == :prepare_font_family_name
+        assert diagnostic.message =~ "family name"
+      end
+
+      data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
+      Limits.install(%{Limits.effective() | max_font_math_work: 0})
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               FontValidator.prepare_font_family_name(data)
+
+      assert diagnostic.stage == :font
+      assert diagnostic.message =~ "font"
+    end
+  end
+
+  test "design outline measurements use the selected bytefont, including true empty glyphs" do
+    assert {:ok, [face]} =
+             Font.load_configured_faces([
+               %{family: "DesignBounds", data: File.read!("priv/fonts/dejavu/DejaVuSans.ttf")}
+             ])
+
+    box = %{text: "A", font_face: face, font_size: 12, x: 30, y: 45}
+    assert {:ok, {top, bottom}} = FontValidator.prepare_text_ink_bounds(box)
+
+    assert {:ok, {left, rectangle_bottom, right, rectangle_top}} =
+             FontValidator.prepare_text_ink_rectangle(box)
+
+    assert left < right and bottom < top
+    assert rectangle_bottom == bottom and rectangle_top == top
+    assert {:ok, nil} = FontValidator.prepare_text_ink_rectangle(%{box | text: " "})
+    assert {:ok, nil} = FontValidator.prepare_text_ink_bounds(%{box | text: " "})
+
+    assert {:ok, {_, _, spaced_right, _}} =
+             FontValidator.prepare_text_ink_rectangle(%{box | text: "A A"})
+
+    assert spaced_right > right
+
+    limit = Limits.get(:max_pdf_numeric_magnitude)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             FontValidator.prepare_text_ink_rectangle(%{box | x: limit})
+
+    assert diagnostic.operation == :measure_child
+    assert diagnostic.source == "A"
+    assert diagnostic.message =~ "max_pdf_numeric_magnitude"
+
+    for invalid <- [Map.put(box, :glyph_ids, [0]), %{box | text: <<255>>}, %{box | x: "invalid"}] do
+      assert {:error, {reason, diagnostic}} = FontValidator.prepare_text_ink_rectangle(invalid)
+      assert reason in [:invalid_document, :invalid_encoding]
+      assert diagnostic.reason == reason
+      assert diagnostic.stage == :font
+      assert diagnostic.message != ""
+    end
+
+    for invalid <- [
+          %{},
+          %{box | font_face: Map.delete(face, :widths)},
+          %{box | font_face: %{face | widths: []}},
+          Map.put(box, :glyph_ids, [face.cmap[?A] | :invalid])
+        ] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               FontValidator.prepare_text_ink_rectangle(invalid)
+
+      assert diagnostic.stage == :font
+      assert diagnostic.operation == :measure_child
+    end
+
+    assert {:error, {:invalid_document, diagnostic}} = FontValidator.prepare_glyph_bounds(nil)
+    assert diagnostic.operation == :glyph_bounds
+
+    assert {:error, {_, diagnostic}} =
+             FontValidator.prepare_text_ink_rectangle(%{box | font_face: %{face | data: <<0>>}})
+
+    assert diagnostic.operation == :glyph_bounds
+  end
+
+  test "CSS advances and design widths keep separate cache plans and actual font byte identities" do
+    bytes = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
+    mono = File.read!("priv/fonts/dejavu/DejaVuSansMono.ttf")
+
+    assert {:ok, [first, second]} =
+             Font.load_configured_faces([
+               %{family: "SharedAlias", data: bytes},
+               %{family: "SharedAlias", data: mono}
+             ])
+
+    text = "AVffi"
+    first_width = Font.css_text_width(text, first, 9)
+    second_width = Font.css_text_width(text, second, 9)
+    design_width = Font.text_width(text, first, 9)
+    assert first_width != second_width
+
+    Font.with_measurement_cache(fn ->
+      assert Font.css_text_width(text, first, 9) == first_width
+      assert is_list(Font.css_glyph_advances(text, first, 9))
+      assert Font.css_text_width(text, first, 9) == first_width
+      assert Font.text_width(text, first, 9) == design_width
+      assert Font.css_text_width(text, second, 9) == second_width
+      assert Font.css_text_width(text, first, 9) == first_width
+    end)
+  end
+
+  defp family_name_table(records) do
+    {headers, bytes, _} =
+      Enum.reduce(records, {<<>>, <<>>, 0}, fn {platform, encoding, language, id, text},
+                                               {headers, bytes, offset} ->
+        header =
+          <<platform::16, encoding::16, language::16, id::16, byte_size(text)::16, offset::16>>
+
+        {headers <> header, bytes <> text, offset + byte_size(text)}
+      end)
+
+    <<0::16, length(records)::16, 6 + length(records) * 12::16, headers::binary, bytes::binary>>
+  end
+
   defp pair_position_table(subtable, type) do
     scripts = <<1::16, "latn", 8::16, 4::16, 0::16, 0::16, 0xFFFF::16, 1::16, 0::16>>
     features = <<1::16, "kern", 8::16, 0::16, 1::16, 0::16>>
@@ -708,7 +1001,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       }
 
       assert {:ok, row} = MathLayout.measure(row)
-      assert row.actual_text == "12 "
+      assert row.actual_text == "12"
 
       assert {:error, {:invalid_document, _}} =
                MathLayoutValidator.validate_flow_geometry([%{style: %{_math_box: %{}}}], 100, 100)
@@ -999,6 +1292,75 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
                  MathLayoutValidator.prepare_value(record, 9)
       end
     end
+  end
+
+  test "loaded caller fonts with variation-dependent kern heights return recoverable Math diagnostics" do
+    {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    {:ok, _, original} = Font.resolve("math", 400, :normal, registry)
+    font = math_variation_font(original, original.cmap[?1], :kern)
+
+    style = %{
+      display: :block,
+      font_size: 20,
+      font_face: font,
+      color: {0, 0, 0},
+      line_height: 24,
+      math_style: :compact
+    }
+
+    token = fn text ->
+      %{
+        type: :element,
+        namespace: :mathml,
+        tag: "mn",
+        attributes: %{},
+        style: style,
+        children: [%{type: :text, text: text, style: style}]
+      }
+    end
+
+    for tag <- ~w(msubsup mmultiscripts) do
+      node = %{
+        type: :element,
+        namespace: :mathml,
+        tag: tag,
+        attributes: %{},
+        style: style,
+        children: Enum.map(~w(1 2 3), token)
+      }
+
+      assert {:error, {_, diagnostic}} = MathLayout.measure(node)
+      assert diagnostic.stage == :layout and diagnostic.message =~ "variation adjustments"
+      assert diagnostic.source =~ "kern"
+    end
+  end
+
+  test "loaded caller ligature correction variations fail before any Math glyph is emitted" do
+    {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    {:ok, _, original} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+    font = math_variation_font(original, original.cmap[0xFB03], :italic)
+    assert Font.shape_ligatures("ffi", font) == "ﬃ"
+
+    style = %{
+      display: :block,
+      font_size: 20,
+      font_face: font,
+      color: {0, 0, 0},
+      line_height: 24,
+      math_style: :compact
+    }
+
+    node = %{
+      type: :element,
+      namespace: :mathml,
+      tag: "mtext",
+      attributes: %{},
+      style: style,
+      children: [%{type: :text, text: "ffi", style: style}]
+    }
+
+    assert {:error, {_, diagnostic}} = MathLayout.measure(node)
+    assert diagnostic.stage == :layout and diagnostic.message =~ "variation adjustments"
   end
 
   describe "mathematical stretch geometry" do
@@ -1822,8 +2184,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
 
     cases = [
       {"No Average", valid_tables(), 42.0},
+      # The selected head bounds span 1000 units; hhea's maximum advance is 900.
+      # Input sizing uses the rounded typeface span, preserving both font metrics.
       {"Metric Average", valid_tables() |> Map.put("OS/2", os2.(300)) |> Map.put("hhea", hhea),
-       27.0},
+       27.75},
       {"Wide Average", valid_tables() |> Map.put("OS/2", os2.(2000)), 42.0},
       {"Courier", valid_tables() |> Map.put("OS/2", os2.(300)), 42.0}
     ]
@@ -1973,9 +2337,72 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
 
             assert diagnostic.source == "√" and diagnostic.operation == :measure_math
           else
-            # This valid caller face deliberately has no stretch construction.
-            assert {:error, {:unsupported_glyph, diagnostic}} = MathLayout.measure(node)
+            # The selected-font radical fallback uses the actual base glyph
+            # when a valid caller face has no stretch construction. Preserve
+            # its actual GID, outlines, advance and overbar are painted.
+            assert {:ok, natural} = MathLayout.glyph("√", font, style.font_size)
+            assert {:ok, metrics} = Font.math_metrics(font)
+            [natural_glyph] = natural.glyphs
+            refute Map.has_key?(metrics.variants.vertical, natural_glyph.glyph_id)
+
+            assert {:error, {:unsupported_glyph, diagnostic}} =
+                     MathLayout.stretch("√", font, style.font_size, :vertical, 30)
+
+            assert diagnostic.source == "√" and diagnostic.operation == :measure_math
             assert diagnostic.message =~ "no vertical stretch construction"
+            assert {:ok, measured} = MathLayout.measure(node)
+            assert [surd] = measured.glyphs
+            assert surd.font_face.data == font.data
+            assert surd.glyph_id == natural_glyph.glyph_id
+            assert surd.font_size == natural_glyph.font_size
+            assert surd.width == natural_glyph.width
+            assert surd.height == natural_glyph.height
+            assert_in_delta measured.width, natural.width + 3.0, 1.0e-10
+            assert [rule] = Enum.filter(measured.drawing_items, &(&1.kind == :native))
+            assert rule.box.width == 3.0
+            assert_in_delta rule.box.height, thickness, 1.0e-10
+
+            assert {:ok, {left, bottom, right, top}} =
+                     NativeElixirPdfUtilities.Validators.MathPaintValidator.prepare_geometry(
+                       measured
+                     )
+
+            assert right > left and top > bottom
+
+            artifact = Path.expand("tmp/math_radical_caller_fallback")
+            File.mkdir_p!(artifact)
+            font_path = Path.join(artifact, "caller.ttf")
+            File.write!(font_path, font.data)
+            File.write!(Path.join(artifact, "original-node.etf"), :erlang.term_to_binary(node))
+
+            html =
+              "<math style='font-family:Caller Radical;font-size:20pt;math-style:compact;color:blue'><msqrt><mspace width='3pt' height='5pt'/></msqrt></math>"
+
+            File.write!(Path.join(artifact, "original-source.html"), html)
+
+            assert {:ok, pdf} =
+                     HtmlToPdf.render(html,
+                       fonts: [%{family: "Caller Radical", path: font_path}],
+                       system_font_discovery: false,
+                       page_size: {120, 80},
+                       margin: 10
+                     )
+
+            File.write!(Path.join(artifact, "native.pdf"), pdf)
+
+            File.write!(
+              Path.join(artifact, "selected-glyph.exs"),
+              inspect(
+                %{
+                  gid: surd.glyph_id,
+                  advance: surd.width,
+                  height: surd.height,
+                  font_sha256: Base.encode16(:crypto.hash(:sha256, font.data), case: :lower),
+                  paint: {left, bottom, right, top}
+                },
+                pretty: true
+              )
+            )
           end
 
         _ ->
@@ -2949,6 +3376,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     end
   end
 
+  test "Latin GSUB rejection preserves diagnostics and extension/filtering contracts" do
+    assert {:error, {:invalid_document, diagnostic}} =
+             MathFontValidator.prepare_substitution_features(<<1::16, 0::16>>, 8, :latin)
+
+    assert diagnostic.stage == :font and diagnostic.operation == :font_ligatures
+    assert diagnostic.source == "selected font GSUB table"
+
+    filtered = <<4::16, 2::16, 1::16, 8::16, 0::16>>
+
+    assert {:ok, %{latin_policy: :requires_full_shaping}} =
+             MathFontValidator.prepare_substitution_features(
+               gsub_table([filtered], [{"liga", [0]}], script: "latn"),
+               8,
+               :latin
+             )
+
+    extension =
+      <<7::16, 0::16, 1::16, 8::16, 1::16, 1::16, 8::32, 1::16, 6::16, 1::16, 1::16, 1::16,
+        1::16>>
+
+    assert {:ok, %{latin_policy: :requires_full_shaping}} =
+             MathFontValidator.prepare_substitution_features(
+               gsub_table([extension], [{"liga", [0]}], script: "latn"),
+               8,
+               :latin
+             )
+  end
+
   test "malformed selected-font GSUB fails recoverably at the shared ligature authority" do
     data = ttf_fixture(Map.put(valid_tables(), "GSUB", <<1::16, 0::16>>))
 
@@ -3434,6 +3889,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     <<1::16, 0::16, 10::16, 10 + byte_size(constants)::16,
       10 + byte_size(constants) + byte_size(info)::16, constants::binary, info::binary,
       variants::binary>>
+  end
+
+  # Negative caller fonts are parsed from their actual repacked byte programs.
+  # They never replace original browser fonts or emit positive paint receipts.
+  defp math_variation_font(original, glyph, field) do
+    device = <<0::16, 1::16, 0x8000::16>>
+
+    info =
+      if field == :kern do
+        <<0::16, 0::16, 0::16, 8::16, 12::16, 1::16, 18::16, 0::16, 18::16, 0::16, 1::16, 1::16,
+          glyph::16, 1::16, 0::signed-16, 14::16, 0::signed-16, 0::16, 0::signed-16, 0::16,
+          device::binary>>
+      else
+        <<8::16, 0::16, 0::16, 0::16, 8::16, 1::16, 0::signed-16, 14::16, 1::16, 1::16, glyph::16,
+          device::binary>>
+      end
+
+    data =
+      original.data
+      |> font_tables()
+      |> Map.put("MATH", math_table(default_constants(), info))
+      |> ttf_fixture()
+
+    assert {:ok, [font]} =
+             Font.load_byte_faces([
+               %{family: "Unsupported MATH variation", data: data, weight: 400, style: :normal}
+             ])
+
+    assert font.data == data and font.data != original.data and font.id != original.id
+    font
   end
 
   defp math_construction_font(font, axis, variants, parts, opts \\ []) do

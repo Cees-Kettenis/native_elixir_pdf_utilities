@@ -191,9 +191,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFileValidator do
          }}
       end
     else
-      {:error, _} = error ->
-        error
-
       _ ->
         Diagnostics.error(
           :style,

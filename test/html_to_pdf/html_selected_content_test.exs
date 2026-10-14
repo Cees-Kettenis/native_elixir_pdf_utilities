@@ -2,6 +2,139 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlSelectedContentTest do
   use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, HtmlSelectedContent, Style}
 
+  test "validated prepared children retain source identity through the direct population entry" do
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<select><button><selectedcontent></selectedcontent></button><option selected><em>Prepared choice</em></option></select>"
+             )
+
+    assert {:ok, composition} =
+             NativeElixirPdfUtilities.HtmlToPdf.HtmlComposition.compose_validated(dom)
+
+    nodes =
+      NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare_composed_initial_nodes(
+        dom,
+        composition.roots,
+        composition.composed.children,
+        %{}
+      )
+
+    assert {:ok, [select]} = HtmlSelectedContent.populate_validated(nodes, dom)
+    [button, option] = select.children
+    [content] = button.children
+    [clone] = content.children
+    assert clone.cloned_from_node_id == hd(option.children).node_id
+    assert clone.source == hd(option.children).source
+    assert clone.parent_id == content.node_id
+    assert [%{text: "Prepared choice"}] = clone.children
+    assert dom.children != [select]
+  end
+
+  test "an empty select has no selection and standalone selected content stays inert" do
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<selectedcontent>Standalone</selectedcontent><select><button><selectedcontent>Before</selectedcontent></button></select>"
+             )
+
+    assert {:ok, projection} = HtmlSelectedContent.compose(dom)
+    [standalone, select] = projection.composed.children
+    assert [%{text: "Standalone"}] = standalone.children
+    refute standalone._selected_content_disabled
+    [button] = select.children
+    [content] = button.children
+    assert content.children == []
+    assert select._initial_form_state.selection.id == nil
+    assert select._initial_form_state.selection.selected_ids == []
+    assert projection.logical == dom
+  end
+
+  test "base-select listbox defaults use inherited line height and authored important appearance" do
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<div style='font-size:20pt;line-height:24pt'><select size=3 style='appearance:base-select!important'><option>One</option><option>Two</option></select></div>"
+             )
+
+    assert {:ok, %{children: [%{children: [select]}]}} =
+             Style.compute_detailed(dom, forms: :static, system_font_discovery: false)
+
+    assert select.style.form_kind == :listbox
+    assert select.style.height == 72.0
+    assert select.style.min_height == 24.0
+    assert select.style.overflow == :auto
+    assert select.style.border_radius == 0
+
+    # Source-bound declarations carry original spans beside the same parsed
+    # tuple. They must preserve the listbox defaults computed from that tuple.
+    assert {:ok, sources} =
+             NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator.prepare(dom)
+
+    [parent] = dom.children
+    [original_select] = parent.children
+
+    assert {:ok, %{children: [styled_parent]}} =
+             Style.compute_detailed(dom, forms: :static, system_font_discovery: false)
+
+    declarations = Map.fetch!(sources.records, original_select.node_id)
+
+    assert [%{declaration: {"appearance", "base-select", :important}, source: source}] =
+             declarations
+
+    assert source.text =~ "appearance:base-select"
+
+    defaults =
+      NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator.prepare_select_defaults(
+        Map.put(select.style, :_select_inherited_style, styled_parent.style),
+        declarations
+      )
+
+    assert defaults.form_kind == select.style.form_kind
+    assert defaults.height == select.style.height
+    assert defaults.padding == select.style.padding
+    refute Map.has_key?(defaults, :_select_inherited_style)
+  end
+
+  test "invalid authored appearance returns canonical CSS diagnostics for both priorities" do
+    for priority <- ["", "!important"] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<select style='appearance:unknown#{priority}'><option>Choice</option></select>"
+               )
+
+      assert {:error, {:invalid_css, diagnostic}} =
+               Style.compute_detailed(dom, system_font_discovery: false)
+
+      assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
+      assert diagnostic.message =~ "appearance"
+    end
+  end
+
+  test "nested select ancestry disables selected-content updates without changing the source option" do
+    # Projected ancestor chains are used by metadata-free legacy DOM transport.
+    # Each ancestor and the selected-content node comes from the canonical parser.
+    assert {:ok, outer_dom} = HtmlParser.parse_detailed("<select><option>Outer</option></select>")
+    assert {:ok, inner_dom} = HtmlParser.parse_detailed("<select><option>Inner</option></select>")
+
+    assert {:ok, content_dom} =
+             HtmlParser.parse_detailed("<selectedcontent>Original</selectedcontent>")
+
+    [outer] = outer_dom.children
+    [inner] = inner_dom.children
+    [content] = content_dom.children
+
+    plan =
+      NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator.selected_content_plan(
+        Map.delete(content, :parent_id),
+        [inner, outer],
+        %{},
+        %{}
+      )
+
+    assert plan.disabled and not plan.update
+    assert plan.option == nil
+    assert [%{text: "Original"}] = content.children
+    assert [%{text: "Outer"}] = hd(outer.children).children
+  end
+
   test "initial clones use the actual selected children instead of the option label" do
     assert {:ok, dom} =
              HtmlParser.parse_detailed(
@@ -200,6 +333,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlSelectedContentTest do
              )
 
     assert String.starts_with?(pdf, "%PDF-")
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
+    assert length(Regex.scan(~r/Shadow/, text)) == 1
+    refute text =~ "Light"
   end
 
   test "a cloned shadow root initializes its own nested select content within the new scope" do
@@ -245,6 +381,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlSelectedContentTest do
              )
 
     assert diagnostic.operation == :clone_selected_content
+    assert diagnostic.stage == :html and diagnostic.reason == :invalid_document
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator
     assert diagnostic.message =~ "exact original"
   end
 

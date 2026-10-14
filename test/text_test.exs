@@ -7,6 +7,157 @@ defmodule NativeElixirPdfUtilities.TextTest do
   alias NativeElixirPdfUtilities.Validators.TextResourceValidator
   alias NativeElixirPdfUtilities.Validators.TextValidator
 
+  test "file extraction rejects actual nonregular inputs with requested operation context" do
+    path = Path.join(System.tmp_dir!(), "nonregular-pdf-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(path)
+    on_exit(fn -> File.rm_rf!(path) end)
+    assert {:error, {:invalid_document, diagnostic}} = Text.extract_file_spans(path)
+    assert diagnostic.stage == :file
+    assert diagnostic.operation == :extract_file_spans
+    assert diagnostic.module == Text
+    assert diagnostic.source == path
+    assert diagnostic.message =~ "regular file"
+  end
+
+  test "invalid physical page frames reject nonpositive MediaBox geometry" do
+    source = page_pdf("BT /F1 12 Tf (A) Tj ET")
+    malformed = String.replace(source, "[0 0 612 792]", "[0 0 000 792]")
+    assert {:error, {:invalid_pdf_input, diagnostic}} = Text.extract_spans(malformed)
+    assert diagnostic.stage == :page_tree
+    assert diagnostic.operation == :extract_spans
+    assert diagnostic.module == Text
+    assert diagnostic.message =~ "MediaBox"
+  end
+
+  test "public extraction retains real decoded replacement text and stream order" do
+    source =
+      page_pdf("BT /F1 12 Tf (A) Tj /Span << /ActualText (reading) >> BDC (ink) Tj EMC (B) Tj ET")
+
+    assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(source)
+    assert Enum.map(spans, & &1.text) == ["A", "reading", "B"]
+    assert Enum.map(spans, & &1.source_index) == [0, 1, 2]
+    assert {:ok, "AreadingB"} = Text.extract(source, layout: false)
+  end
+
+  test "alias content references reuse decoded bytes and preserve each physical execution" do
+    content = "BT /F1 12 Tf (A) Tj ET"
+
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> >> /Contents [6 0 R 7 0 R] >>"},
+        {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+        {6, stream_object("", content)},
+        {7, "6 0 R"}
+      ])
+
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+    Limits.install(Map.put(previous, :max_text_decoded_content_bytes, byte_size(content)))
+    assert {:ok, "A A"} = Text.extract(source, layout: false)
+    assert {:ok, pdf_context} = Reader.read_validated(source)
+    assert {:ok, prepared} = TextValidator.prepare(pdf_context)
+    assert prepared.preparation_stats.decoded_bytes == byte_size(content)
+
+    assert {:ok, first, preparation} =
+             TextValidator.prepare_content_stream(
+               pdf_context.document,
+               {:ref, {6, 0}},
+               1,
+               TextValidator.new_preparation_context()
+             )
+
+    assert {:ok, ^first, reused} =
+             TextValidator.prepare_content_stream(
+               pdf_context.document,
+               {:ref, {7, 0}},
+               1,
+               preparation
+             )
+
+    assert reused.decoded_bytes == preparation.decoded_bytes
+    assert reused.parsed_instructions == preparation.parsed_instructions
+    [page] = prepared.pages
+    [instructions] = page.contents
+    shown = Enum.filter(instructions, &(&1.operator == "Tj"))
+    assert length(shown) == 2
+    assert Enum.map(shown, & &1.decoded.text) == ["A", "A"]
+  end
+
+  test "non-image non-Form XObjects contribute no invented replacement text" do
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> /XObject << /Program 6 0 R >> >> /Contents 4 0 R >>"},
+        {4, stream_object("", "BT /F1 12 Tf (A) Tj ET /Program Do BT /F1 12 Tf (B) Tj ET")},
+        {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+        {6, stream_object("/Type /XObject /Subtype /PS", "0 0 moveto")}
+      ])
+
+    assert {:ok, "A B"} = Text.extract(source, layout: false)
+    assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(source)
+    assert Enum.map(spans, & &1.text) == ["A", "B"]
+    assert Enum.map(spans, & &1.source_index) == [0, 1]
+  end
+
+  test "image ActualText shares the same emitted-span limit as preceding text" do
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> /XObject << /Ink 6 0 R >> >> /Contents 4 0 R >>"},
+        {4,
+         stream_object(
+           "",
+           "BT /F1 12 Tf (A) Tj ET /Span << /ActualText (image) >> BDC /Ink Do EMC"
+         )},
+        {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+        {6,
+         stream_object(
+           "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8",
+           <<255, 0, 0>>
+         )}
+      ])
+
+    assert {:ok, "A image"} = Text.extract(source, layout: false)
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+    Limits.install(Map.put(previous, :max_text_spans, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract_spans(source)
+    assert diagnostic.stage == :limits
+    assert diagnostic.operation == :extract_spans
+    assert diagnostic.module == Text
+    assert diagnostic.message =~ "text span count"
+    assert diagnostic.message =~ "page 1"
+  end
+
+  test "ordinary extraction tokenizes escaped operands once and retains canonical malformed-stream diagnostics" do
+    content = "BT\n/F1 12 Tf\n% before text\n(A\\)B) Tj\nET"
+    source = page_pdf(content)
+    assert {:ok, pdf_context} = Reader.read_validated(source)
+    assert {:ok, ordinary} = TextValidator.prepare(pdf_context)
+    [page] = ordinary.pages
+    [instructions] = page.contents
+    assert Enum.find(instructions, &(&1.operator == "Tj")).decoded.text == "A)B"
+    assert {:ok, "A)B"} = Text.extract(source, layout: false)
+
+    assert {:ok, %{pages: [%{spans: [%{text: "A)B", source_index: 0}]}]}} =
+             Text.extract_spans(source)
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             TextValidator.instructions("BT (unfinished", 1)
+
+    assert diagnostic.stage == :content
+    assert diagnostic.module == TextValidator
+    assert diagnostic.message =~ "page 1"
+  end
+
   test "graphics ActualText replaces an actual image Do with its transformed region" do
     image = fn content, width ->
       pdf([

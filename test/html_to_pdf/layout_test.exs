@@ -6,6 +6,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.TestSupport.TableGeometry
+  alias NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator
 
   @inline_image "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC"
 
@@ -391,6 +392,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       track = Enum.find(layout.boxes, &(Map.get(&1, :role) == :gauge_track))
       assert_in_delta track.width, 80, 0.75
       assert_in_delta track.height, 10, 0.75
+      refute Map.has_key?(track, :fieldset_paint_id)
+      value = Enum.find(layout.boxes, &(Map.get(&1, :role) == :gauge_value))
+      assert value.gauge_state == track.gauge_state
+      assert value.y >= track.y and value.y + value.height <= track.y + track.height
+      refute Map.has_key?(value, :fieldset_paint_id)
 
       assert Enum.any?(
                layout.boxes,
@@ -620,7 +626,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       first = Enum.find(layout.boxes, &(&1.type == :text and &1.text == "First"))
       after_text = Enum.find(layout.boxes, &(&1.type == :text and &1.text == "After"))
       background = Enum.find(layout.boxes, &(&1.type == :rect and &1.fill_color != nil))
-      assert_in_delta background.width, first.annotation_width, 0.0001
+
+      assert_in_delta background.width,
+                      HtmlLineBreakValidator.snap_fragment_width(first.annotation_width),
+                      0.0001
+
       assert_in_delta after_text.x, background.x + background.width, 0.0001
     end
   end
@@ -1127,8 +1137,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert first.y > a.y
     assert a.y == b.y and b.y == c.y
     assert a.x == first.x
-    assert_in_delta b.x, a.x + a.annotation_width, 0.0001
-    assert_in_delta c.x, b.x + b.annotation_width, 0.0001
+
+    assert_in_delta b.x,
+                    a.x + HtmlLineBreakValidator.snap_fragment_width(a.annotation_width),
+                    0.0001
+
+    assert_in_delta c.x,
+                    b.x + HtmlLineBreakValidator.snap_fragment_width(b.annotation_width),
+                    0.0001
+
     assert c.x + c.annotation_width > 40
   end
 
@@ -1689,7 +1706,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       assert {:ok, dom} = HtmlParser.parse(html)
       assert {:ok, styled} = Style.compute(dom)
       assert {:ok, layout} = Layout.layout(styled, page_size: {240, 240}, margin: 0)
-      [box] = layout.boxes
+      [box] = Enum.filter(layout.boxes, &(&1.type == :rect))
+      [space] = Enum.filter(layout.boxes, &(&1.type == :flow_marker))
+      assert space.role == :explicit_block_space
+      assert {space.x, space.y, space.width, space.height} == {box.x, box.y, 0.0, box.height}
+      assert space.fieldset_ancestors == [box.fieldset_paint_id]
+      assert length(layout.boxes) == 2
       assert box.type == :rect
       assert_in_delta box.y + box.height, 240, 0.001
       assert {:ok, _pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html)
@@ -2109,7 +2131,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     text_boxes = Enum.filter(layout_tree.boxes, &(&1.type == :text))
     rects = Enum.filter(layout_tree.boxes, &(&1.type == :rect))
 
-    assert Enum.map(text_boxes, & &1.text) == [
+    # Atomic control contents and anonymous spaces are painted separately.
+    # Keep every authored space and initial value without treating their flat
+    # paint order as the reading order of controls with distinct baselines.
+    assert Enum.count(text_boxes, &(&1.text == " ")) == 3
+
+    assert text_boxes |> Enum.reject(&(&1.text == " ")) |> Enum.map(& &1.text) == [
              "Alice",
              "☒",
              "○",
@@ -2118,6 +2145,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
              "Line two",
              "Save"
            ]
+
+    assert Enum.at(text_boxes, 0).y == Enum.at(text_boxes, 2).y
 
     assert length(Enum.reject(rects, &(Map.get(&1, :role) in [:select_arrow, :textarea_resizer]))) ==
              6
@@ -2129,10 +2158,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert Enum.all?(rects, &(&1.width > 0 and &1.height > 0))
 
-    assert text_boxes
-           |> Enum.map(& &1.y)
-           |> Enum.chunk_every(2, 1, :discard)
-           |> Enum.all?(fn [a, b] -> a >= b end)
+    # The textarea paints above the shorter select on their shared inline line.
+    # Compare each control's actual content and bounds rather than source order
+    # against the baseline of a taller neighboring atomic box.
+    by_text = Map.new(text_boxes, &{&1.text, &1})
+    assert by_text["Alice"].y > by_text["Line one"].y
+    assert by_text["Line one"].y > by_text["Line two"].y
+    assert by_text["Line two"].y > by_text["Approved"].y
+    assert by_text["Approved"].y > by_text["Save"].y
+    assert Enum.all?(rects, &(&1.x >= 10 and &1.x + &1.width <= 230))
   end
 
   test "layout keeps form controls visible when they occur between inline text" do
@@ -2220,11 +2254,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert right_number.x > center_number.x
 
     assert_in_delta center_number.x,
-                    10 + (100 - center_number.annotation_width - center.annotation_width) / 2,
+                    10 +
+                      (100 -
+                         HtmlLineBreakValidator.snap_fragment_width(
+                           center_number.annotation_width
+                         ) - HtmlLineBreakValidator.snap_fragment_width(center.annotation_width)) /
+                        2,
                     0.001
 
     assert_in_delta right_number.x,
-                    10 + 100 - right_number.annotation_width - right.annotation_width,
+                    10 + 100 -
+                      HtmlLineBreakValidator.snap_fragment_width(right_number.annotation_width) -
+                      HtmlLineBreakValidator.snap_fragment_width(right.annotation_width),
                     0.001
 
     assert left.text == "Left"
@@ -2253,18 +2294,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     [right_line, center_line | wrapped_lines] = line_boxes
 
     assert Enum.map_join(right_line, "", & &1.text) == "Right edge"
-    assert_in_delta List.last(right_line).x + List.last(right_line).annotation_width, 110, 0.001
+
+    assert_in_delta List.last(right_line).x +
+                      HtmlLineBreakValidator.snap_fragment_width(
+                        List.last(right_line).annotation_width
+                      ),
+                    110,
+                    0.001
 
     assert Enum.map_join(center_line, "", & &1.text) == "Centered line"
     center_start = hd(center_line).x
-    center_end = List.last(center_line).x + List.last(center_line).annotation_width
+
+    center_end =
+      List.last(center_line).x +
+        HtmlLineBreakValidator.snap_fragment_width(List.last(center_line).annotation_width)
+
     assert_in_delta center_start - 10, 110 - center_end, 0.001
 
     assert length(wrapped_lines) >= 2
 
     for line <- wrapped_lines do
       refute String.ends_with?(List.last(line).text, " ")
-      assert_in_delta List.last(line).x + List.last(line).annotation_width, 70, 0.001
+
+      assert_in_delta List.last(line).x +
+                        HtmlLineBreakValidator.snap_fragment_width(
+                          List.last(line).annotation_width
+                        ),
+                      70,
+                      0.001
     end
   end
 
@@ -2479,7 +2536,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     chip = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "Chip"))
     block = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == "Block"))
 
-    assert_in_delta chip.x, lead.x + lead.annotation_width, 0.0001
+    assert_in_delta chip.x,
+                    lead.x + HtmlLineBreakValidator.snap_fragment_width(lead.annotation_width),
+                    0.0001
+
     assert block.y < lead.y
   end
 
@@ -2570,8 +2630,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       assert {:ok, ref_dom} = HtmlParser.parse(reference)
       assert {:ok, ref_tree} = Style.compute(ref_dom, [])
 
-      assert Layout.layout(styled_tree, page_size: {140, 160}, margin: 10) ==
-               Layout.layout(ref_tree, page_size: {140, 160}, margin: 10)
+      assert {:ok, raw_layout} = Layout.layout(styled_tree, page_size: {140, 160}, margin: 10)
+      assert {:ok, reference_layout} = Layout.layout(ref_tree, page_size: {140, 160}, margin: 10)
+
+      # Each layout issues fresh decoration identities. Compare the complete
+      # source geometry and flow while retaining the separate identity coverage.
+      normalize = fn boxes ->
+        Enum.map(boxes, &Map.drop(&1, [:fieldset_paint_id, :fieldset_ancestors]))
+      end
+
+      assert %{raw_layout | boxes: normalize.(raw_layout.boxes)} ==
+               %{reference_layout | boxes: normalize.(reference_layout.boxes)}
     end
   end
 
@@ -2925,7 +2994,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert_in_delta underline.x, link.x, 0.0001
     assert_in_delta underline.width, link.annotation_width, 0.0001
 
-    assert_in_delta link.x, 73.966796875, 0.0001
+    assert_in_delta link.x,
+                    plain.x + HtmlLineBreakValidator.snap_fragment_width(plain.annotation_width),
+                    0.0001
+
     assert_in_delta link.annotation_width, 27.80859375, 0.0001
     assert second_marker.text == "2."
     assert second_text.text == "Ship"
@@ -3020,7 +3092,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       Enum.filter(row_boxes, &(&1.type == :text))
 
     assert caption.text == "Summary"
-    assert_in_delta caption.x, 268.6448828125, 0.0001
+
+    assert_in_delta caption.x,
+                    10 +
+                      (caption.width -
+                         HtmlLineBreakValidator.snap_fragment_width(caption.annotation_width)) / 2,
+                    0.0001
 
     assert first_header_cell.type == :rect
     assert_in_delta first_header_cell.x, 11.5, 0.0001
@@ -3035,7 +3112,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert first_header_text.text == "Name"
     assert first_header_text.font_face.family == "DejaVu Sans"
-    assert_in_delta first_header_text.x, 133.2109222375, 0.0001
+
+    assert_in_delta first_header_text.x,
+                    first_header_cell.x +
+                      (first_header_cell.width -
+                         HtmlLineBreakValidator.snap_fragment_width(
+                           first_header_text.annotation_width
+                         )) / 2,
+                    0.0001
+
     assert_in_delta first_header_text.y, 800.14, 0.0001
 
     assert_in_delta second_header_cell.x, 295.2050476, 0.0001
@@ -3794,7 +3879,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     }
 
     assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {100, 100}, margin: 10)
-    [max_image, min_image, block_background] = layout_tree.boxes
+
+    [max_image, min_image, block_background] =
+      Enum.reject(layout_tree.boxes, &(&1.type == :flow_marker))
+
+    [space] = Enum.filter(layout_tree.boxes, &(&1.type == :flow_marker))
+    assert space.role == :explicit_block_space
+
+    assert {space.x, space.y, space.width, space.height} ==
+             {block_background.x, block_background.y, 0.0, block_background.height}
+
+    assert space.fieldset_ancestors == [block_background.fieldset_paint_id]
 
     assert max_image.type == :image
     assert_in_delta max_image.width, 12.0, 0.0001
@@ -3965,7 +4060,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
                margin: 0
              )
 
-    assert [%{type: :rect, fill_color: {1, 0, 0}} | rest] = layout_tree.boxes
+    paints = Enum.reject(layout_tree.boxes, &(&1.type == :flow_marker))
+    assert [%{type: :rect, fill_color: {1, 0, 0}} | rest] = paints
+    [space] = Enum.filter(layout_tree.boxes, &(&1.type == :flow_marker))
+    assert space.role == :explicit_block_space
+
+    border = List.last(rest)
+
+    assert {space.x, space.y, space.width, space.height} ==
+             {border.x + border.border_widths.left, border.y, 0.0,
+              border.height - border.border_widths.top}
+
+    assert space.fieldset_ancestors == [border.fieldset_paint_id]
     assert Enum.count(rest, &(&1.type == :image)) == 16
     assert %{type: :rect, fill_color: nil} = List.last(rest)
     assert Enum.all?(Enum.filter(rest, &(&1.type == :image)), &Map.has_key?(&1, :clip))
@@ -4012,8 +4118,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert {:ok, styled_tree} = Style.compute_detailed(dom, [])
     assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 200}, margin: 0)
 
-    blue = Enum.find(layout_tree.boxes, &(&1.fill_color == {0, 0, 1}))
-    black = Enum.find(layout_tree.boxes, &(&1.fill_color == {0, 0, 0}))
+    blue = Enum.find(layout_tree.boxes, &(Map.get(&1, :fill_color) == {0, 0, 1}))
+    black = Enum.find(layout_tree.boxes, &(Map.get(&1, :fill_color) == {0, 0, 0}))
     assert_in_delta blue.x, 70.0, 0.0001
     assert_in_delta blue.y, 145.0, 0.0001
     assert blue.out_of_flow
@@ -4063,10 +4169,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     after_text = Enum.find(layout_tree.boxes, &(&1.type == :text and &1.text == " After"))
     blue = Enum.find(layout_tree.boxes, &(&1.type == :rect and &1.fill_color == {0, 0, 1}))
 
-    assert_in_delta anchor.x, before.x + before.annotation_width + 4.0, 0.0001
+    assert_in_delta anchor.x,
+                    before.x + HtmlLineBreakValidator.snap_fragment_width(before.annotation_width) +
+                      4.0,
+                    0.0001
 
     assert_in_delta after_text.x,
-                    before.x + before.annotation_width + anchor.annotation_width,
+                    before.x + HtmlLineBreakValidator.snap_fragment_width(before.annotation_width) +
+                      HtmlLineBreakValidator.snap_fragment_width(anchor.annotation_width),
                     0.0001
 
     assert_in_delta blue.x, anchor.x, 0.0001
@@ -4346,9 +4456,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert first.text == "A"
     assert second.text == "B"
-    assert_in_delta first.x, 85.8955078125, 0.0001
+
+    assert_in_delta first.x,
+                    90 - HtmlLineBreakValidator.snap_fragment_width(first.annotation_width) / 2,
+                    0.0001
+
     assert_in_delta first.y, 88.0, 0.0001
-    assert_in_delta second.x, 45.8837890625, 0.0001
+
+    assert_in_delta second.x,
+                    50 - HtmlLineBreakValidator.snap_fragment_width(second.annotation_width) / 2,
+                    0.0001
+
     assert_in_delta second.y, 63.75, 0.0001
   end
 
@@ -7263,7 +7381,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 200}, margin: 0)
 
     assert [%{type: :rect, y: 158.5, height: 42.0} | text_boxes] = layout_tree.boxes
-    assert Enum.map(text_boxes, & &1.text) == ["First line", "Second line"]
+
+    assert Enum.map(Enum.filter(text_boxes, &(&1.type == :text)), & &1.text) == [
+             "First line",
+             "Second line"
+           ]
+
+    assert %{role: :block_fragment_end, y: 158.5, height: end_height} = List.last(text_boxes)
+    assert end_height == 0.0
   end
 
   test "a collapsed table paints cell borders after its outer outline" do

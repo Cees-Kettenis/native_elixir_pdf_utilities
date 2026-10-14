@@ -98,14 +98,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
                page_furniture: [header: furniture_html("Résumé α")]
              )
 
-    header_boxes = Enum.drop_while(page.boxes, &(&1.text == "Body 1"))
+    header_boxes = Enum.drop(page.boxes, 1)
+    header_text = Enum.filter(header_boxes, &(&1.type == :text))
 
-    assert Enum.map_join(header_boxes, & &1.text) == "Résumé α"
+    assert Enum.map_join(header_text, & &1.text) == "Résumé α"
 
     assert Enum.all?(
-             header_boxes,
+             header_text,
              &(&1.font_face.type == :embedded and &1.font_face.family == "DejaVu Sans")
            )
+
+    assert [%{type: :flow_marker, role: :explicit_block_space, height: 2.0}] =
+             Enum.reject(header_boxes, &(&1.type == :text))
+
+    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.PdfWriter.render([page])
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+    assert text =~ "Résumé α"
   end
 
   test "decorate applies the unsupported glyph policy to furniture text" do

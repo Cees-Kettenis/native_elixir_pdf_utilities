@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@page {size:360pt 420pt;margin:0}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:12pt;line-height:18pt}
+body {padding:12pt}
+p {margin:0 0 8pt;line-height:52pt}
+math {font-family:"STIX Two Math";font-size:20pt}
+.group {padding:2pt;border:1pt solid #246;background:#e0eaf0}
+.group > mn {display:inline math;math-depth:0;font-size:20pt}
+</style></head><body>
+<p>Inline <math><mrow class="group" style="display:inline;width:60pt;height:32pt;box-sizing:border-box"><mn>12</mn></mrow></math> end.</p>
+<p>Style <math><mstyle class="group" style="display:inline-block;width:min(60pt,80pt);height:32pt;box-sizing:border-box"><mn>34</mn></mstyle></math> end.</p>
+<p>Error <math><merror class="group" style="display:block;width:60pt;height:32pt;box-sizing:border-box"><mn>56</mn></merror></math> end.</p>
+<p>Unknown <math><custom-group class="group" style="display:inline-block;width:60pt;height:32pt;box-sizing:border-box"><mn>78</mn></custom-group></math> end.</p>
+<p>Flex <math><mrow class="group" style="display:inline-flex;gap:4pt"><mn>12</mn><mn>34</mn></mrow></math> end.</p>
+<p>Grid <math><mrow class="group" style="display:inline-grid;grid-template-columns:auto auto;gap:4pt"><mn>56</mn><mn>78</mn></mrow></math> end.</p>
+</body></html>

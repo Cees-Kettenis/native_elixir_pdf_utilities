@@ -167,7 +167,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPhantomPaddingTest do
           %{"width" => "2width", "height" => "nonsense", "depth" => "1depth"}
         ] do
       assert {:ok, padded} = MathLayout.measure(element("mpadded", content, style, attributes))
-      assert Map.delete(padded, :drawing_items) == Map.delete(row, :drawing_items)
+      # The source owner changes while the inferred row geometry stays the same.
+      assert Map.drop(padded, [:drawing_items, :css_math_owner]) ==
+               Map.drop(row, [:drawing_items, :css_math_owner])
     end
 
     assert {:ok, hidden} =
@@ -272,7 +274,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPhantomPaddingTest do
 
     assert_in_delta switched.width, 36 * selected_x_height, 1.0e-10
 
-    assert :error == CssValueValidator.validate_resolved(style, "width", "2em")
+    assert {:ok, %{width: 40.0}} = CssValueValidator.validate_resolved(style, "width", "2em")
 
     assert {:ok, %{width: {:percent, 0.5}}} =
              CssValueValidator.validate_resolved(style, "width", "50%")

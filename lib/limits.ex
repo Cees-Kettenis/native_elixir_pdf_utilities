@@ -3,9 +3,11 @@ defmodule NativeElixirPdfUtilities.Limits do
   Runtime resource limits used by PDF parsing, information access, text
   extraction, merging, page transforms, splitting, and HTML-to-PDF rendering.
 
-  Native SVG link clipping uses `:max_svg_clip_projection_work` for contour
-  subdivision and planar arrangement work. `:svg_clip_curve_precision` is
+  HTML/PDF link clipping uses `:max_clip_projection_work` for contour
+  subdivision and planar arrangement work. `:clip_curve_precision` is
   the reciprocal of the maximum curve-to-chord deviation in PDF points.
+  `:max_clip_expression_depth` bounds nested geometric clip intersections
+  independently of drawing-group nesting.
 
   Applications can override individual defaults in `config/config.exs` or
   `config/runtime.exs`:
@@ -88,15 +90,10 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_svg_resource_bytes: 10_000_000,
     max_aggregate_svg_resource_bytes: 50_000_000,
     max_svg_nodes: 25_000,
-    max_svg_transform_operations: 1_000,
-    max_svg_path_segments: 100_000,
-    max_svg_stroke_work: 1_000_000,
-    max_svg_clip_projection_work: 2_000_000,
-    svg_clip_curve_precision: 1_024,
-    max_svg_gradient_work: 100_000,
-    max_svg_filter_work: 250_000_000,
-    max_svg_filter_kernel_values: 1024,
-    max_svg_filter_octaves: 16,
+    max_css_transform_operations: 1_000,
+    max_clip_projection_work: 2_000_000,
+    max_clip_expression_depth: 256,
+    clip_curve_precision: 1_024,
     svg_raster_scale: 2,
     max_svg_depth: 128,
     max_svg_path_bytes: 1_000_000,
@@ -242,15 +239,10 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_svg_resource_bytes
           | :max_aggregate_svg_resource_bytes
           | :max_svg_nodes
-          | :max_svg_transform_operations
-          | :max_svg_path_segments
-          | :max_svg_gradient_work
-          | :max_svg_filter_work
-          | :max_svg_filter_kernel_values
-          | :max_svg_filter_octaves
-          | :max_svg_clip_projection_work
-          | :svg_clip_curve_precision
-          | :max_svg_stroke_work
+          | :max_css_transform_operations
+          | :max_clip_projection_work
+          | :max_clip_expression_depth
+          | :clip_curve_precision
           | :svg_raster_scale
           | :max_svg_depth
           | :max_svg_path_bytes

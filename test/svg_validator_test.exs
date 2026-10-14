@@ -4,8 +4,8 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.SvgValidator
-  alias NativeElixirPdfUtilities.HtmlToPdf.{SvgBackend, SvgRasterizer, PngDecoder}
-  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, SvgBackendValidator}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{SvgRasterizer, PngDecoder}
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, SvgConverterValidator, FontValidator}
   alias NativeElixirPdfUtilities.TestSupport.PngFixture
   alias NativeElixirPdfUtilities.HtmlToPdf
 
@@ -291,7 +291,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
           %{mode: :inline, resolver: fn -> raise "called" end}
         ] do
       assert {:error, {:invalid_options, %{stage: :options, source: "SVG", operation: :prepare}}} =
-               SvgBackend.rasterize(svg(""), [], invalid)
+               convert_svg(svg(""), [], invalid)
     end
   end
 
@@ -304,16 +304,21 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
           svg("") <> "visible",
           "<!DOCTYPE svg [<!ENTITY a 'x'>]>" <> svg("&a;"),
           "<?xml-stylesheet href='private.css'?>" <> svg(""),
-          svg("<g>&undefined;</g>"),
-          svg("<a href=\"javascript:run()\"/>"),
           svg("<image href=\"data:image/png;base64,eA==\"/>"),
           svg("<use href=\"file:///tmp/private\"/>")
         ] do
       assert {:error, {:invalid_document, %{source: "SVG", message: message}}} =
-               SvgBackend.rasterize(source, [], %{mode: :image})
+               convert_svg(source, [], %{mode: :image})
 
       assert is_binary(message)
     end
+
+    assert {:error,
+            {:unsupported_html,
+             %{module: HtmlValidator, source: "href", stage: :html, line: 1, message: message}}} =
+             convert_svg(svg("<a href=\"javascript:run()\"/>"), [], %{mode: :image})
+
+    assert message =~ "Active URL schemes"
 
     assert {:ok, _} =
              SvgValidator.validate_processing(
@@ -328,11 +333,18 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
           "<script/>"
         ] do
       assert {:error, {:unsupported_html, %{source: "SVG", line: 1}}} =
-               SvgBackend.rasterize(svg(content), [], %{mode: :image})
+               convert_svg(svg(content), [], %{mode: :image})
     end
 
     assert {:error, {:invalid_document, _}} =
              SvgValidator.validate_processing(nil, %{mode: :image})
+  end
+
+  test "undefined XML entities remain invalid converter input" do
+    assert {:error, {:invalid_document, %{source: "SVG", message: message}}} =
+             convert_svg(svg("<g>&undefined;</g>"), [], %{mode: :image})
+
+    assert is_binary(message)
   end
 
   test "mapped active URLs and XML processing instructions fail before backend resolution" do
@@ -350,13 +362,13 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
       }
 
       assert {:error, {:invalid_document, %{source: "SVG", message: message}}} =
-               SvgBackend.rasterize(svg("<image href='#{href}'/>"), [], context)
+               convert_svg(svg("<image href='#{href}'/>"), [], context)
 
       assert message =~ "active URLs"
     end
 
     assert {:error, {:invalid_document, %{message: message}}} =
-             SvgBackend.rasterize(svg("<?instruction data?>"), [], %{mode: :image})
+             convert_svg(svg("<?instruction data?>"), [], %{mode: :image})
 
     assert message =~ "processing instructions"
   end
@@ -370,10 +382,17 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
         ] do
       assert {:ok, _} = SvgValidator.validate_processing(svg(content), %{mode: :inline})
 
-      assert {:error, {:unsupported_html, %{stage: :layout, message: message}}} =
-               SvgBackend.rasterize(svg(content), [], %{mode: :inline})
+      if String.starts_with?(content, "<foreignObject>") do
+        assert {:error,
+                {:unsupported_html,
+                 %{stage: :layout, source: "foreignObject", operation: :convert, message: message}}} =
+                 convert_svg(svg(content), [], %{mode: :inline})
 
-      assert message =~ "complete scenes remain pending"
+        assert message =~ "existing SVG converter does not render foreignObject"
+      else
+        assert {:ok, png} = convert_svg(svg(content), [], %{mode: :inline})
+        assert {:ok, %{alpha_data: <<0>>}} = PngDecoder.decode(png, nil, false)
+      end
     end
 
     for content <- [
@@ -387,12 +406,13 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
                SvgValidator.validate_processing(svg(content), %{mode: :inline})
     end
 
-    assert {:error, {:unsupported_html, %{message: message, operation: :rasterize}}} =
-             SvgBackend.rasterize(svg("<foreignObject/>"), [], %{mode: :image})
+    assert {:error,
+            {:unsupported_html, %{message: message, operation: :convert, source: "foreignObject"}}} =
+             convert_svg(svg("<foreignObject/>"), [], %{mode: :image})
 
-    assert message =~ "usvg 0.47.0 has no foreignObject"
+    assert message =~ "existing SVG converter does not render foreignObject"
     assert {:ok, pdf} = HtmlToPdf.render("<svg></svg>")
-    refute pdf =~ "/Subtype /Image"
+    assert pdf =~ "/Subtype /Image"
   end
 
   test "internal reference graph bounds cycles, missing targets, duplicate IDs and repeated expansion",
@@ -490,8 +510,8 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              HtmlValidator.with_render_budget(fn ->
-               assert {:ok, _} = SvgBackend.rasterize(svg("<rect/>"), [], %{mode: :image})
-               SvgBackend.rasterize(svg("<rect/>"), [], %{mode: :image})
+               assert {:ok, _} = convert_svg(svg("<rect/>"), [], %{mode: :image})
+               convert_svg(svg("<rect/>"), [], %{mode: :image})
              end)
 
     assert message =~ "max_aggregate_svg_raster_pixels"
@@ -499,7 +519,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
     Limits.install(%{old | max_font_count: 1})
 
     assert {:error, {:resource_limit_exceeded, _}} =
-             SvgBackend.rasterize(svg(""), [], %{
+             convert_svg(svg(""), [], %{
                mode: :image,
                fonts: [%{data: data}, %{data: data}]
              })
@@ -509,26 +529,29 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              HtmlValidator.with_render_budget(fn ->
                assert {:ok, _} =
-                        SvgBackend.rasterize(svg(""), [], %{mode: :image, fonts: [%{data: data}]})
+                        convert_svg(svg(""), [], %{mode: :image, fonts: [%{data: data}]})
 
-               SvgBackend.rasterize(svg(""), [], %{mode: :image, fonts: [%{data: data}]})
+               convert_svg(svg(""), [], %{mode: :image, fonts: [%{data: data}]})
              end)
 
     assert message =~ "max_svg_font_work_bytes"
     Limits.install(%{old | max_svg_font_work_bytes: 1})
 
-    assert {:error, {:resource_limit_exceeded, %{source: "SVG", operation: :prepare}}} =
-             SvgBackendValidator.prepare(
+    assert {:error,
+            {:resource_limit_exceeded, %{stage: :font, module: HtmlValidator, message: message}}} =
+             SvgConverterValidator.prepare(
                svg(""),
                [],
-               %{mode: :image, fonts: [%{data: data}]},
-               nil
+               nil,
+               [%{data: data}],
+               %{mode: :image}
              )
 
+    assert message =~ "max_svg_font_work_bytes"
     Limits.install(%{old | max_font_source_bytes: 1})
 
     assert {:error, {:resource_limit_exceeded, %{stage: :font}}} =
-             SvgBackend.rasterize(svg(""), [], %{mode: :image, fonts: [%{data: data}]})
+             convert_svg(svg(""), [], %{mode: :image, fonts: [%{data: data}]})
   end
 
   test "byte adapter dimension failures use the shared asset validation contract" do
@@ -536,10 +559,8 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
           "<svg xmlns='http://www.w3.org/2000/svg' width='0%' height='1' viewBox='0 0 1 1'/>",
           "<svg xmlns='http://www.w3.org/2000/svg' width='50%' height='1'/>"
         ] do
-      assert {:error,
-              {:invalid_document,
-               %{stage: :style, source: "SVG", operation: :rasterize, message: message}}} =
-               SvgBackend.rasterize(source, [], %{mode: :image})
+      assert {:error, {:invalid_document, %{stage: :style, source: "SVG", message: message}}} =
+               convert_svg(source, [], %{mode: :image})
 
       assert message =~ "intrinsic dimensions"
     end
@@ -556,7 +577,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
         resources: %{"svg-resource:logo" => %{data: png, media_type: "image/png"}}
       }
 
-      assert {:ok, output} = SvgBackend.rasterize(source, [], context)
+      assert {:ok, output} = convert_svg(source, [], context)
       assert {:ok, image} = PngDecoder.decode(output, HtmlValidator.new_image_budget(), false)
       assert image.width_px == 1 and image.height_px == 1
       assert image.data == :erlang.list_to_binary(rgb)
@@ -564,7 +585,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
     end
 
     assert {:ok, output} =
-             SvgBackend.rasterize(svg("<rect width='1' height='1' fill='red'/>"), [], %{
+             convert_svg(svg("<rect width='1' height='1' fill='red'/>"), [], %{
                mode: :image
              })
 
@@ -584,7 +605,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
           %{data: png, media_type: "image/svg+xml"}
         ] do
       assert {:error, {_reason, %{stage: stage, message: message}}} =
-               SvgBackend.rasterize(source, [], %{
+               convert_svg(source, [], %{
                  mode: :reference,
                  resources: %{"svg-resource:logo" => descriptor}
                })
@@ -593,7 +614,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
     end
 
     assert {:error, {:invalid_document, %{message: message}}} =
-             SvgBackend.rasterize(svg(""), [], %{
+             convert_svg(svg(""), [], %{
                mode: :reference,
                resources: %{"file:///tmp/private" => %{data: png, media_type: "image/png"}}
              })
@@ -608,7 +629,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
       Limits.install(Map.put(old, key, 1))
 
       assert {:error, {:resource_limit_exceeded, _}} =
-               SvgBackend.rasterize(source, [], %{
+               convert_svg(source, [], %{
                  mode: :reference,
                  resources: %{"svg-resource:logo" => %{data: png, media_type: "image/png"}}
                })
@@ -617,7 +638,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
     Limits.install(old)
 
     assert {:error, {:invalid_document, _}} =
-             SvgBackend.rasterize(svg(""), [zoom: 2], %{mode: :image})
+             convert_svg(svg(""), [zoom: 2], %{mode: :image})
   end
 
   test "selected font bytes paint text while missing fonts and glyphs are diagnosed" do
@@ -625,31 +646,34 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
       "<svg xmlns='http://www.w3.org/2000/svg' width='80' height='20'><text x='0' y='16' font-family='DejaVu Sans' font-size='16'>SVG</text></svg>"
 
     data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
+    assert {:ok, "DejaVu Sans"} = FontValidator.prepare_font_family_name(data)
 
     assert {:ok, output} =
-             SvgBackend.rasterize(source, [], %{mode: :image, fonts: [%{data: data}]})
+             convert_svg(source, [], %{mode: :image, fonts: [%{data: data}]})
 
     assert {:ok, image} = PngDecoder.decode(output, HtmlValidator.new_image_budget(), false)
     assert image.alpha_data != :binary.copy(<<0>>, 80 * 20)
 
     assert {:error, {:unsupported_html, %{message: message}}} =
-             SvgBackend.rasterize(source, [], %{mode: :image})
+             convert_svg(source, [], %{mode: :image})
 
     assert message =~ "font bytes"
 
     for font <- ["font.ttf", %{data: "invalid"}] do
-      assert {:error, {:invalid_document, %{stage: :font, source: "SVG"}}} =
-               SvgBackend.rasterize(source, [], %{mode: :image, fonts: [font]})
+      assert {:error,
+              {:invalid_document,
+               %{stage: :style, source: "SVG", module: SvgConverterValidator, operation: :convert}}} =
+               convert_svg(source, [], %{mode: :image, fonts: [font]})
     end
 
     assert {:error, {:unsupported_html, %{message: message}}} =
-             SvgBackend.rasterize(
+             convert_svg(
                String.replace(source, "SVG</text>", "\u{10FFFF}</text>"),
                [],
                %{mode: :image, fonts: [%{data: data}]}
              )
 
-    assert message =~ "cover all text"
+    assert message =~ "do not cover the original text"
   end
 
   test "a host-readable font that the backend cannot import fails instead of omitting text" do
@@ -675,20 +699,20 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
     assert {:ok, _} = NativeElixirPdfUtilities.Validators.FontValidator.prepare_ttf(font)
 
     assert {:error,
-            {:invalid_document,
+            {:invalid_font,
              %{
-               stage: :style,
-               reason: :invalid_document,
-               source: "SVG",
-               operation: :rasterize,
+               stage: :font,
+               reason: :invalid_font,
+               module: FontValidator,
+               operation: :prepare_font_family_name,
                message: message
              }}} =
-             SvgBackend.rasterize(svg("<text x='0' y='1'>A</text>"), [], %{
+             convert_svg(svg("<text x='0' y='1'>A</text>"), [], %{
                mode: :image,
                fonts: [%{data: font}]
              })
 
-    assert message =~ "selected SVG font bytes must import exactly one named static TrueType face"
+    assert message =~ "usable internal family name"
   end
 
   test "font parser diagnostics retain their limit explanation", %{limits: old} do
@@ -696,35 +720,82 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
     Limits.install(%{old | max_font_cmap_work: 1})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
-             SvgBackend.rasterize(svg(""), [], %{mode: :image, fonts: [%{data: data}]})
+             convert_svg(svg(""), [], %{mode: :image, fonts: [%{data: data}]})
 
     assert message =~ "character-map"
   end
 
-  test "backend omissions fail instead of returning successful blank images" do
+  test "unused empty marker has no ink while active missing paint and font resources still fail" do
+    assert {:ok, png} = convert_svg(svg("<marker/>"), [], %{mode: :reference})
+    assert {:ok, image} = PngDecoder.decode(png, HtmlValidator.new_image_budget(), false)
+    assert image.alpha_data == <<0>>
+
+    assert {:ok, painted} =
+             convert_svg(
+               svg(
+                 "<defs><marker id='m' markerWidth='1' markerHeight='1' refX='0' refY='0'><rect width='1' height='1' fill='red'/></marker></defs><path d='M0 0L1 1' stroke='red' marker-end='url(#m)'/>"
+               ),
+               [],
+               %{mode: :reference}
+             )
+
+    assert {:ok, marker_image} =
+             PngDecoder.decode(painted, HtmlValidator.new_image_budget(), false)
+
+    assert marker_image.data == <<255, 0, 0>>
+    refute Map.has_key?(marker_image, :alpha_data)
+
+    for content <- ["<text>Missing face</text>", "<image href='missing.png'/>"] do
+      assert {:error, {reason, diagnostic}} =
+               convert_svg(svg(content), [], %{mode: :reference})
+
+      assert is_atom(reason) and diagnostic.source == "SVG"
+      assert is_binary(diagnostic.message) and is_atom(diagnostic.stage)
+    end
+  end
+
+  test "unused SVG definitions and stylesheet metadata produce no invented ink" do
     for content <- [
           "<filter/>",
           "<mask/>",
           "<pattern/>",
-          "<marker/>",
           "<clipPath/>",
-          "<style>rect { opacity: 0.5 }</style>",
-          "<unsupported/>",
-          "<image/>"
+          "<style>rect { opacity: 0.5 }</style>"
         ] do
-      assert {:error, {_reason, %{source: "SVG"}}} =
-               SvgBackend.rasterize(svg(content), [], %{mode: :reference})
+      assert {:ok, png} = convert_svg(svg(content), [], %{mode: :reference})
+      assert {:ok, %{alpha_data: <<0>>}} = PngDecoder.decode(png, nil, false)
     end
 
     assert {:error, {:invalid_document, %{message: message}}} =
-             SvgBackend.rasterize(
+             convert_svg(
                svg("<path xmlns:a='urn:x' xmlns:b='urn:x' a:d='x' b:d='y'/>"),
                [],
                %{mode: :image}
              )
 
     assert message =~ "unique expanded namespace/name"
+    assert {:ok, _} = SvgConverterValidator.prepare(svg("<rect/>"), [], nil, [], %{mode: :image})
+  end
 
+  test "unsupported SVG elements cannot silently discard original source" do
+    assert {:error, {:unsupported_html, diagnostic}} =
+             convert_svg(svg("<unsupported/>"), [], %{mode: :reference})
+
+    assert diagnostic.source == "unsupported"
+    assert diagnostic.stage == :layout and diagnostic.reason == :unsupported_html
+    assert diagnostic.message =~ "cannot be silently omitted"
+  end
+
+  test "SVG image elements require an explicit supported asset reference" do
+    assert {:error, {:invalid_document, diagnostic}} =
+             convert_svg(svg("<image/>"), [], %{mode: :reference})
+
+    assert diagnostic.source == "image href" and diagnostic.stage == :style
+    assert diagnostic.reason == :invalid_document
+    assert diagnostic.message =~ "explicit"
+  end
+
+  test "a valid SVG image does not authorize a second missing or internal image resource" do
     resource = %{
       data: PngFixture.build(1, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end),
       media_type: "image/png"
@@ -734,60 +805,32 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
 
     for content <- [
           "<image href='svg-resource:logo'/><image/>",
-          "<rect id='target'/><image href='#target'/>",
-          "<use href='svg-resource:logo'/>",
-          "<textPath href='svg-resource:logo'/>"
+          "<rect id='target'/><image href='#target'/>"
         ] do
-      assert {:error, {:unsupported_html, %{source: "SVG"}}} =
-               SvgBackend.rasterize(svg(content), [], context)
-    end
+      assert {:error, {:invalid_document, diagnostic}} =
+               convert_svg(svg(content), [], context)
 
-    assert {:ok, _} = SvgBackendValidator.prepare(svg("<rect/>"), [], %{mode: :image}, nil)
+      assert diagnostic.source == "image href" and diagnostic.reason == :invalid_document
+      assert diagnostic.stage == :style and diagnostic.message =~ "explicit"
+    end
   end
 
-  test "native resolver has no implicit file, network, data URL or system-font fallback" do
-    assert {:module, SvgBackend.NativeBytes} = SvgBackend.load_native()
-    # Deliberately bypass Elixir input policy to verify the native isolation boundary itself.
-    png = PngFixture.build(1, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
-    path = Path.join(System.tmp_dir!(), "svg-isolation-#{System.unique_integer([:positive])}.png")
-    File.write!(path, png)
-    on_exit(fn -> File.rm(path) end)
+  test "SVG use and textPath cannot consume an image byte descriptor" do
+    resource = %{
+      data: PngFixture.build(1, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end),
+      media_type: "image/png"
+    }
 
-    for href <- [
-          path,
-          "file://#{path}",
-          "https://example.invalid/image.png",
-          "data:image/png;base64,#{Base.encode64(png)}"
-        ] do
-      assert {:ok, output} =
-               SvgBackend.NativeBytes.render(
-                 svg("<image href='#{href}' width='1' height='1'/>"),
-                 1,
-                 1,
-                 [],
-                 %{}
-               )
+    context = %{mode: :reference, resources: %{"svg-resource:logo" => resource}}
 
-      assert {:ok, %{alpha_data: <<0>>}} =
-               PngDecoder.decode(output, HtmlValidator.new_image_budget(), false)
+    for content <- ["<use href='svg-resource:logo'/>", "<textPath href='svg-resource:logo'/>"] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               convert_svg(svg(content), [], context)
+
+      assert diagnostic.source == "SVG" and diagnostic.stage == :style
+      assert diagnostic.reason == :invalid_document and diagnostic.line == 1
+      assert diagnostic.message =~ "not authorized"
     end
-
-    assert {:ok, output} =
-             SvgBackend.NativeBytes.render(
-               svg("<text x='0' y='1' font-family='DejaVu Sans'>X</text>"),
-               1,
-               1,
-               [],
-               %{}
-             )
-
-    assert {:ok, %{alpha_data: <<0>>}} =
-             PngDecoder.decode(output, HtmlValidator.new_image_budget(), false)
-
-    assert {:error, message} =
-             SvgBackend.NativeBytes.render("<!DOCTYPE svg>" <> svg(""), 1, 1, [], %{})
-
-    assert is_binary(message)
   end
 
   test "expanded text and PNG occurrences charge work before native rendering", %{limits: old} do
@@ -819,48 +862,46 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
     Limits.install(%{old | max_aggregate_svg_raster_pixels: 5})
 
     assert {:error, {:resource_limit_exceeded, %{source: "SVG", message: message}}} =
-             SvgBackend.rasterize(source, [], context)
+             convert_svg(source, [], context)
 
     assert message =~ "max_aggregate_svg_raster_pixels"
 
     Limits.install(%{old | max_aggregate_decoded_image_bytes: 20})
 
     assert {:error, {:resource_limit_exceeded, %{source: "SVG", message: message}}} =
-             SvgBackend.rasterize(source, [], context)
+             convert_svg(source, [], context)
 
     assert message =~ "aggregate decoded image bytes"
     Limits.install(old)
-    assert {:ok, _} = SvgBackend.rasterize(source, [], context)
+    assert {:ok, _} = convert_svg(source, [], context)
   end
 
-  test "temporary surface work is bounded cumulatively before backend allocation", %{limits: old} do
+  test "actual converter canvas and cumulative surface budgets retain their bounds", %{
+    limits: old
+  } do
     source = svg("<g opacity='0.5'><rect width='1' height='1'/></g>")
-    Limits.install(%{old | max_aggregate_svg_surface_pixels: 224})
+    Limits.install(%{old | max_aggregate_svg_surface_pixels: 1})
 
-    assert {:error,
-            {:resource_limit_exceeded, %{source: "SVG", stage: :layout, message: message}}} =
-             SvgBackend.rasterize(source, [], %{mode: :image})
+    assert {:error, {:resource_limit_exceeded, %{source: "SVG", stage: :style, message: message}}} =
+             convert_svg(source, [], %{mode: :image})
 
     assert message =~ "max_aggregate_svg_surface_pixels"
-    Limits.install(%{old | max_aggregate_svg_surface_pixels: 225})
-    assert {:ok, _} = SvgBackend.rasterize(source, [], %{mode: :image})
+    Limits.install(old)
+    assert {:ok, png} = convert_svg(source, [], %{mode: :image})
+    assert {:ok, image} = PngDecoder.decode(png, HtmlValidator.new_image_budget(), false)
+    assert image.width_px == 1 and image.height_px == 1
+    assert image.alpha_data == <<128>>
+
+    Limits.install(%{old | max_aggregate_svg_surface_pixels: 1})
 
     HtmlValidator.with_render_budget(fn ->
-      assert {:ok, _} = SvgBackend.rasterize(svg("<rect/>"), [], %{mode: :image})
+      assert {:ok, _} = convert_svg(svg("<rect/>"), [], %{mode: :image})
 
       assert {:error, {:resource_limit_exceeded, %{source: "SVG", message: message}}} =
-               SvgBackend.rasterize(svg("<rect/>"), [], %{mode: :image})
+               convert_svg(svg("<rect/>"), [], %{mode: :image})
 
       assert message =~ "max_aggregate_svg_surface_pixels"
     end)
-  end
-
-  test "missing native artifact diagnostics identify the reproducible build step" do
-    assert {:error,
-            {:svg_backend_unavailable, %{source: "SVG", operation: :rasterize, message: message}}} =
-             SvgBackendValidator.native_load_result({:error, :badfile})
-
-    assert message =~ "native/svg_backend" and message =~ "Cargo"
   end
 
   @tag :browser_parity
@@ -895,7 +936,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
           String.replace(html, "SVG_BACKEND_ARTWORK", reference_uri)
         end,
         native_renderer: fn html, options ->
-          with {:ok, artwork} <- SvgBackend.rasterize(source, [width: 480, height: 160], context) do
+          with {:ok, artwork} <- convert_svg(source, [width: 480, height: 160], context) do
             assert {:ok, %{width_px: 480, height_px: 160}} =
                      PngDecoder.decode(artwork, HtmlValidator.new_image_budget(), false)
 
@@ -915,6 +956,18 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
       assert text =~ "SVG byte adapter" and text =~ "Validated resources"
       assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
     end
+  end
+
+  # The byte context carries the same approved fonts and resources as before;
+  # the existing converter adapter accepts fonts in its separate argument.
+  defp convert_svg(source, options, context) do
+    SvgRasterizer.rasterize(
+      source,
+      options,
+      nil,
+      Map.get(context, :fonts, []),
+      Map.delete(context, :fonts)
+    )
   end
 
   defp svg(content) do

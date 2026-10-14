@@ -1,0 +1,12 @@
+<!doctype html><html lang=en><head><style>
+@page {size:400pt 340pt;margin:0;} html,body{margin:0;padding:0;font-family:"DejaVu Sans";font-size:10.5pt;line-height:15pt} body{padding:12pt} p{margin:0 0 12pt} select{font-family:"DejaVu Sans";font-size:10.5pt;display:inline} fieldset{margin:0 0 12pt;padding:6pt;border:1pt solid #555} legend{padding:0 3pt}
+</style></head><body><form id=controls>
+<p>Default Before <select name=native><option value=a selected>Alpha</option><option value=b>Beta</option></select> After</p>
+<p>Rounded Before <select name=rounded style="border:2pt dashed #884422;border-radius:3pt;width:105pt;font-size:17px;"><option value=a selected>First choice</option><option value=b>Second choice</option></select> After</p>
+<p>Plain Before <select name=plain style="appearance:none;width:100pt;padding:2pt;border:1.5pt solid #345;border-radius:3pt;background:#eef3fa;"><option value=a selected>Plain first</option><option value=b>Plain second</option></select> After</p>
+<p>List Before <select name=list size=3 style="width:105pt;"><option value=a>Before row</option><option value=b selected>Current row</option><option value=c>After row</option><option value=d>Offscreen row</option></select> After</p>
+<fieldset><legend>Owner and initial value</legend><select name=owned style="border:1.5pt solid #345;border-radius:3pt;"><option value=a selected>Owned first</option><option value=b>Owned second</option></select> Caption</fieldset>
+</form>
+<p>External <select form=controls name=external disabled><option value=a selected>Disabled first</option><option value=b>Disabled second</option></select> Tail</p>
+<p>After inline initial select controls</p>
+</body></html>

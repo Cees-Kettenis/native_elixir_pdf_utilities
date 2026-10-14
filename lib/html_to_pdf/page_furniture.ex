@@ -272,14 +272,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
             {:ok, furniture_layout} ->
               place(position, furniture_layout.boxes, page_size, margins)
 
-            {:error, reason} ->
-              Diagnostics.error(
-                :layout,
-                reason,
-                "#{position} page furniture layout failed: #{reason}",
-                operation: :decorate_pages,
-                module: __MODULE__
-              )
+            {:error, {reason, diagnostic}} ->
+              {:error,
+               {reason,
+                Diagnostics.with_context(diagnostic,
+                  operation: :decorate_pages,
+                  module: __MODULE__,
+                  source: "#{position} page furniture"
+                )}}
           end
         end
     end

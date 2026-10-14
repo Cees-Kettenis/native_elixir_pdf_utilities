@@ -2,7 +2,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
   @moduledoc false
   import Kernel, except: [length: 1]
   alias NativeElixirPdfUtilities.Diagnostics
-  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, SvgFilterValidator}
 
   @inherited %{
     svg_text_anchor: "start",
@@ -40,6 +40,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
     "fill-opacity" => :svg_fill_opacity,
     "stroke-opacity" => :svg_stroke_opacity,
     "stroke-width" => :svg_stroke_width,
+    "vector-effect" => :svg_vector_effect,
     "visibility" => :svg_visibility,
     "opacity" => :svg_opacity,
     "x" => :svg_x,
@@ -96,6 +97,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
       svg_stop_color: {:color, {0, 0, 0}},
       svg_stop_opacity: 1.0,
       svg_opacity: 1.0,
+      svg_vector_effect: "none",
       svg_clip_path: :none,
       svg_mask: :none,
       svg_filter: :none,
@@ -112,7 +114,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
       svg_r: {:user, 0.0},
       svg_rx: :auto,
       svg_ry: :auto,
-      svg_transform: {1.0, 0.0, 0.0, 1.0, 0.0, 0.0}
+      svg_transform: "none"
     })
     |> Map.put(
       :_svg_inherited,
@@ -138,8 +140,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
   @doc false
   @spec presentation_property?(map(), String.t()) :: boolean()
   def presentation_property?(node, property) do
-    ((Map.has_key?(@properties, property) and
-        (property not in @geometry or node.tag in Map.fetch!(@geometry_elements, property))) or
+    (property == "marker" or
+       (Map.has_key?(@properties, property) and
+          (property not in @geometry or node.tag in Map.fetch!(@geometry_elements, property))) or
        property in ~w(color display overflow font-family font-size font-weight font-style letter-spacing)) and
       not Map.has_key?(Map.get(node, :attribute_namespaces, %{}), property)
   end
@@ -147,72 +150,99 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
   @doc false
   @spec presentation_declarations(map()) :: {:ok, list()} | {:error, {atom(), map()}}
   def presentation_declarations(node) do
-    Enum.reduce_while(node.attributes, {:ok, []}, fn {property, value}, {:ok, declarations} ->
-      property =
-        if (property == "gradientTransform" and node.tag in ~w(linearGradient radialGradient)) or
-             (property == "patternTransform" and node.tag == "pattern"),
-           do: "transform",
-           else: property
+    attributes = Map.drop(node.attributes, Map.keys(Map.get(node, :attribute_namespaces, %{})))
 
-      if presentation_property?(node, property) do
-        if String.contains?(value, "!") do
-          {:halt, invalid(property, "presentation attributes cannot contain !important")}
-        else
-          # Geometry presentation attributes accept unitless SVG user units.
-          # Their canonical representation is handled by the SVG grammar below.
-          value =
-            if property == "font-size" do
-              case HtmlValidator.parse_css_number(value) do
-                {_, ""} -> value <> "px"
-                _ -> value
+    with :ok <- SvgFilterValidator.validate_source_attributes(node.tag, attributes) do
+      Enum.reduce_while(node.attributes, {:ok, []}, fn {property, value}, {:ok, declarations} ->
+        property =
+          if (property == "gradientTransform" and node.tag in ~w(linearGradient radialGradient)) or
+               (property == "patternTransform" and node.tag == "pattern"),
+             do: "transform",
+             else: property
+
+        if presentation_property?(node, property) do
+          if String.contains?(value, "!") do
+            {:halt, invalid(property, "presentation attributes cannot contain !important")}
+          else
+            # Geometry presentation attributes accept unitless SVG user units.
+            # Their canonical representation is handled by the SVG grammar below.
+            value =
+              if property == "font-size" do
+                case HtmlValidator.parse_css_number(value) do
+                  {_, ""} -> value <> "px"
+                  _ -> value
+                end
+              else
+                value
               end
-            else
-              value
-            end
 
-          {:cont, {:ok, [{property, value} | declarations]}}
+            {:cont, {:ok, [{property, value} | declarations]}}
+          end
+        else
+          {:cont, {:ok, declarations}}
         end
-      else
-        {:cont, {:ok, declarations}}
-      end
-    end)
+      end)
+    end
   end
 
   @doc false
   @spec apply(map(), String.t(), String.t()) ::
           {:ok, map()} | :unhandled | {:error, {atom(), map()}}
   def apply(style, property, value) do
-    key = Map.get(@properties, property)
+    if property == "marker" do
+      # CSS marker is a shorthand for the three inherited vertex properties.
+      # Reuse their canonical declaration rules, including CSS-wide keywords.
+      Enum.reduce_while(~w(marker-start marker-mid marker-end), {:ok, style}, fn longhand,
+                                                                                 {:ok, style} ->
+        case __MODULE__.apply(style, longhand, value) do
+          {:ok, style} ->
+            style =
+              Map.update(
+                style,
+                :_svg_specified,
+                %{longhand => value},
+                &Map.put(&1, longhand, value)
+              )
 
-    if key do
-      normalized = String.trim(value)
-      initial = Map.get(defaults(%{}), key, :auto)
+            {:cont, {:ok, style}}
 
-      parsed =
-        case normalized do
-          "initial" ->
-            {:ok, initial}
-
-          "inherit" ->
-            {:ok, Map.get(style._svg_inherited, key, initial)}
-
-          "unset" ->
-            {:ok,
-             if(Map.has_key?(@inherited, key),
-               do: Map.get(style._svg_inherited, key, initial),
-               else: initial
-             )}
-
-          _ ->
-            parse(property, normalized)
+          failure ->
+            {:halt, failure}
         end
-
-      case parsed do
-        {:ok, parsed} -> {:ok, Map.put(style, key, parsed)}
-        :error -> invalid(property, "invalid SVG property value #{inspect(value)}")
-      end
+      end)
     else
-      :unhandled
+      key = Map.get(@properties, property)
+
+      if key do
+        normalized = String.trim(value)
+        initial = Map.get(defaults(%{}), key, :auto)
+
+        parsed =
+          case normalized do
+            "initial" ->
+              {:ok, initial}
+
+            "inherit" ->
+              {:ok, Map.get(style._svg_inherited, key, initial)}
+
+            "unset" ->
+              {:ok,
+               if(Map.has_key?(@inherited, key),
+                 do: Map.get(style._svg_inherited, key, initial),
+                 else: initial
+               )}
+
+            _ ->
+              parse(property, normalized)
+          end
+
+        case parsed do
+          {:ok, parsed} -> {:ok, Map.put(style, key, parsed)}
+          :error -> invalid(property, "invalid SVG property value #{inspect(value)}")
+        end
+      else
+        :unhandled
+      end
     end
   end
 
@@ -220,6 +250,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
   @spec parse(String.t(), term()) :: {:ok, term()} | :error
   def parse(property, value) do
     case {property, value} do
+      {"marker", value} ->
+        parse("marker-start", value)
+
       {"text-anchor", value} ->
         if value in ~w(start middle end), do: {:ok, value}, else: :error
 
@@ -261,6 +294,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
           {:ok, {:fragment, id}} -> {:ok, {:paint_server, id}}
           _ -> :error
         end
+
+      {"vector-effect", value} ->
+        if value in ~w(none non-scaling-stroke), do: {:ok, value}, else: :error
 
       {"stroke-linecap", value} ->
         if value in ~w(butt round square), do: {:ok, value}, else: :error
@@ -304,7 +340,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
            else: :error
 
       {"transform", value} ->
-        NativeElixirPdfUtilities.Validators.SvgTransformValidator.parse(value)
+        # The converter parses authored SVG transforms. The host cascade keeps
+        # their source spelling instead of reconstructing a rendering CTM.
+        if is_binary(value), do: {:ok, value}, else: :error
 
       {property, value}
       when property in ~w(fill stroke stop-color flood-color lighting-color) and is_binary(value) ->
@@ -314,6 +352,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
 
           "currentcolor" ->
             {:ok, :current_color}
+
+          context
+          when context in ~w(context-fill context-stroke) and property in ~w(fill stroke) ->
+            {:ok, context}
 
           _ ->
             case HtmlValidator.parse_css_color(value, {0, 0, 0}) do

@@ -93,8 +93,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeArtwork do
           end
         end
 
+      ticks =
+        if style.appearance == :auto and not Map.get(style, :_html_content_skipped, false) do
+          Enum.map(style._range_state.ticks, fn tick ->
+            %{
+              base
+              | type: HtmlValidator.reserve_layout_box(:rect),
+                role: :range_tick,
+                x:
+                  tick_left(
+                    x,
+                    style.border_widths.left + padding.left,
+                    content_width,
+                    tick.position
+                  ),
+                y: y + height / 2 - 8.25,
+                width: 0.75,
+                height: 3.0,
+                border_radius: 0.0,
+                fill_color: style.color
+            }
+            |> Map.put(
+              :range_tick_frame,
+              {style.border_widths.left + padding.left, content_width, tick.position}
+            )
+          end)
+        else
+          []
+        end
+
       Enum.map(
-        parts,
+        parts ++ ticks,
         &Map.put(&1, :range_frame, {&1.x - x, &1.y - y, width, height, thumb_left, thumb_top})
       )
     end
@@ -118,6 +147,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeArtwork do
     thumb_top = PageGeometry.snap_css_pixel(thumb_top)
 
     case box.role do
+      :range_tick ->
+        {content_left, content_width, position} = box.range_tick_frame
+
+        %{
+          box
+          | x: tick_left(frame_x, content_left, content_width, position),
+            y:
+              page_height - Float.floor((page_height - bottom - height / 2 + 5.25) / 0.75) * 0.75 -
+                3.0,
+            width: 0.75,
+            height: 3.0,
+            border_radius: 0.0
+        }
+
       :range_thumb ->
         %{
           box
@@ -151,5 +194,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeArtwork do
           box
         end
     end
+  end
+
+  # ThemePainter stores the side margin in an integer, floors the track size,
+  # then rounds each suggested value. These fixed CSS-pixel rules differ from
+  # snapping the host edges or the floating thumb position.
+  defp tick_left(frame_x, content_left, content_width, position) do
+    side = trunc(Float.ceil((frame_x + content_left) / 0.75) + 7.5)
+    region = Float.floor(content_width / 0.75) - 16
+    Float.floor(side + region * position + 0.5) * 0.75
   end
 end

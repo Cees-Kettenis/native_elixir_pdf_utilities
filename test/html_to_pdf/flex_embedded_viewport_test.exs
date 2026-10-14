@@ -21,7 +21,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FlexEmbeddedViewportTest do
         assert {:ok, dom} = HtmlParser.parse_detailed(html)
         assert {:ok, styled} = Style.compute_detailed(dom, opts, context.image_budget)
         assert {:ok, layout} = Layout.layout(styled, opts)
-        hosts = Enum.filter(layout.boxes, &(Map.get(&1, :role) == :embedded_viewport_host))
+        hosts = embedded_hosts(layout.boxes)
         assert length(hosts) == 5
         assert length(Enum.uniq(Enum.map(hosts, & &1.link_scope))) == 5
 
@@ -59,7 +59,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FlexEmbeddedViewportTest do
         assert {:ok, dom} = HtmlParser.parse_detailed(html)
         assert {:ok, styled} = Style.compute_detailed(dom, opts, context.image_budget)
         assert {:ok, layout} = Layout.layout(styled, opts)
-        hosts = Enum.filter(layout.boxes, &(Map.get(&1, :role) == :embedded_viewport_host))
+        hosts = embedded_hosts(layout.boxes)
         assert length(hosts) == 5
         [default, auto, border_box, first_flex, second_flex] = hosts
 
@@ -89,7 +89,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FlexEmbeddedViewportTest do
       assert {:ok, dom} = HtmlParser.parse_detailed(html)
       assert {:ok, styled} = Style.compute_detailed(dom, [], context.image_budget)
       assert {:ok, layout} = Layout.layout(styled, [])
-      [host] = Enum.filter(layout.boxes, &(Map.get(&1, :role) == :embedded_viewport_host))
+      [host] = embedded_hosts(layout.boxes)
       assert_in_delta host.width, 225.0, 0.0001
       assert_in_delta host.height, 112.5, 0.0001
       assert host.transform == {1, 0, 0, 1, host.x, host.y}
@@ -110,5 +110,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FlexEmbeddedViewportTest do
     assert diagnostic.module == NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport
     assert diagnostic.source =~ "missing-flex-child.png"
     assert diagnostic.message != ""
+  end
+
+  # Inline hosts may have an outer overflow clip; inspect their actual owner
+  # without flattening its local child coordinates or losing the clip.
+  defp embedded_hosts(boxes) do
+    Enum.flat_map(boxes, fn box ->
+      case box do
+        %{role: :embedded_viewport_host} ->
+          [box]
+
+        %{type: :drawing_group, boxes: children} ->
+          embedded_hosts(children)
+
+        _ ->
+          []
+      end
+    end)
   end
 end

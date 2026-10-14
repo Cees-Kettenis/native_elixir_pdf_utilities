@@ -1,11 +1,9 @@
 defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
-  alias NativeElixirPdfUtilities.HtmlToPdf.SvgBackend
 
   alias NativeElixirPdfUtilities.Validators.{
     HtmlValidator,
-    SvgBackendValidator,
     SvgStyleValidator,
     SvgViewportValidator
   }
@@ -21,9 +19,35 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
     "image" => ~w(x y width height)
   }
 
+  @doc "Selects the single actual SVG root issued by the document parser."
+  @spec extraction_root(term()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def extraction_root(document) do
+    case document do
+      %{children: children} when is_list(children) ->
+        case Enum.filter(children, &(Map.get(&1, :type) == :element)) do
+          [%{tag: "svg", namespace: :svg} = root] -> {:ok, root}
+          _ -> invalid("SVG extraction requires exactly one complete SVG document", "SVG")
+        end
+
+      _ ->
+        invalid("SVG extraction requires a parsed document", "SVG")
+    end
+  end
+
   @doc false
   @spec validate_node(map()) :: :ok | {:error, {atom(), map()}}
   def validate_node(node) do
+    with :ok <- validate_converter_node(node),
+         :ok <- validate_path_length(node),
+         :ok <- validate_lengths(node),
+         :ok <- validate_points(node),
+         :ok <- validate_path_data(node),
+         do: :ok
+  end
+
+  @doc "Validates source structure and image references without interpreting converter geometry."
+  @spec validate_converter_node(map()) :: :ok | {:error, {atom(), map()}}
+  def validate_converter_node(node) do
     with :ok <-
            NativeElixirPdfUtilities.Validators.ForeignContentValidator.validate_static_input(
              :svg,
@@ -31,35 +55,14 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
              node.attributes
            ),
          :ok <- validate_structure(node) do
-      validate_geometry_node(node)
-    end
-  end
-
-  defp validate_geometry_node(node) do
-    cond do
-      Enum.any?(node.attributes, fn {key, value} ->
-        key in ~w(vector-effect transform-origin pathLength) and
-            value != "none"
-      end) ->
-        unsupported(
-          "SVG effect, vector-effect, transform-origin or pathLength requires its complete geometry/effect implementation",
-          node.tag
-        )
-
-      node.tag not in (@paint_tags ++
-                         NativeElixirPdfUtilities.Validators.SvgFilterValidator.tags()) ->
-        unsupported(
-          "SVG #{node.tag} requires its complete scene, logical content or effect implementation; supported geometry cannot omit it",
-          node.tag
-        )
-
-      true ->
-        with :ok <- validate_lengths(node),
-             :ok <- validate_points(node),
-             :ok <- validate_path(node),
-             :ok <- NativeElixirPdfUtilities.Validators.SvgImageValidator.validate_node(node) do
-          :ok
-        end
+      if node.tag in (@paint_tags ++
+                        NativeElixirPdfUtilities.Validators.SvgFilterValidator.tags()),
+         do: NativeElixirPdfUtilities.Validators.SvgImageValidator.validate_node(node),
+         else:
+           unsupported(
+             "SVG #{node.tag} is not admitted by the supported source policy; unsupported elements cannot be silently omitted",
+             node.tag
+           )
     end
   end
 
@@ -80,6 +83,24 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
     end
   end
 
+  @doc "Admits an existing parsed SVG source tree with common root policy and nonroot syntax validation."
+  @spec validate_source_tree(map()) :: :ok | {:error, {atom(), map()}}
+  def validate_source_tree(root) do
+    Enum.reduce_while(tree_nodes(root), :ok, fn {node, _}, :ok ->
+      result =
+        cond do
+          Map.get(node, :namespace) != :svg -> :ok
+          node == root -> validate_converter_node(node)
+          true -> validate_node(node)
+        end
+
+      case result do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
   @doc false
   @spec validate_document_svg([map()]) :: :ok | {:error, {atom(), map()}}
   def validate_document_svg(nodes) do
@@ -97,7 +118,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
                      )
                  }) do
               {:ok, _} ->
-                NativeElixirPdfUtilities.Validators.SvgTextValidator.validate_original_fonts(node)
+                validate_source_tree(node)
 
               error ->
                 error
@@ -115,6 +136,174 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
         error -> {:halt, error}
       end
     end)
+  end
+
+  # This parses only the path attribute's syntax. Command arities and the two
+  # one-byte arc flags are fixed SVG grammar, not configurable work limits.
+  defp validate_path_data(node) do
+    if node.tag == "path" do
+      case Map.get(node.attributes, "d", "") do
+        value when is_binary(value) ->
+          HtmlValidator.with_render_budget(fn ->
+            HtmlValidator.check_render_resource(:max_svg_path_bytes, byte_size(value), :layout)
+            source = HtmlValidator.trim_ascii_whitespace(value)
+
+            result =
+              if String.downcase(source, :ascii) == "none",
+                do: :ok,
+                else: parse_path_commands(source, nil, true)
+
+            if result == :ok,
+              do: :ok,
+              else:
+                invalid(
+                  "SVG path d requires complete commands beginning with M or m, bounded finite numbers and arc flags 0 or 1",
+                  "path d"
+                )
+          end)
+
+        _ ->
+          invalid("SVG path d requires a path data string", "path d")
+      end
+    else
+      :ok
+    end
+  end
+
+  defp parse_path_commands(source, repeated_command, first?) do
+    source = skip_path_whitespace(source)
+
+    case source do
+      "" ->
+        :ok
+
+      <<command, rest::binary>> when command in ~c"MmZzLlHhVvCcSsQqTtAa" ->
+        cond do
+          first? and command not in ~c"Mm" ->
+            :error
+
+          command in ~c"Zz" ->
+            parse_path_commands(rest, nil, false)
+
+          true ->
+            with {:ok, rest} <- parse_path_arguments(rest, command),
+                 do: parse_path_commands(rest, command, false)
+        end
+
+      _ ->
+        if is_nil(repeated_command) do
+          :error
+        else
+          with {:ok, rest} <- path_argument_separator(source, :optional),
+               {:ok, rest} <- parse_path_arguments(rest, repeated_command),
+               do: parse_path_commands(rest, repeated_command, false)
+        end
+    end
+  end
+
+  defp parse_path_arguments(source, command) do
+    arguments =
+      case command do
+        value when value in ~c"MmLlTt" -> [:number, :number]
+        value when value in ~c"HhVv" -> [:number]
+        value when value in ~c"Cc" -> [:number, :number, :number, :number, :number, :number]
+        value when value in ~c"SsQq" -> [:number, :number, :number, :number]
+        value when value in ~c"Aa" -> [:number, :number, :number, :flag, :flag, :number, :number]
+      end
+
+    arguments
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, source}, fn {kind, index}, {:ok, remaining} ->
+      separator =
+        cond do
+          index == 0 -> :command
+          index == 3 and command in ~c"Aa" -> :required
+          true -> :optional
+        end
+
+      result =
+        with {:ok, remaining} <- path_argument_separator(remaining, separator),
+             do: consume_path_argument(remaining, kind)
+
+      case result do
+        {:ok, remaining} -> {:cont, {:ok, remaining}}
+        :error -> {:halt, :error}
+      end
+    end)
+  end
+
+  defp path_argument_separator(source, requirement) do
+    trimmed = skip_path_whitespace(source)
+
+    case {requirement, trimmed} do
+      {:command, <<",", _rest::binary>>} -> :error
+      {:command, _} -> {:ok, trimmed}
+      {_, <<",", rest::binary>>} -> {:ok, skip_path_whitespace(rest)}
+      {:required, _} when byte_size(source) == byte_size(trimmed) -> :error
+      _ -> {:ok, trimmed}
+    end
+  end
+
+  defp skip_path_whitespace(source) do
+    case source do
+      <<character, rest::binary>> when character in [9, 10, 12, 13, 32] ->
+        skip_path_whitespace(rest)
+
+      _ ->
+        source
+    end
+  end
+
+  defp consume_path_argument(source, kind) do
+    case {kind, source} do
+      {:flag, <<flag, rest::binary>>} when flag in ~c"01" ->
+        {:ok, rest}
+
+      {:number, source} ->
+        case Regex.run(~r/\A[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?/, source,
+               capture: :first
+             ) do
+          [token] ->
+            # Retain the original SVG 1.1 trailing-dot spelling. Only its lexical
+            # token is normalized for the existing canonical numeric parser.
+            normalized = Regex.replace(~r/\.(?=[eE]|$)/, token, ".0")
+
+            case HtmlValidator.parse_css_number(normalized) do
+              {_number, ""} ->
+                {:ok, binary_part(source, byte_size(token), byte_size(source) - byte_size(token))}
+
+              _ ->
+                :error
+            end
+
+          _ ->
+            :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp validate_path_length(node) do
+    case Map.fetch(node.attributes, "pathLength") do
+      :error ->
+        :ok
+
+      {:ok, value} ->
+        case HtmlValidator.parse_css_number(value) do
+          {length, ""} when length >= 0 ->
+            if node.tag in ~w(path rect circle ellipse line polyline polygon),
+              do: :ok,
+              else: invalid("SVG pathLength belongs to geometry", node.tag <> " pathLength")
+
+          _ ->
+            invalid(
+              "SVG pathLength requires a finite nonnegative number",
+              node.tag <> " pathLength"
+            )
+        end
+    end
   end
 
   defp validate_lengths(node) do
@@ -165,84 +354,12 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
     end
   end
 
-  defp validate_path(node) do
-    if node.tag == "path" do
-      with :ok <- SvgBackendValidator.native_load_result(SvgBackend.load_native()) do
-        case NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.validate_path(
-               Map.get(node.attributes, "d", ""),
-               Limits.get(:max_svg_path_segments),
-               Limits.get(:max_css_numeric_magnitude) * 1.0
-             ) do
-          {:ok, count} ->
-            HtmlValidator.reserve_render_resource(:max_svg_path_segments, count, :style)
-
-          {:error, "max_svg_path_segments"} ->
-            Diagnostics.error(
-              :limits,
-              :resource_limit_exceeded,
-              "SVG path exceeds max_svg_path_segments",
-              source: "path d",
-              module: __MODULE__,
-              operation: :prepare
-            )
-
-          {:error, message} ->
-            invalid("SVG path data is invalid: " <> message, "path d")
-        end
-      end
-    else
-      :ok
-    end
-  end
-
   @doc false
   @spec validate_paint_style(map()) :: :ok | {:error, {atom(), map()}}
   def validate_paint_style(style) do
-    cond do
-      Map.get(style, :box_sizing, :content_box) == :border_box or
-          Map.get(style, :border_radius, 0.0) > 0 ->
-        unsupported(
-          "SVG border-box sizing and rounded outer clips require their complete replaced-box composition",
-          "svg box"
-        )
-
-      Map.get(style, :position, :static) == :absolute or
-          Map.get(style, :object_fit, :fill) != :fill ->
-        unsupported(
-          "SVG absolute positioning and object fitting require canonical replaced viewport integration",
-          "svg placement"
-        )
-
-      Map.get(style, :svg_opacity, 1.0) != 1.0 and
-          (Map.get(style, :background_color) != nil or
-             Enum.any?(Map.get(style, :border_styles, %{}), fn {edge, border_style} ->
-               border_style not in [:none, :hidden] and
-                   Map.get(Map.get(style, :border_widths, %{}), edge, 0.0) > 0
-             end)) ->
-        unsupported(
-          "SVG opacity over an outer background/border requires unified scene effects",
-          "svg opacity"
-        )
-
-      Map.get(style, :overflow, :hidden) == :visible ->
-        unsupported(
-          "SVG visible overflow requires expanded ink composition; viewport rasterization cannot omit artwork outside the box",
-          "svg overflow"
-        )
-
-      Map.get(style, :svg_transform, {1.0, 0.0, 0.0, 1.0, 0.0, 0.0}) !=
-          {1.0, 0.0, 0.0, 1.0, 0.0, 0.0} ->
-        unsupported(
-          "outer SVG transforms require affine ink and annotation composition; inner graphics transforms are retained",
-          "svg transform"
-        )
-
-      Map.get(style, :display) not in [:inline, :inline_block, :block, :none] ->
-        unsupported("SVG display requires replaced inline or block formatting", "svg display")
-
-      true ->
-        :ok
-    end
+    if Map.get(style, :display) in [:inline, :inline_block, :block, :none],
+      do: :ok,
+      else: unsupported("SVG display requires replaced inline or block formatting", "svg display")
   end
 
   @doc false
@@ -253,11 +370,15 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
       when is_binary(source) and is_map(attrs) and is_map(style) ->
         with {:ok, _} <- SvgViewportValidator.prepare(attrs, style, %{width: 0.0, height: nil}),
              :ok <- validate_paint_style(style),
-             {:ok, _} <-
+             {:ok, summary} <-
                NativeElixirPdfUtilities.Validators.SvgValidator.validate_processing(source, %{
                  mode: :inline,
                  resources: Map.get(scene, :resources, %{})
-               }) do
+               }),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.SvgConverterValidator.validate_capabilities(
+                 summary
+               ) do
           valid_budget? =
             if is_nil(budget) do
               true
@@ -288,66 +409,21 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
     issued = Map.get(scene, :resource_context)
 
     if is_nil(issued) and is_nil(context) do
-      with {:ok, _ids} <-
-             NativeElixirPdfUtilities.Validators.SvgForeignObjectValidator.validate_slots(
-               Map.get(scene, :foreign_slots, %{})
-             ),
-           do: :ok
+      :ok
     else
       with :ok <- NativeElixirPdfUtilities.Validators.ResourceValidator.validate_context(issued),
            :ok <- NativeElixirPdfUtilities.Validators.ResourceValidator.validate_context(context) do
         if issued.document_id == context.document_id and
-             issued.tree_scope_id == context.tree_scope_id and issued.image_budget == scene.budget do
-          with {:ok, _ids} <-
-                 NativeElixirPdfUtilities.Validators.SvgForeignObjectValidator.validate_slots(
-                   Map.get(scene, :foreign_slots, %{})
-                 ) do
-            Enum.reduce_while(Map.get(scene, :foreign_slots, %{}), :ok, fn {_id, slot}, :ok ->
-              if slot.context.scope == context.scope and
-                   slot.context.authorization_root == context.authorization_root and
-                   slot.context.image_budget == scene.budget do
-                {:cont, :ok}
-              else
-                {:halt,
-                 invalid(
-                   "SVG HTML slot requires its scene permission scope and shared image budget",
-                   "foreignObject"
-                 )}
-              end
-            end)
-          end
-        else
-          invalid(
-            "SVG paint requires its issued source document scope and shared image budget",
-            "SVG"
-          )
-        end
+             issued.tree_scope_id == context.tree_scope_id and
+             issued.image_budget == scene.budget,
+           do: :ok,
+           else:
+             invalid(
+               "SVG paint requires its issued source document scope and shared image budget",
+               "SVG"
+             )
       end
     end
-  end
-
-  defp reserve_foreign_paint_hit(painted) do
-    Enum.reduce_while(painted.html_placements, :ok, fn placement, :ok ->
-      HtmlValidator.reserve_render_resource(:max_layout_boxes, 1, :layout)
-
-      with {:ok, group} <-
-             NativeElixirPdfUtilities.Validators.SvgForeignObjectValidator.layout_slot(placement),
-           {:ok, _, _, _} <-
-             NativeElixirPdfUtilities.HtmlToPdf.PdfWriter.appearance_objects(
-               [%{size: {placement.width, placement.height}, boxes: [group]}],
-               1
-             ),
-           {:ok, _links} <-
-             NativeElixirPdfUtilities.Validators.SvgFormSlotValidator.prepare_links(
-               [Map.put(placement, :group, group)],
-               painted.viewport.width,
-               painted.viewport.height
-             ) do
-        {:cont, :ok}
-      else
-        error -> {:halt, error}
-      end
-    end)
   end
 
   @doc false
@@ -359,59 +435,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
       if viewport.paint? and Map.get(scene.style, :display) != :none and match?({:ok, _}, result) do
         scale = Limits.get(:svg_raster_scale)
 
-        dimensions = [
-          width: max(ceil(viewport.width / 0.75 * scale), 1),
-          height: max(ceil(viewport.height / 0.75 * scale), 1)
-        ]
-
-        source =
-          String.replace(
-            scene.source,
-            "<svg ",
-            "<svg width=\"#{viewport.width / 0.75}\" height=\"#{viewport.height / 0.75}\" ",
-            global: false
-          )
-
-        context = %{
-          mode: :inline,
-          fonts: scene.selected_fonts,
-          resources: Map.get(scene, :resources, %{})
-        }
-
-        if map_size(Map.get(scene, :foreign_slots, %{})) > 0 do
-          with :ok <-
-                 validate_paint_scope(
-                   scene,
-                   NativeElixirPdfUtilities.HtmlToPdf.ResourceContext.current()
-                 ),
-               {:ok, _} <-
-                 SvgBackendValidator.prepare_vector(source, dimensions, context, scene.budget),
-               {:ok, painted} <- result,
-               :ok <- reserve_foreign_paint_hit(painted),
-               {:ok, _} <-
-                 NativeElixirPdfUtilities.Validators.SvgFormValidator.prepare_source(
-                   painted.image.data
-                 ) do
-            :ok
-          end
-        else
-          with {:ok, _} <- SvgBackendValidator.prepare(source, dimensions, context, scene.budget) do
-            case result do
-              {:ok, %{image: nil}} ->
-                :ok
-
-              _ ->
-                with {:ok, _} <-
-                       SvgBackendValidator.prepare_vector(
-                         source,
-                         dimensions,
-                         context,
-                         scene.budget
-                       ),
-                     do: :ok
-            end
-          end
-        end
+        NativeElixirPdfUtilities.Validators.SvgValidator.validate_raster_dimensions(
+          max(ceil(viewport.width / 0.75 * scale), 1),
+          max(ceil(viewport.height / 0.75 * scale), 1),
+          scene.budget
+        )
       else
         :ok
       end
@@ -421,7 +449,18 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
   @doc false
   @spec summary_tree(map()) :: map()
   def summary_tree(summary) do
-    nodes = Map.new(summary.geometry, &{&1.svg_index, &1})
+    nodes =
+      if summary.geometry == [] do
+        # Every processing mode already retains these authentic parsed nodes.
+        # Semantic resource checks need their source tree even when image mode
+        # has no inline geometry transport. Reuse the original hierarchy.
+        Map.new(summary.source_nodes, fn node ->
+          {node.index, node |> Map.put(:type, :element) |> Map.put(:svg_index, node.index)}
+        end)
+      else
+        Map.new(summary.geometry, &{&1.svg_index, &1})
+      end
+
     rebuild(1, nodes, summary.graph)
   end
 

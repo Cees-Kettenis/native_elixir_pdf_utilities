@@ -131,7 +131,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarViewportTest do
     end)
   end
 
-  test "viewport preparation rejects malformed descriptors and percentage sizing cycles" do
+  test "viewport preparation rejects malformed descriptors and stabilizes percentage reflow" do
     assert {:error, {:invalid_layout, %{operation: :style_viewport, message: message}}} =
              EmbeddedViewport.style_viewport(%{}, 90, 45)
 
@@ -145,11 +145,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarViewportTest do
                  parent
                )
 
-      assert {:error,
-              {:not_implemented, %{operation: :layout_embedded_viewport, message: message}}} =
-               EmbeddedViewport.layout(prepared, 90, 45)
-
-      assert message =~ "cycles"
+      assert {:ok, outer} = EmbeddedViewport.layout(prepared, 90, 45)
+      [client, ui] = outer.boxes
+      assert client.client_rect == %{x: 0.0, y: 0.0, width: 78.75, height: 45.0}
+      assert Enum.any?(ui.boxes, &(&1.role == :scrollbar))
+      assert client.clip == %{x: 0.0, y: 0.0, width: 78.75, height: 45.0}
       assert ResourceContext.current() == parent
     end)
   end
@@ -201,7 +201,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarViewportTest do
         assert {:ok, layout} = Layout.layout(tree, page_size: {180, 120}, margin: 0)
 
         [first, second] =
-          Enum.filter(layout.boxes, &(Map.get(&1, :role) == :embedded_viewport_host))
+          embedded_hosts(layout.boxes)
+
+        assert Enum.all?(layout.boxes, &(&1.role == :overflow_clip))
+
+        for host <- [first, second] do
+          assert host.transform == {1, 0, 0, 1, host.x, host.y}
+          assert host.clip == %{x: 0.0, y: 0.0, width: 22.5, height: host.height}
+          assert host.client_rect == host.clip
+          assert host.boxes == []
+        end
+
+        assert {first.width, first.height, second.width, second.height} ==
+                 {22.5, 45.0, 22.5, 7.5}
 
         if alignment == "top",
           do: assert_in_delta(first.y + first.height, second.y + second.height, 0.0001),
@@ -210,7 +222,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarViewportTest do
     end
   end
 
-  test "scrollbar cycles diagnose and empty artwork stays empty" do
+  test "newly appearing scrollbars freeze and empty artwork stays empty" do
     surface = %{host: :iframe, tree: %{children: []}}
     initial = EmbeddedViewportValidator.initial_viewport(surface, 90, 45)
 
@@ -230,13 +242,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarViewportTest do
         seen: MapSet.new([{false, false}, {false, true}])
     }
 
-    assert {:error, {:not_implemented, diagnostic}} =
+    assert {:relayout, next} =
              EmbeddedViewportValidator.prepare_scroll_geometry(layout, surface, 90, 45, previous)
 
-    assert diagnostic.operation == :layout_embedded_viewport
-    assert diagnostic.source == "iframe" and diagnostic.message =~ "cycles"
+    assert next.vertical and next.client_width == 78.75
+    assert next.frozen_scrollbars == MapSet.new([:vertical])
+    fits = %{layout | page_size: {78.75, 45}, content_width: 78.75, boxes: []}
+
+    assert {:paint, stable} =
+             EmbeddedViewportValidator.prepare_scroll_geometry(fits, surface, 90, 45, next)
+
+    assert stable.vertical and stable.client_width == 78.75
     empty = EmbeddedViewportValidator.initial_viewport(%{host: :surface}, 90, 45)
     assert EmbeddedViewportValidator.prepare_scrollbar_parts(empty) == {:ok, []}
     assert ScrollbarPainter.paint([]) == []
+  end
+
+  defp embedded_hosts(boxes) do
+    Enum.flat_map(boxes, fn box ->
+      case box do
+        %{role: :embedded_viewport_host} -> [box]
+        %{type: :drawing_group, boxes: children} -> embedded_hosts(children)
+        _ -> []
+      end
+    end)
   end
 end

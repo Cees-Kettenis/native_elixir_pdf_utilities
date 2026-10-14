@@ -1,0 +1,110 @@
+[
+  {
+    "module": "NativeElixirPdfUtilities.Validators.SvgSceneValidator",
+    "percent": 65.49
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.SvgDocumentViewportValidator",
+    "percent": 83.33
+  },
+  {
+    "module": "NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer",
+    "percent": 86.67
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.SvgImageValidator",
+    "percent": 93.28
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.SvgConverterValidator",
+    "percent": 94.08
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.SvgStyleValidator",
+    "percent": 94.4
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.FormValidator",
+    "percent": 95.58
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.PngValidator",
+    "percent": 96.4
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.EmbeddedFormValidator",
+    "percent": 96.48
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.WriterValidator",
+    "percent": 96.51
+  },
+  {
+    "module": "NativeElixirPdfUtilities.HtmlToPdf.Pagination",
+    "percent": 96.6
+  },
+  {
+    "module": "NativeElixirPdfUtilities.HtmlToPdf.FormValueBackend",
+    "percent": 96.77
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.CssSizingValidator",
+    "percent": 96.94
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.TemplateExecutionValidator",
+    "percent": 97.49
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.SourceSizeValidator",
+    "percent": 97.5
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.SvgDocumentImageValidator",
+    "percent": 97.78
+  },
+  {
+    "module": "NativeElixirPdfUtilities.HtmlToPdf.SvgScene",
+    "percent": 97.8
+  },
+  {
+    "module": "NativeElixirPdfUtilities.HtmlToPdf.Layout",
+    "percent": 97.99
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator",
+    "percent": 98.49
+  },
+  {
+    "module": "NativeElixirPdfUtilities.HtmlToPdf.FontFallback",
+    "percent": 98.63
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.ResponsiveImageValidator",
+    "percent": 99.0
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Pdf.FormWriter",
+    "percent": 99.17
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.FontValidator",
+    "percent": 99.24
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.SvgValidator",
+    "percent": 99.43
+  },
+  {
+    "module": "NativeElixirPdfUtilities.HtmlToPdf.Style",
+    "percent": 99.43
+  },
+  {
+    "module": "NativeElixirPdfUtilities.HtmlToPdf.PdfWriter",
+    "percent": 99.67
+  },
+  {
+    "module": "NativeElixirPdfUtilities.Validators.CssTransformValidator",
+    "percent": 99.77
+  }
+]

@@ -774,6 +774,109 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
     end
   end
 
+  test "real inherited font sizes resolve em dimensions and nested minimum values canonically" do
+    html =
+      "<body style='font-size:20pt'><p style='width:2em'>Inherited</p><div style='font-size:10pt;width:min(2em,30pt);height:3em'>Own size</div></body>"
+
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    assert {:ok, _, contexts} = collect(dom)
+    {_, nil, %{style: first}} = Enum.find(contexts, fn {node, _, _} -> node.tag == "p" end)
+    {_, nil, %{style: own}} = Enum.find(contexts, fn {node, _, _} -> node.tag == "div" end)
+    assert first.width == 40.0
+    assert own.width == {:min, [20.0, 30.0]} and own.height == 30.0
+    assert {:ok, result, _} = collect(dom, [".absent{width:2em}"])
+
+    pending =
+      Enum.find(
+        result.source_obligations.declaration_contexts,
+        &(&1.declaration == {"width", "2em"} and &1.origin == {:stylesheet, 0})
+      )
+
+    assert pending.status == :checked_symbolically and pending.contexts == []
+    assert pending.source_value.length.geometry.units == ["em"]
+  end
+
+  test "unmatched, inactive and detached literal checks retain source owners without inventing elements" do
+    html =
+      "<style>.absent{width:3px;display:none;border-style:solid}@media screen{p{height:4pt}}</style><template><style>.absent{padding:2px}</style><p style='width:5px'>Inert</p></template><p>Active</p>"
+
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    assert {:ok, result, _} = collect(dom)
+    records = result.source_obligations.declaration_contexts
+
+    for text <- [
+          "width:3px",
+          "display:none",
+          "border-style:solid",
+          "height:4pt",
+          "padding:2px",
+          "width:5px"
+        ] do
+      record = Enum.find(records, &(&1.source.text == text))
+      assert record.status == :checked_without_element_context
+      assert record.contexts == []
+      refute Map.has_key?(record, :reason)
+      assert record.source.provenance == :original_html
+      assert is_reference(record.source.owner.node_id)
+      assert binary_part(html, record.source.offset, record.source.length) == text
+      refute Map.has_key?(record, :style)
+      refute Map.has_key?(record, :font)
+    end
+  end
+
+  test "unapplied values retain symbolic types and dependencies without computed element contexts" do
+    css =
+      ".absent{width:2rem;height:3em;min-width:50%;max-width:min(2px,3px);padding:var(--x);font-family:Missing;background-image:url(missing.png);--x:2px;margin:inherit}"
+
+    assert {:ok, dom} = HtmlParser.parse_document_detailed("<p>Active</p>")
+    assert {:ok, result, _} = collect(dom, [css])
+    records = result.source_obligations.declaration_contexts
+    assert length(records) == 9
+    assert Enum.all?(records, &(&1.status == :checked_symbolically))
+
+    assert Enum.all?(
+             records,
+             &(&1.selection == %{kind: :unapplied_stylesheet, basis: :unmatched_original_context} and
+                 &1.contexts == [])
+           )
+
+    assert Enum.all?(records, &(&1.source.provenance == :unbound and &1.source.owner == nil))
+    assert Enum.all?(records, &(not Map.has_key?(&1, :style) and not Map.has_key?(&1, :font)))
+    width = Enum.find(records, &(&1.source.text == "width:2rem"))
+    assert width.source_value.length.geometry == %{units: ["rem"], percentage?: false}
+    variable = Enum.find(records, &(&1.source.text == "padding:var(--x)"))
+    assert variable.source_value.kind == :substitution_tokens
+    assert variable.source_value.variables == ["--x"]
+  end
+
+  test "invalid inactive literal fails against its exact original location" do
+    html = "<style>/*🙂*/\r\n@media screen{.absent{width : bananas}}</style><p>Active</p>"
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    assert {:error, {:invalid_css, diagnostic}} = collect(dom)
+    assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
+    assert diagnostic.operation == :source_style_contexts
+    assert diagnostic.source == "width : bananas"
+    assert diagnostic.line == 2 and diagnostic.column == 23
+    assert diagnostic.module == CssValueValidator
+    assert diagnostic.message =~ "authored literal declaration"
+  end
+
+  test "unmatched literals consume the supplied CSS budget and enclosing render work" do
+    assert {:ok, dom} = HtmlParser.parse_document_detailed("<p>Active</p>")
+    budget = HtmlValidator.new_css_budget()
+    assert {:ok, result, _} = collect(dom, [".absent{width:3px}"], budget)
+    assert [literal] = result.source_obligations.declaration_contexts
+    assert literal.status == :checked_without_element_context
+    used = :atomics.get(budget, 1)
+    assert used == byte_size("3px")
+    Limits.install(Map.put(Limits.effective(), :max_css_variable_total_bytes, used))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             collect(dom, [".absent{width:3px}"], budget)
+
+    assert diagnostic.message =~ "max_css_variable_total_bytes"
+  end
+
   test "each authored declaration retains the original contexts that completed shared validation" do
     html = "<div style='--x:5pt'><p style='width:var(--x)'>A</p><p>B</p></div>"
     css = "p{color:red;color:blue}p::before{content:'Before'}.missing{width:var(--missing)}"
@@ -796,7 +899,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
                :checked_in_original_context,
                :checked_in_original_context,
                :checked_in_original_context,
-               :unresolved
+               :checked_symbolically
              ]
 
       [first, overwritten, pseudo, missing] = records
@@ -804,7 +907,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
       assert first.contexts |> Enum.map(& &1.owner.node_id) |> Enum.uniq() |> length() == 2
       assert Enum.all?(first.contexts, &(&1.pseudo == nil and &1.tag == "p"))
       assert length(pseudo.contexts) == 2 and Enum.all?(pseudo.contexts, &(&1.pseudo == :before))
-      assert missing.reason == :unmatched_original_context and missing.contexts == []
+
+      assert missing.selection == %{
+               kind: :unapplied_stylesheet,
+               basis: :unmatched_original_context
+             }
+
+      assert missing.contexts == [] and missing.source_value.variables == ["--missing"]
       assert first.source.provenance == :unbound and first.source.owner == nil
     end
 
@@ -839,15 +948,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
     obligations = result.source_obligations.declaration_contexts
     assert length(obligations) == 6
     unresolved = Enum.filter(obligations, &(&1.status == :unresolved))
-    assert length(unresolved) == 5
+    assert length(unresolved) == 3
 
     assert Enum.map(unresolved, & &1.reason) == [
-             :inactive_media,
-             :inapplicable_stylesheet,
              :template_insertion_context,
              :template_insertion_context,
              :template_insertion_context
            ]
+
+    symbolic = Enum.filter(obligations, &(&1.status == :checked_symbolically))
+    assert Enum.map(symbolic, & &1.selection.basis) == [:inactive_media, :inapplicable_stylesheet]
+    assert Enum.all?(symbolic, &(&1.contexts == [] and &1.source_value.variables == ["--screen"]))
 
     assert Enum.all?(unresolved, &(&1.contexts == []))
     assert result.source_obligations.template_insertion_contexts == :unresolved

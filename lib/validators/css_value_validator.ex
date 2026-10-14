@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.CssReferenceValidator
   alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
   alias NativeElixirPdfUtilities.Validators.SvgStyleValidator
 
@@ -19,6 +20,32 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     :inset,
     :outset
   ]
+  @source_wide_keywords ~w(inherit initial unset revert revert-layer)
+  @source_layout_properties ~w(width height min-width max-width min-height max-height
+          margin padding border-width border-style border-radius border-spacing
+          text-align text-transform white-space word-break word-wrap overflow-wrap line-break
+          break-before page-break-before break-after page-break-after break-inside page-break-inside
+          content-visibility resize appearance display box-sizing position z-index object-fit overflow aspect-ratio
+          border-collapse caption-side table-layout flex-direction flex-wrap gap row-gap column-gap
+          justify-content align-items align-self justify-self justify-items align-content order
+          flex-grow flex-shrink flex-basis flex grid-column grid-row grid-column-start grid-column-end
+          grid-row-start grid-row-end grid-area)
+  @source_margin_properties ~w(margin-top margin-right margin-bottom margin-left)
+  @source_padding_properties ~w(padding-top padding-right padding-bottom padding-left)
+  @source_border_width_properties ~w(border-top-width border-right-width border-bottom-width border-left-width)
+  @source_edge_properties @source_margin_properties ++
+                            @source_padding_properties ++ @source_border_width_properties
+  @source_position_properties ~w(object-position background-position)
+  @source_color_properties ~w(color background-color background)
+  @source_remaining_properties ~w(accent-color border-color border-top-color border-right-color border-bottom-color border-left-color text-decoration-color letter-spacing line-height vertical-align font-weight font-style text-decoration text-decoration-line text-decoration-style text-decoration-thickness background-size background-repeat border border-top border-right border-bottom border-left top right bottom left quotes content counter-reset counter-increment list-style list-style-type list-style-position grid-template-columns grid-template-rows)
+  @source_scalar_properties ~w(background-repeat font-weight font-style quotes content counter-reset counter-increment list-style list-style-type list-style-position)
+  @source_decoration_properties ~w(text-decoration text-decoration-line text-decoration-style text-decoration-thickness text-decoration-color)
+  @source_symbolic_properties @source_layout_properties ++
+                                @source_edge_properties ++
+                                @source_position_properties ++
+                                @source_color_properties ++
+                                @source_remaining_properties ++
+                                ~w(font-size font-family background-image list-style-image)
   @medium_border_width 2.25
   @doc false
   @spec custom_property_declaration?(term()) :: boolean()
@@ -61,7 +88,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
     case normalized do
       {"--" <> _ = property, value} ->
-        validate_resolved(style, property, value)
+        with {:ok, _references} <- HtmlValidator.parse_css_variable_references(value),
+             do: validate_resolved(style, property, value)
 
       {property, value} ->
         with {:ok, value} <-
@@ -81,6 +109,332 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
       nil ->
         {:error, :invalid_document}
     end
+  end
+
+  @doc """
+  Checks an authored literal whose value policy needs no element or inherited style.
+
+  Lengths and ordinary box/layout keywords use the same resolved-value validator
+  as an actual cascade, with an empty result accumulator. No default color,
+  font, element, custom property, resource or source owner is supplied. Relative
+  units, percentages, functions, inherited keywords and properties requiring
+  other execution context remain pending. The invocation's CSS and render budgets
+  accumulate the real source and validation work. Success grants no resource or
+  replacement authority and does not stand for an element cascade check.
+  """
+  @spec validate_source_literal(map(), :atomics.atomics_ref()) ::
+          :ok | :requires_element_context | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_source_literal(record, budget) do
+    HtmlValidator.with_render_budget(fn ->
+      {property, value} =
+        case record.declaration do
+          {property, value} -> {property, value}
+          {property, value, :important} -> {property, value}
+        end
+
+      HtmlValidator.reserve_render_resource(:max_css_work, 4 * byte_size(value) + 1, :css)
+      tokens = HtmlValidator.split_css_tokens(String.downcase(value, :ascii))
+
+      requires_context? =
+        property not in (@source_layout_properties ++
+                           @source_margin_properties ++
+                           @source_padding_properties) or
+          String.contains?(value, ["(", "%"]) or
+          Enum.any?(tokens, fn token ->
+            token in (@source_wide_keywords ++ ~w(currentcolor math math-auto)) or
+              case HtmlValidator.parse_css_number(token) do
+                {_number, unit} ->
+                  unit in ~w(em rem ex rex ch rch cap rcap ic ric lh rlh vw vh vi vb vmin vmax
+                    svw svh svi svb svmin svmax lvw lvh lvi lvb lvmin lvmax
+                    dvw dvh dvi dvb dvmin dvmax cqw cqh cqi cqb cqmin cqmax)
+
+                _ ->
+                  false
+              end
+          end)
+
+      if requires_context? do
+        :requires_element_context
+      else
+        case validate_declaration(%{}, record, budget) do
+          {:ok, _literal_result} ->
+            :ok
+
+          {:error, {_reason, _diagnostic}} = error ->
+            error
+
+          _ ->
+            Diagnostics.error(
+              :css,
+              :invalid_css,
+              "line #{record.source.line}: authored literal declaration is invalid or unsupported",
+              module: __MODULE__,
+              operation: :source_style_contexts,
+              source: record.source.text,
+              line: record.source.line,
+              column: record.source.column
+            )
+        end
+      end
+    end)
+  end
+
+  @doc """
+  Prepares an unapplied stylesheet value using shared source grammar and static URL policy.
+
+  The result retains symbolic units, percentage and variable dependencies. It is
+  never a computed style, measured geometry, font selection or resource permission.
+  Only the source collector's actual original print selection decides that this
+  declaration has no applicable element. Applied values still use the real cascade.
+  """
+  @spec prepare_unapplied_declaration(map(), :atomics.atomics_ref()) ::
+          {:ok, map()} | :requires_element_context | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_unapplied_declaration(record, budget) do
+    HtmlValidator.with_render_budget(fn ->
+      {property, value} =
+        case record.declaration do
+          {property, value} -> {property, value}
+          {property, value, :important} -> {property, value}
+        end
+
+      prepared =
+        with {:ok, variables} <- HtmlValidator.prepare_css_variable_source(value, budget),
+             {:ok, references} <- CssReferenceValidator.scan(value) do
+          dependencies = Enum.flat_map(variables, & &1.dependencies) |> Enum.uniq()
+          tokens = %{value: value, variables: dependencies, references: references}
+
+          cond do
+            property in @source_symbolic_properties and
+                String.downcase(value, :ascii) in @source_wide_keywords ->
+              {:ok,
+               Map.merge(tokens, %{kind: :cascade_keyword, dependencies: [:cascade_context]})}
+
+            custom_property_declaration?(record) ->
+              {:ok, Map.put(tokens, :kind, :custom_property_tokens)}
+
+            variables != [] and
+                property in @source_symbolic_properties ->
+              {:ok, Map.put(tokens, :kind, :substitution_tokens)}
+
+            property in ~w(width height min-width max-width min-height max-height font-size) ->
+              case HtmlValidator.prepare_css_length_source(value) do
+                {:ok, length} ->
+                  {:ok, Map.merge(tokens, %{kind: :length_percentage, length: length})}
+
+                :error ->
+                  if property == "font-size" and
+                       String.downcase(value, :ascii) in ["math", "inherit"],
+                     do:
+                       {:ok,
+                        Map.merge(tokens, %{kind: :font_keyword, dependencies: [:inherited_font]})},
+                     else: :error
+
+                error ->
+                  error
+              end
+
+            property in ~w(margin padding border-radius) ->
+              context = if property == "margin", do: :margin, else: :nonnegative
+
+              with {:ok, edges} <- HtmlValidator.parse_css_box_lengths(value, {:source, context}),
+                   do: {:ok, Map.merge(tokens, %{kind: :box_lengths, edges: edges})}
+
+            property in ["border-width" | @source_border_width_properties] ->
+              parser = fn token ->
+                case parse_border_width(token) do
+                  {:ok, _} = parsed -> parsed
+                  _ -> HtmlValidator.prepare_css_length_source(token, :length)
+                end
+              end
+
+              if property == "border-width" do
+                with {:ok, widths} <- parse_border_widths(value, parser),
+                     do: {:ok, Map.merge(tokens, %{kind: :box_lengths, edges: widths})}
+              else
+                with {:ok, width} <- parser.(value),
+                     do: {:ok, Map.merge(tokens, %{kind: :edge_length, length: width})}
+              end
+
+            property in (@source_margin_properties ++ @source_padding_properties) ->
+              context = if property in @source_margin_properties, do: :margin, else: :nonnegative
+
+              with {:ok, length} <- HtmlValidator.prepare_css_length_source(value, context),
+                   do: {:ok, Map.merge(tokens, %{kind: :edge_length, length: length})}
+
+            property in ~w(gap row-gap column-gap border-spacing flex-basis) ->
+              context = if property == "border-spacing", do: :length, else: :nonnegative
+              parser = &HtmlValidator.prepare_css_length_source(&1, context)
+
+              parsed =
+                case property do
+                  property when property in ["gap", "border-spacing"] ->
+                    with {:ok, first, second} <- parse_gap(value, parser),
+                         do: {:ok, {first, second}}
+
+                  _ ->
+                    parser.(value)
+                end
+
+              with {:ok, lengths} <- parsed,
+                   do: {:ok, Map.merge(tokens, %{kind: :layout_lengths, lengths: lengths})}
+
+            property in @source_position_properties ->
+              with {:ok, axes} <-
+                     parse_two_axis_position(value, nil, property == "background-position"),
+                   do: {:ok, Map.merge(tokens, %{kind: :image_position, axes: axes})}
+
+            property in ~w(background-image list-style-image font-family) ->
+              with {:ok, _} <- validate_declaration(%{}, record, budget),
+                   do:
+                     {:ok,
+                      Map.put(
+                        tokens,
+                        :kind,
+                        if(property == "font-family", do: :font_family, else: :resource_reference)
+                      )}
+
+            property == "flex" ->
+              with {:ok, specified} <-
+                     put_flex(%{}, value, &HtmlValidator.prepare_css_length_source/1),
+                   do: {:ok, Map.merge(tokens, %{kind: :flex, properties: specified})}
+
+            property == "display" ->
+              with {:ok, display} <- MathLayoutValidator.parse_display(value),
+                   do: {:ok, Map.merge(tokens, %{kind: :math_display, display: display})}
+
+            property in @source_scalar_properties ->
+              with {:ok, specified} <- validate_declaration(%{}, record, budget),
+                   do: {:ok, Map.merge(tokens, %{kind: :specified_tokens, properties: specified})}
+
+            property in @source_decoration_properties ->
+              with {:ok, decoration} <-
+                     HtmlValidator.parse_css_text_decoration(property, value, nil, nil),
+                   do: {:ok, Map.merge(tokens, %{kind: :decoration, properties: decoration})}
+
+            property in ~w(border border-top border-right border-bottom border-left) ->
+              parser = fn token ->
+                case parse_border_width(token) do
+                  {:ok, _} = parsed -> parsed
+                  _ -> HtmlValidator.prepare_css_length_source(token, :length)
+                end
+              end
+
+              with {:ok, widths, color, styles} <-
+                     parse_border(value, :current_color, parser, &parse_source_color/1),
+                   do:
+                     {:ok,
+                      Map.merge(tokens, %{
+                        kind: :border,
+                        widths: widths,
+                        color: color,
+                        styles: styles
+                      })}
+
+            property == "border-color" ->
+              with {:ok, colors} <- parse_border_colors(value, nil, &parse_source_color/1),
+                   do: {:ok, Map.merge(tokens, %{kind: :edge_colors, colors: colors})}
+
+            property in ~w(border-top-color border-right-color border-bottom-color border-left-color) ->
+              with {:ok, color} <- parse_source_color(value),
+                   do: {:ok, Map.merge(tokens, %{kind: :color, color: color})}
+
+            property == "accent-color" ->
+              parsed =
+                case HtmlValidator.parse_css_accent_color(value, nil) do
+                  :error -> parse_source_color(value)
+                  parsed -> parsed
+                end
+
+              with {:ok, color} <- parsed,
+                   do: {:ok, Map.merge(tokens, %{kind: :color, color: color})}
+
+            property == "background-size" ->
+              with {:ok, size} <-
+                     parse_background_size(value, &HtmlValidator.prepare_css_length_source/1),
+                   do: {:ok, Map.merge(tokens, %{kind: :background_size, size: size})}
+
+            property in ~w(grid-template-columns grid-template-rows) ->
+              with {:ok, tracks} <-
+                     parse_grid_tracks(
+                       value,
+                       &HtmlValidator.prepare_css_length_source(&1, :length)
+                     ),
+                   do: {:ok, Map.merge(tokens, %{kind: :grid_tracks, tracks: tracks})}
+
+            property == "line-height" ->
+              with {:ok, height} <-
+                     parse_line_height(value, &HtmlValidator.prepare_css_length_source/1),
+                   do: {:ok, Map.merge(tokens, %{kind: :line_height, height: height})}
+
+            property == "letter-spacing" ->
+              with {:ok, spacing} <- parse_letter_spacing(value, :source),
+                   do: {:ok, Map.merge(tokens, %{kind: :letter_spacing, spacing: spacing})}
+
+            property == "vertical-align" ->
+              with {:ok, align} <- HtmlValidator.parse_vertical_align(value, :source),
+                   do: {:ok, Map.merge(tokens, %{kind: :vertical_align, align: align})}
+
+            property in ~w(top right bottom left) ->
+              with {:ok, offset} <- parse_position_offset(value),
+                   do: {:ok, Map.merge(tokens, %{kind: :position_offset, offset: offset})}
+
+            property in @source_color_properties ->
+              parsed =
+                if property == "background" do
+                  case HtmlValidator.parse_css_background_color(value, nil) do
+                    :error -> parse_source_color(value)
+                    parsed -> parsed
+                  end
+                else
+                  parse_source_color(value)
+                end
+
+              with {:ok, color} <- parsed,
+                   do:
+                     {:ok,
+                      Map.merge(tokens, %{
+                        kind: :color,
+                        color: color,
+                        dependencies:
+                          if(color == :current_color, do: [:inherited_color], else: [])
+                      })}
+
+            true ->
+              :requires_element_context
+          end
+        end
+
+      case prepared do
+        {:ok, symbolic} ->
+          {:ok, symbolic}
+
+        :requires_element_context ->
+          :requires_element_context
+
+        {:error, {:resource_limit_exceeded, diagnostic}} ->
+          {:error,
+           {:resource_limit_exceeded,
+            Diagnostics.diagnostic(diagnostic.stage, diagnostic.reason, diagnostic.message,
+              module: Map.get(diagnostic, :module, __MODULE__),
+              operation: Map.get(diagnostic, :operation, :source_style_contexts),
+              source: record.source.text,
+              line: record.source.line,
+              column: record.source.column
+            )}}
+
+        _ ->
+          Diagnostics.error(
+            :css,
+            :invalid_css,
+            "authored unapplied declaration has invalid or unsupported source syntax or type",
+            module: __MODULE__,
+            operation: :source_style_contexts,
+            source: record.source.text,
+            line: record.source.line,
+            column: record.source.column
+          )
+      end
+    end)
   end
 
   @doc false
@@ -205,9 +559,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           end
 
         case declaration do
-          {property, _value} -> property in ["color", "font-size"]
-          {property, _value, :important} -> property in ["color", "font-size"]
-          _ -> false
+          {property, _value} ->
+            property in ["color", "font-size", "math-style", "math-shift", "math-depth"]
+
+          {property, _value, :important} ->
+            property in ["color", "font-size", "math-style", "math-shift", "math-depth"]
+
+          _ ->
+            false
         end
       end)
 
@@ -248,7 +607,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           style
         end
 
-      validate_cascade_list(style, dependent_declarations, budget, consumer, failure)
+      # Font-relative dimensions need the actual inherited MATH scaling before
+      # value validation. The canonical Math validator owns that computation.
+      with {:ok, style} <-
+             if(Map.get(style, :font_size) == :math,
+               do: MathLayoutValidator.compute_font_size(style),
+               else: {:ok, style}
+             ) do
+        validate_cascade_list(style, dependent_declarations, budget, consumer, failure)
+      end
     end
   end
 
@@ -645,9 +1012,20 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             end
 
           "font-size" ->
-            with {:ok, properties} <-
-                   MathLayoutValidator.parse_property("font-size", value, style),
-                 do: {:ok, Map.merge(style, properties)}
+            case font_keyword(style, value, :font_size, 12.0) do
+              {:ok, _} = prepared ->
+                prepared
+
+              :unhandled ->
+                context =
+                  if Map.has_key?(style, :_math_context),
+                    do: style,
+                    else: Map.merge(style, Map.get(style, :_inherited_font, %{}))
+
+                with {:ok, properties} <-
+                       MathLayoutValidator.parse_property("font-size", value, context),
+                     do: {:ok, Map.merge(style, properties)}
+            end
 
           property when property in ["math-style", "math-shift", "math-depth"] ->
             with {:ok, properties} <- MathLayoutValidator.parse_property(property, value, style),
@@ -682,13 +1060,22 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             end
 
           "font-weight" ->
-            put_font_weight(style, value)
+            case font_keyword(style, value, :font_weight, 400) do
+              {:ok, _} = prepared -> prepared
+              :unhandled -> put_font_weight(style, value)
+            end
 
           "font-style" ->
-            put_font_style(style, value)
+            case font_keyword(style, value, :font_style, :normal) do
+              {:ok, _} = prepared -> prepared
+              :unhandled -> put_font_style(style, value)
+            end
 
           "font-family" ->
-            {:ok, Map.put(style, :font_families, value)}
+            case font_keyword(style, value, :font_families, ["serif"]) do
+              {:ok, _} = prepared -> prepared
+              :unhandled -> {:ok, Map.put(style, :font_families, value)}
+            end
 
           property
           when property in ~w(text-decoration text-decoration-line text-decoration-color text-decoration-thickness text-decoration-style) ->
@@ -713,9 +1100,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
               {:ok, source} ->
                 {:ok, Map.put(style, :list_style_image_source, source)}
-
-              :error ->
-                {:error, :invalid_document}
 
               {:error, _} = error ->
                 error
@@ -742,6 +1126,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             else
               put_size(style, length_property(property), value)
             end
+
+          property when property in ["transform", "transform-origin"] ->
+            NativeElixirPdfUtilities.Validators.CssTransformValidator.apply(
+              style,
+              property,
+              value
+            )
 
           "position" ->
             put_position(style, value)
@@ -971,7 +1362,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_size(style, property, value) do
-    with {:ok, size} <- HtmlValidator.parse_css_size(value, property),
+    with {:ok, size} <- HtmlValidator.parse_css_size(value, property, Map.get(style, :font_size)),
          do: {:ok, Map.put(style, property, size)}
   end
 
@@ -1005,12 +1396,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_background_size(style, value) do
+    with {:ok, size} <- parse_background_size(value),
+         do: {:ok, Map.put(style, :background_size, size)}
+  end
+
+  defp parse_background_size(value, parser \\ &parse_size/1) do
     case value |> String.trim() |> String.downcase() do
       "contain" ->
-        {:ok, Map.put(style, :background_size, :contain)}
+        {:ok, :contain}
 
       "cover" ->
-        {:ok, Map.put(style, :background_size, :cover)}
+        {:ok, :cover}
 
       value ->
         parts = HtmlValidator.split_css_tokens(value)
@@ -1019,16 +1415,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           Enum.map(parts, fn part ->
             case part do
               "auto" -> {:ok, :auto}
-              part -> parse_size(part)
+              part -> parser.(part)
             end
           end)
 
         case parsed do
           [{:ok, size}] ->
-            {:ok, Map.put(style, :background_size, {size, :auto})}
+            {:ok, {size, :auto}}
 
           [{:ok, width}, {:ok, height}] ->
-            {:ok, Map.put(style, :background_size, {width, height})}
+            {:ok, {width, height}}
 
           _ ->
             {:error, :invalid_document}
@@ -1056,16 +1452,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_position_offset(style, property, value) do
-    parsed =
-      case value |> String.trim() |> String.downcase() do
-        "auto" -> {:ok, :auto}
-        value -> parse_position_component(value)
-      end
-
-    with {:ok, offset} <- parsed do
+    with {:ok, offset} <- parse_position_offset(value) do
       side = String.to_existing_atom(property)
       offsets = style |> Map.get(:offsets, edges(:auto)) |> Map.put(side, offset)
       {:ok, Map.put(style, :offsets, offsets)}
+    end
+  end
+
+  defp parse_position_offset(value) do
+    case value |> String.trim() |> String.downcase() do
+      "auto" -> {:ok, :auto}
+      value -> parse_position_component(value)
     end
   end
 
@@ -1239,16 +1636,24 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_letter_spacing(style, value) do
+    with {:ok, spacing} <- parse_letter_spacing(value, Map.get(style, :font_size)),
+         do: {:ok, Map.put(style, :letter_spacing, spacing)}
+  end
+
+  defp parse_letter_spacing(value, font_size) do
     case value |> String.trim() |> String.downcase() do
       "normal" ->
-        {:ok, Map.put(style, :letter_spacing, 0.0)}
+        {:ok, 0.0}
 
       value ->
-        with {:ok, length} <-
-               HtmlValidator.parse_css_length(value, :margin, Map.fetch!(style, :font_size)) do
-          {:ok, Map.put(style, :letter_spacing, length)}
-        else
+        result =
+          if font_size == :source,
+            do: HtmlValidator.prepare_css_length_source(value, :signed_length),
+            else: HtmlValidator.parse_css_length(value, :margin, font_size)
+
+        case result do
           :error -> {:error, :invalid_document}
+          result -> result
         end
     end
   end
@@ -1418,8 +1823,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     end
   end
 
-  defp put_flex(style, value) do
-    tokens = value |> String.trim() |> String.downcase() |> String.split(~r/\s+/u, trim: true)
+  defp put_flex(style, value, parser \\ &parse_length/1) do
+    tokens = value |> String.trim() |> String.downcase() |> HtmlValidator.split_css_tokens()
 
     case tokens do
       ["none"] ->
@@ -1465,7 +1870,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
       [grow, shrink, basis] ->
         with {:ok, grow} <- parse_nonnegative_number(grow),
              {:ok, shrink} <- parse_nonnegative_number(shrink),
-             {:ok, basis} <- flex_basis_value(basis) do
+             {:ok, basis} <- flex_basis_value(basis, parser) do
           {:ok,
            style
            |> Map.put(:flex_grow, grow)
@@ -1495,21 +1900,21 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     end
   end
 
-  defp flex_basis_value(value) do
+  defp flex_basis_value(value, parser) do
     case value do
       "auto" -> {:ok, :auto}
-      value -> parse_length(value)
+      value -> parser.(value)
     end
   end
 
-  defp parse_grid_tracks(value) do
+  defp parse_grid_tracks(value, parser \\ &parse_length/1) do
     result =
       value
       |> String.trim()
       |> String.downcase()
       |> HtmlValidator.split_css_tokens()
       |> Enum.reduce_while({:ok, [], 0}, fn source, {:ok, chunks, track_count} ->
-        case parse_grid_track_source(source) do
+        case parse_grid_track_source(source, parser) do
           {:ok, tracks} ->
             track_count = track_count + length(tracks)
 
@@ -1532,14 +1937,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     end
   end
 
-  defp parse_grid_track_source(value) do
+  defp parse_grid_track_source(value, parser) do
     normalized = value |> String.trim() |> String.downcase()
 
     case Regex.named_captures(~r/^repeat\((?<count>[1-9]\d*)\s*,\s*(?<track>.+)\)$/u, normalized) do
       %{"count" => count, "track" => track} ->
         with {count, ""} <- Integer.parse(count),
              :ok <- HtmlValidator.validate_layout_cardinality(:grid_tracks, count),
-             {:ok, parsed_track} <- parse_grid_track(track) do
+             {:ok, parsed_track} <- parse_grid_track(track, parser) do
           {:ok, List.duplicate(parsed_track, count)}
         else
           {:error, {_reason, _diagnostic}} = error -> error
@@ -1547,16 +1952,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
         end
 
       _ ->
-        with {:ok, track} <- parse_grid_track(normalized), do: {:ok, [track]}
+        with {:ok, track} <- parse_grid_track(normalized, parser), do: {:ok, [track]}
     end
   end
 
-  defp parse_grid_track(value) do
+  defp parse_grid_track(value, parser \\ &parse_length/1) do
     normalized = value |> String.trim() |> String.downcase()
 
     cond do
       String.starts_with?(normalized, "minmax(") ->
-        parse_minmax_grid_track(normalized)
+        parse_minmax_grid_track(normalized, parser)
 
       normalized == "auto" ->
         {:ok, :auto}
@@ -1566,15 +1971,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
              do: {:ok, {:fr, number}}
 
       true ->
-        with {:ok, length} <- parse_length(normalized), do: {:ok, {:length, length}}
+        with {:ok, length} <- parser.(normalized), do: {:ok, {:length, length}}
     end
   end
 
-  defp parse_minmax_grid_track(value) do
+  defp parse_minmax_grid_track(value, parser) do
     case Regex.named_captures(~r/^minmax\((?<min>.+)\s*,\s*(?<max>.+)\)$/u, value) do
       %{"min" => min_track, "max" => max_track} ->
-        with {:ok, minimum} <- parse_grid_track(min_track),
-             {:ok, maximum} <- parse_grid_track(max_track) do
+        with {:ok, minimum} <- parse_grid_track(min_track, parser),
+             {:ok, maximum} <- parse_grid_track(max_track, parser) do
           minimum_valid = minimum == :auto or match?({:length, _length}, minimum)
 
           maximum_valid =
@@ -1734,6 +2139,34 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     end
   end
 
+  # CSS font inheritance uses the actual ancestor, before UA control defaults.
+  # Reverting author declarations restores that element's UA font instead.
+  defp font_keyword(style, value, property, initial) do
+    keyword = value |> String.trim() |> String.downcase(:ascii)
+
+    case keyword do
+      keyword when keyword in ~w(inherit unset initial revert revert-layer) ->
+        context =
+          case keyword do
+            keyword when keyword in ~w(inherit unset) -> Map.get(style, :_inherited_font, style)
+            "initial" -> %{property => initial}
+            _ -> Map.get(style, :_ua_font, style)
+          end
+
+        prepared = Map.put(style, property, Map.get(context, property, Map.get(style, property)))
+
+        prepared =
+          if property == :font_families,
+            do: Map.put(prepared, :_font_family_scope, Map.get(context, :_font_family_scope)),
+            else: prepared
+
+        {:ok, prepared}
+
+      _ ->
+        :unhandled
+    end
+  end
+
   defp put_font_weight(style, value) do
     normalized = value |> String.trim() |> String.downcase()
 
@@ -1769,11 +2202,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     HtmlValidator.parse_css_box_lengths(value, length_context)
   end
 
-  defp parse_gap(value) do
+  defp parse_gap(value, parser \\ &parse_length/1) do
     gaps =
       value
-      |> String.split(~r/\s+/u, trim: true)
-      |> Enum.map(&parse_length/1)
+      |> HtmlValidator.split_css_tokens()
+      |> Enum.map(parser)
 
     case gaps do
       [{:ok, both}] -> {:ok, both, both}
@@ -1831,7 +2264,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     end
   end
 
-  defp parse_two_axis_position(value, font_size, three_values?) do
+  @doc "Parses shared CSS two-axis position components without resolving their percentage basis."
+  @spec parse_two_axis_position(String.t(), number() | nil, boolean()) :: {:ok, tuple()} | :error
+  def parse_two_axis_position(value, font_size, three_values?) do
     tokens =
       value
       |> String.trim()
@@ -1886,14 +2321,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           {{:ok, axis, _}, {:ok, :component, _}} when axis != :component ->
             with {:ok, first_axis, first_component} <- position_token(first, font_size),
                  true <- first_axis != :component,
-                 {:ok, second_axis, second_component} <- edge_position(second, third, font_size),
-                 do:
-                   order_position_components(
-                     first_axis,
-                     first_component,
-                     second_axis,
-                     second_component
-                   )
+                 {:ok, second_axis, second_component} <- edge_position(second, third, font_size) do
+              order_position_components(
+                first_axis,
+                first_component,
+                second_axis,
+                second_component
+              )
+            else
+              false -> :error
+              error -> error
+            end
 
           _ ->
             :error
@@ -1959,15 +2397,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     end
   end
 
-  defp parse_line_height(value) do
+  defp parse_line_height(value, parser \\ &parse_length/1) do
     normalized = value |> String.trim() |> String.downcase()
 
     cond do
       normalized == "normal" ->
         {:ok, :normal}
 
-      match?({:ok, _length}, parse_length(normalized)) ->
-        parse_length(normalized)
+      match?({:ok, _length}, parser.(normalized)) ->
+        parser.(normalized)
 
       true ->
         with {:ok, multiplier} <- parse_nonnegative_number(normalized) do
@@ -2061,32 +2499,42 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     |> String.replace_suffix("-style", "")
   end
 
-  defp parse_border(value, current_color) do
+  defp parse_border(
+         value,
+         current_color,
+         width_parser \\ &parse_border_width/1,
+         color_parser \\ nil
+       ) do
+    color_parser = color_parser || (&HtmlValidator.parse_css_color(&1, current_color))
     tokens = HtmlValidator.split_css_tokens(value)
 
     parsed =
-      Enum.reduce_while(tokens, %{width: nil, style: nil, color: nil}, fn token, acc ->
-        cond do
-          is_nil(acc.style) and match?({:ok, _}, parse_border_style(token)) ->
-            {:ok, border_style} = parse_border_style(token)
-            {:cont, %{acc | style: border_style}}
+      Enum.reduce_while(
+        tokens,
+        %{width: nil, style: nil, color: nil, color_seen?: false},
+        fn token, acc ->
+          cond do
+            is_nil(acc.style) and match?({:ok, _}, parse_border_style(token)) ->
+              {:ok, border_style} = parse_border_style(token)
+              {:cont, %{acc | style: border_style}}
 
-          is_nil(acc.width) and match?({:ok, _}, parse_border_width(token)) ->
-            {:ok, width} = parse_border_width(token)
-            {:cont, %{acc | width: width}}
+            is_nil(acc.width) and match?({:ok, _}, width_parser.(token)) ->
+              {:ok, width} = width_parser.(token)
+              {:cont, %{acc | width: width}}
 
-          is_nil(acc.color) and
-              match?({:ok, _}, HtmlValidator.parse_css_color(token, current_color)) ->
-            {:ok, color} = HtmlValidator.parse_css_color(token, current_color)
-            {:cont, %{acc | color: transparent_color_to_nil(color)}}
+            not acc.color_seen? and
+                match?({:ok, _}, color_parser.(token)) ->
+              {:ok, color} = color_parser.(token)
+              {:cont, %{acc | color: transparent_color_to_nil(color), color_seen?: true}}
 
-          true ->
-            {:halt, :error}
+            true ->
+              {:halt, :error}
+          end
         end
-      end)
+      )
 
     case parsed do
-      %{width: width, style: border_style, color: color} ->
+      %{width: width, style: border_style, color: color} when tokens != [] ->
         width = width || @medium_border_width
         border_style = border_style || :none
 
@@ -2097,7 +2545,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
         {:ok, edges(width), color, edges(border_style)}
 
-      :error ->
+      _ ->
         :error
     end
   end
@@ -2133,12 +2581,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     end
   end
 
-  defp parse_border_colors(value, current_color) do
+  defp parse_border_colors(value, current_color, parser \\ nil) do
+    parser = parser || (&HtmlValidator.parse_css_color(&1, current_color))
+
     colors =
       value
       |> HtmlValidator.split_css_tokens()
       |> Enum.map(fn color ->
-        case HtmlValidator.parse_css_color(color, current_color) do
+        case parser.(color) do
           {:ok, color} -> {:ok, transparent_color_to_nil(color)}
           :error -> :error
         end
@@ -2171,11 +2621,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     end
   end
 
-  defp parse_border_widths(value) do
+  defp parse_border_widths(value, parser \\ &parse_border_width/1) do
     widths =
       value
-      |> String.split(~r/\s+/u, trim: true)
-      |> Enum.map(&parse_border_width/1)
+      |> HtmlValidator.split_css_tokens()
+      |> Enum.map(parser)
 
     case widths do
       [{:ok, all}] ->
@@ -2202,6 +2652,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
       "thick" -> {:ok, 3.75}
       value -> parse_length(value)
     end
+  end
+
+  defp parse_source_color(value) do
+    with {:ok, %{text_decoration_color: color}} <-
+           HtmlValidator.parse_css_text_decoration("text-decoration-color", value, nil, nil),
+         do: {:ok, color}
   end
 
   defp transparent_color_to_nil(color) do

@@ -26,7 +26,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSchemaCssFlowTest do
 
       assert {:ok, measured} = styled_math(html)
       assert measured.actual_text == "12"
-      assert_in_delta measured.width, one.width + two.width, 1.0e-10
+
+      assert measured.width ==
+               NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator.snap_fragment_width(
+                 one.width
+               ) +
+                 NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator.snap_fragment_width(
+                   two.width
+                 )
+
       assert measured.glyphs == []
       assert Enum.all?(measured.drawing_items, &(&1.kind == :native))
       assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
@@ -42,14 +50,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSchemaCssFlowTest do
       assert {:ok, measured} = styled_math(html)
       {:ok, registry} = Font.load_registry(system_font_discovery: false)
       {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
-      {:ok, bounds} = Font.glyph_bounds(font)
-      scale = 20 / font.units_per_em
-      extents = Enum.map(~c"1234", &elem(bounds, font.cmap[&1]))
-      [one, two, three, four] = extents
-      first_ascent = max(elem(one, 3), elem(two, 3)) * scale
-      first_descent = -min(elem(one, 1), elem(two, 1)) * scale
-      second_ascent = max(elem(three, 3), elem(four, 3)) * scale
-      second_descent = -min(elem(three, 1), elem(four, 1)) * scale
+
+      bounds =
+        Enum.map(~c"1234", fn codepoint ->
+          {:ok, outlines} = Font.glyph_bounds(font)
+          {left, bottom, right, top} = elem(outlines, font.cmap[codepoint])
+          scale = 20 / font.units_per_em
+          {left * scale, bottom * scale, right * scale, top * scale}
+        end)
+
+      [one, two, three, four] = bounds
+      first_ascent = max(elem(one, 3), elem(two, 3))
+      first_descent = -min(elem(one, 1), elem(two, 1))
+      second_ascent = max(elem(three, 3), elem(four, 3))
+      second_descent = -min(elem(three, 1), elem(four, 1))
       assert_in_delta measured.ascent, first_ascent, 1.0e-10
       assert_in_delta measured.descent, first_descent + second_ascent + second_descent, 1.0e-10
       assert measured.actual_text == "1234"
@@ -126,7 +140,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSchemaCssFlowTest do
                  "<math style='font-size:20pt'><#{tag} style='display:inline-block;box-sizing:border-box;width:50pt;height:40pt;padding:4pt;border:1pt solid blue'>#{children}</#{tag}></math>"
                )
 
-      assert border_box.width == 50
+      assert_in_delta border_box.width, 50, 0.75 / 64
       # Ordinary CSS dimensions retain the shared fixed 1/64 CSS-pixel precision.
       assert_in_delta border_box.ascent + border_box.descent, 40, 0.75 / 64
       assert border_box.actual_text == "1234"

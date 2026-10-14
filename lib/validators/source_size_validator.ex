@@ -32,6 +32,22 @@ defmodule NativeElixirPdfUtilities.Validators.SourceSizeValidator do
             {:ok, font}
         end
 
+      font_result =
+        case font_result do
+          :error ->
+            Diagnostics.error(
+              :font,
+              :invalid_font,
+              "font-relative source sizing requires supported explicitly authorized TrueType font sources",
+              module: __MODULE__,
+              operation: :prepare_context,
+              source: "font-relative source sizing"
+            )
+
+          result ->
+            result
+        end
+
       with {:ok, font} <- font_result,
            {:ok, metrics} <-
              prepare_font_metrics(
@@ -54,16 +70,15 @@ defmodule NativeElixirPdfUtilities.Validators.SourceSizeValidator do
          true <- font_size >= 0,
          {:ok, line_height} <- HtmlValidator.normalize_geometry_number(line_height),
          true <- line_height >= 0,
-         {:ok, bounds} <- FontValidator.prepare_glyph_bounds(font) do
+         {:ok, bounds} <- FontValidator.prepare_glyph_bounds(font),
+         {:ok, x_height_ratio} <-
+           (case FontValidator.prepare_x_height(font) do
+              {:error, {:unsupported_glyph, _}} -> {:ok, 0.5}
+              result -> result
+            end) do
       pixels = font_size / 0.75
       unit_scale = pixels / font.units_per_em
-
-      x_height =
-        case FontValidator.prepare_x_height(font) do
-          {:ok, ratio} -> pixels * ratio
-          {:error, {:unsupported_glyph, _}} -> pixels / 2
-          {:error, _} = error -> throw({:render_resource_limit, error})
-        end
+      x_height = pixels * x_height_ratio
 
       cap_height =
         case Map.get(font.cmap, ?H) do

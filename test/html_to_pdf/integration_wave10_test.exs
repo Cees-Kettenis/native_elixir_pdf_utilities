@@ -1,7 +1,10 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave10Test do
   use ExUnit.Case, async: false
 
+  alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
+
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
+  alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.HtmlToPdf.{EmbeddedResource, HtmlParser, ResourceContext, Style}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, ObjectValidator}
 
@@ -108,7 +111,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave10Test do
     assert :resources in result.runtime_obligations
   end
 
-  test "selected object children retain table presentation and native SVG shading resources", %{
+  test "selected object children retain table presentation and converted gradient pixels", %{
     root: root
   } do
     File.write!(Path.join(root, "combined.html"), """
@@ -145,10 +148,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave10Test do
     assert text =~ ~r/Child\s+grid/
     assert text =~ ~r/Child\s+caption/
     assert text =~ ~r/Parent\s+tail/
+    assert text =~ ~r/Child\s+grid.*Child\s+caption.*Parent\s+tail/s
+
+    for label <- [~r/Child\s+grid/, ~r/Child\s+caption/, ~r/Parent\s+tail/],
+        do: assert(length(Regex.scan(label, text)) == 1)
+
     refute text =~ "Unused child"
-    assert pdf =~ "/ShadingType 2"
-    assert pdf =~ "/FunctionType 2"
-    assert pdf =~ "/Shading"
+    assert :ok = PdfVisualCompare.assert_svg_image_artwork!(pdf)
+    assert {:ok, document} = Reader.read(pdf)
+
+    rgb_images =
+      for {_ref,
+           %{value: %{"Subtype" => {:name, "Image"}, "ColorSpace" => {:name, "DeviceRGB"}}} =
+             image} <- document.objects do
+        # Inspect this bounded generated plane without changing reader safety limits.
+        pixels = :zlib.uncompress(image.stream)
+        assert byte_size(pixels) == image.value["Width"] * image.value["Height"] * 3
+        {image.value["Width"], image.value["Height"], pixels}
+      end
+
+    assert [{width, height, pixels}] = rgb_images
+    assert rem(width, 120) == 0 and rem(height, 40) == 0
+    scale = div(width, 120)
+    assert height == 40 * scale
+    row_offset = 10 * scale * width * 3
+    first_tile = binary_part(pixels, row_offset + 5 * scale * 3, 30 * scale * 3)
+    second_tile = binary_part(pixels, row_offset + 45 * scale * 3, 30 * scale * 3)
+    assert first_tile == second_tile
+    gradient = for <<r, g, b <- first_tile>>, do: {r, g, b}
+    assert Enum.any?(gradient, fn {r, g, b} -> r > 200 and g == 0 and b < 55 end)
+    assert Enum.any?(gradient, fn {r, g, b} -> b > 200 and g == 0 and r < 55 end)
+    assert Enum.any?(gradient, fn {r, g, b} -> r > 90 and b > 90 and g == 0 end)
+    refute pdf =~ "/ShadingType 2"
     assert pdf =~ "W n"
     refute pdf =~ "/AcroForm"
   end
@@ -220,7 +251,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave10Test do
     refute pdf =~ "/AcroForm"
   end
 
-  test "selected child SVG transports actual CID fonts and Unicode through parent resources", %{
+  test "selected child SVG uses source-font pixels while parent text remains extractable", %{
     root: root
   } do
     File.write!(Path.join(root, "svg-text.html"), """
@@ -242,12 +273,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave10Test do
              )
 
     assert {:ok, text} = Text.extract(pdf, layout: false)
-    assert text =~ "Σ Child SVG"
+    refute text =~ "Σ Child SVG"
     assert text =~ "Parent text"
     refute text =~ "Unused glyph fallback"
-    assert pdf =~ "/CIDFontType2"
-    assert pdf =~ "/FontFile2"
-    assert pdf =~ "/ToUnicode"
+    assert :ok = PdfVisualCompare.assert_svg_image_artwork!(pdf)
+    assert {:ok, document} = Reader.read(pdf)
+
+    masks =
+      for {_,
+           %{value: %{"Subtype" => {:name, "Image"}, "ColorSpace" => {:name, "DeviceGray"}}} =
+             image} <- document.objects do
+        # This bounded generated alpha plane proves source glyphs became pixels.
+        pixels = :zlib.uncompress(image.stream)
+        assert byte_size(pixels) == image.value["Width"] * image.value["Height"]
+        :binary.bin_to_list(pixels)
+      end
+
+    assert [mask] = masks
+    assert 0 in mask and Enum.any?(mask, &(&1 > 0))
+
+    # Embedding must preserve the exact source-font glyph plane produced for
+    # this same authored child when rendered on its own.
+    assert {:ok, child_pdf} =
+             HtmlToPdf.render(File.read!(Path.join(root, "svg-text.html")),
+               forms: :static,
+               default_font: "Helvetica",
+               system_font_discovery: false,
+               compress_streams: false,
+               page_size: {240, 180}
+             )
+
+    assert {:ok, child_document} = Reader.read(child_pdf)
+
+    child_masks =
+      for {_,
+           %{value: %{"Subtype" => {:name, "Image"}, "ColorSpace" => {:name, "DeviceGray"}}} =
+             image} <- child_document.objects,
+          do: :binary.bin_to_list(:zlib.uncompress(image.stream))
+
+    assert child_masks == masks
+
+    assert {:error, {:no_extractable_text, %{stage: :text_extraction}}} =
+             Text.extract(child_pdf, layout: false)
+
+    refute pdf =~ "/ActualText"
     assert pdf =~ "W n"
   end
 end

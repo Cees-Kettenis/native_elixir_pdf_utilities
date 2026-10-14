@@ -103,6 +103,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
             %{text: grapheme, layout_whitespace?: layout_whitespace?}
           end)
 
+        graphemes =
+          case Map.get(style, :_source_glyph_characters) do
+            characters when is_list(characters) ->
+              characters =
+                NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator.normalize_characters(
+                  characters,
+                  %{white_space: :pre}
+                )
+
+              {graphemes, []} =
+                Enum.map_reduce(graphemes, characters, fn grapheme, remaining ->
+                  {source, remaining} =
+                    Enum.split(remaining, length(String.codepoints(grapheme.text)))
+
+                  {Map.put(grapheme, :source_characters, source), remaining}
+                end)
+
+              graphemes
+
+            _ ->
+              graphemes
+          end
+
         prepared =
           node
           |> Map.put(:_font_candidates, candidates)
@@ -160,7 +183,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
                   end
               end
 
-            append_run(runs, node, style, font_face, text)
+            source = Map.get(grapheme, :source_characters)
+
+            source =
+              if source && text != grapheme.text,
+                do: [%{displayed: text, fragments: Enum.flat_map(source, & &1.fragments)}],
+                else: source
+
+            append_run(runs, node, style, font_face, text, source)
           end)
 
         Enum.reverse(resolved)
@@ -180,17 +210,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
     end
   end
 
-  defp append_run(runs, node, style, font_face, grapheme) do
+  defp append_run(runs, node, style, font_face, grapheme, source) do
     case runs do
       [%{style: %{font_face: previous_face}} = previous | remaining]
       when previous_face == font_face ->
-        [%{previous | text: previous.text <> grapheme} | remaining]
+        combined_style =
+          if source,
+            do: Map.update!(previous.style, :_source_glyph_characters, &(&1 ++ source)),
+            else: previous.style
+
+        [%{previous | text: previous.text <> grapheme, style: combined_style} | remaining]
 
       _ ->
         resolved_style =
           style
           |> Map.put(:font_face, font_face)
           |> Map.put(:font_family, font_face.family)
+
+        resolved_style =
+          if source,
+            do: Map.put(resolved_style, :_source_glyph_characters, source),
+            else: resolved_style
 
         [%{node | text: grapheme, style: resolved_style} | runs]
     end

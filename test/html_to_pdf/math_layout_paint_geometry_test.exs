@@ -59,6 +59,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPaintGeometryTest do
     assert box.actual_text == "jAV"
   end
 
+  test "actual native Math background ink follows all corners through an affine paint group" do
+    box =
+      measured(
+        "<math><mtext><span style='background:red;padding:3pt'>Actual</span></mtext></math>"
+      )
+
+    rect =
+      Enum.find_value(box.drawing_items, fn
+        %{kind: :native, box: %{type: :rect} = rect} -> rect
+        _ -> nil
+      end)
+
+    assert rect != nil
+
+    group = %{
+      type: :drawing_group,
+      width: 100,
+      height: 100,
+      transform: {0, 1, -1, 0, 100, 0},
+      boxes: [rect]
+    }
+
+    measured = %{box | glyphs: [], drawing_items: [%{kind: :native, box: group, x: 0, y: 0}]}
+    assert {:ok, {left, bottom, right, top}} = MathPaintValidator.prepare_geometry(measured)
+    assert_in_delta left, 100 - rect.y - rect.height, 0.0001
+    assert_in_delta right, 100 - rect.y, 0.0001
+    assert_in_delta bottom, rect.x, 0.0001
+    assert_in_delta top, rect.x + rect.width, 0.0001
+  end
+
   test "positioned native glyph groups measure their original child ink at the issued offset" do
     box =
       measured(

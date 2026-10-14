@@ -15,9 +15,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgStrokeProgramBrowserParityTest d
 
     assert stats.page_count == 1
 
+    native = File.read!(Path.join(stats.artifact_dir, "native.pdf"))
+    assert :ok = PdfVisualCompare.assert_svg_image_without_text!(native)
+
     assert {:ok, text} =
              NativeElixirPdfUtilities.Text.extract(
-               File.read!(Path.join(stats.artifact_dir, "native.pdf")),
+               File.read!(Path.join(stats.artifact_dir, "chromium.pdf")),
                layout: false
              )
 

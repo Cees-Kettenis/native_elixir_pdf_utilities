@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSemanticsTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  alias NativeElixirPdfUtilities.TestSupport.MathPaintGeometry
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, ResourceContext, Style}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, MathLayoutValidator}
 
@@ -38,7 +39,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSemanticsTest do
                :ink_descent,
                :min_content_width,
                :max_content_width,
-               :glyphs,
                :actual_text
              ]) ==
                Map.take(expected, [
@@ -49,10 +49,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSemanticsTest do
                  :ink_descent,
                  :min_content_width,
                  :max_content_width,
-                 :glyphs,
                  :actual_text
                ])
 
+      assert MathPaintGeometry.glyphs(selected) == MathPaintGeometry.glyphs(expected)
       assert selected.actual_text == "12+α"
       assert :ok == MathLayoutValidator.validate_measured_geometry(selected)
     end
@@ -71,18 +71,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSemanticsTest do
     end
   end
 
-  test "annotation text follows mtext geometry independently of encoding" do
+  test "default annotation boxes omit character data like Chromium Math blocks" do
     for tag <- ~w(annotation annotation-xml),
         encoding <- ["text/html", "application/x-tex", ""] do
-      assert {:ok, expected} = styled_math("<math><mtext>α + β</mtext></math>")
-
       assert {:ok, measured} =
                styled_math("<math><#{tag} encoding='#{encoding}'>α + β</#{tag}></math>")
 
-      assert Map.take(measured, [:width, :ascent, :descent, :glyphs, :actual_text]) ==
-               Map.take(expected, [:width, :ascent, :descent, :glyphs, :actual_text])
-
-      assert measured.actual_text == "α + β"
+      assert measured.actual_text == ""
+      assert measured.glyphs == [] and measured.width == 0
+      assert :ok == MathLayoutValidator.validate_measured_geometry(measured)
     end
   end
 
@@ -136,7 +133,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSemanticsTest do
              :ink_descent,
              :min_content_width,
              :max_content_width,
-             :glyphs,
              :actual_text
            ]) ==
              Map.take(expected, [
@@ -147,9 +143,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSemanticsTest do
                :ink_descent,
                :min_content_width,
                :max_content_width,
-               :glyphs,
                :actual_text
              ])
+
+    assert MathPaintGeometry.glyphs(selected) == MathPaintGeometry.glyphs(expected)
 
     assert {:ok, pdf} =
              HtmlToPdf.render("<math><semantics><mn>12</mn>#{hidden}</semantics></math>")
@@ -169,11 +166,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSemanticsTest do
 
     svg = "<svg width='24' height='18'><rect width='24' height='18' fill='blue'/></svg>"
     assert {:ok, ordinary} = styled_math("<math><mtext>#{svg}</mtext></math>")
-    assert {:ok, annotation} = styled_math("<math><annotation-xml>#{svg}</annotation-xml></math>")
 
-    for field <- [:width, :ascent, :descent, :ink_ascent, :ink_descent, :actual_text] do
-      assert Map.fetch!(annotation, field) == Map.fetch!(ordinary, field)
-    end
+    assert {:ok, annotation} =
+             styled_math(
+               "<math><annotation-xml style='display:inline-block'>#{svg}</annotation-xml></math>"
+             )
+
+    assert annotation.width == ordinary.width
+    assert annotation.actual_text == ordinary.actual_text
 
     assert Enum.any?(annotation.drawing_items, &(&1.kind == :native))
     assert :ok == MathLayoutValidator.validate_measured_geometry(annotation)

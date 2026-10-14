@@ -40,6 +40,12 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererCloneOriginTest do
                assert [declaration] = own.declarations
                assert declaration.source.owner.node_id == original.parent_id
                assert declaration.source.text == "text-transform:uppercase"
+               assert declaration.context_kind == :composition_clone
+               assert declaration.preparation_scope == :original_prefix
+               assert declaration.clone_origin.original.node_id == original.parent_id
+               assert declaration.clone_origin.placement.node_id == own.owner.node_id
+               assert declaration.context.node_id == own.owner.node_id
+               assert declaration.original_context.node_id == original.parent_id
 
                assert {:error, {:unsupported_html, diagnostic}} =
                         TemplatePatchValidator.authorize_mutation(plan, tree)

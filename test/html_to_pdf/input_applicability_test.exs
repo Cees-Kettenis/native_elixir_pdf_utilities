@@ -163,11 +163,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InputApplicabilityTest do
     end
   end
 
-  test "active image URLs, unsupported handlers and Range tick artwork still diagnose" do
+  test "active image URLs and unsupported handlers diagnose while missing range lists remain static" do
     for html <- [
           "<input type=image src='javascript:active'>",
-          "<input type=text onclick=active>",
-          "<input type=range list=ticks>"
+          "<input type=text onclick=active>"
         ] do
       assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, forms: :static)
       assert diagnostic.stage == :html
@@ -177,6 +176,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InputApplicabilityTest do
       assert diagnostic.column >= 1
       assert diagnostic.message != ""
     end
+
+    assert {:ok, static_range} = HtmlToPdf.render("<input type=range list=ticks>", forms: :static)
+    assert {:ok, reference} = HtmlToPdf.render("<input type=range>", forms: :static)
+    assert static_range == reference
+    assert {:ok, []} = Forms.fields(static_range)
 
     assert {:error, {:unsupported_form, diagnostic}} =
              HtmlToPdf.render("<input type=range readonly>")

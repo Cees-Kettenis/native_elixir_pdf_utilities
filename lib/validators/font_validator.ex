@@ -5,6 +5,292 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.MathFontValidator
 
+  @doc "Loads explicitly authorized image faces in an independent scope, excluding host CSS faces, bundled fallback and automatic system discovery."
+  @spec prepare_svg_image_fonts(term()) :: {:ok, [map()]} | {:error, {atom(), map()}}
+  def prepare_svg_image_fonts(fonts) do
+    with_budget(fn ->
+      with {:ok, faces} <- NativeElixirPdfUtilities.HtmlToPdf.Font.load_configured_faces(fonts) do
+        {:ok, Enum.map(faces, &Map.take(&1, [:data, :family, :weight, :style]))}
+      end
+    end)
+  end
+
+  @doc "Loads independent image font bytes, allowing the canonical default serif discovery only when the caller permits it. Invoke after source preparation establishes that the image contains text."
+  @spec prepare_svg_image_fonts(term(), term()) ::
+          {:ok, [map()]} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_svg_image_fonts(fonts, opts) do
+    prepare_image_fonts(fonts, opts, true)
+  end
+
+  @doc "Loads independent image fonts from the existing canonical SVG summary. An empty text chunk list suppresses implicit default discovery while preserving option and explicit font validation."
+  @spec prepare_svg_image_fonts(
+          term(),
+          term(),
+          NativeElixirPdfUtilities.Validators.SvgValidator.document_summary()
+        ) :: {:ok, [map()]} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_svg_image_fonts(fonts, opts, summary) do
+    valid? =
+      case summary do
+        %{text: text} when is_list(text) and length(text) >= 0 ->
+          Enum.all?(text, &is_binary/1)
+
+        _ ->
+          false
+      end
+
+    if valid? do
+      prepare_image_fonts(fonts, opts, summary.text != [])
+    else
+      Diagnostics.error(
+        :font,
+        :invalid_document,
+        "image font preparation requires the canonical SVG summary with a list of binary text chunks",
+        operation: :prepare_svg_image_fonts,
+        module: __MODULE__,
+        source: "SVG summary.text"
+      )
+    end
+  end
+
+  defp prepare_image_fonts(fonts, opts, needs_default?) do
+    with_budget(fn ->
+      case Keyword.keyword?(opts) do
+        true ->
+          discovery = Keyword.get(opts, :system_font_discovery, true)
+
+          with :ok <-
+                 NativeElixirPdfUtilities.Validators.HtmlValidator.validate_system_font_discovery(
+                   discovery
+                 ),
+               {:ok, faces} <- prepare_svg_image_fonts(fonts) do
+            if faces == [] and discovery and needs_default? do
+              with {:ok, registry} <-
+                     NativeElixirPdfUtilities.HtmlToPdf.Font.load_registry(
+                       fonts: [],
+                       system_font_discovery: true
+                     ),
+                   {:ok, _families, font} <-
+                     NativeElixirPdfUtilities.HtmlToPdf.Font.resolve(
+                       "serif",
+                       400,
+                       :normal,
+                       registry
+                     ) do
+                {:ok, [Map.take(font, [:data, :family, :weight, :style])]}
+              else
+                {:error, _} = error ->
+                  error
+
+                :error ->
+                  Diagnostics.error(
+                    :font,
+                    :unsupported_font,
+                    "permitted default image font could not be loaded",
+                    operation: :prepare_svg_image_fonts,
+                    module: __MODULE__
+                  )
+              end
+            else
+              {:ok, faces}
+            end
+          end
+
+        false ->
+          Diagnostics.error(
+            :options,
+            :invalid_options,
+            "image font options must be a keyword list",
+            operation: :prepare_svg_image_fonts,
+            module: __MODULE__
+          )
+      end
+    end)
+  end
+
+  # Fixed font-name MacRoman differences from PDF MacRoman, matching fontdb.
+  @font_name_mac_roman %{
+    0x11 => <<0x2318::utf8>>,
+    0x12 => <<0x21E7::utf8>>,
+    0x13 => <<0x2325::utf8>>,
+    0x14 => <<0x2303::utf8>>,
+    0xAD => <<0x2260::utf8>>,
+    0xB0 => <<0x221E::utf8>>,
+    0xB2 => <<0x2264::utf8>>,
+    0xB3 => <<0x2265::utf8>>,
+    0xB6 => <<0x2202::utf8>>,
+    0xB7 => <<0x2211::utf8>>,
+    0xB8 => <<0x220F::utf8>>,
+    0xB9 => <<0x03C0::utf8>>,
+    0xBA => <<0x222B::utf8>>,
+    0xBD => <<0x03A9::utf8>>,
+    0xC3 => <<0x221A::utf8>>,
+    0xC5 => <<0x2248::utf8>>,
+    0xC6 => <<0x2206::utf8>>,
+    0xCA => <<0x00A0::utf8>>,
+    0xD7 => <<0x25CA::utf8>>,
+    0xDB => <<0x20AC::utf8>>,
+    0xF0 => <<0xF8FF::utf8>>
+  }
+
+  @doc "Reads the actual internal TrueType family name used by a font database, independent of caller CSS aliases."
+  @spec prepare_font_family_name(term()) ::
+          {:ok, String.t()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_font_family_name(data) do
+    with_budget(fn ->
+      result =
+        case data do
+          data when is_binary(data) ->
+            reserve_source(data)
+
+            memo({:internal_family_name, :crypto.hash(:sha256, data)}, fn ->
+              with {:ok, _font} <- prepare_ttf(data),
+                   {:ok, tables} <- table_directory(data),
+                   {:ok, names} <- table(data, tables, "name"),
+                   <<format::16, count::16, storage::16, _::binary>> <- names,
+                   true <-
+                     format in [0, 1] and count > 0 and storage >= 6 + count * 12 and
+                       storage <= byte_size(names) do
+                reserve(:max_font_math_work, count)
+
+                records =
+                  for index <- 0..(count - 1),
+                      <<platform::16, encoding::16, language::16, name_id::16, length::16,
+                        offset::16>> = binary_part(names, 6 + index * 12, 12),
+                      name_id in [1, 16],
+                      storage + offset + length <= byte_size(names) do
+                    bytes = binary_part(names, storage + offset, length)
+                    unicode? = platform == 0 or (platform == 3 and encoding in [0, 1])
+                    mac? = platform == 1 and encoding == 0
+
+                    family =
+                      cond do
+                        unicode? ->
+                          case :unicode.characters_to_binary(bytes, {:utf16, :big}, :utf8) do
+                            family when is_binary(family) -> family
+                            _ -> nil
+                          end
+
+                        mac? ->
+                          Enum.map_join(:binary.bin_to_list(bytes), fn code ->
+                            case Map.fetch(@font_name_mac_roman, code) do
+                              {:ok, character} ->
+                                character
+
+                              :error ->
+                                if code < 128 do
+                                  <<code>>
+                                else
+                                  {:ok, character} =
+                                    NativeElixirPdfUtilities.Pdf.TextEncoding.character(
+                                      "MacRomanEncoding",
+                                      code,
+                                      %{}
+                                    )
+
+                                  character
+                                end
+                            end
+                          end)
+
+                        true ->
+                          nil
+                      end
+
+                    %{
+                      id: name_id,
+                      unicode?: unicode?,
+                      mac?: mac?,
+                      english?:
+                        (platform == 3 and language == 0x0409) or (mac? and language == 0),
+                      family: family
+                    }
+                  end
+
+                Enum.find_value([16, 1], fn id ->
+                  candidates =
+                    Enum.filter(
+                      records,
+                      &(&1.id == id and is_binary(&1.family) and &1.family != "")
+                    )
+
+                  unicode = Enum.filter(candidates, & &1.unicode?)
+
+                  candidates =
+                    if Enum.any?(unicode, & &1.english?),
+                      do: unicode,
+                      else: unicode ++ Enum.take(Enum.filter(candidates, & &1.mac?), 1)
+
+                  selected = Enum.find(candidates, & &1.english?) || List.first(candidates)
+                  if selected, do: {:ok, selected.family}
+                end) || :error
+              else
+                {:error, _} = error -> error
+                _ -> :error
+              end
+            end)
+
+          _ ->
+            :error
+        end
+
+      case result do
+        {:ok, _family} = result ->
+          result
+
+        {:error, _} = error ->
+          error
+
+        :error ->
+          Diagnostics.error(
+            :font,
+            :invalid_font,
+            "font requires supported TrueType bytes with a usable internal family name",
+            module: __MODULE__,
+            operation: :prepare_font_family_name
+          )
+      end
+    end)
+  end
+
+  @doc "Validates a closed list of byte-backed source editor faces before any font loader runs."
+  @spec prepare_byte_faces(term()) :: {:ok, [map()]} | {:error, {atom(), map()}}
+  def prepare_byte_faces(descriptors) do
+    case descriptors do
+      faces when is_list(faces) and faces != [] ->
+        if length(faces) <= Limits.get(:max_font_count) and
+             Enum.all?(faces, fn face ->
+               case face do
+                 %{family: family, data: bytes, weight: weight, style: style}
+                 when is_binary(family) and is_binary(bytes) and is_number(weight) and
+                        style in [:normal, :italic] ->
+                   Enum.all?(Map.keys(face), &(&1 in [:family, :data, :weight, :style]))
+
+                 _ ->
+                   false
+               end
+             end) do
+          {:ok, faces}
+        else
+          Diagnostics.error(
+            :font,
+            :invalid_font,
+            "source editor faces require only family, style, weight and embedded font bytes",
+            module: __MODULE__,
+            operation: :prepare_byte_faces
+          )
+        end
+
+      _ ->
+        Diagnostics.error(
+          :font,
+          :invalid_font,
+          "source editor requires at least one embedded byte face",
+          module: __MODULE__,
+          operation: :prepare_byte_faces
+        )
+    end
+  end
+
   @doc false
   @spec with_source_owner(reference(), (-> term())) :: term()
   def with_source_owner(owner, runner) do
@@ -40,8 +326,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
 
     frame =
       case context do
-        {:ok, context} ->
-          %{owner: owner, context: context, configured: configured, bundled: bundled}
+        {:ok, _context} ->
+          %{owner: owner, configured: configured, bundled: bundled}
 
         _ ->
           nil
@@ -61,32 +347,21 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   def observe_loaded_font(font, ordinal, selected, loaded) do
     case Process.get({__MODULE__, :registry_loads}) do
       %{owner: owner} = frame when is_integer(ordinal) ->
-        with {:ok, context} <-
-               NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.font_registry_context(
-                 owner
-               ),
-             true <- context == frame.context do
-          source = Map.fetch!(font, :source)
-          configs = if source == :bundled, do: frame.bundled, else: frame.configured
-          config = Enum.at(configs, ordinal)
+        # load_fonts assigns the ordinal over the same normalized configuration
+        # list and load_font retains that configuration's family/weight/style.
+        # The canonical observer validates live issuance and recipe/candidate
+        # equality; it also returns the unchanged font for an expired scope.
+        source = Map.fetch!(font, :source)
+        configs = if source == :bundled, do: frame.bundled, else: frame.configured
 
-          if config &&
-               Map.take(config, [:family, :weight, :style]) ==
-                 Map.take(font, [:family, :weight, :style]) do
-            NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.observe_font_load(
-              owner,
-              source,
-              ordinal,
-              selected,
-              config,
-              loaded
-            )
-          else
-            loaded
-          end
-        else
-          _ -> loaded
-        end
+        NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.observe_font_load(
+          owner,
+          source,
+          ordinal,
+          selected,
+          Enum.at(configs, ordinal),
+          loaded
+        )
 
       _ ->
         loaded
@@ -659,6 +934,23 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     end
   end
 
+  @doc "Prepares FreeType's fixed-point linear advance scale from validated font size and units per em."
+  @spec css_advance_scale(pos_integer(), non_neg_integer() | float()) :: %{
+          scale: non_neg_integer(),
+          correction: float()
+        }
+  def css_advance_scale(units, size) do
+    pixels = size / 0.75
+    # 26.6 size and 16.16 scale are fixed FreeType representations, not resource limits.
+    # Skia truncates its requested size to 26.6. FreeType clamps sizes below one pixel;
+    # Skia's remaining matrix then restores the requested subpixel size.
+    requested = max(trunc(pixels * 64), 64)
+    scale = div(requested * 65_536 + div(units, 2), units)
+    actual_pixels = units * scale / 65_536 / 64
+    correction = if pixels < 1, do: pixels / actual_pixels, else: 1.0
+    %{scale: scale, correction: correction}
+  end
+
   @doc false
   @spec prepare_text_metrics(term()) :: {:ok, map()} | :error
   def prepare_text_metrics(font) do
@@ -722,6 +1014,21 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
             nil
         end
 
+      typographic_height =
+        case table(data, tables, "OS/2") do
+          {:ok, os2} ->
+            with {:ok, ascent} <- read_i16(os2, 68),
+                 {:ok, descent} <- read_i16(os2, 70),
+                 true <- ascent > 0 and descent <= 0 do
+              %{ascent: ascent, descent: -descent}
+            else
+              _ -> nil
+            end
+
+          :error ->
+            nil
+        end
+
       max_width =
         case table(data, tables, "hhea") do
           {:ok, hhea} ->
@@ -740,6 +1047,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
          underline: underline,
          strike: strike,
          average_width: average_width,
+         typographic_height: typographic_height,
          max_width: max_width
        }}
     end
@@ -752,7 +1060,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     prepare_text_ink_geometry(box, :vertical)
   end
 
-  @doc "Measures selected embedded-font glyph ink in PDF coordinates, including horizontal overhang, kerning and authored spacing."
+  @doc "Measures selected embedded-font design outline bounds in PDF coordinates, including horizontal overhang, kerning and authored spacing. This does not certify rasterized or clipped paint coverage."
   @spec prepare_text_ink_rectangle(term()) ::
           {:ok, {number(), number(), number(), number()} | nil}
           | {:error, {atom(), Diagnostics.diagnostic()}}
@@ -795,12 +1103,23 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
                 Enum.map(String.to_charlist(selected_text), &Map.get(cmap, &1, 0))
               )
 
-            valid? =
+            selected? =
               valid_text_glyph_selection?(
                 ids,
                 tuple_size(bounds),
                 length(String.codepoints(selected_text))
-              ) and
+              )
+
+            widths =
+              if geometry == :rectangle and selected? and ids != [] and
+                   is_list(Map.get(font, :widths)),
+                 do: NativeElixirPdfUtilities.HtmlToPdf.Font.glyph_widths(font, Enum.max(ids)),
+                 else: {}
+
+            valid? =
+              selected? and
+                (geometry != :rectangle or
+                   Enum.all?(ids, &(&1 < tuple_size(widths)))) and
                 size <= Limits.get(:max_css_numeric_magnitude) and
                 abs(baseline) <= Limits.get(:max_pdf_numeric_magnitude) and
                 (geometry == :vertical or
@@ -827,9 +1146,6 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
 
                     :rectangle ->
                       reserve(:max_font_math_work, 2 * length(ids))
-
-                      widths =
-                        NativeElixirPdfUtilities.HtmlToPdf.Font.glyph_widths(font, Enum.max(ids))
 
                       scale = size / units
                       spacing = Map.get(box, :letter_spacing, 0.0)
@@ -860,11 +1176,10 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
                                  if(right == nil, do: glyph_right, else: max(right, glyph_right))}
                             end
 
-                          advance =
-                            if id < tuple_size(widths),
-                              do: elem(widths, id),
-                              else: font.default_width
-
+                          # Canonical hmtx preparation expands the final advance
+                          # through glyph_count; selection validation above also
+                          # rejects incomplete caller metric descriptors.
+                          advance = elem(widths, id)
                           {cursor + advance * scale + spacing, id, left, right}
                         end)
 

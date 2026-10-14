@@ -132,11 +132,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarValidatorTest do
   end
 
   test "direct clipped arrow paths preserve accepted shapes and diagnose invalid transport" do
-    for {direction, path} <- [
-          {:up, "0 0 m 6 0 l 3 3 l h"},
-          {:down, "0 3 m 6 3 l 3 0 l h"},
-          {:left, "6 0 m 6 3 l 0 1.5 l h"},
-          {:right, "0 0 m 0 3 l 6 1.5 l h"}
+    for {direction, path, scrollbar_path} <- [
+          {:up, "0 0 m 6 0 l 3 3 l h", "-0.0001 0.0001 m 5.9999 0.0001 l 2.9999 3.0001 l h"},
+          {:down, "0 3 m 6 3 l 3 0 l h", "-0.0001 3.0001 m 5.9999 3.0001 l 2.9999 0.0001 l h"},
+          {:left, "6 0 m 6 3 l 0 1.5 l h", "5.9999 0.0001 m 5.9999 3.0001 l -0.0001 1.5001 l h"},
+          {:right, "0 0 m 0 3 l 6 1.5 l h", "-0.0001 0.0001 m -0.0001 3.0001 l 5.9999 1.5001 l h"}
         ] do
       [box] =
         ScrollbarPainter.paint([
@@ -144,8 +144,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarValidatorTest do
         ])
 
       assert box.clip == %{x: 0, y: 0, width: 6, height: 3}
-      assert {:ok, pdf} = PdfWriter.render([%{size: {30, 30}, boxes: [box]}])
-      assert pdf =~ path
+      # Default output compresses page streams. Check the actual decoded path
+      # and clip rather than mistaking compressed bytes for missing arrow paint.
+      for compressed <- [true, false] do
+        assert {:ok, pdf} =
+                 PdfWriter.render([%{size: {30, 30}, boxes: [box]}], compress_streams: compressed)
+
+        assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+        [page] = document.pages
+
+        assert {:ok, content} =
+                 NativeElixirPdfUtilities.Pdf.Reader.decoded_stream(
+                   document,
+                   document.objects[page.ref].value["Contents"]
+                 )
+
+        # Fluent scrollbar artwork has the writer's fixed four-decimal raster
+        # boundary bias. General triangles keep their original source geometry.
+        assert content =~ scrollbar_path
+        assert content =~ "0 0 6 3 re W n"
+
+        assert {:ok, plain} =
+                 PdfWriter.render([%{size: {30, 30}, boxes: [Map.delete(box, :role)]}],
+                   compress_streams: compressed
+                 )
+
+        assert {:ok, plain_document} = NativeElixirPdfUtilities.Pdf.Reader.read(plain)
+        [plain_page] = plain_document.pages
+
+        assert {:ok, plain_content} =
+                 NativeElixirPdfUtilities.Pdf.Reader.decoded_stream(
+                   plain_document,
+                   plain_document.objects[plain_page.ref].value["Contents"]
+                 )
+
+        assert plain_content =~ path
+        assert plain_content =~ "0 0 6 3 re W n"
+      end
 
       assert {:error, {:invalid_pdf_input, %{stage: :pdf, message: message}}} =
                WriterValidator.prepare(

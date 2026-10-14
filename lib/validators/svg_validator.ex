@@ -5,8 +5,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
 
   alias NativeElixirPdfUtilities.Validators.{
     HtmlValidator,
-    ForeignContentValidator,
-    SvgTextPositionValidator
+    ForeignContentValidator
   }
 
   @typedoc "Internal bounded XML summary issued by validate_processing/2, including original document geometry metadata."
@@ -60,15 +59,6 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         "SVG dimensions exceed the supported numeric range; reduce dimensions or aspect ratio",
         source: "SVG"
       )
-  catch
-    {:render_resource_limit, {:error, {reason, diagnostic}}} ->
-      {:error,
-       {reason,
-        Diagnostics.with_context(diagnostic,
-          source: "SVG",
-          module: __MODULE__,
-          operation: :rasterize
-        )}}
   end
 
   @doc "Validates and charges the actual SVG raster canvas before native allocation."
@@ -266,9 +256,13 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
       surface_costs: %{}
     }
 
+    # DTD events are rejected before declarations can introduce entities;
+    # external DTD loading is also disabled. Keep strict undeclared-entity
+    # handling, since entity-disabling options preserve invalid references.
     result =
       :xmerl_sax_parser.stream(svg, [
-        :skip_external_dtd,
+        # DTD callbacks reject declarations before use; retain external entity
+        # denial without skip_external_dtd's permissive undeclared references.
         :disallow_entities,
         {:external_entities, :none},
         {:event_fun, &validate_event/3},
@@ -398,6 +392,27 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
             )
         end
 
+        if namespace == :svg do
+          case NativeElixirPdfUtilities.Validators.SvgFilterValidator.validate_source_attributes(
+                 name,
+                 attrs
+               ) do
+            :ok ->
+              :ok
+
+            {:error, {reason, diagnostic}} ->
+              throw(
+                {:svg_validation,
+                 Diagnostics.error(diagnostic.stage, reason, diagnostic.message,
+                   module: Map.get(diagnostic, :module),
+                   operation: Map.get(diagnostic, :operation),
+                   source: Map.get(diagnostic, :source),
+                   line: line
+                 )}
+              )
+          end
+        end
+
         if state.root == nil and
              (name != "svg" or to_string(uri) not in ["", "http://www.w3.org/2000/svg"]) do
           reject("SVG document must have an svg root", line)
@@ -408,15 +423,38 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
               to_string(key) == "href",
               do: String.trim(to_string(value))
 
+        # Navigation is inert in converter image artwork. Validate its source
+        # URL through the shared policy without treating it as an image fetch.
+        if name == "a" do
+          Enum.each(hrefs, fn href ->
+            case HtmlValidator.validate_static_url_attributes(%{"href" => href}) do
+              :ok ->
+                :ok
+
+              {:error, {reason, diagnostic}} ->
+                throw(
+                  {:svg_validation,
+                   Diagnostics.error(diagnostic.stage, reason, diagnostic.message,
+                     module: Map.get(diagnostic, :module),
+                     operation: Map.get(diagnostic, :operation),
+                     source: Map.get(diagnostic, :source),
+                     line: line
+                   )}
+                )
+            end
+          end)
+        end
+
         resource_hrefs =
-          if name == "a" and state.context.mode == :inline,
+          if name == "a",
             do: [],
             else: hrefs
 
         if (name in ["image", "feImage"] and not state.context.external_resources?) or
              Enum.any?(resource_hrefs, fn value ->
                not String.starts_with?(value, "#") and
-                 (not state.context.external_resources? or
+                 (name not in ["image", "feImage"] or
+                    not state.context.external_resources? or
                     not Map.has_key?(state.context.resources, value))
              end) do
           reject(
@@ -457,35 +495,32 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
                line
              )
 
+        # Marker subtrees are genuine reused geometry in every rendering mode.
+        # Their local references use the existing graph, depth and work policy,
+        # so recursive artwork cannot be silently dropped by the native parser.
+        paint_properties =
+          ~w(marker marker-start marker-mid marker-end) ++
+            if(state.context.mode == :inline, do: ~w(clip-path fill stroke), else: [])
+
         paint_hrefs =
-          if state.context.mode == :inline do
-            Enum.flat_map(~w(clip-path fill stroke), fn property ->
-              case NativeElixirPdfUtilities.Validators.SvgStyleValidator.parse(
-                     property,
-                     Map.get(attrs, property, "none")
-                   ) do
-                {:ok, {kind, id}} when kind in [:fragment, :paint_server] ->
-                  [{"#" <> id, property}]
+          Enum.flat_map(paint_properties, fn property ->
+            case NativeElixirPdfUtilities.Validators.SvgStyleValidator.parse(
+                   property,
+                   Map.get(attrs, property, "none")
+                 ) do
+              {:ok, {kind, id}} when kind in [:fragment, :paint_server] ->
+                [{"#" <> id, property}]
 
-                _ ->
-                  []
-              end
-            end)
-          else
-            []
-          end
-
-        position_work =
-          if namespace == :svg and name in ~w(text tspan textPath) do
-            case SvgTextPositionValidator.reserve_work(%{tag: name, attributes: attrs}, :style) do
-              {:ok, work} -> work
-              error -> throw({:svg_validation, error})
+              _ ->
+                []
             end
-          else
-            0
-          end
+          end)
 
-        paths = byte_size(Map.get(attrs, "d", "")) + byte_size(Map.get(attrs, "points", ""))
+        position_work = 0
+
+        paths =
+          byte_size(Map.get(attrs, "d", "")) + byte_size(Map.get(attrs, "points", "")) +
+            if(name == "textPath", do: byte_size(Map.get(attrs, "path", "")), else: 0)
 
         index = state.nodes + 1
         id = Map.get(attrs, "id")
@@ -541,7 +576,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
                     tag: name,
                     attributes:
                       if(
-                        name in ~w(use image textPath a) and not Map.has_key?(attrs, "href") and
+                        name in ~w(use image feImage textPath a) and
+                          not Map.has_key?(attrs, "href") and
                           hrefs != [],
                         do: Map.put(attrs, "href", hd(hrefs)),
                         else: attrs
@@ -598,7 +634,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
             nested_viewports:
               state.nested_viewports +
                 if(namespace == :svg and name == "svg" and state.root != nil, do: 1, else: 0),
-            images: state.images + if(name == "image", do: 1, else: 0),
+            images: state.images + if(name in ~w(image feImage), do: 1, else: 0),
             ids: if(id == nil, do: state.ids, else: Map.put(state.ids, id, index)),
             graph: graph,
             path_costs: Map.put(state.path_costs, index, paths),

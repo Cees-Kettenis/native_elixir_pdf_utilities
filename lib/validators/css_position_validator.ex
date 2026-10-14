@@ -7,7 +7,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
   @doc "Checks the numeric type of a position calculation without loading fonts or images."
   @spec prepare_math(String.t()) :: {:ok, {:css_position_math, String.t()}} | :error
   def prepare_math(value) do
-    environment = %{width: 1.0, height: 1.0, type_check: true, percentage_basis: 1.0}
+    environment = %{
+      width: 1.0,
+      height: 1.0,
+      type_check: true,
+      percentage_basis: 1.0,
+      _depth_limit: :max_css_calculation_depth
+    }
 
     result =
       try do
@@ -30,6 +36,91 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
     end
   end
 
+  @doc "Prepares the selected-font CSS math environment using a real point percentage basis."
+  @spec math_environment(map(), number()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def math_environment(style, remaining) do
+    font = Map.get(style, :font_face)
+    root_font = Map.get(style, :_root_font_face) || font
+    size = Map.get(style, :font_size)
+    root_size = Map.get(style, :_root_font_size, size)
+
+    with true <- is_number(size) and size >= 0 and is_number(root_size) and root_size >= 0,
+         true <- is_number(Map.get(style, :line_height)),
+         {:ok, metrics} <- SourceSizeValidator.prepare_font_metrics(font, size, style.line_height),
+         {:ok, root_metrics} <-
+           SourceSizeValidator.prepare_font_metrics(
+             root_font,
+             root_size,
+             Map.get(style, :_root_line_height, style.line_height)
+           ) do
+      viewport = Map.get(style, :_position_viewport)
+
+      {:ok,
+       %{
+         width: if(is_map(viewport), do: Map.get(viewport, :width), else: nil),
+         height: if(is_map(viewport), do: Map.get(viewport, :height), else: nil),
+         font_size: size / 0.75,
+         root_font_size: root_size / 0.75,
+         source_metrics: metrics,
+         root_metrics: root_metrics,
+         percentage_basis: remaining / 0.75,
+         _depth_limit: :max_css_calculation_depth
+       }}
+    else
+      {:error, _} = error ->
+        error
+
+      _ ->
+        Diagnostics.error(
+          :layout,
+          :invalid_layout,
+          "CSS calculation requires finite selected font and root font metrics",
+          module: __MODULE__,
+          operation: :resolve_css_math
+        )
+    end
+  end
+
+  @doc "Checks prepared CSS position dimensions through the shared math grammar and numeric bounds."
+  @spec valid_prepared?(term()) :: boolean()
+  def valid_prepared?(position) do
+    valid_prepared_position?(position, 0)
+  end
+
+  defp valid_prepared_position?(position, depth) do
+    HtmlValidator.check_render_resource(:max_css_calculation_depth, depth, :layout)
+
+    case position do
+      {:percent, ratio} ->
+        match?({:ok, _}, HtmlValidator.normalize_geometry_number(ratio))
+
+      {:end, offset} ->
+        valid_prepared_position?(offset, depth + 1)
+
+      {:css_position_math, source} when is_binary(source) ->
+        if String.valid?(source) do
+          case CssMathValidator.evaluate(source, %{
+                 type_check: true,
+                 width: 1.0,
+                 height: 1.0,
+                 percentage_basis: 1.0,
+                 _depth_limit: :max_css_calculation_depth
+               }) do
+            {:ok, value, type} -> type == %{length: 1} or (value == 0 and type == %{})
+            _ -> false
+          end
+        else
+          false
+        end
+
+      number when is_number(number) ->
+        match?({:ok, _}, HtmlValidator.normalize_geometry_number(number))
+
+      _ ->
+        false
+    end
+  end
+
   @doc "Resolves a position in points using actual remaining space and the selected font style."
   @spec resolve(term(), number(), map()) :: {:ok, float()} | {:error, {atom(), map()}}
   def resolve(position, remaining, style) do
@@ -47,34 +138,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
 
             {:css_position_math, source} when is_binary(source) ->
               source = if String.valid?(source), do: source, else: "invalid"
-              font = Map.get(style, :font_face)
-              root_font = Map.get(style, :_root_font_face) || font
-              size = Map.get(style, :font_size)
-              root_size = Map.get(style, :_root_font_size, size)
 
-              with true <-
-                     is_number(size) and size >= 0 and is_number(root_size) and root_size >= 0,
-                   true <- is_number(Map.get(style, :line_height)),
-                   {:ok, metrics} <-
-                     SourceSizeValidator.prepare_font_metrics(font, size, style.line_height),
-                   {:ok, root_metrics} <-
-                     SourceSizeValidator.prepare_font_metrics(
-                       root_font,
-                       root_size,
-                       Map.get(style, :_root_line_height, style.line_height)
-                     ) do
-                viewport = Map.get(style, :_position_viewport)
-
-                environment = %{
-                  width: if(is_map(viewport), do: Map.get(viewport, :width), else: nil),
-                  height: if(is_map(viewport), do: Map.get(viewport, :height), else: nil),
-                  font_size: size / 0.75,
-                  root_font_size: root_size / 0.75,
-                  source_metrics: metrics,
-                  root_metrics: root_metrics,
-                  percentage_basis: remaining / 0.75
-                }
-
+              with {:ok, environment} <- math_environment(style, remaining) do
                 evaluated =
                   try do
                     CssMathValidator.evaluate(source, environment)
@@ -105,9 +170,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
                   _ ->
                     :error
                 end
-              else
-                false -> :error
-                error -> error
               end
 
             number when is_number(number) ->

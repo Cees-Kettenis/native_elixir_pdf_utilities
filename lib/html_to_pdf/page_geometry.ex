@@ -12,6 +12,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
   # Fixed CSS length invariant: one pixel is 1/96 inch, or 0.75 PDF points.
   @css_pixel_points 0.75
 
+  @doc "Returns the whole CSS-pixel source height of a validated print fragmentainer; its physical PDF clip retains the original fractional height."
+  @spec css_fragmentainer_source_height(number()) :: float()
+  def css_fragmentainer_source_height(height),
+    do: Float.ceil(height / @css_pixel_points) * @css_pixel_points
+
   @doc false
   @spec snap_box_to_css_pixel_grid(map()) :: map()
   def snap_box_to_css_pixel_grid(box) do
@@ -69,6 +74,86 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
       # Appearance bounds include precisely the same painted outer contour.
       Enum.map([box, inner], &%{&1 | x: &1.x - 0.0001, y: &1.y + 0.0001})
     end
+  end
+
+  @doc "Returns pixel-snapped outer, inner and center contours for validated per-edge curved CSS borders."
+  @spec curved_border_geometry(map(), number()) :: map()
+  def curved_border_geometry(box, page_height) do
+    scale = @css_pixel_points
+
+    outer = %{
+      x: box.x / scale,
+      y: (page_height - box.y - box.height) / scale,
+      width: box.width / scale,
+      height: box.height / scale,
+      radius: min(box.border_radius / scale, min(box.width, box.height) / (2 * scale))
+    }
+
+    widths =
+      Map.get(box, :border_widths, %{
+        top: box.stroke_width,
+        right: box.stroke_width,
+        bottom: box.stroke_width,
+        left: box.stroke_width
+      })
+      |> Map.new(fn {side, extent} -> {side, extent / scale} end)
+
+    insets = [
+      Map.new(widths, fn {side, _} -> {side, 0} end),
+      widths,
+      Map.new(widths, fn {side, extent} -> {side, trunc(extent * 0.5)} end)
+    ]
+
+    contours =
+      Enum.map(insets, fn inset ->
+        x = Float.floor(outer.x + inset.left + 0.5)
+        y = Float.floor(outer.y + inset.top + 0.5)
+        width = max(Float.floor(outer.x + outer.width - inset.right + 0.5) - x, 0)
+        height = max(Float.floor(outer.y + outer.height - inset.bottom + 0.5) - y, 0)
+
+        radii = %{
+          bottom_left: {max(outer.radius - inset.left, 0), max(outer.radius - inset.top, 0)},
+          bottom_right: {max(outer.radius - inset.right, 0), max(outer.radius - inset.top, 0)},
+          top_right: {max(outer.radius - inset.right, 0), max(outer.radius - inset.bottom, 0)},
+          top_left: {max(outer.radius - inset.left, 0), max(outer.radius - inset.bottom, 0)}
+        }
+
+        %{
+          x: x,
+          y: y,
+          width: width,
+          height: height,
+          radius: max(outer.radius - inset.top, 0),
+          radii: radii
+        }
+      end)
+
+    [outer, inner, center] = contours
+    tl = {outer.x, outer.y}
+    tr = {outer.x + outer.width, outer.y}
+    bl = {outer.x, outer.y + outer.height}
+    br = {outer.x + outer.width, outer.y + outer.height}
+    itl = {inner.x, inner.y}
+    itr = {inner.x + inner.width, inner.y}
+    ibl = {inner.x, inner.y + inner.height}
+    ibr = {inner.x + inner.width, inner.y + inner.height}
+
+    sides = %{
+      top: [tl, tr, itr, itl],
+      right: [tr, br, ibr, itr],
+      bottom: [br, bl, ibl, ibr],
+      left: [bl, tl, itl, ibl]
+    }
+
+    %{
+      outer: outer,
+      inner: inner,
+      center: center,
+      width: box.stroke_width / scale,
+      widths: widths,
+      sides: sides,
+      page_height: page_height / scale
+    }
   end
 
   @type page_size_name ::

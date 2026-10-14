@@ -1,9 +1,17 @@
 defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
-  @moduledoc "Owns the computed root sizing metadata retained after transparent HTML root composition."
+  @moduledoc "Owns shared calculated box dimensions and computed root sizing metadata."
   alias NativeElixirPdfUtilities.Diagnostics
-  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+
+  alias NativeElixirPdfUtilities.Validators.{
+    CssMathValidator,
+    CssPositionValidator,
+    HtmlValidator
+  }
+
+  @dimension_properties [:width, :height, :min_width, :max_width, :min_height, :max_height]
 
   @properties [
+    :calculation_context,
     :width,
     :min_width,
     :max_width,
@@ -23,12 +31,117 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
     :margin_block_auto
   ]
 
+  @typedoc "A validated calculation whose percentage dependency remains tied to the containing axis."
+  @type calculation :: {:css_size_math, {String.t(), boolean()}}
+
+  @doc "Prepares general box size arithmetic through the shared CSS calculation grammar."
+  @spec prepare_math(term()) ::
+          {:ok, calculation()} | :error | {:error, Diagnostics.detailed_error()}
+  def prepare_math(value) do
+    with value when is_binary(value) <- value,
+         true <- String.valid?(value),
+         normalized = NativeElixirPdfUtilities.HtmlToPdf.CssParser.strip_comments(value),
+         {:ok, _identifier, "(" <> _} <-
+           HtmlValidator.parse_css_identifier(String.trim(normalized)),
+         {:ok, dependencies} <- CssMathValidator.length_dependencies(value) do
+      {:ok, {:css_size_math, {value, dependencies.percentage?}}}
+    else
+      {:error, _} = error -> error
+      _ -> :error
+    end
+  end
+
+  @doc "Validates prepared box calculations including their genuine percentage dependency."
+  @spec valid_calculation?(term()) :: boolean()
+  def valid_calculation?(value) do
+    case value do
+      {:css_size_math, {source, percentage?}} ->
+        prepare_math(source) == {:ok, {:css_size_math, {source, percentage?}}}
+
+      _ ->
+        false
+    end
+  end
+
+  @doc "Checks calculation metadata in externally supplied computed styles before used-size resolution."
+  @spec validate_calculations(map(), String.t()) :: :ok | {:error, Diagnostics.detailed_error()}
+  def validate_calculations(style, source) do
+    style
+    |> Map.take(@dimension_properties)
+    |> Enum.reduce_while(:ok, fn {property, value}, :ok ->
+      calculated? =
+        is_tuple(value) and tuple_size(value) > 0 and elem(value, 0) in [:css_size_math, :min]
+
+      if calculated? and HtmlValidator.validate_prepared_css_size(value, property) != :ok do
+        {:halt,
+         Diagnostics.error(
+           :layout,
+           :invalid_layout,
+           "#{property} requires a validated CSS length calculation and its original percentage dependency",
+           operation: :layout,
+           module: __MODULE__,
+           source: source
+         )}
+      else
+        {:cont, :ok}
+      end
+    end)
+  end
+
+  @doc "Resolves box calculations against selected font metrics and the actual containing dimension."
+  @spec resolve_math(calculation(), number() | nil, map()) ::
+          {:ok, number() | nil} | {:error, Diagnostics.detailed_error()}
+  def resolve_math({:css_size_math, {source, percentage?}}, basis, style) do
+    if percentage? and is_nil(basis) do
+      {:ok, nil}
+    else
+      with {:ok, value} <-
+             CssPositionValidator.resolve(
+               {:css_position_math, source},
+               basis || 0.0,
+               Map.get(style, :calculation_context, style)
+             ),
+           do: {:ok, max(value, 0.0)}
+    end
+  end
+
   @doc "Retains computed root dimensions without changing document canvas paint semantics."
   @spec prepare_root(map() | nil) :: map() | nil
   def prepare_root(style) do
     case style do
-      style when is_map(style) -> Map.take(style, @properties)
-      nil -> nil
+      style when is_map(style) ->
+        root = Map.take(style, @properties)
+
+        calculated? =
+          Enum.any?(
+            @dimension_properties,
+            fn property ->
+              value = Map.get(style, property)
+
+              is_tuple(value) and tuple_size(value) > 0 and
+                elem(value, 0) in [:css_size_math, :min]
+            end
+          )
+
+        if calculated? do
+          context =
+            Map.take(style, [
+              :font_size,
+              :font_face,
+              :line_height,
+              :_root_font_size,
+              :_root_font_face,
+              :_root_line_height,
+              :_position_viewport
+            ])
+
+          Map.put(root, :calculation_context, context)
+        else
+          root
+        end
+
+      nil ->
+        nil
     end
   end
 
@@ -45,6 +158,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
             Enum.all?(Map.keys(root), &(&1 in @properties)) and
               Enum.all?(root, fn {property, value} ->
                 case property do
+                  :calculation_context ->
+                    is_map(value) and
+                      match?(
+                        {:ok, 1.0},
+                        CssPositionValidator.resolve(
+                          {:css_position_math, "calc(1pt)"},
+                          0.0,
+                          value
+                        )
+                      )
+
                   :box_sizing ->
                     value in [:content_box, :border_box]
 
@@ -204,6 +328,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
 
       {:percent, ratio} ->
         valid_size?(ratio, depth + 1) and is_number(ratio)
+
+      {:css_size_math, _} = calculation ->
+        valid_calculation?(calculation)
 
       {:min, sizes} when is_list(sizes) and sizes != [] ->
         HtmlValidator.reserve_render_resource(:max_css_work, length(sizes), :layout)

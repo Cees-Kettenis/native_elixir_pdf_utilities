@@ -1,0 +1,13 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><style>
+@page { size: A4; margin: 18px; }
+body { margin: 0; font-family: "DejaVu Sans"; font-size: 14px; }
+math { font-family: "STIX Two Math"; }
+</style></head>
+<body>
+<div><?start name="A"><math style="--size:2rem;font-size:18px"><mspace style="width:var(--size);height:2px"></mspace><mi>x</mi><mfrac><mn>1</mn><mn>2</mn></mfrac></math><p>Removed original</p><?end?></div>
+<template for="A"><math style="--size:2em;font-size:18px"><mstyle style="font-size:125%"><mspace style="width:var(--size);height:2px;background-color:blue"></mspace></mstyle></math><p>Inserted actual</p></template>
+<p>After template</p>
+</body>
+</html>

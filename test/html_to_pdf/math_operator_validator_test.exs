@@ -494,11 +494,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorValidatorTest do
     end
   end
 
+  test "resolved viewport operator lengths retain shared calculation diagnostics" do
+    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 1_000))
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             MathOperatorValidator.prepare("+", %{"lspace" => "200vw"}, %{
+               viewport_width: 1_000,
+               viewport_height: 500
+             })
+
+    assert diagnostic.stage == :layout
+    assert diagnostic.operation == :prepare_math_operator
+    assert diagnostic.module == MathOperatorValidator
+    assert diagnostic.source == "200vw"
+    assert diagnostic.message =~ "operator lspace"
+    assert diagnostic.message =~ "validated expression"
+  end
+
   test "valid CSS lengths requiring unimplemented geometry diagnose instead of taking a dictionary fallback" do
     for value <- [
           "2vw",
-          "1cqw",
-          "calc(1em + 2vw)"
+          "1cqw"
         ] do
       assert {:error, {:invalid_document, diagnostic}} =
                MathOperatorValidator.prepare("+", %{"lspace" => value})
@@ -511,8 +527,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorValidatorTest do
     end
   end
 
-  test "typed CSS arithmetic resolves spacing with font and dictionary percentage context" do
-    for {value, expected} <- [
+  test "Chromium ignores calculated operator attributes before metric resolution" do
+    for {value, _css_result} <- [
           {"calc(1em + 2px)", 19.5},
           {"min(1em, 2px)", 1.5},
           {"max(1em, 2px)", 18},
@@ -537,7 +553,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorValidatorTest do
                  viewport_height: 200
                })
 
-      assert_in_delta operator.lspace, expected, 1.0e-10
+      assert_in_delta operator.lspace, 18 * 4 / 18, 1.0e-10
     end
   end
 
@@ -560,24 +576,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorValidatorTest do
     end
   end
 
-  test "arithmetic failures and nesting exhaustion retain actionable operator diagnostics" do
-    for value <- ["calc(1em / 0)", "calc(1em + 1rch)"] do
-      assert {:error, {:invalid_document, diagnostic}} =
-               MathOperatorValidator.prepare("+", %{"lspace" => value})
-
-      assert diagnostic.stage == :layout
-      assert diagnostic.operation == :prepare_math_operator
-      assert diagnostic.source == value
-      assert diagnostic.message =~ "operator lspace"
-    end
-
+  test "ignored calculated attributes consume no calculation budget and need no font metrics" do
     Limits.install(Map.put(Limits.effective(), :max_css_calculation_depth, 2))
-    value = "calc(min(max(1em, 2em), 3em))"
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             MathOperatorValidator.prepare("+", %{"lspace" => value})
-
-    assert diagnostic.message =~ "max_css_calculation_depth"
-    assert diagnostic.source == value
+    for value <- ["calc(1em / 0)", "calc(1em + 1rch)", "calc(min(max(1em, 2em), 3em))"] do
+      assert {:ok, operator} = MathOperatorValidator.prepare("+", %{"lspace" => value})
+      assert_in_delta operator.lspace, 12 * 4 / 18, 1.0e-10
+    end
   end
 end

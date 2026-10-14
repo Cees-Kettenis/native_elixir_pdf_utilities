@@ -2,7 +2,7 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
-  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.{FontValidator, HtmlValidator, HtmlLineBreakValidator}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, ResourceContext}
 
   @doc "Rejects caller-supplied ruby measurements, which are created only inside inline layout."
@@ -38,64 +38,75 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
 
           _ ->
             with {:ok, _request} <- HtmlValidator.prepare_measured_child(node, context, %{}) do
-              if Enum.all?(children, fn child ->
-                   match?(
-                     %{type: :text, text: text, style: child_style}
-                     when is_binary(text) and is_map(child_style),
-                     child
-                   ) or
-                     match?(
-                       %{type: :element, style: child_style, children: nested}
-                       when is_map(child_style) and is_list(nested),
-                       child
-                     )
-                 end) do
-                {groups, pending} =
-                  Enum.reduce(children, {[], []}, fn child, {groups, pending} ->
-                    HtmlValidator.reserve_render_resource(
-                      :max_html_tree_work,
-                      length(groups) + length(pending) + 1,
-                      :layout
-                    )
+              # The canonical measured-child validator already admitted the styled subtree.
+              {groups, pending} =
+                Enum.reduce(children, {[], []}, fn child, {groups, pending} ->
+                  HtmlValidator.reserve_render_resource(
+                    :max_html_tree_work,
+                    length(groups) + length(pending) + 1,
+                    :layout
+                  )
 
-                    case child do
-                      %{style: %{display: :none}} ->
-                        {groups, pending}
+                  case child do
+                    %{style: %{display: :none}} ->
+                      {groups, pending}
 
-                      %{tag: "rt", style: %{_ruby_annotation: true}} ->
-                        cond do
-                          pending != [] ->
-                            {groups ++ [%{base: pending, annotations: [child]}], []}
+                    %{tag: "rt", style: %{_ruby_annotation: true}} ->
+                      cond do
+                        pending != [] ->
+                          {groups ++ [%{base: pending, annotations: [child]}], []}
 
-                          true ->
-                            {groups ++ [%{base: [], annotations: [child]}], []}
-                        end
+                        true ->
+                          {groups ++ [%{base: [], annotations: [child]}], []}
+                      end
 
-                      _ ->
-                        {groups, pending ++ [child]}
-                    end
-                  end)
+                    _ ->
+                      {groups, pending ++ [child]}
+                  end
+                end)
 
-                groups =
-                  if pending == [],
-                    do: groups,
-                    else: groups ++ [%{base: pending, annotations: []}]
+              groups =
+                if pending == [],
+                  do: groups,
+                  else: groups ++ [%{base: pending, annotations: []}]
+
+              text = Enum.map_join(groups, &base_text(&1.base))
+
+              with {:ok, breaks} <- HtmlLineBreakValidator.opportunities(text) do
+                offsets = MapSet.new(breaks, &elem(&1, 0))
 
                 {groups, _} =
-                  Enum.map_reduce(groups, "", fn group, previous ->
-                    text = base_text(group.base)
+                  Enum.map_reduce(groups, 0, fn group, start ->
+                    base = base_text(group.base)
+                    anywhere? = Map.get(style, :line_break) == :anywhere
 
-                    break_before =
-                      previous == "" or Regex.match?(~r/[ \t\n\r\f]$/u, previous) or
-                        Regex.match?(~r/^[ \t\n\r\f]|^[\p{Han}\p{Hiragana}\p{Katakana}]/u, text) or
-                        Map.get(style, :line_break) == :anywhere
+                    {counts, _} =
+                      base
+                      |> String.graphemes()
+                      |> Enum.with_index(1)
+                      |> Enum.map_reduce(0, fn {grapheme, count}, offset ->
+                        offset = offset + byte_size(grapheme)
+                        {{count, offset}, offset}
+                      end)
 
-                    {Map.put(group, :break_before, break_before), text}
+                    counts =
+                      for {count, offset} <- counts,
+                          offset < byte_size(base),
+                          anywhere? or MapSet.member?(offsets, start + offset),
+                          do: count
+
+                    prepared =
+                      group
+                      |> Map.put(
+                        :break_before,
+                        start == 0 or anywhere? or MapSet.member?(offsets, start)
+                      )
+                      |> Map.put(:break_counts, counts)
+
+                    {prepared, start + byte_size(base)}
                   end)
 
                 {:ok, groups}
-              else
-                failure("ruby requires styled text or element children")
               end
             end
         end
@@ -105,6 +116,36 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
     end
   catch
     {:render_resource_limit, error} -> error
+  end
+
+  @doc "Computes the selected font's normalized typographic em box for horizontal ruby placement."
+  @spec em_metrics(map()) ::
+          {:ok, %{ascent: number(), descent: number()}}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def em_metrics(style) do
+    face = style.font_face
+
+    with {:ok, metrics} <- FontValidator.prepare_text_metrics(face) do
+      height = metrics.typographic_height || %{ascent: face.ascent, descent: -face.descent}
+      pixels = style.font_size / 0.75
+      total = height.ascent + height.descent
+
+      # Blink normalizes the typographic ratio to one em in fixed CSS 1/64-pixel units,
+      # then rounds each em edge upward and clamps it to the primary font height.
+      # The 1/64 unit is a fixed layout representation, not a resource limit.
+      ascent = if total > 0, do: round(height.ascent * pixels / total * 64) / 64, else: 0.0
+      descent = round(pixels * 64) / 64 - ascent
+      primary_ascent = round(face.ascent / face.units_per_em * pixels)
+      primary_descent = round(-face.descent / face.units_per_em * pixels)
+
+      {:ok,
+       %{
+         ascent: min(Float.ceil(ascent), primary_ascent) * 0.75,
+         descent: min(Float.ceil(descent), primary_descent) * 0.75
+       }}
+    else
+      :error -> failure("ruby requires the selected font's readable typographic metrics")
+    end
   end
 
   @doc "Counts the graphemes and indivisible atomic children of a validated ruby base."
@@ -117,7 +158,7 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
   @spec splittable_group?(map(), number()) :: boolean()
   def splittable_group?(group, base_width) do
     # Blink's four/eight glyph boundary is a fixed composition rule, not a resource ceiling.
-    base_width > 0 and
+    base_width > 0 and Map.get(group, :break_counts, []) != [] and
       (node_length(group.base, true) > 4 or
          Enum.any?(group.annotations, &(node_length(&1.children, true) > 8)))
   end
@@ -211,8 +252,24 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
       HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :layout)
 
       case child do
-        %{type: :text, text: text} -> text
-        %{children: children} -> base_text(children)
+        %{style: %{display: :none}} ->
+          ""
+
+        %{tag: "ruby"} ->
+          "\uFFFC"
+
+        %{style: %{display: display}}
+        when display in [:inline_block, :inline_flex, :inline_grid, :image] ->
+          "\uFFFC"
+
+        %{type: :text, text: text} ->
+          text
+
+        %{children: []} ->
+          "\uFFFC"
+
+        %{children: children} ->
+          base_text(children)
       end
     end)
   end

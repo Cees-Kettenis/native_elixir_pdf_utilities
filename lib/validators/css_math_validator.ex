@@ -67,6 +67,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
   @spec referenced_length_units(term()) ::
           {:ok, [String.t()]} | :error | {:error, Diagnostics.detailed_error()}
   def referenced_length_units(value) do
+    case length_dependencies(value) do
+      {:ok, dependencies} -> {:ok, dependencies.units}
+      result -> result
+    end
+  end
+
+  @doc "Collects unit and percentage dependencies through the shared length calculation grammar."
+  @spec length_dependencies(term()) ::
+          {:ok, %{units: [String.t()], percentage?: boolean()}}
+          | :error
+          | {:error, Diagnostics.detailed_error()}
+  def length_dependencies(value) do
     cond do
       not (is_binary(value) and String.valid?(value)) ->
         length_failure(
@@ -100,7 +112,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
 
             case evaluate(value, environment) do
               {:ok, _, %{length: 1}} ->
-                {:ok, collector |> Process.get() |> Enum.reverse() |> Enum.uniq()}
+                dependencies = collector |> Process.get() |> Enum.reverse() |> Enum.uniq()
+                {:ok, %{units: List.delete(dependencies, "%"), percentage?: "%" in dependencies}}
 
               _ ->
                 :error
@@ -274,16 +287,27 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
                 else: :error
 
             product ->
-              right_type =
-                if product == "/",
-                  do: Map.new(right_type, fn {key, exponent} -> {key, -exponent} end),
-                  else: right_type
+              # The pinned color grammar allows scalar factors and scalar divisors.
+              # Check each authored operation before general dimensional cancellation.
+              invalid_color_product? =
+                Map.get(environment, :color_components, false) and
+                  ((product == "*" and left_type != %{} and right_type != %{}) or
+                     (product == "/" and right_type != %{}))
 
-              type =
-                Map.merge(left_type, right_type, fn _key, left, right -> left + right end)
-                |> Map.reject(fn {_key, exponent} -> exponent == 0 end)
+              if invalid_color_product? do
+                :error
+              else
+                right_type =
+                  if product == "/",
+                    do: Map.new(right_type, fn {key, exponent} -> {key, -exponent} end),
+                    else: right_type
 
-              {:ok, arithmetic(operator, left, right), type}
+                type =
+                  Map.merge(left_type, right_type, fn _key, left, right -> left + right end)
+                  |> Map.reject(fn {_key, exponent} -> exponent == 0 end)
+
+                {:ok, arithmetic(operator, left, right), type}
+              end
           end
         else
           _ -> :error
@@ -386,7 +410,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
                   :ok
 
                 collector ->
-                  if unit in @length_units,
+                  if unit in ["%" | @length_units],
                     do: Process.put(collector, [unit | Process.get(collector)])
               end
 
@@ -507,8 +531,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
 
                   "%" ->
                     case Map.fetch(environment, :percentage_basis) do
-                      {:ok, basis} -> {basis / 100.0, :length}
-                      :error -> {1.0, :percentage}
+                      {:ok, basis} ->
+                        {basis / 100.0, Map.get(environment, :percentage_dimension, :length)}
+
+                      :error ->
+                        {1.0, :percentage}
                     end
 
                   "" ->
@@ -524,8 +551,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
                   else: {scale, type}
 
               with true <- is_number(scale),
-                   {:ok, value} <- HtmlValidator.normalize_geometry_number(number * scale),
-                   do: {:ok, value, if(type == :number, do: %{}, else: %{type => 1})}
+                   {:ok, value} <- HtmlValidator.normalize_geometry_number(number * scale) do
+                {:ok, value, if(type == :number, do: %{}, else: %{type => 1})}
+              else
+                _ -> :error
+              end
             end
 
           _ ->
@@ -653,7 +683,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
     case value do
       :infinity -> :negative_infinity
       :negative_infinity -> :infinity
-      :nan -> :nan
       number -> -number
     end
   end

@@ -498,7 +498,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       assert diagnostic.stage == :layout and diagnostic.operation == :prepare
       assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgSceneValidator
       assert diagnostic.source == tag
-      assert diagnostic.message =~ "implementation"
+      assert diagnostic.message =~ "supported source policy"
     end
   end
 
@@ -679,7 +679,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       assert {:ok, ^pdf} = HtmlToPdf.render(reference, opts)
       assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(pdf)
       assert {:ok, flat} = NativeElixirPdfUtilities.Forms.flatten(pdf)
-      assert {:ok, text} = Text.extract(flat)
+      assert {:ok, text} = Text.extract(flat, layout: false)
 
       for caption <- [
             "Metadata record",
@@ -1060,7 +1060,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              NativeElixirPdfUtilities.Forms.fields(pdf)
   end
 
-  test "actual MathML tokens and anonymous rows retain text and selected glyphs" do
+  test "actual MathML tokens retain selected glyphs and default rows follow Chrome text admission" do
     html = """
     <p>Before <math><mrow><mi> x </mi><mn>12</mn><ms lquote='[' rquote=']' mathbackground='yellow'>literal</ms>
     <mspace width='1em' height='2pt' depth='1pt'/><mtext> a <span style='color:red'>b</span> c&nbsp;d </mtext>
@@ -1072,15 +1072,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(pdf)
     assert {:ok, text} = Text.extract(pdf, layout: false)
 
-    for expected <- ["Before", "x12literal", "a b c", "tail", "After", "zexp42"],
+    for expected <- ["Before", "x12literal", "a b c", "After", "zexp42"],
         do: assert(String.contains?(text, expected))
 
+    refute text =~ "tail"
     refute text =~ "[literal]"
     refute text =~ "𝑥"
     refute text =~ "Hidden"
   end
 
-  test "native MathML selection, annotation text and unknown rows retain public logical content" do
+  test "native MathML selection and annotations preserve visible source content under Chrome admission" do
     for tag <- ~w(semantics maction unknown-math) do
       assert {:ok, pdf} = HtmlToPdf.render("<math><#{tag}><mn>12</mn></#{tag}></math>")
       assert {:ok, "12"} = Text.extract(pdf, layout: false)
@@ -1088,7 +1089,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     for tag <- ~w(annotation annotation-xml) do
       assert {:ok, pdf} = HtmlToPdf.render("<math><#{tag}>α</#{tag}></math>")
-      assert {:ok, "α"} = Text.extract(pdf, layout: false)
+      assert {:error, {:no_extractable_text, diagnostic}} = Text.extract(pdf, layout: false)
+      assert diagnostic.stage == :text_extraction
+      assert diagnostic.reason == :no_extractable_text
     end
 
     assert {:ok, pdf} =
@@ -1098,13 +1101,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, "12"} = Text.extract(pdf, layout: false)
 
+    html =
+      "<math><annotation-xml encoding='text/html'><a href='https://annotation.test/'>α</a></annotation-xml></math>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert {:error, {:no_extractable_text, _}} = Text.extract(pdf, layout: false)
+    refute pdf =~ "https://annotation.test/"
+
     assert {:ok, pdf} =
-             HtmlToPdf.render(
-               "<math><annotation-xml encoding='text/html'><a href='https://annotation.test/'>α</a></annotation-xml></math>"
-             )
+             HtmlToPdf.render("<style>annotation-xml {display:inline-block}</style>" <> html)
 
     assert {:ok, "α"} = Text.extract(pdf, layout: false)
     assert pdf =~ "https://annotation.test/"
+    assert {:ok, pdf} = HtmlToPdf.render("<math><mi>α</mi><mtext>β</mtext></math>")
+    assert {:ok, "αβ"} = Text.extract(pdf, layout: false)
   end
 
   test "native six script schemata render actual base and script logical content" do
@@ -1172,15 +1182,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
           "min-width:20pt",
           "box-sizing:border-box"
         ] do
-      assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render("<math style='#{style}'><mn>12</mn></math>")
-
-      assert diagnostic.source == "math"
-      assert diagnostic.message =~ "CSS composition"
+      assert {:ok, pdf} = HtmlToPdf.render("<math style='#{style}'><mn>12</mn></math>")
+      assert {:ok, "12"} = Text.extract(pdf, layout: false)
+      assert pdf =~ "/CIDFontType2" and pdf =~ "/FontFile2" and pdf =~ "STIXTwoMath"
+      assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(pdf)
+      assert Enum.any?(spans, &(&1.paints_text? and &1.end_x > &1.x and &1.font_size > 0))
     end
 
-    assert {:error, {:unsupported_html, _}} =
+    assert {:ok, percentage_token} =
              HtmlToPdf.render("<math><mn style='width:50%'>12</mn></math>")
+
+    assert {:ok, "12"} = Text.extract(percentage_token, layout: false)
+    assert percentage_token =~ "STIXTwoMath" and percentage_token =~ "/FontFile2"
+    assert {:ok, %{pages: [%{spans: token_spans}]}} = Text.extract_spans(percentage_token)
+    assert Enum.any?(token_spans, &(&1.paints_text? and &1.end_x > &1.x))
 
     assert {:ok, pdf} =
              HtmlToPdf.render("<math><mtext style='white-space:pre'> a  b </mtext></math>")
@@ -2526,29 +2541,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert text_message =~ "max_rendered_text_bytes"
   end
 
-  test "zero-size foreignObject retains its original source without paint or logical leakage" do
-    assert {:ok, pdf} =
+  test "zero-size foreignObject returns an explicit converter diagnostic" do
+    assert {:error, {:unsupported_html, diagnostic}} =
              HtmlToPdf.render(
                "<div contenteditable><svg contenteditable=false><foreignObject><p>Foreign</p></foreignObject></svg></div>"
              )
 
-    assert {:error, {:no_extractable_text, %{stage: :text_extraction}}} =
-             Text.extract(pdf, layout: false)
-
-    refute pdf =~ "/NativeHtmlSurface"
-    refute pdf =~ "/Subtype /Image"
+    assert diagnostic.source == "foreignObject"
+    assert diagnostic.stage == :layout and diagnostic.reason == :unsupported_html
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+    assert diagnostic.message =~ "cannot be omitted"
   end
 
-  test "bounded foreignObject paints native selected HTML text through the public API" do
-    assert {:ok, pdf} =
+  test "bounded foreignObject diagnoses unsupported HTML without omitting its content" do
+    assert {:error, {:unsupported_html, diagnostic}} =
              HtmlToPdf.render(
                "<svg width='200' height='50'><foreignObject width='200' height='50'><p style='font-family:DejaVu Sans;font-size:14px'>Foreign café Ω</p></foreignObject></svg>"
              )
 
-    assert {:ok, "Foreign café Ω"} = Text.extract(pdf, layout: false)
-    assert pdf =~ "/NativeHtmlSurface"
-    assert pdf =~ "/FontFile2"
-    refute pdf =~ "/Subtype /Image"
+    assert diagnostic.source == "foreignObject"
+    assert diagnostic.stage == :layout and diagnostic.reason == :unsupported_html
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+    assert diagnostic.message =~ "cannot be omitted"
   end
 
   test "supported inline SVG geometry renders through the public API" do
@@ -2557,14 +2571,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                "<svg width=20 height=20><path d='M0 0 H20 V20 Z' fill=red /></svg>"
              )
 
-    assert pdf =~ "/Subtype /Form"
+    assert pdf =~ "/Subtype /Image"
   end
 
   test "previously unsupported SVG path and MathML token inputs retain successful output" do
     assert {:ok, empty_path_pdf} = HtmlToPdf.render("<svg><path d='M0 0'/></svg>")
     assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(empty_path_pdf)
     assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(empty_path_pdf)
-    refute empty_path_pdf =~ "/Subtype /Image"
+    assert empty_path_pdf =~ "/Subtype /Image"
+    assert {:error, {:no_extractable_text, _}} = Text.extract(empty_path_pdf, layout: false)
 
     assert {:ok, math_pdf} = HtmlToPdf.render("<math><mi>x</mi></math>")
     assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(math_pdf)
@@ -2608,7 +2623,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              page == hd(document.pages).ref and x >= 0 and y >= 0
            end)
 
-    assert pdf =~ "/Subtype /Form"
+    assert pdf =~ "/Subtype /Image"
     assert {:ok, text} = Text.extract(pdf, layout: false)
     assert text =~ "Target" and text =~ "Scene"
     assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
@@ -4070,8 +4085,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert {:ok, pdf} = HtmlToPdf.render(html)
     assert_pdf_text(pdf, ["Summary", "Name", "Docs", "Alpha", "Link"])
     assert pdf =~ ~r|/BaseFont /[A-Z]{6}\+DejaVuSans|
-    assert pdf =~ "0.9333 0.9333 0.9333 rg"
-    assert pdf =~ "0.75 0 0 0.75 0 0 cm 0 0 0 RG 1 w"
+    assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+
+    streams =
+      for {ref, %{stream: raw}} <- document.objects, is_binary(raw) do
+        assert {:ok, stream} =
+                 NativeElixirPdfUtilities.Pdf.Reader.decoded_stream(document, {:ref, ref})
+
+        stream
+      end
+
+    assert Enum.any?(streams, &String.contains?(&1, "0.9333 0.9333 0.9333 rg"))
+    assert Enum.any?(streams, &String.contains?(&1, "0.75 0 0 0.75 0 0 cm 0 0 0 RG 1 w"))
+    assert pdf =~ "/FontFile2"
+    assert {:ok, ^pdf} = HtmlToPdf.render(html)
     assert pdf =~ "/Subtype /Link"
     assert pdf =~ "/URI (https://example.com)"
   end

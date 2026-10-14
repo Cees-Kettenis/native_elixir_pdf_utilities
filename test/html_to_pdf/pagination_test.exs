@@ -405,7 +405,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
              {:ok, [%{size: {200.0, 100.0}, boxes: [text_box("Hello", 78.0, {:block, 1})]}]}
   end
 
-  test "paginate moves out-of-flow positioned descendants with their containing block" do
+  test "paginate projects positioned descendants through their containing block fragments" do
     html = """
     <div style="height: 75pt; background: #eeeeee"></div>
     <div style="position: relative; width: 80pt; height: 40pt; background: white">
@@ -418,11 +418,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
     assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {100, 100}, margin: 10)
     assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
 
-    refute Enum.any?(first_page.boxes, &(Map.get(&1, :fill_color) == {0, 0, 1}))
+    first_blue = Enum.find(first_page.boxes, &(Map.get(&1, :fill_color) == {0, 0, 1}))
+    assert first_blue.y + first_blue.height <= first_blue.clip.y
     blue = Enum.find(second_page.boxes, &(Map.get(&1, :fill_color) == {0, 0, 1}))
     assert blue.out_of_flow
     assert_in_delta blue.x, 75.0, 0.0001
-    assert_in_delta blue.y, 55.0, 0.0001
+    assert_in_delta blue.y, 60.0, 0.0001
   end
 
   test "paginate keeps root-positioned boxes on the first page in stacking order" do
@@ -444,7 +445,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
     assert_in_delta yellow.y, 90.0, 0.0001
     assert_in_delta blue.y, 90.0, 0.0001
     assert Enum.find_index(first_page.boxes, &(&1 == yellow)) == 0
-    assert Enum.find_index(first_page.boxes, &(&1 == blue)) == 2
+    {:ok, green} = NativeElixirPdfUtilities.Validators.HtmlValidator.parse_css_color("green", nil)
+    green_box = Enum.find(first_page.boxes, &(Map.get(&1, :fill_color) == green))
+    assert green_box.height == 30.0
+
+    assert Enum.find_index(first_page.boxes, &(&1 == green_box)) <
+             Enum.find_index(first_page.boxes, &(&1 == blue))
+
     refute Enum.any?(second_page.boxes, &Map.has_key?(&1, :position_anchor))
   end
 

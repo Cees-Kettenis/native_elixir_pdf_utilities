@@ -621,7 +621,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
   # uses the same PDF precision and intersected clips as writer annotations.
   defp collect_positions(boxes, page, composition, acc) do
     Enum.reduce(boxes, acc, fn box, {positions, beginnings, expected, requested} ->
-      {sx, sy, tx, ty, clip, _height} = composition
+      {transform, clip, _height} = DrawingGeometry.composition_parts(composition)
 
       requested =
         case Map.get(box, :link_destination) do
@@ -637,13 +637,38 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
         else
           case box do
             %{type: :drawing_group} ->
-              elem(DrawingGeometry.compose_group(box, composition), 4)
+              elem(
+                DrawingGeometry.composition_parts(
+                  DrawingGeometry.compose_group(box, composition)
+                ),
+                1
+              )
 
             _ ->
-              DrawingGeometry.intersect_clip(
-                clip,
-                DrawingGeometry.transform_box_clip(Map.get(box, :clip), {sx, sy, tx, ty})
-              )
+              box_clip = Map.get(box, :clip)
+
+              bounds =
+                DrawingGeometry.intersect_clip(
+                  clip,
+                  DrawingGeometry.transform_box_clip(box_clip, transform)
+                )
+
+              if is_map(composition) and is_map(box_clip) and
+                   (Map.get(box_clip, :border_radius, 0) > 0 or
+                      Map.get(Map.get(box_clip, :inner_clip) || %{}, :border_radius, 0) > 0) do
+                %{
+                  bounds: DrawingGeometry.clip_bounds(bounds),
+                  expression:
+                    {:intersection,
+                     [
+                       DrawingGeometry.clip_expression(clip) ||
+                         {:intersection, []},
+                       DrawingGeometry.box_clip_expression(box_clip, transform)
+                     ]}
+                }
+              else
+                bounds
+              end
           end
         end
 
@@ -654,7 +679,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
               box.x + target.dx,
               box.y + target.dy,
               page,
-              {sx, sy, tx, ty},
+              transform,
               target_clip
             )
 
@@ -664,8 +689,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
       case box do
         %{type: :drawing_group, boxes: children} ->
           composition = DrawingGeometry.compose_group(box, composition)
-          {sx, sy, tx, ty, clip, _height} = composition
-          transform = {sx, sy, tx, ty}
+          {transform, clip, _height} = DrawingGeometry.composition_parts(composition)
 
           positions =
             Enum.reduce(Map.get(box, :link_document_targets, []), positions, fn target,
@@ -725,12 +749,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
     end)
   end
 
-  defp target_position(x, y, page, transform, {left, bottom, right, top}) do
+  defp target_position(x, y, page, transform, clip) do
     {x, y} = DrawingGeometry.transform_point(x, y, transform)
     HtmlValidator.check_render_resource(:max_pdf_numeric_magnitude, abs(x), :pagination)
     HtmlValidator.check_render_resource(:max_pdf_numeric_magnitude, abs(y), :pagination)
 
-    if right > left and top > bottom and x >= left and x <= right and y >= bottom and y <= top,
+    if DrawingGeometry.clip_contains?(clip, x, y),
       do: {:xyz, page, x, y},
       else: {:unavailable, page, x, y}
   end

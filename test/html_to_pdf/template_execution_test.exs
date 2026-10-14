@@ -49,14 +49,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
       Keyword.put(@opts, :asset_resolver, fn _ ->
         frame = Process.get({TemplateExecutionValidator, :execution})
         assert frame.source_view == nil
-        assert :atomics.get(frame.css_budget, 1) == 18
+        assert :atomics.get(frame.css_budget, 1) == if(frame.mode == :original, do: 18, else: 36)
         send(self(), {:completed_source_budget, frame.css_budget})
         {:ok, png}
       end)
 
     assert {:ok, _} = HtmlToPdf.render(html, opts)
     assert_received {:completed_source_budget, budget}
-    assert :atomics.get(budget, 1) == 18
+    assert :atomics.get(budget, 1) == 36
     assert Process.get({TemplateExecutionValidator, :execution}) == nil
   end
 
@@ -125,9 +125,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
     html =
       "<body><?marker name='A'><template for='A'><style>.absent{width:bananas}</style><p>Good</p></template></body>"
 
-    assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, @opts)
+    assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html, @opts)
     assert diagnostic.source == "width:bananas"
-    assert diagnostic.message =~ "unmatched_original_context"
+    assert diagnostic.message =~ "authored literal declaration"
+    assert diagnostic.stage == :css and diagnostic.operation == :source_style_contexts
   end
 
   test "a consumed range cannot become a reusable target for a later template" do
@@ -215,14 +216,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
     assert diagnostic.stage == :asset and diagnostic.source == "missing-inert.png"
   end
 
-  test "an unmatched source declaration keeps original policy pending" do
+  test "an unmatched literal source declaration permits actual replacement without a fake element" do
+    html =
+      "<style>.unmatched{width:3px}</style><body><?marker name='A'><template for='A'><p>Good</p></template></body>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+    assert {:ok, reference} = HtmlToPdf.render("<p>Good</p>", @opts)
+    assert pdf == reference
+    assert {:ok, "Good"} = Text.extract(pdf)
+    assert Process.get({TemplateExecutionValidator, :execution}) == nil
+  end
+
+  test "the original head-target input retains its genuine tokenizer-context failure" do
     html =
       "<style>.unmatched{width:3px}</style><?marker name='A'><template for='A'><p>Good</p></template>"
 
     assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, @opts)
-    assert diagnostic.operation == :parse
-    assert diagnostic.message =~ "unmatched_original_context"
-    assert diagnostic.source == "width:3px"
+    assert diagnostic.stage == :html and diagnostic.operation == :render
+    assert diagnostic.source == "<p>" and diagnostic.column == 73
+    refute diagnostic.message =~ "unmatched_original_context"
+    assert Process.get({TemplateExecutionValidator, :execution}) == nil
+  end
+
+  test "inactive and original detached unmatched literals complete before real insertion" do
+    html =
+      "<style>@media screen{.absent{height:4pt}}</style><body><?marker name='A'><template for='A'><style>.absent{width:3px}</style><p>Good</p></template></body>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+    assert {:ok, reference} = HtmlToPdf.render("<p>Good</p>", @opts)
+    assert pdf == reference
+  end
+
+  test "original head tokenizer context stays invalid after unapplied symbolic source checks" do
+    for declaration <- [
+          "width:2rem",
+          "height:3em",
+          "width:25%",
+          "font-family:Missing",
+          "background-image:url(missing.png)",
+          "width:var(--x)"
+        ] do
+      html =
+        "<style>.absent{#{declaration}}</style><?marker name='A'><template for='A'><p>Good</p></template>"
+
+      assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, @opts)
+      assert diagnostic.operation == :render and diagnostic.source == "<p>"
+      assert diagnostic.stage == :html
+      refute diagnostic.message =~ "unmatched_original_context"
+    end
   end
 
   test "renderer exception cleans the source frame and cannot leave mutation authority" do

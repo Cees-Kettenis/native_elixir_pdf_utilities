@@ -466,6 +466,80 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateCandidateValidatorTest do
     assert forged.message =~ "forged"
   end
 
+  test "actual prospective composition clones keep separate lexical and execution source contexts" do
+    authored =
+      "<select style='appearance:base-select'><button><selectedcontent></selectedcontent></button><option selected><span style='width:2rem;text-transform:uppercase'>Choice</span></option></select>"
+
+    {source, tree, parent, origin} =
+      fixture("<div style='font-size:20px'><?marker name='A'></div>", authored)
+
+    opts = [system_font_discovery: false, forms: :static]
+
+    assert :checked =
+             ResourceContext.run([], HtmlValidator.new_image_budget(), fn _ ->
+               with_plan(source, tree, parent, origin, fn plan ->
+                 TemplatePatchValidator.with_candidate_projection(plan, tree, fn handle ->
+                   TemplatePatchValidator.with_prospective_renderer_policy_context(
+                     handle,
+                     tree,
+                     opts,
+                     fn policy ->
+                       TemplatePatchValidator.with_renderer_policy_evidence(
+                         policy,
+                         tree,
+                         fn evidence ->
+                           assert evidence.preparation_scope == :prospective_insertion
+
+                           cloned =
+                             Enum.find_value(evidence.glyph_runs, fn {id, runs} ->
+                               if Map.has_key?(evidence.clone_origins, id) and
+                                    hd(runs).authored_text == "Choice",
+                                  do: hd(runs)
+                             end)
+
+                           assert cloned.resolved_text == "CHOICE"
+                           [own | _] = cloned.declaration_contexts
+                           assert own.owner.tag == "span"
+                           assert [width, transform] = own.declarations
+                           assert width.declaration == {"width", "2rem"}
+                           assert transform.declaration == {"text-transform", "uppercase"}
+
+                           for declaration <- own.declarations do
+                             assert declaration.context_kind == :composition_clone
+                             assert declaration.preparation_scope == :prospective_insertion
+                             assert declaration.context.node_id == own.owner.node_id
+
+                             assert declaration.clone_origin.placement.node_id ==
+                                      own.owner.node_id
+
+                             original = declaration.clone_origin.original
+                             assert declaration.original_context == original
+                             assert declaration.source.owner.node_id == original.node_id
+                             refute declaration.context.node_id == original.node_id
+
+                             assert binary_part(
+                                      source,
+                                      declaration.source.offset,
+                                      declaration.source.length
+                                    ) == declaration.source.text
+                           end
+
+                           assert :original_source_policy in evidence.pending_checks
+
+                           assert {:error, {:unsupported_html, diagnostic}} =
+                                    TemplatePatchValidator.authorize_mutation(plan, tree)
+
+                           assert diagnostic.message =~ "original_source_policy"
+                           :checked
+                         end
+                       )
+                     end
+                   )
+                 end)
+               end)
+             end)
+  end
+
   test "ordinary prospective preparation observes actual cascade glyphs and authorized bytes under distinct placement" do
     png = PngFixture.build(1, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
 

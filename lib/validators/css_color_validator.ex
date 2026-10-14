@@ -1,6 +1,9 @@
 defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
   @moduledoc false
 
+  alias NativeElixirPdfUtilities.HtmlToPdf.NativeBackend
+  alias NativeElixirPdfUtilities.Validators.NativeBackendValidator
+
   # Fixed CSS named-color vocabulary, not a configurable resource limit.
   # CSS Color 4, 2025-04-24, section 6.1. Existing channel values remain intact.
   @named_colors %{
@@ -183,9 +186,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
     )
 
     try do
-      case NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.load_native() do
-        {:module, _} ->
-          backend = NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes
+      case NativeBackendValidator.native_load_result(NativeBackend.load_native()) do
+        :ok ->
+          backend = NativeBackend.NativeBytes
           components = backend.css_color_math_components(source)
 
           NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_render_resource(
@@ -234,17 +237,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
               :error
           end
 
-        {:error, reason} ->
-          throw(
-            {:render_resource_limit,
-             NativeElixirPdfUtilities.Diagnostics.error(
-               :style,
-               :unsupported_html,
-               "Native CSS color parser could not load: #{inspect(reason)}; rebuild the packaged native backend",
-               module: __MODULE__,
-               source: "CSS color"
-             )}
-          )
+        {:error, _} = error ->
+          throw({:render_resource_limit, error})
       end
     catch
       {:render_resource_limit, {:error, {reason, diagnostic}}} ->

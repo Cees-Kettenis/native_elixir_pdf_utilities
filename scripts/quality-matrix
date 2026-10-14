@@ -173,7 +173,7 @@ for entry in "${runtime_entries[@]}"; do
   fi
 
   if ! run_logged "${version}" runtime "${docker_command[@]}" sh -c \
-    'elixir --version && elixir --version | grep -F "Elixir ${EXPECTED_ELIXIR}."'; then
+    'set -e; for tool in chromium pdftoppm pdftotext qpdf cargo rustc; do command -v "$tool"; done; elixir --version; elixir --version | grep -F "Elixir ${EXPECTED_ELIXIR}."'; then
     mark_remaining_skipped "${version}" runtime
     continue
   fi

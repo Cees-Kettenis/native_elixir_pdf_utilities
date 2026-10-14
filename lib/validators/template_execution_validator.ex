@@ -8,7 +8,8 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
     FontValidator,
     HtmlValidator,
     ResourceValidator,
-    TemplatePatchValidator
+    TemplatePatchValidator,
+    TemplateRendererContextValidator
   }
 
   @key {__MODULE__, :execution}
@@ -55,6 +56,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
         source_view: nil,
         capture: nil,
         fragment_views: [],
+        fragment_provenances: %{},
         declaration_contexts: [],
         css_budget: HtmlValidator.new_css_budget()
       }
@@ -92,7 +94,9 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                  {:ok, source_contexts} <-
                    Style.with_source_style_contexts(
                      original,
-                     Enum.map(entries, & &1.css),
+                     Enum.flat_map(entries, fn entry ->
+                       if entry.source_kind == :configured, do: [entry.css], else: []
+                     end),
                      Process.get(@key).css_budget,
                      fn node, _, context ->
                        if context.status == :resolved do
@@ -117,12 +121,18 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                        declaration_contexts:
                          source_contexts.source_obligations.declaration_contexts
                    }),
+                 :ok <-
+                   prepare_original_font_sources(
+                     source_contexts.font_source_entries,
+                     entries,
+                     opts
+                   ),
                  :ok <- prepare_original_fragment_contexts(nodes, opts),
-                 :ok <- complete_declaration_contexts(Process.get(@key).declaration_contexts),
                  :ok <- validate_original_runtime_contexts(nodes),
                  {:ok, prepared} <- prepare_runtime_view(original, opts, image_budget),
-                 :ok <- validate_glyph_coverage(original, prepared.styled_tree),
+                 :ok <- validate_glyph_coverage(original, prepared),
                  :ok <- prepare_original_fragments(opts, image_budget),
+                 :ok <- complete_declaration_contexts(Process.get(@key).declaration_contexts),
                  :ok <- validate_live() do
               Process.put(@key, %{Process.get(@key) | mode: :execute, parser: nil})
 
@@ -138,6 +148,54 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
       after
         if previous, do: Process.put(@key, previous), else: Process.delete(@key)
       end
+    end
+  end
+
+  @doc false
+  @spec validate_original_runtime_scope(term(), term(), term()) ::
+          :ok | {:error, {atom(), map()}}
+  def validate_original_runtime_scope(dom, provenance, budget) do
+    case Process.get(@key) do
+      %{mode: :original, busy: true, original: original} = frame when not is_nil(original) ->
+        views = [HtmlTree.fetch(original, original.root) | frame.fragment_views]
+        expected = Enum.find(views, fn view -> is_map(dom) and view.node_id == dom[:node_id] end)
+
+        source =
+          if expected,
+            do: Map.get(frame.fragment_provenances, expected.node_id, frame.source_provenance)
+
+        preparation = Process.get({TemplateRendererContextValidator, :preparation})
+
+        with :ok <- validate_live(),
+             true <-
+               is_map(expected) and expected == dom and source == provenance and
+                 frame.css_budget == budget and
+                 (is_nil(preparation) or preparation.resource_context != frame.resource) do
+          :ok
+        else
+          {:error, {_reason, _diagnostic}} = error ->
+            error
+
+          _ ->
+            Diagnostics.error(
+              :html,
+              :invalid_document,
+              "original runtime observation requires its own issued resource scope, exact original view, provenance and shared CSS budget",
+              module: __MODULE__,
+              operation: :original_runtime_source,
+              source: "original runtime scope"
+            )
+        end
+
+      _ ->
+        Diagnostics.error(
+          :html,
+          :invalid_document,
+          "original runtime source observations require an active original preparation invocation",
+          module: __MODULE__,
+          operation: :original_runtime_source,
+          source: "original runtime scope"
+        )
     end
   end
 
@@ -196,11 +254,10 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
   @doc false
   @spec source_charge(String.t()) :: non_neg_integer()
   def source_charge(source) do
-    case Process.get(@key) do
-      %{mode: :execute, source: ^source, parser: parser, busy: false} when not is_nil(parser) ->
-        if match?(%{id: ^parser}, Process.get({TemplatePatchValidator, :invocation})),
-          do: 0,
-          else: byte_size(source)
+    case {Process.get(@key), Process.get({TemplatePatchValidator, :invocation})} do
+      {%{mode: :execute, source: ^source, parser: parser, busy: false}, %{id: id}}
+      when not is_nil(parser) and parser == id ->
+        0
 
       _ ->
         byte_size(source)
@@ -210,19 +267,15 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
   @doc false
   @spec parser_tree(map(), atom()) :: HtmlTree.t()
   def parser_tree(source, type) do
-    case Process.get(@key) do
-      %{mode: :execute, original: original, parser: parser, busy: false}
-      when not is_nil(parser) ->
-        if match?(%{id: ^parser}, Process.get({TemplatePatchValidator, :invocation})) do
-          root = original.nodes[original.root]
+    case {Process.get(@key), Process.get({TemplatePatchValidator, :invocation})} do
+      {%{mode: :execute, original: original, parser: parser, busy: false}, %{id: id}}
+      when not is_nil(parser) and parser == id ->
+        root = original.nodes[original.root]
 
-          %HtmlTree{
-            root: root.node_id,
-            nodes: %{root.node_id => root |> Map.delete(:projection) |> Map.put(:children, [])}
-          }
-        else
-          HtmlTree.new(source, type)
-        end
+        %HtmlTree{
+          root: root.node_id,
+          nodes: %{root.node_id => root |> Map.delete(:projection) |> Map.put(:children, [])}
+        }
 
       _ ->
         HtmlTree.new(source, type)
@@ -551,8 +604,8 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
     end
   end
 
-  # This names the complete authored-declaration obligation, rather than treating
-  # successful active styling as policy for inactive or unmatched declarations.
+  # Applied declarations need genuine original execution. Unapplied stylesheet
+  # declarations instead retain their canonical symbolic source preparation.
   defp complete_declaration_contexts(records) do
     case Enum.find(records, &(&1.status == :unresolved)) do
       nil ->
@@ -593,7 +646,9 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                      {:ok, contexts} <-
                        Style.with_source_style_contexts(
                          view,
-                         Enum.map(entries, & &1.css),
+                         Enum.flat_map(entries, fn entry ->
+                           if entry.source_kind == :configured, do: [entry.css], else: []
+                         end),
                          frame.css_budget,
                          fn source_node, _, context ->
                            if context.status == :resolved do
@@ -616,12 +671,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                          opts
                        ),
                      :ok <-
-                       complete_declaration_contexts(
-                         Enum.reject(
-                           contexts.source_obligations.declaration_contexts,
-                           &(&1.status == :unresolved and &1.reason == :template_insertion_context)
-                         )
-                       ) do
+                       prepare_original_font_sources(contexts.font_source_entries, entries, opts) do
                   current = Process.get(@key)
 
                   checked =
@@ -633,7 +683,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                         :css
                       )
 
-                      if record.status == :checked_in_original_context and
+                      if record.status in [:checked_in_original_context, :checked_symbolically] and
                            record.source[:provenance] == :original_html and
                            is_map(record.source[:owner]) and
                            record.source.owner.tree_scope_id == fragment.node_id do
@@ -659,11 +709,10 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
 
                         if match,
                           do:
-                            %{
-                              record
-                              | status: :checked_in_original_context,
-                                contexts: match.contexts
-                            }
+                            Map.merge(
+                              record,
+                              Map.take(match, [:status, :contexts, :source_value, :selection])
+                            )
                             |> Map.delete(:reason),
                           else: record
                       else
@@ -676,7 +725,13 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                   Process.put(@key, %{
                     current
                     | declaration_contexts: records,
-                      fragment_views: [view | current.fragment_views]
+                      fragment_views: [view | current.fragment_views],
+                      fragment_provenances:
+                        Map.put(
+                          current.fragment_provenances,
+                          view.node_id,
+                          contexts.source_provenance
+                        )
                   })
 
                   :ok
@@ -698,11 +753,73 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
     end)
   end
 
+  defp prepare_original_font_sources(source_entries, entries, opts) do
+    configured = Enum.filter(entries, &(Map.get(&1, :source_kind) == :configured))
+    count = length(configured)
+    HtmlValidator.reserve_render_resource(:max_css_work, count + length(source_entries), :font)
+
+    sources =
+      source_entries
+      |> Enum.with_index()
+      |> Enum.map(fn {source, index} ->
+        if index < count do
+          # Pair by the original loader's ordering, never by equal CSS bytes.
+          Map.merge(Enum.at(configured, index), source)
+        else
+          Map.merge(
+            %{base_url: Keyword.get(opts, :base_url), trusted_local_resources: false},
+            source
+          )
+        end
+      end)
+
+    with {:ok, selected} <-
+           NativeElixirPdfUtilities.Validators.CssFontFaceValidator.prepare_original_resources(
+             sources
+           ) do
+      if selected == [] do
+        :ok
+      else
+        frame = Process.get(@key)
+        Process.put(@key, %{frame | busy: true})
+
+        try do
+          with {:ok, url_context} <-
+                 NativeElixirPdfUtilities.Validators.HtmlUrlValidator.document_context(
+                   HtmlTree.fetch(frame.original, frame.original.root),
+                   opts
+                 ) do
+            opts = Keyword.put(opts, :__document_url_context__, url_context)
+
+            Enum.reduce_while(selected, :ok, fn entry, :ok ->
+              result =
+                NativeElixirPdfUtilities.Validators.CssFontFaceValidator.with_original_resource(
+                  entry,
+                  fn ->
+                    with :ok <- validate_live(),
+                         {:ok, _original_registry} <- Style.prepare_font_resources([entry], opts),
+                         do: validate_live()
+                  end
+                )
+
+              case result do
+                :ok -> {:cont, :ok}
+                error -> {:halt, error}
+              end
+            end)
+          end
+        after
+          Process.put(@key, %{Process.get(@key) | busy: frame.busy})
+        end
+      end
+    end
+  end
+
   defp prepare_original_fragments(opts, image_budget) do
     Enum.reduce_while(Enum.reverse(Process.get(@key).fragment_views), :ok, fn view, :ok ->
       result =
         with {:ok, prepared} <- prepare_runtime_view(view, opts, image_budget),
-             :ok <- validate_glyph_coverage(view, prepared.styled_tree),
+             :ok <- validate_glyph_coverage(view, prepared),
              do: :ok
 
       case result do
@@ -819,25 +936,64 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
     end)
   end
 
-  defp validate_glyph_coverage(original, styled) do
-    actual = Enum.group_by(authored_nodes(styled, false), &Map.get(&1, :node_id))
+  defp validate_glyph_coverage(original, prepared) do
+    actual = Enum.group_by(authored_nodes(prepared.styled_tree, false), &Map.get(&1, :node_id))
+    math_runs = Map.get(prepared, :original_math_glyph_runs, %{})
+    source_tree = HtmlTree.from_document(original)
 
     authored_nodes(original, false)
     |> Enum.reduce_while(:ok, fn node, :ok ->
-      if node.type == :text and String.trim(node.text) != "" do
+      # SVG descendants are converter image content. Their canonical source,
+      # fonts and pixels were prepared with the image, without PDF glyph runs.
+      image_text? =
+        if node.type == :text do
+          Stream.unfold(node.parent_id, fn id ->
+            case Map.get(source_tree.nodes, id) do
+              %{parent_id: parent_id} = parent ->
+                HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :font)
+                {parent, parent_id}
+
+              _ ->
+                nil
+            end
+          end)
+          |> Enum.any?(&(Map.get(&1, :namespace) == :svg and Map.get(&1, :tag) == "svg"))
+        else
+          false
+        end
+
+      if node.type == :text and String.trim(node.text) != "" and not image_text? do
         case Map.get(actual, node.node_id) do
           nil ->
-            {:halt,
-             Diagnostics.error(
-               :font,
-               :unsupported_html,
-               "template replacement has an unprepared original text context; selected glyph and runtime obligations remain pending",
-               module: __MODULE__,
-               operation: :parse,
-               source: node.source.text,
-               line: node.source.line,
-               column: node.source.column
-             )}
+            covered =
+              math_runs
+              |> Map.get(node.node_id, [])
+              |> Enum.map(& &1.source_offset)
+              |> MapSet.new()
+
+            required =
+              node.text
+              |> String.codepoints()
+              |> Enum.with_index()
+              |> Enum.reject(fn {text, _} -> text in [" ", "\t", "\r", "\n", "\f"] end)
+              |> Enum.map(&elem(&1, 1))
+              |> MapSet.new()
+
+            if MapSet.size(covered) > 0 and MapSet.subset?(required, covered) do
+              {:cont, :ok}
+            else
+              {:halt,
+               Diagnostics.error(
+                 :font,
+                 :unsupported_html,
+                 "template replacement has an unprepared original text context; selected glyph and runtime obligations remain pending",
+                 module: __MODULE__,
+                 operation: :parse,
+                 source: node.source.text,
+                 line: node.source.line,
+                 column: node.source.column
+               )}
+            end
 
           runs ->
             result =
@@ -893,7 +1049,25 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
     Process.put(@key, %{frame | busy: true})
 
     try do
-      with {:ok, prepared} <- HtmlToPdf.prepare_document(dom, opts, budget) do
+      preparation =
+        if frame.mode == :original and frame.source_provenance do
+          provenance = Map.get(frame.fragment_provenances, dom.node_id, frame.source_provenance)
+
+          with {:ok, prepared, cascades} <-
+                 NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.with_original_source_execution(
+                   dom,
+                   provenance,
+                   frame.css_budget,
+                   fn -> HtmlToPdf.prepare_document(dom, opts, budget) end
+                 ) do
+            observe_original_runtime_cascades(cascades)
+            {:ok, prepared}
+          end
+        else
+          HtmlToPdf.prepare_document(dom, opts, budget)
+        end
+
+      with {:ok, prepared} <- preparation do
         if frame.original do
           with {:ok, writer} <-
                  NativeElixirPdfUtilities.Validators.WriterValidator.prepare(
@@ -914,6 +1088,56 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
     after
       Process.put(@key, %{Process.get(@key) | busy: frame.busy})
     end
+  end
+
+  # Only successful original preparation reaches this merge. Prospective and
+  # callback executions cannot turn their observations into original checks.
+  defp observe_original_runtime_cascades(cascades) do
+    frame = Process.get(@key)
+
+    checked =
+      cascades
+      |> Map.values()
+      |> List.flatten()
+      |> Enum.reduce(%{}, fn declaration, checked ->
+        HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+
+        if is_map(declaration.source) do
+          key = {declaration.source, declaration.declaration}
+          node = declaration.context
+
+          context = %{
+            owner: Map.take(node, [:node_id, :document_id, :tree_scope_id, :parent_id]),
+            source: node.source,
+            tag: node.tag,
+            pseudo: declaration.pseudo,
+            execution: :original_runtime,
+            clone_origin: declaration.clone_origin
+          }
+
+          Map.update(checked, key, [context], &[context | &1])
+        else
+          checked
+        end
+      end)
+
+    records =
+      Enum.map(frame.declaration_contexts, fn record ->
+        HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+        contexts = Map.get(checked, {record.source, record.declaration}, [])
+
+        if contexts != [] do
+          record
+          |> Map.put(:status, :checked_in_original_context)
+          |> Map.put(:contexts, Enum.uniq(record.contexts ++ contexts))
+          |> Map.delete(:reason)
+          |> Map.delete(:selection)
+        else
+          record
+        end
+      end)
+
+    Process.put(@key, %{frame | declaration_contexts: records})
   end
 
   defp validate_live do

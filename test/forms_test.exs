@@ -640,7 +640,11 @@ defmodule NativeElixirPdfUtilities.FormsTest do
                ~s(<input type="email" multiple name="contacts" value=" A&#10;B , C&#13;D ">)
              )
 
-    assert {:ok, [%{value: "A\nB,C\rD"}]} = Forms.fields(pdf)
+    assert {:ok, [%{type: :text, value: "AB,CD", read_only: false}]} = Forms.fields(pdf)
+    assert {:ok, flattened} = Forms.flatten(pdf)
+    assert {:ok, []} = Forms.fields(flattened)
+    assert {:ok, text} = Text.extract(flattened, layout: false)
+    assert String.trim(text) == "AB,CD"
   end
 
   test "defaulted input types use text names values and readonly flags" do

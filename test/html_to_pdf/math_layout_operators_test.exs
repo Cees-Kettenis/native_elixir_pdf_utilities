@@ -73,7 +73,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
     assert first.core_operator.lspace == 20 * 4 / 18
   end
 
-  test "straight row text has anonymous mtext space-like semantics before form inference", %{
+  test "discarded row text does not affect Chromium operator form", %{
     node: n,
     row: r,
     style: style
@@ -89,7 +89,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
     [wrapped, _] = outer.children
     assert wrapped.core_operator.form == :prefix
     assert {:ok, measured} = MathLayout.measure(r.([plus, text]))
-    assert measured.actual_text == "+words"
+    assert measured.actual_text == "+"
   end
 
   test "only the outer non-embellished row adds core spacing", %{node: n, row: r, font: font} do
@@ -534,6 +534,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
     assert length(empty.drawing_items) == 2
   end
 
+  test "large operator selection tests actual outline height independently of stretch advances",
+       %{
+         node: n,
+         style: style,
+         font: font
+       } do
+    assert {:ok, bounds} = Font.glyph_bounds(font)
+    assert elem(elem(bounds, 1304), 3) - elem(elem(bounds, 1304), 1) == 1906
+
+    node = %{
+      n.("mo", "(", %{"stretchy" => "false", "largeop" => "true"})
+      | style: %{style | math_style: :normal}
+    }
+
+    assert {:ok, prepared} = MathLayoutValidator.prepare_element(node, %{})
+    # A controlled prepared minimum isolates the real STIX 1906/1907 boundary.
+    # Original font bytes, source glyph IDs and outline metrics stay unchanged.
+    assert Enum.find(
+             prepared.source_glyph.source.metrics.variants.vertical[font.cmap[?(]].variants,
+             &(&1.glyph == 1304)
+           ).advance == 1907
+
+    prepared =
+      put_in(prepared.source_glyph.source.metrics.constants.display_operator_min_height, 1907)
+
+    assert {:ok, %{shape: %{glyph: glyph}}} =
+             MathLayoutValidator.prepare_operator_stretch(prepared, nil)
+
+    assert glyph.glyph_id == 1305 and glyph.font_face.data == font.data
+    assert elem(glyph.bounds, 3) - elem(glyph.bounds, 1) == 2144
+  end
+
   test "large operators use variants only in normal math-style and keep movable-limits metadata",
        %{node: n, style: style, font: font} do
     sum = n.("mo", "∑", %{})
@@ -813,7 +845,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
     assert text =~ "5\u2061\u2062\u2063\u20646!=7"
   end
 
-  test "calculated minmax uses selected natural glyph height after percentage preparation", %{
+  test "ignored calculated minmax retains the natural selected glyph minimum", %{
     node: n,
     row: r
   } do
@@ -829,49 +861,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
 
     assert_in_delta constrained.target_ascent +
                       constrained.target_descent,
-                    2 * height + 4,
+                    height,
                     1.0e-10
 
     assert {:ok, measured} = MathLayout.measure(r.([operator]))
     assert measured.actual_text == "("
   end
 
-  test "calculations discover actual core and root metrics through embellishment", %{
+  test "ignored calculated spacing requires no root font metrics through embellishment", %{
     node: n,
     row: r,
-    style: style,
-    font: font
+    style: style
   } do
-    assert {:ok, zero} =
-             MathLayout.with_context(fn ->
-               MathLayoutValidator.prepare_glyph("0", font, 14, [])
-             end)
-
-    assert {:ok, cap} =
-             MathLayout.with_context(fn ->
-               MathLayoutValidator.prepare_glyph("H", font, 20, [])
-             end)
-
     operator = n.("mo", "+", %{"lspace" => "calc(1rch + 0.5cap + 0.25rlh + 1vw)"})
-
-    operator = %{
-      operator
-      | style:
-          Map.merge(style, %{_root_font_face: font, _root_font_size: 14, _root_line_height: 28})
-    }
-
     wrapper = %{r.([operator]) | style: %{style | font_size: 40}}
-
-    assert {:ok, prepared} =
-             MathLayoutValidator.prepare_element(wrapper, %{
-               viewport_width: 600,
-               viewport_height: 200
-             })
-
-    expected =
-      zero.advance * 14 / zero.units_per_em + elem(cap.bounds, 3) * 10 / cap.units_per_em + 7 + 6
-
-    assert_in_delta prepared.core_operator.lspace, expected, 1.0e-10
+    assert {:ok, prepared} = MathLayoutValidator.prepare_element(wrapper, %{})
+    assert_in_delta prepared.core_operator.lspace, style.font_size * 4 / 18, 1.0e-10
   end
 
   test "viewport context uses actual print dimensions and child client viewport" do

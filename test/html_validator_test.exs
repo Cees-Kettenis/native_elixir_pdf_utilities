@@ -3871,8 +3871,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
 
     original = "<svg><foreignObject><p>Prepared only</p></foreignObject></svg>"
     assert {:ok, dom} = HtmlParser.parse_detailed(original)
-    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(original)
-    assert {:error, {:no_extractable_text, _}} = NativeElixirPdfUtilities.Text.extract(pdf)
+
+    assert {:error, {:unsupported_html, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(original)
+
+    assert diagnostic.source == "foreignObject" and diagnostic.stage == :layout
+    assert diagnostic.reason == :unsupported_html
+    assert diagnostic.message =~ "cannot be omitted"
 
     filtered =
       "<svg><defs><filter id='f'><feGaussianBlur stdDeviation='1'/></filter></defs><g filter='url(#f)'><foreignObject width='100' height='30'><p>Real HTML input</p></foreignObject></g></svg>"
@@ -3901,8 +3906,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
 
                  assert {:ok, _styled} = Style.compute_detailed(filtered_dom, [])
 
-                 # Preparation cannot authorize invalid effect parameters in the
-                 # same budget, even when genuine HTML SourceGraphic is available.
+                 # Preparation cannot authorize invalid source parameters in the
+                 # same budget. Canonical validation remains independent of painting.
                  invalid = String.replace(filtered, "stdDeviation='1'", "stdDeviation='-1'")
                  assert {:ok, invalid_dom} = HtmlParser.parse_detailed(invalid)
 
@@ -3919,6 +3924,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
 
                  assert diagnostic.source == "feGaussianBlur"
                  assert diagnostic.stage == :layout and diagnostic.operation == :prepare
+                 assert diagnostic.reason == :invalid_document
+                 assert diagnostic.message =~ "stdDeviation"
 
                  assert diagnostic.module ==
                           NativeElixirPdfUtilities.Validators.SvgFilterValidator

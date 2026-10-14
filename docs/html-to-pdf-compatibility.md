@@ -17,7 +17,7 @@ effect; see [page declarations without an effect](#page-declarations-without-an-
 | Tables | `table`, `caption`, `colgroup`, `col`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td` |
 | Images | `img` with a `src` |
 | Custom containers | Valid unregistered HTML custom names with inline defaults and supported transparent contents |
-| Form controls | Text, search, telephone, URL, email, password, number, initial horizontal range, checkbox, radio, hidden, submit, reset, and button `input`; `select`, `option`, `textarea`, `button`, ordinary `form` and `label` containers |
+| Form controls | Text, search, telephone, URL, email, password, number, initial horizontal range, checkbox, radio, hidden, submit, reset, and button `input`; `select`, `option`, `textarea`, `button`, `output`, `datalist`, ordinary `form` and `label` containers |
 
 Preformatted text retains spaces, default eight-space tab stops, and line breaks.
 `pre` and `listing` discard one immediately following newline and default to bundled DejaVu
@@ -115,6 +115,11 @@ and XML declarations remain unsupported.
 supported non-void context such as `"tr"`, `"select"`, or `"p"` and return a tree
 without its context wrapper. Fragment failures include shared diagnostics.
 Raw-text and RCDATA contexts consume the full fragment as text.
+Root inline native controls need an actual page formatting container. Use
+`parse_document_detailed/1`, an authored block container, or `HtmlToPdf.render/2`
+for page layout. Wrapper-free controls can be measured with `Layout.measure_child/3`
+in its issued resource context. A missing page owner returns an actionable layout
+diagnostic instead of a bare failure.
 
 The parser also retains SVG and MathML namespaces, adjusted foreign names and
 attributes, HTML integration points, and literal foreign CDATA. Foreign elements
@@ -236,9 +241,13 @@ appearances retain their existing path.
 
 Horizontal range inputs prepare initial midpoint/default, clamp and decimal
 step state centrally. `forms: :static` paints the native track and thumb with
-authored sizing, accent color, disabled state and supported clipping. Disabled
+authored sizing, accent color, disabled state and supported clipping. Associated
+datalists supply static tick marks for enabled values satisfying exact bounds
+and decimal step constraints. Ticks use the text color, labels remain metadata,
+and appearance:none suppresses ticks. A valid association retains the native
+22 CSS-pixel intrinsic height even when no options produce ticks. Disabled
 interactive ranges can expose a read-only scalar field when their thumb fits
-the widget. Mutable interactive sliders, datalist ticks and overflowing disabled
+the widget. Mutable interactive sliders and overflowing disabled
 widget appearances return diagnostics. Date, month, week, time and local datetime
 inputs prepare canonical initial values, scalar bounds and exact step state.
 Hidden temporal controls retain this state for selectors. Visible date, month,
@@ -267,6 +276,14 @@ CSS attribute selectors still see the authored `checked` attributes. Independent
 owner groups sharing a PDF field name return `:unsupported_form`; use unique
 names or `forms: :static`. Broader selection modes, fieldsets,
 legends, optgroups, constraint states and shadow-tree integration remain open.
+
+Native initial controls retain their atomic used boxes when author CSS requests
+`display:inline`. Menus and listboxes carry the same measured host dimensions,
+visible option artwork and actual form owner into page paint and PDF widgets.
+A menu with `appearance:none` uses authored padding and ordinary font leading,
+without the native arrow. Disabled native select paint uses the pinned platform
+colors and one isolated transparency Form for the whole initial control.
+General author opacity and browser popup actions remain outside this slice.
 
 Ordinary single-select menu state retains the last authored selection or
 defaults to the first enabled option when its display size is one. An explicit
@@ -399,6 +416,11 @@ track/item sizing, but not every browser layout rule.
 
 `white-space: nowrap` collapses whitespace and prevents automatic wrapping.
 Explicit `<br>` breaks still apply; long lines can overflow their container.
+`break-spaces` retains ordinary Unicode line opportunities, including CJK and
+word hyphens, and allows a break after each preserved space, tab or other
+Unicode space separator except no-break space. Spaces keep their measured
+width at line ends. These opportunities and styled inline boundaries share
+the same Unicode line breaking validator.
 
 ## Render options
 
@@ -833,7 +855,25 @@ HTML headingoffset and boolean headingreset compute automatic bookmark levels th
 Inline blocks align to their last normal-flow line. Empty content and overflow:hidden use the bottom margin edge. Declared height, margins, borders and padding affect line extents while relative offsets and absolute descendants leave the flow baseline intact. Multiline automatic widths use the widest forced line. Empty form controls retain their intrinsic line struts. Other vertical-align values, full shrink-to-fit, writing modes and inline-flex/grid baseline integration remain partial.
 
 
+Ordinary inputs, selects and buttons use Chromium's initial 10pt Arial request;
+textareas and temporal editors use their monospace defaults. The existing font
+registry resolves these requests from authorized caller fonts or permitted system
+discovery. Disabling discovery preserves the registry's actual bundled fallback.
+Author font declarations override the UA defaults. Font inheritance and percentage
+sizes use the real ancestor before those defaults, while reverting author font
+properties restores the element's UA font.
+
 Native form appearance objects preserve the existing artwork and active PDF resource graph while avoiding unused temporary page objects. The default limits support the tested 1,000-control interactive document; this does not complete the remaining control semantics or native-theme work.
+
+Rounded dashed and dotted CSS borders retain the authored widths, colors and
+styles of each edge. Their clipped corner contours and closed-path spacing use
+the source print canvas and the fixed Chromium/Skia sampling profile. Rounded
+backgrounds and borders share one outer clip. Disabled native select artwork
+keeps its actual control owner and isolated opacity. These paint operations
+preserve logical box positions, links and widget rectangles, including negative
+local artwork in unclipped translated groups. Contour subdivision and dash
+generation charge the shared `max_svg_clip_projection_work` budget. Existing
+groove, ridge, double, inset and outset adapters remain unchanged.
 
 All 148 opaque CSS named colors are supported in text, backgrounds, borders and
 text decorations. Keywords use ASCII case folding and whitespace. Color parsing
@@ -843,7 +883,10 @@ colors and broader modern color functions remain unfinished.
 Horizontal rules render with gray inset borders, half-em vertical margins and
 automatic horizontal margins. Legacy width, size, align, color and noshade hints
 apply below author CSS. Legacy HTML color parsing remains separate from CSS color
-syntax and shares the named-color palette. Rules inside selects are separators,
+syntax and shares the named-color palette. Comma-separated CSS `rgb()` and
+`rgba()` accept ASCII whitespace between channels, including authored newlines,
+while retaining their original color and alpha values in Chromium print output.
+Rules inside selects are separators,
 not options. Automatic horizontal margins work in ordinary block layout;
 unfinished flex, table and intrinsic-sizing contexts return diagnostics.
 
@@ -898,3 +941,5 @@ Language pragmas use the authored document tree, excluding shadow metadata and
 unused template fragments. Shadow style `:lang()` selectors and slotted selectors
 resolve the actual node language; language does not inherit from a distribution
 slot. Selected-content clones inherit through their destination's logical parents.
+
+SVG images containing text receive the active host font’s validated TrueType bytes. Image rasterization uses only those supplied bytes and never asks the native backend to discover another face. A host built-in PDF face has no transportable font program, so SVG text still returns a diagnostic when no byte-backed font is available. SVG image cache entries include the selected face to keep identical artwork with different font selections separate.

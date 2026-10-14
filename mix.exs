@@ -1,23 +1,23 @@
-defmodule Mix.Tasks.Compile.SvgBackend do
+defmodule Mix.Tasks.Compile.HtmlBackend do
   use Mix.Task.Compiler
 
   @doc false
   @spec run(list()) :: {:ok, list()} | {:error, list()}
   def run(_args) do
-    manifest = Path.expand("native/svg_backend/Cargo.toml")
-    target = Path.expand(Path.join(Mix.Project.build_path(), "svg_backend"))
+    manifest = Path.expand("native/html_backend/Cargo.toml")
+    target = Path.expand(Path.join(Mix.Project.build_path(), "html_backend"))
 
     library =
       case :os.type() do
-        {:win32, _} -> "native_svg_backend.dll"
-        {:unix, :darwin} -> "libnative_svg_backend.dylib"
-        _ -> "libnative_svg_backend.so"
+        {:win32, _} -> "native_html_backend.dll"
+        {:unix, :darwin} -> "libnative_html_backend.dylib"
+        _ -> "libnative_html_backend.so"
       end
 
     nif_library =
       if match?({:win32, _}, :os.type()),
-        do: "libnative_svg_backend.dll",
-        else: "libnative_svg_backend.so"
+        do: "libnative_html_backend.dll",
+        else: "libnative_html_backend.so"
 
     # Mix normally symlinks priv into the source tree. Keep generated native
     # artifacts inside this runtime's build, including when caches were copied.
@@ -32,6 +32,11 @@ defmodule Mix.Tasks.Compile.SvgBackend do
     File.cp_r!("priv", priv)
     destination = Path.join(priv, "native")
     File.mkdir_p!(destination)
+
+    Enum.each(
+      ~w(libnative_svg_backend.so libnative_svg_backend.dylib libnative_svg_backend.dll native_svg_backend.dll Elixir.NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.beam),
+      &File.rm(Path.join(destination, &1))
+    )
 
     case System.cmd(
            "cargo",
@@ -74,14 +79,14 @@ defmodule Mix.Tasks.Compile.SvgBackend do
         File.mkdir_p!(compile_path)
         :code.add_patha(String.to_charlist(compile_path))
         :code.add_patha(String.to_charlist(destination))
-        bindings = Path.expand("native/svg_backend/bindings.ex")
+        bindings = Path.expand("native/html_backend/bindings.ex")
         fingerprint = :crypto.hash(:sha256, File.read!(bindings))
         binding_manifest = Path.join(target, "bindings.sha256")
 
         beam =
           Path.join(
             destination,
-            "Elixir.NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes.beam"
+            "Elixir.NativeElixirPdfUtilities.HtmlToPdf.NativeBackend.NativeBytes.beam"
           )
 
         if File.read(binding_manifest) != {:ok, fingerprint} or not File.exists?(beam) do
@@ -89,13 +94,13 @@ defmodule Mix.Tasks.Compile.SvgBackend do
           # compiler VM's old code before recompilation rather than attempting
           # a NIF upgrade; other VMs retain their atomically published library.
           :code.del_path(String.to_charlist(destination))
-          binding_module = NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes
+          binding_module = NativeElixirPdfUtilities.HtmlToPdf.NativeBackend.NativeBytes
 
           try do
             unless :code.soft_purge(binding_module),
               do:
                 Mix.raise(
-                  "An older private SVG binding is still executing; finish native renders before rebuilding"
+                  "An older private HTML utility binding is still executing; finish native utility calls before rebuilding"
                 )
 
             :code.delete(binding_module)
@@ -103,7 +108,7 @@ defmodule Mix.Tasks.Compile.SvgBackend do
             unless :code.soft_purge(binding_module),
               do:
                 Mix.raise(
-                  "The private SVG binding is still executing; finish native renders before rebuilding"
+                  "The private HTML utility binding is still executing; finish native utility calls before rebuilding"
                 )
 
             for {module, binary} <- Code.compile_file(bindings) do
@@ -142,7 +147,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
       description:
         "Pure Elixir utilities for PDF inspection, metadata, tokenizing, merging, page transforms, splitting, stamping, forms, attachments, outlines, text extraction, and native HTML/CSS rendering.",
       deps: deps(),
-      compilers: [:svg_backend] ++ Mix.compilers(),
+      compilers: [:html_backend] ++ Mix.compilers(),
       # Analyze the tracked private NIF binding as well as application modules.
       dialyzer: [
         paths: [Path.join(application_root, "ebin"), Path.join(application_root, "priv/native")]

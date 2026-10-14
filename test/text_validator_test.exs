@@ -3,6 +3,19 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidatorTest do
 
   alias NativeElixirPdfUtilities.Validators.TextValidator
 
+  test "invalid preparation context and content stream input return canonical failures" do
+    assert {:error, {:invalid_pdf_input, diagnostic}} = TextValidator.prepare(nil)
+    assert diagnostic.stage == :text_validation
+    assert diagnostic.operation == :extract
+    assert diagnostic.module == TextValidator
+    assert diagnostic.message =~ "shared PDF validation context"
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} = TextValidator.instructions(42, 1)
+    assert diagnostic.stage == :content
+    assert diagnostic.operation == :extract
+    assert diagnostic.message =~ "content stream input"
+  end
+
   test "matrix composition validates representability without reapplying the input limit" do
     identity = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
     large = [1.0e300, 0.0, 0.0, 1.0e300, 0.0, 0.0]

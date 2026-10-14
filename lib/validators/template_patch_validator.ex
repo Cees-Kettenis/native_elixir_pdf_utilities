@@ -54,39 +54,43 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
   @spec validate_attributes(map(), nil | {HtmlTree.t(), reference(), map()}) ::
           :ok | {:error, {atom(), map()}}
   def validate_attributes(attributes, context \\ nil) do
-    composition = Enum.find(@composition_attributes, &Map.has_key?(attributes, &1))
-
-    cond do
-      is_nil(composition) ->
+    # The first recognized attribute is "for" whenever it is present.
+    # All other recognized attributes therefore have only shadow-root semantics.
+    case Enum.find(@composition_attributes, &Map.has_key?(attributes, &1)) do
+      nil ->
         :ok
 
-      composition != "for" and not Map.has_key?(attributes, "for") ->
-        NativeElixirPdfUtilities.Validators.HtmlCompositionValidator.validate_attributes(
-          attributes
-        )
-
-      composition == "for" and
+      "for" ->
+        cond do
           NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.inert_source_view?(
             attributes,
             context
           ) ->
-        :ok
+            :ok
 
-      context == nil or composition != "for" or
-          Enum.any?(tl(@composition_attributes), &Map.has_key?(attributes, &1)) ->
-        Diagnostics.error(
-          :html,
-          :unsupported_html,
-          "template replacement and declarative shadow attributes require validated parser composition contexts",
-          module: __MODULE__
+          context == nil or
+              Enum.any?(tl(@composition_attributes), &Map.has_key?(attributes, &1)) ->
+            Diagnostics.error(
+              :html,
+              :unsupported_html,
+              "template replacement and declarative shadow attributes require validated parser composition contexts",
+              module: __MODULE__
+            )
+
+          true ->
+            {tree, parent, origin} = context
+
+            with_insertion_context(tree, parent, attributes["for"], origin, fn handle ->
+              with_planned_insertion(handle, tree, fn _context ->
+                authorize_mutation(handle, tree)
+              end)
+            end)
+        end
+
+      _ ->
+        NativeElixirPdfUtilities.Validators.HtmlCompositionValidator.validate_attributes(
+          attributes
         )
-
-      true ->
-        {tree, parent, origin} = context
-
-        with_insertion_context(tree, parent, attributes["for"], origin, fn handle ->
-          with_planned_insertion(handle, tree, fn _context -> authorize_mutation(handle, tree) end)
-        end)
     end
   end
 
@@ -266,24 +270,11 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
                HtmlValidator.preprocess_html(entry.context.source.text),
                entry.context.tokenizer_context,
                entry.context.tokenizer_ancestors
-             ),
-           :ok <-
-             (case HtmlValidator.validate_html_element_attributes(
-                     "template",
-                     Map.delete(prepared.attributes, "for")
-                   ) do
-                :ok ->
-                  :ok
-
-                {:error, {reason, diagnostic}} ->
-                  {:error,
-                   {reason,
-                    Diagnostics.with_context(diagnostic,
-                      source: entry.context.source.text,
-                      line: entry.context.source.line,
-                      column: entry.context.source.column
-                    )}}
-              end) do
+             ) do
+        # Planning already accepted this exact token. The tokenizer's template
+        # attribute grammar excludes URL-bearing attributes; removing `for`
+        # leaves ordinary globals and shadow metadata, which cannot fail the
+        # replacement-attribute check. Keep the issued opening token unchanged.
         ancestors =
           entry.context.insertion.ancestors
           |> tl()

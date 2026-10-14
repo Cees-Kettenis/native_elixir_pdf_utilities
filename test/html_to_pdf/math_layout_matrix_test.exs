@@ -603,9 +603,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
     assert phantom.actual_text == "β" and Enum.all?(phantom.drawing_items, &(&1.kind == :glyph))
   end
 
-  test "prepared row paint rejects invalid sources, row edges and mismatched row metadata", %{
-    style: style
-  } do
+  test "prepared row paint rejects invalid sources, malformed edges and mismatched row metadata",
+       %{
+         style: style
+       } do
     zero = %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
 
     assert {:ok, prepared} =
@@ -618,8 +619,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
           [],
           [nil],
           [%{row | source: %{namespace: :html, tag: "mtr"}}],
-          [%{row | style: Map.put(row.style, :border_widths, %{zero | top: 1})}],
-          [%{row | style: Map.put(row.style, :padding, %{zero | left: 1})}],
+          [%{row | style: Map.put(row.style, :border_widths, %{zero | top: -1})}],
+          [%{row | style: Map.put(row.style, :padding, %{zero | left: -1})}],
           [%{row | style: Map.put(row.style, :background_image, "pending")}]
         ] do
       assert {:error, {reason, diagnostic}} =

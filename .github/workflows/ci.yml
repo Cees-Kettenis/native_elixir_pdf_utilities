@@ -59,7 +59,7 @@ jobs:
       - name: Install test and browser comparison tools
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends chromium fonts-dejavu-core fonts-liberation libfreetype6 poppler-utils
+          apt-get install -y --no-install-recommends chromium fonts-dejavu-core fonts-liberation libfreetype6 poppler-utils qpdf
           rm -rf /var/lib/apt/lists/*
 
       - name: Restore Mix and Dialyzer caches

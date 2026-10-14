@@ -7,7 +7,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
   alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
-  alias NativeElixirPdfUtilities.HtmlToPdf.SvgBackend
+  alias NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentImage
   alias NativeElixirPdfUtilities.HtmlToPdf.ResourceContext
   alias NativeElixirPdfUtilities.HtmlToPdf.ScrollbarPainter
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
@@ -22,6 +22,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
             NativeElixirPdfUtilities.Validators.ResourceValidator.document_descriptor(),
           optional(:client_css_viewport) => %{width: number(), height: number()},
           optional(:media_css_viewport) => %{width: number(), height: number()},
+          optional(:initial_document_kind) => :html | :text | :raster | :svg,
           optional(:frame_border) => boolean(),
           optional(:frame_scrollbars) => :auto | :none,
           optional(:frame_margins) => map(),
@@ -34,6 +35,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
 
   @typedoc "Authorized child source awaiting its actual layout viewport before styling."
   @type prepared :: %{
+          optional(:initial_document_kind) => :html | :text | :raster | :svg,
           optional(:frame_border) => boolean(),
           optional(:frame_scrollbars) => :auto | :none,
           optional(:frame_margins) => map(),
@@ -128,16 +130,45 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
              else: opts
            ),
          {:ok, opts} <- EmbeddedViewportValidator.prepare_options(opts, document.context) do
-      {:ok,
-       %{
-         prepared_dom: document.dom,
-         source: document.source,
-         options: opts,
-         document_url: urls.fallback_base,
-         context: document.context,
-         forms: Keyword.get(opts, :forms, :interactive),
-         host: :iframe
-       }}
+      prepared = %{
+        prepared_dom: document.dom,
+        initial_document_kind: resource.kind,
+        source: document.source,
+        options: opts,
+        document_url: urls.fallback_base,
+        context: document.context,
+        forms: Keyword.get(opts, :forms, :interactive),
+        host: :iframe
+      }
+
+      if resource.kind == :svg do
+        ResourceContext.with_document(document.context, fn ->
+          with {:ok, fonts} <- local_fonts(Keyword.fetch!(opts, :fonts), document.context, opts),
+               :ok <-
+                 HtmlValidator.reserve_image_source(
+                   context.image_budget,
+                   byte_size(resource.bytes)
+                 ),
+               {:ok, image} <-
+                 SvgDocumentImage.prepare(
+                   resource.bytes,
+                   context.image_budget,
+                   source,
+                   :iframe,
+                   Enum.flat_map(fonts, fn font ->
+                     Enum.map(
+                       font.data,
+                       &(font |> Map.take([:family, :weight, :style]) |> Map.put(:data, &1))
+                     )
+                   end),
+                   opts
+                 ) do
+            {:ok, Map.put(prepared, :svg_image, image)}
+          end
+        end)
+      else
+        {:ok, prepared}
+      end
     else
       {:error, {reason, diagnostic}} ->
         {:error,
@@ -220,15 +251,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
         :image ->
           if mime == "image/svg+xml" do
             ResourceContext.with_document(resource.context, fn ->
-              with {:ok, _opts} <-
+              with {:ok, opts} <-
                      EmbeddedViewportValidator.prepare_options(opts, resource.context),
+                   {:ok, fonts} <-
+                     local_fonts(Keyword.fetch!(opts, :fonts), resource.context, opts),
                    :ok <-
                      HtmlValidator.reserve_image_source(
                        context.image_budget,
                        byte_size(resource.bytes)
                      ),
                    {:ok, image} <-
-                     SvgBackend.prepare_document(resource.bytes, context.image_budget, source) do
+                     SvgDocumentImage.prepare(
+                       resource.bytes,
+                       context.image_budget,
+                       source,
+                       host,
+                       Enum.flat_map(fonts, fn font ->
+                         Enum.map(
+                           font.data,
+                           &(font |> Map.take([:family, :weight, :style]) |> Map.put(:data, &1))
+                         )
+                       end),
+                       opts
+                     ) do
                 {:ok, {:image, %{image: image, svg_document_fitting: %{object_fit: :fill}}}}
               end
             end)
@@ -255,11 +300,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
   end
 
   defp prepare_document(source, context, opts, host) do
-    with {:ok, document} <-
-           if(host == :object,
-             do: EmbeddedResource.load_object_html(source, context, opts),
-             else: EmbeddedResource.load_html(source, context, opts)
-           ),
+    # This helper is reached only from prepare_object_document/3.
+    with {:ok, document} <- EmbeddedResource.load_object_html(source, context, opts),
          {:ok, document, urls} <-
            EmbeddedViewportValidator.prepare_document_context(document, context),
          {:ok, opts} <- EmbeddedViewportValidator.prepare_options(opts, document.context) do
@@ -347,126 +389,159 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def layout(surface, width, height) do
     with {:ok, _opts} <- EmbeddedViewportValidator.prepare_layout(surface, width, height) do
-      ResourceContext.with_document(surface.context, fn ->
-        geometry = EmbeddedViewportValidator.initial_viewport(surface, width, height)
+      case surface do
+        %{svg_image: document} ->
+          with {:ok, image} <- SvgDocumentImage.compose(document, width, height) do
+            boxes =
+              case image do
+                :skipped ->
+                  []
 
-        with {:ok, surface} <-
-               (case surface do
-                  %{prepared_dom: _dom, client_css_viewport: client} ->
-                    if client == %{
-                         width: geometry.client_width / 0.75,
-                         height: geometry.client_height / 0.75
-                       } and
-                         Map.get(surface, :media_css_viewport) == %{
-                           width: geometry.viewport_width / 0.75,
-                           height: geometry.viewport_height / 0.75
-                         },
-                       do: {:ok, surface},
-                       else:
-                         style_viewport(
-                           surface,
-                           geometry.client_width,
-                           geometry.client_height,
-                           {geometry.viewport_width, geometry.viewport_height}
-                         )
+                image ->
+                  [
+                    %{
+                      type: HtmlValidator.reserve_layout_box(:image),
+                      snap_to_css_pixel_grid: true,
+                      x: 0.0,
+                      y: 0.0,
+                      width: width,
+                      height: height,
+                      image: image
+                    }
+                  ]
+              end
 
-                  %{tree: _tree} ->
-                    {:ok, surface}
-
-                  _ ->
-                    style_viewport(
-                      surface,
-                      geometry.client_width,
-                      geometry.client_height,
-                      {geometry.viewport_width, geometry.viewport_height}
-                    )
-                end),
-             tree <- EmbeddedViewportValidator.prepare_viewport_tree(surface),
-             {:ok, layout, geometry} <- layout_client(tree, surface, width, height, geometry),
-             {:ok, boxes, widgets} <-
-               EmbeddedViewportValidator.prepare_composition(layout, surface, width, height) do
-          # Target-bearing nonpainting markers belong to the document's target
-          # transport. Pagination's destination owner finalizes them later.
-          boxes =
-            Enum.reject(boxes, fn box ->
-              box.type == :page_break or
-                (box.type == :flow_marker and not Map.has_key?(box, :html_targets))
-            end)
-
-          origin = %{x: layout.margins.left, y: geometry.client_height - layout.margins.top}
-
-          metadata =
-            layout
-            |> Map.take([:link_scope, :link_expected_targets, :link_document_targets])
-            |> Map.update(:link_document_targets, [], fn targets ->
-              Enum.map(targets, &Map.merge(&1, origin))
-            end)
-
-          metadata =
-            if Map.has_key?(metadata, :link_scope),
-              do: Map.put(metadata, :link_document_origin, origin),
-              else: metadata
-
-          client_rect = %{
-            x: 0.0,
-            y: 0.0,
-            width: geometry.client_width,
-            height: geometry.client_height
-          }
-
-          metadata =
-            metadata
-            |> Map.put(:client_rect, client_rect)
-            |> Map.put(:scroll_offset, %{x: 0.0, y: 0.0})
-            |> Map.put(:embedded_widgets, widgets)
-
-          metadata =
-            if surface.host == :iframe,
-              do: Map.put(metadata, :role, :iframe_viewport),
-              else: metadata
-
-          if not geometry.horizontal and not geometry.vertical and
-               geometry.client_height == height do
-            {:ok, drawing_group(width, height, boxes, {1, 0, 0, 1, 0, 0}) |> Map.merge(metadata)}
-          else
-            content =
-              drawing_group(
-                geometry.client_width,
-                geometry.client_height,
-                boxes,
-                {1, 0, 0, 1, 0, height - geometry.client_height}
-              )
-              |> Map.merge(metadata)
-
-            with {:ok, parts} <- EmbeddedViewportValidator.prepare_scrollbar_parts(geometry) do
-              ui = ScrollbarPainter.paint(parts)
-
-              ui =
-                drawing_group(
-                  geometry.viewport_width,
-                  geometry.viewport_height,
-                  ui,
-                  {1, 0, 0, 1, 0, height - geometry.viewport_height}
-                )
-
-              {:ok, drawing_group(width, height, [content, ui], {1, 0, 0, 1, 0, 0})}
-            end
+            {:ok,
+             drawing_group(width, height, boxes, {1, 0, 0, 1, 0, 0})
+             |> Map.put(:role, :iframe_viewport)}
           end
-        else
-          {:error, {reason, diagnostic}} ->
-            {:error,
-             {reason,
-              Diagnostics.with_context(
-                if(reason == :invalid_layout,
-                  do: Map.drop(diagnostic, [:operation, :module]),
-                  else: diagnostic
-                ),
-                operation: :layout_embedded_viewport,
-                module: __MODULE__
-              )}}
-        end
-      end)
+
+        _ ->
+          layout_html(surface, width, height)
+      end
     end
+  end
+
+  defp layout_html(surface, width, height) do
+    ResourceContext.with_document(surface.context, fn ->
+      geometry = EmbeddedViewportValidator.initial_viewport(surface, width, height)
+
+      with {:ok, surface} <-
+             (case surface do
+                %{prepared_dom: _dom, client_css_viewport: client} ->
+                  if client == %{
+                       width: geometry.client_width / 0.75,
+                       height: geometry.client_height / 0.75
+                     } and
+                       Map.get(surface, :media_css_viewport) == %{
+                         width: geometry.viewport_width / 0.75,
+                         height: geometry.viewport_height / 0.75
+                       },
+                     do: {:ok, surface},
+                     else:
+                       style_viewport(
+                         surface,
+                         geometry.client_width,
+                         geometry.client_height,
+                         {geometry.viewport_width, geometry.viewport_height}
+                       )
+
+                %{tree: _tree} ->
+                  {:ok, surface}
+
+                _ ->
+                  style_viewport(
+                    surface,
+                    geometry.client_width,
+                    geometry.client_height,
+                    {geometry.viewport_width, geometry.viewport_height}
+                  )
+              end),
+           tree <- EmbeddedViewportValidator.prepare_viewport_tree(surface),
+           {:ok, layout, geometry} <- layout_client(tree, surface, width, height, geometry),
+           {:ok, boxes, widgets} <-
+             EmbeddedViewportValidator.prepare_composition(layout, surface, width, height) do
+        # Target-bearing nonpainting markers belong to the document's target
+        # transport. Pagination's destination owner finalizes them later.
+        boxes =
+          Enum.reject(boxes, fn box ->
+            box.type == :page_break or
+              (box.type == :flow_marker and not Map.has_key?(box, :html_targets))
+          end)
+
+        origin = %{x: layout.margins.left, y: geometry.client_height - layout.margins.top}
+
+        metadata =
+          layout
+          |> Map.take([:link_scope, :link_expected_targets, :link_document_targets])
+          |> Map.update(:link_document_targets, [], fn targets ->
+            Enum.map(targets, &Map.merge(&1, origin))
+          end)
+
+        metadata =
+          if Map.has_key?(metadata, :link_scope),
+            do: Map.put(metadata, :link_document_origin, origin),
+            else: metadata
+
+        client_rect = %{
+          x: 0.0,
+          y: 0.0,
+          width: geometry.client_width,
+          height: geometry.client_height
+        }
+
+        metadata =
+          metadata
+          |> Map.put(:client_rect, client_rect)
+          |> Map.put(:scroll_offset, %{x: 0.0, y: 0.0})
+          |> Map.put(:embedded_widgets, widgets)
+
+        metadata =
+          if surface.host == :iframe,
+            do: Map.put(metadata, :role, :iframe_viewport),
+            else: metadata
+
+        if not geometry.horizontal and not geometry.vertical and
+             geometry.client_height == height do
+          {:ok, drawing_group(width, height, boxes, {1, 0, 0, 1, 0, 0}) |> Map.merge(metadata)}
+        else
+          content =
+            drawing_group(
+              geometry.client_width,
+              geometry.client_height,
+              boxes,
+              {1, 0, 0, 1, 0, height - geometry.client_height}
+            )
+            |> Map.merge(metadata)
+
+          with {:ok, parts} <- EmbeddedViewportValidator.prepare_scrollbar_parts(geometry) do
+            ui = ScrollbarPainter.paint(parts)
+
+            ui =
+              drawing_group(
+                geometry.viewport_width,
+                geometry.viewport_height,
+                ui,
+                {1, 0, 0, 1, 0, height - geometry.viewport_height}
+              )
+
+            {:ok, drawing_group(width, height, [content, ui], {1, 0, 0, 1, 0, 0})}
+          end
+        end
+      else
+        {:error, {reason, diagnostic}} ->
+          {:error,
+           {reason,
+            Diagnostics.with_context(
+              if(reason == :invalid_layout,
+                do: Map.drop(diagnostic, [:operation, :module]),
+                else: diagnostic
+              ),
+              operation: :layout_embedded_viewport,
+              module: __MODULE__
+            )}}
+      end
+    end)
   end
 
   defp layout_client(tree, surface, width, height, geometry) do
@@ -496,9 +571,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
           else
             layout_client(tree, surface, width, height, geometry)
           end
-
-        {:error, {_reason, _diagnostic}} = error ->
-          error
       end
     end
   end

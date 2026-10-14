@@ -110,42 +110,120 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     end
   end
 
+  @doc "Checks that converted SVG artwork is stored as image data rather than custom glyph programs."
+  @spec assert_svg_image_artwork!(binary()) :: :ok
+  def assert_svg_image_artwork!(pdf) do
+    assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+
+    images =
+      for {_ref, %{value: %{"Subtype" => {:name, "Image"}}} = object} <- document.objects,
+          do: object
+
+    assert images != [], "Expected converted SVG artwork in a PDF Image XObject"
+
+    for image <- images do
+      assert is_integer(image.value["Width"]) and image.value["Width"] > 0
+      assert is_integer(image.value["Height"]) and image.value["Height"] > 0
+      assert image.value["BitsPerComponent"] == 8
+      assert is_binary(image.stream) and byte_size(image.stream) > 0
+    end
+
+    refute pdf =~ "/Subtype /Type3"
+    refute pdf =~ "/NativeOriginalGID"
+    refute pdf =~ "/NativeSourceFont"
+    :ok
+  end
+
+  @doc "Checks that SVG image artwork has no selectable or source-only text."
+  @spec assert_svg_image_without_text!(binary()) :: :ok
+  def assert_svg_image_without_text!(pdf) do
+    assert {:error,
+            {:no_extractable_text,
+             %{stage: :text_extraction, reason: :no_extractable_text, message: message}}} =
+             NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
+
+    assert is_binary(message) and message != ""
+    refute pdf =~ "/ActualText"
+    assert_svg_image_artwork!(pdf)
+  end
+
+  @doc "Preserves the original Chromium reference while checking the native foreignObject diagnostic, without claiming visual parity."
+  @spec assert_browser_unsupported!(String.t(), keyword()) :: map()
+  def assert_browser_unsupported!(fixture_path, opts \\ []) do
+    context = prepare_browser_fixture!(fixture_path, opts)
+
+    assert {:error,
+            {:unsupported_html,
+             %{
+               stage: :layout,
+               reason: :unsupported_html,
+               operation: :convert,
+               module: NativeElixirPdfUtilities.Validators.SvgConverterValidator,
+               source: "foreignObject",
+               message: message
+             } = diagnostic}} = context.native_result
+
+    assert message =~ "foreignObject" and message =~ "converter"
+    assert message =~ "cannot be omitted"
+    refute File.exists?(context.native_pdf)
+
+    pages =
+      rasterize_pdf!(
+        context.pdftoppm_bin,
+        context.chromium_pdf,
+        Path.join(context.artifact_dir, "chromium"),
+        context.dpi
+      )
+
+    assert pages != []
+    File.cp!(context.fixture_path, Path.join(context.artifact_dir, "original.html"))
+
+    File.write!(
+      Path.join(context.artifact_dir, "native-render-options.exs"),
+      inspect(context.render_opts, pretty: true, limit: :infinity)
+    )
+
+    stats = %{
+      status: :unsupported_feature,
+      visual_comparison: :not_performed,
+      fixture: context.fixture_path,
+      diagnostic: diagnostic,
+      chromium_page_count: length(pages),
+      chromium_pages: pages,
+      chromium_version: command_output!(context.chromium_bin, ["--version"]),
+      scripting: :disabled,
+      dpi: context.dpi,
+      rasterizer_version:
+        command_output!(context.pdftoppm_bin, ["-v"]) |> String.split("\n") |> hd(),
+      font_sources: source_fonts(context.render_opts),
+      embedded_fonts: %{chromium: command_output!(pdffonts_bin!(), [context.chromium_pdf])},
+      artifact_dir: Path.expand(context.artifact_dir)
+    }
+
+    File.write!(
+      Path.join(context.artifact_dir, "unsupported-feature.exs"),
+      inspect(stats, pretty: true, limit: :infinity)
+    )
+
+    stats
+  end
+
   @doc false
   @spec assert_browser_match!(String.t(), keyword()) :: comparison_stats()
   def assert_browser_match!(fixture_path, opts \\ []) do
-    fixture_path = Path.expand(fixture_path)
-    fixture_name = fixture_path |> Path.basename() |> Path.rootname()
+    %{
+      fixture_path: fixture_path,
+      artifact_dir: artifact_dir,
+      chromium_bin: chromium_bin,
+      pdftoppm_bin: pdftoppm_bin,
+      dpi: dpi,
+      render_opts: render_opts,
+      chromium_pdf: chromium_pdf,
+      native_pdf: native_pdf,
+      native_result: native_result
+    } = prepare_browser_fixture!(fixture_path, opts)
 
-    artifact_dir =
-      Keyword.get(opts, :artifact_dir, Path.join(["tmp", "browser_parity", fixture_name]))
-
-    chromium_bin = Keyword.get(opts, :chromium_bin, chromium_bin!())
-    pdftoppm_bin = Keyword.get(opts, :pdftoppm_bin, pdftoppm_bin!())
-    dpi = Keyword.get(opts, :dpi, 72)
-
-    render_opts =
-      fixture_path
-      |> default_render_opts()
-      |> Keyword.merge(Keyword.get(opts, :render_opts, []))
-
-    File.rm_rf!(artifact_dir)
-    File.mkdir_p!(artifact_dir)
-
-    chromium_pdf = Path.join(artifact_dir, "chromium.pdf")
-    native_pdf = Path.join(artifact_dir, "native.pdf")
-
-    {chromium_fixture_path, temporary_input} =
-      chromium_fixture_path!(fixture_path, artifact_dir, opts, render_opts)
-
-    try do
-      render_chromium_pdf!(chromium_bin, chromium_fixture_path, chromium_pdf)
-    after
-      if temporary_input, do: File.rm!(temporary_input)
-    end
-
-    html = File.read!(fixture_path)
-    native_renderer = Keyword.get(opts, :native_renderer, &HtmlToPdf.render/2)
-    assert {:ok, native_pdf_binary} = native_renderer.(html, render_opts)
+    assert {:ok, native_pdf_binary} = native_result
     File.write!(native_pdf, native_pdf_binary)
 
     chromium_pages =
@@ -182,20 +260,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       chromium_version: command_output!(chromium_bin, ["--version"]),
       scripting: :disabled,
       rasterizer_version: command_output!(pdftoppm_bin, ["-v"]) |> String.split("\n") |> hd(),
-      font_sources:
-        render_opts
-        |> Keyword.get(:fonts, [])
-        |> Enum.map(fn font ->
-          font
-          |> Map.take([:family, :path, :weight, :style])
-          |> Map.put(
-            :sha256,
-            font.path
-            |> File.read!()
-            |> then(&:crypto.hash(:sha256, &1))
-            |> Base.encode16(case: :lower)
-          )
-        end),
+      font_sources: source_fonts(render_opts),
       embedded_fonts: %{
         chromium: command_output!(pdffonts_bin!(), [chromium_pdf]),
         native: command_output!(pdffonts_bin!(), [native_pdf])
@@ -276,6 +341,69 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     |> Enum.with_index(1)
     |> Enum.map(fn {{before_page, after_page}, page_number} ->
       visual_change_stats!(before_page, after_page, page_number, artifact_dir)
+    end)
+  end
+
+  defp prepare_browser_fixture!(fixture_path, opts) do
+    fixture_path = Path.expand(fixture_path)
+    fixture_name = fixture_path |> Path.basename() |> Path.rootname()
+
+    artifact_dir =
+      Keyword.get(opts, :artifact_dir, Path.join(["tmp", "browser_parity", fixture_name]))
+
+    chromium_bin = Keyword.get(opts, :chromium_bin, chromium_bin!())
+    pdftoppm_bin = Keyword.get(opts, :pdftoppm_bin, pdftoppm_bin!())
+    dpi = Keyword.get(opts, :dpi, 72)
+
+    render_opts =
+      fixture_path
+      |> default_render_opts()
+      |> Keyword.merge(Keyword.get(opts, :render_opts, []))
+
+    File.rm_rf!(artifact_dir)
+    File.mkdir_p!(artifact_dir)
+
+    chromium_pdf = Path.join(artifact_dir, "chromium.pdf")
+    native_pdf = Path.join(artifact_dir, "native.pdf")
+
+    {chromium_fixture_path, temporary_input} =
+      chromium_fixture_path!(fixture_path, artifact_dir, opts, render_opts)
+
+    try do
+      render_chromium_pdf!(chromium_bin, chromium_fixture_path, chromium_pdf)
+    after
+      if temporary_input, do: File.rm!(temporary_input)
+    end
+
+    html = File.read!(fixture_path)
+    native_renderer = Keyword.get(opts, :native_renderer, &HtmlToPdf.render/2)
+
+    %{
+      fixture_path: fixture_path,
+      artifact_dir: artifact_dir,
+      chromium_bin: chromium_bin,
+      pdftoppm_bin: pdftoppm_bin,
+      dpi: dpi,
+      render_opts: render_opts,
+      chromium_pdf: chromium_pdf,
+      native_pdf: native_pdf,
+      native_result: native_renderer.(html, render_opts)
+    }
+  end
+
+  defp source_fonts(render_opts) do
+    render_opts
+    |> Keyword.get(:fonts, [])
+    |> Enum.map(fn font ->
+      font
+      |> Map.take([:family, :path, :weight, :style])
+      |> Map.put(
+        :sha256,
+        font.path
+        |> File.read!()
+        |> then(&:crypto.hash(:sha256, &1))
+        |> Base.encode16(case: :lower)
+      )
     end)
   end
 

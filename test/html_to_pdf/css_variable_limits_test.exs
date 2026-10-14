@@ -34,7 +34,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssVariableLimitsTest do
     assert {:ok, "éééééééééé"} =
              HtmlValidator.resolve_css_variables("var(--x)var(--x)", %{"--x" => "ééééé"}, %{})
 
-    for value <- ["xvar(--x)var(--x)", "var(--x)var(--x)x", String.duplicate("x", 21)] do
+    # xvar is a distinct CSS function token, so only the trailing var resolves.
+    assert {:ok, "xvar(--x)ééééé"} =
+             HtmlValidator.resolve_css_variables("xvar(--x)var(--x)", %{"--x" => "ééééé"}, %{})
+
+    for value <- ["x var(--x)var(--x)", "var(--x)var(--x)x", String.duplicate("x", 21)] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                HtmlValidator.resolve_css_variables(value, %{"--x" => "ééééé"}, %{})
 

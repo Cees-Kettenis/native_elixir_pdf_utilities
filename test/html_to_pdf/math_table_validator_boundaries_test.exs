@@ -175,6 +175,56 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
     end
   end
 
+  test "spaced prepared matrix callers reject malformed cell and nested paint state", %{
+    style: style
+  } do
+    zero = %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+    source = matrix([[cell("1", style, zero)]], style)
+    source = %{source | style: Map.put(source.style, :border_spacing, {2.0, 2.0})}
+    assert {:ok, prepared} = MathLayoutValidator.prepare_element(source, %{})
+    assert {:ok, measured} = MathLayout.measure(token("1", style))
+    [first] = hd(prepared.rows)
+
+    for replacement <- [
+          nil,
+          %{first | content: %{kind: :native_flow, children: [%{}]}},
+          %{first | content: %{kind: :native_flow, children: [%{boxes: [%{type: :text}]}]}},
+          %{first | content: %{kind: :matrix, rows: [[nil]]}}
+        ] do
+      assert {:error, {_, diagnostic}} =
+               MathTableValidator.prepare_geometry(%{prepared | rows: [[replacement]]}, [
+                 [measured]
+               ])
+
+      assert diagnostic.stage == :layout and diagnostic.source == "mtd"
+      assert diagnostic.message != ""
+    end
+
+    bad_span = first |> Map.put(:colspan, 2) |> Map.put(:style, nil)
+
+    assert {:error, {_, diagnostic}} =
+             MathTableValidator.prepare_geometry(%{prepared | rows: [[bad_span]]}, [[measured]])
+
+    assert diagnostic.message =~ "span placements"
+  end
+
+  test "allocated row baseline overflow is diagnosed by the shared table authority", %{
+    style: style,
+    limits: limits
+  } do
+    zero = %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+    source = matrix([[cell("1", style, zero)], [cell("2", style, zero)]], style)
+
+    source = %{
+      source
+      | children: Enum.map(source.children, &%{&1 | style: Map.put(&1.style, :height, 80.0)})
+    }
+
+    Limits.install(Map.put(limits, :max_css_numeric_magnitude, 100))
+    assert {:error, {_, diagnostic}} = MathLayout.measure(source)
+    assert diagnostic.stage == :layout and diagnostic.message != ""
+  end
+
   test "authored empty rows contribute zero natural height and preserve selected MATH axis", %{
     style: style
   } do

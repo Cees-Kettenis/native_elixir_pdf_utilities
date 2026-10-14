@@ -133,13 +133,117 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidatorTest do
     assert prepared.drawing_annotation_rect == {20.0, 26.0, 50.0, 50.0}
     assert prepared.drawing_page_height == 30
 
+    # The documented logical flow marker consumes validation work but paints
+    # nothing. Its genuine PDF transport retains the same content and link as
+    # the original group, in compressed and uncompressed output alike.
+    marker = %{type: :flow_marker, x: 0, y: 0, width: 0, height: 0}
+    only_marker = %{group | boxes: [marker]}
+    alias NativeElixirPdfUtilities.Pdf.Reader
+
+    assert {:ok, %{pages: [%{boxes: [empty_start, empty_end]}]}} =
+             WriterValidator.prepare([%{page | boxes: [only_marker]}], [])
+
+    assert empty_start.type == :drawing_group_start and empty_end.type == :drawing_group_end
+
+    for compressed <- [true, false] do
+      assert {:ok, empty} =
+               PdfWriter.render([%{page | boxes: [only_marker]}], compress_streams: compressed)
+
+      assert {:error, {:no_extractable_text, %{stage: :text_extraction}}} =
+               NativeElixirPdfUtilities.Text.extract(empty)
+
+      assert {:ok, document} = Reader.read(empty)
+      [empty_page] = document.pages
+      refute Map.has_key?(document.objects[empty_page.ref].value, "Annots")
+
+      assert {:ok, empty_stream} =
+               Reader.decoded_stream(document, document.objects[empty_page.ref].value["Contents"])
+
+      assert empty_stream =~ "5 2 20 10 re W n"
+      refute String.contains?(empty_stream, ["Tj", "TJ", " Do", " re f", " S"])
+
+      assert {:ok, marked} =
+               PdfWriter.render([%{page | boxes: [%{group | boxes: [marker, text]}]}],
+                 compress_streams: compressed
+               )
+
+      assert {:ok, plain} = PdfWriter.render([page], compress_streams: compressed)
+      assert {:ok, marked_document} = Reader.read(marked)
+      assert {:ok, plain_document} = Reader.read(plain)
+      [marked_page] = marked_document.pages
+      [plain_page] = plain_document.pages
+
+      assert {:ok, marked_stream} =
+               Reader.decoded_stream(
+                 marked_document,
+                 marked_document.objects[marked_page.ref].value["Contents"]
+               )
+
+      assert {:ok, ^marked_stream} =
+               Reader.decoded_stream(
+                 plain_document,
+                 plain_document.objects[plain_page.ref].value["Contents"]
+               )
+
+      assert {:ok, "Link"} = NativeElixirPdfUtilities.Text.extract(marked)
+      [{:ref, annotation}] = marked_document.objects[marked_page.ref].value["Annots"]
+      assert marked_document.objects[annotation].value["Rect"] == [20, 26, 50, 50]
+
+      assert marked_document.objects[annotation].value["A"]["URI"] ==
+               {:string, "https://example.com"}
+    end
+
+    for {transform, operator} <- [
+          {{1, 1, 0, 1, 0, 0}, "1 1 0 1 0 0 cm"},
+          {{1, 0, 1, 1, 0, 0}, "1 0 1 1 0 0 cm"},
+          {{-1, 0, 0, 1, 0, 0}, "-1 0 0 1 0 0 cm"},
+          {{1, 0, 0, -1, 0, 0}, "1 0 0 -1 0 0 cm"}
+        ] do
+      assert {:ok, pdf} = PdfWriter.render([%{page | boxes: [%{group | transform: transform}]}])
+      assert {:ok, document} = Reader.read(pdf)
+      [painted_page] = document.pages
+
+      assert {:ok, content} =
+               Reader.decoded_stream(
+                 document,
+                 document.objects[painted_page.ref].value["Contents"]
+               )
+
+      assert content =~ operator
+      assert {:ok, "Link"} = NativeElixirPdfUtilities.Text.extract(pdf)
+
+      if elem(transform, 0) < 0 or elem(transform, 3) < 0 do
+        # These original origin-zero reflections place the entire clip outside
+        # the page. They emit the actual matrix without a page-visible link.
+        refute Map.has_key?(document.objects[painted_page.ref].value, "Annots")
+      else
+        [{:ref, annotation}] = document.objects[painted_page.ref].value["Annots"]
+        assert document.objects[annotation].value["A"]["URI"] == {:string, "https://example.com"}
+        points = document.objects[annotation].value["QuadPoints"]
+        assert points != [] and rem(length(points), 8) == 0
+
+        area =
+          Enum.chunk_every(points, 8)
+          |> Enum.reduce(0.0, fn [a, b, c, d, e, f, g, h], total ->
+            ring = [{a, b}, {c, d}, {g, h}, {e, f}]
+
+            signed =
+              Enum.zip(ring, tl(ring) ++ [hd(ring)])
+              |> Enum.reduce(0.0, fn {{x, y}, {u, v}}, sum -> sum + x * v - u * y end)
+
+            total + abs(signed) / 2
+          end)
+
+        assert_in_delta area, 120.0, 0.001
+      end
+    end
+
     for invalid <- [
           Map.delete(group, :width),
           %{group | width: -1},
           %{group | height: "bad"},
           %{group | boxes: :bad},
           %{group | boxes: [1]},
-          %{group | boxes: [%{type: :flow_marker, x: 0, y: 0, width: 0, height: 0}]},
           %{group | boxes: [%{text | text: <<255>>}]},
           %{group | boxes: [Map.put(text, :snap_to_css_pixel_grid, :bad)]},
           %{group | boxes: [%{type: :glyph_group, actual_text: "x", boxes: :bad}]},
@@ -160,10 +264,6 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidatorTest do
           %{group | transform: {1, 0, 0, 1, :bad, 0}},
           %{group | transform: {0, 0, 0, 1, 0, 0}},
           %{group | transform: {0.00001, 0, 0, 1, 0, 0}},
-          %{group | transform: {1, 1, 0, 1, 0, 0}},
-          %{group | transform: {1, 0, 1, 1, 0, 0}},
-          %{group | transform: {-1, 0, 0, 1, 0, 0}},
-          %{group | transform: {1, 0, 0, -1, 0, 0}},
           %{group | transform: {1, 0, 0, 1, 0, 0, 0}},
           %{group | width: 1_000_000_001},
           %{group | baseline: -1},

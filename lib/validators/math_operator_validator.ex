@@ -1,6 +1,6 @@
 defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
   @moduledoc """
-  Prepares MathML Core operator semantics independently of glyph measurement.
+  Prepares operator semantics and Chromium-compatible authored MathML lengths.
 
   The source is the 24 June 2025 MathML Core snapshot, sections 3.2.4.1,
   3.2.4.2 and B.1. Invalid authored attribute syntax uses Core's dictionary
@@ -70,7 +70,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
 
   @typedoc "Point lengths, glyph-height percentages, or the unbounded Core maximum."
   @type size_constraint ::
-          number() | {:percentage, number()} | CssCalculationValidator.calculation() | :infinity
+          number() | {:percentage, number()} | :infinity
 
   @typedoc "Validated operator properties for a prepared MathML core operator."
   @type semantics :: %{
@@ -125,8 +125,10 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
   Fence and separator are semantic metadata and do not change Core geometry.
   Numeric percentages and absolute, em, rem, ex, cap, ch and lh lengths are resolved
   against the core operator's selected font and computed style.
-  Typed `calc`, `min`, `max`, and `clamp` expressions retain min/max percentages
-  until natural glyph height is known. Optional `viewport_width` and
+  Authored MathML length attributes using `calc`, `min`, `max`, or `clamp`
+  use the dictionary fallback, matching Chromium's ParseMathLength rejection
+  of calculated values. Ordinary CSS calculations are unaffected.
+  Optional `viewport_width` and
   `viewport_height` are point dimensions of the actual CSS viewport. Root font
   units use the corresponding `root_*` metric. Missing geometry is diagnosed.
   `stretch_axis` uses the names accepted by `MathLayout.stretch/6`, even when
@@ -323,16 +325,9 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
         prepared =
           case HtmlValidator.parse_css_number(normalized) do
             :error ->
-              if is_binary(normalized) and
-                   String.starts_with?(normalized, ["calc(", "min(", "max(", "clamp("]),
-                 do:
-                   prepare_calculation(
-                     normalized,
-                     context,
-                     spacing?,
-                     if(spacing?, do: default * size, else: 0)
-                   ),
-                 else: :error
+              # MathMLElement::ParseMathLength rejects calculated CSS values,
+              # even when the same expression is valid in an authored CSS rule.
+              :error
 
             {number, "%"} ->
               if spacing?,
@@ -357,13 +352,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
 
             {_number, unit} when unit in @contextual_units ->
               if Map.has_key?(unit_scales(context), unit),
-                do:
-                  prepare_calculation(
-                    normalized,
-                    context,
-                    spacing?,
-                    if(spacing?, do: default * size, else: 0)
-                  ),
+                do: resolve_contextual_length(normalized, context),
                 else: :unsupported_geometry
 
             {_number, unit} when unit in ["pc", "q"] ->
@@ -491,16 +480,12 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
     end
   end
 
-  defp prepare_calculation(value, context, spacing?, basis) do
-    case CssCalculationValidator.prepare(value, unit_scales(context)) do
-      {:ok, expression} ->
-        if spacing?,
-          do: CssCalculationValidator.resolve(expression, basis),
-          else: {:ok, expression}
-
-      other ->
-        other
-    end
+  # Primitive viewport/container units have a definite prepared CSS context.
+  # Calculated attribute syntax is already rejected; no glyph-height basis
+  # remains to defer into the Math layout consumer.
+  defp resolve_contextual_length(value, context) do
+    with {:ok, expression} <- CssCalculationValidator.prepare(value, unit_scales(context)),
+         do: CssCalculationValidator.resolve(expression, 0)
   end
 
   defp failure(reason, message, source) do

@@ -84,6 +84,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IframeInitializationHintsTest do
     end)
   end
 
+  test "allocated iframe borders retain their UA relief paint role" do
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn parent ->
+      assert {:ok, dom} =
+               HtmlParser.parse_document_detailed(
+                 "<iframe srcdoc='' style='display:block;width:90pt;height:60pt'></iframe>"
+               )
+
+      assert {:ok, tree} = Style.compute_detailed(dom, [], parent.image_budget)
+      assert {:ok, layout} = NativeElixirPdfUtilities.HtmlToPdf.Layout.layout(tree)
+      assert border = Enum.find(layout.boxes, &(Map.get(&1, :role) == :iframe_border))
+      assert border.border_styles.left == :inset
+      assert border.border_colors.left == {238 / 255, 238 / 255, 238 / 255}
+    end)
+  end
+
   test "iframe descriptors carry real margins and client scrollbar geometry without source replacement" do
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn parent ->
       for {hint, client} <- [

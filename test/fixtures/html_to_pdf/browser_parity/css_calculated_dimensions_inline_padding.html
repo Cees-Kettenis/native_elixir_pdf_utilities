@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@page {size:300pt 220pt;margin:0}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:12pt;line-height:18pt}
+body {padding:12pt}
+p {margin:0 0 12pt}
+.fixed {width:240pt;height:60pt;background:#eee}
+.calculated {width:calc(50% + 12pt);height:calc(50% - 6pt);min-width:max(80pt,30%);max-width:clamp(100pt,60%,150pt);background:#497c9b}
+.borderbox {box-sizing:border-box;width:calc(50% - 6pt);min-height:calc(1em + 6pt);max-height:30pt;height:calc(2em + 12pt);padding:3pt;border:1.5pt solid #23513a;background:#83b88f}
+</style></head><body>
+<p>A<span style="padding:2pt;background:#c6dde9">B<span style="padding:3pt;background:#e1c9ae">C</span><span style="display:inline-block;width:10pt;height:6pt;background:#704060"></span>D</span>E.</p>
+<div class="fixed"><div class="calculated"></div><div class="borderbox"></div></div>
+<p style="margin-top:12pt">Fixed <span style="display:inline-block;width:min(40pt,calc(20% + 2pt));height:calc(1lh + 2pt);background:#ddbc84"></span> tail.</p>
+</body></html>

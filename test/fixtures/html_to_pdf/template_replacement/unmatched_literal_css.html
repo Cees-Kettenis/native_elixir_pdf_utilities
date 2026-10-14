@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><style>
+@page { size: A4; margin: 18px; }
+body { margin: 0; font-family: "DejaVu Sans"; font-size: 14px; }
+.absent { width: 3px; display: none; }
+@media screen { .absent { height: 4pt; padding: 2px; } }
+</style></head>
+<body>
+<div><?start name="A"><p>Removed original</p><?end?></div>
+<template for="A"><style>.absent { width: 5px; }</style><p>Inserted actual</p></template>
+<p>After template</p>
+</body>
+</html>

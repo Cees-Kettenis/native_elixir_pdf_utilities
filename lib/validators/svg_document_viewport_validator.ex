@@ -1,200 +1,265 @@
 defmodule NativeElixirPdfUtilities.Validators.SvgDocumentViewportValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
-  alias NativeElixirPdfUtilities.HtmlToPdf.{CssParser, SvgViewport}
+  alias NativeElixirPdfUtilities.HtmlToPdf.SvgViewport
 
   alias NativeElixirPdfUtilities.Validators.{
     HtmlValidator,
-    SvgSceneValidator,
+    CssValueValidator,
     SvgStyleValidator,
-    SvgTransformValidator,
     SvgValidator,
     SvgViewportValidator
   }
 
-  @lengths ~w(x y x1 y1 x2 y2 cx cy r rx ry width height stroke-width stroke-dashoffset stroke-dasharray)
-
   @typedoc "Internal canonical plan retained in the validator-issued SVG document request."
   @type plan :: %{
           attributes: %{String.t() => String.t()},
-          inverse: {number(), number(), number(), number(), number(), number()},
+          host: :object | :embed | :iframe | :frame,
+          root_style: map(),
           width: number(),
-          height: number(),
-          surface_factor: non_neg_integer()
+          height: number()
         }
 
   @type raster :: %{
           width: pos_integer(),
           height: pos_integer(),
-          matrix: {number(), number(), number(), number(), number(), number()}
+          root_size: {number(), number()}
+        }
+
+  @typedoc "Validated SVG root attributes and their optional prepared host CSS dimensions."
+  @type source_viewport :: %{
+          required(:source_root) => %{String.t() => String.t()},
+          optional(:root_style) => map()
         }
 
   @doc """
-  Internal preparation of intrinsic metadata and the pinned tree's original
-  viewport transform without raster allocation. Accepts only the bounded XML
-  summary issued by SvgValidator.validate_processing/2. Application callers
-  enter through SvgBackend.prepare_document/3 and its validated source contract.
+  Prepares intrinsic metadata from the validated SVG root and host CSS dimensions.
+  The validated host determines whether the root uses document sizing or the
+  replaced child viewport. Selected documents enter through the PNG document adapter.
   """
-  @spec prepare(SvgValidator.document_summary()) ::
+  @spec prepare(source_viewport()) :: {:ok, plan()} | {:error, {atom(), map()}}
+  @spec prepare(source_viewport(), term()) ::
           {:ok, plan()} | {:error, {atom(), map()}}
-  def prepare(summary) do
-    # The XML backend uses case-sensitive, unqualified SVG root attributes.
-    # Keep the original names alongside the existing folded summary metadata.
+  def prepare(summary, host \\ :object) do
     attributes = summary.source_root
 
-    with {:ok, root} <-
-           SvgViewportValidator.prepare(attributes, %{}, %{width: 225.0, height: 112.5}),
-         :ok <- validate_source_geometry(summary.source_nodes, root, attributes),
-         {:ok, natural} <- SvgViewport.measure(attributes, %{}, %{width: 225.0, height: 112.5}),
-         true <- natural.width > 0 and natural.height > 0,
-         {original_width, original_height} <-
-           if(root.view_box,
-             do: {elem(root.view_box, 2), elem(root.view_box, 3)},
-             else: {100.0, 100.0}
+    css_context =
+      CssValueValidator.policy_style()
+      |> Map.merge(SvgStyleValidator.defaults(%{}))
+      |> Map.merge(%{_svg_element: true, _svg_prepare: true, _svg_inherited: %{}})
+
+    with true <- host in [:object, :embed, :iframe, :frame],
+         {:ok, root_css} <-
+           CssValueValidator.validate_declarations_in_context(
+             Map.get(attributes, "style", ""),
+             css_context,
+             HtmlValidator.new_css_budget()
            ),
-         {:ok, original} <-
-           SvgViewport.measure(attributes, %{svg_x: {:user, 0.0}, svg_y: {:user, 0.0}}, %{
-             width: original_width,
-             height: original_height,
-             nested: true
-           }),
-         true <- original.paint?,
-         {:ok, inverse} <- SvgTransformValidator.inverse(original.ctm) do
+         root_style <-
+           root_css._svg_specified
+           |> Map.keys()
+           |> Enum.filter(&(&1 in ~w(width height)))
+           |> Enum.map(&String.to_existing_atom("svg_" <> &1))
+           |> then(&Map.take(root_css, &1))
+           |> Map.merge(Map.get(summary, :root_style, %{})),
+         {:ok, natural} <-
+           SvgViewport.measure(attributes, root_style, %{width: 225.0, height: 112.5}) do
       {:ok,
        %{
          attributes: attributes,
-         inverse: inverse,
+         root_style: root_style,
+         host: host,
          width: natural.width,
-         height: natural.height,
-         surface_factor: 75 * summary.expanded_work
+         height: natural.height
        }}
     else
       {:error, {_, _}} = error ->
         error
 
       _ ->
-        invalid(
-          "selected SVG root requires positive intrinsic dimensions and an invertible viewBox transform"
-        )
+        invalid("selected SVG document requires a supported host and bounded intrinsic geometry")
     end
   end
 
-  # Percent geometry without a viewBox is resolved by usvg against its original
-  # root canvas, rather than the eventual child viewport. Root CSS sizing changes
-  # that original transform too. Do not claim either profile through a bitmap fit.
-  defp validate_source_geometry(nodes, root, attributes) do
-    Enum.reduce_while(nodes, :ok, fn node, :ok ->
-      with {:ok, declarations} <-
-             CssParser.parse_declarations_detailed(Map.get(node.attributes, "style", "")),
-           :ok <-
-             (cond do
-                node.index == 1 and
-                    ((root.width == :auto and Map.has_key?(attributes, "width")) or
-                       (root.height == :auto and Map.has_key?(attributes, "height")) or
-                       match?({unit, _} when unit in [:percent, :svg_em, :svg_rem], root.width) or
-                       match?({unit, _} when unit in [:percent, :svg_em, :svg_rem], root.height) or
-                       Enum.any?(
-                         declarations,
-                         &(elem(&1, 0) in ~w(width height x y transform transform-origin))
-                       )) ->
-                  unsupported(
-                    "selected SVG root percentage/font-relative dimensions and CSS viewport sizing require proven used geometry"
-                  )
+  @doc "Validates the actual flex formatting context retained for initial SVG document canvas layout."
+  @spec prepare_layout_context(term()) :: {:ok, map() | nil} | {:error, {atom(), map()}}
+  def prepare_layout_context(context) do
+    valid? =
+      case context do
+        nil ->
+          true
 
-                root.view_box == nil and
-                    ((node.tag == "svg" and node.index != 1) or
-                       (node.tag in ~w(linearGradient radialGradient) and
-                          Map.get(node.attributes, "gradientunits") == "userSpaceOnUse") or
-                       Enum.any?(node.attributes, fn {name, value} ->
-                         (name in @lengths and String.contains?(value, "%")) or
-                             (node.tag in ~w(linearGradient radialGradient) and
-                                Map.get(node.attributes, "gradientunits") == "userSpaceOnUse" and
-                                String.contains?(value, "%"))
-                       end) or
-                       Enum.any?(declarations, fn declaration ->
-                         elem(declaration, 0) in @lengths and
-                             String.contains?(elem(declaration, 1), "%")
-                       end)) ->
-                  unsupported(
-                    "selected SVG geometry without viewBox cannot resolve viewport-relative percentages or nested viewports against the child yet"
-                  )
+        %{main_axis: axis, alignment: alignment, containing_height: containing, height: height} =
+            context
+        when map_size(context) == 4 ->
+          axis in [:row, :column] and
+            alignment in [:stretch, :flex_start, :flex_end, :center, :baseline] and
+            Enum.all?([containing, height], fn value ->
+              is_nil(value) or
+                (is_number(value) and value >= 0 and
+                   value <= Limits.get(:max_css_numeric_magnitude) and
+                   match?({:ok, _}, HtmlValidator.normalize_geometry_number(value)))
+            end)
 
-                Enum.any?(node.attributes, fn {name, value} ->
-                  name in @lengths and
-                      match?(
-                        {:ok, {unit, _}} when unit in [:svg_em, :svg_rem],
-                        SvgStyleValidator.length(value, true)
-                      )
-                end) or
-                    Enum.any?(declarations, fn declaration ->
-                      elem(declaration, 0) in @lengths and
-                          match?(
-                            {:ok, {unit, _}} when unit in [:svg_em, :svg_rem],
-                            SvgStyleValidator.length(elem(declaration, 1), true)
-                          )
-                    end) ->
-                  unsupported(
-                    "selected SVG font-relative geometry requires its actual document font context"
-                  )
-
-                SvgTransformValidator.parse(Map.get(node.attributes, "transform", "none")) ==
-                    :error ->
-                  invalid("selected SVG transform requires a complete bounded transform list")
-
-                true ->
-                  if node.tag in ~w(svg g defs symbol use path rect circle ellipse line polyline polygon title desc),
-                    do: SvgSceneValidator.validate_node(node),
-                    else: :ok
-              end) do
-        {:cont, :ok}
-      else
-        error -> {:halt, error}
+        _ ->
+          false
       end
-    end)
+
+    if valid?,
+      do: {:ok, context},
+      else:
+        Diagnostics.error(
+          :layout,
+          :invalid_document,
+          "selected SVG canvas requires its actual flex axis, alignment and finite containing/used height",
+          operation: :rasterize_document,
+          module: __MODULE__,
+          source: "SVG"
+        )
   end
 
   @doc """
-  Internal validation of the actual child viewport and its canvas allocation.
-  The plan must be the canonical result of prepare/1 retained in the issued
-  request. SvgBackend.paint_document/3 resolves that request through validator
+  Resolves the actual child viewport and initial used SVG root without allocating pixels.
+  The plan must be the canonical result of prepare/2 retained in the issued
+  request. The PNG document adapter resolves that request through validator
   authority before calling this helper; caller-authored maps are not plans.
   """
-  @spec prepare_raster(plan(), term(), term(), HtmlValidator.image_budget()) ::
-          {:ok, raster()} | {:error, {atom(), map()}}
-  def prepare_raster(plan, width, height, budget) do
+  @spec prepare_viewport(plan(), term(), term(), HtmlValidator.image_budget()) ::
+          {:ok, map() | :skipped} | {:error, {atom(), map()}}
+  @spec prepare_viewport(plan(), term(), term(), HtmlValidator.image_budget(), map() | nil) ::
+          {:ok, map() | :skipped} | {:error, {atom(), map()}}
+  def prepare_viewport(plan, width, height, budget, context \\ nil) do
     with {:ok, {width, height}} <- HtmlValidator.prepare_viewport_dimensions(width, height),
-         true <- width > 0 and height > 0,
-         {:ok, target} <-
-           SvgViewport.measure(
-             plan.attributes,
-             %{svg_width: {:points, width}, svg_height: {:points, height}},
-             %{width: width, height: height}
-           ),
-         {a, b, c, d, e, f} <- SvgTransformValidator.multiply(target.ctm, plan.inverse),
-         raster_width <- max(ceil(width / 0.75 * Limits.get(:svg_raster_scale)), 1),
-         raster_height <- max(ceil(height / 0.75 * Limits.get(:svg_raster_scale)), 1),
-         sx <- raster_width / width,
-         sy <- raster_height / height,
-         matrix <- {a * sx, b * sy, c * sx, d * sy, e * sx, f * sy},
-         true <-
-           Enum.all?(
-             Tuple.to_list(matrix),
-             &match?({:ok, _}, HtmlValidator.normalize_geometry_number(&1))
-           ),
-         :ok <- SvgValidator.validate_raster_dimensions(raster_width, raster_height, budget),
+         :ok <- HtmlValidator.validate_image_budget(budget),
          :ok <-
-           HtmlValidator.reserve_render_resource(
-             :max_aggregate_svg_surface_pixels,
-             raster_width * raster_height * plan.surface_factor,
-             :layout
+           if(
+             is_nil(context) or
+               (is_map(context) and map_size(context) == 2 and context[:host] == plan.host),
+             do: :ok,
+             else: invalid("selected SVG raster context must retain its original issued host")
+           ),
+         {:ok, layout} <-
+           prepare_layout_context(if(is_nil(context), do: nil, else: context[:layout])),
+         # A stretched embed in an indefinite flex row initializes its document
+         # canvas before the host cross size becomes definite.
+         canvas_height <-
+           (case {plan.host, layout} do
+              {:embed,
+               %{main_axis: :row, alignment: :stretch, containing_height: nil, height: nil}} ->
+                elem(
+                  NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator.intrinsic_size(),
+                  1
+                )
+
+              _ ->
+                height
+            end),
+         {:ok, root} <-
+           SvgViewportValidator.prepare(plan.attributes, plan.root_style, %{
+             width: width,
+             height: canvas_height
+           }),
+         used_style <-
+           Map.merge(
+             plan.root_style,
+             if(plan.host in [:object, :embed],
+               do: %{svg_width: {:points, width}, svg_height: {:points, canvas_height}},
+               else: %{
+                 svg_width: if(root.width == :auto, do: {:percent, 1.0}, else: root.width),
+                 svg_height: if(root.height == :auto, do: {:percent, 1.0}, else: root.height)
+               }
+             )
+           ),
+         {:ok, target} <-
+           SvgViewport.measure(plan.attributes, used_style, %{width: width, height: canvas_height}),
+         true <- width > 0 and height > 0 and target.paint?,
+         :ok <-
+           if(plan.host in [:iframe, :frame] and (target.width > width or target.height > height),
+             do:
+               unsupported(
+                 "selected SVG document overflow requires its initial scrollbar geometry"
+               ),
+             else: :ok
+           ),
+         root_size <- {target.width / 0.75, target.height / 0.75},
+         :ok <-
+           if(
+             Enum.all?(
+               Tuple.to_list(root_size),
+               &match?({:ok, _}, HtmlValidator.normalize_geometry_number(&1))
+             ),
+             do: :ok,
+             else: invalid("selected SVG raster transform exceeds the supported numeric range")
+           ),
+         # Positive native viewport dimensions are represented as f32 by usvg.
+         # This is the pinned representation invariant, not another tunable limit.
+         :ok <-
+           if(
+             Enum.all?(Tuple.to_list(root_size) ++ [width / 0.75, height / 0.75], fn value ->
+               <<native::float-32>> = <<value::float-32>>
+               native > 0
+             end),
+             do: :ok,
+             else:
+               invalid(
+                 "selected SVG root dimensions cannot be represented by the native viewport"
+               )
            ) do
-      {:ok, %{width: raster_width, height: raster_height, matrix: matrix}}
+      {:ok, %{width: width, height: height, root_size: root_size}}
     else
+      false ->
+        {:ok, :skipped}
+
       {:error, {_, _}} = error ->
         error
 
       _ ->
         invalid("selected SVG raster requires a positive child viewport and a bounded transform")
+    end
+  rescue
+    ArithmeticError ->
+      invalid("selected SVG viewport arithmetic exceeds the supported numeric range")
+  catch
+    {:render_resource_limit, {:error, {reason, diagnostic}}} ->
+      {:error,
+       {reason,
+        Diagnostics.with_context(diagnostic,
+          source: "SVG",
+          module: __MODULE__,
+          operation: :rasterize_document
+        )}}
+  end
+
+  @doc "Charges actual raster allocation after shared document viewport resolution."
+  @spec prepare_raster(plan(), term(), term(), HtmlValidator.image_budget()) ::
+          {:ok, raster() | :skipped} | {:error, {atom(), map()}}
+  @spec prepare_raster(plan(), term(), term(), HtmlValidator.image_budget(), map() | nil) ::
+          {:ok, raster() | :skipped} | {:error, {atom(), map()}}
+  def prepare_raster(plan, width, height, budget, context \\ nil) do
+    with {:ok, viewport} <- prepare_viewport(plan, width, height, budget, context) do
+      case viewport do
+        :skipped ->
+          {:ok, :skipped}
+
+        viewport ->
+          raster_width = max(ceil(viewport.width / 0.75 * Limits.get(:svg_raster_scale)), 1)
+          raster_height = max(ceil(viewport.height / 0.75 * Limits.get(:svg_raster_scale)), 1)
+
+          with :ok <- SvgValidator.validate_raster_dimensions(raster_width, raster_height, nil),
+               :ok <-
+                 HtmlValidator.reserve_render_resource(
+                   :max_aggregate_svg_surface_pixels,
+                   raster_width * raster_height * 2,
+                   :layout
+                 ) do
+            {:ok,
+             %{
+               width: raster_width,
+               height: raster_height,
+               root_size: viewport.root_size
+             }}
+          end
+      end
     end
   rescue
     ArithmeticError ->

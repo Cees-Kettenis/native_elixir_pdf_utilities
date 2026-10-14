@@ -1,0 +1,10 @@
+<!doctype html><html lang=en-US><head><style>
+@page{size:300pt 300pt;margin:0}html,body{margin:0;padding:0;font-family:"DejaVu Sans";font-size:10.5pt;line-height:15pt}body{padding:12pt}p{margin:0 0 6pt}.row{margin:0 0 12pt}.plain{appearance:none;border:1pt solid #767676;padding:2pt;width:120pt;height:15pt;font-family:"DejaVu Sans Mono";font-size:10.5pt;line-height:15pt}datalist.visible{display:block;margin:0 0 12pt;padding:3pt;border:1pt solid #345}option{padding:0;min-height:0;white-space:normal}output[disabled]:not(:disabled),output[required]:not(:required){color:#21517b}
+</style></head><body>
+<p>Closed authored suggestions</p><div class=row><input class=plain name=entry list=choices value=authored></div>
+<datalist id=choices><option value=other>Hidden suggestion</option></datalist>
+<p>Visible option source</p><datalist class=visible><option value=one label="One label">Original text</option><option disabled value=two>Two label</option></datalist>
+<p>Visible fallback source</p><datalist class=visible><label>Fallback <input class=plain name=fallback required value=Visible></label></datalist>
+<p>Output source metadata <output disabled>2</output> and <output required>2</output>.</p>
+<p>Canonical email <input class=plain type=email multiple value=" A&#10;B , C&#13;D ">.</p>
+</body></html>

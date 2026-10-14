@@ -1,0 +1,36 @@
+{
+  "family": "CSS Source Metrics Fixture",
+  "source_url": "https://raw.githubusercontent.com/google/fonts/66928797f271fed5ee428544e7229685e2d90127/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf",
+  "source_revision": "66928797f271fed5ee428544e7229685e2d90127",
+  "source_sha256": "c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f",
+  "static_instance_sha256": "6f78eeee7d1b287040f03b7619863b070736fe8144caf7d75c3a3bf5feadf4d4",
+  "fixture_sha256": "5b3986efc48a8e98c3b496b657f9bcd30739cbd6d0afabc84b3eb9cf1afcf8b1",
+  "fonttools_version": "4.66.1",
+  "weight": 400,
+  "units_per_em": 1000,
+  "glyphs": {
+    "U+0048": {
+      "advance": 728,
+      "left_side_bearing": 101,
+      "outline_sha256": "496197cd48f76d418564d31b6ee158f2acf4d4bc1225d19a29cd425c9bb3122f"
+    },
+    "U+0030": {
+      "advance": 555,
+      "left_side_bearing": 50,
+      "outline_sha256": "8acede758eb667315abc3ae1bb3850b92649320d6ec6f07d989140d51fe2ffb0"
+    },
+    "U+0078": {
+      "advance": 498,
+      "left_side_bearing": 15,
+      "outline_sha256": "ae3404104902b89ebfb16371b3078a8c9bb49cf806506d431bf068a5e1b291ad"
+    },
+    "U+6C34": {
+      "advance": 1000,
+      "left_side_bearing": 29,
+      "outline_sha256": "532ff71502d922349ea4faed38d68b45e446f330736c141cbb0def681005ad13"
+    }
+  },
+  "license": "OFL-1.1",
+  "license_file": "source-metrics-water-LICENSE.txt",
+  "rebuild_script": "scripts/build-source-metrics-water-fixture.py"
+}

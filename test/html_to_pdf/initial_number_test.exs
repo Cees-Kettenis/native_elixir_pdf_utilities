@@ -134,16 +134,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialNumberTest do
   end
 
   test "number applicability, fieldset state and selectors use canonical initial metadata" do
+    expected = HtmlFormValidator.prepare_initial_number(%{"type" => "number"})
+    assert {:ok, expected_pdf} = HtmlToPdf.render("<input type=number>", compress_streams: false)
+
     for attribute <- ["checked", "multiple", "size"] do
-      assert {:error, {_, diagnostic}} =
+      assert {:ok, %{children: [node]}} =
                HtmlParser.parse_detailed("<input type=number #{attribute}=2>")
 
-      assert diagnostic.stage == :html and diagnostic.source =~ "<input type=number"
-      assert is_integer(diagnostic.line) and is_integer(diagnostic.column)
+      assert node.attributes[attribute] == "2"
+      assert HtmlFormValidator.prepare_initial_number(node.attributes) == expected
+
+      assert {:ok, pdf} =
+               HtmlToPdf.render("<input type=number #{attribute}=2>", compress_streams: false)
+
+      assert pdf == expected_pdf
     end
 
     for type <- ["text", "checkbox"] do
-      assert {:error, _} = HtmlParser.parse_detailed("<input type=#{type} min=1>")
+      assert {:ok, %{children: [node]}} = HtmlParser.parse_detailed("<input type=#{type} min=1>")
+      assert node.attributes["min"] == "1"
+      assert {:ok, expected} = HtmlToPdf.render("<input type=#{type}>", compress_streams: false)
+
+      assert {:ok, actual} =
+               HtmlToPdf.render("<input type=#{type} min=1>", compress_streams: false)
+
+      assert actual == expected
     end
 
     html = """

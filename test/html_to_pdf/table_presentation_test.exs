@@ -158,13 +158,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TablePresentationTest do
                "<table><tr><td align=justify style='text-align:left'>CSS override</td></tr></table>"
              )
 
-    assert {:error, {:invalid_layout, diagnostic}} =
+    # Retain the original admitted input and prove its actual PDF placement.
+    assert {:ok, pdf} =
              HtmlToPdf.render(
                "<div style='display:flex'><table width=160 align=center><tr><td>Cell</td></tr></table></div>"
              )
 
-    assert diagnostic.stage == :layout and diagnostic.source == "table"
-    assert diagnostic.message =~ "automatic inline margins"
+    assert {:ok, %{page_count: 1, pages: [%{media_box: [0, 0, 595.28, 841.89], spans: [cell]}]}} =
+             NativeElixirPdfUtilities.Text.extract_spans(pdf)
+
+    assert cell.text == "Cell" and cell.paints_text?
+    assert_in_delta cell.x, 240.0, 0.0001
+    assert_in_delta cell.y, 13.4999, 0.0001
+    assert cell.end_x > cell.x and cell.render_mode == 0
 
     for {attribute, value} <- [
           {"cellspacing", "999999999999999999999999999"},

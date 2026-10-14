@@ -218,7 +218,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
     end
   end
 
-  test "MathML child painting succeeds while unsupported SVG scenes diagnose and child destinations serialize" do
+  test "MathML child painting and original zero-extent SVG children preserve child destinations" do
     child = "<math><mtext><span style='background:red'>Painted</span></mtext></math>"
 
     assert {:ok, painted} =
@@ -234,12 +234,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
       html =
         "<iframe srcdoc='#{escape("<body style=\"overflow:hidden\">" <> content <> "</body>")}'></iframe>"
 
-      assert {:error, {reason, diagnostic}} = HtmlToPdf.render(html, forms: :static)
-      assert reason == :unsupported_html
-      assert diagnostic.reason == reason and diagnostic.message =~ "complete scene"
-      assert diagnostic.stage == :layout and diagnostic.operation == :prepare
-      assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgSceneValidator
-      assert diagnostic.source == "foreignObject"
+      assert {:ok, pdf} = HtmlToPdf.render(html, forms: :static)
+      assert {:error, {:no_extractable_text, diagnostic}} = Text.extract(pdf, layout: false)
+      assert diagnostic.stage == :text_extraction and diagnostic.reason == :no_extractable_text
+      assert {:ok, %{pages: [%{spans: []}]}} = Text.extract_spans(pdf)
+      assert {:ok, []} = Forms.fields(pdf)
+      assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+
+      child_forms =
+        for {ref, %{value: %{"Subtype" => {:name, "Form"}}}} <- document.objects,
+            do: ref
+
+      assert child_forms != []
+
+      for ref <- child_forms do
+        assert {:ok, stream} =
+                 NativeElixirPdfUtilities.Pdf.Reader.decoded_stream(document, {:ref, ref})
+
+        refute Regex.match?(~r/\b(?:BT|Tj|TJ|Do|f|S)\b/, stream)
+      end
     end
 
     child =
@@ -251,8 +264,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
     assert pdf =~ "/Dest ["
   end
 
-  test "authorized exact font and PNG bytes pass the closed SVG backend into a local child image" do
-    alias NativeElixirPdfUtilities.HtmlToPdf.{AssetLoader, ResourceContext, SvgBackend}
+  test "authorized exact font and PNG bytes pass the existing SVG converter into a local child image" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{AssetLoader, ResourceContext, SvgRasterizer}
     alias NativeElixirPdfUtilities.Validators.HtmlValidator
     root = Path.expand(".")
 
@@ -275,15 +288,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
           "<svg xmlns='http://www.w3.org/2000/svg' width='80' height='30'><image href='svg-resource:bars' width='30' height='30'/><text x='32' y='20' font-family='DejaVu Sans' font-size='12'>SVG</text></svg>"
 
         assert {:ok, artwork} =
-                 SvgBackend.rasterize(
+                 SvgRasterizer.rasterize(
                    source,
                    [],
+                   parent.image_budget,
+                   [%{data: font}],
                    %{
                      mode: :reference,
-                     fonts: [%{data: font}],
                      resources: %{"svg-resource:bars" => %{data: png, media_type: "image/png"}}
-                   },
-                   parent.image_budget
+                   }
                  )
 
         child =
@@ -360,8 +373,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
 
     assert atom =~ "/Dest ["
 
-    assert {:error, {:unsupported_html, %{stage: :layout}}} =
+    assert {:ok, token_pdf} =
              HtmlToPdf.render("<a href='#token'>Token</a><math><mi id=token>x</mi></math>")
+
+    assert {:ok, token_document} = NativeElixirPdfUtilities.Pdf.Reader.read(token_pdf)
+
+    assert [%{"Dest" => [{:ref, target_page}, {:name, "XYZ"}, token_x, token_y, nil]}] =
+             for(
+               %{value: %{"Subtype" => {:name, "Link"}} = link} <-
+                 Map.values(token_document.objects),
+               do: link
+             )
+
+    assert target_page == hd(token_document.pages).ref
+    assert token_x >= 0 and token_y > 0
+    assert {:ok, token_text} = Text.extract(token_pdf, layout: false)
+    assert token_text =~ "Token" and token_text =~ "x"
+    assert token_pdf =~ "STIXTwoMath" and token_pdf =~ "/FontFile2"
 
     assert {:ok, child_targets} =
              HtmlToPdf.render(

@@ -18,4 +18,15 @@ defmodule NativeElixirPdfUtilities.Pdf.ObjectMapping do
         value
     end
   end
+
+  @doc "Collects indirect references in an already parsed PDF value for native resource graph traversal."
+  @spec references(term()) :: [tuple()]
+  def references(value) do
+    case value do
+      {:ref, ref} -> [ref]
+      values when is_map(values) -> Enum.flat_map(Map.values(values), &references/1)
+      values when is_list(values) -> Enum.flat_map(values, &references/1)
+      _ -> []
+    end
+  end
 end

@@ -188,7 +188,7 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
 
   @doc "Resolves sizes in a validated print environment. Invalid entries and eager auto are skipped."
   @spec source_size(String.t(), PrintMediaValidator.context(), number() | nil) ::
-          float() | {:error, {atom(), map()}}
+          number() | {:error, {atom(), map()}}
   def source_size(sizes, context, auto_width \\ nil) do
     HtmlValidator.with_render_budget(fn ->
       sizes
@@ -341,47 +341,48 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
         if(source == "source" and allows_auto?(node), do: "auto", else: "")
       )
 
-    size = source_size(sizes, context, if(allows_auto?(node), do: auto_width))
+    with size when is_number(size) <-
+           source_size(sizes, context, if(allows_auto?(node), do: auto_width)) do
+      candidates =
+        candidates
+        |> Enum.map(fn candidate ->
+          density =
+            cond do
+              is_number(candidate.density) ->
+                candidate.density
 
-    candidates =
-      candidates
-      |> Enum.map(fn candidate ->
-        density =
-          cond do
-            is_number(candidate.density) ->
-              candidate.density
+              is_nil(candidate.width) ->
+                1.0
 
-            is_nil(candidate.width) ->
-              1.0
+              size == 0 ->
+                :infinity
 
-            size == 0 ->
-              :infinity
+              true ->
+                try do
+                  candidate.width / size
+                rescue
+                  ArithmeticError -> :infinity
+                end
+            end
 
-            true ->
-              try do
-                candidate.width / size
-              rescue
-                ArithmeticError -> :infinity
-              end
-          end
+          %{candidate | density: density}
+        end)
+        |> Enum.uniq_by(& &1.density)
+        |> Enum.sort_by(& &1.density)
 
-        %{candidate | density: density}
-      end)
-      |> Enum.uniq_by(& &1.density)
-      |> Enum.sort_by(& &1.density)
+      chosen = Enum.find(candidates, &(&1.density >= context.density)) || List.last(candidates)
 
-    chosen = Enum.find(candidates, &(&1.density >= context.density)) || List.last(candidates)
+      dimensions =
+        if source == "source" and
+             Enum.any?(~w(width height), &Map.has_key?(attributes, &1)),
+           do: attributes,
+           else: node.attributes
 
-    dimensions =
-      if source == "source" and
-           Enum.any?(~w(width height), &Map.has_key?(attributes, &1)),
-         do: attributes,
-         else: node.attributes
-
-    if is_nil(chosen) do
-      prepare_selection("", 1.0, dimensions, source, mode)
-    else
-      prepare_selection(chosen.url, chosen.density, dimensions, source, mode)
+      if is_nil(chosen) do
+        prepare_selection("", 1.0, dimensions, source, mode)
+      else
+        prepare_selection(chosen.url, chosen.density, dimensions, source, mode)
+      end
     end
   end
 

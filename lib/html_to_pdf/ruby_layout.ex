@@ -2,7 +2,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyLayout do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
-  alias NativeElixirPdfUtilities.HtmlToPdf.{DrawingGeometry, Layout, ResourceContext, Style}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{DrawingGeometry, Layout, ResourceContext}
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.RubyValidator
 
@@ -72,7 +72,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyLayout do
     if total == 0 do
       {:ok, 0}
     else
-      Enum.reduce_while(1..total, {:ok, 0}, fn count, {:ok, selected} ->
+      candidates = Map.get(group, :break_counts, Enum.to_list(1..total))
+
+      Enum.reduce_while(candidates, {:ok, 0}, fn count, {:ok, selected} ->
         {before, _after} = RubyValidator.partition_group(group, count, [])
 
         node = %{
@@ -97,7 +99,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyLayout do
 
         case result do
           {:ok, measured} ->
-            if measured.width <= width, do: {:cont, {:ok, count}}, else: {:halt, {:ok, selected}}
+            if NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator.fits_width?(
+                 Map.get(measured, :typographic_width, measured.width),
+                 width
+               ), do: {:cont, {:ok, count}}, else: {:halt, {:ok, selected}}
 
           error ->
             {:halt, error}
@@ -116,7 +121,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyLayout do
       }
 
       with {:ok, base} <- Layout.measure_child(base, context),
+           {:ok, base_em} <- RubyValidator.em_metrics(node.style),
            {:ok, annotations} <- measure_annotations(group.annotations, context) do
+        # The final font advance can be fractional while earlier styled runs
+        # occupy fixed CSS units. Center the genuine unpositioned typographic
+        # extent supplied by the shared measured-child flow authority.
+        base = %{base | width: Map.get(base, :typographic_width, base.width)}
+
         base =
           if group.base == [] do
             ascent = HtmlValidator.text_baseline_depth(node.style)
@@ -133,12 +144,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyLayout do
         {boxes, ascent} =
           Enum.reduce(
             annotations,
-            {boxes,
-             HtmlValidator.text_baseline_depth(
-               Map.put(node.style, :line_height, Style.normal_line_height(node.style))
-             )},
+            {boxes, base_em.ascent},
             fn annotation, {boxes, top} ->
-              baseline = top
+              baseline = top + annotation.em_metrics.descent
 
               annotation_boxes =
                 DrawingGeometry.translate_boxes(
@@ -147,7 +155,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyLayout do
                   baseline
                 )
 
-              {boxes ++ annotation_boxes, baseline + annotation.ascent}
+              {boxes ++ annotation_boxes, baseline + annotation.em_metrics.ascent}
             end
           )
 
@@ -197,8 +205,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyLayout do
       annotation = %{annotation | style: Map.put(annotation.style, :display, :inline)}
 
       case Layout.measure_child(annotation, context) do
-        {:ok, result} -> {:cont, {:ok, measured ++ [result]}}
-        {:error, _} = error -> {:halt, error}
+        {:ok, result} ->
+          case RubyValidator.em_metrics(annotation.style) do
+            {:ok, em_metrics} ->
+              result = %{result | width: Map.get(result, :typographic_width, result.width)}
+              {:cont, {:ok, measured ++ [Map.put(result, :em_metrics, em_metrics)]}}
+
+            {:error, _} = error ->
+              {:halt, error}
+          end
+
+        {:error, _} = error ->
+          {:halt, error}
       end
     end)
   end
