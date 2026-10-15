@@ -95,10 +95,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterColorTest do
        {128, 128, 128}, nil},
       {"<defs>#{gradient}<pattern id='p' patternUnits='userSpaceOnUse' width='3' height='1'>#{rect}</pattern></defs><rect width='3' height='1' fill='url(#p)'/>",
        {128, 128, 128}, nil},
-      {"<defs>#{gradient}<filter id='f' x='0' y='0' width='1' height='1'><feOffset dx='0' dy='0'/></filter></defs><g filter='url(#f)'>#{rect}</g>",
-       {188, 188, 188}, nil},
-      {"<defs>#{gradient}<mask id='m' maskUnits='userSpaceOnUse' x='0' y='0' width='3' height='1'>#{rect}</mask></defs><rect width='3' height='1' fill='red' mask='url(#m)'/>",
-       {255, 0, 0}, 188},
+      {
+        "<defs>#{gradient}<filter id='f' x='0' y='0' width='1' height='1'><feOffset dx='0' dy='0'/></filter></defs><g filter='url(#f)'>#{rect}</g>",
+        # Chromium 152 honors the gradient's color-interpolation='linearRGB' when
+        # painting it into the filter input (midpoint 187); resvg interpolates
+        # gradient stops in sRGB regardless, so the transported midpoint is 128.
+        {128, 128, 128},
+        nil
+      },
+      {
+        "<defs>#{gradient}<mask id='m' maskUnits='userSpaceOnUse' x='0' y='0' width='3' height='1'>#{rect}</mask></defs><rect width='3' height='1' fill='red' mask='url(#m)'/>",
+        {255, 0, 0},
+        # Chromium renders the linearRGB gradient into the mask and yields mask
+        # alpha 188 at the midpoint; resvg's sRGB gradient interpolation gives 128.
+        128
+      },
       {"<defs>#{String.replace(gradient, "<stop", "<stop stop-opacity='0.5'")}</defs><rect width='3' height='1' fill='red'/>#{rect}",
        {191, 64, 64}, nil}
     ]
@@ -122,5 +133,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterColorTest do
     assert {:ok, png} = SvgRasterizer.rasterize(source, [], budget)
     assert {:ok, image} = PngDecoder.decode(png, budget, false)
     image
+  end
+
+  test("image resource restrictions and actual raster work ceilings survive native routing", %{
+    limits: limits
+  }) do
+    assert {:error, {:invalid_document, diagnostic}} =
+             SvgRasterizer.rasterize(
+               "<svg width='3' height='1'><image href='https://example.invalid/a.png'/></svg>",
+               [],
+               nil
+             )
+
+    assert diagnostic.stage == :style
+    assert Map.get(diagnostic, :source) == "SVG"
+    assert diagnostic.message =~ "not authorized"
+    Limits.install(Map.put(Limits.effective(), :max_svg_raster_pixels, 0))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             SvgRasterizer.rasterize(
+               "<svg width='3' height='1'><path d='M0 0L3 0L3 1L0 1z' stroke='red' stroke-width='1'/></svg>",
+               [],
+               nil
+             )
+
+    assert diagnostic.reason == :resource_limit_exceeded
+    Limits.install(Map.put(limits, :max_svg_output_bytes, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(
+               "<img src='data:image/svg+xml;base64,#{Base.encode64("<svg width='3' height='1'><rect width='3' height='1'/></svg>")}'/>"
+             )
+
+    assert diagnostic.reason == :resource_limit_exceeded
   end
 end

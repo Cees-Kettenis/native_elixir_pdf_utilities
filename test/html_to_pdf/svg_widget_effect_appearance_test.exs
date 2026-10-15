@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgWidgetEffectAppearanceTest do
+  Code.require_file("../support/svg_public_workflow.ex", __DIR__)
+  Code.require_file("../support/png_fixture.ex", __DIR__)
   use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{HtmlToPdf}
 
   test "ancestor opacity, masks and filters preserve real initial widget AP and shared sibling paint" do
     scenes = [
@@ -17,7 +18,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgWidgetEffectAppearanceTest do
     File.mkdir_p!(directory)
     on_exit(fn -> File.rm_rf!(directory) end)
 
-    for {effect, definition} <- scenes do
+    for {{effect, definition}, _index} <- Enum.with_index(scenes) do
       html = "<body style='margin:0'><svg width='180' height='70'><defs>#{definition}</defs>
 <rect width='180' height='70' fill='#e8e8f8'/>
 <g #{effect}><rect x='5' y='4' width='145' height='50' fill='#ff7777'/>
@@ -27,39 +28,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgWidgetEffectAppearanceTest do
 </svg></body>
 "
 
-      (
-        assert {:error, {:unsupported_html, diagnostic}} =
-                 HtmlToPdf.render(html, page_size: {150, 75}, margin: 0)
-
-        assert diagnostic.reason == :unsupported_html
-        assert diagnostic.stage == :layout
-        assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
-        assert diagnostic.operation == :convert
-        assert diagnostic.source == "foreignObject"
-        assert diagnostic.message =~ "foreignObject"
-      )
-
-      (
-        assert {:error, {:unsupported_html, diagnostic}} =
-                 HtmlToPdf.render(html, page_size: {150, 75}, margin: 0, forms: :static)
-
-        assert diagnostic.reason == :unsupported_html
-        assert diagnostic.stage == :layout
-        assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
-        assert diagnostic.operation == :convert
-        assert diagnostic.source == "foreignObject"
-        assert diagnostic.message =~ "foreignObject"
-      )
-    end
-  end
-
-  test "effect-owned checkbox states remain real Forms when toggled and flattened" do
-    html =
-      "<body style='margin:0'><svg width='150' height='60'><g opacity='.4'>\n<rect width='150' height='60' fill='red'/><foreignObject x='10' y='10' width='120' height='40'>\n<div><input type='checkbox' name='tick' checked></div></foreignObject></g></svg></body>\n"
-
-    (
       assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render(html, page_size: {120, 60}, margin: 0)
+               NativeElixirPdfUtilities.HtmlToPdf.render(html, page_size: {150, 75}, margin: 0)
 
       assert diagnostic.reason == :unsupported_html
       assert diagnostic.stage == :layout
@@ -67,13 +37,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgWidgetEffectAppearanceTest do
       assert diagnostic.operation == :convert
       assert diagnostic.source == "foreignObject"
       assert diagnostic.message =~ "foreignObject"
-    )
 
-    (
       assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render(String.replace(html, " checked", ""),
-                 page_size: {120, 60},
-                 margin: 0
+               NativeElixirPdfUtilities.HtmlToPdf.render(html,
+                 page_size: {150, 75},
+                 margin: 0,
+                 forms: :static
                )
 
       assert diagnostic.reason == :unsupported_html
@@ -82,7 +51,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgWidgetEffectAppearanceTest do
       assert diagnostic.operation == :convert
       assert diagnostic.source == "foreignObject"
       assert diagnostic.message =~ "foreignObject"
-    )
+    end
+  end
+
+  test "effect-owned checkbox states remain real Forms when toggled and flattened" do
+    html =
+      "<body style='margin:0'><svg width='150' height='60'><g opacity='.4'>\n<rect width='150' height='60' fill='red'/><foreignObject x='10' y='10' width='120' height='40'>\n<div><input type='checkbox' name='tick' checked></div></foreignObject></g></svg></body>\n"
+
+    assert {:error, {:unsupported_html, foreignobject_diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(html, page_size: {120, 60}, margin: 0)
+
+    assert foreignobject_diagnostic.reason == :unsupported_html
+    assert foreignobject_diagnostic.message =~ "foreignObject"
+    assert foreignobject_diagnostic.stage == :layout
+    assert foreignobject_diagnostic.operation == :convert
+
+    assert foreignobject_diagnostic.module ==
+             NativeElixirPdfUtilities.Validators.SvgConverterValidator
+
+    assert {:error, {:unsupported_html, foreignobject_diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(String.replace(html, " checked", ""),
+               page_size: {120, 60},
+               margin: 0
+             )
+
+    assert foreignobject_diagnostic.reason == :unsupported_html
+    assert foreignobject_diagnostic.message =~ "foreignObject"
+    assert foreignobject_diagnostic.stage == :layout
+    assert foreignobject_diagnostic.operation == :convert
+
+    assert foreignobject_diagnostic.module ==
+             NativeElixirPdfUtilities.Validators.SvgConverterValidator
 
     directory =
       Path.join(System.tmp_dir!(), "native-effect-button-#{System.unique_integer([:positive])}")
@@ -97,7 +96,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgWidgetEffectAppearanceTest do
 
     (
       assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render(html, page_size: {120, 60}, margin: 0)
+               NativeElixirPdfUtilities.HtmlToPdf.render(html, page_size: {120, 60}, margin: 0)
 
       assert diagnostic.reason == :unsupported_html
       assert diagnostic.stage == :layout
@@ -114,7 +113,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgWidgetEffectAppearanceTest do
 
     (
       assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render(html, page_size: {120, 60}, margin: 0)
+               NativeElixirPdfUtilities.HtmlToPdf.render(html, page_size: {120, 60}, margin: 0)
 
       assert diagnostic.reason == :unsupported_html
       assert diagnostic.stage == :layout

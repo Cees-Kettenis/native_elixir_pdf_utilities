@@ -1,4 +1,5 @@
 Code.require_file("../support/svg_public_workflow.ex", __DIR__)
+Code.require_file("../support/png_fixture.ex", __DIR__)
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFiltersTest do
   use ExUnit.Case, async: false
@@ -63,18 +64,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFiltersTest do
     end
   end
 
+  alias NativeElixirPdfUtilities.{Limits}
+
   test "original HTML under an ancestor filter supplies actual painted content and text" do
-    assert {:error, {:unsupported_html, diagnostic}} =
-             HtmlToPdf.render(
+    assert {:error, {:unsupported_html, foreignobject_diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(
                "<svg><defs><filter id='f'><feGaussianBlur/></filter></defs><g filter='url(#f)'><foreignObject width='100' height='30'><div>Original HTML</div></foreignObject></g></svg>"
              )
 
-    assert diagnostic.reason == :unsupported_html
-    assert diagnostic.stage == :layout
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
-    assert diagnostic.operation == :convert
-    assert diagnostic.source == "foreignObject"
-    assert diagnostic.message =~ "foreignObject"
+    assert foreignobject_diagnostic.reason == :unsupported_html
+    assert foreignobject_diagnostic.message =~ "foreignObject"
+    assert foreignobject_diagnostic.stage == :layout
+    assert foreignobject_diagnostic.operation == :convert
+
+    assert foreignobject_diagnostic.module ==
+             NativeElixirPdfUtilities.Validators.SvgConverterValidator
   end
 
   test "HTML filter inputs retain original Unicode, ordinary CID forms and clipped URI geometry" do
@@ -86,30 +90,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFiltersTest do
         )
       )
 
-    (
-      assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html)
-      assert diagnostic.reason == :unsupported_html
-      assert diagnostic.stage == :layout
-      assert diagnostic.operation == :convert
-      assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
-      assert diagnostic.source == "foreignObject"
-      assert diagnostic.message =~ "foreignObject"
-    )
+    assert {:error, {:unsupported_html, foreignobject_diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(html)
+
+    assert foreignobject_diagnostic.reason == :unsupported_html
+    assert foreignobject_diagnostic.message =~ "foreignObject"
+    assert foreignobject_diagnostic.stage == :layout
+    assert foreignobject_diagnostic.operation == :convert
+
+    assert foreignobject_diagnostic.module ==
+             NativeElixirPdfUtilities.Validators.SvgConverterValidator
 
     linked =
       "<svg width='200' height='80'><defs><filter id='f'><feGaussianBlur stdDeviation='1'/></filter><clipPath id='clip'><rect x='10' y='10' width='90' height='45'/></clipPath></defs><g filter='url(#f)' clip-path='url(#clip)'><foreignObject x='10' y='10' width='100' height='50'><div style='font-family:DejaVu Sans;font-size:14px'><a href='https://example.test/native'>Native link café</a></div></foreignObject></g></svg>"
 
-    (
-      assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render(linked, page_size: "200pt 100pt", margin: 0)
+    assert {:error, {:unsupported_html, foreignobject_diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(linked,
+               page_size: "200pt 100pt",
+               margin: 0
+             )
 
-      assert diagnostic.reason == :unsupported_html
-      assert diagnostic.stage == :layout
-      assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
-      assert diagnostic.operation == :convert
-      assert diagnostic.source == "foreignObject"
-      assert diagnostic.message =~ "foreignObject"
-    )
+    assert foreignobject_diagnostic.reason == :unsupported_html
+    assert foreignobject_diagnostic.message =~ "foreignObject"
+    assert foreignobject_diagnostic.stage == :layout
+    assert foreignobject_diagnostic.operation == :convert
+
+    assert foreignobject_diagnostic.module ==
+             NativeElixirPdfUtilities.Validators.SvgConverterValidator
   end
 
   test "hidden and fully clipped HTML effect inputs do not leak replacement text" do
@@ -122,30 +129,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFiltersTest do
       html =
         "<svg width='200' height='60'><defs><filter id='f'><feGaussianBlur stdDeviation='1'/></filter></defs><g filter='url(#f)' #{attributes}><foreignObject width='150' height='40'><div style='background:red'>Hidden HTML</div></foreignObject></g></svg>"
 
-      (
-        assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html)
-        assert diagnostic.reason == :unsupported_html
-        assert diagnostic.stage == :layout
-        assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
-        assert diagnostic.operation == :convert
-        assert diagnostic.source == "foreignObject"
-        assert diagnostic.message =~ "foreignObject"
-      )
+      assert {:error, {:unsupported_html, diagnostic}} =
+               NativeElixirPdfUtilities.HtmlToPdf.render(html)
+
+      assert diagnostic.reason == :unsupported_html
+      assert diagnostic.stage == :layout
+      assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+      assert diagnostic.operation == :convert
+      assert diagnostic.source == "foreignObject"
+      assert diagnostic.message =~ "foreignObject"
     end
 
     for style <- ["display:none", "position:relative;left:500pt"] do
       html =
         "<svg width='200' height='60'><defs><filter id='f'><feGaussianBlur stdDeviation='1'/></filter></defs><g filter='url(#f)'><foreignObject width='150' height='40'><div style='background:red'><span style='#{style}'>Hidden HTML</span></div></foreignObject></g></svg>"
 
-      (
-        assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html)
-        assert diagnostic.reason == :unsupported_html
-        assert diagnostic.stage == :layout
-        assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
-        assert diagnostic.operation == :convert
-        assert diagnostic.source == "foreignObject"
-        assert diagnostic.message =~ "foreignObject"
-      )
+      assert {:error, {:unsupported_html, diagnostic}} =
+               NativeElixirPdfUtilities.HtmlToPdf.render(html)
+
+      assert diagnostic.reason == :unsupported_html
+      assert diagnostic.stage == :layout
+      assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+      assert diagnostic.operation == :convert
+      assert diagnostic.source == "foreignObject"
+      assert diagnostic.message =~ "foreignObject"
     end
   end
 
@@ -160,15 +167,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFiltersTest do
       html =
         "<svg width='200' height='60'>#{defs}<g filter='url(#f)' #{clip}>#{content}<rect x='100' y='10' width='20' height='10' fill='blue'/></g></svg>"
 
-      (
-        assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html)
-        assert diagnostic.reason == :unsupported_html
-        assert diagnostic.stage == :layout
-        assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
-        assert diagnostic.operation == :convert
-        assert diagnostic.source == "foreignObject"
-        assert diagnostic.message =~ "foreignObject"
-      )
+      assert {:error, {:unsupported_html, diagnostic}} =
+               NativeElixirPdfUtilities.HtmlToPdf.render(html)
+
+      assert diagnostic.reason == :unsupported_html
+      assert diagnostic.stage == :layout
+      assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+      assert diagnostic.operation == :convert
+      assert diagnostic.source == "foreignObject"
+      assert diagnostic.message =~ "foreignObject"
     end
   end
 end

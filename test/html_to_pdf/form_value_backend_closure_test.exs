@@ -135,4 +135,52 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormValueBackendClosureTest do
     assert diagnostic.operation == :initial_form_value
     assert diagnostic.message =~ "Elixir"
   end
+
+  test "URL admission reserves native compile work before host parsing" do
+    Limits.install(%{Limits.effective() | max_html_pattern_compile_work: 10})
+
+    assert {:ok, request} = HtmlFormValueValidator.prepare(:url, "https://example.test", [])
+    assert {:limit, :max_html_pattern_compile_work} = result = FormValueBackend.run(request)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlFormValueValidator.result(result)
+
+    assert diagnostic.stage == :html
+    assert diagnostic.operation == :initial_form_value
+    assert diagnostic.message =~ "max_html_pattern_compile_work"
+  end
+
+  test "the compiled expression is charged against the form-value memory ceiling" do
+    # The worker survives its entry memory check but the escaped expression is
+    # three times the authored source and exceeds the ceiling.
+    Limits.install(%{Limits.effective() | max_html_form_value_memory_bytes: 30_000})
+
+    assert {:ok, request} =
+             HtmlFormValueValidator.prepare(:pattern, String.duplicate("\\v", 10_000), [])
+
+    assert {:limit, :max_html_form_value_memory_bytes} = result = FormValueBackend.run(request)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlFormValueValidator.result(result)
+
+    assert diagnostic.stage == :html
+    assert diagnostic.operation == :initial_form_value
+    assert diagnostic.message =~ "max_html_form_value_memory_bytes"
+  end
+
+  test "native recursion exhaustion reports the pattern depth limit" do
+    Limits.install(%{Limits.effective() | max_html_pattern_depth: 5})
+
+    assert {:ok, request} =
+             HtmlFormValueValidator.prepare(:pattern, "(a+)+b", [String.duplicate("a", 20)])
+
+    assert {:limit, :max_html_pattern_depth} = result = FormValueBackend.run(request)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlFormValueValidator.result(result)
+
+    assert diagnostic.stage == :html
+    assert diagnostic.operation == :initial_form_value
+    assert diagnostic.message =~ "max_html_pattern_depth"
+  end
 end

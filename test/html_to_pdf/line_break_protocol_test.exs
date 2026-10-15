@@ -62,4 +62,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LineBreakProtocolTest do
     assert diagnostic.stage == :layout
     assert diagnostic.message =~ "max_layout_text_work"
   end
+
+  test "code points beyond the packed line-break tables fall back to the unassigned class" do
+    # Plane 15 private use (U+F0000) has no packed index entry, so property
+    # lookup falls back and the pair automaton treats it as unassigned text.
+    assert {:ok, [{6, true}]} = HtmlLineBreakValidator.opportunities("a\u{F0000}b")
+  end
 end

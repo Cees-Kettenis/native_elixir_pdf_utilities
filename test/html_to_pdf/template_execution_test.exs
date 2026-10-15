@@ -4,7 +4,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
   alias NativeElixirPdfUtilities.TestSupport.PngFixture
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text, Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, ResourceContext}
-  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, TemplateExecutionValidator}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlValidator,
+    TemplateExecutionValidator,
+    TemplatePatchValidator
+  }
 
   @opts [system_font_discovery: false, compress_streams: false]
 
@@ -487,5 +492,95 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
              end)
 
     assert {:error, {:unsupported_html, _}} = HtmlParser.parse_document_detailed(html)
+  end
+
+  test "an unmatched original declaration that requires element context blocks replacement" do
+    html =
+      "<style>.absent{float:left}</style><body><?start name='A'><p>Old</p><?end?><template for='A'><p>New</p></template><p>After</p></body>"
+
+    assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, @opts)
+    assert diagnostic.stage == :css and diagnostic.reason == :unsupported_html
+    assert diagnostic.operation == :parse
+    assert diagnostic.module == TemplateExecutionValidator
+    assert diagnostic.source == "float:left"
+
+    assert diagnostic.message ==
+             "template replacement requires an original context for unmatched_original_context; this authored declaration remains unresolved"
+
+    assert is_integer(diagnostic.line) and is_integer(diagnostic.column)
+    assert Process.get({TemplateExecutionValidator, :execution}) == nil
+  end
+
+  test "template content that cannot be normalized into a document keeps its construction failure" do
+    html =
+      "<body><?marker name='A'><template for='A'><p>First</p><title>Stray title</title></template></body>"
+
+    assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, @opts)
+    assert diagnostic.stage == :html and diagnostic.reason == :unsupported_html
+
+    assert diagnostic.message ==
+             "document head and body must occur once in order; place title in the head and printed content in the body"
+
+    assert Process.get({TemplateExecutionValidator, :execution}) == nil
+  end
+
+  test "a nested inert template keeps its detached stylesheet insertion context while the outer content replaces" do
+    html =
+      "<body><?marker name='A'><template for='A'><template><style>p{color:red}</style><p>Inert</p></template><p style='color:red'>Actual</p></template></body>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+    assert {:ok, text} = Text.extract(pdf)
+    assert text =~ "Actual"
+    refute text =~ "Inert"
+    assert Process.get({TemplateExecutionValidator, :execution}) == nil
+  end
+
+  test "configured stylesheet cascades on the original document observe replacement without authored ownership" do
+    opts = Keyword.put(@opts, :stylesheets, [{:css, "p{color:red}"}])
+
+    html =
+      "<body><?marker name='A'><template for='A'><p>New</p></template><p>Original</p></body>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, opts)
+    assert {:ok, text} = Text.extract(pdf)
+    assert text =~ "New" and text =~ "Original"
+    assert Process.get({TemplateExecutionValidator, :execution}) == nil
+  end
+
+  test "an unexpected composition context shape never grants inert source view authority" do
+    source =
+      "<body><?marker name='A'><p>Old</p><?end?><template for='A'><p>New</p></template></body>"
+
+    parser = make_ref()
+    tree = %{root: make_ref(), nodes: %{}}
+
+    capture = %{handle: make_ref(), tree: tree, invocation: parser, offset: 5}
+    execution_key = {TemplateExecutionValidator, :execution}
+
+    Process.put(execution_key, %{
+      mode: :execute,
+      source: source,
+      parser: parser,
+      busy: true,
+      capture: capture
+    })
+
+    Process.put({TemplatePatchValidator, :invocation}, %{id: parser, source: source, handles: %{}})
+
+    Process.put({TemplatePatchValidator, :candidate_capture}, capture)
+
+    try do
+      # A nil composition context stays inert, while an unrecognized shape is
+      # never treated as an inert source view during an active execute capture.
+      assert TemplateExecutionValidator.inert_source_view?(%{"for" => "A"}, nil)
+      refute TemplateExecutionValidator.inert_source_view?(%{"for" => "A"}, :unexpected_shape)
+      refute TemplateExecutionValidator.inert_source_view?(%{"for" => "A"}, %{})
+    after
+      Process.delete(execution_key)
+      Process.delete({TemplatePatchValidator, :invocation})
+      Process.delete({TemplatePatchValidator, :candidate_capture})
+    end
+
+    assert Process.get(execution_key) == nil
   end
 end

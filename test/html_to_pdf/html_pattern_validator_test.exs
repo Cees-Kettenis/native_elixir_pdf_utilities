@@ -1,7 +1,12 @@
 defmodule NativeElixirPdfUtilities.Validators.HtmlPatternValidatorTest do
   use ExUnit.Case
   alias NativeElixirPdfUtilities.Limits
-  alias NativeElixirPdfUtilities.Validators.{HtmlPatternValidator, HtmlUrlValidator}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlPatternSyntaxValidator,
+    HtmlPatternValidator,
+    HtmlUrlValidator
+  }
 
   setup do
     limits = Limits.effective()
@@ -234,5 +239,72 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternValidatorTest do
     end
 
     assert {:error, {:invalid_document, _}} = HtmlUrlValidator.valid_initial_input_url?(<<255>>)
+  end
+
+  test "Unicode-v syntax boundaries prepare directly to invalid patterns or expressions" do
+    limits = Limits.effective()
+
+    for pattern <- [
+          # A capture name must be an ECMAScript identifier.
+          "(?<1abc>a)",
+          # A named group without its closing angle bracket.
+          "(?<abc",
+          # A \u{...} escape without its closing brace.
+          "\\u{12",
+          # A \uXXXX escape with non-hexadecimal digits.
+          "\\u12g4",
+          # A \p{...} name that is neither a string property nor an identifier.
+          "\\p{1abc}",
+          # A \p{...} escape without its closing brace.
+          "\\p{Greek",
+          # A \k<...> reference without its closing angle bracket.
+          "a\\k<x",
+          # A \xXX escape with non-hexadecimal digits.
+          "\\xzz",
+          # A trailing backslash has nothing to escape.
+          "a\\",
+          # A \q{...} string set without its closing brace.
+          "[\\q{ab",
+          # Class shorthands cannot bound a range.
+          "[\\d-z]",
+          # A set operator without a right operand.
+          "[a&&",
+          # A range whose endpoint is a class shorthand.
+          "[a-\\d]"
+        ] do
+      assert :invalid_pattern = HtmlPatternSyntaxValidator.prepare(pattern, limits), pattern
+    end
+
+    # A lone high surrogate followed by a non-surrogate escapes both parts.
+    assert {:ok, "\\A(?:(?!)\\x{0041})\\z", _} =
+             HtmlPatternSyntaxValidator.prepare("\\uD800\\u0041", limits)
+
+    # A lone low surrogate matches nothing instead of failing.
+    assert {:ok, "\\A(?:(?!))\\z", _} = HtmlPatternSyntaxValidator.prepare("\\uDC00", limits)
+    assert {:ok, "\\A(?:\\x{B})\\z", _} = HtmlPatternSyntaxValidator.prepare("\\v", limits)
+    assert {:ok, "\\A(?:(?:\\x{8}))\\z", _} = HtmlPatternSyntaxValidator.prepare("[\\b]", limits)
+    assert {:ok, "\\A(?:(?:\\d))\\z", _} = HtmlPatternSyntaxValidator.prepare("[\\d]", limits)
+
+    assert {:ok, expression, work} =
+             HtmlPatternSyntaxValidator.prepare("[\\p{RGI_Emoji}]", limits)
+
+    assert expression =~ "⌚"
+    # The string property charges its actual native string bytes.
+    assert work > 0
+  end
+
+  test "oversized quantifier counts report the numeric token limit" do
+    original = Limits.effective()
+    Limits.install(Map.put(original, :max_html_numeric_token_bytes, 8))
+
+    assert {:limit, :max_html_numeric_token_bytes} =
+             HtmlPatternSyntaxValidator.prepare("a{123456789}", Limits.effective())
+  end
+
+  test "percent-decoded hosts outside UTF-8 fail during Unicode host parsing" do
+    assert HtmlUrlValidator.absolute_input_url?("http://a%41.test/")
+    # %FF decodes to a raw byte that the Unicode host check cannot scan, so
+    # host parsing fails instead of admitting the address.
+    refute HtmlUrlValidator.absolute_input_url?("http://a%FF.test/")
   end
 end

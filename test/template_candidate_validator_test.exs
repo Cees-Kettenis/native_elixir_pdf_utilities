@@ -540,6 +540,62 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateCandidateValidatorTest do
              end)
   end
 
+  test "cloned detached shadow origins without prospective placements stay unbound synthetic sources" do
+    authored =
+      "<select style='appearance:base-select'><button><selectedcontent></selectedcontent></button><option selected><template shadowrootmode=open shadowrootclonable><style>b{color:red}</style><b>Shadow</b></template></option></select>"
+
+    {source, tree, parent, origin} =
+      fixture("<div style='font-size:20px'><?marker name='A'></div>", authored)
+
+    opts = [system_font_discovery: false, forms: :static]
+
+    assert :checked =
+             ResourceContext.run([], HtmlValidator.new_image_budget(), fn _ ->
+               with_plan(source, tree, parent, origin, fn plan ->
+                 TemplatePatchValidator.with_candidate_projection(plan, tree, fn handle ->
+                   TemplatePatchValidator.with_prospective_renderer_policy_context(
+                     handle,
+                     tree,
+                     opts,
+                     fn policy ->
+                       TemplatePatchValidator.with_renderer_policy_evidence(
+                         policy,
+                         tree,
+                         fn evidence ->
+                           assert evidence.preparation_scope == :prospective_insertion
+
+                           unbound =
+                             Enum.find(Map.get(evidence, :clone_origins, %{}), fn {_id, binding} ->
+                               binding.original == :unbound_synthetic_source
+                             end)
+
+                           assert unbound != nil
+                           {clone_id, binding} = unbound
+                           assert binding.preparation_origin.type == :document_fragment
+                           assert binding.policy == :actual_normal_clone_origin_chain
+
+                           assert Enum.any?(Map.get(evidence, :clone_origins, %{}), fn {id, other} ->
+                                    id != clone_id and is_map(other.original)
+                                  end)
+
+                           # The cloned detached style keeps its authored owner while
+                           # placed inside the prospective composition.
+                           cloned_style =
+                             Enum.find(Map.get(evidence, :clone_origins, %{}), fn {_id, other} ->
+                               is_map(other.original) and other.preparation_origin.tag == "style"
+                             end)
+
+                           assert cloned_style != nil
+                           :checked
+                         end
+                       )
+                     end
+                   )
+                 end)
+               end)
+             end)
+  end
+
   test "ordinary prospective preparation observes actual cascade glyphs and authorized bytes under distinct placement" do
     png = PngFixture.build(1, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
 

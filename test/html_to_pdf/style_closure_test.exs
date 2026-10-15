@@ -1,4 +1,4 @@
-defmodule NativeElixirPdfUtilities.HtmlToPdf.Wave23StyleClosureTest do
+defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleClosureTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}

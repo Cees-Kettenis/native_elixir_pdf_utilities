@@ -1,4 +1,4 @@
-defmodule NativeElixirPdfUtilities.Validators.Wave11ParsingDiagnosticRegressionTest do
+defmodule NativeElixirPdfUtilities.Validators.HtmlParsingDiagnosticRegressionTest do
   use ExUnit.Case, async: false
 
   Code.require_file("support/png_fixture.ex", __DIR__)

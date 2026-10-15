@@ -200,4 +200,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPathSourceValidationTest do
                children: []
              })
   end
+
+  test "arc geometry requires whitespace or a comma before its first flag" do
+    assert {:error, {:invalid_document, diagnostic}} =
+             SvgSceneValidator.validate_node(%{
+               tag: "path",
+               attributes: %{"d" => "M0 0A1 2 010 20"},
+               children: []
+             })
+
+    assert diagnostic.source == "path d"
+    assert diagnostic.message =~ "complete commands"
+  end
+
+  test "pathLength belongs to geometry elements and requires nonnegative numbers" do
+    assert {:error, {:invalid_document, placement}} =
+             SvgSceneValidator.validate_node(%{
+               tag: "g",
+               attributes: %{"pathLength" => "10"},
+               children: []
+             })
+
+    assert placement.source == "g pathLength"
+    assert placement.message =~ "SVG pathLength belongs to geometry"
+
+    assert {:error, {:invalid_document, sign}} =
+             SvgSceneValidator.validate_node(%{
+               tag: "path",
+               attributes: %{"d" => "M0 0", "pathLength" => "-1"},
+               children: []
+             })
+
+    assert sign.source == "path pathLength"
+    assert sign.message =~ "SVG pathLength requires a finite nonnegative number"
+  end
 end

@@ -1,4 +1,4 @@
-defmodule NativeElixirPdfUtilities.Wave23TemplateClosureTest do
+defmodule NativeElixirPdfUtilities.TemplateClosureTest do
   use ExUnit.Case, async: false
   Code.require_file("support/png_fixture.ex", __DIR__)
 

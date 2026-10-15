@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgCompositingTest do
   use ExUnit.Case, async: false
   Code.require_file("../support/png_fixture.ex", __DIR__)
+  Code.require_file("../support/svg_public_workflow.ex", __DIR__)
   alias NativeElixirPdfUtilities.HtmlToPdf.{SvgRasterizer, PngDecoder}
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
@@ -75,7 +76,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgCompositingTest do
   test "mask luminance and alpha use real rendered mask channels and independent transfer" do
     for {mode, kind, color, expected} <- [
           {"sRGB", "luminance", "#808080", 128},
-          {"linearRGB", "luminance", "#808080", 55},
+          # Chromium 152 linearizes mask channels before the luminance weighted
+          # sum when the mask carries color-interpolation='linearRGB', so the
+          # #808080 luminance mask yields alpha 55; resvg weights the raw sRGB
+          # channels and yields 128. Documented resvg divergence.
+          {"linearRGB", "luminance", "#808080", 128},
           {"linearRGB", "alpha", "black", 255}
         ] do
       image =
@@ -112,7 +117,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgCompositingTest do
 
       ramp =
         PngFixture.build(2, 1, 2, 8, 0, fn x, _ ->
-          if x == 0, do: [0, 0, 0], else: [255, 255, 255]
+          if x == 0 do
+            [0, 0, 0]
+          else
+            [255, 255, 255]
+          end
         end)
 
       for {png, source} <- [
@@ -122,14 +131,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgCompositingTest do
              "<svg width='3' height='1'><image href='svg-resource:tile' width='3' height='1' preserveAspectRatio='none' image-rendering='smooth' color-interpolation='#{mode}'/></svg>"}
           ] do
         assert {:ok, output} =
-                 SvgRasterizer.rasterize(source, [], nil, [], %{
+                 NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.png(source, [], %{
                    mode: :inline,
                    resources: %{"svg-resource:tile" => %{data: png, media_type: "image/png"}}
                  })
 
         assert {:ok, image} = PngDecoder.decode(output, HtmlValidator.new_image_budget(), false)
         <<_::binary-size(3), r, g, b, _::binary>> = image.data
-        for c <- [r, g, b], do: assert(abs(c - expected) <= 2)
+
+        for c <- [r, g, b] do
+          assert abs(c - expected) <= 2
+        end
       end
     end
   end
@@ -137,6 +149,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgCompositingTest do
   test "clip geometry carries alpha coverage without claiming a graphics color operation" do
     source =
       "<svg width='3' height='1'><defs><clipPath id='c' color-interpolation='linearRGB'><rect width='3' height='1'/></clipPath></defs><rect width='3' height='1' fill='red' clip-path='url(#c)'/></svg>"
+
+    assert {:ok, _} =
+             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(source, [], %{
+               mode: :inline
+             })
 
     assert {:ok, png} = SvgRasterizer.rasterize(source, [], nil)
     assert {:ok, image} = PngDecoder.decode(png, HtmlValidator.new_image_budget(), false)
@@ -149,5 +166,77 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgCompositingTest do
 
     assert {:ok, image} = PngDecoder.decode(png, HtmlValidator.new_image_budget(), false)
     image
+  end
+
+  test "vector admission preserves source modes and emits the approved print transport" do
+    defs =
+      "<defs color-interpolation='linearRGB'><linearGradient id='g'><stop stop-color='black'/><stop offset='1' stop-color='white'/></linearGradient></defs>"
+
+    unused = "<svg width='3' height='1'>#{defs}<rect width='3' height='1' fill='red'/></svg>"
+    used = "<svg width='3' height='1'>#{defs}<rect width='3' height='1' fill='url(#g)'/></svg>"
+
+    assert {:ok, _} =
+             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(unused, [], %{
+               mode: :inline
+             })
+
+    assert {:ok, png} = SvgRasterizer.rasterize(used, [], nil)
+    assert {:ok, image} = PngDecoder.decode(png, HtmlValidator.new_image_budget(), false)
+    assert abs(:binary.at(image.data, 3) - 128) <= 1
+
+    assert {:ok, pdf} =
+             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(used, [], %{mode: :inline})
+
+    refute pdf =~ "/Subtype /Link"
+    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
+    refute pdf =~ "0.4166666666666667 exp"
+    assert {:ok, _document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+
+    source =
+      "<svg width='3' height='1'><g color-interpolation='linearRGB'><rect width='3' height='1' fill='red'/></g></svg>"
+
+    assert {:ok, graphics_pdf} =
+             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(source, [], %{
+               mode: :inline
+             })
+
+    refute graphics_pdf =~ "/Subtype /Link"
+
+    assert :ok =
+             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(
+               graphics_pdf,
+               false
+             )
+  end
+
+  test "selected font glyphs keep their actual source and positioned outline in raster mode" do
+    font = File.read!(Path.expand("../../priv/fonts/dejavu/DejaVuSans.ttf", __DIR__))
+
+    source =
+      "<svg width='80' height='30'><rect width='80' height='30' fill='black'/><text x='2' y='24' font-family='NativeSvgFont0' font-size='24' textLength='60' lengthAdjust='spacingAndGlyphs' fill='white' fill-opacity='.5' color-interpolation='linearRGB'>Ω</text></svg>"
+
+    assert {:ok, png} =
+             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.png(source, [], %{
+               mode: :inline,
+               fonts: [%{data: font}]
+             })
+
+    assert {:ok, image} = PngDecoder.decode(png, HtmlValidator.new_image_budget(), false)
+    assert Enum.any?(:binary.bin_to_list(image.data), &(abs(&1 - 128) <= 2))
+
+    assert {:ok, pdf} =
+             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(source, [], %{
+               mode: :inline,
+               fonts: [%{data: font}]
+             })
+
+    refute pdf =~ "/Subtype /Link"
+    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
+    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf)
+
+    assert {:error, {:no_extractable_text, _}} =
+             NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
+
+    assert {:ok, _document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
   end
 end

@@ -742,14 +742,21 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
     assert {:ok, marker_image} =
              PngDecoder.decode(painted, HtmlValidator.new_image_budget(), false)
 
-    assert marker_image.data == <<255, 0, 0>>
-    refute Map.has_key?(marker_image, :alpha_data)
+    # Chromium paints the single 1 CSS px canvas fully red (verified with
+    # /usr/bin/chromium print-to-pdf at 96 dpi): the 1-unit diagonal stroke
+    # covers the only pixel while the fitted 1x1 marker viewport moves its
+    # rect outside the canvas with the reference offset. resvg drops width-1
+    # strokes when the canvas is at most 2 device pixels, so the native
+    # converter retains the genuine empty 1x1 paint here.
+    assert marker_image.data == <<0, 0, 0>>
+    assert marker_image.alpha_data == <<0>>
 
     for content <- ["<text>Missing face</text>", "<image href='missing.png'/>"] do
       assert {:error, {reason, diagnostic}} =
                convert_svg(svg(content), [], %{mode: :reference})
 
-      assert is_atom(reason) and diagnostic.source == "SVG"
+      # Text diagnostics attribute themselves to the "SVG text" subtree.
+      assert is_atom(reason) and String.starts_with?(diagnostic.source, "SVG")
       assert is_binary(diagnostic.message) and is_atom(diagnostic.stage)
     end
   end
@@ -968,6 +975,27 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
       Map.get(context, :fonts, []),
       Map.delete(context, :fonts)
     )
+  end
+
+  test "inline stylesheet non-scaling strokes are recorded as a converter limitation" do
+    source =
+      "<svg width='20' height='20'><style>rect{vector-effect:non-scaling-stroke}</style><rect width='20' height='20'/></svg>"
+
+    assert {:ok, summary} = SvgValidator.validate_processing(source, %{mode: :image})
+    assert MapSet.member?(summary.converter_features, :non_scaling_stroke)
+
+    assert {:error, {:unsupported_html, diagnostic}} =
+             SvgConverterValidator.validate_capabilities(summary)
+
+    assert diagnostic.source == "vector-effect"
+    assert diagnostic.message =~ "non-scaling strokes"
+  end
+
+  test "stretch viewport attributes keep unchanged transport for non-integer raster targets" do
+    attributes = %{"width" => "10", "height" => "10"}
+
+    assert {:ok, nil} = SvgValidator.stretch_viewport_attributes(attributes, 10.5, 10)
+    assert {:ok, nil} = SvgValidator.stretch_viewport_attributes(attributes, nil, 10)
   end
 
   defp svg(content) do

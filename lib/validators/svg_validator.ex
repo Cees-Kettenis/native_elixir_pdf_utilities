@@ -994,6 +994,46 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
     end
   end
 
+  @doc """
+  Returns root attribute overrides that stretch the authored canvas to an
+  explicit two-dimensional raster target, matching CSS default object-fit fill
+  semantics for replaced SVG images.
+
+  Returns `:ok` with `nil` overrides when the target aspect already matches the
+  intrinsic canvas within device-pixel rounding, so unchanged sources keep
+  their exact authored transport.
+  """
+  @spec stretch_viewport_attributes(map(), term(), term()) ::
+          {:ok, map() | nil} | {:error, {atom(), map()}}
+  def stretch_viewport_attributes(attributes, width, height) do
+    case {width, height} do
+      {width, height}
+      when is_integer(width) and width > 0 and is_integer(height) and height > 0 ->
+        with {:ok, {intrinsic_width, intrinsic_height}} <-
+               svg_intrinsic_dimensions(attributes) do
+          cond do
+            intrinsic_width <= 0 or intrinsic_height <= 0 ->
+              {:ok, nil}
+
+            abs(width * intrinsic_height - height * intrinsic_width) <= max(width, height) ->
+              {:ok, nil}
+
+            true ->
+              {:ok,
+               %{
+                 "width" => Integer.to_string(width),
+                 "height" => Integer.to_string(height),
+                 "viewBox" => "0 0 #{intrinsic_width} #{intrinsic_height}",
+                 "preserveAspectRatio" => "none"
+               }}
+          end
+        end
+
+      _ ->
+        {:ok, nil}
+    end
+  end
+
   defp svg_raster_dimensions(raster_options, intrinsic_width, intrinsic_height) do
     width = Keyword.get(raster_options, :width)
     height = Keyword.get(raster_options, :height)

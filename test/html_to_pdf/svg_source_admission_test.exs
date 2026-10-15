@@ -6,7 +6,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSourceAdmissionTest do
     SvgConverterValidator,
     SvgSceneValidator,
     SvgFilterValidator,
-    SvgForeignObjectValidator
+    SvgForeignObjectValidator,
+    SvgValidator
   }
 
   test "actual filter source tags retain format admission without a filter execution bridge" do
@@ -37,5 +38,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSourceAdmissionTest do
     assert SvgForeignObjectValidator.layout_applicable?(active, active_ancestors)
     refute SvgForeignObjectValidator.layout_applicable?(inert, inert_ancestors)
     assert SvgForeignObjectValidator.layout_applicable?(root, [])
+  end
+
+  test "extraction requires an actual parsed document tree" do
+    assert {:error, {:invalid_document, diagnostic}} = SvgSceneValidator.extraction_root("junk")
+
+    assert diagnostic.module == SvgSceneValidator
+    assert diagnostic.source == "SVG"
+    assert diagnostic.message =~ "SVG extraction requires a parsed document"
+  end
+
+  test "alignment requires the XML summary and parsed tree to share one structure" do
+    source =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><rect width='4' height='4'/></svg>"
+
+    assert {:ok, summary} = SvgValidator.validate_processing(source, %{mode: :image})
+    assert {:ok, document} = HtmlParser.parse_detailed(source)
+    [svg] = document.children
+    [rect] = svg.children
+
+    # Fewer parsed elements than admitted XML nodes leave unaligned sources.
+    trimmed = %{document | children: [%{svg | children: []}]}
+
+    assert {:error, {:invalid_document, missing}} =
+             SvgSceneValidator.align_xml_source(trimmed, summary)
+
+    assert missing.source == "SVG"
+
+    assert missing.message =~
+             "SVG XML source and parsed extraction tree have different structures"
+
+    # Extra parsed elements have no admitted XML node to align against.
+    padded = %{document | children: [%{svg | children: [rect, rect]}]}
+
+    assert {:error, {:invalid_document, extra}} =
+             SvgSceneValidator.align_xml_source(padded, summary)
+
+    assert extra.message == missing.message
   end
 end

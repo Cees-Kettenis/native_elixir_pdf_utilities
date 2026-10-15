@@ -142,4 +142,55 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterTest do
       assert diagnostic.message =~ "exactly one complete SVG"
     end
   end
+
+  test "font staging failures surface recoverable diagnostics when snapshots cannot be written" do
+    # Grow a scratch directory until the converter's font snapshot file name
+    # would exceed the kernel path limit, so the per-font file write fails
+    # after the staging directory itself was created successfully.
+    # The staging directory is TMPDIR <> "/nepu-svg-" <> pid <> "-" <> 32 hex
+    # characters and the first font snapshot appends "/0.ttf".
+    pid_size = byte_size(System.pid())
+    target = 4051 - pid_size
+
+    base =
+      Path.join(System.tmp_dir!(), "nepu-staging-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(base)
+
+    directory =
+      1..40
+      |> Enum.reduce_while(base, fn _, current ->
+        if target - byte_size(Path.join(current, String.duplicate("d", 200))) >= 2,
+          do: {:cont, Path.join(current, String.duplicate("d", 200))},
+          else: {:halt, current}
+      end)
+      |> then(fn current ->
+        filler = target - byte_size(current) - 1
+        if filler > 0, do: Path.join(current, String.duplicate("d", filler)), else: current
+      end)
+
+    File.mkdir_p!(directory)
+    assert byte_size(directory) == target
+
+    previous = System.get_env("TMPDIR")
+    System.put_env("TMPDIR", directory)
+
+    try do
+      font = %{data: File.read!("priv/fonts/dejavu/DejaVuSans.ttf"), family: "DejaVu Sans"}
+
+      source =
+        "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><rect width='4' height='4' fill='red'/></svg>"
+
+      assert {:error, {:invalid_document, diagnostic}} =
+               SvgRasterizer.rasterize(source, [], nil, [font])
+
+      assert diagnostic.module == SvgConverterValidator
+      assert diagnostic.operation == :convert
+      assert diagnostic.message =~ "could not stage approved SVG font bytes"
+      assert diagnostic.message =~ "enametoolong"
+    after
+      if previous, do: System.put_env("TMPDIR", previous), else: System.delete_env("TMPDIR")
+      File.rm_rf!(base)
+    end
+  end
 end

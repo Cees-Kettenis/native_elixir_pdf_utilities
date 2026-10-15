@@ -1,6 +1,6 @@
 defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
   @moduledoc false
-  alias NativeElixirPdfUtilities.{Diagnostics, Limits}
+  alias NativeElixirPdfUtilities.Diagnostics
 
   alias NativeElixirPdfUtilities.Validators.{
     HtmlValidator,
@@ -484,26 +484,6 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
                "SVG paint requires its issued source document scope and shared image budget",
                "SVG"
              )
-      end
-    end
-  end
-
-  @doc false
-  @spec reserve_paint_hit(map(), number(), number() | nil, term()) ::
-          :ok | {:error, {atom(), map()}}
-  def reserve_paint_hit(scene, width, height, result) do
-    with {:ok, viewport} <-
-           NativeElixirPdfUtilities.HtmlToPdf.SvgScene.measure(scene, width, height) do
-      if viewport.paint? and Map.get(scene.style, :display) != :none and match?({:ok, _}, result) do
-        scale = Limits.get(:svg_raster_scale)
-
-        NativeElixirPdfUtilities.Validators.SvgValidator.validate_raster_dimensions(
-          max(ceil(viewport.width / 0.75 * scale), 1),
-          max(ceil(viewport.height / 0.75 * scale), 1),
-          scene.budget
-        )
-      else
-        :ok
       end
     end
   end

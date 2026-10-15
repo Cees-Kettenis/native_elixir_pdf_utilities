@@ -1,4 +1,4 @@
-defmodule NativeElixirPdfUtilities.HtmlToPdf.Wave23CompositionClosureTest do
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CompositionClosureTest do
   use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlComposition, HtmlParser}

@@ -37,6 +37,33 @@ limitation case is not a successful pixel comparison. Other painting differences
 remain failures under the unchanged browser thresholds until their causes are
 verified.
 
+Further verified `resvg` deviations from Chromium painting remain in place.
+Each was measured against both engines on the same input:
+
+- resvg interpolates gradient stops in sRGB and ignores
+  `color-interpolation="linearRGB"` on gradients and masks, including when the
+  gradient feeds filter inputs, pattern tiles or mask content. Chromium
+  linearizes channels first.
+- resvg weights mask luminance from raw sRGB channels and ignores
+  `color-interpolation` on `<mask>`; Chromium linearizes first.
+- resvg clips the SourceGraphic filter input to the filter region before the
+  primitive chain runs; Chromium does not, so `feOffset` and
+  `feDisplacementMap` chains that move ink authored outside the region render
+  empty under resvg.
+- resvg orients automatic markers with the raw segment tangent: degenerate
+  start tangents render horizontally, and closed subpath start and end markers
+  keep separate incoming and outgoing tangents instead of Chromium's join
+  bisector.
+- resvg drops strokes of width at most one user unit on canvases of at most two
+  device pixels.
+- resvg renders percentage geometry (`cx`, `cy`, `r`) on marker children as
+  nothing where identical numeric values paint.
+
+Converter preparation re-encodes three deviations where source rewriting
+reproduces Chromium exactly: marker viewport clipping, zero-area marker
+viewBoxes and large glyph-turn angle reduction. The remaining deviations are
+documented behavior of the established converter, not omitted features.
+
 Converter preparation reserves the validated canvas dimensions and decoded image
 planes against the shared limits. Repeated referenced images charge each
 validated occurrence. The cumulative SVG surface reservation also includes a

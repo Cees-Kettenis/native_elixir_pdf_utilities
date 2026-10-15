@@ -1,8 +1,15 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
+  Code.require_file("../support/svg_public_workflow.ex", __DIR__)
+  Code.require_file("../support/png_fixture.ex", __DIR__)
   use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.HtmlToPdf.{EmbeddedViewport, ResourceContext, SvgDocumentImage}
-  alias NativeElixirPdfUtilities.Validators.{HtmlValidator}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlValidator,
+    SvgDocumentViewportValidator,
+    SvgSceneValidator
+  }
 
   setup do
     root =
@@ -251,44 +258,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
     )
   end
 
-  test "zero hosts retain preparation failures and paint no image or link rectangle", %{
-    root: root
-  } do
-    File.write!(
-      Path.join(root, "valid.svg"),
-      "<svg width='100' height='50'><rect width='200' height='100'/></svg>"
-    )
-
-    File.write!(Path.join(root, "bad.svg"), "<svg><rect></svg>")
-
-    assert {:ok, pdf} =
-             HtmlToPdf.render(
-               "<a href='https://example.test/'><object data='valid.svg' style='width:0;height:40pt'>Unused</object></a>",
-               base_url: root
-             )
-
-    refute pdf =~ "/Subtype /Image"
-    refute pdf =~ "/Subtype /Link"
-
-    assert {:error, {:invalid_document, diagnostic}} =
-             HtmlToPdf.render(
-               "<object data='bad.svg' style='width:0;height:40pt'>Unused</object>",
-               base_url: root
-             )
-
-    assert diagnostic.stage == :style and diagnostic.message =~ "malformed"
-
-    Limits.install(Map.put(Limits.effective(), :max_aggregate_image_source_bytes, 1))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render(
-               "<object data='valid.svg' style='width:0;height:40pt'>Unused</object>",
-               base_url: root
-             )
-
-    assert diagnostic.message =~ "read limit" and Path.basename(diagnostic.source) == "valid.svg"
-  end
-
   test "zero hosts and roots skip paint after validating the issued source", %{root: root} do
     Limits.install(Map.put(Limits.effective(), :max_aggregate_decoded_image_bytes, 1))
 
@@ -438,7 +407,165 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
     binary_part(image.data, (y * image.width_px + x) * 3, 3)
   end
 
+  test "prepared scene validation requires issued image budgets and complete scenes" do
+    scene = %{
+      source:
+        "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><rect width='4' height='4'/></svg>",
+      attributes: %{"width" => "4", "height" => "4"},
+      style: %{display: :inline},
+      budget: HtmlValidator.new_image_budget()
+    }
+
+    assert :ok = SvgSceneValidator.validate_prepared(scene)
+
+    assert {:error, {:invalid_document, budget_diagnostic}} =
+             SvgSceneValidator.validate_prepared(%{scene | budget: :revoked})
+
+    assert budget_diagnostic.module == SvgSceneValidator
+    assert budget_diagnostic.message =~ "prepared SVG requires an issued image budget"
+
+    assert {:error, {:invalid_document, _}} =
+             SvgSceneValidator.validate_prepared(%{
+               scene
+               | budget: :atomics.new(2, signed: false)
+             })
+
+    for incomplete <- [%{source: "x"}, "junk"] do
+      assert {:error, {:invalid_document, shape_diagnostic}} =
+               SvgSceneValidator.validate_prepared(incomplete)
+
+      assert shape_diagnostic.message =~
+               "prepared SVG requires complete source, geometry and style"
+    end
+  end
+
+  test "viewport resolution bounds the actual root transform against the geometry range" do
+    {:ok, plan} =
+      SvgDocumentViewportValidator.prepare(%{
+        source_root: %{"width" => "100", "height" => "50"},
+        root_style: %{}
+      })
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             SvgDocumentViewportValidator.prepare_viewport(
+               plan,
+               1_000_000_000,
+               90,
+               HtmlValidator.new_image_budget()
+             )
+
+    assert diagnostic.module == SvgDocumentViewportValidator
+
+    assert diagnostic.message =~
+             "selected SVG raster transform exceeds the supported numeric range"
+  end
+
+  test "render budget exhaustion during viewport resolution keeps its issued context" do
+    {:ok, plan} =
+      SvgDocumentViewportValidator.prepare(%{
+        source_root: %{"width" => "100", "height" => "50"},
+        root_style: %{}
+      })
+
+    result =
+      HtmlValidator.with_render_budget(fn ->
+        SvgDocumentViewportValidator.prepare_viewport(
+          plan,
+          1.0e30,
+          90,
+          HtmlValidator.new_image_budget()
+        )
+      end)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = result
+    assert diagnostic.module == HtmlValidator
+    assert diagnostic.source == "SVG"
+    assert diagnostic.operation == :rasterize_document
+    assert diagnostic.message =~ "max_css_numeric_magnitude"
+  end
+
+  test "viewport and raster arithmetic beyond the numeric range return recoverable diagnostics" do
+    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 1.7e308))
+
+    {:ok, plan} =
+      SvgDocumentViewportValidator.prepare(%{
+        source_root: %{"width" => "1.5e308", "height" => "50", "viewBox" => "0 0 10 10"},
+        root_style: %{}
+      })
+
+    assert {:error, {:invalid_document, viewport_arithmetic}} =
+             SvgDocumentViewportValidator.prepare_viewport(
+               plan,
+               1.5e308,
+               90,
+               HtmlValidator.new_image_budget()
+             )
+
+    assert viewport_arithmetic.module == SvgDocumentViewportValidator
+
+    assert viewport_arithmetic.message =~
+             "selected SVG viewport arithmetic exceeds the supported numeric range"
+
+    {:ok, plain} =
+      SvgDocumentViewportValidator.prepare(%{
+        source_root: %{"width" => "100", "height" => "50"},
+        root_style: %{}
+      })
+
+    Limits.install(Map.put(Limits.effective(), :svg_raster_scale, 1.5e308))
+
+    assert {:error, {:invalid_document, raster_arithmetic}} =
+             SvgDocumentViewportValidator.prepare_raster(
+               plain,
+               100,
+               90,
+               HtmlValidator.new_image_budget()
+             )
+
+    assert raster_arithmetic.module == SvgDocumentViewportValidator
+    assert raster_arithmetic.message == viewport_arithmetic.message
+  end
+
   defp prepare_document(source, budget, origin \\ "SVG", host \\ :object, fonts \\ []) do
     SvgDocumentImage.prepare(source, budget, origin, host, fonts, [])
+  end
+
+  alias NativeElixirPdfUtilities.{Limits}
+
+  test("zero hosts retain preparation failures and paint no image or link rectangle", %{
+    root: root
+  }) do
+    File.write!(
+      Path.join(root, "valid.svg"),
+      "<svg width='100' height='50'><rect width='200' height='100'/></svg>"
+    )
+
+    File.write!(Path.join(root, "bad.svg"), "<svg><rect></svg>")
+
+    assert {:ok, pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(
+               "<a href='https://example.test/'><object data='valid.svg' style='width:0;height:40pt'>Unused</object></a>",
+               base_url: root
+             )
+
+    refute pdf =~ "/Subtype /Link"
+    refute pdf =~ "/Subtype /Link"
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(
+               "<object data='bad.svg' style='width:0;height:40pt'>Unused</object>",
+               base_url: root
+             )
+
+    assert diagnostic.message =~ "malformed" and diagnostic.source == "bad.svg"
+    Limits.install(Map.put(Limits.effective(), :max_aggregate_image_source_bytes, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(
+               "<object data='valid.svg' style='width:0;height:40pt'>Unused</object>",
+               base_url: root
+             )
+
+    assert diagnostic.message =~ "read limit" and Path.basename(diagnostic.source) == "valid.svg"
   end
 end

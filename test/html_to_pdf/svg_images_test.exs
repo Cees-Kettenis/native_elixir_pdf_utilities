@@ -573,4 +573,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImagesTest do
 
     assert message =~ "not authorized"
   end
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{PngDecoder}
+  alias NativeElixirPdfUtilities.{Limits}
+
+  test("selected PNG resources paint in SVG order with meet slice and affine groups", %{png: png}) do
+    html =
+      "<svg width=100 height=60><rect width=100 height=60 fill=green /><g transform='translate(10 5)'><image href='paint.png' width=80 height=40 preserveAspectRatio='none' /><rect x=35 width=10 height=40 fill=yellow /></g></svg>"
+
+    assert {:ok, pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(html,
+               assets: %{"paint.png" => {:bytes, png}}
+             )
+
+    refute pdf =~ "/Subtype /Link"
+    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
+    assert {:ok, _} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+
+    context = %{
+      mode: :inline,
+      resources: %{"svg-resource:paint" => %{data: png, media_type: "image/png"}}
+    }
+
+    assert {:ok, raster} =
+             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.png(
+               "<svg width='4' height='1'><image href='svg-resource:paint' width='4' height='1' preserveAspectRatio='none' /></svg>",
+               [width: 4, height: 1],
+               context
+             )
+
+    assert {:ok, image} = PngDecoder.decode(raster, HtmlValidator.new_image_budget(), false)
+    assert binary_part(image.data, 0, 3) == <<255, 0, 0>>
+    assert binary_part(image.data, 9, 3) == <<0, 0, 255>>
+  end
+
+  test("nested SVG stays vector and resolves child images against its source directory", %{
+    dir: dir
+  }) do
+    File.write!(
+      Path.join(dir, "nested/art.svg"),
+      "<svg xmlns='http://www.w3.org/2000/svg' width='20' height='10' viewBox='0 0 20 10'><image href='paint.png' width='20' height='10' /><rect x='8' width='4' height='10' fill='yellow' /></svg>"
+    )
+
+    html =
+      "<svg width=100 height=50><image href='nested/art.svg' width=100 height=50 preserveAspectRatio='none' /></svg>"
+
+    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html, base_url: dir)
+    refute pdf =~ "/Subtype /Link"
+    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
+    assert {:ok, _} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+  end
 end

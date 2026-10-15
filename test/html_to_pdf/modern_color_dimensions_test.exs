@@ -1,6 +1,8 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ModernColorDimensionsTest do
   use ExUnit.Case, async: false
 
+  alias NativeElixirPdfUtilities.Limits
+
   alias NativeElixirPdfUtilities.Validators.{
     CssColorValidator,
     CssMathValidator,
@@ -89,5 +91,45 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ModernColorDimensionsTest do
       assert state.value == "#000000", value
       assert :error = CssColorValidator.parse_function_color(value, nil), value
     end
+  end
+
+  test "degenerate conversions reach the shared sRGB transfer branches" do
+    # An opaque 8-digit hex color drops its redundant fully-opaque alpha.
+    assert {:ok, {red, green, blue}} = CssColorValidator.parse_function_color("#112233ff", nil)
+    assert_in_delta red, 17 / 255, 1.0e-12
+    assert_in_delta green, 34 / 255, 1.0e-12
+    assert_in_delta blue, 51 / 255, 1.0e-12
+
+    # hwb with white plus black at or above 1 collapses to a single gray value.
+    assert {:ok, {1.0, 1.0, 1.0}} = CssColorValidator.parse_function_color("hwb(0 100% 0%)", nil)
+
+    # rec2020 channels below the linear threshold use the / 4.5 segment.
+    assert {:ok, {red, green, blue}} =
+             CssColorValidator.parse_function_color("color(rec2020 0.04 0.5 0.5)", nil)
+
+    assert_in_delta red, 0.0, 1.0e-12
+    assert_in_delta green, 0.5757394201442669, 1.0e-9
+    assert_in_delta blue, 0.5509552860805521, 1.0e-9
+
+    # srgb-linear black encodes through the n * 12.92 segment.
+    assert {:ok, {red, green, blue}} =
+             CssColorValidator.parse_function_color("color(srgb-linear 0.0 0.5 1.0)", nil)
+
+    assert_in_delta red, 0.0, 1.0e-12
+    assert_in_delta green, 0.7353569830524495, 1.0e-9
+    assert_in_delta blue, 1.0, 1.0e-9
+  end
+
+  test "color-component exponents beyond float range clamp to the shared numeric magnitude" do
+    limit = Limits.get(:max_css_numeric_magnitude)
+
+    assert {:ok, value, %{}} = CssMathValidator.evaluate_color_component("1e999")
+    assert value == limit
+
+    assert {:ok, value, %{}} = CssMathValidator.evaluate_color_component("-1e999")
+    assert value == -limit
+
+    # Exponents within float range are rejected rather than clamped.
+    assert :error = CssMathValidator.evaluate_color_component("1e100")
   end
 end

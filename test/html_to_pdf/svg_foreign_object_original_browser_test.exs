@@ -1,4 +1,4 @@
-defmodule NativeElixirPdfUtilities.HtmlToPdf.Wave20OriginalSvgBrowserTest do
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgForeignObjectOriginalBrowserTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
   @moduletag :browser_parity

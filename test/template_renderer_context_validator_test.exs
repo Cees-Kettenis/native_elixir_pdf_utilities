@@ -629,6 +629,271 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidatorTe
     assert Process.get(key) == nil
   end
 
+  test "live stylesheet preparation binds authored owners and leaves synthetic styles unbound",
+       %{opts: _opts} do
+    key = {TemplateRendererContextValidator, :preparation}
+
+    assert {:ok, dom} =
+             HtmlParser.parse_document_detailed(
+               "<head><style>p{color:blue}</style></head><body><p>Body</p></body>"
+             )
+
+    tree = HtmlTree.from_document(dom)
+    style = Enum.find(Map.values(tree.nodes), &(&1[:tag] == "style"))
+
+    identity = [
+      :node_id,
+      :document_id,
+      :tree_scope_id,
+      :parent_id,
+      :source,
+      :attributes,
+      :tag,
+      :namespace
+    ]
+
+    # A composition clone of the authored style element keeps its payload and
+    # gains a fresh placement identity.
+    clone = %{style | node_id: make_ref()}
+    authored = %{Map.take(style, identity) | node_id: make_ref()}
+    entry = %{css: "p{color:blue}", source_kind: :embedded}
+
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn current ->
+      FontValidator.with_budget(fn ->
+        preparation = %{
+          resource_frame: nil,
+          resource_context: current,
+          tree: tree,
+          clone_nodes: %{},
+          clone_bindings: %{},
+          source_projection: nil,
+          preparation_limits: Limits.effective(),
+          font_budget_id: Process.get({FontValidator, :budget}).budget_id
+        }
+
+        Process.put(key, preparation)
+
+        try do
+          # An authored stylesheet keeps its own original owner.
+          owned = TemplateRendererContextValidator.stylesheet_owner(style, entry)
+          assert owned.__template_stylesheet_owner__ == Map.take(style, identity)
+
+          # A composition clone's stylesheet binds its authored origin.
+          Process.put(key, %{
+            preparation
+            | clone_nodes: %{clone.node_id => clone},
+              clone_bindings: %{clone.node_id => %{original: authored}}
+          })
+
+          assert TemplateRendererContextValidator.stylesheet_owner(clone, entry).__template_stylesheet_owner__ ==
+                   Map.take(authored, identity)
+
+          # A prospective synthetic style without a prefix placement stays unbound.
+          Process.put(key, %{
+            preparation
+            | clone_nodes: %{clone.node_id => clone},
+              clone_bindings: %{},
+              source_projection: %{placements: %{}}
+          })
+
+          assert TemplateRendererContextValidator.stylesheet_owner(clone, entry) == entry
+        after
+          Process.delete(key)
+        end
+      end)
+    end)
+  end
+
+  test "an out-of-range CSS font candidate ordinal cannot mint candidate ownership", %{
+    opts: _opts
+  } do
+    key = {TemplateRendererContextValidator, :preparation}
+
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn current ->
+      FontValidator.with_budget(fn ->
+        ticket = make_ref()
+
+        provider = %{
+          authored: %{candidates: [%{role: :first_candidate}]},
+          owner: nil,
+          resolution_base: nil,
+          shadow_scope_id: nil,
+          shadow_host_id: nil,
+          resource_context: current
+        }
+
+        preparation = %{
+          resource_frame: nil,
+          resource_context: current,
+          font_providers: %{ticket => provider},
+          font_candidate_frame: nil,
+          references: [],
+          preparation_limits: Limits.effective(),
+          font_budget_id: Process.get({FontValidator, :budget}).budget_id
+        }
+
+        Process.put(key, preparation)
+
+        try do
+          config = %{family: "Chosen", data: ["bytes"]}
+
+          assert {:ok, {^config, issued}} =
+                   TemplateRendererContextValidator.with_font_candidate(ticket, 0, fn ->
+                     {:ok, config}
+                   end)
+
+          assert issued.provider == provider and issued.candidate.role == :first_candidate
+
+          assert {:error, {:invalid_document, diagnostic}} =
+                   TemplateRendererContextValidator.with_font_candidate(ticket, 99, fn ->
+                     {:ok, config}
+                   end)
+
+          assert diagnostic.stage == :font and diagnostic.reason == :invalid_document
+          assert diagnostic.operation == :template_renderer_context
+          assert diagnostic.module == TemplateRendererContextValidator
+          assert diagnostic.message =~ "live normal preparation source owner and policy context"
+        after
+          Process.delete(key)
+        end
+      end)
+    end)
+  end
+
+  test "a font load observation with a forged configuration stays unbound", %{opts: _opts} do
+    key = {TemplateRendererContextValidator, :preparation}
+
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn current ->
+      FontValidator.with_budget(fn ->
+        ticket = make_ref()
+        provider = %{shadow_scope_id: nil, shadow_host_id: nil, resource_context: current}
+        candidate = %{provider: provider, candidate: %{role: :first_candidate}, references: []}
+        config = %{family: "Real", path: ["/fonts/real.ttf"]}
+
+        frame = %{
+          ticket: ticket,
+          caller_count: 0,
+          recipes: [%{provider: ticket, candidates: [candidate], config: config}],
+          context: current
+        }
+
+        preparation = %{
+          resource_frame: nil,
+          resource_context: current,
+          font_registry_frame: frame,
+          font_outcomes: %{},
+          preparation_limits: Limits.effective(),
+          font_budget_id: Process.get({FontValidator, :budget}).budget_id
+        }
+
+        Process.put(key, preparation)
+
+        try do
+          loaded = %{family: "Real", weight: 400, style: :normal, data: "bytes"}
+
+          observed =
+            TemplateRendererContextValidator.observe_font_load(
+              ticket,
+              :configured,
+              0,
+              0,
+              config,
+              loaded
+            )
+
+          assert observed.family == "Real"
+          assert is_reference(observed.__template_font_outcome__)
+          assert Process.get(key).font_outcomes != %{}
+
+          forged = %{family: "Forged", weight: 400, style: :normal, data: "bytes"}
+
+          assert TemplateRendererContextValidator.observe_font_load(
+                   ticket,
+                   :configured,
+                   0,
+                   0,
+                   %{family: "Forged"},
+                   forged
+                 ) == forged
+
+          assert map_size(Process.get(key).font_outcomes) == 1
+        after
+          Process.delete(key)
+        end
+      end)
+    end)
+  end
+
+  test "prepared glyph declaration chains stop at tree scope boundaries", %{opts: _opts} do
+    document = make_ref()
+    outer_scope = make_ref()
+    inner_scope = make_ref()
+    body_id = make_ref()
+    div_id = make_ref()
+    text_id = make_ref()
+    source = %{line: 1, text: "Chained", column: 1}
+
+    text_identity = %{
+      type: :text,
+      node_id: text_id,
+      document_id: document,
+      tree_scope_id: outer_scope,
+      parent_id: div_id,
+      source: source,
+      attributes: nil,
+      tag: nil,
+      namespace: nil
+    }
+
+    tree = %HtmlTree{
+      root: body_id,
+      nodes: %{
+        text_id => Map.merge(text_identity, %{text: "Chained"}),
+        div_id => %{
+          type: :element,
+          node_id: div_id,
+          document_id: document,
+          tree_scope_id: outer_scope,
+          parent_id: body_id,
+          source: source,
+          attributes: %{},
+          tag: "div",
+          namespace: :html,
+          children: [text_id]
+        },
+        body_id => %{
+          type: :element,
+          node_id: body_id,
+          document_id: document,
+          tree_scope_id: inner_scope,
+          parent_id: nil,
+          source: source,
+          attributes: %{},
+          tag: "body",
+          namespace: :html,
+          children: [div_id]
+        }
+      }
+    }
+
+    runs = [
+      Map.merge(text_identity, %{
+        text: "Chained",
+        style: %{font_face: %{family: "DejaVu Sans"}, font_size: 12.0}
+      })
+    ]
+
+    assert {:ok, collected} =
+             TemplateRendererContextValidator.validate_prepared_glyph_runs(runs, tree)
+
+    assert [_run] = collected[text_id]
+    [run] = collected[text_id]
+    assert run.authored_text == "Chained"
+    assert [%{owner: owner, declarations: []}] = run.declaration_contexts
+    assert owner.node_id == div_id
+    assert owner.tree_scope_id == outer_scope
+  end
+
   defp fixture(
          reference \\ "pixel.png",
          authored \\ "<p>Original</p>",
