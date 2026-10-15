@@ -3,8 +3,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternValidator do
   Evaluates static HTML patterns with ECMAScript Unicode-v and UTF-16 semantics.
 
   Invalid authored patterns are ignored, as required by HTML. Valid patterns
-  match the entire initial value. Compilation, recursion, native allocations,
-  character scans and backtracking consume configured Limits. Exhaustion is a
+  match the entire initial value. Compilation, recursion, BEAM memory,
+  character scans and bounded OTP matching consume configured Limits. Exhaustion is a
   diagnostic, never an invented mismatch. No general script engine is involved.
   """
   alias NativeElixirPdfUtilities.Diagnostics

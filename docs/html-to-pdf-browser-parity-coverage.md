@@ -37,7 +37,10 @@ page count and its existing average channel-delta limit.
 Chromium and the native renderer load the same bundled DejaVu font files. Two
 font fixtures also use the same bundled Liberation font files. Each run records
 SHA-256 hashes of these files alongside its raster output. The quality matrix
-checks the threshold on every supported Elixir runtime. Browser and rasterizer
+checks the threshold on every supported Elixir runtime. The current recovery
+source still has failing comparisons. See the
+[current work plan](milestone-1.1.0-work-plan.md) for its acceptance status.
+Browser and rasterizer
 updates can change the result, so failures must be investigated and corrected
 when those tools change. The measured bound applies to these representative
 fixtures within the supported HTML/CSS subset; arbitrary documents or different
@@ -57,14 +60,14 @@ pages, and body padding, backgrounds, and grid layout.
 `font_supplementary_unicode.html` uses the same pinned STIX Two Math bytes in
 both renderers. It checks mathematical alphanumeric characters, ordinary
 operators, wrapping, and page boundaries. Public tests check exact Unicode text
-extraction with font subsetting enabled and disabled. MathML layout has its own
-unfinished checklist.
+extraction with font subsetting enabled and disabled. The current work plan
+tracks remaining MathML qualification.
 
 `math_glyph_rows.html` checks selected glyph/row measurement against equivalent
 CSS coordinates calculated independently from STIX. Both painting paths use
 the same renamed reference subset. It checks glyph identities, original text,
 baselines, and spacing at 30 points. Direct MathML raster-ink differences
-remain recorded in the milestone progress file and do not count as completed
+remain tracked in the current work plan and do not count as completed
 MathML rendering.
 
 `math_stretch_glyphs.html` compares natural and larger glyphs, vertical

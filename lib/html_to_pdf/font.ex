@@ -883,10 +883,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
              parsed.embedding_flags,
              parsed.variable_font?
            ) do
-      hash =
-        :crypto.hash(:sha256, [family, data])
-        |> Base.encode16(case: :lower)
-        |> binary_part(0, 12)
+      hash = FontCache.identity(family, data)
 
       loaded =
         parsed

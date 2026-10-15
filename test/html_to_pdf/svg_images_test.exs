@@ -403,7 +403,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImagesTest do
       "<svg xmlns='http://www.w3.org/2000/svg' width='100' height='30'><foreignObject width='100' height='30'><div xmlns='http://www.w3.org/1999/xhtml'><img src='https://private.invalid/p.png'/></div></foreignObject></svg>"
     )
 
-    assert {:error, {:resource_denied, diagnostic}} =
+    assert {:error, {:unsupported_html, diagnostic}} =
              HtmlToPdf.render(
                "<svg width=100 height=30><image href='nested/denied-html.svg' width=100 height=30 /></svg>",
                base_url: dir,
@@ -413,13 +413,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImagesTest do
                end
              )
 
-    assert diagnostic.stage == :resource
-    assert diagnostic.source == "https://private.invalid/p.png"
+    assert diagnostic.stage == :layout
+    assert diagnostic.operation == :convert
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+    assert diagnostic.source == "foreignObject"
+    assert diagnostic.message =~ "does not render foreignObject"
     refute_received {:host_resolver, _}
   end
 
   test(
-    "nested HTML images share the outer decoded-byte budget on repeated byte hits",
+    "unsupported nested HTML is rejected before decoding its images, including repeated byte hits",
     %{dir: dir, limits: limits}
   ) do
     File.write!(
@@ -429,14 +432,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImagesTest do
 
     Limits.install(Map.put(limits, :max_aggregate_decoded_image_bytes, 10))
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+    assert {:error, {:unsupported_html, diagnostic}} =
              HtmlToPdf.render(
                "<svg width='8' height='2'><image href='nested/budget-html.svg' width='4' height='2'/><image href='nested/budget-html.svg' x='4' width='4' height='2'/></svg>",
                base_url: dir
              )
 
-    assert diagnostic.stage == :limits
-    assert diagnostic.message =~ "decoded image"
+    assert diagnostic.stage == :layout
+    assert diagnostic.operation == :convert
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+    assert diagnostic.source == "foreignObject"
+    assert diagnostic.message =~ "does not render foreignObject"
   end
 
   test("nested HTML retains caller-selected font bytes with system discovery disabled", %{

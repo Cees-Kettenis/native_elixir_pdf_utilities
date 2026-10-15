@@ -208,7 +208,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BodyClosureContractTest do
   test "actual native replies cannot reset the cumulative compiler budget between requests" do
     {:ok, initial} = HtmlFormValueValidator.prepare(:pattern, "(a)", ["a"])
 
-    {:ok, <<1, compile::unsigned-big-64, _match::unsigned-big-64, _allocated::unsigned-big-64>>} =
+    {:ok, :matched, %{compile: compile}} =
       FormValueBackend.run(initial)
 
     assert compile > 0
@@ -226,20 +226,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BodyClosureContractTest do
              diagnostic.message =~ "max_html_pattern_compile_work"
   end
 
-  test "native fixed capture operand bounds return a public failure independently of configurable ceilings" do
+  test "Elixir pattern compilation enforces configured work independently of obsolete native operand bounds" do
+    Limits.install(%{Limits.effective() | max_html_pattern_compile_work: 100})
+    {:ok, request} = HtmlFormValueValidator.prepare(:pattern, String.duplicate("()", 200), [""])
+    assert {:limit, :max_html_pattern_compile_work} = reply = FormValueBackend.run(request)
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlFormValueValidator.result(reply)
+    assert diagnostic.message =~ "max_html_pattern_compile_work"
+    assert diagnostic.operation == :initial_form_value
+  end
+
+  test "fixed OTP engine bounds diagnose valid authored patterns instead of ignoring them" do
     Limits.install(%{
       Limits.effective()
       | max_html_pattern_bytes: 200_000,
         max_html_pattern_compile_work: 20_000_000
     })
 
-    {:ok, request} =
-      HtmlFormValueValidator.prepare(:pattern, String.duplicate("()", 65_536), [""])
+    for pattern <- ["a{100000}", String.duplicate("()", 65_536)] do
+      assert {:error, {:unsupported_html, diagnostic}} =
+               NativeElixirPdfUtilities.Validators.HtmlPatternValidator.initial_pattern(pattern, [
+                 ""
+               ])
 
-    reply = FormValueBackend.run(request)
-    assert reply == {:exit, 79}
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlFormValueValidator.result(reply)
-    assert diagnostic.message =~ "65,535" and diagnostic.operation == :initial_form_value
+      assert diagnostic.operation == :initial_form_value
+      assert diagnostic.stage == :html
+      assert diagnostic.message =~ "fixed engine bound"
+      assert diagnostic.message =~ "not an invalid authored HTML pattern"
+    end
   end
 
   test "RGB function whitespace preserves the actual channel and alpha values" do

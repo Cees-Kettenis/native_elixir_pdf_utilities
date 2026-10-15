@@ -16,6 +16,13 @@ if baseline_path && !report_path do
 end
 
 Process.put(:performance_results, [])
+Process.put(:performance_failures, [])
+
+# Measure every original workload and retain its evidence before failing the run.
+record_failure = fn message ->
+  IO.puts("PERFORMANCE_FAILURE #{message}")
+  Process.put(:performance_failures, [message | Process.get(:performance_failures)])
+end
 
 # Memory sampling runs separately so it cannot distort the existing timed samples.
 # This is sampled total BEAM memory, including shared caches and binaries. Native
@@ -121,31 +128,31 @@ measure = fn name, operation, limits ->
   IO.inspect(result, label: "PERFORMANCE_REGRESSION")
 
   if median_reductions > maximum_reductions do
-    raise """
+    record_failure.("""
     #{name} exceeded the reductions limit
     measured: #{median_reductions}
     baseline: #{baseline_reductions}
     allowed: #{maximum_reductions} (+#{maximum_reduction_regression_percent}%)
     optimize the regression before treating the pull request as complete
-    """
+    """)
   end
 
   if median_microseconds > Keyword.fetch!(limits, :maximum_microseconds) do
-    raise """
+    record_failure.("""
     #{name} exceeded the wall-clock limit
     measured: #{Float.round(median_microseconds / 1_000, 3)} ms
     allowed: #{Keyword.fetch!(limits, :maximum_microseconds) / 1_000} ms
     rerun on an idle host before deciding whether this is a regression
-    """
+    """)
   end
 
   case Keyword.fetch(limits, :maximum_result_bytes) do
     {:ok, maximum} when is_integer(result_bytes) and result_bytes > maximum ->
-      raise """
+      record_failure.("""
       #{name} exceeded the output-size limit
       measured: #{result_bytes} bytes
       allowed: #{maximum} bytes
-      """
+      """)
 
     _ ->
       :ok
@@ -178,8 +185,11 @@ fixtures = [
   {"purchase_order.html", [page_size: :a4], %{"1.19" => 3_640_000, "1.20" => 3_500_000}, 124_904},
   {"material_requisition.html", [page_size: :a4], %{"1.19" => 4_630_000, "1.20" => 4_450_000},
    126_232},
+  # Approved size baseline: retain the full source font for later field editing.
+  # The 2026-10-15 capture is 688,413 bytes, including a 382,174-byte font snapshot.
+  # Timing and reductions retain their original pre-milestone baselines.
   {"government_application_form.html", [page_size: :a4],
-   %{"1.19" => 3_850_000, "1.20" => 3_680_000}, 256_688},
+   %{"1.19" => 3_850_000, "1.20" => 3_680_000}, 688_413},
   {"stock_sticker.html", [page_size: {4.92126, 1.49606}, margin: 0],
    %{"1.19" => 1_410_000, "1.20" => 1_400_000}, 59_392},
   {"trim_card.html", [page_size: {11.6929, 8.2677}, margin: 0],
@@ -372,8 +382,6 @@ measure.(
   maximum_result_bytes: div(21_226 * 105, 100)
 )
 
-IO.puts("PERFORMANCE_REGRESSION status=PASS")
-
 if report_path do
   evidence_files =
     [
@@ -402,6 +410,7 @@ if report_path do
     schedulers: :erlang.system_info(:schedulers_online),
     input_hashes: file_hashes.(evidence_files),
     library_hashes: file_hashes.(Path.wildcard(Path.expand("../lib/**/*.ex", __DIR__))),
+    guard_failures: Enum.reverse(Process.get(:performance_failures)),
     warmups: 2,
     timed_samples: 5,
     memory_sample_interval_ms: 10,
@@ -471,11 +480,25 @@ if report_path do
       )
 
       if workload.median_ms > maximum_ms do
-        raise "#{workload.name} exceeded the cumulative wall-clock allowance: " <>
-                "#{workload.median_ms} ms versus fixed #{baseline_ms} ms, allowed +10%"
+        record_failure.(
+          "#{workload.name} exceeded the cumulative wall-clock allowance: " <>
+            "#{workload.median_ms} ms versus fixed #{baseline_ms} ms, allowed +10%"
+        )
       end
     end
 
-    IO.puts("PERFORMANCE_MILESTONE status=PASS allowance_percent=10 baseline=#{baseline_path}")
   end
+end
+
+case Enum.reverse(Process.get(:performance_failures)) do
+  [] ->
+    IO.puts("PERFORMANCE_REGRESSION status=PASS")
+
+    if baseline_path do
+      IO.puts("PERFORMANCE_MILESTONE status=PASS allowance_percent=10 baseline=#{baseline_path}")
+    end
+
+  failures ->
+    IO.puts("PERFORMANCE_REGRESSION status=FAIL failures=#{length(failures)}")
+    raise Enum.join(failures, "\n\n")
 end

@@ -34,6 +34,54 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
     end
   end
 
+  @doc "Preserves canonical XML attribute spelling before HTML-oriented style projection."
+  @spec align_xml_source(map(), map()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def align_xml_source(document, summary) do
+    sources = Enum.sort_by(summary.source_nodes, & &1.index)
+    {children, remaining} = align_xml_children(document.children, sources)
+
+    if remaining == [],
+      do: {:ok, %{document | children: children}},
+      else: invalid("SVG XML source and parsed extraction tree have different structures", "SVG")
+  catch
+    :svg_xml_structure ->
+      invalid("SVG XML source and parsed extraction tree have different structures", "SVG")
+  end
+
+  defp align_xml_children(children, sources) do
+    Enum.map_reduce(children, sources, fn child, sources ->
+      case {child, sources} do
+        {%{type: :element}, [source | sources]} ->
+          qualified =
+            Map.filter(child.attributes, fn {name, _} ->
+              name == "xmlns" or String.contains?(name, ":")
+            end)
+
+          attributes = Map.merge(qualified, source.attributes)
+          {children, sources} = align_xml_children(child.children, sources)
+
+          spellings =
+            Map.new(source.attributes, fn {name, _} -> {String.downcase(name, :ascii), name} end)
+
+          order =
+            Enum.map(Map.get(child, :attribute_order, Map.keys(child.attributes)), fn name ->
+              if Map.has_key?(qualified, name),
+                do: name,
+                else: Map.get(spellings, String.downcase(name, :ascii), name)
+            end)
+
+          child = %{child | tag: source.tag, attributes: attributes, children: children}
+          {Map.put(child, :attribute_order, order), sources}
+
+        {%{type: :element}, []} ->
+          throw(:svg_xml_structure)
+
+        _ ->
+          {child, sources}
+      end
+    end)
+  end
+
   @doc false
   @spec validate_node(map()) :: :ok | {:error, {atom(), map()}}
   def validate_node(node) do
@@ -69,29 +117,43 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
   @doc false
   @spec validate_structure(map()) :: :ok | {:error, {atom(), map()}}
   def validate_structure(node) do
-    if node.tag in ~w(rect circle ellipse line polyline polygon path) and
-         Enum.any?(
-           node.children,
-           &(Map.get(&1, :type) == :element and Map.get(&1, :tag) not in ~w(title desc))
-         ) do
-      invalid(
-        "SVG graphics elements may contain descriptive metadata, not nested artwork",
-        node.tag
-      )
-    else
-      :ok
+    cond do
+      node.tag == "textPath" and
+          not Enum.any?(~w(href xlink:href path), &Map.has_key?(node.attributes, &1)) ->
+        invalid("SVG textPath requires a same-scene #id href or inline path", "textPath href")
+
+      node.tag in ~w(rect circle ellipse line polyline polygon path) and
+          Enum.any?(
+            node.children,
+            &(Map.get(&1, :type) == :element and Map.get(&1, :tag) not in ~w(title desc))
+          ) ->
+        invalid(
+          "SVG graphics elements may contain descriptive metadata, not nested artwork",
+          node.tag
+        )
+
+      true ->
+        :ok
     end
   end
 
   @doc "Admits an existing parsed SVG source tree with common root policy and nonroot syntax validation."
   @spec validate_source_tree(map()) :: :ok | {:error, {atom(), map()}}
   def validate_source_tree(root) do
-    Enum.reduce_while(tree_nodes(root), :ok, fn {node, _}, :ok ->
+    Enum.reduce_while(tree_nodes(root), :ok, fn {node, ancestors}, :ok ->
       result =
         cond do
-          Map.get(node, :namespace) != :svg -> :ok
-          node == root -> validate_converter_node(node)
-          true -> validate_node(node)
+          Map.get(node, :namespace) != :svg ->
+            :ok
+
+          node.tag in ~w(tspan textPath) and "text" not in ancestors ->
+            invalid("SVG #{node.tag} requires an enclosing text element", node.tag)
+
+          node == root ->
+            validate_converter_node(node)
+
+          true ->
+            validate_node(node)
         end
 
       case result do

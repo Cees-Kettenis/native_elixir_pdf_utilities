@@ -234,25 +234,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave5Test do
       html =
         "<iframe srcdoc='#{escape("<body style=\"overflow:hidden\">" <> content <> "</body>")}'></iframe>"
 
-      assert {:ok, pdf} = HtmlToPdf.render(html, forms: :static)
-      assert {:error, {:no_extractable_text, diagnostic}} = Text.extract(pdf, layout: false)
-      assert diagnostic.stage == :text_extraction and diagnostic.reason == :no_extractable_text
-      assert {:ok, %{pages: [%{spans: []}]}} = Text.extract_spans(pdf)
-      assert {:ok, []} = Forms.fields(pdf)
-      assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
-
-      child_forms =
-        for {ref, %{value: %{"Subtype" => {:name, "Form"}}}} <- document.objects,
-            do: ref
-
-      assert child_forms != []
-
-      for ref <- child_forms do
-        assert {:ok, stream} =
-                 NativeElixirPdfUtilities.Pdf.Reader.decoded_stream(document, {:ref, ref})
-
-        refute Regex.match?(~r/\b(?:BT|Tj|TJ|Do|f|S)\b/, stream)
-      end
+      assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, forms: :static)
+      assert diagnostic.stage == :layout
+      assert diagnostic.source == "foreignObject"
+      assert diagnostic.message =~ "does not render foreignObject"
     end
 
     child =

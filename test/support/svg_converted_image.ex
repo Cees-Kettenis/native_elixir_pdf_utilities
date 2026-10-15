@@ -16,7 +16,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.SvgConvertedImage do
     refute pdf =~ "/Subtype /Type3"
     assert {:ok, document} = Reader.read(pdf)
 
-    {_reference, image} =
+    {reference, image} =
       Enum.find(document.objects, fn {_reference, object} ->
         match?(
           %{value: %{"Subtype" => {:name, "Image"}, "ColorSpace" => {:name, "DeviceRGB"}}},
@@ -24,16 +24,16 @@ defmodule NativeElixirPdfUtilities.TestSupport.SvgConvertedImage do
         )
       end)
 
-    assert image.value["Filter"] == {:name, "FlateDecode"}
-    data = :zlib.uncompress(image.stream)
+    assert image.value["Filter"] in [nil, {:name, "FlateDecode"}]
+    assert {:ok, data} = Reader.decoded_stream(document, {:ref, reference})
     assert byte_size(data) == image.value["Width"] * image.value["Height"] * 3
 
     alpha =
       case image.value["SMask"] do
         {:ref, _} = reference ->
           mask = document.objects[elem(reference, 1)]
-          assert mask.value["Filter"] == {:name, "FlateDecode"}
-          alpha = :zlib.uncompress(mask.stream)
+          assert mask.value["Filter"] in [nil, {:name, "FlateDecode"}]
+          assert {:ok, alpha} = Reader.decoded_stream(document, reference)
           assert byte_size(alpha) == image.value["Width"] * image.value["Height"]
           alpha
 

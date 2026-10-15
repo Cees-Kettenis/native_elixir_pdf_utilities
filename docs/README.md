@@ -44,3 +44,6 @@ Neither is needed for the common tasks above.
 
 See [Licenses](licenses.md) for the project and bundled-data notices, and the
 [Changelog](../CHANGELOG.md) for released changes.
+
+For the current 1.1.0 development status, see the
+[work plan](milestone-1.1.0-work-plan.md).

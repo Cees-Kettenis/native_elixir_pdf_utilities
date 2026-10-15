@@ -2845,7 +2845,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     """
 
     assert {:ok, dom} = HtmlParser.parse(html)
-    assert {:ok, styled_tree} = Style.compute(dom)
+    # Pin the bundled DejaVu fallback used by the metric assertions below.
+    assert {:ok, styled_tree} = Style.compute(dom, system_font_discovery: false)
     [container] = styled_tree.children
 
     [

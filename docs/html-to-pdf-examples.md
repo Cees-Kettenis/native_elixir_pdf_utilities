@@ -1922,6 +1922,6 @@ the entire initial value. For example, `pattern="[[a-z]&&[^aeiou]]+"` accepts
 violations remain renderable form state. Initial URL input values use WHATWG
 parsing without a base, independently of resource loading and authorization.
 Compilation, native allocations, recursive depth and matching work are bounded
-by `max_html_pattern_compile_work`, `max_html_form_native_allocation_bytes`,
+by `max_html_pattern_compile_work`, `max_html_form_value_memory_bytes`,
 `max_html_pattern_depth` and `max_html_pattern_match_work` in `Limits`. Exhaustion
 returns the shared resource diagnostic instead of a fabricated mismatch.

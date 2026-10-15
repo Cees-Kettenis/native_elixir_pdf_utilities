@@ -30,8 +30,12 @@ source tests exercise real PNG pixels and PDF image embedding. Original browser
 fixtures and strict tolerances remain unchanged. SVG foreignObject HTML returns an explicit `unsupported_html` diagnostic from
 `SvgConverterValidator` at the layout stage. The whole input is rejected because
 the converter cannot paint that HTML; its descendants are never silently omitted.
-Other converter painting differences remain real visual failures under the
-unchanged browser thresholds.
+Non-scaling strokes and SVG2 inline `textPath` path data also return explicit
+converter diagnostics. Existing rendering expectations for those features must
+assert the diagnostic while preserving the original Chromium reference. A
+limitation case is not a successful pixel comparison. Other painting differences
+remain failures under the unchanged browser thresholds until their causes are
+verified.
 
 Converter preparation reserves the validated canvas dimensions and decoded image
 planes against the shared limits. Repeated referenced images charge each

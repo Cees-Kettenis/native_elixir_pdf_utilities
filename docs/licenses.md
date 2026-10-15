@@ -302,3 +302,14 @@ They share the complete [SIL Open Font License](../test/fixtures/html_to_pdf/bro
 The [reference generator](../scripts/generate-math-glyph-reference.py) records
 source and derivative hashes and verifies retained outlines, advances and hints.
 These subsets are test assets; the library's bundled STIX face is unmodified.
+
+## Unicode line breaking and emoji data
+
+The Elixir line-break tables retain the Unicode 15.0 automaton from
+`unicode-linebreak` 0.1.5 under its
+[Apache 2.0 license](../priv/licenses/unicode-linebreak-APACHE-2.0.txt).
+ECMAScript Unicode string-property tables retain the generated data previously
+provided by `regress` 0.12 under its
+[MIT license](../priv/licenses/unicode-string-properties-MIT.txt).
+Both are immutable data used by Elixir code. Their Rust implementations are not
+included in this library.

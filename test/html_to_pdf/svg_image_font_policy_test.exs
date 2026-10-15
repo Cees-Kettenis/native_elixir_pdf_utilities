@@ -10,6 +10,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImageFontPolicyTest do
     :ok
   end
 
+  test "shape-only parents carry independently permitted child font bytes to the converter" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{SvgRasterizer, PngDecoder}
+
+    source =
+      "<svg width='60' height='20'><image href='svg-resource:child' width='60' height='20'/></svg>"
+
+    child = "<svg width='60' height='20'><text y='15' font-size='12'>Child Ω</text></svg>"
+
+    context = %{
+      mode: :inline,
+      resources: %{"svg-resource:child" => %{data: child, media_type: "image/svg+xml"}}
+    }
+
+    assert {:ok, png} =
+             SvgRasterizer.rasterize(source, [], nil, [], context, system_font_discovery: true)
+
+    assert {:ok, image} = PngDecoder.decode(png, nil, false)
+    assert Enum.any?(:binary.bin_to_list(image.alpha_data), &(&1 > 0))
+
+    assert {:error, {:unsupported_html, diagnostic}} =
+             SvgRasterizer.rasterize(source, [], nil, [], context, system_font_discovery: false)
+
+    assert diagnostic.message =~ "font"
+    assert diagnostic.source == "SVG text"
+
+    fonts = [%{data: File.read!("priv/fonts/dejavu/DejaVuSans.ttf"), family: "Child font"}]
+
+    assert {:ok, png} =
+             SvgRasterizer.rasterize(source, [], nil, fonts, context,
+               system_font_discovery: false
+             )
+
+    assert {:ok, image} = PngDecoder.decode(png, nil, false)
+    assert Enum.any?(:binary.bin_to_list(image.alpha_data), &(&1 > 0))
+  end
+
   test "the genuine shape-only summary suppresses default discovery under zero font budgets" do
     assert {:ok, summary} =
              SvgValidator.validate_processing(

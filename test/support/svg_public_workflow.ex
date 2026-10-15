@@ -120,24 +120,33 @@ defmodule NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow do
     assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
 
     images =
-      for {_reference, %{value: value} = image} <- document.objects,
+      for {reference, %{value: value} = image} <- document.objects,
           value["Subtype"] == {:name, "Image"} and value["ColorSpace"] == {:name, "DeviceRGB"},
-          do: image
+          do: {reference, image}
 
     assert images != []
 
     planes =
-      Enum.map(images, fn image ->
-        assert image.value["Filter"] == {:name, "FlateDecode"}
-        pixels = :zlib.uncompress(image.stream)
+      Enum.map(images, fn {reference, image} ->
+        assert image.value["Filter"] in [nil, {:name, "FlateDecode"}]
+
+        assert {:ok, pixels} =
+                 NativeElixirPdfUtilities.Pdf.Reader.decoded_stream(document, {:ref, reference})
+
         assert byte_size(pixels) == image.value["Width"] * image.value["Height"] * 3
 
         alpha =
           case image.value["SMask"] do
             {:ref, reference} ->
               mask = document.objects[reference]
-              assert mask.value["Filter"] == {:name, "FlateDecode"}
-              alpha = :zlib.uncompress(mask.stream)
+              assert mask.value["Filter"] in [nil, {:name, "FlateDecode"}]
+
+              assert {:ok, alpha} =
+                       NativeElixirPdfUtilities.Pdf.Reader.decoded_stream(
+                         document,
+                         {:ref, reference}
+                       )
+
               assert byte_size(alpha) == image.value["Width"] * image.value["Height"]
               alpha
 

@@ -333,6 +333,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
       attributes
       |> Map.put("display", if(node.style.display == :none, do: "none", else: "inline"))
 
+    # Host CSS has already selected the final presentation values. XML names
+    # with different case are inert to SVG painting; do not emit a second
+    # spelling beside a projected property and turn it into an HTML duplicate.
+    projected_names = Map.values(properties) ++ ~w(width height x y)
+
+    attributes =
+      Map.reject(attributes, fn {name, _} ->
+        canonical = String.downcase(name, :ascii)
+        name != canonical and canonical in projected_names and Map.has_key?(attributes, canonical)
+      end)
+
     children =
       Enum.map_join(node.children, "", fn child ->
         case child do

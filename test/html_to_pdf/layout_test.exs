@@ -586,7 +586,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
             "<div style='#{parent}'><select style='display:#{display};font-size:#{font_size}pt;line-height:#{line_height}'>#{options}</select></div>"
 
           assert {:ok, dom} = HtmlParser.parse(html)
-          assert {:ok, styled} = Style.compute(dom)
+          assert {:ok, styled} = Style.compute(dom, system_font_discovery: false)
           assert {:ok, layout} = Layout.layout(styled, page_size: {240, 120}, margin: 0)
           box = Enum.find(layout.boxes, &is_map(Map.get(&1, :form_control)))
           assert_in_delta box.height, expected_height, 0.0001

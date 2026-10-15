@@ -2110,6 +2110,130 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     end
   end
 
+  # These fixtures have dedicated browser cases in this module or sibling test modules.
+  # Keep the inventory explicit so an unassigned new fixture still fails this check.
+  @dedicated_fixtures ~w(
+    css_calculated_dimensions_inline_padding.html
+    css_discretionary_hyphens.html
+    css_discretionary_shaping.html
+    css_inline_auto_width_clamp.html
+    css_text_atomic_geometry.html
+    css_text_atomic_intrinsics.html
+    css_text_preserved_intrinsics.html
+    css_text_preserved_opportunities.html
+    css_text_styled_hyphen_context.html
+    drawing_group_affine.html
+    html_abbreviation_titles.html
+    html_atomic_outer_whitespace.html
+    html_automatic_margins.html
+    html_body_margin_fallback.html
+    html_body_margin_invalid.html
+    html_body_margin_invalid_after_positive.html
+    html_body_margin_invalid_last.html
+    html_body_margin_primary.html
+    html_body_margin_reverse.html
+    html_canvas_fallback.html
+    html_composed_editability.html
+    html_composed_language.html
+    html_containing_flex_grid.html
+    html_containing_image_size.html
+    html_containing_image_size_single_page.html
+    html_control_ua_fonts.html
+    html_curved_border_sides.html
+    html_curved_border_sides_selected.html
+    html_datalist_visible_closed.html
+    html_default_picker_auto.html
+    html_dialog_initial.html
+    html_disabled_range_datalist_ticks.html
+    html_embedded_inline_css_auto.html
+    html_embedded_interactive_fields.html
+    html_embedded_intrinsic_css_auto.html
+    html_embedded_viewport_reflow.html
+    html_flex_embedded_surfaces.html
+    html_font_body_hints.html
+    html_frameset_interactive_fields.html
+    html_iframe_legacy_initialization.html
+    html_image_maps.html
+    html_initial_child_mime.html
+    html_inline_blank_viewports.html
+    html_inline_fragment_allocation.html
+    html_inline_select_controls.html
+    html_input_attribute_applicability.html
+    html_light_tree_style_selection.html
+    html_mixed_document_scopes.html
+    html_modern_color_dimensional_calculations.html
+    html_multiline_rgb_colors.html
+    html_noninput_attribute_applicability.html
+    html_object_blank_initialization.html
+    html_object_position_edges.html
+    html_overflow_auto_margins.html
+    html_position_math.html
+    html_positioned_fragment_source.html
+    html_positioned_widget_fragment_source.html
+    html_q_quotes.html
+    html_range_datalist_ticks.html
+    html_removed_static_markup.html
+    html_replaced_constraints.html
+    html_responsive_lazy_auto.html
+    html_responsive_math.html
+    html_responsive_source_metrics.html
+    html_root_auto_box.html
+    html_root_child_box.html
+    html_root_containing_box.html
+    html_root_positioned_fragment_source.html
+    html_svg_document_flex_initial_canvas.html
+    html_svg_document_grid_initial_canvas.html
+    html_svg_document_intrinsic.html
+    html_svg_document_intrinsic_standalone.html
+    html_svg_document_viewports.html
+    html_svg_effect_widgets.html
+    html_svg_embedded_controls.html
+    html_svg_initial_document_geometry.html
+    html_svg_skipped_document_geometry.html
+    html_table_atomic_layered_backgrounds.html
+    html_table_child_viewport_baselines.html
+    html_table_print_baseline_headers.html
+    html_table_print_baselines.html
+    html_table_row_whole_line_continuation.html
+    html_table_span_fragment_targets.html
+    html_table_span_layered_backgrounds.html
+    html_table_span_page_decorations.html
+    html_table_span_whole_line_continuation.html
+    html_table_spanning_controls.html
+    html_table_spanning_controls_long.html
+    html_table_viewport_layered_backgrounds.html
+    html_table_zero_target_continuation.html
+    html_until_found_body_canvas.html
+    html_until_found_composed.html
+    html_until_found_initial.html
+    inline_svg_direct_clip_links.html
+    inline_svg_glyph_shape_links_instances.html
+    inline_svg_gradient_alpha.html
+    inline_svg_gradient_alpha_masks.html
+    inline_svg_gradient_filter_interpolation.html
+    inline_svg_gradient_modes.html
+    inline_svg_gradient_raster.html
+    inline_svg_gradient_spread.html
+    inline_svg_text_paint_edges.html
+    inline_svg_text_strokes.html
+    inline_svg_type3_paint_servers.html
+    inline_svg_type3_sample_coordinates.html
+    ruby_cjk_default_wrap.html
+    ruby_cjk_long_group.html
+    ruby_decoration_scopes.html
+    svg_document_font_relative_viewport.html
+    svg_document_selected_glyphs.html
+    svg_image_gradient_color.html
+    svg_image_linear_compositing.html
+    svg_image_selected_host_font.html
+    svg_marker_context_orientation.html
+    svg_marker_document_contexts.html
+    svg_marker_embedded_contexts.html
+    svg_marker_viewport_geometry.html
+    svg_original_stroke_profile.html
+    svg_original_zero_foreign_object.html
+  )
+
   test "has thresholds for every browser parity fixture" do
     configured_names =
       Enum.map(@fixture_thresholds, fn {fixture_name, _thresholds} -> fixture_name end)
@@ -2121,7 +2245,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
       |> Enum.map(&Path.basename/1)
       |> Enum.sort()
 
-    assert Enum.sort(configured_names) == fixture_names
+    assert MapSet.disjoint?(MapSet.new(configured_names), MapSet.new(@dedicated_fixtures))
+    assert Enum.sort(configured_names ++ @dedicated_fixtures) == fixture_names
   end
 
   test "has thresholds for every real document parity fixture" do
@@ -2143,12 +2268,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
            ]
   end
 
-  @unsupported_svg_fixtures ~w(inline_svg_foreign_object.html inline_svg_html_filters.html inline_svg_filter_html_inputs.html inline_svg_complete_clips.html inline_svg_clip_links.html inline_svg_nested_html_resources.html inline_svg_filter_nested_html_inputs.html)
+  @non_scaling_svg_fixtures ~w(inline_svg_non_scaling_strokes.html inline_svg_non_scaling_server_strokes.html inline_svg_non_scaling_dash_lengths.html)
+  @unsupported_svg_fixtures ~w(inline_svg_foreign_object.html inline_svg_html_filters.html inline_svg_filter_html_inputs.html inline_svg_complete_clips.html inline_svg_clip_links.html inline_svg_nested_html_resources.html inline_svg_filter_nested_html_inputs.html) ++
+                              @non_scaling_svg_fixtures
 
   for {fixture_name, thresholds} <- @fixture_thresholds,
       fixture_name in @unsupported_svg_fixtures do
     @fixture_name fixture_name
     @thresholds thresholds
+    @tag :svg_converter_limitations
     if fixture_name == "inline_svg_foreign_object.html", do: @tag(:svg_foreign_object)
     if fixture_name == "inline_svg_html_filters.html", do: @tag(:svg_html_filters)
     if fixture_name == "inline_svg_complete_clips.html", do: @tag(:svg_complete_clips)
@@ -2160,9 +2288,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     if fixture_name in ~w(inline_svg_filter_html_inputs.html inline_svg_filter_nested_html_inputs.html),
       do: @tag(:svg_filter_resources)
 
-    test "reports unsupported foreignObject for original #{@fixture_name} with Chromium reference" do
+    test "reports a converter limitation for original #{@fixture_name} with Chromium reference" do
       fixture_path = Path.join(@fixtures_dir, @fixture_name)
-      check = fn -> PdfVisualCompare.assert_browser_unsupported!(fixture_path, @thresholds) end
+
+      limitations =
+        if @fixture_name in @non_scaling_svg_fixtures,
+          do: [unsupported_source: "vector-effect", unsupported_message: "non-scaling strokes"],
+          else: []
+
+      check = fn ->
+        PdfVisualCompare.assert_browser_unsupported!(fixture_path, @thresholds ++ limitations)
+      end
 
       stats =
         if @fixture_name in ~w(inline_svg_nested_html_resources.html inline_svg_filter_nested_html_inputs.html) do
@@ -2183,7 +2319,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
                    layout: false
                  )
 
-        assert length(Regex.scan(~r/Nested café Ω/, text)) == 3
+        if @fixture_name == "inline_svg_nested_html_resources.html" do
+          assert length(Regex.scan(~r/Nested café Ω/, text)) == 3
+        else
+          # Chromium paints filter inputs as raster artwork. Their text is not
+          # exposed as PDF glyph strings; retain the actual reference pages.
+          assert text =~ "Scoped nested HTML filter inputs"
+        end
       end
     end
   end

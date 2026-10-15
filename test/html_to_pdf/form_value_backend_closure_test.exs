@@ -10,216 +10,129 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormValueBackendClosureTest do
     :ok
   end
 
-  test "native helper absence reports actionable rebuild failure without altering caller flags" do
-    executable =
-      Application.app_dir(:native_elixir_pdf_utilities, "priv/native/native_form_values")
+  test "memory exhaustion preserves caller flags and unrelated messages" do
+    Limits.install(%{Limits.effective() | max_html_form_value_memory_bytes: 1})
+    flags = Process.info(self(), :trap_exit)
+    marker = make_ref()
+    send(self(), {:caller_message, marker})
+    assert {:ok, request} = HtmlFormValueValidator.prepare(:pattern, "[a-z]+", ["abc"])
+    assert {:limit, :max_html_form_value_memory_bytes} = result = FormValueBackend.run(request)
 
-    {:ok, stat} = File.stat(executable)
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlFormValueValidator.result(result)
 
-    HtmlValidator.with_render_budget(fn ->
-      assert {:ok, request} = HtmlFormValueValidator.prepare(:url, "https://example.com/", [])
-      flags = Process.info(self(), :trap_exit)
-
-      try do
-        assert :ok = File.chmod(executable, 0o600)
-        assert :unavailable = FormValueBackend.run(request)
-
-        assert {:error, {:native_form_backend_unavailable, diagnostic}} =
-                 HtmlFormValueValidator.result(:unavailable)
-
-        assert diagnostic.stage == :html
-        assert diagnostic.operation == :initial_form_value
-        assert diagnostic.message =~ "rebuild"
-        assert Process.info(self(), :trap_exit) == flags
-      after
-        File.chmod!(executable, stat.mode)
-      end
-    end)
+    assert diagnostic.message =~ "max_html_form_value_memory_bytes"
+    assert Process.info(self(), :trap_exit) == flags
+    assert_receive {:caller_message, ^marker}
+    refute_receive {:EXIT, _, _}
+    refute_receive {:DOWN, _, _, _, _}
   end
 
-  test "actual helper allocation exit preserves caller mailbox and maps the configured limit" do
-    assert :ok = Limits.install(%{Limits.effective() | max_html_form_native_allocation_bytes: 1})
+  test "worker death returns unavailable and consumes its monitor" do
+    assert {:ok, request} =
+             HtmlFormValueValidator.prepare(:pattern, String.duplicate("a?", 5_000), [
+               String.duplicate("a", 5_000)
+             ])
 
-    HtmlValidator.with_render_budget(fn ->
-      assert {:ok, request} = HtmlFormValueValidator.prepare(:pattern, "[a-z]+", ["abc"])
-      assert {:exit, 73} = result = FormValueBackend.run(request)
-
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               HtmlFormValueValidator.result(result)
-
-      assert diagnostic.message =~ "max_html_form_native_allocation_bytes"
-      refute_receive {:EXIT, _, _}
-    end)
-  end
-
-  test "an actual disposable worker death returns unavailable without leaking its monitor" do
-    HtmlValidator.with_render_budget(fn ->
-      assert {:ok, request} =
-               HtmlFormValueValidator.prepare(:pattern, String.duplicate("a?", 5_000), [
-                 String.duplicate("a", 5_000)
-               ])
-
-      caller =
-        Task.async(fn ->
-          receive do
-            :run -> FormValueBackend.run(request)
-          end
-        end)
-
-      :erlang.trace(caller.pid, true, [:procs, {:tracer, self()}])
-      send(caller.pid, :run)
-      assert_receive {:trace, caller_pid, :spawn, worker, _}, 1_000
-      assert caller_pid == caller.pid
-      Process.exit(worker, :kill)
-      assert :unavailable = Task.await(caller)
-    end)
-  end
-
-  test "closing the actual native worker port remains isolated from the caller" do
-    HtmlValidator.with_render_budget(fn ->
-      assert {:ok, request} =
-               HtmlFormValueValidator.prepare(:pattern, "(a+)+b", [String.duplicate("a", 500_000)])
-
-      caller =
-        Task.async(fn ->
-          receive do
-            :run -> FormValueBackend.run(request)
-          end
-        end)
-
-      Code.ensure_loaded!(FormValueBackend)
-      assert :erlang.trace_pattern({FormValueBackend, :receive_result, 4}, true, [:local]) == 1
-      :erlang.trace(caller.pid, true, [:procs, :call, :set_on_spawn, {:tracer, self()}])
-
-      try do
-        send(caller.pid, :run)
-        assert_receive {:trace, caller_pid, :spawn, worker, _}, 1_000
-        assert caller_pid == caller.pid
-
-        assert_receive {:trace, ^worker, :call,
-                        {FormValueBackend, :receive_result, [port, _, _, nil]}},
-                       1_000
-
-        assert :erlang.suspend_process(worker)
-
-        try do
-          assert {:connected, ^worker} = Port.info(port, :connected)
-          assert Port.close(port)
-        after
-          :erlang.resume_process(worker)
+    caller =
+      Task.async(fn ->
+        receive do
+          :run -> FormValueBackend.run(request)
         end
+      end)
 
-        assert Task.await(caller, 6_000) in [:unavailable, :timeout]
-        refute_receive {:EXIT, ^port, _}
-      after
-        :erlang.trace_pattern({FormValueBackend, :receive_result, 4}, false, [:local])
-      end
-    end)
+    :erlang.trace(caller.pid, true, [:procs, {:tracer, self()}])
+    send(caller.pid, :run)
+    assert_receive {:trace, caller_pid, :spawn, worker, _}, 1_000
+    assert caller_pid == caller.pid
+    Process.exit(worker, :kill)
+    assert :unavailable = Task.await(caller)
   end
 
-  test "native timeout after readiness retains the actual exit when the payload send meets a closed port" do
-    assert :ok = Limits.install(%{Limits.effective() | max_html_form_native_timeout_ms: 250})
+  test "a running worker that stalls is killed at its nonzero deadline" do
+    Limits.install(%{Limits.effective() | max_html_form_value_timeout_ms: 250})
 
-    HtmlValidator.with_render_budget(fn ->
-      assert {:ok, request} = HtmlFormValueValidator.prepare(:pattern, "a+", ["aaaa"])
+    assert {:ok, request} =
+             HtmlFormValueValidator.prepare(:pattern, String.duplicate("a?", 30_000), ["a"])
 
-      caller =
-        Task.async(fn ->
-          receive do
-            :run -> FormValueBackend.run(request)
-          end
-        end)
-
-      Code.ensure_loaded!(FormValueBackend)
-      assert :erlang.trace_pattern({FormValueBackend, :receive_result, 4}, true, [:local]) == 1
-      :erlang.trace(caller.pid, true, [:procs, :call, :set_on_spawn, {:tracer, self()}])
-
-      try do
-        send(caller.pid, :run)
-        assert_receive {:trace, caller_pid, :spawn, worker, _}, 1_000
-        assert caller_pid == caller.pid
-
-        assert_receive {:trace, ^worker, :call,
-                        {FormValueBackend, :receive_result, [port, nil, _, payload]}},
-                       1_000
-
-        assert payload == request.payload
-        assert :erlang.suspend_process(worker)
-
-        try do
-          assert {:connected, ^worker} = Port.info(port, :connected)
-          deadline = System.monotonic_time(:millisecond) + 5_000
-          wait_for_native_exit(port, deadline)
-          assert Port.info(port) == nil
-          assert {:messages, messages} = Process.info(worker, :messages)
-          assert {port, {:data, <<1>>}} in messages
-          assert {port, {:exit_status, 78}} in messages
-        after
-          :erlang.resume_process(worker)
+    caller =
+      Task.async(fn ->
+        receive do
+          :run -> FormValueBackend.run(request)
         end
+      end)
 
-        assert {:exit, 78} = result = Task.await(caller, 6_000)
+    :erlang.trace(caller.pid, true, [:procs, {:tracer, self()}])
+    send(caller.pid, :run)
+    assert_receive {:trace, caller_pid, :spawn, worker, _}, 1_000
+    assert caller_pid == caller.pid
+    :erlang.suspend_process(worker)
+    :erlang.trace(caller.pid, false, [:procs])
+    on_exit(fn -> if Process.alive?(worker), do: Process.exit(worker, :kill) end)
 
-        assert {:error, {:resource_limit_exceeded, diagnostic}} =
-                 HtmlFormValueValidator.result(result)
-
-        assert diagnostic.message =~ "max_html_form_native_timeout_ms"
-        refute_receive {:EXIT, ^port, _}
-      after
-        :erlang.trace_pattern({FormValueBackend, :receive_result, 4}, false, [:local])
-      end
-    end)
+    assert :timeout == Task.await(caller)
+    refute Process.alive?(worker)
+    refute_receive {:DOWN, _, _, _, _}
+    refute_receive {_, {:ok, _, _}}
   end
 
-  defp wait_for_native_exit(port, deadline) do
-    if Port.info(port) != nil do
-      assert System.monotonic_time(:millisecond) < deadline
-      Process.sleep(5)
-      wait_for_native_exit(port, deadline)
-    end
-  end
-
-  test "zero native ceilings charge actual work and retain unused URL match allowance" do
+  test "configured zero ceilings identify the actual consumed resource" do
     original = Limits.effective()
 
-    for {limit, operation, source, values, status} <- [
-          {:max_html_form_native_allocation_bytes, :pattern, "a", ["a"], 73},
-          {:max_html_pattern_compile_work, :pattern, "a", ["a"], 74},
-          {:max_html_pattern_depth, :pattern, "(a)", ["a"], 76},
-          {:max_html_pattern_match_work, :pattern, "a", ["a"], 75}
+    for {limit, source} <- [
+          {:max_html_form_value_memory_bytes, "a"},
+          {:max_html_pattern_compile_work, "a"},
+          {:max_html_pattern_depth, "(a)"},
+          {:max_html_pattern_match_work, "a"}
         ] do
-      assert :ok = Limits.install(Map.put(original, limit, 0))
-
-      HtmlValidator.with_render_budget(fn ->
-        assert {:ok, request} = HtmlFormValueValidator.prepare(operation, source, values)
-        assert {:exit, ^status} = result = FormValueBackend.run(request)
-
-        assert {:error, {:resource_limit_exceeded, diagnostic}} =
-                 HtmlFormValueValidator.result(result)
-
-        assert diagnostic.message =~ Atom.to_string(limit)
-      end)
-    end
-
-    assert :ok = Limits.install(%{original | max_html_pattern_match_work: 0})
-
-    HtmlValidator.with_render_budget(fn ->
-      assert {:ok, request} = HtmlFormValueValidator.prepare(:url, "https://example.com/", [])
-      assert {:ok, _} = result = FormValueBackend.run(request)
-      assert {:ok, :valid_url} = HtmlFormValueValidator.result(result)
-    end)
-
-    assert :ok = Limits.install(%{original | max_html_form_native_timeout_ms: 0})
-
-    HtmlValidator.with_render_budget(fn ->
-      assert {:ok, request} = HtmlFormValueValidator.prepare(:pattern, "a", ["a"])
-      assert result = FormValueBackend.run(request)
-      assert result in [:timeout, {:exit, 78}]
+      Limits.install(Map.put(original, limit, 0))
+      assert {:ok, request} = HtmlFormValueValidator.prepare(:pattern, source, ["a"])
+      assert {:limit, ^limit} = result = FormValueBackend.run(request)
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                HtmlFormValueValidator.result(result)
 
-      assert diagnostic.message =~ "max_html_form_native_timeout_ms"
+      assert diagnostic.stage == :html
+      assert diagnostic.operation == :initial_form_value
+      assert diagnostic.message =~ Atom.to_string(limit)
+    end
+  end
+
+  test "URL validation does not consume unused pattern matching work" do
+    Limits.install(%{Limits.effective() | max_html_pattern_match_work: 0})
+
+    HtmlValidator.with_render_budget(fn ->
+      assert {:ok, request} = HtmlFormValueValidator.prepare(:url, "https://example.test", [])
+      assert {:ok, :valid_url} = HtmlFormValueValidator.result(FormValueBackend.run(request))
     end)
+  end
+
+  test "deadline exhaustion leaves later calls and the caller mailbox usable" do
+    original = Limits.effective()
+    Limits.install(%{original | max_html_form_value_timeout_ms: 0})
+
+    assert {:ok, request} =
+             HtmlFormValueValidator.prepare(:pattern, "(a+)+b", [String.duplicate("a", 50)])
+
+    assert :timeout = result = FormValueBackend.run(request)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlFormValueValidator.result(result)
+
+    assert diagnostic.message =~ "max_html_form_value_timeout_ms"
+    refute_receive {:DOWN, _, _, _, _}
+    refute_receive {_, {:ok, _, _}}
+    Limits.install(original)
+    assert {:ok, request} = HtmlFormValueValidator.prepare(:pattern, "a+", ["aaa"])
+    assert {:ok, :matched} = HtmlFormValueValidator.result(FormValueBackend.run(request))
+  end
+
+  test "worker failures retain actionable shared diagnostics" do
+    assert {:error, {:form_value_backend_unavailable, diagnostic}} =
+             HtmlFormValueValidator.result(:unavailable)
+
+    assert diagnostic.stage == :html
+    assert diagnostic.operation == :initial_form_value
+    assert diagnostic.message =~ "Elixir"
   end
 end

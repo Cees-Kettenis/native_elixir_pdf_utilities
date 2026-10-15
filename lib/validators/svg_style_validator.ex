@@ -176,7 +176,19 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
                 value
               end
 
-            {:cont, {:ok, [{property, value} | declarations]}}
+            error =
+              if property in ~w(font-family font-size font-weight font-style letter-spacing) do
+                source = property <> ":" <> value
+
+                NativeElixirPdfUtilities.Validators.CssValueValidator.declaration_error(source, [
+                  source
+                ])
+              end
+
+            case error do
+              nil -> {:cont, {:ok, [{property, value} | declarations]}}
+              {reason, diagnostic} -> {:halt, {:error, {reason, diagnostic}}}
+            end
           end
         else
           {:cont, {:ok, declarations}}

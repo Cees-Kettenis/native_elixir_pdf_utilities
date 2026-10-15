@@ -1,5 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSourceAdmissionTest do
   use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
 
   alias NativeElixirPdfUtilities.Validators.{
     SvgConverterValidator,
@@ -26,7 +27,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSourceAdmissionTest do
     source =
       "<svg xmlns='http://www.w3.org/2000/svg'><foreignObject width='8' height='4'><div xmlns='http://www.w3.org/1999/xhtml'>Visible source</div></foreignObject><defs><foreignObject width='8' height='4'><div xmlns='http://www.w3.org/1999/xhtml'>Definition source</div></foreignObject></defs></svg>"
 
-    assert {:ok, document} = SvgConverterValidator.prepare_extraction(source)
+    assert {:ok, document} = HtmlParser.parse_detailed(source)
     assert {:ok, root} = SvgSceneValidator.extraction_root(document)
     nodes = SvgSceneValidator.tree_nodes(root)
 

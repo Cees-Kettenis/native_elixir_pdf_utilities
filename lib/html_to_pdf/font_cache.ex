@@ -100,6 +100,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
     end)
   end
 
+  @doc "Reuses the stable PDF identity of validated font bytes without rehashing them on every registry load."
+  @spec identity(String.t(), binary()) :: String.t()
+  def identity(family, data) do
+    key = {:identity, family, data}
+
+    loader = fn _ ->
+      identity =
+        :crypto.hash(:sha256, [family, data])
+        |> Base.encode16(case: :lower)
+        |> binary_part(0, 12)
+
+      {:ok, identity}
+    end
+
+    result =
+      case cached(key, nil) do
+        {:hit, result} ->
+          result
+
+        :miss ->
+          case Process.whereis(__MODULE__) do
+            nil -> loader.(<<>>)
+            _ -> GenServer.call(__MODULE__, {:fetch, key, nil, <<>>, loader}, :infinity)
+          end
+      end
+
+    {:ok, identity} = result
+    identity
+  end
+
   @impl GenServer
   def init(options) do
     table =

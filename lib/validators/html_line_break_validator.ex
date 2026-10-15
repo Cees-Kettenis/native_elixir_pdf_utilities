@@ -2,10 +2,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
-  alias NativeElixirPdfUtilities.HtmlToPdf.NativeBackend
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
-  alias NativeElixirPdfUtilities.HtmlToPdf.NativeBackend.NativeBytes
-  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, NativeBackendValidator}
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.HtmlToPdf.UnicodeLineBreak
 
   @discretionary_characters ["\u00AD", "\u200B"]
 
@@ -20,13 +19,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
         HtmlValidator.reserve_render_resource(:max_layout_text_work, byte_size(text), :layout)
 
         if String.valid?(text) do
-          with :ok <- NativeBackendValidator.native_load_result(NativeBackend.load_native()) do
-            result = NativeBytes.unicode_line_breaks(text)
+          result = UnicodeLineBreak.opportunities(text)
 
-            with {:ok, word_hyphens} <- native_opportunity_plan(text, result) do
-              {:ok, css_space_opportunities(text, result, word_hyphens, break_spaces?)}
-            end
-          end
+          HtmlValidator.reserve_render_resource(
+            :max_layout_text_work,
+            byte_size(text) + length(result),
+            :layout
+          )
+
+          # The Elixir scanner produces these offsets directly. Protocol
+          # admission is needed only for externally supplied offset lists.
+          {:ok,
+           css_space_opportunities(text, result, word_hyphen_opportunities(text), break_spaces?)}
         else
           failure("line breaking requires valid UTF-8 text")
         end
@@ -48,8 +52,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
     with {:ok, _word_hyphens} <- native_opportunity_plan(text, result), do: :ok
   end
 
-  # Native result admission and printed word-hyphen opportunities share the
-  # same UTF-8 traversal rather than charging a second whole-text regex scan.
+  # Retained protocol admission also serves callers validating an offset list.
   defp native_opportunity_plan(text, result) do
     case {text, result} do
       {text, result} when is_binary(text) and is_list(result) and length(result) >= 0 ->
@@ -60,20 +63,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
         )
 
         if String.valid?(text) do
-          {grapheme_offsets, word_hyphens, _offset, _previous, _before_previous} =
+          {grapheme_offsets, _offset} =
             text
             |> String.graphemes()
-            |> Enum.reduce({MapSet.new(), [], 0, nil, nil}, fn cluster,
-                                                               {offsets, hyphens, offset,
-                                                                previous, before_previous} ->
-              hyphens =
-                if previous == "-" and Regex.match?(~r/\p{L}$/u, before_previous || "") and
-                     Regex.match?(~r/^\p{Nd}/u, cluster),
-                   do: [{offset, false} | hyphens],
-                   else: hyphens
-
+            |> Enum.reduce({MapSet.new(), 0}, fn cluster, {offsets, offset} ->
               offset = offset + byte_size(cluster)
-              {MapSet.put(offsets, offset), hyphens, offset, cluster, previous}
+              {MapSet.put(offsets, offset), offset}
             end)
 
           {valid?, _last} =
@@ -89,7 +84,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
             end)
 
           if valid? and (List.last(result) == {byte_size(text), true} or text == ""),
-            do: {:ok, word_hyphens},
+            do: {:ok, word_hyphen_opportunities(text)},
             else: failure("native Unicode line breaking returned an invalid grapheme boundary")
         else
           failure("native Unicode line breaking requires valid UTF-8 source text")
@@ -100,6 +95,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
     end
   catch
     {:render_resource_limit, error} -> error
+  end
+
+  defp word_hyphen_opportunities(text) do
+    if :binary.match(text, "-") == :nomatch do
+      []
+    else
+      Regex.scan(~r/\p{L}-(?=\p{Nd})/u, text, return: :index)
+      |> Enum.map(fn [{offset, bytes}] -> {offset + bytes, false} end)
+    end
   end
 
   @doc "Segments at shared Unicode and optional preserved-space opportunities, retaining exact text and preceding context."

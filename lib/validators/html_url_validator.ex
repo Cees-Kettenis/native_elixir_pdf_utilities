@@ -22,7 +22,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlValidator do
         }
   @type destination :: {:uri, String.t()} | {:fragment, String.t()}
 
-  @doc "Tests an initial URL input through the WHATWG URL parser without a base or resource access."
+  @doc "Tests an absolute initial URL input without a base or resource access."
   @spec valid_initial_input_url?(term()) ::
           {:ok, boolean()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def valid_initial_input_url?(value) do
@@ -33,6 +33,99 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlValidator do
              NativeElixirPdfUtilities.HtmlToPdf.FormValueBackend.run(request)
            ) do
       {:ok, state == :valid_url}
+    end
+  end
+
+  @doc "Admits an absolute initial input URL without granting resource access."
+  @spec absolute_input_url?(binary()) :: boolean()
+  def absolute_input_url?(source) do
+    source = normalize_reference(source)
+
+    case Regex.run(~r/\A([A-Za-z][A-Za-z0-9+.-]*):(.*)\z/s, source) do
+      [_, scheme, rest] ->
+        scheme = String.downcase(scheme, :ascii)
+
+        if scheme in ~w(http https ftp ws wss) do
+          # Special URL schemes treat backslashes as slashes before host parsing.
+          rest = rest |> String.replace("\\", "/") |> String.trim_leading("/")
+
+          case URI.new(
+                 scheme <> "://" <> URI.encode(rest, &(&1 == ?% or URI.char_unescaped?(&1)))
+               ) do
+            {:ok, %URI{host: host, port: port}} when is_binary(host) and host != "" ->
+              decoded = URI.decode(host)
+              valid_host? = not Regex.match?(~r/[\x00-\x20<>\\#\/?@^|%]/u, decoded)
+
+              address? =
+                if String.contains?(host, ":"),
+                  do: match?({:ok, _}, :inet.parse_ipv6_address(String.to_charlist(host))),
+                  else: valid_numeric_host?(decoded)
+
+              valid_host? and address? and (is_nil(port) or port in 0..65_535)
+
+            _ ->
+              false
+          end
+        else
+          # Non-special URLs may have opaque paths, including mailto: and data:.
+          if scheme == "file", do: not Regex.match?(~r/\A\/\/[^\/]*[:@]/, rest), else: true
+        end
+
+      _ ->
+        false
+    end
+  rescue
+    ArgumentError -> false
+  end
+
+  # URL Standard host parsing treats a numeric final label as an IPv4 address,
+  # including shortened, hexadecimal and octal spellings. It cannot fall back
+  # to a domain name when that address is out of range.
+  # https://url.spec.whatwg.org/#concept-ipv4-parser
+  defp valid_numeric_host?(host) do
+    parts = String.split(host, ".")
+    parts = if List.last(parts) == "", do: Enum.drop(parts, -1), else: parts
+    last = List.last(parts)
+
+    if Regex.match?(~r/\A[0-9]+\z/, last) or
+         Regex.match?(~r/\A0[xX][0-9a-fA-F]*\z/, last) do
+      numbers = Enum.map(parts, &ipv4_number/1)
+
+      length(numbers) <= 4 and Enum.all?(numbers, &is_integer/1) and
+        Enum.all?(Enum.drop(numbers, -1), &(&1 <= 255)) and
+        List.last(numbers) < Integer.pow(256, 5 - length(numbers))
+    else
+      true
+    end
+  end
+
+  defp ipv4_number(source) do
+    {radix, digits} =
+      case source do
+        <<"0", x, rest::binary>> when x in [?x, ?X] -> {16, rest}
+        <<"0", rest::binary>> when rest != "" -> {8, rest}
+        _ -> {10, source}
+      end
+
+    digits = String.trim_leading(digits, "0")
+
+    cond do
+      source == "" ->
+        nil
+
+      digits == "" ->
+        0
+
+      # An IPv4 component has at most 32 bits. Longer significant spellings
+      # cannot fit even in the least compact accepted radix, octal.
+      byte_size(digits) > 11 or not Regex.match?(~r/\A[0-9a-fA-F]+\z/, digits) ->
+        nil
+
+      true ->
+        case Integer.parse(digits, radix) do
+          {number, ""} when number >= 0 -> number
+          _ -> nil
+        end
     end
   end
 

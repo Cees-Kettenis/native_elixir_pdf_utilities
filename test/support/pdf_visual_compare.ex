@@ -147,10 +147,11 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     assert_svg_image_artwork!(pdf)
   end
 
-  @doc "Preserves the original Chromium reference while checking the native foreignObject diagnostic, without claiming visual parity."
+  @doc "Preserves the original Chromium reference while checking a known converter limitation, without claiming visual parity."
   @spec assert_browser_unsupported!(String.t(), keyword()) :: map()
   def assert_browser_unsupported!(fixture_path, opts \\ []) do
     context = prepare_browser_fixture!(fixture_path, opts)
+    source = Keyword.get(opts, :unsupported_source, "foreignObject")
 
     assert {:error,
             {:unsupported_html,
@@ -159,12 +160,12 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
                reason: :unsupported_html,
                operation: :convert,
                module: NativeElixirPdfUtilities.Validators.SvgConverterValidator,
-               source: "foreignObject",
+               source: ^source,
                message: message
              } = diagnostic}} = context.native_result
 
-    assert message =~ "foreignObject" and message =~ "converter"
-    assert message =~ "cannot be omitted"
+    assert message =~ Keyword.get(opts, :unsupported_message, source) and message =~ "converter"
+    if source == "foreignObject", do: assert(message =~ "cannot be omitted")
     refute File.exists?(context.native_pdf)
 
     pages =

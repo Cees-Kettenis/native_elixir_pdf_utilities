@@ -883,11 +883,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   @doc "Removes CSS comments while preserving quoted strings and escapes."
   @spec strip_comments(String.t()) :: String.t()
-  def strip_comments(css) do
-    strip_comments(css, nil, false, [])
+  @spec strip_comments(String.t(), String.t()) :: String.t()
+  def strip_comments(css, separator \\ "") do
+    strip_comments(css, nil, false, [], separator)
   end
 
-  defp strip_comments(css, quote, escaped?, acc) do
+  defp strip_comments(css, quote, escaped?, acc, separator) do
     case {css, quote, escaped?} do
       {"", _quote, _escaped?} ->
         acc |> Enum.reverse() |> IO.iodata_to_binary()
@@ -896,28 +897,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         case :binary.match(rest, "*/") do
           {index, 2} ->
             remaining = binary_part(rest, index + 2, byte_size(rest) - index - 2)
-            strip_comments(remaining, nil, false, acc)
+            strip_comments(remaining, nil, false, [separator | acc], separator)
 
           :nomatch ->
-            strip_comments("", nil, false, [<<"/*", rest::binary>> | acc])
+            strip_comments("", nil, false, [<<"/*", rest::binary>> | acc], separator)
         end
 
       {<<character::utf8, rest::binary>>, quote, true} ->
-        strip_comments(rest, quote, false, [<<character::utf8>> | acc])
+        strip_comments(rest, quote, false, [<<character::utf8>> | acc], separator)
 
       {<<character::utf8, rest::binary>>, quote, false}
       when character == ?\\ ->
-        strip_comments(rest, quote, true, [<<character::utf8>> | acc])
+        strip_comments(rest, quote, true, [<<character::utf8>> | acc], separator)
 
       {<<character::utf8, rest::binary>>, quote, false}
       when not is_nil(quote) and character == quote ->
-        strip_comments(rest, nil, false, [<<character::utf8>> | acc])
+        strip_comments(rest, nil, false, [<<character::utf8>> | acc], separator)
 
       {<<character::utf8, rest::binary>>, nil, false} when character in [?", ?'] ->
-        strip_comments(rest, character, false, [<<character::utf8>> | acc])
+        strip_comments(rest, character, false, [<<character::utf8>> | acc], separator)
 
       {<<character::utf8, rest::binary>>, quote, false} ->
-        strip_comments(rest, quote, false, [<<character::utf8>> | acc])
+        strip_comments(rest, quote, false, [<<character::utf8>> | acc], separator)
     end
   end
 

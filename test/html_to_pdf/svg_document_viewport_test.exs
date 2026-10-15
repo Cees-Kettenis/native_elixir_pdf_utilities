@@ -270,13 +270,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
     refute pdf =~ "/Subtype /Image"
     refute pdf =~ "/Subtype /Link"
 
-    assert {:error, {:unsupported_html, diagnostic}} =
+    assert {:error, {:invalid_document, diagnostic}} =
              HtmlToPdf.render(
                "<object data='bad.svg' style='width:0;height:40pt'>Unused</object>",
                base_url: root
              )
 
-    assert diagnostic.stage == :html and diagnostic.message =~ "</svg>"
+    assert diagnostic.stage == :style and diagnostic.message =~ "malformed"
 
     Limits.install(Map.put(Limits.effective(), :max_aggregate_image_source_bytes, 1))
 
@@ -400,7 +400,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
                  prepare_document(source, context.image_budget, "skipped.svg", :iframe)
 
         assert diagnostic.message =~ "max_aggregate_svg_source_bytes"
-        assert diagnostic.source == "SVG"
+        assert diagnostic.source == "skipped.svg"
         assert :atomics.get(context.image_budget, 3) == 0
       end
     )

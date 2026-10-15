@@ -1028,6 +1028,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert {:ok, _text} = Text.extract(extreme, layout: false)
   end
 
+  test "solid PNG color and alpha streams remain readable within the default decompression limits" do
+    pixels = :binary.copy(<<255, 0, 0>>, 40_000)
+    alpha = :binary.copy(<<128>>, 40_000)
+
+    image =
+      image_fixture(:png, pixels, 200, 200, :device_rgb)
+      |> Map.put(:alpha_data, alpha)
+
+    box = %{type: :image, x: 0, y: 0, width: 200, height: 200, image: image}
+    assert {:ok, pdf} = PdfWriter.render([%{size: {200, 200}, boxes: [box]}])
+    assert {:ok, document} = Reader.read(pdf)
+
+    images =
+      for {ref, %{value: %{"Subtype" => {:name, "Image"}}} = object} <- document.objects do
+        assert {:ok, decoded} = Reader.decoded_stream(document, {:ref, ref})
+        assert object.value["Filter"] == {:name, "FlateDecode"}
+
+        assert byte_size(decoded) <=
+                 byte_size(object.stream) *
+                   NativeElixirPdfUtilities.Limits.get(:max_pdf_decompression_ratio)
+
+        {object.value["ColorSpace"], decoded}
+      end
+
+    assert Enum.sort(images) ==
+             Enum.sort([{{:name, "DeviceRGB"}, pixels}, {{:name, "DeviceGray"}, alpha}])
+  end
+
   test "writer rejects conflicting embedded faces with the same ID" do
     assert {:ok, registry} = Font.load_registry(fonts: [{"Fixture Sans", ttf_font_path!()}])
     assert {:ok, _, font} = Font.resolve("Fixture Sans", 400, :normal, registry)

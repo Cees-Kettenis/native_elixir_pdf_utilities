@@ -1,9 +1,6 @@
 defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
   @moduledoc false
 
-  alias NativeElixirPdfUtilities.HtmlToPdf.NativeBackend
-  alias NativeElixirPdfUtilities.Validators.NativeBackendValidator
-
   # Fixed CSS named-color vocabulary, not a configurable resource limit.
   # CSS Color 4, 2025-04-24, section 6.1. Existing channel values remain intact.
   @named_colors %{
@@ -163,93 +160,300 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
     Map.get(@named_colors, normalized_name)
   end
 
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, CssMathValidator}
+  alias NativeElixirPdfUtilities.HtmlToPdf.CssColor
+
+  # Chromium's static light input palette. This does not read a host theme.
+  @input_palette %{
+    "accentcolor" => 0x000000,
+    "accentcolortext" => 0x000000,
+    "activetext" => 0xFF0000,
+    "buttonborder" => 0x767676,
+    "buttonface" => 0xEFEFEF,
+    "buttontext" => 0x000000,
+    "canvas" => 0xFFFFFF,
+    "canvastext" => 0x000000,
+    "field" => 0xFFFFFF,
+    "fieldtext" => 0x000000,
+    "graytext" => 0x808080,
+    "highlight" => 0x0041C6,
+    "highlighttext" => 0xFFFFFF,
+    "linktext" => 0x0000EE,
+    "mark" => 0xFFFF00,
+    "marktext" => 0x000000,
+    "selecteditem" => 0x1967D2,
+    "selecteditemtext" => 0xFFFFFF,
+    "visitedtext" => 0x551A8B,
+    "activeborder" => 0x767676,
+    "activecaption" => 0xFFFFFF,
+    "appworkspace" => 0xFFFFFF,
+    "background" => 0xFFFFFF,
+    "buttonhighlight" => 0xEFEFEF,
+    "buttonshadow" => 0xEFEFEF,
+    "captiontext" => 0x000000,
+    "inactiveborder" => 0x767676,
+    "inactivecaption" => 0xFFFFFF,
+    "inactivecaptiontext" => 0x808080,
+    "infobackground" => 0xFFFFFF,
+    "infotext" => 0x000000,
+    "menu" => 0xFFFFFF,
+    "menutext" => 0x000000,
+    "scrollbar" => 0xFFFFFF,
+    "threeddarkshadow" => 0x767676,
+    "threedface" => 0xEFEFEF,
+    "threedhighlight" => 0x767676,
+    "threedlightshadow" => 0x767676,
+    "threedshadow" => 0x767676,
+    "window" => 0xFFFFFF,
+    "windowframe" => 0x767676,
+    "windowtext" => 0x000000
+  }
+
   @doc false
   @spec parse_initial_input_color(String.t()) :: {:ok, term()} | :error
-  def parse_initial_input_color(source), do: parse_native_color(source, nil, true)
+  def parse_initial_input_color(source), do: parse_color(source, nil, true)
 
   @doc false
   @spec parse_function_color(String.t(), term()) :: {:ok, term()} | :error
-  def parse_function_color(source, current_color),
-    do: parse_native_color(source, current_color, false)
+  def parse_function_color(source, current_color), do: parse_color(source, current_color, false)
 
-  defp parse_native_color(source, current_color, initial_input) do
-    NativeElixirPdfUtilities.Validators.HtmlValidator.check_render_resource(
-      :max_css_source_bytes,
-      byte_size(source),
-      :style
-    )
+  defp parse_color(source, current_color, initial_input) do
+    HtmlValidator.check_render_resource(:max_css_source_bytes, byte_size(source), :style)
+    HtmlValidator.reserve_render_resource(:max_html_tree_work, byte_size(source), :style)
 
-    NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_render_resource(
-      :max_html_tree_work,
-      byte_size(source),
-      :style
-    )
+    source =
+      source
+      |> NativeElixirPdfUtilities.HtmlToPdf.CssParser.strip_comments(" ")
+      |> HtmlValidator.trim_css_whitespace()
+      |> String.downcase(:ascii)
 
-    try do
-      case NativeBackendValidator.native_load_result(NativeBackend.load_native()) do
-        :ok ->
-          backend = NativeBackend.NativeBytes
-          components = backend.css_color_math_components(source)
+    cond do
+      source == "currentcolor" ->
+        if is_nil(current_color), do: :error, else: {:ok, current_color}
 
-          NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_render_resource(
-            :max_css_work,
-            length(components),
-            :style
-          )
+      source == "transparent" ->
+        {:ok, if(initial_input, do: {0.0, 0.0, 0.0, 0.0}, else: :transparent)}
 
-          math =
-            Enum.map(components, fn {position, expression} ->
-              case NativeElixirPdfUtilities.Validators.CssMathValidator.evaluate_color_component(
-                     expression
-                   ) do
-                {:ok, number, type}
-                when type == %{} or type == %{percentage: 1} or type == %{angle: 1} ->
-                  value =
-                    case number do
-                      :nan -> 0.0
-                      :infinity -> 1.0e100
-                      :negative_infinity -> -1.0e100
-                      number -> number * 1.0
-                    end
+      Map.has_key?(@named_colors, source) ->
+        {:ok, Map.fetch!(@named_colors, source)}
 
-                  {kind, value} =
-                    cond do
-                      type == %{percentage: 1} -> {1, value / 100}
-                      type == %{angle: 1} -> {2, value * 180 / :math.pi()}
-                      true -> {0, value}
-                    end
+      initial_input and Map.has_key?(@input_palette, source) ->
+        value = Map.fetch!(@input_palette, source)
+        {:ok, {div(value, 65536) / 255, rem(div(value, 256), 256) / 255, rem(value, 256) / 255}}
 
-                  {position, kind, value}
+      Regex.match?(~r/\A\#[0-9a-f]{3,4}(?:[0-9a-f]{2}){0,2}\z/, source) and
+          byte_size(source) in [4, 5, 7, 9] ->
+        hex = binary_part(source, 1, byte_size(source) - 1)
+        hex = if byte_size(hex) < 5, do: for(<<c <- hex>>, into: "", do: <<c, c>>), else: hex
+        channels = for <<pair::binary-size(2) <- hex>>, do: String.to_integer(pair, 16) / 255
 
-                _ ->
-                  {position, 3, 0.0}
-              end
-            end)
+        channels =
+          if length(channels) == 4 and List.last(channels) == 1.0,
+            do: Enum.take(channels, 3),
+            else: channels
 
-          case backend.parse_css_color(source, initial_input, math) do
-            {:ok, {red, green, blue, alpha}} ->
-              {:ok, if(alpha == 1.0, do: {red, green, blue}, else: {red, green, blue, alpha})}
+        {:ok, List.to_tuple(channels)}
 
-            {:ok, :currentcolor} ->
-              if is_nil(current_color), do: :error, else: {:ok, current_color}
+      true ->
+        with [_, function, body] <- Regex.run(~r/\A([a-z]+)\((.*)\)\z/s, source),
+             true <- function in ~w(rgb rgba hsl hsla hwb lab lch oklab oklch color),
+             {:ok, tokens, legacy?} <- color_arguments(body),
+             {:ok, space, channels, alpha} <- color_channels(function, tokens, legacy?) do
+          [red, green, blue] = CssColor.to_srgb(space, channels)
+          {:ok, if(alpha == 1.0, do: {red, green, blue}, else: {red, green, blue, alpha})}
+        else
+          _ -> :error
+        end
+    end
+  catch
+    {:render_resource_limit, {:error, {reason, diagnostic}}} ->
+      throw(
+        {:render_resource_limit,
+         {:error,
+          {reason,
+           NativeElixirPdfUtilities.Diagnostics.with_context(diagnostic,
+             source: if(initial_input, do: "input/color", else: "CSS color")
+           )}}}
+      )
+  end
 
-            _ ->
-              :error
+  # Preserve nested calculation tokens; only outer commas/slashes delimit channels.
+  defp color_arguments(body) do
+    {parts, token, depth} =
+      for <<char::utf8 <- body>>, reduce: {[], [], 0} do
+        {parts, token, depth} ->
+          cond do
+            char == ?( ->
+              {parts, [<<char::utf8>> | token], depth + 1}
+
+            char == ?) ->
+              {parts, [<<char::utf8>> | token], depth - 1}
+
+            depth == 0 and char in [?,, ?/] ->
+              part = token |> Enum.reverse() |> IO.iodata_to_binary()
+              {[<<char>>, part | parts], [], depth}
+
+            true ->
+              {parts, [<<char::utf8>> | token], depth}
+          end
+      end
+
+    if depth == 0 do
+      parts = Enum.reverse([token |> Enum.reverse() |> IO.iodata_to_binary() | parts])
+      legacy? = "," in parts
+
+      tokens =
+        if legacy?,
+          do: Enum.map(parts, &HtmlValidator.trim_css_whitespace/1),
+          else: Enum.flat_map(parts, &HtmlValidator.split_css_tokens/1)
+
+      {:ok, tokens, legacy?}
+    else
+      :error
+    end
+  end
+
+  defp color_channels(function, tokens, legacy?) do
+    {space, tokens} =
+      case {function, tokens} do
+        {"color", [space | rest]} -> {space, rest}
+        _ -> {function, tokens}
+      end
+
+    tokens =
+      if legacy? do
+        case tokens do
+          [a, ",", b, ",", c] -> [a, b, c]
+          [a, ",", b, ",", c, ",", alpha] -> [a, b, c, alpha]
+          _ -> []
+        end
+      else
+        tokens
+      end
+
+    valid_legacy? = not legacy? or function in ~w(rgb rgba hsl hsla)
+
+    {colors, alpha} =
+      case tokens do
+        [a, b, c] -> {[a, b, c], "1"}
+        [a, b, c, "/", alpha] when not legacy? -> {[a, b, c], alpha}
+        [a, b, c, alpha] when legacy? -> {[a, b, c], alpha}
+        _ -> {[], ""}
+      end
+
+    with true <- valid_legacy? and length(colors) == 3,
+         true <- not legacy? or Enum.all?(colors ++ [alpha], &(&1 != "none")),
+         {:ok, alpha_value} <- component(alpha, :alpha),
+         {:ok, channels} <- prepare_channels(space, colors, legacy?) do
+      {:ok, space, channels, alpha_value |> max(0.0) |> min(1.0)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp prepare_channels(space, colors, legacy?) do
+    kinds =
+      case space do
+        s when s in ~w(rgb rgba) ->
+          [:rgb, :rgb, :rgb]
+
+        s when s in ~w(hsl hsla) ->
+          [:hue, :percent, :percent]
+
+        "hwb" ->
+          [:hue, :percent, :percent]
+
+        "lab" ->
+          [{:scaled, 100}, {:scaled, 125}, {:scaled, 125}]
+
+        "lch" ->
+          [{:scaled, 100}, {:scaled, 150}, :hue]
+
+        "oklab" ->
+          [{:scaled, 1}, {:scaled, 0.4}, {:scaled, 0.4}]
+
+        "oklch" ->
+          [{:scaled, 1}, {:scaled, 0.4}, :hue]
+
+        s
+        when s in ~w(srgb srgb-linear display-p3 display-p3-linear a98-rgb prophoto-rgb rec2020 xyz xyz-d50 xyz-d65) ->
+          [:alpha, :alpha, :alpha]
+
+        _ ->
+          []
+      end
+
+    mixed_rgb? =
+      legacy? and space in ~w(rgb rgba) and Enum.any?(colors, &String.ends_with?(&1, "%")) and
+        not Enum.all?(colors, &String.ends_with?(&1, "%"))
+
+    invalid_hsl? =
+      legacy? and space in ~w(hsl hsla) and not Enum.all?(tl(colors), &String.ends_with?(&1, "%"))
+
+    if kinds == [] or mixed_rgb? or invalid_hsl? do
+      :error
+    else
+      Enum.zip(colors, kinds)
+      |> Enum.reduce_while({:ok, []}, fn {source, kind}, {:ok, values} ->
+        case component(source, kind) do
+          {:ok, value} -> {:cont, {:ok, [value | values]}}
+          :error -> {:halt, :error}
+        end
+      end)
+      |> case do
+        {:ok, values} -> {:ok, Enum.reverse(values)}
+        :error -> :error
+      end
+    end
+  end
+
+  defp component(source, kind) do
+    HtmlValidator.reserve_render_resource(:max_css_work, 1, :style)
+
+    parsed =
+      if source == "none",
+        do: {:ok, 0.0, %{}},
+        else: CssMathValidator.evaluate_color_component(source)
+
+    case parsed do
+      {:ok, value, type} when type == %{} or type == %{percentage: 1} or type == %{angle: 1} ->
+        value =
+          case value do
+            :nan -> 0.0
+            :infinity -> 1.0e30
+            :negative_infinity -> -1.0e30
+            value -> value
           end
 
-        {:error, _} = error ->
-          throw({:render_resource_limit, error})
-      end
-    catch
-      {:render_resource_limit, {:error, {reason, diagnostic}}} ->
-        throw(
-          {:render_resource_limit,
-           {:error,
-            {reason,
-             NativeElixirPdfUtilities.Diagnostics.with_context(diagnostic,
-               source: if(initial_input, do: "input/color", else: "CSS color")
-             )}}}
-        )
+        cond do
+          kind == :hue and type == %{angle: 1} ->
+            {:ok, value * 180 / :math.pi()}
+
+          kind == :hue and type == %{} ->
+            {:ok, value}
+
+          kind == :hue ->
+            :error
+
+          type == %{angle: 1} ->
+            :error
+
+          kind == :rgb ->
+            {:ok, if(type == %{}, do: value / 255, else: value / 100)}
+
+          kind == :percent ->
+            {:ok, value / 100}
+
+          kind == :alpha ->
+            {:ok, if(type == %{}, do: value, else: value / 100)}
+
+          true ->
+            {:scaled, scale} = kind
+            {:ok, if(type == %{}, do: value, else: value / 100 * scale)}
+        end
+
+      _ ->
+        :error
     end
   end
 end

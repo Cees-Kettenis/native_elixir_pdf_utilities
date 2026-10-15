@@ -34,7 +34,7 @@ bookmarks.
 5. [Outlines and bookmarks](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-outlines.md) - read or replace bookmarks, detect headings in existing PDFs, and generate bookmarks from HTML headings. Merging, transforms, and splitting preserve supported outlines.
 6. [Stamping and page numbers](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-stamping.md) - adds text stamps, translucent watermarks, page numbers, and PDF artwork overlays to existing PDFs through incremental updates.
 7. [Reader](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-reader.md) and [text extraction](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/text-extraction.md) - strictly resolve embedded Unicode text from classic and modern PDFs.
-8. [HTML to PDF](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/html-to-pdf-compatibility.md) - renders a strict, document-oriented HTML/CSS subset to native PDF bytes, with [examples](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/html-to-pdf-examples.md) for common workflows. It supports configured fonts and cross-platform discovery of installed system fonts. Rendering after compilation does not require Chromium, wkhtmltopdf, Node, SaaS calls, or a Rust toolchain. Building this checkout requires Rust 1.92.0 for the bundled CSS color and Unicode line-break utilities. SVG images use the existing Resvg converter. Local asset loading works on Windows, macOS, and Linux.
+8. [HTML to PDF](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/html-to-pdf-compatibility.md) - renders a strict, document-oriented HTML/CSS subset to native PDF bytes, with [examples](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/html-to-pdf-examples.md) for common workflows. It supports configured fonts and cross-platform discovery of installed system fonts. Rendering after compilation does not require Chromium, wkhtmltopdf, Node, SaaS calls, or a Rust toolchain. First-party runtime code is Elixir, including CSS colors, Unicode line breaking and HTML form-value validation. SVG images use the existing Resvg converter. Local asset loading works on Windows, macOS, and Linux.
 
 9. [PDF forms](docs/pdf-forms.md) - generates named AcroForm fields from HTML by default, inspects and fills existing fields, and flattens selected fields.
 10. [Attachments](docs/pdf-attachments.md) - embeds caller-approved file bytes with MIME detection and lists embedded metadata.
@@ -64,6 +64,9 @@ and 100% coverage, runs Dialyzer, and compares HTML-to-PDF fixtures with
 Chromium. See the
 [contribution guide](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/CONTRIBUTING.md)
 for prerequisites, quicker installed-version checks, and result interpretation.
+
+Milestone 1.1.0 is still under repair. Its current failures, remaining batches and
+acceptance rules are in the [work plan](docs/milestone-1.1.0-work-plan.md).
 
 ## License
 

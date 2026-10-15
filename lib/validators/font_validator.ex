@@ -143,7 +143,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
             reserve_source(data)
 
             memo({:internal_family_name, :crypto.hash(:sha256, data)}, fn ->
-              with {:ok, _font} <- prepare_ttf(data),
+              with {:ok, _font} <- memo({:validated_ttf, data}, fn -> prepare_ttf(data) end),
                    {:ok, tables} <- table_directory(data),
                    {:ok, names} <- table(data, tables, "name"),
                    <<format::16, count::16, storage::16, _::binary>> <- names,

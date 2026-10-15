@@ -1,5 +1,4 @@
 ARG BASE_IMAGE=sigdevelopers/sigportal-ci:v2.6
-FROM rust:1.92.0-slim AS html_rust
 FROM ${BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -13,9 +12,3 @@ RUN apt-get update \
       poppler-utils \
       qpdf \
     && rm -rf /var/lib/apt/lists/*
-
-# The independent HTML utilities build from their tracked Cargo.lock.
-COPY --from=html_rust /usr/local/rustup /usr/local/rustup
-COPY --from=html_rust /usr/local/cargo /usr/local/cargo
-ENV RUSTUP_HOME=/usr/local/rustup
-ENV PATH=/usr/local/cargo/bin:${PATH}

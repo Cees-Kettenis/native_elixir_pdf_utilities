@@ -135,10 +135,13 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
                                                                                    descriptors,
                                                                                    added, next,
                                                                                    fonts} ->
-                     fingerprint = :crypto.hash(:sha256, face.data)
+                     # These bytes already belong to the validated editor. An
+                     # exact binary key reuses its font object across controls
+                     # without hashing the full font again for each field.
+                     source = face.data
 
                      {ref, next, added, fonts} =
-                       case Map.fetch(fonts, fingerprint) do
+                       case Map.fetch(fonts, source) do
                          {:ok, ref} ->
                            {ref, next, added, fonts}
 
@@ -151,7 +154,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
                                {:stream, %{"Filter" => {:name, "FlateDecode"}},
                                 :zlib.compress(face.data)}}
                               | added
-                            ], Map.put(fonts, fingerprint, ref)}
+                            ], Map.put(fonts, source, ref)}
                        end
 
                      dictionary = %{

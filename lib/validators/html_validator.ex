@@ -8363,55 +8363,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec parse_css_color(String.t(), term()) :: {:ok, term()} | :error
   def parse_css_color(value, current_color) do
-    normalized = value |> trim_ascii_whitespace() |> downcase_ascii()
-    named_color = NativeElixirPdfUtilities.Validators.CssColorValidator.named_color(normalized)
-
-    cond do
-      normalized == "currentcolor" and not is_nil(current_color) ->
-        {:ok, current_color}
-
-      normalized == "transparent" ->
-        {:ok, :transparent}
-
-      not is_nil(named_color) ->
-        {:ok, named_color}
-
-      Regex.match?(~r/^#[0-9a-f]{6}$/u, normalized) ->
-        <<"#", red::binary-size(2), green::binary-size(2), blue::binary-size(2)>> = normalized
-        {:ok, {hex_to_pdf_color(red), hex_to_pdf_color(green), hex_to_pdf_color(blue)}}
-
-      Regex.match?(~r/^#[0-9a-f]{8}$/u, normalized) ->
-        <<"#", red::binary-size(2), green::binary-size(2), blue::binary-size(2),
-          alpha::binary-size(2)>> = normalized
-
-        {:ok,
-         color_with_alpha(
-           {hex_to_pdf_color(red), hex_to_pdf_color(green), hex_to_pdf_color(blue)},
-           hex_to_pdf_color(alpha)
-         )}
-
-      Regex.match?(~r/^#[0-9a-f]{3}$/u, normalized) ->
-        <<"#", red::binary-size(1), green::binary-size(1), blue::binary-size(1)>> = normalized
-
-        {:ok,
-         {hex_to_pdf_color(red <> red), hex_to_pdf_color(green <> green),
-          hex_to_pdf_color(blue <> blue)}}
-
-      (String.starts_with?(normalized, "rgb(") or String.starts_with?(normalized, "rgba(")) and
-        String.contains?(normalized, ",") and
-          Regex.match?(~r/\A(?:rgb|rgba)\([^()]*\)\z/u, normalized) ->
-        parse_rgb_color(normalized)
-
-      String.contains?(normalized, "(") or
-          Regex.match?(~r/\A#[0-9a-f]{4}\z/u, normalized) ->
-        NativeElixirPdfUtilities.Validators.CssColorValidator.parse_function_color(
-          normalized,
-          current_color
-        )
-
-      true ->
-        :error
-    end
+    NativeElixirPdfUtilities.Validators.CssColorValidator.parse_function_color(
+      value,
+      current_color
+    )
   end
 
   @doc false
@@ -8425,78 +8380,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end
   end
 
-  defp parse_rgb_color(value) do
-    # parse_css_color/2 already validates the complete RGB function wrapper.
-    # Keep ASCII newlines inside its channels as CSS whitespace.
-    [_function, body] = String.split(value, "(", parts: 2)
-    channels = body |> binary_part(0, byte_size(body) - 1) |> split_css_comma()
-
-    case channels do
-      [red, green, blue] ->
-        parse_rgb_channels(red, green, blue)
-
-      [red, green, blue, alpha] ->
-        with {:ok, color} <- parse_rgb_channels(red, green, blue),
-             {:ok, alpha} <- parse_alpha_channel(alpha) do
-          {:ok, color_with_alpha(color, alpha)}
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp parse_rgb_channels(red, green, blue) do
-    with {:ok, red} <- parse_rgb_channel(red),
-         {:ok, green} <- parse_rgb_channel(green),
-         {:ok, blue} <- parse_rgb_channel(blue) do
-      {:ok, {red, green, blue}}
-    end
-  end
-
-  defp parse_rgb_channel(channel) do
-    normalized = trim_ascii_whitespace(channel)
-
-    cond do
-      Regex.match?(~r/^\d+(?:\.\d+)?%$/u, normalized) ->
-        with {number, "%"} <- parse_css_number(normalized) do
-          {:ok, number |> max(0.0) |> min(100.0) |> Kernel./(100.0)}
-        end
-
-      true ->
-        case parse_css_number(normalized) do
-          {number, ""} -> {:ok, number |> max(0.0) |> min(255.0) |> Kernel./(255.0)}
-          _ -> :error
-        end
-    end
-  end
-
-  defp parse_alpha_channel(channel) do
-    normalized = trim_ascii_whitespace(channel)
-
-    cond do
-      Regex.match?(~r/^\d+(?:\.\d+)?%$/u, normalized) ->
-        with {number, "%"} <- parse_css_number(normalized) do
-          {:ok, number |> max(0.0) |> min(100.0) |> Kernel./(100.0)}
-        end
-
-      true ->
-        case parse_css_number(normalized) do
-          {number, ""} -> {:ok, number |> max(0.0) |> min(1.0)}
-          _ -> :error
-        end
-    end
-  end
-
-  defp color_with_alpha(color, alpha) do
-    case {color, alpha} do
-      {{red, green, blue}, alpha} when alpha < 1.0 -> {red, green, blue, alpha}
-      {color, _alpha} -> color
-    end
-  end
-
-  # Fold only ASCII letters while leaving non-ASCII UTF-8 bytes unchanged.
-  # A binary comprehension avoids the per-byte list built by String's ASCII mode.
+  # Fold ASCII letters without allocating a list for every byte.
   defp downcase_ascii(value) do
     for <<character <- value>>, into: <<>> do
       <<if(character >= ?A and character <= ?Z, do: character + 32, else: character)>>

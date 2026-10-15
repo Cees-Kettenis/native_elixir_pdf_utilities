@@ -3,6 +3,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCacheTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.FontCache
 
+  test "cached identities preserve published font names and distinguish family and source bytes" do
+    data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
+    other = File.read!("priv/fonts/dejavu/DejaVuSansMono.ttf")
+
+    assert FontCache.identity("DejaVu Sans", data) == "3c8c7d9f38c2"
+    assert FontCache.identity("DejaVu Sans", data) == "3c8c7d9f38c2"
+    refute FontCache.identity("Different family", data) == "3c8c7d9f38c2"
+    refute FontCache.identity("DejaVu Sans", other) == "3c8c7d9f38c2"
+  end
+
   test "fetch reuses successful loads while the source file is unchanged" do
     path = temporary_path("hit")
     File.write!(path, "font")
@@ -193,6 +203,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCacheTest do
              )
 
     try do
+      data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
+      assert FontCache.identity("DejaVu Sans", data) == "3c8c7d9f38c2"
+
       assert FontCache.fetch(path, fn data ->
                {:ok, data}
              end) == {:ok, "font"}

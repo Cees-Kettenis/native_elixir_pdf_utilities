@@ -127,8 +127,7 @@ for entry in "${runtime_entries[@]}"; do
   version="$(jq -r '.elixir' <<<"${entry}")"
   source_image="$(jq -r '.image' <<<"${entry}")"
   canonical="$(jq -r '.canonical' <<<"${entry}")"
-  # Concurrent worktrees may require different native toolchains. Keep each
-  # run's image stable across stages rather than sharing a mutable global tag.
+  # Keep each run's validation image stable across stages.
   local_image="native-elixir-pdf-utilities-quality:elixir-${version}-${run_id}"
   runtime_root="${repository_root}/.quality/elixir-${version}"
   runtime_versions+=("${version}")
@@ -173,7 +172,7 @@ for entry in "${runtime_entries[@]}"; do
   fi
 
   if ! run_logged "${version}" runtime "${docker_command[@]}" sh -c \
-    'set -e; for tool in chromium pdftoppm pdftotext qpdf cargo rustc; do command -v "$tool"; done; elixir --version; elixir --version | grep -F "Elixir ${EXPECTED_ELIXIR}."'; then
+    'set -e; for tool in chromium pdftoppm pdftotext qpdf; do command -v "$tool"; done; elixir --version; elixir --version | grep -F "Elixir ${EXPECTED_ELIXIR}."'; then
     mark_remaining_skipped "${version}" runtime
     continue
   fi

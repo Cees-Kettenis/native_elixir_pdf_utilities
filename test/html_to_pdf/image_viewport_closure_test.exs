@@ -119,7 +119,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageViewportClosureTest do
                  )
 
         assert host_error.message =~ "supported host"
-        assert host_error.source == "SVG"
+        assert host_error.source == "original.svg"
 
         assert {:ok, descriptor} =
                  SvgDocumentImage.prepare(

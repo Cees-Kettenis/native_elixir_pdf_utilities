@@ -41,7 +41,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterPreparationFollowupTest
     refute serialized =~
              "<div id=\"original\" xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:xlink="
 
-    assert {:ok, _} = SvgConverterValidator.prepare_extraction(serialized)
+    assert {:error, {:unsupported_html, %{source: "foreignObject"}}} =
+             SvgConverterValidator.prepare_extraction(serialized)
   end
 
   test "authored XHTML void elements remain well-formed converter input without invented end tags" do
@@ -55,14 +56,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterPreparationFollowupTest
     assert serialized =~ "<br />" and serialized =~ "<hr />"
     assert serialized =~ "<textarea >Original text</textarea>"
     refute serialized =~ "</input>" or serialized =~ "</br>" or serialized =~ "</hr>"
-    assert {:ok, _} = SvgConverterValidator.prepare_extraction(serialized)
 
-    assert {:ok, scene} =
+    assert {:error, {:unsupported_html, %{source: "foreignObject"}}} =
+             SvgConverterValidator.prepare_extraction(serialized)
+
+    assert {:error, {:unsupported_html, diagnostic}} =
              SvgScene.extract(serialized, HtmlValidator.new_image_budget(),
                system_font_discovery: false
              )
 
-    assert {:error, {:unsupported_html, diagnostic}} = SvgScene.paint(scene, 30)
     assert diagnostic.stage == :layout and diagnostic.source == "foreignObject"
     assert diagnostic.module == SvgConverterValidator
     assert diagnostic.operation == :convert
@@ -72,12 +74,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterPreparationFollowupTest
     source =
       "<svg width='40' height='20'><foreignObject width='40' height='20'><div xmlns='http://www.w3.org/1999/xhtml'>Original <span>text</span></div></foreignObject></svg>"
 
-    assert {:ok, scene} =
+    assert {:error, {:unsupported_html, diagnostic}} =
              SvgScene.extract(source, HtmlValidator.new_image_budget(),
                system_font_discovery: false
              )
 
-    assert {:error, {:unsupported_html, diagnostic}} = SvgScene.paint(scene, 30)
     assert diagnostic.stage == :layout and diagnostic.source == "foreignObject"
     assert diagnostic.message =~ "existing SVG converter does not render foreignObject"
   end
@@ -86,10 +87,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterPreparationFollowupTest
     source =
       "<svg><foreignObject><div xmlns='urn:other'>Original text</div></foreignObject></svg>"
 
-    assert {:error, {:unsupported_html, diagnostic}} =
+    assert {:error, {:invalid_document, diagnostic}} =
              SvgConverterValidator.prepare_extraction(source)
 
-    assert diagnostic.source =~ "xmlns='urn:other'"
-    assert diagnostic.stage == :html
+    assert diagnostic.source == "SVG"
+    assert diagnostic.stage == :style
+    assert diagnostic.message =~ "namespace"
   end
 end

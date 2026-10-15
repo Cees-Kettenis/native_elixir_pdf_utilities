@@ -84,6 +84,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgDocumentImageValidator do
        }}
     else
       {:error, {reason, diagnostic}} ->
+        diagnostic =
+          if Map.get(diagnostic, :source) in [nil, "SVG"],
+            do: Map.delete(diagnostic, :source),
+            else: diagnostic
+
         {:error, {reason, Diagnostics.with_context(diagnostic, source: origin)}}
 
       _ ->

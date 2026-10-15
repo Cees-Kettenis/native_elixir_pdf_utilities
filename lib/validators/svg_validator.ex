@@ -236,6 +236,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
       root: nil,
       source_root: nil,
       styles: [],
+      converter_features: MapSet.new(),
       stack: [],
       context: context,
       elements: MapSet.new(),
@@ -303,6 +304,18 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
           line: line
         )
     end
+  end
+
+  # The converter ignores this authored SVG property, including stylesheet
+  # declarations. Record it during source admission so invisible content and
+  # independent image documents receive the same explicit limitation.
+  defp non_scaling_stroke_css?(css) do
+    css = NativeElixirPdfUtilities.HtmlToPdf.CssParser.strip_comments(css)
+
+    Regex.match?(
+      ~r/(?:\A|[;{])\s*vector-effect\s*:\s*non-scaling-stroke\s*(?:!\s*important\s*)?(?=[;}]|\z)/i,
+      css
+    )
   end
 
   defp validate_event(event, {_file, _entity, line}, state) do
@@ -499,7 +512,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         # Their local references use the existing graph, depth and work policy,
         # so recursive artwork cannot be silently dropped by the native parser.
         paint_properties =
-          ~w(marker marker-start marker-mid marker-end) ++
+          ~w(marker marker-start marker-mid marker-end mask filter) ++
             if(state.context.mode == :inline, do: ~w(clip-path fill stroke), else: [])
 
         paint_hrefs =
@@ -545,6 +558,14 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         state = %{
           state
           | stack: [%{namespace: namespace, name: name, index: index} | state.stack],
+            converter_features:
+              if(
+                namespace == :svg and
+                  (String.trim(Map.get(attrs, "vector-effect", "")) == "non-scaling-stroke" or
+                     non_scaling_stroke_css?(Map.get(attrs, "style", ""))),
+                do: MapSet.put(state.converter_features, :non_scaling_stroke),
+                else: state.converter_features
+              ),
             source_root:
               if(state.root == nil,
                 do:
@@ -675,6 +696,20 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         state
 
       {:endElement, _uri, local, _name} ->
+        state =
+          if to_string(local) == "style" and
+               non_scaling_stroke_css?(
+                 state.styles
+                 |> hd()
+                 |> Enum.reverse()
+                 |> IO.iodata_to_binary()
+               ),
+             do: %{
+               state
+               | converter_features: MapSet.put(state.converter_features, :non_scaling_stroke)
+             },
+             else: state
+
         styles =
           if to_string(local) == "style" do
             [chunks | rest] = state.styles
@@ -722,8 +757,28 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         case href do
           "#" <> id when name != "a" ->
             case Map.fetch(summary.ids, id) do
-              {:ok, target} -> Map.update!(graph, index, &[target | &1])
-              :error -> reject("SVG reference ##{id} has no target", line)
+              {:ok, target} ->
+                Map.update!(graph, index, &[target | &1])
+
+              :error ->
+                if name in ~w(mask filter) do
+                  node = Enum.find(summary.source_nodes, &(&1.index == index))
+
+                  throw(
+                    {:svg_validation,
+                     Diagnostics.error(
+                       :layout,
+                       :invalid_document,
+                       "SVG #{node.tag} #{name} reference ##{id} has no target",
+                       source: node.tag <> " " <> name,
+                       line: line,
+                       module: __MODULE__,
+                       operation: :prepare
+                     )}
+                  )
+                else
+                  reject("SVG reference ##{id} has no target", line)
+                end
             end
 
           _ ->

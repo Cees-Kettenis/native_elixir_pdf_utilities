@@ -2801,16 +2801,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     stream_object(stream, compress?)
   end
 
-  defp stream_object(data, compress?) do
-    compressed = if compress? and byte_size(data) >= 1_024, do: :zlib.compress(data), else: <<>>
+  defp stream_object(data, compress?), do: stream_object(data, compress?, "", 1_024)
 
-    if compress? and byte_size(data) >= 1_024 and
-         byte_size(compressed) + byte_size(" /Filter /FlateDecode") < byte_size(data) and
+  defp stream_object(data, compress?, entries, minimum_size) do
+    compressed =
+      if compress? and byte_size(data) >= minimum_size, do: :zlib.compress(data), else: <<>>
+
+    ratio = Limits.get(:max_pdf_decompression_ratio)
+
+    compressed =
+      if minimum_size == 0 and compress? and ratio > 0 and
+           byte_size(data) > byte_size(compressed) * ratio,
+         do: bounded_image_compression(data, ratio),
+         else: compressed
+
+    if compress? and byte_size(data) >= minimum_size and
+         (minimum_size == 0 or
+            byte_size(compressed) + byte_size(" /Filter /FlateDecode") < byte_size(data)) and
          byte_size(data) <= byte_size(compressed) * Limits.get(:max_pdf_decompression_ratio) do
-      "<< /Length #{byte_size(compressed)} /Filter /FlateDecode >>\nstream\n" <>
+      "<<#{entries} /Length #{byte_size(compressed)} /Filter /FlateDecode >>\nstream\n" <>
         compressed <> "\nendstream"
     else
-      "<< /Length #{byte_size(data)} >>\nstream\n" <> data <> "\nendstream"
+      "<<#{entries} /Length #{byte_size(data)} >>\nstream\n" <> data <> "\nendstream"
+    end
+  end
+
+  # Sync flushes emit real DEFLATE blocks. Periodic flushes bound the reader's
+  # expansion ratio without storing uniform image planes uncompressed.
+  defp bounded_image_compression(data, ratio) do
+    zlib = :zlib.open()
+
+    try do
+      :ok = :zlib.deflateInit(zlib)
+      # A sync flush ends with at least four bytes. Two input bytes per allowed
+      # expansion unit leave room for block alignment and the final checksum.
+      chunk_size = max(ratio * 2, 1)
+
+      blocks =
+        for offset <- 0..div(byte_size(data) - 1, chunk_size) do
+          offset = offset * chunk_size
+          chunk = binary_part(data, offset, min(chunk_size, byte_size(data) - offset))
+          :zlib.deflate(zlib, chunk, :sync)
+        end
+
+      final = :zlib.deflate(zlib, <<>>, :finish)
+      :ok = :zlib.deflateEnd(zlib)
+      IO.iodata_to_binary([blocks, final])
+    after
+      :zlib.close(zlib)
     end
   end
 
@@ -3080,16 +3118,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp image_object(resource) do
     image = resource.image
 
-    data =
-      case image.format do
-        :png -> :zlib.compress(image.data)
-        :jpeg -> image.data
-      end
-
     filter =
       case image.format do
-        :png -> "/FlateDecode"
-        :jpeg -> "/DCTDecode"
+        :png -> ""
+        :jpeg -> " /Filter /DCTDecode"
       end
 
     smask =
@@ -3113,15 +3145,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
     decode = if Map.get(image, :inverted_cmyk, false), do: " /Decode [1 0 1 0 1 0 1 0]", else: ""
 
-    "<< /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace #{color_space} /BitsPerComponent #{image.bits_per_component} /Filter #{filter}#{smask}#{decode}#{color_transform} /Length #{byte_size(data)} >>\nstream\n" <>
-      data <> "\nendstream"
+    entries =
+      " /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace #{color_space} /BitsPerComponent #{image.bits_per_component}#{filter}#{smask}#{decode}#{color_transform}"
+
+    stream_object(image.data, image.format == :png, entries, 0)
   end
 
   defp image_mask_object(image) do
-    data = :zlib.compress(Map.fetch!(image, :alpha_data))
+    entries =
+      " /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace /DeviceGray /BitsPerComponent #{image.bits_per_component}"
 
-    "<< /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace /DeviceGray /BitsPerComponent #{image.bits_per_component} /Filter /FlateDecode /Length #{byte_size(data)} >>\nstream\n" <>
-      data <> "\nendstream"
+    stream_object(Map.fetch!(image, :alpha_data), true, entries, 0)
   end
 
   defp font_resource_dictionary(font_resources) do

@@ -126,41 +126,23 @@ attributes, HTML integration points, and literal foreign CDATA. Foreign elements
 include `namespace` and `attribute_namespaces` fields. Use `"svg"` or `"math"`
 for a root fragment context, or a map such as
 `%{namespace: :mathml, tag: "annotation-xml", attributes: %{"encoding" => "text/html"}}`
-for an integration point. Native rendering supports a bounded SVG shape/path
-profile, selected-font text and MathML tokens, rows, operators, fractions, roots,
-phantoms and bounded natural-width matrices. Complete SVG
-and MathML remain under implementation; other rendering contexts return
-actionable diagnostics. The separate [SVG](html-to-pdf-svg-1.1.0-checklist.md)
-and [MathML](html-to-pdf-mathml-1.1.0-checklist.md) checklists retain their open
-requirements and direct browser disagreements.
+for an integration point. MathML renders through the Elixir layout and PDF text
+pipeline. SVG artwork uses the existing Resvg converter and is embedded as PNG.
+See [SVG conversion](svg-converter-workflow.md) for its resource policy and
+[the current work plan](milestone-1.1.0-work-plan.md) for unresolved validation.
 
-SVG clips may reference a definition within the same SVG scene using
-`clip-path:url(#id)`. The supported `clipPath` has `userSpaceOnUse` units, one
-static geometry child, optional affine transformation and inherited clip rule.
-Visibility, empty clips and nested group transforms retain their paint behavior.
-Other units, multiple shapes, nested clip references and broader effects return
-diagnostics. Nested SVG CSS sizing still has a known Chromium disagreement;
-the clip comparison scopes its sizing rule to the outer SVG roots.
+Elixir prepares SVG source, host CSS, used viewport dimensions, approved fonts
+and selected resource bytes. Resvg owns paths, clipping, gradients, patterns,
+markers, text, masks and filters. SVG text is raster artwork, so it is not
+selectable PDF text. Internal SVG hyperlinks do not produce PDF annotations.
+An enclosing HTML anchor retains its normal link.
 
-Same-scene `defs`, `symbol` and `use` support bounded geometry reuse, nested
-instances, transforms, symbol viewports and inherited instance paints. Missing
-or ineligible targets, external references and cycles return diagnostics.
-Explicit inheritance of non-inherited effects within reused targets remains
-diagnosed until complete instance context is supported. Raw inline vector CSS
-requires host cascade preparation before effects and allocation accounting;
-prepared host CSS and the restricted image mode retain their existing paths.
-Symbols currently require a direct `defs` parent. Linear and radial gradients
-produce native PDF shadings for static coordinates, pad spread, sRGB colors and
-constant stop opacity. Stops must increase strictly from zero to one, including
-in the native binary32 representation. Gradient templates, other spread modes,
-variable alpha, patterns and markers return diagnostics. SVG text supports
-exact selected static TrueType bytes, solid fills, scalar positioning, text
-anchors and local transforms. Visible PDF CID glyphs retain complete cluster
-logical text and selected font identity. Original font declarations use the
-shared CSS validator even when later CSS overrides them; supported letter spacing
-affects actual glyph advance. Text strokes, gradient text, bidi and advanced
-text-path/coordinate-list behavior remain diagnosed. ForeignObject, masks,
-filters and complete reference behavior remain separate work.
+Known converter omissions return `unsupported_html` diagnostics, including
+`foreignObject`, `vector-effect:non-scaling-stroke` and SVG2 inline `textPath`
+path data. Use a same-document path reference for `textPath` instead. These
+limitations do not imply full support for every other SVG feature. Strict
+Chromium comparisons still expose unresolved converter and integration
+rendering differences. The development baseline is not yet qualified.
 
 Math phantoms retain intrinsic metrics, selected-font work and operator context
 while omitting paint, links and logical text. Basic `mtable`/`mtr`/`mtd` matrices
@@ -176,10 +158,9 @@ MIME hints select authored fallback. Once HTML is selected, authorization,
 read, MIME, parser and budget failures return diagnostics. Use `forms: :static`
 for child control artwork. Selected local plaintext preserves literal markup
 and browser pre-wrap defaults. Selected PNG/JPEG images reuse the existing
-decoders. Selected SVG uses the bounded byte-only image backend, with no font
-or external-resource access. It honors root aspect preservation for matching
-intrinsic/viewBox proportions or `preserveAspectRatio="none"`; no-viewBox and
-mismatched-aspect roots diagnose pending document viewport support.
+decoders. Selected SVG follows the same converter workflow with an isolated
+resource scope and authorized independent font bytes. Root sizing and XML
+spelling remain subject to the current recovery plan's acceptance checks.
 
 `embed` accepts authorized local HTML, plaintext and those still images. Missing
 `src` suppresses its box; an explicit empty source or `about:blank`, including
@@ -599,7 +580,7 @@ Use `font-family: "STIX Two Math"` or `font-family: math` to select the pinned
 math font for text. Explicitly supplied faces take precedence. TrueType Unicode
 format-4 and format-12 character maps support supplementary characters when the
 selected font contains them. Font availability does not yet establish MathML
-layout support; see the [MathML checklist](html-to-pdf-mathml-1.1.0-checklist.md).
+layout support; see the [current work plan](milestone-1.1.0-work-plan.md).
 
 Advanced callers can read selected-font OpenType MATH data with
 `Font.math_metrics/1`. Metrics remain in font design units and include
@@ -736,7 +717,7 @@ SVG image assets reject namespace-qualified or ASCII-case-variant event handlers
 foreign scripts and executable XHTML scripts before conversion. Genuine unqualified
 XHTML type attributes classify non-executable HTML data; qualified XML attributes
 do not replace them. Shared validators own this policy, including inactive caller
-DOMs. Full inline SVG composition and foreignObject/font painting remain unfinished.
+DOMs. Resvg limitations and unresolved comparisons are documented in the current work plan.
 
 
 With the static scripting-disabled model, noscript prints supported active inline
@@ -942,4 +923,9 @@ unused template fragments. Shadow style `:lang()` selectors and slotted selector
 resolve the actual node language; language does not inherit from a distribution
 slot. Selected-content clones inherit through their destination's logical parents.
 
-SVG images containing text receive the active host font’s validated TrueType bytes. Image rasterization uses only those supplied bytes and never asks the native backend to discover another face. A host built-in PDF face has no transportable font program, so SVG text still returns a diagnostic when no byte-backed font is available. SVG image cache entries include the selected face to keep identical artwork with different font selections separate.
+Inline SVG text uses the actual selected byte-backed host faces. Independent SVG
+image and document resources use the caller's admitted font configuration and
+system discovery option. Resvg receives only validated snapshots and never scans
+system font directories itself. Missing permitted glyph coverage returns an
+explicit diagnostic. Cache keys include the approved font bytes and resource
+scope.

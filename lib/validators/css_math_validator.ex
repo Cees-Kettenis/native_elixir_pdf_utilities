@@ -393,7 +393,35 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
         {:ok, :nan, %{}}
 
       _ ->
-        case HtmlValidator.parse_css_number(value) do
+        parsed_number =
+          case HtmlValidator.parse_css_number(value) do
+            :error ->
+              if Map.get(environment, :color_components, false) and
+                   Regex.match?(~r/\A[+-]?(?:\d+(?:\.\d+)?|\.\d+)[eE]\+?\d{3,}\z/, value) do
+                {:ok, mantissa, exponent} =
+                  case Regex.run(~r/\A(.+)[eE]\+?(\d+)\z/, value) do
+                    [_, mantissa, exponent] -> {:ok, mantissa, String.to_integer(exponent)}
+                  end
+
+                case HtmlValidator.parse_css_number(mantissa) do
+                  {number, ""} when number != 0 and exponent > 308 ->
+                    {if(number < 0,
+                       do: -Limits.get(:max_css_numeric_magnitude),
+                       else: Limits.get(:max_css_numeric_magnitude)
+                     ), ""}
+
+                  _ ->
+                    :error
+                end
+              else
+                :error
+              end
+
+            parsed ->
+              parsed
+          end
+
+        case parsed_number do
           {number, raw_unit} ->
             unit =
               case HtmlValidator.parse_css_identifier(raw_unit) do

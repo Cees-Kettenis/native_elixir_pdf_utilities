@@ -83,6 +83,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     :_font_registry,
     :font_face,
     :_root_font_face,
+    :_inherited_font,
     :image,
     :svg_image,
     :_text_decorations,
@@ -1127,7 +1128,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                      Keyword.fetch!(opts, :__image_budget__),
                      opts
                    ) do
-              style = CssValueValidator.ensure_box_style(style)
+              style =
+                style |> CssValueValidator.ensure_box_style() |> resolve_current_color_values()
 
               style =
                 Map.put(

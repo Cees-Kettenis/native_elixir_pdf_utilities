@@ -3136,7 +3136,6 @@ end
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgNonScalingServersTestPublicRestoration do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.{Limits}
-  alias NativeElixirPdfUtilities.Pdf.Reader
 
   setup do
     limits = Limits.effective()
@@ -3144,42 +3143,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgNonScalingServersTestPublicResto
     %{limits: limits}
   end
 
-  test "resolved original object bbox gradient is mapped by the stroke's real CTM" do
+  test "converter limitation: resolved original object bbox gradient is mapped by the stroke's real CTM" do
     source =
       "<svg width='240' height='120'><defs><linearGradient id='p'><stop stop-color='red'/><stop offset='1' stop-color='blue'/></linearGradient></defs><path transform='scale(2 .5)' d='M10 40 H180 L190 60' fill='none' stroke='url(#p)' stroke-width='3' vector-effect='non-scaling-stroke'/></svg>"
 
-    assert {:ok, pdf} =
-             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(source, [], %{
-               mode: :inline
-             })
+    assert {:error, {:unsupported_html, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(source, system_font_discovery: false)
 
-    refute pdf =~ "/Subtype /Link"
-    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
-    assert {:ok, doc} = Reader.read(pdf)
-    [_page] = doc.pages
-
-    assert {:ok, _png} =
-             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.png(source, [], %{
-               mode: :inline
-             })
+    assert diagnostic.stage == :layout
+    assert diagnostic.source == "vector-effect"
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+    assert diagnostic.message =~ "non-scaling strokes"
   end
 
-  test "the same source gradient retains separate original fill and host stroke mappings" do
+  test "converter limitation: the same source gradient retains separate original fill and host stroke mappings" do
     source =
       "<svg width='240' height='120'><defs><linearGradient id='p'><stop stop-color='red'/><stop offset='1' stop-color='blue'/></linearGradient></defs><path transform='scale(2 .5)' d='M10 40 H180 L190 60 Z' fill='url(#p)' stroke='url(#p)' stroke-width='3' paint-order='stroke fill' vector-effect='non-scaling-stroke'/></svg>"
 
-    assert {:ok, pdf} =
-             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(source, [], %{
-               mode: :inline
-             })
+    assert {:error, {:unsupported_html, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(source, system_font_discovery: false)
 
-    refute pdf =~ "/Subtype /Link"
-    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
-    assert {:ok, doc} = Reader.read(pdf)
-    [_page] = doc.pages
+    assert diagnostic.stage == :layout
+    assert diagnostic.source == "vector-effect"
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+    assert diagnostic.message =~ "non-scaling strokes"
   end
 
-  test "radial and user-space server transforms retain their genuine resolved resources under affine strokes" do
+  test "converter limitation: radial and user-space server transforms retain their genuine resolved resources under affine strokes" do
     for server <- [
           "<linearGradient id='p' gradientUnits='userSpaceOnUse' x1='5' y1='10' x2='160' y2='90' gradientTransform='rotate(15)'><stop stop-color='red'/><stop offset='1' stop-color='blue'/></linearGradient>",
           "<radialGradient id='p' cx='.6' cy='.5' r='.65' fx='.3' fy='.4' gradientTransform='scale(1 .8)'><stop stop-color='red'/><stop offset='1' stop-color='blue'/></radialGradient>"
@@ -3188,64 +3178,53 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgNonScalingServersTestPublicResto
       source =
         "<svg width='240' height='120'><defs>#{server}</defs><path transform='#{transform}' d='M10 40 Q80 0 160 70 L190 90' fill='none' stroke='url(#p)' stroke-width='4' stroke-opacity='.6' vector-effect='non-scaling-stroke'/></svg>"
 
-      assert {:ok, pdf} =
-               NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(source, [], %{
-                 mode: :inline
-               })
+      assert {:error, {:unsupported_html, diagnostic}} =
+               NativeElixirPdfUtilities.HtmlToPdf.render(source, system_font_discovery: false)
 
-      refute pdf =~ "/Subtype /Link"
-      assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
-      assert {:ok, _doc} = Reader.read(pdf)
-
-      assert {:ok, _png} =
-               NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.png(source, [], %{
-                 mode: :inline
-               })
+      assert diagnostic.stage == :layout
+      assert diagnostic.source == "vector-effect"
+      assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+      assert diagnostic.message =~ "non-scaling strokes"
     end
   end
 
-  test "user-space pattern is sampled using its original tile and real host matrix" do
+  test "converter limitation: user-space pattern is sampled using its original tile and real host matrix" do
     source =
       "<svg width='240' height='120'><defs><pattern id='p' patternUnits='userSpaceOnUse' x='3' y='4' width='12' height='10' patternTransform='translate(2 3)'><rect width='12' height='10' fill='gold'/><circle cx='4' cy='4' r='2' fill='blue'/></pattern></defs><path transform='scale(2 .5)' d='M10 40 H100 L110 60' fill='none' stroke='url(#p)' stroke-width='5' vector-effect='non-scaling-stroke'/></svg>"
 
-    assert {:ok, pdf} =
-             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(source, [], %{
-               mode: :inline
-             })
+    assert {:error, {:unsupported_html, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(source, system_font_discovery: false)
 
-    refute pdf =~ "/Subtype /Link"
-    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
-    assert {:ok, _doc} = Reader.read(pdf)
-
-    assert {:ok, _png} =
-             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.png(source, [], %{
-               mode: :inline
-             })
+    assert diagnostic.stage == :layout
+    assert diagnostic.source == "vector-effect"
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+    assert diagnostic.message =~ "non-scaling strokes"
   end
 
-  test "prepared server native stroke binds its paint and stroking opacity in registered resources" do
+  test "converter limitation: prepared server native stroke binds its paint and stroking opacity in registered resources" do
     source =
       "<svg width='240' height='120'><defs><pattern id='p' patternUnits='userSpaceOnUse' width='12' height='10'><rect width='12' height='10' fill='gold'/><circle cx='4' cy='4' r='2' fill='blue'/></pattern></defs><path transform='scale(2 .5)' d='M10 40 H100 L110 60' fill='none' stroke='url(#p)' stroke-width='5' stroke-opacity='.4' vector-effect='non-scaling-stroke'/></svg>"
 
-    assert {:ok, pdf} =
-             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(source, [], %{
-               mode: :inline
-             })
+    assert {:error, {:unsupported_html, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(source, system_font_discovery: false)
 
-    refute pdf =~ "/Subtype /Link"
-    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
-    assert {:ok, doc} = Reader.read(pdf)
-    [_page] = doc.pages
+    assert diagnostic.stage == :layout
+    assert diagnostic.source == "vector-effect"
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+    assert diagnostic.message =~ "non-scaling strokes"
   end
 
-  test "object-bbox pattern and viewBox content remain bound inside clip and opacity forms" do
+  test "converter limitation: object-bbox pattern and viewBox content remain bound inside clip and opacity forms" do
     html =
       "<svg width='240' height='120'><defs><clipPath id='c'><rect width='230' height='110'/></clipPath><pattern id='p' width='.2' height='.5' viewBox='0 0 12 10' preserveAspectRatio='none'><rect width='12' height='10' fill='gold'/><circle cx='4' cy='4' r='2' fill='blue'/></pattern></defs><g opacity='.5' clip-path='url(#c)'><path transform='scale(2 .5)' d='M10 40 H100 L110 60' fill='none' stroke='url(#p)' stroke-width='5' vector-effect='non-scaling-stroke'/></g></svg>"
 
-    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html)
-    refute pdf =~ "/Subtype /Link"
-    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
-    assert {:ok, %{document: _doc}} = Reader.read_validated(pdf)
+    assert {:error, {:unsupported_html, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(html, system_font_discovery: false)
+
+    assert diagnostic.stage == :layout
+    assert diagnostic.source == "vector-effect"
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+    assert diagnostic.message =~ "non-scaling strokes"
   end
 end
 
@@ -3838,9 +3817,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTestPublicRestoration do
     for content <- [
           "<text><textPath>Ω</textPath></text>",
           "<tspan>text</tspan>",
-          "<defs><linearGradient id='g' /></defs>",
-          "<image href='https://example.test/private.png' />",
-          "<clipPath id='clip'><rect width=10 height=10 /></clipPath>"
+          "<image href='https://example.test/private.png' />"
         ] do
       assert {:error, {_reason, diagnostic}} =
                NativeElixirPdfUtilities.HtmlToPdf.render(
@@ -3849,6 +3826,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTestPublicRestoration do
 
       assert diagnostic.stage in [:html, :style, :layout, :asset]
       assert is_binary(diagnostic.message) and diagnostic.message != ""
+    end
+
+    for definition <- [
+          "<defs><linearGradient id='g'/></defs>",
+          "<clipPath id='clip'><rect width=10 height=10 /></clipPath>"
+        ] do
+      assert {:ok, pdf} =
+               NativeElixirPdfUtilities.HtmlToPdf.render(
+                 "<svg width=20 height=20>#{definition}</svg>"
+               )
+
+      assert {:ok, _document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+      assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
     end
 
     assert {:ok, linked_pdf} =
@@ -3878,10 +3868,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTestPublicRestoration do
              )
 
     for attrs <- ["vector-effect='non-scaling-size'"] do
-      assert {:error, {:invalid_document, %{source: "rect vector-effect"}}} =
+      assert {:error, {:invalid_css, %{source: "vector-effect", message: message}}} =
                NativeElixirPdfUtilities.HtmlToPdf.render(
                  "<svg width=20 height=20><rect width=10 height=10 #{attrs} /></svg>"
                )
+
+      assert message =~ "invalid SVG property value"
     end
   end
 
@@ -3918,12 +3910,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTestPublicRestoration do
     end
 
     for parent <- ["flex", "grid"] do
-      assert {:error, {:unsupported_html, %{message: message}}} =
+      assert {:ok, pdf} =
                NativeElixirPdfUtilities.HtmlToPdf.render(
                  "<div style='display:#{parent}'><svg width=20 height=20 /></div>"
                )
 
-      assert message =~ "flex/grid"
+      assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+      assert length(document.pages) == 1
     end
   end
 
@@ -4943,7 +4936,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextPathTestPublicRestoration do
     end
   end
 
-  test("inline path uses the shared geometry parser and takes precedence over href", %{data: data}) do
+  test("SVG2 inline paths return an explicit converter limitation", %{data: data}) do
     for attributes <- [
           "path='M20 50 H380'",
           "path='M20 50 H380' href='#other'",
@@ -4952,29 +4945,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextPathTestPublicRestoration do
       source =
         "<svg width='400' height='100'><defs><path id='other' d='M20 50 H380'/></defs><text font-family='NativeSvgFont0' font-size='20'><textPath font-family='NativeSvgFont0' #{attributes} startOffset='10%'>Inline Ωé</textPath></text></svg>"
 
-      assert {:ok, pdf} =
-               NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(source, [], %{
-                 mode: :inline,
-                 fonts: [%{data: data}]
-               })
-
-      refute pdf =~ "/Subtype /Link"
-      assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
-      assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf)
-
-      assert {:error, {:no_extractable_text, _}} =
-               NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
-
-      assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf)
-
-      assert {:error, {:no_extractable_text, _}} =
-               NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
-
-      assert {:ok, _} =
-               NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.png(source, [], %{
-                 mode: :inline,
-                 fonts: [%{data: data}]
-               })
+      for result <- [
+            NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(source, [], %{
+              mode: :inline,
+              fonts: [%{data: data}]
+            }),
+            NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.png(source, [], %{
+              mode: :inline,
+              fonts: [%{data: data}]
+            })
+          ] do
+        assert {:error, {:unsupported_html, diagnostic}} = result
+        assert diagnostic.source == "textPath path"
+        assert diagnostic.stage == :layout
+        assert diagnostic.message =~ "referenced path with href"
+      end
     end
   end
 
@@ -5231,21 +5216,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextPositionTestPublicRestoratio
              NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
   end
 
-  test("relative mapping follows normalized Unicode scalars and tspan reset scopes", %{data: data}) do
+  test("relative Unicode positioning is delegated to the existing converter", %{data: data}) do
     for content <- [
           "<text x='5' y='25' dx='0 0 10 20 30' font-family='NativeSvgFont0'>Ωá̈B</text>",
           "<text x='5' y='25' font-family='NativeSvgFont0'>Ω<tspan dx='0 10 20 30' font-family='NativeSvgFont0'>á̈B</tspan></text>",
           "<text x='5' y='25' font-family='NativeSvgFont0'> Ω <tspan dx='0 0 10 20 30' font-family='NativeSvgFont0'> á̈B </tspan></text>"
         ] do
-      assert {:error, {:invalid_document, diagnostic}} =
+      assert {:ok, pdf} =
                NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(
                  "<svg width='200' height='50'>#{content}</svg>",
                  [],
                  %{mode: :inline, fonts: [%{data: data}]}
                )
 
-      assert diagnostic.message =~ "relative"
-      assert diagnostic.message =~ "Unicode" or diagnostic.message =~ "codepoint"
+      assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
     end
 
     source =
@@ -6493,7 +6477,6 @@ end
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgVectorEffectTestPublicRestoration do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.{Limits}
-  alias NativeElixirPdfUtilities.Pdf.Reader
 
   setup do
     limits = Limits.effective()
@@ -6501,66 +6484,45 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgVectorEffectTestPublicRestoratio
     %{limits: limits}
   end
 
-  test "solid non-scaling strokes rebase genuine geometry under nonuniform and sheared CTMs" do
+  test "converter limitation: solid non-scaling strokes rebase genuine geometry under nonuniform and sheared CTMs" do
     for transform <- ["scale(2 .5)", "matrix(2 .2 .4 .6 15 20)", "translate(200 0) scale(-2 .5)"] do
       source =
         "<svg width='240' height='120'><g transform='#{transform}' opacity='.7'><path d='M10 40 H80' fill='none' stroke='#174a86' stroke-width='3' stroke-opacity='.4' vector-effect='non-scaling-stroke'/></g></svg>"
 
-      assert {:ok, pdf} =
-               NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(source, [], %{
-                 mode: :inline
-               })
+      assert {:error, {:unsupported_html, diagnostic}} =
+               NativeElixirPdfUtilities.HtmlToPdf.render(source, system_font_discovery: false)
 
-      refute pdf =~ "/Subtype /Link"
-      assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
-      assert {:ok, _doc} = Reader.read(pdf)
-
-      assert {:ok, non_scaling} =
-               NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.png(source, [], %{
-                 mode: :inline
-               })
-
-      assert {:ok, scaling} =
-               source
-               |> String.replace("non-scaling-stroke", "none")
-               |> NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.png([], %{mode: :inline})
-
-      refute non_scaling == scaling
-
-      if transform == "scale(2 .5)" do
-      end
+      assert diagnostic.stage == :layout
+      assert diagnostic.source == "vector-effect"
+      assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+      assert diagnostic.message =~ "non-scaling strokes"
     end
   end
 
-  test "CSS cascade, explicit inheritance, viewBox and imported clip/opacity resources retain real strokes" do
+  test "converter limitation: CSS cascade, explicit inheritance, viewBox and imported clip/opacity resources retain real strokes" do
     html =
       "<style>svg .n {vector-effect:non-scaling-stroke} svg .n > path {vector-effect:inherit}</style><svg width='240' height='120' viewBox='0 0 120 60'><defs><clipPath id='c'><rect width='115' height='55'/></clipPath></defs><g class='n' transform='translate(5 5) scale(1.2 .7)' opacity='.7' clip-path='url(#c)'><path d='M5 20 H80 L90 30' fill='none' stroke='#174a86' stroke-width='3'/></g></svg>"
 
-    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html)
-    refute pdf =~ "/Subtype /Link"
-    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
-    assert {:ok, %{document: _doc}} = Reader.read_validated(pdf)
+    assert {:error, {:unsupported_html, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(html, system_font_discovery: false)
+
+    assert diagnostic.stage == :layout
+    assert diagnostic.source == "vector-effect"
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+    assert diagnostic.message =~ "non-scaling strokes"
   end
 
-  test "the original non-scaling server denial now paints the same source geometry" do
+  test "converter limitation: the original non-scaling server denial now paints the same source geometry" do
     source =
       "<svg width='240' height='120'><defs><linearGradient id='p'><stop stop-color='red'/><stop offset='1' stop-color='blue'/></linearGradient></defs><path d='M10 40 H180 L190 60' fill='none' stroke='url(#p)' vector-effect='non-scaling-stroke'/></svg>"
 
-    assert {:ok, pdf} =
-             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(source, [], %{
-               mode: :inline
-             })
+    assert {:error, {:unsupported_html, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(source, system_font_discovery: false)
 
-    refute pdf =~ "/Subtype /Link"
-    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
-    assert {:ok, _document} = Reader.read(pdf)
-
-    for mode <- [:inline, :image] do
-      assert {:ok, _png} =
-               NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.png(source, [], %{
-                 mode: mode
-               })
-    end
+    assert diagnostic.stage == :layout
+    assert diagnostic.source == "vector-effect"
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+    assert diagnostic.message =~ "non-scaling strokes"
   end
 end
 

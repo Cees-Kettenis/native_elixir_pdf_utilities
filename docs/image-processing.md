@@ -17,15 +17,18 @@ conversion is unsupported.
 
 ## SVG images
 
-SVGs appear as raster images in the PDF. Use self-contained SVGs with internal
-`#id` references. Embedded images, external resources, DTD/entity declarations,
-and escaped CSS resource syntax are rejected. Remove any `DOCTYPE` declaration
-from exported SVGs before using them.
+SVGs appear as PNG artwork in the PDF through the existing Resvg dependency.
+Elixir prepares source, dimensions, permitted font bytes and selected nested image
+resources. The converter cannot read arbitrary caller paths or fetch network
+resources. DTD/entity declarations and escaped CSS resource syntax are rejected.
 
-SVG rendering uses Resvg, which can ignore unsupported SVG features and still
-return an image. The binding does not report those omissions as conversion errors,
-so this library cannot return diagnostics for them. A successful conversion
-therefore does not guarantee that every SVG feature appears in the PDF.
+The library diagnoses known unsupported converter features before returning an
+incomplete image. These include `foreignObject`, non-scaling strokes and SVG2
+inline `textPath` path data. SVG text is rasterized and internal SVG links are
+inert. An ordinary HTML anchor around the image remains clickable.
 
-See [image sources and supported styling](html-to-pdf-compatibility.md#images-and-backgrounds)
-and [diagnostics](diagnostics.md) for usage details.
+Successful conversion alone does not prove complete SVG conformance. The current
+development baseline still has unresolved Chromium comparisons. See
+[SVG conversion](svg-converter-workflow.md), the
+[current work plan](milestone-1.1.0-work-plan.md) and
+[diagnostics](diagnostics.md).

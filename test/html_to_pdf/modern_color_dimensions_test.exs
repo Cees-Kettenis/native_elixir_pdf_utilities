@@ -7,6 +7,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ModernColorDimensionsTest do
     HtmlFormValidator
   }
 
+  test "color token boundaries reject malformed commas and comments joining distinct tokens" do
+    for color <- [
+          "rgb(1,,2,3)",
+          "rgb(,1,2,3)",
+          "rgb(1,2,3,)",
+          "rgb(1/**/2 3 4)",
+          "r/**/ed",
+          "rgb/**/(1 2 3)"
+        ] do
+      assert :error = CssColorValidator.parse_function_color(color, nil), color
+    end
+
+    assert {:ok, color} = CssColorValidator.parse_function_color("rgb(255/**/ 0 0)", nil)
+    assert color == {1.0, 0.0, 0.0}
+  end
+
   test "each color product requires a scalar factor and division requires a scalar divisor" do
     for source <- [
           "calc(120deg / 1deg)",
