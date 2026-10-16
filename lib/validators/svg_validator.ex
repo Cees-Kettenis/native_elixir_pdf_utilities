@@ -39,15 +39,21 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
           {:ok, keyword()} | {:error, {atom(), map()}}
   def validate_dimensions(attributes, options, budget) do
     if is_list(options) and Keyword.keyword?(options) and
-         Enum.all?(Keyword.keys(options), &(&1 in [:width, :height])) do
+         Enum.all?(Keyword.keys(options), &(&1 in [:width, :height, :scale])) and
+         is_integer(Keyword.get(options, :scale, 1)) and Keyword.get(options, :scale, 1) > 0 do
+      scale = Keyword.get(options, :scale, 1)
+
       with {:ok, {intrinsic_width, intrinsic_height}} <- svg_intrinsic_dimensions(attributes),
            {:ok, {width, height}} <-
              svg_raster_dimensions(options, intrinsic_width, intrinsic_height),
-           :ok <- validate_raster_dimensions(width, height, budget) do
-        {:ok, [width: width, height: height]}
+           :ok <- validate_raster_dimensions(width * scale, height * scale, budget) do
+        {:ok, [width: width * scale, height: height * scale]}
       end
     else
-      Diagnostics.error(:style, :invalid_document, "SVG options accept only width and height",
+      Diagnostics.error(
+        :style,
+        :invalid_document,
+        "SVG options accept only width, height and a positive integer scale",
         source: "SVG"
       )
     end

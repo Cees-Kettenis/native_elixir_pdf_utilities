@@ -402,6 +402,62 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
     assert measured.actual_text == "()"
   end
 
+  test "CSS ink rounding selects the Chromium all-stretch variant without changing design metrics",
+       %{font: font} do
+    assert {:ok, exact} = MathLayout.glyph("(", font, 20)
+    assert {:ok, css} = MathLayout.glyph("(", font, 20, stretch_metrics: :ink)
+    assert_in_delta exact.ascent, 14.72, 1.0e-10
+    assert_in_delta exact.descent, 3.92, 1.0e-10
+    assert css.ascent == 15.0
+    assert css.descent == 4.5
+    assert css.ink_ascent == exact.ascent
+    assert css.ink_descent == exact.descent
+
+    html = "<math style='font-size:20pt'><mo>(</mo><mo style='font-size:40pt'>)</mo></math>"
+    assert {:ok, dom} = NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse_detailed(html)
+
+    assert {:ok, %{children: [math]}} =
+             NativeElixirPdfUtilities.HtmlToPdf.Style.compute_detailed(dom,
+               system_font_discovery: false
+             )
+
+    box = math.style._math_box
+    assert hd(box.glyphs).glyph_id == 1307
+    assert box.ascent + box.descent == 53.25
+
+    # A vertical assembly aligns each piece by its top advance, and its
+    # allocated height comes from the union of the selected pixel ink bounds.
+    assert {:ok, assembly} =
+             NativeElixirPdfUtilities.Validators.FontValidator.with_budget(fn ->
+               MathLayoutValidator.prepare_stretch("(", font, 16, :vertical, 120,
+                 stretch_metrics: :ink
+               )
+             end)
+
+    assert assembly.kind == :assembly
+
+    assert {:ok, painted} =
+             MathLayout.stretch("(", font, 16, :vertical, 120, stretch_metrics: :ink)
+
+    scale = 16 / font.units_per_em
+    first = hd(assembly.parts)
+    {_, _, _, top} = first.metric.ink_bounds
+    assert_in_delta hd(painted.glyphs).y, first.full_advance * scale - top, 1.0e-10
+
+    bounds =
+      Enum.zip(painted.glyphs, assembly.parts)
+      |> Enum.map(fn {glyph, part} ->
+        {_, bottom, _, top} = part.metric.ink_bounds
+        {glyph.y + bottom, glyph.y + top}
+      end)
+
+    expected_height =
+      Enum.max(Enum.map(bounds, &elem(&1, 1))) - Enum.min(Enum.map(bounds, &elem(&1, 0)))
+
+    assert_in_delta painted.ascent, expected_height, 1.0e-10
+    assert painted.descent == 0.0
+  end
+
   test "all-stretch rows relayout to the initial source ink maxima", %{
     node: n,
     row: r,

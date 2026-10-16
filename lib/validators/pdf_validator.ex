@@ -20,6 +20,39 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   # recovery too, and the outer scope always deletes it, including on exceptions.
   @reader_budget_key {__MODULE__, :reader_budget}
 
+  @doc "Parses a bounded PDF numeric token, rejecting exponent notation and unrepresentable reals."
+  @spec parse_numeric_token(binary()) ::
+          {:ok, {:int, integer()} | {:real, float()}} | :error | {:error, {atom(), map()}}
+  def parse_numeric_token(word) do
+    with :ok <- validate_reader_size(byte_size(word), :max_pdf_numeric_token_bytes) do
+      if :binary.match(word, ".") == :nomatch do
+        try do
+          {:ok, {:int, :erlang.binary_to_integer(word)}}
+        rescue
+          ArgumentError -> :error
+        end
+      else
+        if :binary.match(word, ["e", "E"]) == :nomatch do
+          normalized =
+            case word do
+              "." <> rest -> "0." <> rest
+              "+." <> rest -> "+0." <> rest
+              "-." <> rest -> "-0." <> rest
+              _ -> if String.ends_with?(word, "."), do: word <> "0", else: word
+            end
+
+          try do
+            {:ok, {:real, :erlang.binary_to_float(normalized)}}
+          rescue
+            ArgumentError -> :error
+          end
+        else
+          :error
+        end
+      end
+    end
+  end
+
   @doc false
   @spec with_reader_budget((-> result)) :: result | {:error, {atom(), Diagnostics.diagnostic()}}
         when result: var

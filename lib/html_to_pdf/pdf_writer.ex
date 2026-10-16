@@ -1408,6 +1408,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                            do: %{fill_box | border_radius: 0.0},
                            else: fill_box
 
+                      fill_box =
+                        case fill_box do
+                          %{role: :block_fragment_paint, snap_to_css_pixel_grid: true} ->
+                            # Block fills share Chromium's print-matrix edge ties
+                            # with inline fills; layout bounds stay unchanged.
+                            %{
+                              fill_box
+                              | x: fill_box.x - @raster_boundary_bias,
+                                y: fill_box.y + @raster_boundary_bias
+                            }
+
+                          _ ->
+                            fill_box
+                        end
+
                       [rect_path(fill_box), "f", "Q"]
                     end
 
@@ -2909,7 +2924,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             }
 
           _ ->
-            mask_object_id = if Map.has_key?(image, :alpha_data), do: object_id + 1
+            mask_object_id = if Map.get(image, :alpha_data), do: object_id + 1
             base_object_count = if is_nil(mask_object_id), do: 1, else: 2
 
             tint_object_id =
@@ -3148,7 +3163,97 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     entries =
       " /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace #{color_space} /BitsPerComponent #{image.bits_per_component}#{filter}#{smask}#{decode}#{color_transform}"
 
-    stream_object(image.data, image.format == :png, entries, 0)
+    stream_object(image_color_data(image), image.format == :png, entries, 0)
+  end
+
+  # PDF readers resample the color image separately from its soft mask. Extend
+  # visible colors by one pixel into transparent pixels so interpolation cannot
+  # mix an unrelated hidden color into the visible edge. Alpha is unchanged.
+  defp image_color_data(image) do
+    case image do
+      %{format: :png, alpha_data: alpha} when is_binary(alpha) ->
+        width = image.width_px
+        height = image.height_px
+        sample_bytes = div(image.bits_per_component, 8)
+        pixel_bytes = sample_bytes * if(image.color_space == :device_rgb, do: 3, else: 1)
+
+        mask =
+          if sample_bytes == 1 do
+            alpha
+          else
+            for <<sample::16 <- alpha>>, into: <<>>, do: <<if(sample == 0, do: 0, else: 255)>>
+          end
+
+        for y <- 0..(height - 1), into: [] do
+          row = binary_part(image.data, y * width * pixel_bytes, width * pixel_bytes)
+          zeros = Regex.scan(~r/\x00+/, binary_part(mask, y * width, width), return: :index)
+
+          {parts, offset} =
+            Enum.reduce(zeros, {[], 0}, fn [{start, length}], {parts, offset} ->
+              left = max(start - 1, 0)
+              right = min(start + length, width - 1)
+
+              neighbors =
+                for ny <- max(y - 1, 0)..min(y + 1, height - 1),
+                    [{x, count}] <-
+                      Regex.scan(
+                        ~r/[^\x00]+/,
+                        binary_part(mask, ny * width + left, right - left + 1),
+                        return: :index
+                      ),
+                    do: {max(start, left + x - 1), min(start + length - 1, left + x + count)}
+
+              case neighbors do
+                [] ->
+                  {parts, offset}
+
+                _ ->
+                  first = neighbors |> Enum.map(&elem(&1, 0)) |> Enum.min()
+                  last = neighbors |> Enum.map(&elem(&1, 1)) |> Enum.max()
+
+                  colors =
+                    for x <- first..last do
+                      transparent_edge_color(
+                        image.data,
+                        alpha,
+                        x,
+                        y,
+                        width,
+                        height,
+                        sample_bytes,
+                        pixel_bytes
+                      )
+                    end
+
+                  {[parts, binary_part(row, offset, first * pixel_bytes - offset), colors],
+                   (last + 1) * pixel_bytes}
+              end
+            end)
+
+          [parts, binary_part(row, offset, byte_size(row) - offset)]
+        end
+        |> IO.iodata_to_binary()
+
+      _ ->
+        image.data
+    end
+  end
+
+  defp transparent_edge_color(data, alpha, x, y, width, height, sample_bytes, pixel_bytes) do
+    {_alpha, index} =
+      for ny <- max(y - 1, 0)..min(y + 1, height - 1),
+          nx <- max(x - 1, 0)..min(x + 1, width - 1),
+          reduce: {0, y * width + x} do
+        {best, index} ->
+          candidate = ny * width + nx
+
+          value =
+            :binary.decode_unsigned(binary_part(alpha, candidate * sample_bytes, sample_bytes))
+
+          if value > best, do: {value, candidate}, else: {best, index}
+      end
+
+    binary_part(data, index * pixel_bytes, pixel_bytes)
   end
 
   defp image_mask_object(image) do
@@ -3212,7 +3317,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
            Map.get(image, :inverted_cmyk, false), Map.get(image, :layer)}
         ),
         image.data,
-        Map.get(image, :alpha_data, "")
+        Map.get(image, :alpha_data) || ""
       ])
       |> Base.encode16(case: :lower)
     end
@@ -3297,13 +3402,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp escape_text(text) do
-    text
-    |> String.replace("\\", "\\\\")
-    |> String.replace("(", "\\(")
-    |> String.replace(")", "\\)")
-    |> String.replace("\r\n", "\\n")
-    |> String.replace("\n", "\\n")
-    |> String.replace("\r", "\\n")
+    case :binary.match(text, ["\\", "(", ")", "\r", "\n"]) do
+      :nomatch ->
+        text
+
+      _ ->
+        text
+        |> String.replace("\\", "\\\\")
+        |> String.replace("(", "\\(")
+        |> String.replace(")", "\\)")
+        |> String.replace("\r\n", "\\n")
+        |> String.replace("\n", "\\n")
+        |> String.replace("\r", "\\n")
+    end
   end
 
   defp pad_offset(offset) do
@@ -3313,17 +3424,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp format_number(number) do
-    rounded = Float.round(number * 1.0, 4)
+    case number do
+      integer when is_integer(integer) ->
+        Integer.to_string(integer)
 
-    case rounded == trunc(rounded) do
-      true ->
-        Integer.to_string(trunc(rounded))
+      number when number == trunc(number) ->
+        Integer.to_string(trunc(number))
 
-      false ->
-        rounded
-        |> :erlang.float_to_binary(decimals: 4)
-        |> String.trim_trailing("0")
-        |> String.trim_trailing(".")
+      number ->
+        rounded = Float.round(number, 4)
+
+        case rounded == trunc(rounded) do
+          true ->
+            Integer.to_string(trunc(rounded))
+
+          false ->
+            :erlang.float_to_binary(rounded, [:compact, decimals: 4])
+        end
     end
   end
 end

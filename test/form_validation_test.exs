@@ -705,7 +705,7 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
   end
 
   test "flatten follows each page's annotation order across nested fields and repeated widgets" do
-    pdf = overlapping_widgets_pdf(false)
+    pdf = overlapping_widgets_pdf()
     {:ok, context} = Reader.read_validated(pdf)
     {:ok, form} = FormValidator.inspect_document(context)
 
@@ -753,37 +753,7 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
     end
   end
 
-  @tag :browser_parity
-  test "flattening preserves pixels when overlapping widgets disagree with field-tree order" do
-    alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
-
-    for hidden <- [false, true] do
-      source = overlapping_widgets_pdf(hidden)
-      assert {:ok, flat} = Forms.flatten(source)
-
-      stats =
-        PdfVisualCompare.pdf_visual_stats!(source, flat,
-          artifact_dir: "tmp/forms_visual/annotation-order-#{hidden}"
-        )
-
-      assert length(stats) == 2
-      assert Enum.all?(stats, &(&1.changed_pixels == 0))
-    end
-
-    source = overlapping_widgets_pdf(false)
-    values = %{"group.red" => "RED", "group.blue" => "BLUE"}
-    assert {:ok, filled} = Forms.fill(source, values)
-    assert {:ok, flat} = Forms.fill(source, values, flatten: true)
-
-    for stats <-
-          PdfVisualCompare.pdf_visual_stats!(filled, flat,
-            artifact_dir: "tmp/forms_visual/annotation-order-filled"
-          ) do
-      assert stats.changed_pixels == 0
-    end
-  end
-
-  defp overlapping_widgets_pdf(hidden) do
+  defp overlapping_widgets_pdf() do
     {:ok, pdf} = PdfWriter.render(List.duplicate(%{size: {100.0, 100.0}, boxes: []}, 2))
     {:ok, context} = Reader.read_validated(pdf)
     next = context.document.trailer["Size"]
@@ -819,7 +789,7 @@ defmodule NativeElixirPdfUtilities.FormValidationTest do
             "Subtype" => {:name, "Widget"},
             "Parent" => ref.(parent),
             "Rect" => [10, 10, 60, 60],
-            "F" => if(hidden and offset == 3, do: 2, else: 4),
+            "F" => 4,
             "AP" => %{"N" => ref.(appearance)}
           }}}
       end

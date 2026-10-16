@@ -75,8 +75,6 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
   # NUL, HT, LF, FF, CR, SP
   @whitespace [0, 9, 10, 12, 13, 32]
   @delims ~c"()<>[]{}/%"
-  @pdf_integer ~r/\A[+-]?[0-9]+\z/
-  @pdf_real ~r/\A[+-]?(?:[0-9]+\.[0-9]*|\.[0-9]+)\z/
 
   @doc """
   Initialize the tokenizer from a binary.
@@ -402,22 +400,17 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
 
   # Read bytes until a delimiter or whitespace is reached.
   defp take_until_delim(%__MODULE__{} = st) do
-    take_until_delim(st, 0)
+    length = token_length(binary_part(st.bin, st.pos, st.size - st.pos), 0)
+    {slice(st, length), bump(st, length)}
   end
 
-  defp take_until_delim(%__MODULE__{} = st, n) do
-    cond do
-      st.pos + n >= st.size ->
-        {slice(st, n), bump(st, n)}
+  defp token_length(source, length) do
+    case source do
+      <<byte, rest::binary>> when byte not in @whitespace and byte not in @delims ->
+        token_length(rest, length + 1)
 
-      :binary.at(st.bin, st.pos + n) in @whitespace ->
-        {slice(st, n), bump(st, n)}
-
-      :binary.at(st.bin, st.pos + n) in @delims ->
-        {slice(st, n), bump(st, n)}
-
-      true ->
-        take_until_delim(st, n + 1)
+      _ ->
+        length
     end
   end
 
@@ -624,13 +617,13 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
 
   # Parse a number or a keyword that looks like a number prefix.
   defp parse_number_or_keyword(%__MODULE__{} = st) do
-    {word, st2} = take_word(st)
+    {word, st2} = take_until_delim(st)
     parse_number_from_word(word, st2)
   end
 
   # Parse a bareword keyword (operators or known symbols like obj/endobj/R/etc.).
   defp parse_keyword(%__MODULE__{} = st) do
-    {word, st2} = take_word(st)
+    {word, st2} = take_until_delim(st)
 
     case word do
       "obj" ->
@@ -672,55 +665,20 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
     end
   end
 
-  # Read a bareword until a delimiter or whitespace.
-  defp take_word(%__MODULE__{} = st) do
-    take_word(st, 0)
-  end
-
-  defp take_word(%__MODULE__{} = st, n) do
-    cond do
-      st.pos + n >= st.size ->
-        {slice(st, n), bump(st, n)}
-
-      :binary.at(st.bin, st.pos + n) in @whitespace ->
-        {slice(st, n), bump(st, n)}
-
-      is_delim?(:binary.at(st.bin, st.pos + n)) ->
-        {slice(st, n), bump(st, n)}
-
-      true ->
-        take_word(st, n + 1)
-    end
-  end
-
   # Interpret a bareword as a PDF integer or real, retaining the start of invalid numbers.
   defp parse_number_from_word(word, st) do
-    with :ok <- PdfValidator.validate_reader_size(byte_size(word), :max_pdf_numeric_token_bytes) do
-      cond do
-        Regex.match?(@pdf_integer, word) ->
-          {integer, ""} = Integer.parse(word)
-          st = maybe_capture_length_int(st, integer)
-          {{:int, integer}, st}
+    case PdfValidator.parse_numeric_token(word) do
+      {:ok, {:int, integer} = token} ->
+        {token, maybe_capture_length_int(st, integer)}
 
-        Regex.match?(@pdf_real, word) ->
-          normalized =
-            cond do
-              String.starts_with?(word, ".") -> "0" <> word
-              String.starts_with?(word, "+.") -> "+0" <> binary_part(word, 1, byte_size(word) - 1)
-              String.starts_with?(word, "-.") -> "-0" <> binary_part(word, 1, byte_size(word) - 1)
-              String.ends_with?(word, ".") -> word <> "0"
-              true -> word
-            end
+      {:ok, token} ->
+        {token, st}
 
-          try do
-            {{:real, :erlang.binary_to_float(normalized)}, st}
-          rescue
-            ArgumentError -> {{:error, {:not_a_number, word, st.pos - byte_size(word)}}, st}
-          end
+      :error ->
+        {{:error, {:not_a_number, word, st.pos - byte_size(word)}}, st}
 
-        true ->
-          {{:error, {:not_a_number, word, st.pos - byte_size(word)}}, st}
-      end
+      {:error, _} = error ->
+        error
     end
   end
 

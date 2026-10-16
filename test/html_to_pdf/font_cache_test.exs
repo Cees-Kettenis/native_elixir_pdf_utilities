@@ -11,6 +11,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCacheTest do
     assert FontCache.identity("DejaVu Sans", data) == "3c8c7d9f38c2"
     refute FontCache.identity("Different family", data) == "3c8c7d9f38c2"
     refute FontCache.identity("DejaVu Sans", other) == "3c8c7d9f38c2"
+
+    compressed = FontCache.compressed(data)
+    assert compressed == :zlib.compress(data)
+    assert FontCache.compressed(data) == compressed
+    assert :zlib.uncompress(compressed) == data
+    assert :zlib.uncompress(FontCache.compressed(other)) == other
   end
 
   test "fetch reuses successful loads while the source file is unchanged" do
@@ -205,6 +211,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCacheTest do
     try do
       data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
       assert FontCache.identity("DejaVu Sans", data) == "3c8c7d9f38c2"
+      assert :zlib.uncompress(FontCache.compressed(data)) == data
 
       assert FontCache.fetch(path, fn data ->
                {:ok, data}

@@ -71,7 +71,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AutomaticMarginFollowupTest do
                )
 
       paint = Enum.map_join(hd(prepared.pages).boxes, &Map.get(&1, :text, ""))
-      assert paint =~ "Copied target" and paint =~ "Shadow copy" and paint =~ "▾"
+      assert paint =~ "Copied target" and paint =~ "Shadow copy" and paint =~ "▼"
     end)
   end
 
@@ -148,6 +148,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AutomaticMarginFollowupTest do
 
     assert stats.page_count == 1
     {text, 0} = System.cmd("pdftotext", [Path.join(stats.artifact_dir, "native.pdf"), "-"])
-    assert text =~ "Copied target" and text =~ "Shadow copy" and text =~ "▾"
+    assert text =~ "Copied target" and text =~ "Shadow copy" and text =~ "▼"
   end
 end

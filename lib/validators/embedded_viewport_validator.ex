@@ -380,13 +380,9 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
     # body. The existing reflow state machine removes it when the laid-out
     # document fits, including hidden overflow. Starting without it can select
     # the wrong stable wrapping state for a document near its height boundary.
-    # Plain-text initial documents lay out their preformatted root at the full
-    # viewport first; a provisional gutter would create an extra wrapped line
-    # and incorrectly retain scrolling for an otherwise fitting text document.
     vertical =
       surface.host in [:iframe, :object, :embed, :frame] and width > 0 and height > 0 and
         not match?({:blank, _url}, Map.get(surface, :source)) and
-        Map.get(surface, :initial_document_kind) != :text and
         (surface.host not in [:iframe, :frame] or
            Map.get(surface, :frame_scrollbars, :auto) != :none)
 
@@ -462,12 +458,16 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
         end
       end)
 
-    # The initial about:blank document has no scrolling body allocation. An
-    # empty srcdoc is a parsed document and retains its ordinary body margins.
-    # The full child tree has already been styled and laid out in its issued
-    # scope; only a genuinely empty initial document has this viewport extent.
+    # An empty body contributes no scrollable content, including in a parsed
+    # srcdoc. Its default margins alone must not create scrollbars in a tiny
+    # viewport. Painted backgrounds and anchored content keep their extents.
     initial_empty? =
-      match?({:blank, _url}, Map.get(surface, :source)) and
+      Enum.all?(surface.tree.children, fn node ->
+        node.tag == "body" and
+          Enum.all?(node.children, fn child ->
+            child.type == :text and HtmlValidator.trim_ascii_whitespace(child.text) == ""
+          end)
+      end) and
         Enum.all?(layout.boxes, fn box ->
           box.type == :flow_marker and Map.get(box, :role) == :embedded_extent and
             Map.get(box, :html_targets, []) == []

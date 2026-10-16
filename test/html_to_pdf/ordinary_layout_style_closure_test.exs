@@ -134,14 +134,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OrdinaryLayoutStyleClosureTest do
   end
 
   test "quote nesting crosses genuine element boundaries independently of counters" do
-    html = """
-    <style>q{quotes:'«' '»' '‹' '›'}span{counter-reset:item}</style>
-    <q>A<span><q>B</q></span>C</q>
-    """
-
-    assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {200, 140}, margin: 10)
-    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
-    assert String.replace(text, ~r/\s+/, "") == "«A‹B›C»"
+    for {content, expected} <- [
+          {"<q>A<span><q>B</q></span>C</q>", "«A‹B›C»"},
+          {"<div><q>First</q></div><p><q>Next</q></p>", "«First»«Next»"}
+        ] do
+      html = "<style>q{quotes:'«' '»' '‹' '›'}span{counter-reset:item}</style>" <> content
+      assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {200, 140}, margin: 10)
+      assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+      assert String.replace(text, ~r/\s+/, "") == expected
+    end
   end
 
   test "empty positioned targets retain genuine source line ownership and root transforms" do

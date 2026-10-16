@@ -43,7 +43,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
             when is_binary(text) and is_integer(line) and line > 0 and is_integer(column) and
                    column > 0 ->
               HtmlValidator.reserve_render_resource(:max_html_tree_work, byte_size(text), :html)
-              map_size(source) == 3 and String.valid?(text)
+              map_size(source) == 3 and String.valid?(text, :fast_ascii)
 
             _ ->
               false
@@ -395,7 +395,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
     source =
       cond do
         is_nil(source) -> nil
-        is_binary(source) and String.valid?(source) -> source
+        is_binary(source) and String.valid?(source, :fast_ascii) -> source
         true -> inspect(source)
       end
 

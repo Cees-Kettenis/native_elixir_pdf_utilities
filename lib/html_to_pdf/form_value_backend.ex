@@ -13,15 +13,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormValueBackend do
     if request.timeout == 0 do
       :timeout
     else
-      caller = self()
-      reply = make_ref()
-
       {worker, monitor} =
-        spawn_monitor(fn -> send(caller, {reply, HtmlFormValueValidator.evaluate(request)}) end)
+        spawn_monitor(fn ->
+          exit({:form_value_result, HtmlFormValueValidator.evaluate(request)})
+        end)
 
       receive do
-        {^reply, result} ->
-          Process.demonitor(monitor, [:flush])
+        {:DOWN, ^monitor, :process, ^worker, {:form_value_result, result}} ->
           result
 
         {:DOWN, ^monitor, :process, ^worker, _reason} ->
@@ -32,12 +30,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormValueBackend do
 
           receive do
             {:DOWN, ^monitor, :process, ^worker, _reason} -> :ok
-          end
-
-          receive do
-            {^reply, _result} -> :ok
-          after
-            0 -> :ok
           end
 
           :timeout

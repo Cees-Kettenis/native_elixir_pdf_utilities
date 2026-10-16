@@ -114,20 +114,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
       {:ok, identity}
     end
 
-    result =
-      case cached(key, nil) do
-        {:hit, result} ->
-          result
-
-        :miss ->
-          case Process.whereis(__MODULE__) do
-            nil -> loader.(<<>>)
-            _ -> GenServer.call(__MODULE__, {:fetch, key, nil, <<>>, loader}, :infinity)
-          end
-      end
-
-    {:ok, identity} = result
+    {:ok, identity} = fetch_value(key, loader)
     identity
+  end
+
+  @doc "Reuses losslessly compressed, already validated source-font bytes within the existing bounded font cache."
+  @spec compressed(binary()) :: binary()
+  def compressed(data) do
+    {:ok, compressed} =
+      fetch_value({:compressed, data}, fn _ -> {:ok, :zlib.compress(data)} end)
+
+    compressed
+  end
+
+  defp fetch_value(key, loader) do
+    case cached(key, nil) do
+      {:hit, result} ->
+        result
+
+      :miss ->
+        case Process.whereis(__MODULE__) do
+          nil -> loader.(<<>>)
+          _ -> GenServer.call(__MODULE__, {:fetch, key, nil, <<>>, loader}, :infinity)
+        end
+    end
   end
 
   @impl GenServer

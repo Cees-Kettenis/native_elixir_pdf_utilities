@@ -4,6 +4,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableBaselineSupportTest do
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, Style}
 
+  test "empty and hidden cell content does not invent a text baseline" do
+    html =
+      "<style>html,body{margin:0;font-family:DejaVu Sans;font-size:12pt;line-height:15pt}p{margin:0}</style><table style='border-collapse:collapse;width:100pt'><tr><td style='vertical-align:baseline;background:red;padding:0'><div style='display:none'>Hidden</div> </td><td style='vertical-align:baseline;padding:0'><div style='height:20pt;background:blue'></div></td></tr></table><p>After</p>"
+
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 200})
+    after_text = Enum.find(layout.boxes, &(Map.get(&1, :text) == "After"))
+    assert after_text.y == 168.75
+    refute Enum.any?(layout.boxes, &(Map.get(&1, :text) == "Hidden"))
+    refute Enum.any?(layout.boxes, &(&1.type == :baseline_measurement))
+  end
+
+  test "an empty nested table exports no synthetic row baseline" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<table><tr><td style='vertical-align:baseline'><table></table></td><td>Peer</td></tr></table>",
+               system_font_discovery: false
+             )
+
+    assert {:ok, "Peer"} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
+  end
+
   test "effective baseline hints preserve computed styles and use actual fragmented print geometry" do
     for baseline <- ["valign=baseline", "style='vertical-align:baseline'"],
         tag <- ["tbody", "tr", "td"] do

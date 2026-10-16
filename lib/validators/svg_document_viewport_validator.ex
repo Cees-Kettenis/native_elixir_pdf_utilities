@@ -212,9 +212,6 @@ defmodule NativeElixirPdfUtilities.Validators.SvgDocumentViewportValidator do
 
       {:error, {_, _}} = error ->
         error
-
-      _ ->
-        invalid("selected SVG raster requires a positive child viewport and a bounded transform")
     end
   rescue
     ArithmeticError ->

@@ -6390,8 +6390,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert {:ok, svg_style} = image_style(svg_src, [])
     assert svg_style.display == :image
     assert svg_style.image.format == :png
-    assert svg_style.image.width_px == 2
-    assert svg_style.image.height_px == 1
+    assert svg_style.image.width_px == 4
+    assert svg_style.image.height_px == 2
 
     transparent_svg_src =
       "data:image/svg+xml;base64," <>
@@ -6400,7 +6400,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
         )
 
     assert {:ok, transparent_svg_style} = image_style(transparent_svg_src, [])
-    assert byte_size(transparent_svg_style.image.alpha_data) == 2
+    assert byte_size(transparent_svg_style.image.alpha_data) == 8
 
     doctype_svg_src =
       "data:image/svg+xml;base64," <>
@@ -6436,8 +6436,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert {:ok, sized_svg_tree} = Style.compute(sized_svg_dom, [])
     [sized_svg] = sized_svg_tree.children
     assert sized_svg.style.image.format == :png
-    assert sized_svg.style.image.width_px == 10
-    assert sized_svg.style.image.height_px == 10
+    assert sized_svg.style.image.width_px == 20
+    assert sized_svg.style.image.height_px == 20
 
     height_sized_svg_dom = %{
       type: :document,
@@ -6456,8 +6456,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert height_sized_svg.style.image.format == :png
     assert height_sized_svg.style.aspect_ratio == 2.0
     assert height_sized_svg.style.height == 7.5
-    assert height_sized_svg.style.image.width_px == 20
-    assert height_sized_svg.style.image.height_px == 10
+    assert height_sized_svg.style.image.width_px == 40
+    assert height_sized_svg.style.image.height_px == 20
 
     assert {:ok, %{boxes: height_sized_boxes}} =
              NativeElixirPdfUtilities.HtmlToPdf.Layout.layout(height_sized_svg_tree)

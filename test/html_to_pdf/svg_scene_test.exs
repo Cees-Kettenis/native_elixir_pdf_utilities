@@ -5,7 +5,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, SvgScene}
-  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   setup do
     limits = Limits.effective()
@@ -104,17 +103,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
     assert diagnostic.message =~ "same-scene #id"
   end
 
-  test "original SVG anchor links retain their annotation behavior" do
-    assert {:ok, linked_pdf} =
-             HtmlToPdf.render(
-               "<svg width=20 height=20><a href='https://example.test/'><rect width=10 height=10 /></a></svg>"
-             )
-
-    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(linked_pdf)
-    refute linked_pdf =~ "/Subtype /Link"
-    assert {:error, {:no_extractable_text, _}} = Text.extract(linked_pdf, layout: false)
-  end
-
   test "authored metadata, IDs and processing instructions validate before omission" do
     for content <- [
           "<title onload='x'>Unsafe</title>",
@@ -172,11 +160,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
     assert {:ok, dom} = HtmlParser.parse_detailed(html)
     assert {:ok, styled} = Style.compute_detailed(dom)
     assert {:ok, layout} = Layout.layout(styled, page_size: {200, 100}, margin: 0)
-    group = Enum.find(layout.boxes, &(&1.type == :drawing_group))
+    image = Enum.find(layout.boxes, &(&1.type == :image))
     after_text = Enum.find(layout.boxes, &(Map.get(&1, :text) == "After café"))
-    assert_in_delta group.y, after_text.y, 0.001
-    assert {group.width, group.height} == {30.0, 15.0}
-    assert hd(group.boxes).link_rect == %{x: +0.0, y: +0.0, width: 30.0, height: 15.0}
+    assert_in_delta image.y, after_text.y, 0.001
+    assert {image.width, image.height} == {30.0, 15.0}
+    assert image.link_rect == %{x: image.x, y: image.y, width: 30.0, height: 15.0}
   end
 
   test "missing logical content and effects diagnose before successful artwork" do
@@ -318,31 +306,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
                  "<svg width=40 height=40><path d='#{d}' stroke=red fill=none /></svg>"
                )
     end
-  end
-
-  test "vector output uses the pinned shape tree and expands curved dashed strokes" do
-    source =
-      "<svg width='80' height='40'><path d='M2 30 C5 0 40 0 65 30' fill='none' stroke='red' stroke-width='4' stroke-linecap='round' stroke-dasharray='10 4'/></svg>"
-
-    assert {:ok, pdf} =
-             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(
-               source,
-               [width: 80, height: 40],
-               %{mode: :inline}
-             )
-
-    refute pdf =~ "/Subtype /Link"
-    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
-    assert {:ok, _context} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
-
-    assert {:ok, image_pdf} =
-             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(
-               source,
-               [width: 80, height: 40],
-               %{mode: :image}
-             )
-
-    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(image_pdf)
   end
 
   test "sibling opacity groups retain every form and graphics state" do

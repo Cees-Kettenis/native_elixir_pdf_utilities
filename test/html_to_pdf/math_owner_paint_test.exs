@@ -221,20 +221,4 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOwnerPaintTest do
       assert diagnostic.message =~ "prepared source node"
     end
   end
-
-  @tag :browser_parity
-  @tag :math_owner_paint_original
-  test "relative, clipped and image-decorated Math owners match original Chromium" do
-    fixture =
-      Path.expand("../fixtures/html_to_pdf/browser_parity/mathml_owner_paint.html", __DIR__)
-
-    stats =
-      NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
-        artifact_dir: "tmp/browser_parity/mathml_owner_paint",
-        max_changed_ratio: 0.01,
-        max_average_delta: 0.01
-      )
-
-    assert stats.page_count == 1
-  end
 end

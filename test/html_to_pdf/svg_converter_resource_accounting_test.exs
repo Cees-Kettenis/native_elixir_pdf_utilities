@@ -36,6 +36,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterResourceAccountingTest 
     end
   end
 
+  test "viewport re-encoding remains inside the cumulative source budget", %{limits: limits} do
+    source = "<svg width='10' height='20'><rect width='10' height='20'/></svg>"
+    Limits.install(%{limits | max_aggregate_svg_source_bytes: byte_size(source) * 2})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             SvgRasterizer.rasterize(source, [width: 20, height: 10], nil)
+
+    assert diagnostic.stage == :style
+    assert diagnostic.source == "SVG"
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "max_aggregate_svg_source_bytes"
+  end
+
+  test "arc rotation requires a separator before its first flag" do
+    source = "<svg width='10' height='10'><path d='M0 0A1 1 0-1 1 1 1'/></svg>"
+
+    assert {:error, {:invalid_document, diagnostic}} = SvgRasterizer.rasterize(source, [], nil)
+    assert diagnostic.stage == :layout
+    assert diagnostic.source == "path d"
+    assert diagnostic.reason == :invalid_document
+    assert diagnostic.message =~ "arc flags"
+  end
+
   test "XML built-in and numeric references remain valid while DTDs are rejected" do
     source =
       "<svg width='1' height='1'><desc>&amp;&#65;</desc><![CDATA[&undefined;]]><rect width='1' height='1'/></svg>"

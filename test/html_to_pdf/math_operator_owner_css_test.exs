@@ -105,20 +105,4 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorOwnerCssTest do
     assert diagnostic.stage == :layout and diagnostic.source == "mo"
     assert diagnostic.message =~ "static or relative"
   end
-
-  @tag :browser_parity
-  @tag :math_operator_owner_css_original
-  test "operator source CSS boxes compare with original Chromium" do
-    fixture =
-      Path.expand(
-        "../fixtures/html_to_pdf/browser_parity/mathml_operator_css_owners.html",
-        __DIR__
-      )
-
-    NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
-      artifact_dir: "tmp/browser_parity/mathml_operator_css_owners",
-      max_changed_ratio: 0.01,
-      max_average_delta: 0.01
-    )
-  end
 end

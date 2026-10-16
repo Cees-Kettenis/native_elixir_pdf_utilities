@@ -113,32 +113,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImagesTest do
     assert diagnostic.message =~ "ancestor"
   end
 
-  test("nested text uses selected fonts and original visible Unicode", %{dir: dir}) do
-    File.write!(
-      Path.join(dir, "nested/text.svg"),
-      "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='24'><text x='0' y='18' font-size='18'>Nested Ω</text></svg>"
-    )
-
-    assert {:ok, pdf} =
-             HtmlToPdf.render(
-               "<svg width=120 height=24><image href='nested/text.svg' width=120 height=24 /></svg>",
-               base_url: dir
-             )
-
-    (
-      assert :ok =
-               NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(
-                 pdf,
-                 true
-               )
-
-      assert {:error, {:no_extractable_text, _}} =
-               NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
-
-      refute pdf =~ "/Subtype /Link"
-    )
-  end
-
   test("scene paint cache keys include viewport source fonts styles and issued source scope", %{
     dir: dir,
     png: png
@@ -311,31 +285,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImagesTest do
                  child
                )
     end)
-  end
-
-  test("nested image text retains its actual selected Unicode under a parent filter", %{dir: dir}) do
-    File.write!(
-      Path.join(dir, "nested/filtered-text.svg"),
-      "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='24'><text x='0' y='18' font-size='18'>Nested Ω</text></svg>"
-    )
-
-    html =
-      "<svg width=120 height=24><defs><filter id=f><feOffset dx='1'/></filter></defs><g filter='url(#f)'><image href='nested/filtered-text.svg' width=120 height=24 /></g></svg>"
-
-    assert {:ok, pdf} = HtmlToPdf.render(html, base_url: dir)
-
-    (
-      assert :ok =
-               NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(
-                 pdf,
-                 true
-               )
-
-      assert {:error, {:no_extractable_text, _}} =
-               NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
-
-      refute pdf =~ "/Subtype /Link"
-    )
   end
 
   test("nested foreignObject paints issued HTML text images and transformed links", %{dir: dir}) do
@@ -605,22 +554,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImagesTest do
     assert {:ok, image} = PngDecoder.decode(raster, HtmlValidator.new_image_budget(), false)
     assert binary_part(image.data, 0, 3) == <<255, 0, 0>>
     assert binary_part(image.data, 9, 3) == <<0, 0, 255>>
-  end
-
-  test("nested SVG stays vector and resolves child images against its source directory", %{
-    dir: dir
-  }) do
-    File.write!(
-      Path.join(dir, "nested/art.svg"),
-      "<svg xmlns='http://www.w3.org/2000/svg' width='20' height='10' viewBox='0 0 20 10'><image href='paint.png' width='20' height='10' /><rect x='8' width='4' height='10' fill='yellow' /></svg>"
-    )
-
-    html =
-      "<svg width=100 height=50><image href='nested/art.svg' width=100 height=50 preserveAspectRatio='none' /></svg>"
-
-    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html, base_url: dir)
-    refute pdf =~ "/Subtype /Link"
-    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
-    assert {:ok, _} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
   end
 end

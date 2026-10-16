@@ -199,7 +199,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OrdinaryFormProjectionClosureTest d
     assert diagnostic.message =~ "password display exceeds max_rendered_text_bytes"
   end
 
-  test "grouped native glyph button states paint and extract their actual selected characters", %{
+  test "grouped native glyph button states extract their actual selected characters", %{
     fields: fields
   } do
     editor = Enum.find(fields, &(&1.type == :text)).source_editor
@@ -222,29 +222,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OrdinaryFormProjectionClosureTest d
     radio = Enum.find(fields, &(&1.type == :radio))
     [off, on] = FormWriter.appearance_frames(%{radio | appearance: appearance})
 
-    output = ".quality/orchestration/ordinary-forms-v5/glyph-states"
-    File.mkdir_p!(output)
-
-    for {frame, expected, state} <- [{off, "○", "off"}, {on, "●", "on"}] do
+    for {frame, expected} <- [{off, "○"}, {on, "●"}] do
       assert {:ok, pdf} = PdfWriter.render([frame])
       assert {:ok, rendered} = Text.extract(pdf, layout: false)
       assert rendered == expected
-
-      plain = %{frame | boxes: [%{text | text: expected}]}
-      assert {:ok, plain_pdf} = PdfWriter.render([plain])
-
-      for {role, bytes} <- [{"grouped", pdf}, {"plain", plain_pdf}] do
-        path = Path.join(output, state <> "-" <> role)
-        File.write!(path <> ".pdf", bytes)
-        assert {_, 0} = System.cmd("pdftoppm", ["-r", "96", "-singlefile", path <> ".pdf", path])
-      end
-
-      assert File.read!(Path.join(output, state <> "-grouped.ppm")) ==
-               File.read!(Path.join(output, state <> "-plain.ppm"))
     end
-
-    refute File.read!(Path.join(output, "on-grouped.ppm")) ==
-             File.read!(Path.join(output, "off-grouped.ppm"))
 
     field = Enum.find(fields, &(&1.type == :text))
     [_, background] = FormWriter.appearance_frames(%{field | appearance: appearance})

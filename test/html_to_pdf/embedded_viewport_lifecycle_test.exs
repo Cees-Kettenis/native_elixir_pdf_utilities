@@ -4,6 +4,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewportLifecycleTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.{EmbeddedViewport, ResourceContext}
   alias NativeElixirPdfUtilities.Validators.{EmbeddedViewportValidator, HtmlValidator}
 
+  test "absolute iframe placement retains intrinsic auto width and applies its right inset once" do
+    html =
+      "<body style='margin:0'><iframe style='position:absolute;right:10pt;top:10pt;width:auto;height:30pt;border:0;margin-left:auto;margin-right:0' srcdoc='<body style=\"margin:0\">Child</body>'></iframe></body>"
+
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
+      assert {:ok, dom} =
+               NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse_document_detailed(html)
+
+      assert {:ok, styled} =
+               NativeElixirPdfUtilities.HtmlToPdf.Style.compute_detailed(
+                 dom,
+                 [],
+                 context.image_budget
+               )
+
+      assert {:ok, layout} =
+               NativeElixirPdfUtilities.HtmlToPdf.Layout.layout(styled, page_size: {400, 200})
+
+      [viewport] = layout.boxes
+      assert viewport.x == 165.0
+      assert viewport.y == 160.0
+      assert viewport.width == 225.0 and viewport.height == 30.0
+    end)
+  end
+
   test "true empty initial documents retain their issued source and full client without parsed-body gutters" do
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn parent ->
       for source <- [{:blank, "about:blank"}, {:blank, "ABOUT:blank?original#scope"}] do
@@ -36,11 +61,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewportLifecycleTest do
         end
       end
 
-      assert {:ok, parsed} = EmbeddedViewport.prepare_iframe_document({:srcdoc, ""}, parent)
-      assert {:ok, %{boxes: [client, ui]}} = EmbeddedViewport.layout(parsed, 22.5, 3.75)
-      assert client.client_rect == %{x: 0.0, y: 0.0, width: 11.25, height: 3.75}
-      assert Enum.any?(ui.boxes, &(&1.role == :scrollbar))
-      assert parsed.source == {:srcdoc, ""}
+      for source <- ["", "<body></body>", "<body> \n </body>"] do
+        assert {:ok, parsed} = EmbeddedViewport.prepare_iframe_document({:srcdoc, source}, parent)
+        assert {:ok, group} = EmbeddedViewport.layout(parsed, 22.5, 3.75)
+        assert group.client_rect == %{x: 0.0, y: 0.0, width: 22.5, height: 3.75}
+        assert group.boxes == []
+        assert parsed.source == {:srcdoc, source}
+      end
     end)
   end
 
@@ -56,7 +83,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewportLifecycleTest do
       assert {:ok, styled} = EmbeddedViewport.style_viewport(prepared, 131.25, 37.5)
       assert {:ok, group} = EmbeddedViewport.layout(styled, 142.5, 37.5)
       assert group.client_rect == %{x: 0.0, y: 0.0, width: 142.5, height: 37.5}
-      assert Enum.any?(group.boxes, &(&1.type == :drawing_group))
+      assert Enum.any?(group.boxes, &(&1.type == :image))
       refute Enum.any?(group.boxes, &(Map.get(&1, :role) == :scrollbar))
       assert styled.source == {:srcdoc, source}
       assert styled.prepared_dom == prepared.prepared_dom

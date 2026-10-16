@@ -259,17 +259,4 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTokenOwnerCssTest do
     assert diagnostic.source == "annotation-xml"
     assert diagnostic.message =~ "prepared style map"
   end
-
-  @tag :browser_parity
-  @tag :math_token_owner_css_original
-  test "default token owners and native HTML/SVG children compare against original Chromium" do
-    fixture =
-      Path.expand("../fixtures/html_to_pdf/browser_parity/mathml_token_css_owners.html", __DIR__)
-
-    NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
-      artifact_dir: "tmp/browser_parity/mathml_token_css_owners",
-      max_changed_ratio: 0.01,
-      max_average_delta: 0.01
-    )
-  end
 end

@@ -4,6 +4,94 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssDiscretionaryBreakTest do
   alias NativeElixirPdfUtilities.Validators.{HtmlLineBreakValidator, HtmlValidator}
   alias NativeElixirPdfUtilities.Limits
 
+  test "an entirely invisible discretionary source keeps its destination and logical text" do
+    html = "<p id='hidden'>&#x200b;</p><p><a href='#hidden'>Jump</a></p>"
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    assert {:ok, layout} = Layout.layout(styled)
+    logical = Enum.find(layout.boxes, &(&1.type == :glyph_group))
+    assert logical.actual_text == "\u200B"
+    assert logical.boxes == []
+    assert logical.height > 0
+
+    assert {:ok, pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(
+               html,
+               system_font_discovery: false
+             )
+
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
+    assert text == "Jump"
+    assert pdf =~ "/Dest"
+  end
+
+  test "transparent source boundaries propagate the shared work budget diagnostic" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(%{limits | max_layout_text_work: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(
+               "<p>office<span>&shy;</span>word</p>",
+               system_font_discovery: false
+             )
+
+    assert diagnostic.stage == :layout
+    assert diagnostic.operation == :render
+    assert diagnostic.message =~ "max_layout_text_work"
+  end
+
+  test "styled line-boundary exhaustion retains the shared work budget diagnostic" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(%{limits | max_layout_text_work: 230})
+
+    html =
+      "<style>html,body{margin:0;font-family:DejaVu Sans;font-size:12pt;line-height:15pt}p{margin:0}</style>" <>
+        "<p style='width:25pt'><span style='color:red'>alpha</span><i>beta</i></p>"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(html, system_font_discovery: false)
+
+    assert diagnostic.stage == :layout
+    assert diagnostic.operation == :render
+    assert diagnostic.message =~ "max_layout_text_work"
+  end
+
+  test "a break after an atomic inline box does not select an earlier soft hyphen" do
+    html =
+      "<style>html,body{margin:0;font-family:DejaVu Sans;font-size:12pt;line-height:15pt}" <>
+        "p{margin:0;width:65pt}span{display:inline-block}</style>" <>
+        "<p>co&shy;<span style='width:15pt'>Box</span><span style='width:60pt'>Next</span></p>"
+
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    assert {:ok, layout} = Layout.layout(styled)
+    boxes = texts(layout.boxes)
+    assert Enum.any?(boxes, &(&1.text == "co"))
+    refute Enum.any?(boxes, &String.contains?(&1.text, "‐"))
+    box = Enum.find(boxes, &(&1.text == "Box"))
+    next = Enum.find(boxes, &(&1.text == "Next"))
+    assert next.y < box.y
+  end
+
+  test "empty positioned inline spans do not add a line before oversized atomic content" do
+    [plain, positioned] =
+      for prefix <- ["", "<span style='position:relative'></span>"] do
+        html =
+          "<p style='margin:0;width:65pt'>#{prefix}" <>
+            "<span style='display:inline-block;width:80pt'>Atomic</span></p>"
+
+        assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+        assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+        assert {:ok, layout} = Layout.layout(styled)
+        Enum.find(texts(layout.boxes), &(&1.text == "Atomic"))
+      end
+
+    assert positioned.x == plain.x
+    assert positioned.y == plain.y
+  end
+
   test "the selected genuine font paints a conditional hyphen only at a taken opportunity" do
     assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
     assert {:ok, _, face} = Font.resolve("DejaVu Sans", 400, :normal, registry)

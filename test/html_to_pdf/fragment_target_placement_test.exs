@@ -3,6 +3,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FragmentTargetPlacementTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout}
   alias NativeElixirPdfUtilities.Validators.HtmlLinkValidator
 
+  test "a target on discretionary text keeps its authored origin after glyph grouping" do
+    html =
+      "<style>html,body{margin:0;font-family:DejaVu Sans;font-size:12pt;line-height:15pt}p{margin:0;width:25pt}</style><p><span id='word'>wa&shy;ter</span></p><a href='#word'>Jump</a>"
+
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 200})
+    group = Enum.find(layout.boxes, &(&1.type == :glyph_group))
+    assert group.actual_text =~ "wa\u00AD"
+    [target] = group.html_targets
+    assert {:ok, [page]} = NativeElixirPdfUtilities.HtmlToPdf.Pagination.paginate(layout)
+    link = Enum.find(page.boxes, &Map.has_key?(&1, :link_destination))
+    assert {:xyz, 1, x, y} = link.link_destination
+    assert_in_delta x, group.x + target.dx, 0.000001
+    assert_in_delta y, group.y + target.dy, 0.000001
+  end
+
   test "the same selected DOM target binds to its first visible physical fragment" do
     html =
       "<style>html,body{margin:0}p{margin:0}</style><p><a href='#delayed'>Jump</a></p><p id='delayed'>Target</p>"

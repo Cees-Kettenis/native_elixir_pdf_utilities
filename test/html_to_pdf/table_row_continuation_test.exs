@@ -38,6 +38,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableRowContinuationTest do
     end)
   end
 
+  test "an atomic cell taller than a whole page remains intact on its first page" do
+    html =
+      "<style>@page{size:100pt 80pt;margin:10pt}html,body{margin:0}p{margin:0}</style><table><tr><td><div style='display:inline-block;width:20pt;height:200pt;background:blue'></div></td></tr></table><p>After</p>"
+
+    assert {:ok, pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(html, system_font_discovery: false)
+
+    assert {:ok, %{pages: [first, second]}} = NativeElixirPdfUtilities.Text.extract_spans(pdf)
+    assert first.spans == []
+    assert Enum.map_join(second.spans, & &1.text) == "After"
+  end
+
+  test "spanned math and discretionary text keep their selected glyphs through fragment alignment" do
+    html =
+      "<table style='width:80pt'><tr><td rowspan=2><math><mi>x</mi></math>wa&shy;ter</td><td>One</td></tr><tr><td>Two</td></tr></table>"
+
+    assert {:ok, pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(html, system_font_discovery: false)
+
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
+    assert text =~ "x" and text =~ "wa\u00ADter"
+    assert text =~ "One" and text =~ "Two"
+  end
+
   test "oversized ordinary row consumes remaining capacity and repeats real headers" do
     lines = Enum.map_join(1..20, "<br>", &"Line#{&1}")
 

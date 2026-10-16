@@ -18,7 +18,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
       {text, break_spaces?} when is_binary(text) and is_boolean(break_spaces?) ->
         HtmlValidator.reserve_render_resource(:max_layout_text_work, byte_size(text), :layout)
 
-        if String.valid?(text) do
+        if String.valid?(text, :fast_ascii) do
           result = UnicodeLineBreak.opportunities(text)
 
           HtmlValidator.reserve_render_resource(
@@ -62,7 +62,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
           :layout
         )
 
-        if String.valid?(text) do
+        if String.valid?(text, :fast_ascii) do
           {grapheme_offsets, _offset} =
             text
             |> String.graphemes()
@@ -157,9 +157,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
       {text, selected?} when is_binary(text) and is_boolean(selected?) ->
         HtmlValidator.reserve_render_resource(:max_layout_text_work, byte_size(text), :layout)
 
-        if String.valid?(text) do
+        if String.valid?(text, :fast_ascii) do
           # U+00AD and U+200B remain in UAX14 input and ActualText, not in unbroken glyph paint.
-          visible = String.replace(text, @discretionary_characters, "")
+          visible = strip_discretionary_characters(text)
 
           hyphen =
             if selected? and String.ends_with?(text, "\u00AD") do
@@ -207,10 +207,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
           :layout
         )
 
-        if String.valid?(before) and String.valid?(after_text) do
+        if String.valid?(before, :fast_ascii) and String.valid?(after_text, :fast_ascii) do
           {:ok,
            String.ends_with?(before, @discretionary_characters) or
-             (after_text != "" and String.replace(after_text, @discretionary_characters, "") == "")}
+             (after_text != "" and
+                strip_discretionary_characters(after_text) == "")}
         else
           failure("discretionary inline boundaries require valid UTF-8")
         end
@@ -220,6 +221,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
     end
   catch
     {:render_resource_limit, error} -> error
+  end
+
+  @compile {:inline, strip_discretionary_characters: 1}
+  defp strip_discretionary_characters(text) do
+    if :binary.match(text, "\u00AD") == :nomatch and
+         :binary.match(text, "\u200B") == :nomatch,
+       do: text,
+       else: String.replace(text, @discretionary_characters, "")
   end
 
   @doc "Rounds a validated inline fragment width upward to the fixed CSS layout unit."
@@ -244,6 +253,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
     # Retain numeric prefixes and numeric ranges as indivisible sequences.
     opportunities =
       (opportunities ++ word_hyphens)
+      # Chromium's ASCII compatibility rules keep slash-separated words intact,
+      # including literal markup in a text document. Unicode rules still apply
+      # to the boundary between a slash and a non-ASCII character.
+      |> Enum.reject(fn {offset, mandatory?} ->
+        not mandatory? and offset > 0 and offset < byte_size(text) and
+          :binary.at(text, offset - 1) == ?/ and :binary.at(text, offset) in 0x21..0x7F
+      end)
       |> Map.new()
       |> Enum.sort_by(&elem(&1, 0))
 

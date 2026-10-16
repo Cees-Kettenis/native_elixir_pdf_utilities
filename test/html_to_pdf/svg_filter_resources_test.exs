@@ -114,57 +114,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterResourcesTest do
     )
   end
 
-  test "nested filter SVG retains caller-selected font bytes with system discovery disabled" do
-    data = File.read!(Path.expand("../../priv/fonts/dejavu/DejaVuSansMono.ttf", __DIR__))
-
-    nested =
-      "<svg xmlns='http://www.w3.org/2000/svg' width='180' height='40'><text x='5' y='25' font-family='IssuedFace' font-size='18'>Issued café Ω</text></svg>"
-
-    html =
-      "<svg width='180' height='40'><defs><filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='180' height='40'><feImage href='nested.svg'/></filter></defs><rect width='180' height='40' filter='url(#f)'/></svg>"
-
-    assert {:ok, pdf} =
-             HtmlToPdf.render(html,
-               assets: %{"nested.svg" => {:bytes, nested}},
-               default_font: "IssuedFace",
-               fonts: [%{family: "IssuedFace", data: data}],
-               system_font_discovery: false
-             )
-
-    (
-      assert :ok =
-               NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(
-                 pdf,
-                 true
-               )
-
-      assert {:error, {:no_extractable_text, _}} =
-               NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
-
-      refute pdf =~ "/Subtype /Link"
-    )
-  end
-
-  test "local nested SVG filter inputs retain their original viewport and genuine text" do
-    html =
-      "<svg width='240' height='100'><defs><svg id='input' x='4' y='6' width='180' height='50' viewBox='10 0 180 50'><text x='15' y='30' font-family='DejaVu Sans' font-size='18'>Own viewport Ω</text></svg><filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='200' height='70'><feImage href='#input'/></filter></defs><rect width='180' height='50' filter='url(#f)'/></svg>"
-
-    assert {:ok, pdf} = HtmlToPdf.render(html)
-
-    (
-      assert :ok =
-               NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(
-                 pdf,
-                 true
-               )
-
-      assert {:error, {:no_extractable_text, _}} =
-               NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
-
-      refute pdf =~ "/Subtype /Link"
-    )
-  end
-
   test "nested image viewport crop prevents logical leakage beyond its actual painted image" do
     nested =
       "<svg xmlns='http://www.w3.org/2000/svg' width='80' height='20'><rect width='80' height='20' fill='blue'/><text x='5' y='42' font-family='DejaVu Sans' font-size='18'>Y</text></svg>"

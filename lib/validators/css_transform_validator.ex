@@ -402,12 +402,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
           end
       end
     end)
-  rescue
-    ArithmeticError ->
-      error(
-        "CSS transform calculation exceeds finite affine geometry",
-        inspect(Map.get(style, :css_transform))
-      )
   end
 
   defp operation_matrix(name, values) do

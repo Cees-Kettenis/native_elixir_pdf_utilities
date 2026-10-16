@@ -33,12 +33,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterContractTest do
     source =
       "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='2'><rect width='2' height='2' fill='red'/></svg>"
 
-    assert {:ok, png} = SvgRasterizer.rasterize(source, [width: 8, height: 4], nil)
-    assert {:ok, image} = PngDecoder.decode(png, nil, false)
-    assert {image.width_px, image.height_px} == {8, 4}
-    assert :binary.at(image.alpha_data, 1) == 255
-    assert :binary.at(image.alpha_data, 7) == 0
-    assert binary_part(image.data, 0, 3) == <<255, 0, 0>>
+    for scale <- [1, 2] do
+      assert {:ok, png} =
+               SvgRasterizer.rasterize(source, [width: 8, height: 4, scale: scale], nil)
+
+      assert {:ok, image} = PngDecoder.decode(png, nil, false)
+      assert {image.width_px, image.height_px} == {8 * scale, 4 * scale}
+      assert :binary.at(image.alpha_data, 1) == 255
+      assert :binary.at(image.alpha_data, 8 * scale - 1) == 0
+      assert binary_part(image.data, 0, 3) == <<255, 0, 0>>
+    end
   end
 
   test "HTML SVG source becomes ordinary PDF image content while surrounding Unicode remains text" do

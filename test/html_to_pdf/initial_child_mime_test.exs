@@ -70,17 +70,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialChildMimeTest do
     end)
   end
 
-  test "a fitting literal document uses its full initial width before wrapping", %{root: root} do
+  test "a fitting literal document removes its provisional gutter after wrapping", %{root: root} do
     File.write!(Path.join(root, "fitting.txt"), "<b>Literal & markup</b>\nSecond line\n")
 
     ResourceContext.run([authorization_root: root], HtmlValidator.new_image_budget(), fn parent ->
       assert {:ok, prepared} = EmbeddedViewport.prepare_iframe_document("fitting.txt", parent)
       assert prepared.initial_document_kind == :text
-      geometry = EmbeddedViewportValidator.initial_viewport(prepared, 90, 60)
-      refute geometry.vertical
-      assert geometry.client_width == 90
-      assert {:ok, group} = EmbeddedViewport.layout(prepared, 90, 60)
-      assert group.client_rect == %{x: 0.0, y: 0.0, width: 90.0, height: 60.0}
+      geometry = EmbeddedViewportValidator.initial_viewport(prepared, 100.5, 90)
+      assert geometry.vertical
+      assert geometry.client_width == 89.25
+      assert {:ok, group} = EmbeddedViewport.layout(prepared, 100.5, 90)
+      assert group.client_rect == %{x: 0.0, y: 0.0, width: 100.5, height: 90.0}
       assert Enum.count(group.boxes, &(&1.type == :text)) == 3
 
       assert Enum.map_join(Enum.filter(group.boxes, &(&1.type == :text)), & &1.text) =~

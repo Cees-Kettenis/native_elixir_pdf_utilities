@@ -335,20 +335,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
               Enum.flat_map(Map.get(positioned_sources, owner, []), fn {source, source_page} ->
                 delta = elem(source_page_offsets, index) - elem(source_page_offsets, source_page)
 
-                source =
-                  case NativeElixirPdfUtilities.Validators.EmbeddedFormValidator.issue_drawing_slice(
-                         source
-                       ) do
-                    {:ok, slice} ->
-                      NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.translate_box(
-                        slice,
-                        0,
-                        delta
-                      )
+                {:ok, slice} =
+                  source
+                  |> NativeElixirPdfUtilities.Validators.EmbeddedFormValidator.issue_drawing_slice()
+                  |> propagate_error()
 
-                    {:error, _} = failure ->
-                      throw({:render_resource_limit, failure})
-                  end
+                source =
+                  NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.translate_box(
+                    slice,
+                    0,
+                    delta
+                  )
 
                 HtmlValidator.reserve_render_resource(:max_layout_boxes, 1, :pagination)
 
@@ -494,41 +491,46 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     alias NativeElixirPdfUtilities.Validators.HtmlTableValidator
     page_size = hd(pages).size
 
-    with {:ok, overflow} <-
-           HtmlTableValidator.prepare_cell_overflow_fragments(
-             sources,
-             [],
-             consumed,
-             elem(page_size, 1) - margins.top,
-             margins.bottom
-           ) do
-      case overflow do
-        [] ->
-          pages
+    {:ok, overflow} =
+      HtmlTableValidator.prepare_cell_overflow_fragments(
+        sources,
+        [],
+        consumed,
+        elem(page_size, 1) - margins.top,
+        margins.bottom
+      )
+      |> propagate_error()
 
-        _ ->
-          HtmlValidator.check_render_resource(:max_pdf_pages, length(pages) + 1, :pagination)
+    case overflow do
+      [] ->
+        pages
 
-          case HtmlTableValidator.prepare_cell_page_fragments(
-                 overflow,
-                 consumed,
-                 margins.bottom,
-                 elem(page_size, 1) - margins.top - margins.bottom
-               ) do
-            {:ok, boxes, next} ->
-              continue_spanning_cell_pages(
-                pages ++ [%{size: page_size, boxes: boxes}],
-                sources,
-                next,
-                margins
-              )
+      _ ->
+        HtmlValidator.check_render_resource(:max_pdf_pages, length(pages) + 1, :pagination)
 
-            {:error, _} = failure ->
-              throw({:render_resource_limit, failure})
-          end
-      end
-    else
-      {:error, _} = failure -> throw({:render_resource_limit, failure})
+        {:ok, boxes, next} =
+          HtmlTableValidator.prepare_cell_page_fragments(
+            overflow,
+            consumed,
+            margins.bottom,
+            elem(page_size, 1) - margins.top - margins.bottom
+          )
+          |> propagate_error()
+
+        continue_spanning_cell_pages(
+          pages ++ [%{size: page_size, boxes: boxes}],
+          sources,
+          next,
+          margins
+        )
+    end
+  end
+
+  # Fragment callbacks retain validator diagnostics through the outer budget.
+  defp propagate_error(result) do
+    case result do
+      {:error, _} = error -> throw({:render_resource_limit, error})
+      result -> result
     end
   end
 
@@ -834,16 +836,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     capacity = max(target_top - margins.bottom, 0.0)
 
     {:ok, boxes, height} =
-      case NativeElixirPdfUtilities.Validators.HtmlTableValidator.prepare_row_page_fragment(
-             group.boxes,
-             source_top,
-             group.bottom,
-             capacity,
-             elem(page_size, 1) - margins.top - margins.bottom
-           ) do
-        {:ok, _, _} = result -> result
-        {:error, _} = error -> throw({:render_resource_limit, error})
-      end
+      NativeElixirPdfUtilities.Validators.HtmlTableValidator.prepare_row_page_fragment(
+        group.boxes,
+        source_top,
+        group.bottom,
+        capacity,
+        elem(page_size, 1) - margins.top - margins.bottom
+      )
+      |> propagate_error()
 
     cond do
       height == 0 and state.current_boxes != [] and is_number(state.position_delta) ->
@@ -861,16 +861,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       height == 0 ->
         # An atom taller than a complete fragmentainer stays intact on an empty
         # page, matching the ordinary oversized-atom placement rule.
-        boxes =
-          case NativeElixirPdfUtilities.Validators.HtmlTableValidator.prepare_row_page_fragment(
-                 group.boxes,
-                 source_top,
-                 group.bottom,
-                 remaining
-               ) do
-            {:ok, boxes, _height} -> boxes
-            {:error, _} = error -> throw({:render_resource_limit, error})
-          end
+        {:ok, boxes, _height} =
+          NativeElixirPdfUtilities.Validators.HtmlTableValidator.prepare_row_page_fragment(
+            group.boxes,
+            source_top,
+            group.bottom,
+            remaining
+          )
+          |> propagate_error()
 
         place_whole_group(
           %{group | boxes: boxes, top: source_top, height: remaining, break_before: :auto},

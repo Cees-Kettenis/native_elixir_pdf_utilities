@@ -52,7 +52,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave23Test do
     assert {:ok, png} =
              SvgRasterizer.rasterize(
                svg,
-               [width: 80, height: 80],
+               [width: 80, height: 80, scale: Limits.get(:svg_raster_scale)],
                HtmlValidator.new_image_budget(),
                [descriptor]
              )

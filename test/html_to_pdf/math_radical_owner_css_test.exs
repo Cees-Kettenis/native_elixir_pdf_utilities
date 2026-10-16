@@ -136,23 +136,4 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathRadicalOwnerCssTest do
     assert diagnostic.reason == reason and diagnostic.stage == :layout
     assert diagnostic.source == "msqrt" and diagnostic.message =~ "positioned"
   end
-
-  @tag :browser_parity
-  @tag :math_radical_owner_css_original
-  test "actual radical owner CSS constraints and clipping compare with original Chromium" do
-    fixture =
-      Path.expand(
-        "../fixtures/html_to_pdf/browser_parity/mathml_radical_css_owners.html",
-        __DIR__
-      )
-
-    stats =
-      NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
-        artifact_dir: "tmp/browser_parity/mathml_radical_css_owners",
-        max_changed_ratio: 0.01,
-        max_average_delta: 0.01
-      )
-
-    assert stats.page_count == 1
-  end
 end

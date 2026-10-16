@@ -996,22 +996,19 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
             end
 
           runs ->
-            result =
-              Enum.reduce_while(runs, :ok, fn run, :ok ->
-                case NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.validate_prepared_source(
-                       run,
-                       node,
-                       :font
-                     ) do
-                  :ok -> {:cont, :ok}
-                  error -> {:halt, error}
-                end
-              end)
+            # These runs were issued from this exact original node during the
+            # guarded preparation. A lost identity here is an internal invariant
+            # failure; caller-authored identities are rejected before issuance.
+            Enum.each(runs, fn run ->
+              :ok =
+                NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.validate_prepared_source(
+                  run,
+                  node,
+                  :font
+                )
+            end)
 
-            case result do
-              :ok -> {:cont, :ok}
-              error -> {:halt, error}
-            end
+            {:cont, :ok}
         end
       else
         {:cont, :ok}

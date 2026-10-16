@@ -2,7 +2,15 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
   @moduledoc "Canonical closed source editor geometry and embedded font programs for ordinary field appearances."
   import Bitwise
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
-  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, FontFallback, Layout, FormAppearanceComposition}
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{
+    Font,
+    FontCache,
+    FontFallback,
+    Layout,
+    FormAppearanceComposition
+  }
+
   alias NativeElixirPdfUtilities.Pdf.Reader
 
   alias NativeElixirPdfUtilities.Validators.{
@@ -152,7 +160,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
                             [
                               {next, 0,
                                {:stream, %{"Filter" => {:name, "FlateDecode"}},
-                                :zlib.compress(face.data)}}
+                                FontCache.compressed(face.data)}}
                               | added
                             ], Map.put(fonts, source, ref)}
                        end

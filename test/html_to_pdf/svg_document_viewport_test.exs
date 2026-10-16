@@ -26,6 +26,51 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
     %{root: root}
   end
 
+  test "document PNG decode failures retain their specific diagnostic source", %{root: root} do
+    source = "<svg width='4' height='4'><rect width='4' height='4' fill='red'/></svg>"
+    File.write!(Path.join(root, "limited.svg"), source)
+    budget = HtmlValidator.new_image_budget()
+
+    ResourceContext.run([authorization_root: root], budget, fn parent ->
+      assert {:ok, {:image, %{image: descriptor}}} =
+               EmbeddedViewport.prepare_selected(
+                 {:image, "limited.svg", "image/svg+xml"},
+                 parent,
+                 [],
+                 :object
+               )
+
+      Limits.install(%{Limits.effective() | max_png_working_bytes: 1})
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               SvgDocumentImage.compose(descriptor, 3.0, 3.0)
+
+      assert diagnostic.stage == :limits
+      assert diagnostic.source == "PNG"
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.message =~ "PNG decoding work buffers"
+    end)
+  end
+
+  test "zero-height selected SVG documents keep their host allocation without image paint", %{
+    root: root
+  } do
+    File.write!(
+      Path.join(root, "zero.svg"),
+      "<svg width='10' height='0' viewBox='0 0 10 0' xmlns='http://www.w3.org/2000/svg'><rect width='10' height='10' fill='red'/></svg>"
+    )
+
+    assert {:ok, pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(
+               "<object type='image/svg+xml' data='zero.svg' style='width:20pt;height:auto'></object><object type='image/svg+xml' data='zero.svg' style='width:20pt;height:20pt'></object><p>After</p>",
+               base_url: root,
+               system_font_discovery: false
+             )
+
+    assert {:ok, "After"} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
+    refute pdf =~ "/Subtype /Image"
+  end
+
   test "no viewBox preserves absolute user geometry beyond the original root canvas", %{
     root: root
   } do
@@ -128,6 +173,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
         assert document.width == 225.0 and document.height == 112.5
         assert {:ok, image} = SvgDocumentImage.compose(document, 120, 90)
         assert pixel(image, 40, 25) == <<255, 0, 0>>
+        # CSS-unit translation is applied once, including when the root is
+        # nested in the converter canvas. The old double transform starts at 40.
+        assert pixel(image, 25, 15) == <<255, 0, 0>>
         assert :binary.at(image.alpha_data, 2 * 320 + 2) == 0
         assert :binary.at(image.alpha_data, 140 * 320 + 300) == 0
       end

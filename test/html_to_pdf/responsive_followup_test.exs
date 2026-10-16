@@ -40,6 +40,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResponsiveFollowupTest do
     assert ResponsiveImageValidator.source_size("calc(10ch + 1cap)", measured) > ch
   end
 
+  test "malformed size components fall through while resource failures retain diagnostics" do
+    context = %{width: 800.0, height: 600.0, density: 1.0, type: :print}
+    assert ResponsiveImageValidator.source_size("'invalid', 40px", context) == 40.0
+    assert ResponsiveImageValidator.source_size("calc(", context) == 800.0
+
+    limits = NativeElixirPdfUtilities.Limits.effective()
+    on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
+    NativeElixirPdfUtilities.Limits.install(%{limits | max_css_work: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             ResponsiveImageValidator.source_size("calc(20px + 10px)", context)
+
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.stage == :style
+    assert diagnostic.message =~ "max_css_work"
+  end
+
+  test "styling an automatic lazy image without its resource scope returns the preparation diagnostic" do
+    assert {:ok, document} =
+             NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse_detailed(
+               "<img loading='lazy' sizes='auto' src='image.png'>"
+             )
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.Style.compute_detailed(document)
+
+    assert diagnostic.stage == :style
+    assert diagnostic.source == "img"
+    assert diagnostic.message =~ "active rendering resource scope"
+    assert diagnostic.message =~ "HtmlToPdf.render"
+  end
+
   test "media condition grammar supports nested boolean expressions and rejects mixed unparenthesized operators" do
     context = %{width: 800.0, height: 600.0, density: 1.0, type: :print}
 

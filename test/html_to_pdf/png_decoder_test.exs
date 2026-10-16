@@ -89,11 +89,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PngDecoderTest do
       assert {:ok, image} = decode(png)
       assert image.alpha_data == <<0::size(depth), 2 ** depth - 1::size(depth)>>
 
+      assert image.data ==
+               for(
+                 x <- 0..1,
+                 value <- List.update_at(values, 0, &(&1 + x)),
+                 into: <<>>,
+                 do: <<value::size(depth)>>
+               )
+
       assert {:ok, pdf} =
                HtmlToPdf.render("<img src=\"sample\">", assets: %{"sample" => {:bytes, png}})
 
       assert pdf =~ "/BitsPerComponent #{depth}"
-      assert :binary.match(pdf, :zlib.compress(image.data)) != :nomatch
+      # The decoder retains authored hidden samples. The PDF writer extends the
+      # visible neighbor into the transparent pixel for soft-mask interpolation.
+      visible =
+        for value <- List.update_at(values, 0, &(&1 + 1)), into: <<>>, do: <<value::size(depth)>>
+
+      assert :binary.match(pdf, :zlib.compress(visible <> visible)) != :nomatch
       assert :binary.match(pdf, :zlib.compress(image.alpha_data)) != :nomatch
     end
   end

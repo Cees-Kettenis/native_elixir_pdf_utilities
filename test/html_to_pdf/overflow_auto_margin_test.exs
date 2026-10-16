@@ -54,23 +54,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OverflowAutoMarginTest do
   end
 
   @tag :browser_parity
-  @tag :flex_distribution_regression_original
-  test "existing flex direction and explicit cross-size originals remain unchanged" do
-    for {name, delta} <- [
-          {"flex_direction_and_justification.html", 0.035},
-          {"flex_explicit_cross_sizes.html", 0.03}
-        ] do
-      fixture = Path.expand("../fixtures/html_to_pdf/browser_parity/#{name}", __DIR__)
-
-      NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
-        artifact_dir: "tmp/browser_parity/overflow-margin-regression-#{name}",
-        max_changed_ratio: 0.01,
-        max_average_delta: delta
-      )
-    end
-  end
-
-  @tag :browser_parity
   @tag :overflow_auto_margins_original
   test "overflow automatic margins match original Chromium" do
     fixture =

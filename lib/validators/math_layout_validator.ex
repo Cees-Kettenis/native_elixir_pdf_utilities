@@ -2372,6 +2372,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   defp prepare_token_content(node, children, style, runs, context) do
     math_formatting? = Map.get(style, :_math_formatting, style.display != :inline_block)
 
+    metrics = if Map.has_key?(style, :_math_element), do: :ink, else: :advance
+
     available =
       Map.get(context, :available_content_width, Map.get(context, :available_inline_size))
 
@@ -2428,10 +2430,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           Enum.reduce_while(lines, {:ok, []}, fn line, {:ok, prepared} ->
             with {:ok, runs} <- token_runs(line, true),
                  {:ok, glyphs, text} <-
-                   prepare_token_glyphs(
-                     runs,
-                     if(Map.has_key?(style, :_math_element), do: :ink, else: :advance)
-                   ) do
+                   prepare_token_glyphs(runs, metrics) do
               if glyphs == [] do
                 {:cont, {:ok, prepared}}
               else
@@ -2467,10 +2466,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           end
         else
           with {:ok, glyphs, actual_text} <-
-                 prepare_token_glyphs(
-                   runs,
-                   if(Map.has_key?(style, :_math_element), do: :ink, else: :advance)
-                 ),
+                 prepare_token_glyphs(runs, metrics),
                {:ok, ink} <- prepare_token_layout_ink(runs, glyphs, style) do
             {:ok,
              %{
@@ -3562,21 +3558,33 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     end
   end
 
-  # MathTokenLayoutAlgorithm measures PlainTextPainter with the original
-  # characters, without inline math-auto/ssty glyph substitutions. The real
-  # selected substitute glyphs remain the only emitted paint/source bindings.
+  # Token layout measures the original characters before math-auto paint
+  # transforms, but retains their selected OpenType script-style substitutions.
+  # Measuring an unsubstituted digit would give its fraction the wrong bounds.
   defp prepare_token_layout_ink(runs, glyphs, style) do
     if Map.has_key?(style, :_math_element) do
       # Glyph preparation already validated and retained these exact source
       # outlines. Reuse them for the original-character metric request.
       sources = Map.new(glyphs, fn %{glyph: glyph} -> {glyph.font_face.id, glyph.source} end)
 
+      selected =
+        Map.new(glyphs, fn %{glyph: glyph} ->
+          {{glyph.font_face.id, glyph.font_size, glyph.source.displayed}, glyph.glyph_id}
+        end)
+
       ink =
         Enum.reduce(token_characters(runs), nil, fn character, bounds ->
           font = character.style.font_face
           <<codepoint::utf8>> = character.text
           source = Map.fetch!(sources, font.id)
-          glyph = Map.get(font.cmap, codepoint, 0)
+          source = %{source | size: character.style.font_size, stretch_metrics: :advance}
+
+          glyph =
+            Map.get(
+              selected,
+              {font.id, character.style.font_size, codepoint},
+              Map.get(font.cmap, codepoint, 0)
+            )
 
           {_left, bottom, _right, top} =
             glyph_ink_bounds(elem(source.bounds, glyph), source, glyph)
@@ -4018,11 +4026,18 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     end
   end
 
-  # Existing Font APIs expose exact selected TrueType outline bounds. Keep
-  # those source metrics; hinted platform masks require a different API.
+  # CSS operator stretching uses outward-rounded CSS-pixel ink bounds. The standalone
+  # design-metric API retains exact outlines. This rounding affects variant
+  # selection as well as the allocated ascent and descent, not PDF glyph paint.
   defp glyph_ink_bounds({left, bottom, right, top}, source, _glyph_id) do
     scale = source.size / source.metrics.units_per_em
-    {left * scale, bottom * scale, right * scale, top * scale}
+
+    if source.stretch_metrics == :ink do
+      {Float.floor(left * scale / 0.75) * 0.75, Float.floor(bottom * scale / 0.75) * 0.75,
+       Float.ceil(right * scale / 0.75) * 0.75, Float.ceil(top * scale / 0.75) * 0.75}
+    else
+      {left * scale, bottom * scale, right * scale, top * scale}
+    end
   end
 
   defp selected_glyph(id, source) do

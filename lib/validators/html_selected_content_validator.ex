@@ -130,6 +130,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator do
           }
 
           style
+          |> Map.drop([:line_height_normal, :line_height_multiplier])
           |> Map.merge(defaults)
           |> Map.merge(
             Map.take(inherited, [

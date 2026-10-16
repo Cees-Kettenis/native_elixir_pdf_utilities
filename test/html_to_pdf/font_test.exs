@@ -287,6 +287,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert first_width != second_width
 
     Font.with_measurement_cache(fn ->
+      assert Font.css_glyph_advances("", first, 9) == []
       assert Font.css_text_width(text, first, 9) == first_width
       assert is_list(Font.css_glyph_advances(text, first, 9))
       assert Font.css_text_width(text, first, 9) == first_width

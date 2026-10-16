@@ -25,12 +25,14 @@ defmodule NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator do
   @spec source_characters(map(), String.t()) :: [map()] | nil
   def source_characters(node, displayed) do
     if Map.has_key?(node, :node_id) do
+      owner = Map.drop(node, [:style, :children])
+
       Enum.zip(String.codepoints(displayed), String.codepoints(node.text))
       |> Enum.with_index()
       |> Enum.map(fn {{displayed, text}, offset} ->
         %{
           displayed: displayed,
-          fragments: [%{owner: Map.drop(node, [:style, :children]), text: text, offset: offset}]
+          fragments: [%{owner: owner, text: text, offset: offset}]
         }
       end)
     end
@@ -50,9 +52,16 @@ defmodule NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator do
   @doc "Normalizes native text with the shared CSS whitespace operations."
   @spec normalize_text(String.t(), map()) :: String.t()
   def normalize_text(text, style) do
-    Enum.reduce(normalizations(style), text, fn {pattern, replacement}, text ->
-      String.replace(text, pattern, replacement)
-    end)
+    # A single ordinary space is already normalized under every white-space mode.
+    case :binary.match(text, ["\r", "\n", "\t", "\f", "  "]) do
+      :nomatch ->
+        text
+
+      _ ->
+        Enum.reduce(normalizations(style), text, fn {pattern, replacement}, text ->
+          String.replace(text, pattern, replacement)
+        end)
+    end
   end
 
   @doc "Carries exact scalar provenance through the same whitespace normalization."
@@ -91,7 +100,7 @@ defmodule NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator do
     case Map.get(style, :white_space, :normal) do
       mode when mode in [:pre, :pre_wrap, :break_spaces] -> [newline]
       :pre_line -> [newline, {~r/[ \t\f]+/u, " "}]
-      _ -> [newline, {~r/[ \t\n\f]+/u, " "}]
+      _ -> [{~r/[ \t\r\n\f]+/u, " "}]
     end
   end
 

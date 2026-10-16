@@ -89,19 +89,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
               {candidates, Map.put(cached_candidates, key, {selected, candidates})}
           end
 
-        graphemes =
-          node.text
-          |> String.replace("\r\n", "\n")
-          |> String.replace("\r", "\n")
-          |> String.graphemes()
-          |> Enum.map(fn grapheme ->
-            layout_whitespace? =
-              grapheme
-              |> String.to_charlist()
-              |> Enum.all?(&(&1 in [9, 10, 13]))
+        text = HtmlValidator.preprocess_html(node.text)
 
-            %{text: grapheme, layout_whitespace?: layout_whitespace?}
-          end)
+        # A fully covered run needs no font-boundary segmentation. Source
+        # provenance still follows individual graphemes through normalization.
+        graphemes =
+          if text != "" and not Map.has_key?(style, :_source_glyph_characters) and
+               Font.supports_text?(selected, text) do
+            [%{text: text, layout_whitespace?: false}]
+          else
+            text
+            |> String.graphemes()
+            |> Enum.map(fn grapheme ->
+              %{text: grapheme, layout_whitespace?: grapheme in ["\t", "\n", "\r", "\r\n"]}
+            end)
+          end
 
         graphemes =
           case Map.get(style, :_source_glyph_characters) do

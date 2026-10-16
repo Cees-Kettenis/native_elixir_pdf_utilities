@@ -74,9 +74,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer do
                  ) do
             SvgValidator.conversion_result(result)
           else
-            {:error, reason} when is_binary(reason) ->
-              SvgValidator.conversion_result({:error, reason})
-
             {:error, reason} ->
               SvgConverterValidator.staging_error(reason)
           end

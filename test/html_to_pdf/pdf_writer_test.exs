@@ -7,6 +7,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Text
 
+  test "integer paint coordinates retain precision beyond binary64's exact integer range" do
+    alias NativeElixirPdfUtilities.Limits
+    alias NativeElixirPdfUtilities.Validators.LimitsValidator
+
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
+    assert {:ok, limits} =
+             LimitsValidator.validate(max_pdf_numeric_magnitude: 18_014_398_509_481_984)
+
+    Limits.install(limits)
+
+    box = %{
+      type: :rect,
+      x: 9_007_199_254_740_993,
+      y: 0,
+      width: 1,
+      height: 1,
+      fill_color: {0, 0, 0},
+      stroke_color: nil,
+      stroke_width: 0,
+      border_radius: 0
+    }
+
+    assert {:ok, pdf} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [box]}], compress_streams: false)
+
+    assert pdf =~ "9007199254740993 0 1 1 re"
+  end
+
   test "rejects malformed vector form image bytes through the writer diagnostic contract" do
     image = %{format: :pdf_form, data: "not a PDF", width_px: 2, height_px: 2}
     box = %{type: :image, x: 1, y: 1, width: 2, height: 2, image: image}
@@ -1295,6 +1325,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "/Width 1 /Height 1"
   end
 
+  test "snapped block fills preserve Chromium's half-point top edge without moving their clip" do
+    box = %{
+      type: :rect,
+      role: :block_fragment_paint,
+      snap_to_css_pixel_grid: true,
+      x: 12.0,
+      y: 122.25,
+      width: 216.0,
+      height: 8.25,
+      fill_color: {0, 0, 0},
+      stroke_color: nil,
+      stroke_width: 0,
+      border_radius: 0,
+      clip: %{x: 12, y: 122.25, width: 216, height: 8.25}
+    }
+
+    assert {:ok, pdf} =
+             PdfWriter.render([%{size: {240, 180}, boxes: [box]}], compress_streams: false)
+
+    assert pdf =~ "12 122.25 216 8.25 re W n"
+    assert pdf =~ "11.9999 122.2501 216 8.25 re f"
+  end
+
   test "render writes a valid PDF for a text page" do
     pages = [
       %{
@@ -2086,6 +2139,74 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "/SMask 4 0 R"
     assert pdf =~ "/ColorSpace /DeviceGray"
     assert pdf =~ "q 10 0 0 20 5 6 cm /Im1 Do Q"
+
+    [page] = pages
+    [box] = page.boxes
+    opaque = %{box | image: Map.put(box.image, :alpha_data, nil)}
+    assert {:ok, pdf} = PdfWriter.render([%{page | boxes: [opaque]}])
+    refute pdf =~ "/SMask"
+    assert {:ok, document} = Reader.read(pdf)
+    assert {:ok, <<0, 0, 0, 255, 0, 0>>} = Reader.decoded_stream(document, {:ref, {3, 0}})
+  end
+
+  test "PNG soft masks preserve visible samples and extend colors only one pixel into transparency" do
+    for color_space <- [:device_rgb, :device_gray],
+        depth <- [8, 16],
+        right <- [3, 5],
+        empty <- [false, true] do
+      channels = if color_space == :device_rgb, do: 3, else: 1
+      hidden = Enum.take([19, 7, 3], channels)
+      red = Enum.take([100, 50, 25], channels)
+      blue = Enum.take([200, 120, 90], channels)
+
+      pixels =
+        for y <- 0..4, x <- 0..6, into: <<>> do
+          values =
+            cond do
+              not empty and {x, y} == {1, 2} -> red
+              not empty and {x, y} == {right, 2} -> blue
+              true -> hidden
+            end
+
+          for value <- values, into: <<>>, do: <<value::size(depth)>>
+        end
+
+      alpha =
+        for y <- 0..4, x <- 0..6, into: <<>> do
+          value =
+            cond do
+              not empty and {x, y} == {1, 2} -> 1
+              not empty and {x, y} == {right, 2} -> 2 ** depth - 1
+              true -> 0
+            end
+
+          <<value::size(depth)>>
+        end
+
+      image =
+        image_fixture(:png, pixels, 7, 5, color_space)
+        |> Map.merge(%{bits_per_component: depth, alpha_data: alpha})
+
+      box = %{type: :image, x: 0.25, y: 0.5, width: 35, height: 25, image: image}
+      assert {:ok, pdf} = PdfWriter.render([%{size: {50, 50}, boxes: [box]}])
+      assert {:ok, document} = Reader.read(pdf)
+      assert {:ok, ^alpha} = Reader.decoded_stream(document, {:ref, {4, 0}})
+      assert {:ok, colors} = Reader.decoded_stream(document, {:ref, {3, 0}})
+
+      expected =
+        for y <- 0..4, x <- 0..6, into: <<>> do
+          values =
+            cond do
+              not empty and y in 1..3 and x in (right - 1)..(right + 1) -> blue
+              not empty and y in 1..3 and x in 0..2 -> red
+              true -> hidden
+            end
+
+          for value <- values, into: <<>>, do: <<value::size(depth)>>
+        end
+
+      assert colors == expected
+    end
   end
 
   test "render writes gray and CMYK image color spaces" do

@@ -910,7 +910,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
 
       %{type: :glyph_group, actual_text: text, boxes: children}
       when is_binary(text) and is_list(children) ->
-        String.valid?(text) and
+        String.valid?(text, :fast_ascii) and
           Enum.all?(children, fn child ->
             is_map(child) and Map.get(child, :type) == :text and
               is_boolean(Map.get(child, :snap_to_css_pixel_grid, false)) and valid_box?(child)
@@ -1684,7 +1684,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
               :writer
             )
 
-        is_binary(text) and String.valid?(text) and valid_image?(Map.delete(image, :logical_text))
+        is_binary(text) and String.valid?(text, :fast_ascii) and
+          valid_image?(Map.delete(image, :logical_text))
 
       %{format: :pdf_form, data: source, width_px: width_px, height_px: height_px}
       when is_binary(source) and is_integer(width_px) and width_px > 0 and
@@ -1950,7 +1951,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   defp valid_font_box?(box) do
     case Map.get(box, :font_face) do
       %{type: :embedded, id: id, cmap: cmap} when is_binary(id) and is_map(cmap) ->
-        box.font == Font.pdf_name(box.font_face) and String.valid?(box.text) and
+        box.font == Font.pdf_name(box.font_face) and String.valid?(box.text, :fast_ascii) and
           case Map.fetch(box, :glyph_ids) do
             {:ok, glyphs} when is_list(glyphs) ->
               length(glyphs) == length(String.to_charlist(box.text)) and

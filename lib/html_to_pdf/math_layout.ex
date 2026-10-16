@@ -579,6 +579,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
               |> Map.put(:width, width)
               |> Map.put(:ascent, shaped.ascent + offset)
               |> Map.put(:descent, shaped.descent - offset)
+              |> Map.put(:ink_ascent, Map.get(shaped, :ink_ascent, shaped.ascent) + offset)
+              |> Map.put(:ink_descent, Map.get(shaped, :ink_descent, shaped.descent) - offset)
               |> Map.put(:glyphs, glyphs)
               |> Map.put(:drawing_items, Enum.map(glyphs, &Map.put(&1, :kind, :glyph)))
               |> Map.put(:min_content_width, resolved.intrinsic_width)
@@ -1059,33 +1061,64 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             glyph =
               if axis == :horizontal,
                 do: %{glyph | x: offset},
-                else: %{glyph | y: offset + measured.descent}
+                else: %{
+                  glyph
+                  | y:
+                      offset +
+                        if(prepared.source.stretch_metrics == :ink,
+                          do:
+                            part.full_advance * size / prepared.source.metrics.units_per_em -
+                              measured.ascent,
+                          else: measured.descent
+                        )
+                }
 
             {glyph,
              offset + part.full_advance * size / prepared.source.metrics.units_per_em -
                prepared.overlap}
           end)
 
+        # CSS assembly metrics use the painted ink union. The theoretical
+        # stretch advance can differ from the bounds of its overlapping parts.
         {width, ascent, descent} =
-          if axis == :vertical do
-            {Enum.max(
-               Enum.map(
-                 prepared.metric_parts,
-                 &(&1.metric.advance * size / &1.metric.units_per_em)
-               )
-             ), prepared.stretch_size, 0.0}
-          else
-            {prepared.stretch_size,
-             Enum.max(
-               Enum.map(prepared.metric_parts, fn part ->
-                 elem(part.metric.bounds, 3) * size / part.metric.units_per_em
-               end)
-             ),
-             Enum.max(
-               Enum.map(prepared.metric_parts, fn part ->
-                 -elem(part.metric.bounds, 1) * size / part.metric.units_per_em
-               end)
-             )}
+          cond do
+            prepared.source.stretch_metrics == :ink ->
+              bounds =
+                Enum.zip(glyphs, parts)
+                |> Enum.map(fn {glyph, part} ->
+                  {left, bottom, right, top} = part.metric.ink_bounds
+                  {glyph.x + left, glyph.y + bottom, glyph.x + right, glyph.y + top}
+                end)
+
+              left = bounds |> Enum.map(&elem(&1, 0)) |> Enum.min()
+              bottom = bounds |> Enum.map(&elem(&1, 1)) |> Enum.min()
+              right = bounds |> Enum.map(&elem(&1, 2)) |> Enum.max()
+              top = bounds |> Enum.map(&elem(&1, 3)) |> Enum.max()
+
+              if axis == :vertical,
+                do: {right - left, top - bottom, 0.0},
+                else: {right - left, top, -bottom}
+
+            axis == :vertical ->
+              {Enum.max(
+                 Enum.map(
+                   prepared.metric_parts,
+                   &(&1.metric.advance * size / &1.metric.units_per_em)
+                 )
+               ), prepared.stretch_size, 0.0}
+
+            true ->
+              {prepared.stretch_size,
+               Enum.max(
+                 Enum.map(prepared.metric_parts, fn part ->
+                   elem(part.metric.bounds, 3) * size / part.metric.units_per_em
+                 end)
+               ),
+               Enum.max(
+                 Enum.map(prepared.metric_parts, fn part ->
+                   -elem(part.metric.bounds, 1) * size / part.metric.units_per_em
+                 end)
+               )}
           end
 
         {value, pixels} = prepared.italic
@@ -1105,6 +1138,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
   defp glyph_geometry(glyph) do
     scale = glyph.font_size / glyph.units_per_em
     {_xmin, ymin, _xmax, ymax} = glyph.ink_bounds
+    {_xmin, outline_bottom, _xmax, outline_top} = glyph.bounds
     ascent = ymax
     descent = -ymin
     width = glyph.advance * scale
@@ -1125,6 +1159,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
       width: width,
       ascent: ascent,
       descent: descent,
+      ink_ascent: outline_top * scale,
+      ink_descent: -outline_bottom * scale,
       italic_correction: italic,
       top_accent_attachment: accent,
       glyphs: [

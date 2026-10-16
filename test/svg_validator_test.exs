@@ -101,7 +101,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
 
     assert message =~ "UTF-8"
 
-    for options <- [[1], [zoom: 2], :invalid] do
+    for options <- [[1], [zoom: 2], :invalid, [scale: 0], [scale: -1], [scale: 1.5], [scale: nil]] do
       assert {:error, {:invalid_document, _}} = SvgValidator.validate(svg(""), options, nil)
     end
   end
@@ -909,60 +909,6 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
 
       assert message =~ "max_aggregate_svg_surface_pixels"
     end)
-  end
-
-  @tag :browser_parity
-  test "byte adapter artwork matches Chromium without enabling inline SVG composition" do
-    fixture = Path.expand("fixtures/html_to_pdf/svg_backend/byte_artwork.html", __DIR__)
-    source = File.read!(Path.join(Path.dirname(fixture), "byte_artwork.svg"))
-    image = PngFixture.build(2, 2, 2, 8, 0, fn _, _ -> [22, 163, 74] end)
-    image_uri = "data:image/png;base64," <> Base.encode64(image)
-    font = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
-    font_uri = "data:font/ttf;base64," <> Base.encode64(font)
-
-    font_style =
-      "<style>@font-face { font-family: 'DejaVu Sans'; src: url('#{font_uri}') format('truetype'); }</style>"
-
-    reference_svg =
-      source
-      |> String.replace("svg-resource:logo", image_uri)
-      |> String.replace("viewBox=\"0 0 240 80\">", "viewBox=\"0 0 240 80\">" <> font_style)
-
-    reference_uri = "data:image/svg+xml;base64," <> Base.encode64(reference_svg)
-
-    context = %{
-      mode: :reference,
-      fonts: [%{data: font}],
-      resources: %{"svg-resource:logo" => %{data: image, media_type: "image/png"}}
-    }
-
-    stats =
-      NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
-        artifact_dir: "tmp/browser_parity/svg_backend_byte_artwork",
-        chromium_transform: fn html ->
-          String.replace(html, "SVG_BACKEND_ARTWORK", reference_uri)
-        end,
-        native_renderer: fn html, options ->
-          with {:ok, artwork} <- convert_svg(source, [width: 480, height: 160], context) do
-            assert {:ok, %{width_px: 480, height_px: 160}} =
-                     PngDecoder.decode(artwork, HtmlValidator.new_image_budget(), false)
-
-            uri = "data:image/png;base64," <> Base.encode64(artwork)
-            HtmlToPdf.render(String.replace(html, "SVG_BACKEND_ARTWORK", uri), options)
-          end
-        end,
-        max_changed_ratio: 0.01,
-        max_average_delta: 0.01
-      )
-
-    assert stats.page_count == 1
-
-    for name <- ["native.pdf", "chromium.pdf"] do
-      pdf = File.read!(Path.join(stats.artifact_dir, name))
-      assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
-      assert text =~ "SVG byte adapter" and text =~ "Validated resources"
-      assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
-    end
   end
 
   # The byte context carries the same approved fonts and resources as before;

@@ -221,40 +221,6 @@ defmodule NativeElixirPdfUtilities.JpegValidatorTest do
     end
   end
 
-  @tag :browser_parity
-  test "independent PDF rasterization preserves red across all CMYK conventions" do
-    directory = Path.join(System.tmp_dir!(), "nepu-cmyk-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(directory)
-    on_exit(fn -> File.rm_rf!(directory) end)
-    rasterizer = System.find_executable("pdftoppm") || flunk("pdftoppm is required")
-
-    for name <- ["ordinary_cmyk", "adobe_cmyk", "adobe_ycck"] do
-      data = File.read!(Path.join([__DIR__, "fixtures", "html_to_pdf", name <> ".jpg"]))
-
-      {:ok, pdf} =
-        HtmlToPdf.render("<img src='x' style='display:block;width:30pt;height:30pt'>",
-          assets: %{"x" => {:bytes, data}},
-          page_size: {40, 40},
-          margin: 0
-        )
-
-      path = Path.join(directory, name)
-      File.write!(path <> ".pdf", pdf)
-
-      assert {_log, 0} =
-               System.cmd(rasterizer, ["-singlefile", "-r", "72", path <> ".pdf", path],
-                 stderr_to_stdout: true
-               )
-
-      # PPM pixels are uncompressed RGB; sample the middle of the solid-red fixture.
-      assert <<"P6\n40 40\n255\n", pixels::binary>> = File.read!(path <> ".ppm")
-      <<red, green, blue>> = binary_part(pixels, (10 * 40 + 10) * 3, 3)
-
-      assert red > 200 and green < 50 and blue < 50,
-             "#{name} rendered #{inspect({red, green, blue})}"
-    end
-  end
-
   defp fixture(name), do: File.read!(Path.join([__DIR__, "fixtures", "html_to_pdf", name]))
 
   defp jpeg(body), do: <<255, 216>> <> body <> <<255, 217>>

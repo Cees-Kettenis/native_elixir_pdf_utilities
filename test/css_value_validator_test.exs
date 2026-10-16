@@ -129,6 +129,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
                "--Width:2pt!important;--width:3pt;width:var(--Width);color:blue"
              )
 
+    # Literal values still pass balanced-component validation before the
+    # variable scanner can take its no-function path.
+    assert {:ok, []} = HtmlValidator.parse_css_variable_references("3pt solid red")
+    assert :error = HtmlValidator.parse_css_variable_references("red)")
+
+    assert {:ok, [%{name: "--size"}]} =
+             HtmlValidator.parse_css_variable_references("v\\61r(--size)")
+
     assert {:ok, %{width: 2.0}} =
              CssValueValidator.validate_resolved(
                %{color: {0, 0, 0}, font_size: 12.0},

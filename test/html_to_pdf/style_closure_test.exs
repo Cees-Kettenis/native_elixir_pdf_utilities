@@ -84,6 +84,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleClosureTest do
       assert diagnostic.operation == :rasterize
       assert diagnostic.source == "SVG"
       assert diagnostic.message =~ "max_aggregate_svg_raster_pixels"
+
+      # Reusing decoded artwork still charges every requested dense raster.
+      # One occurrence fits; the cached second occurrence must fail explicitly.
+      Limits.install(
+        Map.put(old, :max_aggregate_svg_raster_pixels, 8 * 6 * Limits.get(:svg_raster_scale) ** 2)
+      )
+
+      uri = "data:image/svg+xml;base64," <> Base.encode64(source)
+      assert {:ok, one} = HtmlParser.parse_detailed("<img src='#{uri}'>")
+      assert {:ok, _} = Style.compute_detailed(one, @opts)
+      assert {:ok, two} = HtmlParser.parse_detailed("<img src='#{uri}'><img src='#{uri}'>")
+      assert {:error, {:resource_limit_exceeded, repeated}} = Style.compute_detailed(two, @opts)
+      assert repeated.source == "SVG"
+      assert repeated.message =~ "max_aggregate_svg_raster_pixels"
     after
       Limits.install(old)
     end

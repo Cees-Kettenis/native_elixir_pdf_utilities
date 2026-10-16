@@ -221,9 +221,6 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
                   do: {:halt, value},
                   else: {:cont, default}
 
-              {:error, {_reason, _diagnostic}} = error ->
-                throw({:render_resource_limit, error})
-
               _ ->
                 {:cont, default}
             end

@@ -138,7 +138,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateUnappliedPositionTest do
       NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
         artifact_dir: ".quality/orchestration/unapplied-positions-original-browser",
         native_renderer:
-          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_initial_numbers/2,
+          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_with_chromium_arial/2,
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )

@@ -192,6 +192,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutFractionsTest do
     widths = Enum.map(inline.glyphs, & &1.width)
     assert_in_delta inline.width, Enum.max(widths) + 1.5, 1.0e-10
 
+    [numerator, denominator] = inline.glyphs
+    {_left, _bottom, _right, top} = elem(c.bounds, numerator.glyph_id)
+    {_left, bottom, _right, _top} = elem(c.bounds, denominator.glyph_id)
+
+    assert_in_delta inline.ascent,
+                    numerator.y + top * numerator.font_size / c.font.units_per_em,
+                    1.0e-10
+
+    assert_in_delta inline.descent,
+                    -denominator.y - bottom * denominator.font_size / c.font.units_per_em,
+                    1.0e-10
+
     assert {:ok, display} =
              styled_math(
                "<math display=block style='font-size:20pt'><mfrac><mn>1</mn><mn>2</mn></mfrac></math>"

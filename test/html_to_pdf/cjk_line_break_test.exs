@@ -21,6 +21,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CjkLineBreakTest do
           {"東京（京都）、大阪", ["東", "京", "（京", "都）、", "大", "阪"]},
           {"漢字AlphaBeta中文", ["漢", "字", "AlphaBeta", "中", "文"]},
           {"A\u00A0B C", ["A\u00A0B ", "C"]},
+          {"markup</b> path/to/file", ["markup</b> ", "path/to/file"]},
+          {"path/東京", ["path/", "東", "京"]},
           {"e\u0301漢字", ["e\u0301", "漢", "字"]},
           {"👩‍👩‍👧‍👦漢字", ["👩‍👩‍👧‍👦", "漢", "字"]}
         ] do

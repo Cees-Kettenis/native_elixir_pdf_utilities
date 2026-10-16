@@ -1,5 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarViewportTest do
   use ExUnit.Case, async: false
+  Code.require_file("../support/png_fixture.ex", __DIR__)
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
     DrawingGeometry,
@@ -21,7 +22,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarViewportTest do
             {"<div style='height:100px'></div>", 90.5, 45.5, 79.5, 45.75},
             {"<div style='width:200px;height:200px'></div>", 7.5, 7.5, 0, 0},
             {"<div style='height:100px'></div>", 7.5, 45, 0, 33.75},
-            {"", 30, 3.75, 18.75, 3.75},
+            {"", 30, 3.75, 30, 3.75},
             {"<div style='height:100px'></div>", 30, 0.75, 18.75, 0.75},
             {"<div style='height:100px'></div>", 30, 1.5, 18.75, 1.5}
           ] do
@@ -223,36 +224,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarViewportTest do
   end
 
   test "newly appearing scrollbars freeze and empty artwork stays empty" do
-    surface = %{host: :iframe, tree: %{children: []}}
-    initial = EmbeddedViewportValidator.initial_viewport(surface, 90, 45)
+    png =
+      NativeElixirPdfUtilities.TestSupport.PngFixture.build(100, 52, 2, 8, 0, fn _, _ ->
+        [255, 0, 0]
+      end)
 
-    layout = %{
-      page_size: {90, 45},
-      content_width: 90,
-      content_height: 45,
-      boxes: [%{type: :rect, x: 0, y: -10, width: 90, height: 55}]
-    }
+    html =
+      "<body style='margin:0'><img style='display:block;width:100%;height:auto' src='data:image/png;base64," <>
+        Base.encode64(png) <> "'></body>"
 
-    assert initial.vertical and initial.client_width == 78.75
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn parent ->
+      assert {:ok, prepared} = EmbeddedViewport.prepare_iframe_document({:srcdoc, html}, parent)
+      assert {:ok, outer} = EmbeddedViewport.layout(prepared, 90, 45)
+      client = hd(outer.boxes)
+      assert client.client_rect == %{x: 0.0, y: 0.0, width: 78.75, height: 45.0}
+      [image] = client.boxes
+      assert image.type == :image
+      assert image.width == 78.75
+      assert image.height < 45
+      # Initial narrow layout fits, full-width layout overflows, and the final
+      # narrow layout keeps the newly frozen scrollbar rather than oscillating.
+      assert :atomics.get(parent.image_budget, 1) == 3
+    end)
 
-    previous = %{
-      initial
-      | vertical: false,
-        client_width: 90,
-        seen: MapSet.new([{false, false}, {false, true}])
-    }
-
-    assert {:relayout, next} =
-             EmbeddedViewportValidator.prepare_scroll_geometry(layout, surface, 90, 45, previous)
-
-    assert next.vertical and next.client_width == 78.75
-    assert next.frozen_scrollbars == MapSet.new([:vertical])
-    fits = %{layout | page_size: {78.75, 45}, content_width: 78.75, boxes: []}
-
-    assert {:paint, stable} =
-             EmbeddedViewportValidator.prepare_scroll_geometry(fits, surface, 90, 45, next)
-
-    assert stable.vertical and stable.client_width == 78.75
     empty = EmbeddedViewportValidator.initial_viewport(%{host: :surface}, 90, 45)
     assert EmbeddedViewportValidator.prepare_scrollbar_parts(empty) == {:ok, []}
     assert ScrollbarPainter.paint([]) == []

@@ -1448,17 +1448,20 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
       bytes ->
         candidate =
           cmap.sizes
-          |> Enum.find(fn size ->
-            byte_size(bytes) >= size and
-              (cmap.codespaces == [] or
-                 Enum.any?(cmap.codespaces, fn {first, last} ->
-                   byte_size(first) == size and binary_part(bytes, 0, size) >= first and
-                     binary_part(bytes, 0, size) <= last
-                 end))
+          |> Enum.find_value(fn size ->
+            if byte_size(bytes) >= size do
+              <<code::binary-size(^size), rest::binary>> = bytes
+
+              if cmap.codespaces == [] or
+                   Enum.any?(cmap.codespaces, fn {first, last} ->
+                     byte_size(first) == size and code >= first and code <= last
+                   end),
+                 do: {code, rest}
+            end
           end)
 
         if candidate do
-          <<code::binary-size(^candidate), rest::binary>> = bytes
+          {code, rest} = candidate
 
           case Map.get(cmap.mappings, code) do
             nil ->

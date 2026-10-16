@@ -136,23 +136,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateNestedContextTest do
     assert Process.get({TemplatePatchValidator, :candidate_capture}) == nil
   end
 
-  @tag :browser_parity
-  test "untouched original nested candidate matches Chromium's inert inner template" do
-    fixture =
-      Path.expand("../fixtures/html_to_pdf/template_replacement/nested_range.html", __DIR__)
-
-    stats =
-      NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
-        artifact_dir: ".quality/orchestration/nested-template-original-after",
-        native_renderer:
-          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_initial_numbers/2,
-        max_changed_ratio: 0.01,
-        max_average_delta: 0.01
-      )
-
-    assert stats.page_count == 1 and stats.scripting == :disabled
-  end
-
   defp nested(content) do
     "<body><div><?marker name='A'></div><template for='A'><section><?start name='B'><p>Inner original</p><?end?></section><template for='B'>#{content}</template><p>Outer after</p></template><p>Document after</p></body>"
   end

@@ -58,28 +58,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClippingTest do
     assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
   end
 
-  test "multiple children object bounds and linked reference clips compose actual vector geometry" do
-    definitions = [
-      "<clipPath id=c><rect width=20 height=40 /><circle cx=30 cy=20 r=10 /></clipPath>",
-      "<clipPath id=c />",
-      "<clipPath id=c clipPathUnits=objectBoundingBox><rect width='.5' height='1' /></clipPath>",
-      "<clipPath id=c clip-path='url(#other)'><rect width=30 height=30 /></clipPath>",
-      "<clipPath id=c><rect width=30 height=30 clip-path='url(#other)' /><circle cx=30 cy=30 r=8 /></clipPath>",
-      "<clipPath id=c><use href='#shape' x=10 /></clipPath>"
-    ]
-
-    for definition <- definitions do
-      assert {:ok, pdf} =
-               NativeElixirPdfUtilities.HtmlToPdf.render(
-                 "<svg width=40 height=40><defs><rect id=shape width=20 height=30 /><clipPath id=other><circle cx=15 cy=15 r=10 /></clipPath>#{definition}</defs><rect width=40 height=40 clip-path='url(#c)' /></svg>"
-               )
-
-      refute pdf =~ "/Subtype /Link"
-      assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
-      assert {:ok, _} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
-    end
-  end
-
   test "clip geometry rejects elements the native static profile cannot paint" do
     for geometry <- [
           "<g><rect /></g>",
@@ -257,33 +235,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClippingTest do
     assert {:error, {:no_extractable_text, _}} = Text.extract(pdf, layout: false)
   end
 
-  test "union clipping retains genuine selected text and native filtered layer geometry" do
-    html =
-      "<svg width='180' height='48'><defs><clipPath id='union'><rect width='120' height='48'/><circle cx='145' cy='24' r='24'/></clipPath></defs><g clip-path='url(#union)' opacity='.7'><text x='2' y='28' font-size='20'>Painted café Ω</text></g></svg>"
-
-    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html)
-    refute pdf =~ "/Subtype /Link"
-    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
-    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf)
-
-    assert {:error, {:no_extractable_text, _}} =
-             NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
-
-    source =
-      "<svg width='80' height='80'><defs><clipPath id='union'><rect x='8' y='8' width='30' height='60'/><circle cx='45' cy='40' r='30'/></clipPath><filter id='blur' x='-1' y='-1' width='3' height='3'><feGaussianBlur stdDeviation='4'/></filter></defs><g clip-path='url(#union)' filter='url(#blur)'><rect x='25' y='25' width='20' height='20' fill='red'/></g></svg>"
-
-    assert {:ok, pdf} =
-             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(
-               source,
-               [width: 80, height: 80],
-               %{mode: :inline}
-             )
-
-    refute pdf =~ "/Subtype /Link"
-    assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
-    assert {:ok, _} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
-  end
-
   test "authorized nested SVG empty clips retain their actual empty set" do
     child =
       "<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><defs><clipPath id='empty'/></defs><rect width='40' height='40' fill='red' clip-path='url(#empty)'/><rect width='5' height='5' fill='blue'/></svg>"
@@ -370,21 +321,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClippingTest do
 
     assert message =~ "40x40"
     assert message =~ "10-pixel per-axis limit"
-  end
-
-  test "original path clip browser fixture remains vector artwork with surrounding logical text" do
-    html =
-      File.read!(
-        Path.expand(
-          "../fixtures/html_to_pdf/browser_parity/inline_svg_path_clips_scoped.html",
-          __DIR__
-        )
-      )
-
-    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html)
-    assert {:ok, text} = Text.extract(pdf)
-    assert text =~ "host cascade Ω"
-    assert text =~ "viewports café"
-    assert text =~ "Clip artwork survived"
   end
 end

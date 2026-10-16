@@ -969,7 +969,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           {:ok, [map()]} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
   def parse_css_variable_references(value) do
     with_render_budget(fn ->
-      if is_binary(value) and String.valid?(value),
+      if is_binary(value) and String.valid?(value, :fast_ascii),
         do: css_variable_references(value, 0),
         else: :error
     end)
@@ -981,7 +981,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   def prepare_css_variable_source(value, budget) do
     with_render_budget(fn ->
       with :ok <- validate_css_budget(budget),
-           true <- is_binary(value) and String.valid?(value),
+           true <- is_binary(value) and String.valid?(value, :fast_ascii),
            :ok <- css_limit(:max_css_variable_bytes, byte_size(value)),
            {:ok, references} <- css_variable_references(value, 0),
            :ok <-
@@ -1011,12 +1011,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
            NativeElixirPdfUtilities.Validators.CssMathValidator.component_tokens(value, false) do
       reserve_render_resource(:max_css_work, byte_size(value), :css)
 
-      {units, _} =
-        value
-        |> css_component_units()
-        |> Enum.map_reduce(0, fn unit, offset -> {{unit, offset}, offset + byte_size(unit)} end)
+      # Balanced components without a function opening cannot contain var().
+      if :binary.match(value, "(") == :nomatch do
+        {:ok, []}
+      else
+        {units, _} =
+          value
+          |> css_component_units()
+          |> Enum.map_reduce(0, fn unit, offset -> {{unit, offset}, offset + byte_size(unit)} end)
 
-      css_variable_scan(units, value, depth, [])
+        css_variable_scan(units, value, depth, [])
+      end
     else
       :invalid -> :error
       result -> result
@@ -1456,7 +1461,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         check_render_resource(limit, amount, stage)
 
       budget ->
-        used = Map.get(budget, limit, 0) + amount
+        used =
+          case budget do
+            %{^limit => used} -> used + amount
+            _ -> amount
+          end
+
         check_render_resource(limit, used, stage)
         if amount != 0, do: Process.put(key, Map.put(budget, limit, used))
     end
@@ -1514,7 +1524,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   def validate_html_source(html) do
     case html do
       html when is_binary(html) ->
-        case {byte_size(html) <= Limits.get(:max_html_source_bytes), String.valid?(html)} do
+        case {byte_size(html) <= Limits.get(:max_html_source_bytes),
+              String.valid?(html, :fast_ascii)} do
           {false, _} ->
             Diagnostics.error(
               :html,
@@ -3340,7 +3351,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                    column > 0 ->
               reserve_render_resource(:max_html_tree_work, 2 * byte_size(text), :html)
 
-              map_size(source) == 3 and String.valid?(text) and
+              map_size(source) == 3 and String.valid?(text, :fast_ascii) and
                 case validate_html_processing_instruction(String.replace(text, ~r/\r\n?/, "\n")) do
                   {:ok, parsed} -> parsed.target == target and parsed.data == data
                   _ -> false
@@ -3752,7 +3763,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   def validate_css_source(css, kind \\ :stylesheet) do
     case {css, kind} do
       {css, kind} when is_binary(css) and kind in [:stylesheet, :declarations] ->
-        case {byte_size(css) <= Limits.get(:max_css_source_bytes), String.valid?(css)} do
+        case {byte_size(css) <= Limits.get(:max_css_source_bytes),
+              String.valid?(css, :fast_ascii)} do
           {false, _} ->
             Diagnostics.error(:css, :invalid_css, "CSS input exceeds max_css_source_bytes")
 
@@ -6915,7 +6927,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             end
 
           %{type: :text, text: text} when is_binary(text) ->
-            if String.valid?(text),
+            if String.valid?(text, :fast_ascii),
               do: {:ok, false},
               else:
                 Diagnostics.error(:style, :invalid_document, "HTML text requires valid UTF-8",
@@ -6933,7 +6945,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
                 Enum.all?(attributes, fn {name, value} ->
                   is_binary(name) and is_binary(value) and String.valid?(name) and
-                      String.valid?(value)
+                      String.valid?(value, :fast_ascii)
                 end) ->
                   nil
 
@@ -7404,9 +7416,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                   )
 
             %{type: :text, text: text, style: style} ->
-              if is_binary(text) and String.valid?(text) and valid_layout_style?(style),
-                do: :ok,
-                else: :invalid_layout
+              if is_binary(text) and String.valid?(text, :fast_ascii) and
+                   valid_layout_style?(style),
+                 do: :ok,
+                 else: :invalid_layout
 
             %{
               type: :element,
@@ -8086,7 +8099,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         }
         when is_binary(text) and is_map(registry) and is_map(selected) and is_list(families) and
                is_number(weight) and font_style in [:normal, :italic] ->
-          case String.valid?(text) do
+          case String.valid?(text, :fast_ascii) do
             true ->
               {:cont, :ok}
 
@@ -8161,7 +8174,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           supported? = layout_whitespace? or Enum.any?(candidates, &Font.supports_text?(&1, text))
 
           replacement_supported? =
-            unsupported_glyphs == :replace and
+            not supported? and unsupported_glyphs == :replace and
               Enum.any?(candidates, &Font.supports_text?(&1, replacement_character))
 
           case supported? or replacement_supported? do
@@ -8264,7 +8277,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         :error
 
       value when is_binary(value) ->
-        if String.valid?(value) do
+        if String.valid?(value, :fast_ascii) do
           input = trim_ascii_whitespace(value)
           # The longest keyword fixes recognition cost; this is not a limit
           # on legacy color input, whose separate format algorithm follows.

@@ -48,6 +48,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlSelectedContentTest do
     assert projection.logical == dom
   end
 
+  test "base-select dropdowns retain inherited explicit and unitless line height" do
+    for {line_height, expected} <- [{"24pt", 24.0}, {"1.5", 30.0}] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<div style='font-size:20pt;line-height:#{line_height}'><select style='appearance:base-select'><option>Choice</option></select></div>"
+               )
+
+      assert {:ok, %{children: [%{children: [select]}]}} =
+               Style.compute_detailed(dom, forms: :static, system_font_discovery: false)
+
+      assert select.style.line_height == expected
+    end
+  end
+
+  test "invalid default picker declarations return actionable diagnostics instead of raising" do
+    html =
+      "<style>select::picker-icon{color:bad}</style><select style='appearance:base-select'><option>Choice</option></select>"
+
+    assert {:error, {:invalid_css, diagnostic}} = NativeElixirPdfUtilities.HtmlToPdf.render(html)
+    assert diagnostic.stage == :css
+    assert diagnostic.reason == :invalid_css
+    assert diagnostic.operation == :render
+    assert diagnostic.source == "color:bad"
+    assert diagnostic.line == 1 and diagnostic.column > 0
+    assert diagnostic.message =~ "invalid or unsupported"
+  end
+
   test "base-select listbox defaults use inherited line height and authored important appearance" do
     assert {:ok, dom} =
              HtmlParser.parse_detailed(

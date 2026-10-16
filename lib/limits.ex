@@ -337,6 +337,7 @@ defmodule NativeElixirPdfUtilities.Limits do
 
   @doc "Returns the effective resource limits loaded for this application instance."
   @spec effective() :: t()
+  @compile {:inline, effective: 0}
   def effective do
     :persistent_term.get(@persistent_key, @defaults)
   end

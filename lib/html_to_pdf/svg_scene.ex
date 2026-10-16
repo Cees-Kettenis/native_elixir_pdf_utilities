@@ -358,9 +358,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
 
           %{type: :text, text: text} ->
             escape(text)
-
-          _ ->
-            ""
         end
       end)
 
@@ -411,9 +408,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
 
       {:svg_rem, n} ->
         "#{n * style._root_font_size / 0.75}"
-
-      value when is_tuple(value) and tuple_size(value) == 6 ->
-        "matrix(" <> Enum.map_join(Tuple.to_list(value), " ", &to_string/1) <> ")"
 
       value when is_list(value) ->
         Enum.map_join(value, " ", &property_value(&1, style, reference?))

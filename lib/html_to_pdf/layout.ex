@@ -347,38 +347,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
                 root_targets = Map.get(styled_tree, :link_document_targets, [])
 
-                root_target_boxes =
-                  if Map.get(root_style, :css_transform, :none) == :none or root_targets == [],
-                    do: [],
-                    else: [
-                      %{
-                        type: HtmlValidator.reserve_layout_box(:flow_marker),
-                        x: root_box_x,
-                        y: root_box_top,
-                        width: 0.0,
-                        height: 0.0,
-                        html_targets: Enum.map(root_targets, &Map.merge(&1, %{dx: 0.0, dy: 0.0}))
-                      }
-                    ]
-
-                root_content_boxes = root_boxes ++ root_target_boxes ++ group_math_glyphs(boxes)
-
-                root_content_boxes =
-                  CssTransformValidator.mark_border_box(root_style, root_content_boxes, %{
-                    x: root_box_x,
-                    top: root_box_top,
-                    width: root_box_width,
-                    height: root_paint_height
-                  })
-
-                {:ok, root_content_boxes} =
-                  CssTransformValidator.attach_scope(root_style, root_content_boxes)
+                root_content_boxes = root_boxes ++ group_math_glyphs(boxes)
 
                 {page_width, page_height} = layout_page_size
                 link_metadata = Map.take(styled_tree, [:link_scope, :link_expected_targets])
 
                 link_metadata =
-                  case if(root_target_boxes == [], do: root_targets, else: []) do
+                  case root_targets do
                     [] ->
                       link_metadata
 
@@ -2858,7 +2833,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                :inline_positioning_marker,
                :soft_break
              ] or
-               Map.get(run, :hard_break, false) or trim_inline_whitespace(run.text, run) != ""
+               Map.get(run, :hard_break, false) or
+               HtmlValidator.trim_ascii_whitespace(run.text) != ""
            end) do
         true ->
           {boxes, content_height} = inline_text_boxes(runs, style, x, y, width, metadata)
@@ -2940,19 +2916,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           end
 
         if box_width > 0 and box_height > 0 do
-          [
-            %{
-              type: HtmlValidator.reserve_layout_box(:drawing_group),
-              x: box_x,
-              y: box_top - box_height,
-              width: box_width,
-              height: box_height,
-              transform: {1.0, 0.0, 0.0, 1.0, box_x, box_top - box_height},
-              baseline: 0.0,
-              boxes: background ++ artwork,
-              svg_scene_contract: Map.drop(measured, [:image])
-            }
-          ]
+          shift_layout_boxes(background ++ artwork, box_x, box_top - box_height)
         else
           []
         end
@@ -3247,7 +3211,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       %{type: :text, text: text} when is_binary(text) ->
         text = normalize_inline_whitespace(text, child.style)
 
-        case trim_inline_whitespace(text, false) do
+        case HtmlValidator.trim_ascii_whitespace(text) do
           "" ->
             {:ok, nil}
 
@@ -4168,19 +4132,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp flex_item(child, index, main_axis, available_main, available_cross) do
-    child =
-      case child do
-        %{style: child_style} ->
-          height = if main_axis == :row, do: available_cross, else: available_main
-          %{child | style: Map.put(child_style, :_containing_height, height)}
-
-        child ->
-          child
-      end
+    height = if main_axis == :row, do: available_cross, else: available_main
+    child = %{child | style: Map.put(child.style, :_containing_height, height)}
 
     case child do
       %{type: :text, text: text} when is_binary(text) ->
-        case text |> normalize_inline_whitespace(child.style) |> trim_inline_whitespace(false) do
+        case text
+             |> normalize_inline_whitespace(child.style)
+             |> HtmlValidator.trim_ascii_whitespace() do
           "" ->
             {:ok, nil}
 
@@ -5291,7 +5250,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       %{type: :text, text: text, style: style} when is_binary(text) ->
         text
         |> normalize_inline_whitespace(style)
-        |> trim_inline_whitespace(false)
+        |> HtmlValidator.trim_ascii_whitespace()
         |> text_width(style)
 
       %{type: :element, style: %{display: :none}} ->
@@ -7269,7 +7228,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     text =
       if Map.get(style, :white_space) in [:nowrap, :pre, :break_spaces],
         do: plan.text,
-        else: trim_inline_whitespace(plan.text, true)
+        else: HtmlValidator.trim_ascii_whitespace(plan.text)
 
     prepared_text_width(text, style)
   end
@@ -8939,15 +8898,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               )
             )
 
-          case layout_block(
-                 %{type: :element, style: style, children: children},
-                 x,
-                 baseline_y + Map.fetch!(run, :_inline_baseline_depth),
-                 inline_run_width(run, width)
-               ) do
-            {:ok, boxes, _next_y} -> Enum.map(boxes, &Map.merge(&1, metadata))
-            {:error, _} -> [%{type: :layout_error}]
-          end
+          {:ok, boxes, _next_y} =
+            layout_block(
+              %{type: :element, style: style, children: children},
+              x,
+              baseline_y + Map.fetch!(run, :_inline_baseline_depth),
+              inline_run_width(run, width)
+            )
+            |> propagate_error()
+
+          Enum.map(boxes, &Map.merge(&1, metadata))
 
         %{type: :inline_block, style: %{_fieldset: true} = style, children: children} ->
           top = baseline_y + Map.fetch!(run, :_inline_baseline_depth)
@@ -9035,7 +8995,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                          metadata
                        ) do
                     {:ok, boxes, height} -> {boxes, height}
-                    {:error, _reason} -> {[%{type: :layout_error}], 0.0}
+                    {:error, _} = error -> throw({:render_resource_limit, error})
                   end
               end
             end)
@@ -9264,56 +9224,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     boxes =
       case run do
         %{type: type, style: style} when type in [:inline_block, :inline_image] ->
-          if Map.get(style, :css_transform, :none) != :none and
-               not Enum.any?(boxes, &(Map.get(&1, :css_transform_border_box) != nil)) and
-               Map.get(style, :display) not in [:inline_flex, :inline_grid] and
-               not Map.get(style, :_fieldset, false) do
-            margin = Map.get(style, :margin, edges(0.0))
+          measured = Map.get(style, :_math_box) || Map.get(style, :_ruby_box)
 
-            {box_width, box_height, top} =
-              case run do
-                %{style: %{_math_box: measured}} ->
-                  {measured.width, measured.ascent + measured.descent,
-                   baseline_y + measured.ascent}
+          # Math and ruby use their prepared atomic geometry. Ordinary images
+          # and inline blocks already mark their border box above; SVG owns
+          # its source transform inside the converted image.
+          boxes =
+            if measured != nil and Map.get(style, :css_transform, :none) != :none and
+                 not Enum.any?(boxes, &(Map.get(&1, :css_transform_border_box) != nil)) do
+              margin = Map.get(style, :margin, edges(0.0))
 
-                %{style: %{_ruby_box: measured}} ->
-                  {measured.width, measured.ascent + measured.descent,
-                   baseline_y + measured.ascent}
-
-                %{type: :inline_image} ->
-                  {cw, ch} = image_content_size(style, width, Map.get(style, :_containing_height))
-
-                  {cw + horizontal_box_size(style), ch + vertical_box_size(style),
-                   baseline_y +
-                     Map.get(run, :_inline_baseline_depth, ch + vertical_box_size(style))}
-
-                _ ->
-                  cw = inline_block_content_width(run, width)
-                  ch = run._inline_content_height
-
-                  {cw + horizontal_box_size(style), ch + vertical_box_size(style),
-                   baseline_y +
-                     Map.get(run, :_inline_baseline_depth, ch + vertical_box_size(style))}
-              end
-
-            boxes =
               CssTransformValidator.mark_border_box(style, boxes, %{
                 x: x + margin.left,
-                top: top,
-                width: box_width,
-                height: box_height
+                top: baseline_y + measured.ascent,
+                width: measured.width,
+                height: measured.ascent + measured.descent
               })
+            else
+              boxes
+            end
 
-            case CssTransformValidator.attach_scope(style, boxes) do
-              {:ok, boxes} -> boxes
-              {:error, _} = error -> throw({:render_resource_limit, error})
-            end
-          else
-            case CssTransformValidator.attach_scope(style, boxes) do
-              {:ok, boxes} -> boxes
-              {:error, _} = error -> throw({:render_resource_limit, error})
-            end
-          end
+          {:ok, boxes} = CssTransformValidator.attach_scope(style, boxes) |> propagate_error()
+          boxes
 
         _ ->
           boxes
@@ -9770,7 +9702,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       runs
       |> Enum.reverse()
       |> Enum.find(fn run ->
-        Map.get(run, :hard_break, false) or trim_inline_whitespace(run.text, run) != ""
+        Map.get(run, :hard_break, false) or HtmlValidator.trim_ascii_whitespace(run.text) != ""
       end)
 
     terminal_newline? =
@@ -9806,7 +9738,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           true
 
         %{text: text} ->
-          trim_inline_whitespace(text, last) != ""
+          HtmlValidator.trim_ascii_whitespace(text) != ""
 
         _ ->
           false
@@ -9827,7 +9759,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                  :inline_positioning_marker
                ] and
                  Map.get(run.style, :white_space) not in [:pre, :pre_wrap, :break_spaces] and
-                 trim_inline_whitespace(run.text, run) == "")
+                 HtmlValidator.trim_ascii_whitespace(run.text) == "")
           end)
 
         {trailing, Enum.reverse(remaining)}
@@ -9844,7 +9776,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           run
 
         run ->
-          NativeGlyphSourceValidator.trim_run(run, String.replace(run.text, ~r/[ \t\f\r]+$/u, ""))
+          NativeGlyphSourceValidator.trim_run(run, trim_trailing_inline_text(run.text))
       end)
 
     if trailing == [] do
@@ -9863,7 +9795,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     outer_white_space = Map.get(run, :_inline_outer_white_space, Map.get(run.style, :white_space))
 
     case is_number(width) and outer_white_space not in [:nowrap, :pre] and
-           current_line != [] and
+           Enum.any?(current_line, &(Map.get(&1, :type) != :inline_positioning_marker)) and
            inline_line_width(current_line, width) + inline_run_width(run, width) >
              width do
       true -> List.update_at(lines, -1, &select_discretionary_break/1) ++ [[run]]
@@ -9908,15 +9840,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               width
             )
 
-          {:ok, nil} when current != [] ->
-            append_wrapped_ruby(
-              List.update_at(lines, -1, &select_discretionary_break/1) ++ [[]],
-              run,
-              width
-            )
-
           {:ok, nil} ->
-            List.update_at(lines, -1, &(&1 ++ [run]))
+            if Enum.any?(current, &(Map.get(&1, :type) != :inline_positioning_marker)) do
+              append_wrapped_ruby(
+                List.update_at(lines, -1, &select_discretionary_break/1) ++ [[]],
+                run,
+                width
+              )
+            else
+              List.update_at(lines, -1, &(&1 ++ [run]))
+            end
 
           {:error, _} = error ->
             throw({:render_resource_limit, error})
@@ -10033,9 +9966,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     token_text =
       if mode in [:pre, :break_spaces],
         do: run.text,
-        else: String.replace(run.text, ~r/[ \t\f\r]+$/u, "")
+        else: trim_trailing_inline_text(run.text)
 
-    token_width = text_width(token_text, run.style)
+    token_width = if emergency?, do: text_width(token_text, run.style)
 
     # Adjacent tokens in one run share one rounded fragment. Styled runs remain separate.
     candidate_width =
@@ -10049,7 +9982,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       end)
 
     cond do
-      not preserve? and trim_inline_whitespace(run.text, run) == "" and
+      not preserve? and HtmlValidator.trim_ascii_whitespace(run.text) == "" and
           Enum.all?(current_line, &(Map.get(&1, :type) == :inline_positioning_marker)) ->
         lines
 
@@ -10096,7 +10029,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {prefix, tail} = split_unbroken_inline_tail(current_line, run)
 
           word_width =
-            inline_line_width(tail, width) - text_width(run.text, run.style) + token_width
+            if emergency?,
+              do: inline_line_width(tail, width) - text_width(run.text, run.style) + token_width
 
           cond do
             emergency? and word_width > width and not Map.get(run, :emergency_break, false) ->
@@ -10261,23 +10195,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   # Geometry selects the taken soft opportunity; the validator owns its glyph projection.
   defp select_discretionary_break(line) do
-    last =
+    # Wrapping callers require a text or atomic run before selecting a break;
+    # positioning markers alone never consume a line.
+    {run, index} =
       line
       |> Enum.with_index()
       |> Enum.reverse()
       |> Enum.find(fn {run, _} ->
-        Map.get(run, :type) != :inline_positioning_marker and run.text != ""
+        Map.get(run, :type) in [:inline_block, :inline_image, :soft_break] or
+          (Map.get(run, :type) != :inline_positioning_marker and run.text != "")
       end)
 
-    case last do
-      {run, index} ->
-        if Map.get(run, :type) in [:inline_block, :inline_image, :soft_break],
-          do: line,
-          else: List.update_at(line, index, &Map.put(&1, :_css_break_after, true))
-
-      nil ->
-        line
-    end
+    if Map.get(run, :type) in [:inline_block, :inline_image, :soft_break],
+      do: line,
+      else: List.update_at(line, index, &Map.put(&1, :_css_break_after, true))
   end
 
   defp append_break_word_token(lines, run, width) do
@@ -10741,10 +10672,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       %{type: :element, style: %{display: :image, image_display: :inline} = style} ->
         parent_x_height =
           if Map.get(style, :vertical_align, :baseline) == :middle do
-            case HtmlValidator.text_x_height(parent_style) do
-              height when is_number(height) -> height
-              {:error, _} = error -> throw({:render_resource_limit, error})
-            end
+            HtmlValidator.text_x_height(parent_style) |> propagate_error()
           else
             nil
           end
@@ -10885,13 +10813,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                         # Flex basis controls the vertical main axis in a
                         # column, so horizontal intrinsic sizing uses width.
                         Enum.map(children, fn child ->
-                          case child do
-                            %{style: child_style} ->
-                              %{child | style: Map.delete(child_style, :flex_basis)}
-
-                            _ ->
-                              child
-                          end
+                          %{child | style: Map.delete(child.style, :flex_basis)}
                         end)
                       else
                         children
@@ -11199,7 +11121,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         %{text: previous_text, style: previous_style}
         when run.style.white_space not in [:pre, :pre_wrap, :break_spaces] and
                previous_style.white_space not in [:pre, :pre_wrap, :break_spaces] ->
-          case Regex.match?(~r/[ \t\n\f\r]$/u, previous_text) do
+          case previous_text != "" and :binary.last(previous_text) in [32, 9, 10, 12, 13] do
             true -> String.replace(text, ~r/^[ \t\f]+/u, "")
             false -> text
           end
@@ -11240,24 +11162,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp trim_inline_whitespace(text, context) do
-    table_context? =
-      case context do
-        true -> true
-        %{_table_text: true} -> true
-        _ -> false
-      end
+  defp trim_leading_inline_whitespace(text) do
+    case text do
+      <<first, _rest::binary>> when first in [32, 9, 10, 12, 13] ->
+        String.replace(text, ~r/^[ \t\n\f\r]+/u, "")
 
-    if table_context? and text != "" and :binary.last(text) not in [32, 9, 10, 12, 13] and
-         :binary.first(text) not in [32, 9, 10, 12, 13] do
-      text
-    else
-      String.replace(text, ~r/^[ \t\n\f\r]+|[ \t\n\f\r]+$/u, "")
+      _ ->
+        text
     end
   end
 
-  defp trim_leading_inline_whitespace(text) do
-    String.replace(text, ~r/^[ \t\n\f\r]+/u, "")
+  defp trim_trailing_inline_text(text) do
+    # The regex can also match before a final LF; preserve that existing behavior.
+    if text != "" and :binary.last(text) in [32, 9, 10, 12, 13],
+      do: String.replace(text, ~r/[ \t\f\r]+$/u, ""),
+      else: text
   end
 
   @spec text_box(%{text: String.t(), style: map()}, number(), number(), number()) :: box()
@@ -11496,29 +11415,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     border_visible? = visible_border?(border_widths, border_styles, border_colors)
 
-    rect = %{
-      type: HtmlValidator.reserve_layout_box(:rect),
-      paint_layer: :container_background,
-      snap_to_css_pixel_grid: true,
-      x: x,
-      y: y,
-      width: width,
-      height: height,
-      fill_color: fill_color,
-      stroke_color: Map.get(style, :border_color, {0, 0, 0}),
-      stroke_width: stroke_width,
-      border_widths: border_widths,
-      border_colors: border_colors,
-      border_styles: border_styles,
-      border_radius: Map.get(style, :border_radius, 0.0)
-    }
+    # Keep layout accounting even when no paint or form box is needed.
+    type = HtmlValidator.reserve_layout_box(:rect)
 
-    rect =
-      rect
-      |> Map.put(:form_control, Map.get(style, :_form_control))
-      |> Map.put(:form_owner, Map.get(style, :_form_owner))
-      |> Map.put(:initial_option_id, Map.get(style, :_initial_option_id))
-      |> then(fn rect ->
+    if width > 0 and height > 0 and
+         (fill_color != nil or border_visible? or Map.get(style, :background_image) != nil or
+            !!Map.get(style, :_form_control) or Map.has_key?(style, :_initial_option_id)) do
+      rect = %{
+        type: type,
+        paint_layer: :container_background,
+        snap_to_css_pixel_grid: true,
+        x: x,
+        y: y,
+        width: width,
+        height: height,
+        fill_color: fill_color,
+        stroke_color: Map.get(style, :border_color, {0, 0, 0}),
+        stroke_width: stroke_width,
+        border_widths: border_widths,
+        border_colors: border_colors,
+        border_styles: border_styles,
+        border_radius: Map.get(style, :border_radius, 0.0),
+        form_control: Map.get(style, :_form_control),
+        form_owner: Map.get(style, :_form_owner),
+        initial_option_id: Map.get(style, :_initial_option_id)
+      }
+
+      rect =
         cond do
           Map.get(style, :_iframe_border, false) ->
             Map.put(rect, :role, :iframe_border)
@@ -11570,7 +11493,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               | border_radius: 1.5 + @css_pixel_points / 2,
                 fill_color:
                   if(
-                    Map.has_key?(style, :_temporal_display) or Map.has_key?(style, :_color_state),
+                    Map.has_key?(style, :_temporal_display) or
+                      Map.has_key?(style, :_color_state),
                     do: fill_color,
                     else:
                       if(fill_color,
@@ -11599,81 +11523,73 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           true ->
             rect
         end
-      end)
 
-    rect =
-      if Map.get(style, :form_kind) == :select and Map.get(style, :appearance, :auto) != :none and
-           rect.border_radius > 0 and
-           Enum.any?(Map.values(border_styles), &(&1 in [:dashed, :dotted])) do
-        Map.put(rect, :native_menu_clip, %{
-          x: x,
-          y: y,
-          width: width,
-          height: height,
-          border_radius: rect.border_radius
-        })
-      else
-        rect
-      end
-
-    case {width > 0 and height > 0, Map.get(style, :background_image)} do
-      {false, _image} ->
-        []
-
-      {true, nil} ->
-        case {fill_color, border_visible?} do
-          {nil, false} ->
-            cond do
-              Map.get(style, :_form_control) ->
-                [rect]
-
-              Map.has_key?(style, :_initial_option_id) ->
-                [%{rect | fill_color: {0.0, 0.0, 0.0, 0.0}}]
-
-              true ->
-                []
-            end
-
-          _ ->
-            if Map.get(rect, :role) == :native_menu and Map.get(style, :form_kind) == :select and
-                 get_in(style, [:_form_control, :initial_state, :disabled]) do
-              # NativeThemeBase first paints its disabled lighten layer, then
-              # the translucent checkbox-background fill, within the same group.
-              lighten =
-                rect
-                |> Map.put(:type, HtmlValidator.reserve_layout_box(:rect))
-                |> Map.put(:fill_color, {169 / 255, 169 / 255, 169 / 255, 51 / 255})
-                |> Map.put(:stroke_color, nil)
-                |> Map.put(:border_colors, edges(nil))
-                |> Map.delete(:form_control)
-
-              [lighten, rect]
-            else
-              [rect]
-            end
+      rect =
+        if Map.get(style, :form_kind) == :select and Map.get(style, :appearance, :auto) != :none and
+             rect.border_radius > 0 and
+             Enum.any?(Map.values(border_styles), &(&1 in [:dashed, :dotted])) do
+          Map.put(rect, :native_menu_clip, %{
+            x: x,
+            y: y,
+            width: width,
+            height: height,
+            border_radius: rect.border_radius
+          })
+        else
+          rect
         end
 
-      {true, image} ->
-        fill_boxes =
-          case fill_color do
-            nil ->
-              []
+      case Map.get(style, :background_image) do
+        nil ->
+          case {fill_color, border_visible?} do
+            {nil, false} ->
+              if Map.get(style, :_form_control),
+                do: [rect],
+                else: [%{rect | fill_color: {0.0, 0.0, 0.0, 0.0}}]
 
             _ ->
-              [
-                %{rect | stroke_color: nil, stroke_width: 0.0, border_widths: edges(0.0)}
-              ]
+              if Map.get(rect, :role) == :native_menu and Map.get(style, :form_kind) == :select and
+                   get_in(style, [:_form_control, :initial_state, :disabled]) do
+                # NativeThemeBase first paints its disabled lighten layer, then
+                # the translucent checkbox-background fill, within the same group.
+                lighten =
+                  rect
+                  |> Map.put(:type, HtmlValidator.reserve_layout_box(:rect))
+                  |> Map.put(:fill_color, {169 / 255, 169 / 255, 169 / 255, 51 / 255})
+                  |> Map.put(:stroke_color, nil)
+                  |> Map.put(:border_colors, edges(nil))
+                  |> Map.delete(:form_control)
+
+                [lighten, rect]
+              else
+                [rect]
+              end
           end
 
-        border_boxes =
-          case border_visible? do
-            true -> [%{rect | fill_color: nil}]
-            false -> []
-          end
+        image ->
+          fill_boxes =
+            case fill_color do
+              nil ->
+                []
 
-        fill_boxes ++
-          background_image_boxes(style, image, x, y, width, height, border_widths) ++
-          border_boxes
+              _ ->
+                [
+                  %{rect | stroke_color: nil, stroke_width: 0.0, border_widths: edges(0.0)}
+                ]
+            end
+
+          border_boxes =
+            case border_visible? do
+              true -> [%{rect | fill_color: nil}]
+              false -> []
+            end
+
+          fill_boxes ++
+            background_image_boxes(style, image, x, y, width, height, border_widths) ++
+            border_boxes
+      end
+    else
+      []
     end
   end
 
@@ -11980,6 +11896,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     }
   end
 
+  @compile {:inline, text_width: 3, prepared_text_width: 2, letter_spacing_width: 2}
   @spec text_width(String.t(), map()) :: number()
   defp text_width(text, style, break_after? \\ false) do
     plan = inline_display_plan(text, style, break_after?)
@@ -12022,6 +11939,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
+  defp propagate_error(result) do
+    case result do
+      {:error, _} = error -> throw({:render_resource_limit, error})
+      result -> result
+    end
+  end
+
+  @compile {:inline, text_font_face: 1, edges: 1, edges: 4}
   defp text_font_face(style) do
     Map.fetch!(style, :font_face)
   end

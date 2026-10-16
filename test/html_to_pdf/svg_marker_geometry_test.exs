@@ -2,7 +2,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgMarkerGeometryTest do
   Code.require_file("../support/svg_public_workflow.ex", __DIR__)
   Code.require_file("../support/png_fixture.ex", __DIR__)
   use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
   setup do

@@ -231,22 +231,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformContractTest do
     end)
   end
 
-  test "finite affine overflow and malformed retained scopes use canonical errors", %{
+  test "numeric bounds and malformed retained scopes use canonical errors", %{
     style: style
   } do
-    Limits.install(%{
-      Limits.effective()
-      | max_css_numeric_magnitude: 1.0e300,
-        max_pdf_numeric_magnitude: 1.0e300
-    })
+    assert {:ok, limits} =
+             NativeElixirPdfUtilities.Validators.LimitsValidator.validate(
+               max_css_numeric_magnitude: 9_223_372_036_854_775_807,
+               max_pdf_numeric_magnitude: 9_223_372_036_854_775_807
+             )
+
+    Limits.install(limits)
 
     assert {:ok, prepared} =
-             CssTransformValidator.apply(style, "transform", "scale(1e200) scale(1e200)")
+             CssTransformValidator.apply(style, "transform", "scale(1e18) scale(1e18)")
 
-    assert {:error, {:invalid_layout, diagnostic}} =
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssTransformValidator.resolve(prepared, %{x: 0, top: 30, width: 20, height: 20})
 
-    assert diagnostic.message =~ "finite affine"
+    assert diagnostic.message =~ "max_pdf_numeric_magnitude"
     assert diagnostic.stage == :layout
     source = %{type: :rect, x: 0, y: 0, width: 20, height: 20, css_transform_scopes: [nil]}
 
@@ -254,6 +256,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformContractTest do
              CssTransformValidator.materialize([%{size: {90, 60}, boxes: [source]}], [])
 
     assert diagnostic.source == "css_transform_scopes"
+  end
+
+  test "atomic inline transforms preserve numeric resource diagnostics" do
+    for content <- [
+          "<span style='display:inline-block;transform:scale(1000000000) scale(1000000000)'>Text</span>",
+          "<math style='transform:scale(1000000000) scale(1000000000)'><mi>x</mi></math>"
+        ] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlToPdf.render("<p>#{content}</p>", system_font_discovery: false)
+
+      assert diagnostic.stage == :layout
+      assert diagnostic.message =~ "max_pdf_numeric_magnitude"
+    end
   end
 
   test "actual decorated source scopes follow fragment border boxes across sheets" do

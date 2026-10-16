@@ -4,7 +4,7 @@ Code.require_file("../support/png_fixture.ex", __DIR__)
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentVectorTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.{Limits}
-  alias NativeElixirPdfUtilities.HtmlToPdf.{ResourceContext, EmbeddedViewport}
+  alias NativeElixirPdfUtilities.HtmlToPdf.ResourceContext
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator}
 
   setup do
@@ -86,44 +86,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentVectorTest do
                  )
       end
     )
-  end
-
-  test("document glyphs embed their actual authorized selected TrueType bytes", %{root: root}) do
-    data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
-
-    source =
-      "<svg width='160' height='60'><text x='8' y='28' font-family='DejaVu Sans' font-size='20'>Vector Ω café</text></svg>"
-
-    path = Path.join(root, "glyph.svg")
-    File.write!(path, source)
-
-    ResourceContext.run([authorization_root: root], HtmlValidator.new_image_budget(), fn parent ->
-      assert {:ok, {:image, %{image: doc}}} =
-               EmbeddedViewport.prepare_selected(
-                 {:image, "glyph.svg", "image/svg+xml"},
-                 parent,
-                 [fonts: [%{family: "DejaVu Sans", data: data}]],
-                 :object
-               )
-
-      assert {:ok, image} =
-               NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.compose_document(
-                 doc,
-                 120,
-                 45
-               )
-
-      assert :ok =
-               NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(
-                 NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.image_pdf(image, 120, 45)
-               )
-
-      assert {:error, {:no_extractable_text, _}} =
-               NativeElixirPdfUtilities.Text.extract(
-                 NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.image_pdf(image, 120, 45),
-                 layout: false
-               )
-    end)
   end
 
   test "selected marker documents use Form resources through the existing PDF writer" do

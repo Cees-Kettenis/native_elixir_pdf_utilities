@@ -488,7 +488,13 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   def reserve(limit, amount) do
     key = {__MODULE__, :budget}
     budget = Process.get(key)
-    used = Map.get(budget, limit, 0) + amount
+
+    used =
+      case budget do
+        %{^limit => used} -> used + amount
+        _ -> amount
+      end
+
     check(limit, used)
     Process.put(key, Map.put(budget, limit, used))
     :ok

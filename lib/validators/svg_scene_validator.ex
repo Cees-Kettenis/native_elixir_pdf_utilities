@@ -489,35 +489,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
   end
 
   @doc false
-  @spec summary_tree(map()) :: map()
-  def summary_tree(summary) do
-    nodes =
-      if summary.geometry == [] do
-        # Every processing mode already retains these authentic parsed nodes.
-        # Semantic resource checks need their source tree even when image mode
-        # has no inline geometry transport. Reuse the original hierarchy.
-        Map.new(summary.source_nodes, fn node ->
-          {node.index, node |> Map.put(:type, :element) |> Map.put(:svg_index, node.index)}
-        end)
-      else
-        Map.new(summary.geometry, &{&1.svg_index, &1})
-      end
-
-    rebuild(1, nodes, summary.graph)
-  end
-
-  @doc false
   @spec tree_nodes(map()) :: [{map(), [String.t()]}]
   def tree_nodes(root), do: flatten(root, [])
-
-  defp rebuild(index, nodes, graph) do
-    node = Map.fetch!(nodes, index)
-
-    %{
-      node
-      | children: Enum.map(Enum.reverse(Map.fetch!(graph, index)), &rebuild(&1, nodes, graph))
-    }
-  end
 
   defp flatten(node, ancestors) do
     [

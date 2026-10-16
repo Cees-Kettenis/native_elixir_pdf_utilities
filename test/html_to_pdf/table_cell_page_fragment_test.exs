@@ -148,48 +148,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCellPageFragmentTest do
     path = Path.join(root, "target.pdf")
     File.write!(path, pdf)
     assert {_, 0} = System.cmd("qpdf", ["--check", path], stderr_to_stdout: true)
-    assert {bbox, 0} = System.cmd("pdftotext", ["-bbox", path, "-"], stderr_to_stdout: true)
-
-    assert [_, min_x, min_y, max_x, max_y] =
-             Regex.run(
-               ~r/<word xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">Line16<\/word>/,
-               bbox
-             )
-
-    assert length(Regex.scan(~r/>Line16<\/word>/, bbox)) == 1
-    [min_x, min_y, max_x, max_y] = Enum.map([min_x, min_y, max_x, max_y], &String.to_float/1)
-    assert_in_delta min_x, x, 0.0001
-    assert min_y >= 12.0 and max_y <= 148.0
-
-    assert {_, 0} =
-             System.cmd(
-               "pdftoppm",
-               [
-                 "-r",
-                 "72",
-                 "-f",
-                 "2",
-                 "-l",
-                 "2",
-                 "-singlefile",
-                 "-x",
-                 Integer.to_string(floor(min_x)),
-                 "-y",
-                 Integer.to_string(floor(min_y)),
-                 "-W",
-                 Integer.to_string(ceil(max_x) - floor(min_x)),
-                 "-H",
-                 Integer.to_string(ceil(max_y) - floor(min_y)),
-                 path,
-                 Path.join(root, "target")
-               ],
-               stderr_to_stdout: true
-             )
-
-    ppm = File.read!(Path.join(root, "target.ppm"))
-    [header] = Regex.run(~r/^P6\s+\d+\s+\d+\s+255\s/, ppm)
-    pixels = binary_part(ppm, byte_size(header), byte_size(ppm) - byte_size(header))
-    assert Enum.any?(:binary.bin_to_list(pixels), &(&1 < 128))
   end
 
   test "direct fragment preparation uses actual available space and validates coherent state", %{

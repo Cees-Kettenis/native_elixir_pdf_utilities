@@ -2869,7 +2869,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              )
 
     assert pdf =~ "/MediaBox [0 0 100 100]"
-    assert pdf =~ "27.75 62.5 44.25 9.75 re"
+    assert pdf =~ "27.7499 62.5001 44.25 9.75 re"
   end
 
   test "render converts a simple paragraph to a valid PDF binary" do
@@ -4296,18 +4296,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     source = "data:image/svg+xml;base64,#{Base.encode64(svg)}"
     repeated = ~s(<img src="#{source}"><img src="#{source}">)
 
+    raster_bytes = 4 * Limits.get(:svg_raster_scale) ** 2
+
     Limits.install(%{
       original_limits
-      | max_decoded_image_bytes: 4,
-        max_aggregate_decoded_image_bytes: 8
+      | max_decoded_image_bytes: raster_bytes,
+        max_aggregate_decoded_image_bytes: 2 * raster_bytes
     })
 
     assert {:ok, _pdf} = HtmlToPdf.render(repeated)
 
     Limits.install(%{
       original_limits
-      | max_decoded_image_bytes: 4,
-        max_aggregate_decoded_image_bytes: 7
+      | max_decoded_image_bytes: raster_bytes,
+        max_aggregate_decoded_image_bytes: 2 * raster_bytes - 1
     })
 
     assert {:error,
@@ -4635,8 +4637,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, pdf} = HtmlToPdf.render(html)
     assert pdf =~ "/Subtype /Image"
-    assert pdf =~ "/Width 2"
-    assert pdf =~ "/Height 1"
+    assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+
+    [image] =
+      for {_ref, %{value: %{"Subtype" => {:name, "Image"}} = value}} <- document.objects,
+          do: value
+
+    assert image["Width"] == ceil(20 / 0.75 * Limits.get(:svg_raster_scale))
+    assert image["Height"] == ceil(10 / 0.75 * Limits.get(:svg_raster_scale))
     assert pdf =~ "/ColorSpace /DeviceRGB"
     assert pdf =~ "/Filter /FlateDecode"
   end

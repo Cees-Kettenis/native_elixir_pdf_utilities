@@ -385,11 +385,11 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   end
 
   defp content_tokens(tokenizer, tokens, page_number) do
-    case Tokenizer.next_with_span(tokenizer) do
-      {{{:eof, nil}, _span}, _tokenizer} ->
+    case Tokenizer.next(tokenizer) do
+      {{:eof, nil}, _tokenizer} ->
         {:ok, Enum.reverse(tokens)}
 
-      {{{:op, "BI"}, _span}, _tokenizer} ->
+      {{:op, "BI"}, _tokenizer} ->
         error(
           :content,
           :unsupported_pdf_feature,
@@ -409,7 +409,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
               module: __MODULE__
           }}}
 
-      {{token, _span}, tokenizer} ->
+      {token, tokenizer} ->
         content_tokens(tokenizer, [token | tokens], page_number)
     end
   end
@@ -668,7 +668,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     end
   end
 
-  defp translate(matrix, x, y), do: multiply([1.0, 0.0, 0.0, 1.0, x, y], matrix)
+  defp translate([a, b, c, d, e, f], x, y),
+    do: [a, b, c, d, x * a + y * c + e, x * b + y * d + f]
 
   defp multiply([a, b, c, d, e, f], [a2, b2, c2, d2, e2, f2]),
     do: [

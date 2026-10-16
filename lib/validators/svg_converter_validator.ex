@@ -158,6 +158,40 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
           {:ok, binary()} | {:error, {atom(), map()}}
   @spec with_root_viewport(binary(), tuple()) :: {:ok, binary()} | {:error, {atom(), map()}}
   def with_root_viewport(source, size, context \\ %{mode: :image}) do
+    with {:ok, root} <- sized_root(source, size, context),
+         do: {:ok, SvgScene.authored_source(root)}
+  end
+
+  @doc "Places a document root in its actual child canvas without stretching its authored viewport."
+  @spec with_document_viewport(binary(), tuple(), tuple(), map()) ::
+          {:ok, binary()} | {:error, {atom(), map()}}
+  def with_document_viewport(source, root_size, canvas_size, context) do
+    with {:ok, root} <- sized_root(source, root_size, context),
+         {:ok, {width, height}} <- viewport_size(canvas_size) do
+      # Resvg applies a nested SVG's transform twice. The equivalent parent
+      # group applies it once, in the same parent coordinate system as Chrome.
+      # Extraction has already resolved CSS into this root's attributes.
+      root =
+        case Map.pop(root.attributes, "transform") do
+          {nil, _attributes} ->
+            root
+
+          {transform, attributes} ->
+            %{
+              type: :element,
+              namespace: :svg,
+              tag: "g",
+              attributes: %{"transform" => transform},
+              children: [%{root | attributes: attributes}]
+            }
+        end
+
+      {:ok,
+       "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"#{width}\" height=\"#{height}\" viewBox=\"0 0 #{width} #{height}\">#{SvgScene.authored_source(root)}</svg>"}
+    end
+  end
+
+  defp sized_root(source, size, context) do
     with {:ok, summary} <- SvgValidator.validate_processing(source, context),
          {:ok, {width, height}} <- viewport_size(size),
          {:ok, document} <- HtmlParser.parse_detailed(source),
@@ -171,21 +205,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
             |> Map.put("height", to_string(height))
       }
 
-      {:ok, SvgScene.authored_source(root)}
-    else
-      {:error, _} = error -> error
-      _ -> invalid("SVG extraction requires exactly one SVG root")
-    end
-  end
-
-  @doc "Places a document root in its actual child canvas without stretching its authored viewport."
-  @spec with_document_viewport(binary(), tuple(), tuple(), map()) ::
-          {:ok, binary()} | {:error, {atom(), map()}}
-  def with_document_viewport(source, root_size, canvas_size, context) do
-    with {:ok, source} <- with_root_viewport(source, root_size, context),
-         {:ok, {width, height}} <- viewport_size(canvas_size) do
-      {:ok,
-       "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"#{width}\" height=\"#{height}\" viewBox=\"0 0 #{width} #{height}\">#{source}</svg>"}
+      {:ok, root}
     end
   end
 
@@ -219,9 +239,6 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
                {:ok, root} <- SvgSceneValidator.extraction_root(document) do
             {:ok,
              SvgScene.authored_source(%{root | attributes: Map.merge(root.attributes, overrides)})}
-          else
-            {:error, _} = error -> error
-            _ -> invalid("SVG extraction requires exactly one SVG root")
           end
       end
     end
@@ -268,36 +285,18 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
          approved = SvgScene.authored_source(normalized),
          :ok <- HtmlValidator.check_render_resource(:max_svg_bytes, byte_size(approved), :style) do
       {:ok, approved, summary, fonts}
-    else
-      {:error, _} = error -> error
-      _ -> invalid("SVG converter input requires exactly one complete root")
     end
   end
 
-  # The existing converter renders markers and large glyph turns with two
-  # transport deviations from Chromium that attribute re-encoding removes
-  # without any painting decision:
-  #
-  #   * marker artwork is clipped to the marker viewBox rectangle instead of
-  #     the marker viewport, so every viewBox whose viewport transform is not
-  #     the identity is re-encoded as an identity viewport with the original
-  #     transform moved onto the children and the reference point;
-  #   * a zero-area marker viewBox disables marker rendering per SVG while the
-  #     converter still paints the children, so those children are dropped to
-  #     retain the genuine empty paint;
-  #   * text glyph turns are reduced with single-precision angle arithmetic,
-  #     so authored angles of one or two glyph turns are reduced modulo 360
-  #     with the exact IEEE remainder before they reach the converter.
+  # Zero-area marker viewBoxes must paint nothing. Large glyph turns are
+  # reduced before the converter's single-precision angle arithmetic.
   defp normalize_converter_source(node) do
     children =
-      if Map.get(node, :tag) == "foreignObject",
-        do: node.children,
-        else:
-          Enum.map(node.children, fn child ->
-            if Map.get(child, :type) == :element,
-              do: normalize_converter_source(child),
-              else: child
-          end)
+      Enum.map(node.children, fn child ->
+        if Map.get(child, :type) == :element,
+          do: normalize_converter_source(child),
+          else: child
+      end)
 
     node = %{node | children: children}
 
@@ -312,74 +311,6 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
     case SvgViewportValidator.view_box(Map.get(marker.attributes, "viewBox")) do
       {:ok, {_min_x, _min_y, view_width, view_height}} when view_width == 0 or view_height == 0 ->
         %{marker | children: []}
-
-      {:ok, {min_x, min_y, view_width, view_height}} ->
-        rewrite_converter_marker(marker, min_x, min_y, view_width, view_height)
-
-      _ ->
-        marker
-    end
-  end
-
-  defp rewrite_converter_marker(marker, min_x, min_y, view_width, view_height) do
-    attributes = marker.attributes
-
-    rewrite =
-      with {:ok, {align_x, align_y, mode}} <-
-             SvgViewportValidator.aspect_ratio(Map.get(attributes, "preserveAspectRatio")),
-           {:ok, marker_width} <- converter_length(Map.get(attributes, "markerWidth"), 3.0),
-           {:ok, marker_height} <- converter_length(Map.get(attributes, "markerHeight"), 3.0),
-           # Percentage reference points are already resolved against the
-           # referencing viewport exactly like Chromium, so they never need
-           # re-encoding here.
-           {:ok, reference_x} <- converter_plain_number(Map.get(attributes, "refX"), 0.0),
-           {:ok, reference_y} <- converter_plain_number(Map.get(attributes, "refY"), 0.0),
-           true <- marker_width > 0 and marker_height > 0,
-           false <- converter_visible_overflow?(attributes),
-           false <- converter_styled_transform?(marker) do
-        scale =
-          case mode do
-            :none -> nil
-            :meet -> min(marker_width / view_width, marker_height / view_height)
-            :slice -> max(marker_width / view_width, marker_height / view_height)
-          end
-
-        {scale_x, scale_y} =
-          if scale,
-            do: {scale, scale},
-            else: {marker_width / view_width, marker_height / view_height}
-
-        translate_x = (marker_width - view_width * scale_x) * align_x - min_x * scale_x
-        translate_y = (marker_height - view_height * scale_y) * align_y - min_y * scale_y
-
-        if scale_x == 1.0 and scale_y == 1.0 and translate_x == 0.0 and translate_y == 0.0 do
-          :error
-        else
-          with {:ok, transform} <- converter_transform(translate_x, translate_y, scale_x, scale_y),
-               {:ok, reference_x} <-
-                 converter_number(reference_x * scale_x + translate_x),
-               {:ok, reference_y} <-
-                 converter_number(reference_y * scale_y + translate_y),
-               {:ok, view_box} <-
-                 converter_number_pair("0 0 ", marker_width, marker_height) do
-            {:ok, transform, reference_x, reference_y, view_box}
-          end
-        end
-      end
-
-    case rewrite do
-      {:ok, transform, reference_x, reference_y, view_box} ->
-        children = Enum.map(marker.children, &prepend_converter_transform(&1, transform))
-
-        %{
-          marker
-          | attributes:
-              attributes
-              |> Map.put("viewBox", view_box)
-              |> Map.put("refX", reference_x)
-              |> Map.put("refY", reference_y),
-            children: children
-        }
 
       _ ->
         marker
@@ -432,94 +363,13 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
     end)
   end
 
-  defp converter_length(value, default) do
-    case value do
-      nil ->
-        {:ok, default}
-
-      value ->
-        case HtmlValidator.parse_css_number(value) do
-          {number, ""} when number >= 0 -> {:ok, number}
-          _ -> :error
-        end
-    end
-  end
-
-  defp converter_plain_number(value, default) do
-    case value do
-      nil ->
-        {:ok, default}
-
-      value ->
-        case HtmlValidator.parse_css_number(value) do
-          {number, ""} -> {:ok, number}
-          _ -> :error
-        end
-    end
-  end
-
-  defp converter_visible_overflow?(attributes) do
-    attributes |> Map.get("overflow", "") |> String.downcase() == "visible"
-  end
-
-  defp converter_styled_transform?(node) do
-    String.contains?(Map.get(node.attributes, "style", ""), "transform") or
-      Enum.any?(node.children, fn child ->
-        Map.get(child, :type) == :element and converter_styled_transform?(child)
-      end)
-  end
-
-  defp converter_transform(translate_x, translate_y, scale_x, scale_y) do
-    with {:ok, translate_x} <- converter_number(translate_x),
-         {:ok, translate_y} <- converter_number(translate_y),
-         {:ok, scale_x} <- converter_number(scale_x),
-         {:ok, scale_y} <- converter_number(scale_y) do
-      translate =
-        if translate_x == "0" and translate_y == "0",
-          do: [],
-          else: ["translate(" <> translate_x <> " " <> translate_y <> ")"]
-
-      scale =
-        if scale_x == scale_y,
-          do: ["scale(" <> scale_x <> ")"],
-          else: ["scale(" <> scale_x <> " " <> scale_y <> ")"]
-
-      {:ok, Enum.join(translate ++ scale, " ")}
-    end
-  end
-
   defp converter_number(value) do
-    cond do
-      value == 0.0 ->
-        {:ok, "0"}
-
-      value == trunc(value) and abs(value) < 1.0e15 ->
-        {:ok, Integer.to_string(trunc(value))}
-
-      true ->
-        text = :erlang.float_to_binary(value, [:short])
-
-        if String.contains?(text, ["e", "E"]), do: :error, else: {:ok, text}
-    end
-  end
-
-  defp converter_number_pair(prefix, first, second) do
-    with {:ok, first} <- converter_number(first),
-         {:ok, second} <- converter_number(second) do
-      {:ok, prefix <> first <> " " <> second}
-    end
-  end
-
-  defp prepend_converter_transform(child, transform) do
-    case Map.get(child, :type) do
-      :element ->
-        prefix = Map.get(child.attributes, "transform")
-        appended = if prefix, do: transform <> " " <> prefix, else: transform
-
-        %{child | attributes: Map.put(child.attributes, "transform", appended)}
-
-      _ ->
-        child
+    # The only caller supplies a remainder modulo 360, including zero.
+    if value == trunc(value) do
+      {:ok, Integer.to_string(trunc(value))}
+    else
+      text = :erlang.float_to_binary(value, [:short])
+      if String.contains?(text, ["e", "E"]), do: :error, else: {:ok, text}
     end
   end
 
@@ -568,11 +418,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
                    byte_size(data),
                    :style
                  ),
-               :ok <-
-                 if(is_nil(budget),
-                   do: :ok,
-                   else: HtmlValidator.reserve_image_source(budget, byte_size(data))
-                 ),
+               :ok <- HtmlValidator.reserve_image_source(budget, byte_size(data)),
                {:ok, data, resource_fonts} <-
                  resource_bytes(
                    data,

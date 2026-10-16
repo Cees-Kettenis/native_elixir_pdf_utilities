@@ -427,14 +427,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
           {original, _} = HtmlTree.close(original, host)
           normalized_finish = source_context.size - byte_size(rest)
 
-          finish =
-            normalized_finish +
-              boundary_index(
-                source_context.crlf,
-                normalized_finish,
-                0,
-                tuple_size(source_context.crlf)
-              )
+          {crlf_offset, work} =
+            boundary_index(
+              source_context.crlf,
+              normalized_finish,
+              0,
+              tuple_size(source_context.crlf)
+            )
+
+          HtmlValidator.reserve_render_resource(:max_html_tree_work, work, :html)
+          finish = normalized_finish + crlf_offset
 
           with {:ok, provenance} <-
                  TemplateCandidateValidator.prepare_original(original, finish, plan),
@@ -958,17 +960,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
                   offset =
                     source_context.size - byte_size(token) - byte_size(stream_source(remaining))
 
+                  {crlf_offset, work} =
+                    boundary_index(
+                      source_context.crlf,
+                      offset,
+                      0,
+                      tuple_size(source_context.crlf)
+                    )
+
+                  HtmlValidator.reserve_render_resource(:max_html_tree_work, work, :html)
+
                   {tree, parent,
                    %{
                      source: source,
-                     offset:
-                       offset +
-                         boundary_index(
-                           source_context.crlf,
-                           offset,
-                           0,
-                           tuple_size(source_context.crlf)
-                         ),
+                     offset: offset + crlf_offset,
                      tokenizer_context: context,
                      ancestors: ancestors
                    }}
@@ -1294,35 +1299,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   # Precomputed newline and grapheme indexes preserve byte spans and columns
   # without rescanning the document or line prefix for each captured token.
   defp original_source_span(context, offset, length) do
-    first = offset + boundary_index(context.crlf, offset, 0, tuple_size(context.crlf))
+    {first, last, crlf_work} =
+      case context.crlf do
+        {} ->
+          # Each of the two empty-index searches charges one visit.
+          {offset, offset + length, 2}
 
-    last =
-      offset + length + boundary_index(context.crlf, offset + length, 0, tuple_size(context.crlf))
+        positions ->
+          {first_index, first_work} = boundary_index(positions, offset, 0, tuple_size(positions))
 
-    line = boundary_index(context.lines, first + 1, 0, tuple_size(context.lines))
+          {last_index, last_work} =
+            boundary_index(positions, offset + length, 0, tuple_size(positions))
+
+          {offset + first_index, offset + length + last_index, first_work + last_work}
+      end
+
+    {line, line_work} = boundary_index(context.lines, first + 1, 0, tuple_size(context.lines))
     line_start = elem(context.lines, line - 1)
 
-    HtmlValidator.reserve_render_resource(
-      :max_html_tree_work,
-      last - first,
-      :html
-    )
+    work = last - first + crlf_work + line_work
 
-    extras =
-      Enum.map([first, line_start], fn position ->
-        index =
-          boundary_index(
-            context.column_positions,
-            position + 1,
-            0,
-            tuple_size(context.column_positions)
-          )
+    {column, work} =
+      case context.column_positions do
+        {} ->
+          # ASCII columns need no index; retain both empty-search reservations.
+          {first - line_start + 1, work + 2}
 
-        if index == 0, do: 0, else: elem(context.column_extras, index - 1)
-      end)
+        positions ->
+          {[first_extra, line_extra], work} =
+            Enum.map_reduce([first, line_start], work, fn position, work ->
+              {index, search_work} =
+                boundary_index(positions, position + 1, 0, tuple_size(positions))
 
-    [first_extra, line_extra] = extras
-    column = first - line_start - first_extra + line_extra + 1
+              {if(index == 0, do: 0, else: elem(context.column_extras, index - 1)),
+               work + search_work}
+            end)
+
+          {first - line_start - first_extra + line_extra + 1, work}
+      end
+
+    HtmlValidator.reserve_render_resource(:max_html_tree_work, work, :html)
+
     {binary_part(context.original, first, last - first), line, column}
   end
 
@@ -1360,10 +1377,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
   defp boundary_index(positions, boundary, first, last, work \\ 0) do
     if first == last do
-      # Source size is validated before indexing. Account for the bounded binary
-      # search once rather than updating the shared budget at every comparison.
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, work + 1, :html)
-      first
+      # The source-span caller reserves all searches together after the bounded
+      # indexes are resolved, preserving the complete comparison count.
+      {first, work + 1}
     else
       middle = div(first + last, 2)
 

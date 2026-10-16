@@ -10,6 +10,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FlexEmbeddedViewportTest do
              __DIR__
            )
 
+  test "inline flex child documents retain actionable CSS failures" do
+    html =
+      "<span style='display:inline-flex'><iframe style='width:120pt;height:40pt;border:0' " <>
+        "srcdoc=\"&lt;style&gt;body{color:bad}&lt;/style&gt;&lt;p&gt;Child&lt;/p&gt;\"></iframe></span>"
+
+    assert {:error, {:invalid_css, diagnostic}} =
+             HtmlToPdf.render(html, system_font_discovery: false)
+
+    assert diagnostic.stage == :css
+    assert diagnostic.operation == :layout_embedded_viewport
+    assert diagnostic.module == NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport
+    assert diagnostic.message =~ "color:bad"
+    assert diagnostic.line == 1
+  end
+
   test "flex HTML surfaces paint child content in allocated clipped boxes with local link scopes" do
     html = File.read!(@fixture)
     opts = [base_url: Path.dirname(@fixture)]

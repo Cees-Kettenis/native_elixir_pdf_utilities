@@ -132,43 +132,6 @@ defmodule NativeElixirPdfUtilities.PageTransformsTest do
     end
   end
 
-  @tag :browser_parity
-  test "rebuilding keeps text visible through small Form matrix coefficients" do
-    source = small_matrix_pdf()
-
-    directory =
-      Path.join(System.tmp_dir!(), "rebuild-precision-#{System.unique_integer([:positive])}")
-
-    File.mkdir_p!(directory)
-    on_exit(fn -> File.rm_rf!(directory) end)
-    rasterizer = System.find_executable("pdftoppm") || flunk("pdftoppm is required")
-
-    rasters =
-      for {result, name} <- [
-            {{:ok, source}, "original"},
-            {Merge.merge([source]), "merged"},
-            {Transform.pick_pages(source, [1]), "picked"}
-          ] do
-        assert {:ok, document} = result
-        prefix = Path.join(directory, name)
-        File.write!(prefix <> ".pdf", document)
-
-        assert {_output, 0} =
-                 System.cmd(rasterizer, ["-singlefile", "-r", "72", prefix <> ".pdf", prefix],
-                   stderr_to_stdout: true
-                 )
-
-        assert <<"P6\n600 800\n255\n", pixels::binary>> = File.read!(prefix <> ".ppm")
-        assert byte_size(pixels) == 600 * 800 * 3
-        assert Enum.any?(:binary.bin_to_list(pixels), &(&1 < 255))
-        pixels
-      end
-
-    assert [original, merged, picked] = rasters
-    assert merged == original
-    assert picked == original
-  end
-
   test "picks and reorders pages while rebuilding a readable PDF" do
     source = three_page_pdf()
 

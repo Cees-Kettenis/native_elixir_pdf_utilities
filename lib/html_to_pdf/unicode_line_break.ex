@@ -218,6 +218,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.UnicodeLineBreak do
   defp scan(text, offset, state, joiner?, breaks) do
     {class, rest, size} =
       case text do
+        <<codepoint, rest::binary>> when codepoint < 128 ->
+          {property(codepoint), rest, 1}
+
         <<codepoint::utf8, rest::binary>> ->
           {property(codepoint), rest, byte_size(<<codepoint::utf8>>)}
 
@@ -238,6 +241,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.UnicodeLineBreak do
       else: scan(rest, offset + size, value &&& 0x3F, class == 10, breaks)
   end
 
+  @compile {:inline, property: 1}
   defp property(codepoint) do
     position =
       cond do
