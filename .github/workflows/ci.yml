@@ -52,11 +52,11 @@ jobs:
           runtime_id="$(elixir -e 'IO.write("#{System.version()}-erts-#{:erlang.system_info(:version)}")')"
           echo "cache-key=${runtime_id}" >> "${GITHUB_OUTPUT}"
 
-      - name: Install test and browser comparison tools
+      - name: Verify browser comparison tools
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends chromium fonts-dejavu-core fonts-liberation libfreetype6 poppler-utils qpdf
-          rm -rf /var/lib/apt/lists/*
+          for tool in chromium pdftoppm pdftotext pdffonts qpdf fc-match; do
+            command -v "$tool"
+          done
 
       - name: Restore Mix and Dialyzer caches
         uses: actions/cache@v5
