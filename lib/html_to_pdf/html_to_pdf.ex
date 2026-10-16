@@ -338,6 +338,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
          {:ok, opts} <- font_options,
          {:ok, effective_opts} <- effective_render_options_detailed(dom, opts),
          {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts, image_budget),
+         :ok <- HtmlValidator.release_style_input(dom),
          {:ok, styled_tree} <-
            FontFallback.resolve(
              styled_tree,

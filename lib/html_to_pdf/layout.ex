@@ -11173,10 +11173,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp trim_trailing_inline_text(text) do
-    # The regex can also match before a final LF; preserve that existing behavior.
-    if text != "" and :binary.last(text) in [32, 9, 10, 12, 13],
-      do: String.replace(text, ~r/[ \t\f\r]+$/u, ""),
-      else: text
+    # A single trailing separator needs no regex. Longer runs retain the regex,
+    # including its ability to match before a final LF without removing that LF.
+    cond do
+      text == "" ->
+        text
+
+      :binary.last(text) in [32, 9, 12, 13] and
+          (byte_size(text) == 1 or
+             :binary.at(text, byte_size(text) - 2) not in [32, 9, 12, 13]) ->
+        binary_part(text, 0, byte_size(text) - 1)
+
+      :binary.last(text) in [32, 9, 10, 12, 13] ->
+        String.replace(text, ~r/[ \t\f\r]+$/u, "")
+
+      true ->
+        text
+    end
   end
 
   @spec text_box(%{text: String.t(), style: map()}, number(), number(), number()) :: box()
@@ -11899,8 +11912,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @compile {:inline, text_width: 3, prepared_text_width: 2, letter_spacing_width: 2}
   @spec text_width(String.t(), map()) :: number()
   defp text_width(text, style, break_after? \\ false) do
-    plan = inline_display_plan(text, style, break_after?)
-    prepared_text_width(plan.text, style)
+    # Width measurements need only visible glyph text, not a paint plan map.
+    visible =
+      if Map.has_key?(style, :_math_native_group) do
+        HtmlValidator.reserve_render_resource(:max_layout_text_work, byte_size(text), :layout)
+        text
+      else
+        case NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator.display_text(
+               text,
+               text_font_face(style),
+               break_after?
+             ) do
+          {:ok, visible} -> visible
+          {:error, _} = error -> throw({:render_resource_limit, error})
+        end
+      end
+
+    prepared_text_width(visible, style)
   end
 
   defp inline_display_plan(text, style, break_after?) do

@@ -79,6 +79,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   ]
 
   @medium_border_width 2.25
+  # Fixed style values share literal edge maps across the styled document.
+  @zero_edges CssValueValidator.edges(0.0)
+  @none_edges CssValueValidator.edges(:none)
+  @current_color_edges CssValueValidator.edges(:current_color)
+  @black_edges CssValueValidator.edges({0, 0, 0})
+  @medium_border_edges CssValueValidator.edges(@medium_border_width)
+  @cell_padding_edges CssValueValidator.edges(0.75)
+  @control_padding_edges CssValueValidator.edges(1.5)
   @rem_opaque_style_keys [
     :_font_registry,
     :font_face,
@@ -1696,7 +1704,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                           block_defaults(element_style.font_size, element_style.font_weight, 0.0)
                           |> Map.merge(text_style(element_style))
                           |> Map.put(:padding, CssValueValidator.edges(0.0, 1.5, 0.75, 1.5))
-                          |> Map.put(:border_widths, CssValueValidator.edges(0.0))
+                          |> Map.put(:border_widths, @zero_edges)
                           |> Map.put(:min_height, element_style.font_size * 1.2)
                           |> Map.put(:line_height, normal_line_height(element_style))
 
@@ -2412,7 +2420,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             block_defaults(inherited_font_size, 400, 0.0)
             |> Map.merge(%{
               margin: CssValueValidator.edges(0.0, 1.5, 0.0, 1.5),
-              border_widths: CssValueValidator.edges(1.5),
+              border_widths: @control_padding_edges,
               border_styles: CssValueValidator.edges(:groove),
               # ThreeDFace in the pinned Chromium print theme is rgb(239,239,239).
               border_colors: CssValueValidator.edges({239 / 255, 239 / 255, 239 / 255}),
@@ -2468,7 +2476,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
             if Enum.any?(ancestors, &(&1.tag == "dl")) do
               defaults
-              |> Map.put(:margin, CssValueValidator.edges(0.0))
+              |> Map.put(:margin, @zero_edges)
               |> Map.put(:margin_after, 0.0)
             else
               defaults |> Map.put(:_margin_before_em, 1.0) |> Map.put(:_margin_after_em, 1.0)
@@ -2558,7 +2566,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               defaults
             else
               defaults
-              |> Map.put(:margin, CssValueValidator.edges(0.0))
+              |> Map.put(:margin, @zero_edges)
               |> Map.put(:margin_after, 0.0)
               |> Map.delete(:_margin_before_em)
               |> Map.delete(:_margin_after_em)
@@ -2681,7 +2689,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               |> Map.merge(%{
                 color: gray,
                 border_styles: CssValueValidator.edges(:inset),
-                border_widths: CssValueValidator.edges(0.75),
+                border_widths: @cell_padding_edges,
                 margin: %{top: 0.0, right: :auto, bottom: 0.0, left: :auto},
                 _margin_before_em: {:css_layout_em, 0.5},
                 _margin_after_em: {:css_layout_em, 0.5},
@@ -2716,9 +2724,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                 width: 225.0,
                 height: 112.5,
                 overflow: :hidden,
-                margin: CssValueValidator.edges(0.0),
-                padding: CssValueValidator.edges(0.0),
-                border_widths: CssValueValidator.edges(1.5),
+                margin: @zero_edges,
+                padding: @zero_edges,
+                border_widths: @control_padding_edges,
                 border_styles: CssValueValidator.edges(:inset)
               })
               |> Map.merge(hints)
@@ -2881,7 +2889,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               border_color: {118 / 255, 118 / 255, 118 / 255},
               border_colors: CssValueValidator.edges({118 / 255, 118 / 255, 118 / 255}),
               white_space: :pre,
-              padding: CssValueValidator.edges(0.0),
+              padding: @zero_edges,
               # Chromium's pinned Linux sheet gives popup selects ButtonFace.
               # The native unstyled theme supplies its own field background.
               background_color:
@@ -3601,17 +3609,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       orphans: 2,
       widows: 2,
       border_color: :current_color,
-      border_colors: CssValueValidator.edges(:current_color),
+      border_colors: @current_color_edges,
       border_radius: 0.0,
-      border_styles: CssValueValidator.edges(:none),
-      border_widths: CssValueValidator.edges(@medium_border_width),
+      border_styles: @none_edges,
+      border_widths: @medium_border_edges,
       box_sizing: :content_box,
       display: :block,
       font_size: font_size,
       font_weight: font_weight,
       margin: CssValueValidator.edges(0.0, 0.0, margin_bottom, 0.0),
       margin_after: margin_bottom,
-      padding: CssValueValidator.edges(0.0),
+      padding: @zero_edges,
       position: :static,
       offsets: CssValueValidator.edges(:auto),
       z_index: :auto
@@ -3642,8 +3650,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       box_sizing: :border_box,
       border_collapse: :separate,
       border_spacing: {1.5, 1.5},
-      margin: CssValueValidator.edges(0.0),
-      padding: CssValueValidator.edges(0.0),
+      margin: @zero_edges,
+      padding: @zero_edges,
       table_layout: :auto
     })
   end
@@ -3660,13 +3668,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     %{
       background_color: nil,
       border_color: :current_color,
-      border_colors: CssValueValidator.edges(:current_color),
+      border_colors: @current_color_edges,
       border_radius: 0.0,
-      border_styles: CssValueValidator.edges(:none),
-      border_widths: CssValueValidator.edges(@medium_border_width),
+      border_styles: @none_edges,
+      border_widths: @medium_border_edges,
       box_sizing: :content_box,
       display: :table_row_group,
-      padding: CssValueValidator.edges(0.0),
+      padding: @zero_edges,
       table_section: section,
       vertical_align: :middle
     }
@@ -3676,13 +3684,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     %{
       background_color: nil,
       border_color: :current_color,
-      border_colors: CssValueValidator.edges(:current_color),
+      border_colors: @current_color_edges,
       border_radius: 0.0,
-      border_styles: CssValueValidator.edges(:none),
-      border_widths: CssValueValidator.edges(@medium_border_width),
+      border_styles: @none_edges,
+      border_widths: @medium_border_edges,
       box_sizing: :content_box,
       display: :table_row,
-      padding: CssValueValidator.edges(0.0)
+      padding: @zero_edges
     }
   end
 
@@ -3707,17 +3715,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     base = %{
       background_color: nil,
       border_color: :current_color,
-      border_colors: CssValueValidator.edges(:current_color),
+      border_colors: @current_color_edges,
       border_radius: 0.0,
-      border_styles: CssValueValidator.edges(:none),
-      border_widths: CssValueValidator.edges(0.0),
+      border_styles: @none_edges,
+      border_widths: @zero_edges,
       box_sizing: :content_box,
       colspan: 1,
       display: :table_cell,
       font_size: font_size,
       font_weight: 400,
-      margin: CssValueValidator.edges(0.0),
-      padding: CssValueValidator.edges(0.75),
+      margin: @zero_edges,
+      padding: @cell_padding_edges,
       rowspan: 1,
       vertical_align: :middle
     }
@@ -3840,10 +3848,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     block_defaults(font_size, 400, 0.0)
     |> Map.merge(%{
       display: :inline,
-      margin: CssValueValidator.edges(0.0),
+      margin: @zero_edges,
       object_fit: :fill,
       object_position: {{:percent, 0.5}, {:percent, 0.5}},
-      padding: CssValueValidator.edges(0.0)
+      padding: @zero_edges
     })
   end
 
@@ -3909,10 +3917,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         border_color: {0.47, 0.47, 0.47},
         border_colors: CssValueValidator.edges({0.47, 0.47, 0.47}),
         border_styles: CssValueValidator.edges(:solid),
-        border_widths: CssValueValidator.edges(0.75),
+        border_widths: @cell_padding_edges,
         form_kind:
           if(HtmlValidator.readonly_input_type?(kind), do: :text, else: String.to_atom(kind)),
-        margin: CssValueValidator.edges(0.0),
+        margin: @zero_edges,
         padding: CssValueValidator.edges(1.5, 2.25, 1.5, 2.25)
       })
 
@@ -3934,7 +3942,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           height: :auto,
           overflow: :hidden,
           padding: CssValueValidator.edges(0.0, 0.0, 0.0, 0.75),
-          border_widths: CssValueValidator.edges(1.5),
+          border_widths: @control_padding_edges,
           border_styles: CssValueValidator.edges(:inset),
           border_color: {118 / 255, 118 / 255, 118 / 255},
           border_colors: CssValueValidator.edges({118 / 255, 118 / 255, 118 / 255})
@@ -3955,9 +3963,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           overflow: :hidden,
           white_space: :pre,
           background_color: nil,
-          padding: CssValueValidator.edges(0.0),
-          border_widths: CssValueValidator.edges(0.0),
-          border_styles: CssValueValidator.edges(:none)
+          padding: @zero_edges,
+          border_widths: @zero_edges,
+          border_styles: @none_edges
         })
 
       "color" ->
@@ -3968,7 +3976,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           width: 37.5,
           height: 20.25,
           box_sizing: :border_box,
-          border_widths: CssValueValidator.edges(0.75),
+          border_widths: @cell_padding_edges,
           border_styles: CssValueValidator.edges(:solid),
           border_color: {0, 0, 0},
           border_colors: CssValueValidator.edges({0, 0, 0}),
@@ -3982,10 +3990,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           width: 96.75,
           height: 12.0,
           background_color: {1.0, 1.0, 1.0},
-          border_widths: CssValueValidator.edges(0.0),
-          border_styles: CssValueValidator.edges(:none),
-          padding: CssValueValidator.edges(0.0),
-          margin: CssValueValidator.edges(1.5),
+          border_widths: @zero_edges,
+          border_styles: @none_edges,
+          padding: @zero_edges,
+          margin: @control_padding_edges,
           color: {16 / 255, 16 / 255, 16 / 255}
         })
 
@@ -3994,9 +4002,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         |> Map.merge(%{
           background_color: nil,
           border_colors: CssValueValidator.edges(nil),
-          border_styles: CssValueValidator.edges(:none),
-          border_widths: CssValueValidator.edges(0.0),
-          padding: CssValueValidator.edges(0.0),
+          border_styles: @none_edges,
+          border_widths: @zero_edges,
+          padding: @zero_edges,
           width: 9.75,
           height: 9.75
         })
@@ -4013,7 +4021,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           line_height_multiplier: nil,
           line_height_normal: true,
           padding: CssValueValidator.edges(0.75, 1.5, 0.75, 1.5),
-          border_widths: CssValueValidator.edges(1.5),
+          border_widths: @control_padding_edges,
           border_styles: CssValueValidator.edges(:inset),
           border_color: {118 / 255, 118 / 255, 118 / 255},
           border_colors: CssValueValidator.edges({118 / 255, 118 / 255, 118 / 255})
@@ -4048,7 +4056,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               display: :inline_block,
               appearance: :auto,
               padding: CssValueValidator.edges(0.75, 1.5, 0.75, 1.5),
-              border_widths: CssValueValidator.edges(1.5),
+              border_widths: @control_padding_edges,
               border_styles: CssValueValidator.edges(:inset),
               border_color: {118 / 255, 118 / 255, 118 / 255},
               border_colors: CssValueValidator.edges({118 / 255, 118 / 255, 118 / 255})
@@ -4789,11 +4797,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                  style =
                    style
                    |> resolve_font_relative_defaults()
-                   |> Map.delete(:_inherited_color)
-                   |> Map.delete(:_inherited_caption_side)
-                   |> Map.delete(:_inherited_orphans)
-                   |> Map.delete(:_inherited_widows)
-                   |> Map.delete(:_root_element)
+                   # Cascade inputs are no longer needed once declarations resolve.
+                   # Keep the computed properties and captured transform metrics.
+                   |> Map.drop([
+                     :_inherited_color,
+                     :_inherited_caption_side,
+                     :_inherited_orphans,
+                     :_inherited_widows,
+                     :_root_element,
+                     :_inherited_font,
+                     :_inherited_quotes,
+                     :_inherited_css_transform,
+                     :_inherited_css_transform_metrics,
+                     :_inherited_transform_origin_metrics,
+                     :_inherited_transform_origin,
+                     :_ua_font
+                   ])
                    |> resolve_current_color_values(),
                  style = style |> apply_border_styles() |> resolve_auto_margin_values(),
                  {:ok, style} <- put_font_face(style, rules.cache),
@@ -5260,21 +5279,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp apply_border_styles(style) do
-    border_styles = Map.get(style, :border_styles, CssValueValidator.edges(:none))
+    border_styles = Map.get(style, :border_styles, @none_edges)
 
     border_widths =
-      style
-      |> Map.get(:border_widths, CssValueValidator.edges(@medium_border_width))
-      |> Enum.map(fn {side, width} ->
-        case Map.fetch!(border_styles, side) in [:none, :hidden] do
-          true ->
-            {side, 0.0}
-
-          false ->
-            {side, if(width > 0, do: max(0.75, Float.floor(width / 0.75) * 0.75), else: 0.0)}
-        end
-      end)
-      |> Map.new()
+      if border_styles == @none_edges do
+        @zero_edges
+      else
+        :maps.map(
+          fn side, width ->
+            if Map.fetch!(border_styles, side) in [:none, :hidden],
+              do: 0.0,
+              else: if(width > 0, do: max(0.75, Float.floor(width / 0.75) * 0.75), else: 0.0)
+          end,
+          Map.get(style, :border_widths, @medium_border_edges)
+        )
+      end
 
     style
     |> Map.put(:border_styles, border_styles)
@@ -5293,14 +5312,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     case Map.get(style, :border_colors) do
       border_colors when is_map(border_colors) ->
         resolved =
-          border_colors
-          |> Enum.map(fn {side, border_color} ->
-            case border_color do
-              :current_color -> {side, color}
-              _ -> {side, border_color}
-            end
-          end)
-          |> Map.new()
+          case {border_colors, color} do
+            {@current_color_edges, {0, 0, 0}} ->
+              @black_edges
+
+            _ ->
+              :maps.fold(
+                fn side, value, resolved ->
+                  if value == :current_color, do: Map.put(resolved, side, color), else: resolved
+                end,
+                border_colors,
+                border_colors
+              )
+          end
 
         Map.put(style, :border_colors, resolved)
 

@@ -284,6 +284,24 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableModelTest do
     cells = Map.new(table._table_model.cells, &{&1.id, &1})
     assert cells["b"].headers == [cells["span"].source]
     assert cells["a"].headers == [cells["over"].source, cells["h"].source]
+
+    # Long data-only prefixes on either scan axis cannot hide a header.
+    for axis <- [:column, :row] do
+      data =
+        Enum.map_join(1..80, fn index ->
+          cell = "<td id='v#{index}'>Value #{index}</td>"
+          if axis == :column, do: "<tr>#{cell}</tr>", else: cell
+        end)
+
+      html =
+        if axis == :column,
+          do: "<table><tr><th id=h scope=col>Header</th></tr>#{data}</table>",
+          else: "<table><tr><th id=h scope=row>Header</th>#{data}</tr></table>"
+
+      [table] = prepared(html)
+      cells = Map.new(table._table_model.cells, &{&1.id, &1})
+      for index <- 1..80, do: assert(cells["v#{index}"].headers == [cells["h"].source])
+    end
   end
 
   test "metadata-free caller DOM retains source locations without issuing canonical IDs" do

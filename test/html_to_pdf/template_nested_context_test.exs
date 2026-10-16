@@ -14,7 +14,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateNestedContextTest do
   @opts [system_font_discovery: false, compress_streams: false]
 
   test "nested matching template remains inert when its outer candidate executes" do
-    html = nested("<p>Inner replacement</p>")
+    html =
+      nested("<p>Inner replacement</p>")
+      |> String.replace("<template", "<TeMpLaTe")
+      |> String.replace("</template>", "</TeMpLaTe>")
+
     assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
     assert {:ok, text} = Text.extract(pdf)
     assert text =~ "Inner original" and text =~ "Outer after" and text =~ "Document after"

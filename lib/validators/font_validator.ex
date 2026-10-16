@@ -463,6 +463,9 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
 
     case Process.get(key) do
       nil ->
+        {:garbage_collection, flags} = Process.info(self(), :garbage_collection)
+        previous_binary_floor = Keyword.fetch!(flags, :min_bin_vheap_size)
+
         Process.put(key, %{
           budget_id: make_ref(),
           sources: MapSet.new(),
@@ -475,6 +478,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
         catch
           {:font_resource_limit, error} -> error
         after
+          :erlang.process_flag(:min_bin_vheap_size, previous_binary_floor)
           Process.delete(key)
         end
 
@@ -524,10 +528,18 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   @doc false
   @spec read_limit() :: pos_integer()
   def read_limit do
-    budget = Process.get({__MODULE__, :budget})
-    used = Map.get(budget, :max_aggregate_font_source_bytes, 0)
+    used = source_bytes()
     check(:max_aggregate_font_source_bytes, used + 1)
     min(Limits.get(:max_font_source_bytes), Limits.get(:max_aggregate_font_source_bytes) - used)
+  end
+
+  @doc "Returns cumulative checked source bytes in the current font scope, or zero outside one."
+  @spec source_bytes() :: non_neg_integer()
+  def source_bytes do
+    case Process.get({__MODULE__, :budget}) do
+      nil -> 0
+      budget -> Map.get(budget, :max_aggregate_font_source_bytes, 0)
+    end
   end
 
   @doc false
@@ -580,6 +592,15 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
       false ->
         reserve(:max_aggregate_font_source_bytes, source_bytes)
         Process.put(key, %{Process.get(key) | sources: MapSet.put(budget.sources, identity)})
+
+        # Font bytes stay referenced by this scope's parse memo and registries.
+        # Keep one working set of headroom to avoid repeatedly collecting them.
+        # This adjusts a collection trigger; all allocation/work limits remain.
+        {:garbage_collection, flags} = Process.info(self(), :garbage_collection)
+        previous_floor = Keyword.fetch!(flags, :min_bin_vheap_size)
+        word_bytes = :erlang.system_info(:wordsize)
+        binary_floor = div(2 * source_bytes() + word_bytes - 1, word_bytes)
+        :erlang.process_flag(:min_bin_vheap_size, max(previous_floor, binary_floor))
         :ok
     end
   end

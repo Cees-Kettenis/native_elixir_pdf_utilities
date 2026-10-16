@@ -65,7 +65,12 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
 
       try do
         with {:ok, original} <- HtmlParser.parse_document_detailed(source) do
-          nodes = authored_nodes(original, true)
+          # Parsed HTML tag names preserve their authored ASCII letters. If the
+          # source has no template spelling, no execution template can exist.
+          nodes =
+            if String.contains?(String.downcase(source, :ascii), "template"),
+              do: authored_nodes(original, true),
+              else: []
 
           templates =
             Enum.filter(nodes, &match?(%{tag: "template", attributes: %{"for" => _}}, &1))

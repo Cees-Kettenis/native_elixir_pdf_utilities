@@ -105,6 +105,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssDiscretionaryBreakTest do
         ] do
       assert {:ok, %{text: ^visible, actual_text: ^source, discretionary?: true}} =
                HtmlLineBreakValidator.display_plan(source, face, selected)
+
+      assert {:ok, ^visible} = HtmlLineBreakValidator.display_text(source, face, selected)
     end
 
     assert {:ok, true} = HtmlLineBreakValidator.transparent_format_boundary?("office", "\u00AD")
@@ -126,6 +128,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssDiscretionaryBreakTest do
       assert diagnostic.stage == :layout
       assert diagnostic.operation == :line_break
       assert diagnostic.message =~ "UTF-8" or diagnostic.message =~ "boolean"
+
+      assert {:error, {:invalid_layout, ^diagnostic}} =
+               HtmlLineBreakValidator.display_text(text, face, option)
     end
 
     assert {:error, {:invalid_layout, diagnostic}} =
@@ -139,6 +144,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssDiscretionaryBreakTest do
     assert invalid.operation == :line_break and invalid.message =~ "UTF-8"
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
+    # Measurement succeeds, then painting reaches the same shared work ceiling.
+    Limits.install(Map.put(limits, :max_layout_text_work, 116))
+
+    assert {:error, {:resource_limit_exceeded, paint}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render("<p style='margin:0'>word</p>",
+               system_font_discovery: false
+             )
+
+    assert paint.stage == :layout and paint.operation == :render
+    assert paint.message =~ "max_layout_text_work"
+
     Limits.install(Map.put(limits, :max_layout_text_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -146,6 +162,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssDiscretionaryBreakTest do
 
     assert diagnostic.stage == :layout
     assert diagnostic.message =~ "max_layout_text_work"
+
+    assert {:error, {:resource_limit_exceeded, ^diagnostic}} =
+             HtmlLineBreakValidator.display_text("word", face)
   end
 
   test "ordinary soft wraps paint actual Unicode hyphens and preserve exact source selection" do

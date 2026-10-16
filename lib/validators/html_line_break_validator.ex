@@ -153,6 +153,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
           {:ok, %{text: binary(), actual_text: binary(), discretionary?: boolean()}}
           | {:error, {atom(), Diagnostics.diagnostic()}}
   def display_plan(text, font, break_after? \\ false) do
+    with {:ok, visible} <- display_text(text, font, break_after?) do
+      {:ok, %{text: visible, actual_text: text, discretionary?: visible != text}}
+    end
+  end
+
+  @doc "Prepares the same visible glyph text for measurement without allocating a selection/paint plan."
+  @spec display_text(term(), Font.font_face(), term()) ::
+          {:ok, binary()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  @spec display_text(term(), Font.font_face()) ::
+          {:ok, binary()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def display_text(text, font, break_after? \\ false) do
     case {text, break_after?} do
       {text, selected?} when is_binary(text) and is_boolean(selected?) ->
         HtmlValidator.reserve_render_resource(:max_layout_text_work, byte_size(text), :layout)
@@ -174,12 +185,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
               failure("the selected font cannot paint a conditional hyphen")
 
             hyphen ->
-              {:ok,
-               %{
-                 text: visible <> hyphen,
-                 actual_text: text,
-                 discretionary?: visible <> hyphen != text
-               }}
+              {:ok, visible <> hyphen}
           end
         else
           failure("discretionary text requires valid UTF-8")

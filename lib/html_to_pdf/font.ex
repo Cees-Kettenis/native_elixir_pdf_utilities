@@ -702,21 +702,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
           pdf_encoding([{text, letter_spacing}], font)
       end
 
-    text
-    |> shape_ligatures(
-      %{
-        cmap: encoding.codepoint_to_cid,
-        latin_ligatures: Map.get(encoding, :latin_ligatures, %{})
-      },
-      letter_spacing
-    )
-    |> String.to_charlist()
-    |> Enum.map(fn codepoint ->
-      cid = Map.fetch!(encoding.codepoint_to_cid, codepoint)
-      <<cid::16>>
-    end)
-    |> IO.iodata_to_binary()
-    |> Base.encode16(case: :upper)
+    shaped =
+      shape_ligatures(
+        text,
+        %{
+          cmap: encoding.codepoint_to_cid,
+          latin_ligatures: Map.get(encoding, :latin_ligatures, %{})
+        },
+        letter_spacing
+      )
+
+    encoded =
+      for codepoint <- String.to_charlist(shaped), into: <<>> do
+        <<Map.fetch!(encoding.codepoint_to_cid, codepoint)::16>>
+      end
+
+    Base.encode16(encoded, case: :upper)
   end
 
   @doc """

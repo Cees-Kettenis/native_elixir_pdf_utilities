@@ -5016,7 +5016,24 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       <<first, _rest::binary>> ->
         if first in [32, 9, 10, 12, 13] or :binary.last(value) in [32, 9, 10, 12, 13] do
-          String.replace(value, ~r/^[ \t\n\f\r]+|[ \t\n\f\r]+$/u, "")
+          first_kept = if first in [32, 9, 10, 12, 13], do: 1, else: 0
+
+          last_kept =
+            if :binary.last(value) in [32, 9, 10, 12, 13],
+              do: byte_size(value) - 1,
+              else: byte_size(value)
+
+          cond do
+            first_kept >= last_kept ->
+              ""
+
+            :binary.at(value, first_kept) not in [32, 9, 10, 12, 13] and
+                :binary.at(value, last_kept - 1) not in [32, 9, 10, 12, 13] ->
+              binary_part(value, first_kept, last_kept - first_kept)
+
+            true ->
+              String.replace(value, ~r/^[ \t\n\f\r]+|[ \t\n\f\r]+$/u, "")
+          end
         else
           value
         end
@@ -5591,6 +5608,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           error
       end
     end)
+  end
+
+  @doc "Releases the exact DOM validation memo after its style preparation has completed."
+  @spec release_style_input(map()) :: :ok
+  def release_style_input(dom) do
+    key = {__MODULE__, :validated_dom}
+
+    case Process.get(key) do
+      {^dom, _limits, _mode, _result} -> Process.delete(key)
+      _ -> :ok
+    end
+
+    :ok
   end
 
   @doc false

@@ -547,76 +547,79 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp validate_cascade_steps(style, declarations, budget, consumer, failure) do
-    {custom_declarations, ordinary_declarations} =
-      Enum.split_with(declarations, &custom_property_declaration?/1)
+    if declarations == [] and style._custom_properties == %{} do
+      prepare_cascade_defaults(style)
+    else
+      {custom_declarations, ordinary_declarations} =
+        Enum.split_with(declarations, &custom_property_declaration?/1)
 
-    {foundational_declarations, dependent_declarations} =
-      Enum.split_with(ordinary_declarations, fn declaration ->
-        declaration =
+      {foundational_declarations, dependent_declarations} =
+        Enum.split_with(ordinary_declarations, fn declaration ->
+          declaration =
+            case declaration do
+              %{declaration: tuple} -> tuple
+              tuple -> tuple
+            end
+
           case declaration do
-            %{declaration: tuple} -> tuple
-            tuple -> tuple
+            {property, _value} ->
+              property in ["color", "font-size", "math-style", "math-shift", "math-depth"]
+
+            {property, _value, :important} ->
+              property in ["color", "font-size", "math-style", "math-shift", "math-depth"]
+
+            _ ->
+              false
           end
+        end)
 
-        case declaration do
-          {property, _value} ->
-            property in ["color", "font-size", "math-style", "math-shift", "math-depth"]
-
-          {property, _value, :important} ->
-            property in ["color", "font-size", "math-style", "math-shift", "math-depth"]
-
-          _ ->
-            false
-        end
-      end)
-
-    with {:ok, style} <-
-           validate_cascade_list(style, custom_declarations, budget, consumer, failure),
-         {:ok, custom_properties} <-
-           HtmlValidator.compute_custom_properties(style._custom_properties, budget),
-         style = Map.put(style, :_custom_properties, custom_properties),
-         {:ok, style} <-
-           validate_cascade_list(style, foundational_declarations, budget, consumer, failure) do
-      style =
-        case Map.get(style, :_root_element, false) do
-          true -> Map.put(style, :_root_font_size, Map.fetch!(style, :font_size))
-          false -> style
-        end
-
-      style =
-        if Map.get(style, :_fieldset_default_padding, false) do
-          font_size = style.font_size
-          padding = edges(font_size * 0.35, font_size * 0.75, font_size * 0.625, font_size * 0.75)
-
-          padding =
-            Map.new(padding, fn {side, value} ->
-              {side, Float.floor(value / 0.75 * 64) / 64 * 0.75}
-            end)
-
-          style |> Map.put(:padding, padding) |> Map.delete(:_fieldset_default_padding)
-        else
-          style
-        end
-
-      style =
-        if Map.get(style, :_dialog_default_padding, false) do
-          style
-          |> Map.put(:padding, edges(style.font_size))
-          |> Map.delete(:_dialog_default_padding)
-        else
-          style
-        end
-
-      # Font-relative dimensions need the actual inherited MATH scaling before
-      # value validation. The canonical Math validator owns that computation.
       with {:ok, style} <-
-             if(Map.get(style, :font_size) == :math,
-               do: MathLayoutValidator.compute_font_size(style),
-               else: {:ok, style}
-             ) do
+             validate_cascade_list(style, custom_declarations, budget, consumer, failure),
+           {:ok, custom_properties} <-
+             HtmlValidator.compute_custom_properties(style._custom_properties, budget),
+           style = Map.put(style, :_custom_properties, custom_properties),
+           {:ok, style} <-
+             validate_cascade_list(style, foundational_declarations, budget, consumer, failure),
+           {:ok, style} <- prepare_cascade_defaults(style) do
         validate_cascade_list(style, dependent_declarations, budget, consumer, failure)
       end
     end
+  end
+
+  defp prepare_cascade_defaults(style) do
+    style =
+      case Map.get(style, :_root_element, false) do
+        true -> Map.put(style, :_root_font_size, Map.fetch!(style, :font_size))
+        false -> style
+      end
+
+    style =
+      if Map.get(style, :_fieldset_default_padding, false) do
+        font_size = style.font_size
+        padding = edges(font_size * 0.35, font_size * 0.75, font_size * 0.625, font_size * 0.75)
+
+        padding =
+          Map.new(padding, fn {side, value} ->
+            {side, Float.floor(value / 0.75 * 64) / 64 * 0.75}
+          end)
+
+        style |> Map.put(:padding, padding) |> Map.delete(:_fieldset_default_padding)
+      else
+        style
+      end
+
+    style =
+      if Map.get(style, :_dialog_default_padding, false) do
+        style
+        |> Map.put(:padding, edges(style.font_size))
+        |> Map.delete(:_dialog_default_padding)
+      else
+        style
+      end
+
+    if Map.get(style, :font_size) == :math,
+      do: MathLayoutValidator.compute_font_size(style),
+      else: {:ok, style}
   end
 
   @doc false

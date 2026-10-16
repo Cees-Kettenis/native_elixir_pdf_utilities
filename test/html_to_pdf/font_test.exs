@@ -2867,7 +2867,52 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert Font.text_width("", font, 10) == 0.0
   end
 
-  test "measurement cache reuses widths but still charges layout work on hits" do
+  test "font scopes restore process settings and measurement caches still charge work" do
+    {:garbage_collection, before_flags} = Process.info(self(), :garbage_collection)
+    before_floor = Keyword.fetch!(before_flags, :min_bin_vheap_size)
+    assert FontValidator.source_bytes() == 0
+
+    FontValidator.with_budget(fn ->
+      assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
+      assert {:ok, _, selected} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+      source_bytes = FontValidator.source_bytes()
+      assert source_bytes > 0
+      {:garbage_collection, loaded_flags} = Process.info(self(), :garbage_collection)
+      loaded_floor = Keyword.fetch!(loaded_flags, :min_bin_vheap_size)
+      assert loaded_floor >= before_floor
+      assert loaded_floor * :erlang.system_info(:wordsize) >= source_bytes
+
+      assert :ok =
+               FontValidator.with_budget(fn ->
+                 Font.with_measurement_cache(fn ->
+                   assert Font.text_width("A", selected, 12) > 0
+
+                   Font.with_measurement_cache(fn ->
+                     {:garbage_collection, nested} = Process.info(self(), :garbage_collection)
+                     assert Keyword.fetch!(nested, :min_bin_vheap_size) == loaded_floor
+                   end)
+                 end)
+
+                 :ok
+               end)
+
+      {:garbage_collection, nested_done} = Process.info(self(), :garbage_collection)
+      assert Keyword.fetch!(nested_done, :min_bin_vheap_size) == loaded_floor
+    end)
+
+    {:garbage_collection, restored} = Process.info(self(), :garbage_collection)
+    assert Keyword.fetch!(restored, :min_bin_vheap_size) == before_floor
+
+    assert_raise RuntimeError, "font scope failure", fn ->
+      FontValidator.with_budget(fn ->
+        assert {:ok, _registry} = Font.load_registry(system_font_discovery: false)
+        raise "font scope failure"
+      end)
+    end
+
+    {:garbage_collection, restored} = Process.info(self(), :garbage_collection)
+    assert Keyword.fetch!(restored, :min_bin_vheap_size) == before_floor
+
     font = %{
       type: :embedded,
       id: "measurement-fixture",

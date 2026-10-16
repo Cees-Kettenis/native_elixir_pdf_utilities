@@ -3251,10 +3251,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
     by_source = Map.new(cells, &{&1.source, &1})
     data = Enum.reject(cells, &(&1.tag == "th"))
 
+    header_cells = Enum.filter(cells, &(&1.tag == "th"))
+
+    header_bounds =
+      Enum.reduce(header_cells, {-1, -1}, fn cell, {right, bottom} ->
+        {max(right, cell.column + cell.colspan - 1), max(bottom, cell.row + cell.rowspan - 1)}
+      end)
+
     headers =
-      cells
-      |> Enum.filter(&(&1.tag == "th"))
-      |> Map.new(fn cell ->
+      Map.new(header_cells, fn cell ->
         HtmlValidator.reserve_render_resource(
           :max_table_header_work,
           length(data) * 2 + 1,
@@ -3280,7 +3285,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
         {cell.source, %{column: column_header, row: row_header}}
       end)
 
-    group_headers = Enum.filter(cells, &(&1.tag == "th" and &1.scope in [:rowgroup, :colgroup]))
+    group_headers = Enum.filter(header_cells, &(&1.scope in [:rowgroup, :colgroup]))
 
     Enum.map(cells, fn cell ->
       associated =
@@ -3310,13 +3315,31 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
             left =
               Enum.flat_map(
                 cell.row..(cell.row + cell.rowspan - 1),
-                &scan_headers(cell, cell.column - 1, &1, -1, 0, slots, by_source, headers)
+                &scan_headers(
+                  cell,
+                  cell.column - 1,
+                  &1,
+                  -1,
+                  0,
+                  slots,
+                  by_source,
+                  {headers, header_bounds}
+                )
               )
 
             above =
               Enum.flat_map(
                 cell.column..(cell.column + cell.colspan - 1),
-                &scan_headers(cell, &1, cell.row - 1, 0, -1, slots, by_source, headers)
+                &scan_headers(
+                  cell,
+                  &1,
+                  cell.row - 1,
+                  0,
+                  -1,
+                  slots,
+                  by_source,
+                  {headers, header_bounds}
+                )
               )
 
             HtmlValidator.reserve_render_resource(
@@ -3350,13 +3373,26 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
     end)
   end
 
-  defp scan_headers(principal, x, y, dx, dy, slots, cells, kinds) do
-    # Every scan reaches the leading row/column boundary. Reserve its exact slot
-    # visits before reading slots; opaque-header comparisons remain incremental.
+  defp scan_headers(principal, x, y, dx, dy, slots, cells, header_context) do
+    {kinds, {right, bottom}} = header_context
+    # Charge the canonical full-scan extent before skipping impossible matches.
+    # Opaque-header comparisons remain incremental.
     visits = if x < 0 or y < 0, do: 0, else: if(dx == 0, do: y + 1, else: x + 1)
 
     if visits > 0,
       do: HtmlValidator.reserve_render_resource(:max_table_header_work, visits, :style)
+
+    # A data cell starts outside a header block. Slots beyond the last header
+    # cannot alter that state, so jump over them after charging the original
+    # full scan. Header principals retain their opaque-block transitions.
+    {x, y} =
+      if principal.tag == "th" do
+        {x, y}
+      else
+        if dx == 0,
+          do: {x, if(x > right, do: -1, else: min(y, bottom))},
+          else: {if(y > bottom, do: -1, else: min(x, right)), y}
+      end
 
     initial = %{
       headers: [],

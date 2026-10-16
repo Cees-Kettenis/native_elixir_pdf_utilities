@@ -1536,6 +1536,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
           {"", ""},
           {" \t\n\f\r", ""},
           {"khaki", "khaki"},
+          {" ", ""},
+          {" x", "x"},
+          {"x\t", "x"},
+          {"x \n", "x"},
+          {" \u0301", "\u0301"},
           {"\rkhaki\f", "khaki"},
           {"a b", "a b"},
           {"\u00a0khaki\u00a0", "\u00a0khaki\u00a0"},
@@ -3827,6 +3832,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
 
                assert diagnostic.stage == :style or diagnostic.stage == :options
                assert {:ok, false} = HtmlValidator.prepare_style_input(dom, [], options)
+               checked_work = Process.get({HtmlValidator, :render_budget})
+               assert :ok = HtmlValidator.release_style_input(changed)
+               assert {:ok, false} = HtmlValidator.prepare_style_input(dom, [], options)
+               assert Process.get({HtmlValidator, :render_budget}) == checked_work
+
+               assert :ok = HtmlValidator.release_style_input(dom)
+               assert :ok = HtmlValidator.release_style_input(dom)
+               assert {:ok, false} = HtmlValidator.prepare_style_input(dom, [], options)
+
+               assert Process.get({HtmlValidator, :render_budget}).max_html_tree_work >
+                        checked_work.max_html_tree_work
+
                :ok
              end)
   end

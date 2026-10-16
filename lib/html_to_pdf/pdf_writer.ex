@@ -11,6 +11,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   alias NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.HtmlToPdf.FontCache
   alias NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubset
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
@@ -2741,7 +2742,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       {resource.descendant_object_id, embedded_cid_font_object(resource, font)},
       {resource.descriptor_object_id, embedded_descriptor_object(resource, font)},
       {resource.font_file_object_id,
-       stream_object(Map.get(resource, :font_file_data, font.data), compress?)},
+       stream_object(
+         Map.get(resource, :font_file_data, font.data),
+         compress?,
+         &FontCache.compressed/1
+       )},
       {resource.cid_to_gid_object_id, cid_to_gid_object(resource, compress?)},
       {resource.to_unicode_object_id, to_unicode_object(resource, compress?)}
     ]
@@ -2816,11 +2821,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     stream_object(stream, compress?)
   end
 
-  defp stream_object(data, compress?), do: stream_object(data, compress?, "", 1_024)
+  defp stream_object(data, compress?, compressor \\ &:zlib.compress/1),
+    do: stream_object(data, compress?, "", 1_024, compressor)
 
-  defp stream_object(data, compress?, entries, minimum_size) do
+  defp stream_object(data, compress?, entries, minimum_size, compressor \\ &:zlib.compress/1) do
     compressed =
-      if compress? and byte_size(data) >= minimum_size, do: :zlib.compress(data), else: <<>>
+      if compress? and byte_size(data) >= minimum_size, do: compressor.(data), else: <<>>
 
     ratio = Limits.get(:max_pdf_decompression_ratio)
 
