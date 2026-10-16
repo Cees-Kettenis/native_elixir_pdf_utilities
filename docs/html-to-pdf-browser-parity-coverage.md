@@ -1,5 +1,14 @@
 # Supported browser rendering
 
+Routine SVG acceptance follows the document-to-PNG workflow. It covers representative SVG behavior and mixed MathML/template documents
+that contain SVG. A separate comparison contract test
+verifies that the Chrome PNG reference detects deliberate regressions. The total browser suite has 380 test
+registrations. The [SVG browser audit](svg-browser-workflow-audit.md) lists the
+27 specialized or redundant cases removed from routine acceptance and the
+coverage retained in their place. Two unstable intrinsic-flex-embed Chrome
+comparisons were also retired at the user's request. Original inputs and strict results remain
+available; removal does not establish Chromium parity for those inputs.
+
 The HTML renderer supports a document-oriented subset of browser rendering for
 reports, invoices, statements, forms, and labels. Use the overview below to
 choose a layout, then follow the linked reference for supported values and
@@ -29,10 +38,30 @@ before relying on successful rendering as evidence that page settings were appli
 
 ## Visual parity
 
-We compare rendered documents with Chromium at 72 DPI. Every fixture enforces
-a strict ceiling of **less than 1% differing pixels**. A pixel differs when at least one
+We compare rendered documents with Chromium at 72 DPI. Eligible SVG workflow
+comparisons use Chrome-generated replacement PNGs and compare at the shared SVG
+raster density, currently 192 DPI. They also retain the original vector-PDF
+comparison at 72 DPI with a separate pass/fail result. See
+[SVG conversion](svg-converter-workflow.md) for the reference procedure. Comparisons normally enforce
+a strict ceiling of **less than 1% differing pixels**. The user approved two
+Chrome bug exceptions: `inline_svg_filter_offsets.html` allows less than 10%,
+and `inline_svg_filter_text_inputs.html` allows less than 3%. The offset case
+also allows a 3% mean channel delta; the text-input case retains 1%.
+The user also approved 2% changed-pixel ceilings for
+`inline_svg_text_paint_servers.html` and `inline_svg_gradient_alpha.html`,
+retaining their 1% mean-delta limits. These accommodate the permitted font
+rasterization differences documented in the [SVG audit](svg-browser-workflow-audit.md).
+The paint-server case also retains a separately documented fractional-pattern
+geometry defect. These
+exceptions accommodate verified engine differences and do not establish strict
+one-percent parity. Original inputs and earlier strict failure evidence remain
+unchanged. A pixel differs when at least one
 RGB channel differs by more than 12 out of 255. Each fixture also checks the
 page count and its existing average channel-delta limit.
+
+Chromium supplies every visual reference. Poppler rasterizes both PDFs with
+the same settings; it is not a separate reference renderer. Standalone Poppler
+pixel checks and native-versus-native PDF image comparisons are excluded.
 
 Chromium and the native renderer load the same bundled DejaVu font files. Two
 font fixtures also use the same bundled Liberation font files. Each run records
@@ -56,6 +85,62 @@ The suite includes invoices, statements, forms, labels, and focused fixtures for
 supported layout behavior. Recent cases cover `white-space: nowrap`, leading
 decimal lengths, letter spacing and ligatures, collapsed table borders across
 pages, and body padding, backgrounds, and grid layout.
+
+Ten small typography and layout fixtures share two comparison pages,
+`compact_typography.html` and `compact_layout.html`. Each original sample keeps
+its own canvas size and comparison region, so unrelated samples cannot dilute
+its changed-pixel ratio. The tests also require visible ink in every region and
+check the expected visible and hidden text. Original source fixtures remain in
+the repository. Root-document and multipage behaviors retain separate tests.
+
+A further 36 MathML cases, four SVG cases, and 23 HTML cases share eleven
+generated comparison sheets. Each sample keeps its full original canvas, scale, and independent
+one-percent threshold. Consolidation controls verified pixel-identical crops
+against the original native and Chromium outputs for all 63 retained samples.
+The four retained SVG samples were checked again after sharing one sheet. Original
+strict failures remain failures in the corresponding sample regions; sheet
+assertions list every failing sample. They are not counted as successful visual
+comparisons merely because fewer test registrations report those failures.
+
+The original files remain the editable sources. `sheets.json` describes placement,
+and `scripts/build-browser-sheets.exs` regenerates the sheets. The existing fixture
+inventory check detects stale generated output. Cases with altered raster output,
+root viewport dependencies, pagination, or custom reference adapters stay separate.
+
+Independent comparisons run concurrently across ExUnit modules, with six workers
+by default. Tests that change shared Fontconfig or resource-limit configuration
+remain serial. Intrinsic embedded-SVG references also stay serial because their
+Chrome print output varies under concurrent load. Chrome processes are reused, but every comparison has a fresh
+browser context with author scripting disabled. Print media is selected before
+navigation, and printing waits for page load and the virtual-time budget. This
+selects the intended print styles before embedded documents initialize.
+Fontconfig-scoped ordinary references use separate command-line Chrome processes.
+SVG PNG references use a pool keyed by their Fontconfig configuration.
+The original command-line path remains available through
+`BROWSER_PARITY_BROWSER=cli`; neither path changes the comparison thresholds.
+
+
+The earlier repair run on 2026-10-16 passes 374 of 382 browser registrations in 59.4
+seconds on the host. Every retained non-SVG comparison passes; eight SVG samples
+remain above the unchanged threshold. This is not full browser acceptance.
+The token-owner MathML sheet supplies two existing source-derived script glyph
+aliases because Chrome does not apply `ssty` in that nested fraction. Chrome
+still performs its fraction and surrounding CSS layout. The existing dedicated
+fraction and italic-token Core references remain explicit reference adaptations.
+
+Six ordinary iframe initialization cases and child MIME contexts now share one
+page. The original overflowing iframe-margin and tiny plaintext-scrollbar inputs
+remain archived because Chrome 152 and 155 produce different initial states.
+The 400-digit frameset-margin case and dense repeating SVG background sampling
+case are also retired from routine browser acceptance. Normal iframe hints,
+frameset layouts, SVG backgrounds and pagination retain ordinary and browser
+coverage. These removals do not establish parity for the archived sources.
+
+Original fixtures for explicitly unsupported converter features remain as
+reference sources. Ordinary tests verify their actionable diagnostics; routine
+CI does not print Chromium reference PDFs just to repeat those rejection checks.
+These sources do not count as successful visual comparisons. Original strict
+failure evidence from before consolidation remains in the local repair records.
 
 `font_supplementary_unicode.html` uses the same pinned STIX Two Math bytes in
 both renderers. It checks mathematical alphanumeric characters, ordinary
@@ -387,3 +472,19 @@ and block summaries. Both PDFs must preserve every visible caption and omit
 closed body text. The unchanged pixel threshold includes default marker shape
 differences. Focused tests check pagination, fields, unused assets, original DOM
 positions, template-group isolation and recoverable input failures.
+
+The nested-template original-source browser check is retired after a verified
+Chrome 152/155 semantic difference. Chrome 155 applies the inner `template for`
+replacement; Chrome 152 and the library's original-source policy keep it inert.
+The ordinary nested-candidate validation/mutation tests remain, as do eight
+other template browser checks. Its original fixture is unchanged and its failed
+reference is retained in `tmp/workflow-repair/nested-template-chrome155-strict/`.
+This is a documented template-policy deviation, not a fixed original-source
+Chrome comparison. It removes one browser registration, leaving 382.
+
+The final quality matrix is `.quality/logs/20261016T061011Z-2877245/`. Both
+supported runtimes pass 3,804 ordinary tests with 100% coverage and zero warnings.
+Elixir 1.19 reaches parity and fails the eight SVG samples in 59.4 seconds.
+Elixir 1.20 stops at two performance reduction guards; supplemental Dialyzer
+passes, and its separate browser check fails the same eight samples in 58.6
+seconds. The full matrix therefore remains FAIL.

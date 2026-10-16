@@ -1,3 +1,8 @@
+This reconstruction is retained as historical evidence. The active browser test
+now compares `mathml_radicals.html` directly against Chromium without replacing
+its MathML. Its text and link behavior remains covered by the ordinary radical
+tests. The generator, source font and old comparison evidence below are archival.
+
 # Fixed radical artwork comparison
 
 This directory retains the approved source-derived CSS artwork comparison for

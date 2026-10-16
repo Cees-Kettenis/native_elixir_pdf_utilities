@@ -46,13 +46,33 @@ The helper needs Docker, `jq`, and Bash 4 or newer. Docker must be running.
 Native PowerShell and Command Prompt are not supported by the helper.
 
 [ci/runtime-matrix.json](ci/runtime-matrix.json) defines the local and CI
-runtimes. It currently tests Elixir 1.19 and 1.20. The support policy moves to a
-rolling three-minor window when the Elixir 1.21 container is available. Add
-measured performance baselines when adding a runtime.
+runtimes. It currently tests Elixir 1.19 and 1.20 using the same published images
+locally and in CI:
+
+| Elixir | Image |
+| --- | --- |
+| 1.19 | `sigdevelopers/native-elixir-pdf-ci:elixir-1.19` |
+| 1.20 | `sigdevelopers/sigportal-ci:v2.8` |
+
+Both images include Chrome, fonts, and the PDF tools. The runner reuses local
+images, pulls missing ones, and resolves each tag to an immutable image ID for
+that run. It does not build images or install system packages during validation.
+Run `docker pull <image>` when updating an existing local image.
+
+Each runtime uses one container for the complete sequence of checks. Build,
+dependency and tool caches stay separate for each Elixir version under `.quality/`.
+If a stage fails, later stages for that runtime are marked `SKIP`; the other
+runtime still runs. No additional validation image is created.
+
+The support policy moves to a rolling three-minor window when the Elixir 1.21
+container is available. Add measured performance baselines when adding a runtime.
 
 ### Read the results
 
 Each stage prints a log path under `.quality/logs/`.
+The terminal summary and `results.tsv` contain one row per runtime and stage,
+with its status, warning count and log path. Each runtime also retains the
+complete container output in `container.log`.
 
 | Result | Action |
 | --- | --- |
@@ -148,6 +168,29 @@ Poppler, and matching fonts. The matrix supplies these tools, DejaVu, and
 Liberation. If a comparison differs, check the fonts embedded in both PDFs.
 On Linux, `fc-match` shows the native Fontconfig aliases.
 
+The browser alias runs up to six independent ExUnit modules concurrently. Cases
+that change Fontconfig or other process-wide settings remain serial. Chrome's
+load-sensitive intrinsic embedded-SVG references also retain serial scheduling.
+Each worker
+reuses a Chrome process through its DevTools pipe, creates a fresh browser context
+for each comparison, disables author JavaScript, and selects print media before
+loading the fixture. It waits for page load and the existing virtual-time budget
+before printing. The suite closes Chrome before removing its temporary profiles.
+Comparisons that install a temporary Fontconfig configuration use a separate
+Chrome process so it inherits the correct environment.
+
+Use `mix test.browser_parity --max-cases 2` to reduce concurrency on a smaller
+runner. To replay the original command-line printing path for diagnosis, run
+`BROWSER_PARITY_BROWSER=cli CHROMIUM_BIN=/usr/bin/chromium mix test.browser_parity`.
+Both paths use stock Chrome and the same pixel thresholds. The comparator caches
+executable versions within the test VM; it still records fonts for every PDF.
+
+Chromium is the reference for visual acceptance. Poppler only rasterizes the
+Chromium and native PDFs with the same settings and records embedded fonts.
+Do not add standalone Poppler pixel expectations or native-versus-native PDF
+image comparisons to the browser suite. Keep ordinary structural, text,
+geometry, and diagnostic tests alongside the Chromium comparisons.
+
 ## Make a change
 
 Keep the change focused. Add regression tests for behavior changes and update
@@ -168,6 +211,34 @@ Follow the [project conventions](AGENTS.md):
 Renderer changes need focused parser, style, layout, pagination, or PDF writer
 coverage. Add browser parity fixtures when the change affects visible output.
 Review and understand everything you submit, including code produced with AI tools.
+
+Keep each test tied to an observable contract. Image presence alone does not
+establish glyph placement, clipping, gradients, or text sizing. Prefer a focused
+pixel, geometry, text, field, or diagnostic assertion. Consolidate repeated
+checks of the same input and configuration, and keep converter painting tests
+focused on the library's source, font, resource, and image integration.
+
+Small visual cases can share a page when their styles and geometry remain
+independent. The compact browser fixtures retain a separate comparison region
+for every sample, with the same one-percent ceiling and an ink-presence check.
+Keep root-document and pagination cases separate. Preserve the original fixture
+sources when consolidating them. The HTML, SVG, and MathML sheets are generated
+from those originals using `test/fixtures/html_to_pdf/browser_parity/sheets.json`:
+
+```bash
+MIX_ENV=test mise exec -- mix run scripts/build-browser-sheets.exs
+```
+
+The fixture inventory check verifies that every sheet matches its sources.
+Keep the original canvas sizes and scale, use separate regions, and keep SVG IDs
+disjoint across samples. Sheet origins use a three-point grid, equivalent to
+four CSS pixels, to avoid introducing fractional CSS placement. Verify the native
+and Chromium raster crops against the original individual fixtures after changing
+a layout. Cases with changed rendering, viewport dependencies, pagination, or
+custom reference adapters need their own comparison.
+
+Share large assertion bodies outside generated
+`for` tests so the compiler processes them once.
 
 ## Try the manual app
 
