@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ModernColorDimensionsBrowserTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   @moduletag :browser_parity
 
   @tag :modern_color_inputs

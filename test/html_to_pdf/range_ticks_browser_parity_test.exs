@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeTicksBrowserParityTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
   @moduletag :browser_parity
   test "static authored range datalist ticks match Chromium" do

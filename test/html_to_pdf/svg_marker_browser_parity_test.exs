@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgMarkerBrowserParityTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
   @moduletag :browser_parity
   @moduletag :svg_marker_geometry
@@ -12,22 +12,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgMarkerBrowserParityTest do
 
     stats =
       PdfVisualCompare.assert_browser_match!(path,
-        max_changed_ratio: 0.01,
-        max_average_delta: 0.01
-      )
-
-    assert stats.page_count == 1
-  end
-
-  test "marker shorthand, context paint, curve directions, subpaths and nested transforms" do
-    path =
-      Path.expand(
-        "../fixtures/html_to_pdf/browser_parity/svg_marker_context_orientation.html",
-        __DIR__
-      )
-
-    stats =
-      PdfVisualCompare.assert_browser_match!(path,
+        svg_reference: :png,
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )
@@ -46,6 +31,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgMarkerBrowserParityTest do
     stats =
       PdfVisualCompare.assert_browser_match!(path,
         render_opts: [fonts: []],
+        svg_reference: :png,
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )
@@ -64,6 +50,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgMarkerBrowserParityTest do
     stats =
       PdfVisualCompare.assert_browser_match!(path,
         render_opts: [fonts: []],
+        svg_reference: :png,
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )

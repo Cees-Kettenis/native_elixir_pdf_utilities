@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.PositionedFragmentSourceBrowserParityTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
   @moduletag :browser_parity
   @moduletag :positioned_fragment_source
@@ -12,6 +12,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PositionedFragmentSourceBrowserPari
     test "actual source fragmentation #{name}" do
       stats =
         PdfVisualCompare.assert_browser_match!(@source_fixture,
+          native_renderer: &PdfVisualCompare.render_with_chromium_arial/2,
           max_changed_ratio: 0.01,
           max_average_delta: 0.01
         )

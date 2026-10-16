@@ -1,0 +1,24 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page {size:600pt 440pt;margin:0}
+html,body{margin:0;padding:0}body{font-family:'DejaVu Sans';font-size:12pt}
+#empty_flex_height,#empty_flex_height{margin:0;padding:0}
+#distributed_gaps,#distributed_gaps{margin:0;padding:0}
+#distributed_gaps .row{width:200pt;gap:20pt;margin-bottom:20pt;grid-template-columns:40pt 40pt}
+#distributed_gaps .row div{width:40pt;height:20pt;background:red}
+#computed_custom_properties,#computed_custom_properties{margin:0;padding:0}
+#computed_custom_properties .child{width:100pt;height:40pt;background:var(--alias)}
+#quoted_at_rules,#quoted_at_rules{margin:0;padding:0}
+#quoted_at_rules{font-family:'DejaVu Sans';font-size:12pt}
+#quoted_at_rules p{margin:0}
+#quoted_at_rules p::before{content:"@media print {BOGUS}"}
+</style></head><body>
+<!-- empty_flex_height.html, original canvas 240 x 240 pt -->
+<section id="empty_flex_height" style="position:absolute;left:0pt;top:0pt;width:240pt;height:240pt;box-sizing:border-box"><div style="display:flex;height:100pt;background:red"></div><div style="display:flex;min-height:60pt;background:blue"><span style="display:none">Hidden</span></div><div style="height:10pt;background:green"></div></section>
+<!-- distributed_gaps.html, original canvas 240 x 240 pt -->
+<section id="distributed_gaps" style="position:absolute;left:300pt;top:0pt;width:240pt;height:240pt;box-sizing:border-box"><div class="row" style="display:flex;justify-content:space-around"><div></div><div style="background:blue"></div></div><div class="row" style="display:flex;justify-content:space-evenly"><div></div><div style="background:blue"></div></div><div class="row" style="display:grid;justify-content:space-around"><div></div><div style="background:blue"></div></div><div class="row" style="display:grid;justify-content:space-evenly"><div></div><div style="background:blue"></div></div></section>
+<!-- computed_custom_properties.html, original canvas 240 x 180 pt -->
+<section id="computed_custom_properties" style="position:absolute;left:0pt;top:260pt;width:240pt;height:180pt;box-sizing:border-box"><div style="--base:red;--alias:var(--base)"><div class="child" style="--base:blue"></div><div class="child" style="--base:green;--alias:var(--base)"></div></div></section>
+<!-- quoted_at_rules.html, original canvas 360 x 180 pt -->
+<section id="quoted_at_rules" style="position:absolute;left:240pt;top:260pt;width:360pt;height:180pt;box-sizing:border-box"><p></p></section>
+</body></html>

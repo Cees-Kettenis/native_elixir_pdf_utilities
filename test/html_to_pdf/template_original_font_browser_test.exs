@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateOriginalFontBrowserTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   @moduletag :browser_parity
 
   test "discarded inactive font loading preserves Chromium's active selection" do
@@ -14,7 +14,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateOriginalFontBrowserTest do
         artifact_dir: ".quality/orchestration/template-inactive-original-font-browser",
         render_opts: [assets: %{"provided-original.ttf" => {:file, font}}],
         native_renderer:
-          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_initial_numbers/2,
+          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_with_chromium_arial/2,
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )

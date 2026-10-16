@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgInitialDocumentBrowserParityTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
   @moduletag :browser_parity
   @moduletag :svg_initial_document
@@ -14,6 +14,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgInitialDocumentBrowserParityTest
     stats =
       PdfVisualCompare.assert_browser_match!(source,
         render_opts: [fonts: []],
+        svg_reference: :png,
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )

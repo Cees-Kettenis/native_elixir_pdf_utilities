@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CurvedBorderBrowserParityTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
   alias NativeElixirPdfUtilities.{Forms, HtmlToPdf}
   @moduletag :browser_parity

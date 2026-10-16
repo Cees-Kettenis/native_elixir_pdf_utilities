@@ -1,0 +1,72 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page{size:840pt 1290pt;margin:0}
+html,body{margin:0;padding:0;font-size:12pt}
+#sample_0,#sample_0{margin:0;padding:0;font-family:"DejaVu Sans";font-size:12pt;line-height:18pt}
+#sample_0{padding:12pt}
+#sample_0 p{margin:0 0 8pt;line-height:80pt}
+#sample_0 math{font-family:"STIX Two Math";font-size:18pt}
+#sample_0 mtd{padding:2pt 3pt}
+#sample_1,#sample_1{margin:0;padding:0;font-family:"DejaVu Sans";font-size:12pt;line-height:18pt}
+#sample_1{padding:12pt}
+#sample_1 p{margin:0 0 6pt;line-height:80pt}
+#sample_1 math{font-family:"STIX Two Math";font-size:18pt}
+#sample_2,#sample_2{margin:0;padding:0;font-family:"DejaVu Sans";font-size:12pt;line-height:18pt}
+#sample_2{padding:12pt}
+#sample_2 p{margin:0 0 6pt;line-height:42pt}
+#sample_2 math{font-family:"STIX Two Math";font-size:18pt}
+#sample_3,#sample_3{margin:0;padding:0;font-family:"DejaVu Sans";font-size:12pt;line-height:18pt}
+#sample_3{padding:12pt}
+#sample_3 p{margin:0 0 8pt}
+#sample_3 math{font-family:"STIX Two Math"}
+#sample_4,#sample_4{margin:0;padding:0;font-family:"DejaVu Sans";font-size:12pt;line-height:18pt}
+#sample_4{padding:12pt}
+#sample_4 p{margin:0 0 8pt;line-height:40pt}
+#sample_4 math{font-family:"STIX Two Math"}
+</style></head><body>
+<!-- mathml_matrix_spans_constraints.html; SHA256 db870fb3bad8a425d98e986b577680bb3dcf96e0c6f9cfd052e19c3a8ac12aef; original 360 x 480 pt canvas -->
+<section id="sample_0" style="position:absolute;left:0.0pt;top:0.0pt;width:360.0pt;height:480.0pt;box-sizing:border-box">
+<p>Columns <math><mtable><mtr><mtd columnspan="2"><mn>123456</mn></mtd></mtr><mtr><mtd><mn>1</mn></mtd><mtd><mn>23</mn></mtd></mtr></mtable><mn>7</mn></math> end.</p>
+<p>Rows <math><mtable><mtr><mtd rowspan="2" style="height:60pt;background:lightblue"><mn>1</mn></mtd><mtd><mn>2</mn></mtd></mtr><mtr><mtd><mn>3</mn></mtd></mtr></mtable><mn>4</mn></math> end.</p>
+<p>Bounds <math><mtable style="width:120pt;height:60pt;background:lightyellow"><mtr><mtd style="width:60pt"><mn>1</mn></mtd><mtd><mn>2</mn></mtd></mtr></mtable><mn>3</mn></math> end.</p>
+<p>Align <math><mtable><mtr><mtd style="height:40pt;vertical-align:top"><mn>1</mn></mtd><mtd style="vertical-align:bottom"><mn>2</mn></mtd><mtd style="vertical-align:middle"><mn>3</mn></mtd></mtr></mtable><mn>4</mn></math> end.</p>
+</section>
+
+<!-- mathml_matrix_spacing_boxes.html; SHA256 a9a5eb1e9d56df0f3a12fa52c8e8572907700f17d4a5949d2f0dbbe3f0a5eebd; original 360 x 480 pt canvas -->
+<section id="sample_1" style="position:absolute;left:420.0pt;top:0.0pt;width:360.0pt;height:480.0pt;box-sizing:border-box">
+<p>Single <math><mtable style="border-spacing:4pt 3pt"><mtr><mtd><mn>12</mn></mtd></mtr></mtable><mn>3</mn></math> end.</p>
+<p>Separate <math><mtable style="border-spacing:4pt 2pt"><mtr><mtd><mn>1</mn></mtd><mtd><mn>23</mn></mtd></mtr><mtr><mtd><mn>456</mn></mtd><mtd><mn>7</mn></mtd></mtr></mtable><mn>8</mn></math> end.</p>
+<p>Owner <math><mtable style="padding:7pt 4pt 1pt 2pt;border:1pt solid blue;background-color:lightyellow"><mtr><mtd><mn>23</mn></mtd></mtr><mtr><mtd><mn>45</mn></mtd></mtr></mtable><mn>6</mn></math> end.</p>
+<p>Combined <math><mtable style="border-spacing:3pt 2pt;padding:1pt 2pt 5pt 3pt;border:1pt solid blue;background-color:lightblue"><mtr><mtd><mn>7</mn></mtd><mtd><mn>89</mn></mtd></mtr><mtr><mtd></mtd><mtd><mn>2</mn></mtd></mtr></mtable><mn>3</mn></math> end.</p>
+<p>Fraction <math><mtable style="border-spacing:3pt 2pt"><mtr><mtd><mfrac><mn>1</mn><mn>2</mn></mfrac></mtd><mtd><mn>34</mn></mtd></mtr><mtr><mtd><mn>5</mn></mtd><mtd><mfrac><mn>6</mn><mn>7</mn></mfrac></mtd></mtr></mtable><mn>8</mn></math> end.</p>
+</section>
+
+<!-- mathml_phantoms.html; SHA256 eda7cd0b6fe7ed4016045802be88cdbf9e50d03379fc3a59f1d2abab652c0d37; original 360 x 360 pt canvas -->
+<section id="sample_2" style="position:absolute;left:420.0pt;top:480.0pt;width:360.0pt;height:360.0pt;box-sizing:border-box">
+<p>Gap <math><mn>7</mn><mphantom><mn>123</mn></mphantom><mn>8</mn></math> end.</p>
+<p>Nested <math><mn>2</mn><mphantom><mn>34</mn><mphantom><mn>5</mn></mphantom></mphantom><mn>6</mn></math> end.</p>
+<p>Rule <math><mn>3</mn><mphantom><mfrac><mn>4</mn><mn>5</mn></mfrac></mphantom><mn>6</mn></math> end.</p>
+<p>Decoration <math><mn>1</mn><mphantom style="border:1px solid red;background-color:blue;padding:2pt"><mn>Hidden</mn></mphantom><mn>2</mn></math> end.</p>
+<p>Link <math><mn>8</mn><mphantom><mtext><a href="https://hidden.test">Hidden</a></mtext></mphantom><mn>9</mn></math> end.</p>
+<p>Operator <math><mphantom><mo form="prefix" lspace="3pt" rspace="7pt">+</mo></mphantom><mn>7</mn><mo form="postfix">!</mo></math> end.</p>
+</section>
+
+<!-- mathml_operators_ordinary.html; SHA256 246521b2fdba6aedfdd4f52fce3d89a75e70c73f26c3a0f3e572de5b89d093a3; original 360 x 450 pt canvas -->
+<section id="sample_3" style="position:absolute;left:420.0pt;top:840.0pt;width:360.0pt;height:450.0pt;box-sizing:border-box">
+<p>Small <math style="font-size:12pt"><mn>1</mn><mo>+</mo><mn>2</mn><mo>=</mo><mn>3</mn><mo>,</mo><mo form="prefix">+</mo><mn>4</mn><mo>!</mo></math> end.</p>
+<p>Medium <math style="font-size:20pt"><mo>+</mo><mn>1</mn><mrow><mspace width="2pt"/><mo lspace="3pt" rspace="5pt">+</mo></mrow><mn>2</mn><mo form="postfix">!</mo></math> end.</p>
+<p style="line-height:40pt">Large <math style="font-size:30pt"><mn>1</mn><mo>&#x2062;</mo><mn>2</mn><mo>!=</mo><mn>3</mn><mo stretchy="false">(</mo><mn>4</mn><mo stretchy="false">)</mo></math> end.</p>
+<math display="block" style="font-size:20pt"><mo>∑</mo><mn>1</mn><mo>+</mo><mo largeop="false">∑</mo><mn>2</mn><mo>→</mo><mn>3</mn><mo>⏞</mo></math>
+<p>After operators.</p>
+</section>
+
+<!-- mathml_scripts_ordinary.html; SHA256 562a51923bad681fa0509d7d9b5339c60f42e4cf09f596eeecc8d4a168b0a672; original 360 x 300 pt canvas -->
+<section id="sample_4" style="position:absolute;left:0.0pt;top:900.0pt;width:360.0pt;height:300.0pt;box-sizing:border-box">
+<p>Sub <math style="font-size:12pt"><msub><mn>1</mn><mn>2</mn></msub></math> end.</p>
+<p>Super <math style="font-size:18pt"><msup><mn>3</mn><mn>4</mn></msup></math> end.</p>
+<p>Pair <math style="font-size:24pt"><msubsup><mn>5</mn><mn>6</mn><mn>7</mn></msubsup></math> end.</p>
+<p>Row <math style="font-size:18pt"><msup><mn>8</mn><mn>9</mn><mn>0</mn></msup></math> end.</p>
+<p>Linked <math style="font-size:12pt"><msub><mtext><a href="https://script.test/ordinary">Link</a></mtext><mn>2</mn></msub></math> end.</p>
+</section>
+
+</body></html>

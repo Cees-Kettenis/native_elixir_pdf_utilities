@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ControlUaFontBrowserParityTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
   @moduletag :browser_parity
   @tag :control_ua_fonts
@@ -8,6 +8,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ControlUaFontBrowserParityTest do
       PdfVisualCompare.assert_browser_match!(
         Path.expand("../fixtures/html_to_pdf/browser_parity/html_control_ua_fonts.html", __DIR__),
         artifact_dir: ".quality/orchestration/control-ua-font-browser",
+        native_renderer: &PdfVisualCompare.render_with_chromium_arial/2,
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )

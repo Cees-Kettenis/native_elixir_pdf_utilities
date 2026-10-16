@@ -1,0 +1,136 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page{size:840pt 1341pt;margin:0}
+html,body{margin:0;padding:0;font-size:12pt}
+#sample_0,#sample_0{margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:12pt}
+#sample_0 h1,#sample_0 h2,#sample_0 h3,#sample_0 h4,#sample_0 h5,#sample_0 h6{font-size:10pt;line-height:12pt;margin:0 0 4pt}
+#sample_0 p{margin:0 0 4pt}
+#sample_0 x-box{display:block}
+#sample_0 .flex{display:flex;gap:8pt}
+#sample_0 .grid{display:grid;grid-template-columns:100pt 100pt;gap:4pt}
+#sample_1,#sample_1{margin:0;padding:0}
+#sample_1{font-family:"DejaVu Sans";font-size:10pt;line-height:14pt;color:#8b1a1a}
+#sample_1 p{margin:0 0 8pt}
+#sample_1 .narrow{width:120pt}
+#sample_1 .override a{color:#006400;text-decoration:none}
+#sample_2,#sample_2{margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt}
+#sample_2{padding:12pt}
+#sample_2 p{margin:0 0 6pt}
+#sample_2 .fallback{color:#164e63}
+#sample_2 .block{display:block;color:#9a3412}
+#sample_3,#sample_3{margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt}
+#sample_3{padding:12pt}
+#sample_3 p{margin:0 0 6pt}
+#sample_3 .siblings{margin-bottom:6pt}
+#sample_3 .siblings>span:nth-child(2){color:#9a3412}
+#sample_3 input:not([hidden]){display:block;width:180pt;box-sizing:border-box;border:1px solid #777;background:white;padding:1.5pt 3pt;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt;margin-bottom:6pt}
+#sample_3 script.revealed{display:block;margin-bottom:6pt}
+#sample_4,#sample_4{margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt}
+#sample_4{padding:12pt}
+#sample_4 h2{font-size:11pt;line-height:14pt;margin:6pt 0 0}
+#sample_4 ul,#sample_4 ol,#sample_4 dl{margin:0;padding-top:0;padding-bottom:0}
+#sample_4 ul,#sample_4 ol{padding-left:24pt}
+#sample_4 dt{font-weight:bold}
+#sample_4 dd{margin-left:24pt}
+#sample_4 li:nth-child(3),#sample_4 td:nth-child(3),#sample_4 tr:nth-child(4){color:#064f80}
+#sample_4 ul script.shown{display:block}
+#sample_4 ul template.shown{display:block;border:1px solid #777;padding:2pt}
+#sample_4 table{width:216pt;border-collapse:collapse;margin:0}
+#sample_4 td{padding:3pt;border:1px solid #777}
+#sample_4 select{display:block;width:180pt;box-sizing:border-box;border:1px solid #777;background:white;padding:2pt 3pt;margin:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt}
+#sample_5,#sample_5{margin:0;padding:0}
+#sample_5{padding:12pt;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt}
+#sample_5 input{display:block;width:180pt;box-sizing:border-box;border:1px solid #777777;background:white;padding:1.5pt 3pt;margin:0 0 6pt;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt}
+#sample_5 input[type="password"][value^="A"]{color:red}
+#sample_5 input[disabled]{color:#666666;background:#f4f4f4}
+</style></head><body>
+<!-- html_heading_offsets.html; SHA256 d6f133dcf82990d24974563b455b670e6db28484fa0de9d029c1d68f87cdc14e; original 264 x 360 pt canvas -->
+<section id="sample_0" style="position:absolute;left:432.0pt;top:252.0pt;width:240.0pt;height:336.0pt;box-sizing:border-box">
+<h1>Root heading</h1>
+<x-box headingoffset="2"><h1>Offset child</h1><h2>Offset grandchild</h2>
+<section headingoffset="1"><h3>Nested sum</h3><h6>Level nine cap</h6></section>
+<div headingoffset="1" headingreset="false"><h2>Inclusive reset</h2></div>
+<h1 headingoffset="invalid">Invalid inherits</h1><h1 headingoffset="-3">Negative inherits</h1>
+<h1 headingoffset=" +03tail">Integer prefix</h1>
+</x-box>
+<div headingoffset="4"><h2 headingreset>Reset without offset</h2></div>
+<div headingoffset="2" class="flex"><h1>Flex heading</h1><h2>Flex child</h2></div>
+<div headingoffset="2" class="grid"><h1>Grid heading</h1><h2>Grid child</h2></div>
+<div headingoffset="2">Before<h1>Anonymous block heading</h1>After</div>
+<h1 headingoffset="1"><a href="https://example.com/heading">Linked <strong>heading</strong></a></h1>
+<h1 inert headingoffset="1">Inert printed heading</h1>
+<h1 hidden headingoffset="8">Hidden heading</h1><template><h1 headingoffset="8">Template heading</h1></template>
+<div headingoffset="2"><h1 style="display:inline">Inline <strong>heading</strong></h1> tail</div>
+<div headingoffset="2"><h2 style="display:inline-block">Atomic heading</h2></div>
+<h1>Final root</h1>
+</section>
+
+<!-- html_anchor_defaults.html; SHA256 7ef7898e2a025e66f18a8b7d373466754c348808848bcb018398aaf79e16674c; original 264 x 300 pt canvas -->
+<section id="sample_1" style="position:absolute;left:12.0pt;top:312.0pt;width:240.0pt;height:276.0pt;box-sizing:border-box">
+<p><a>Placeholder inherits</a> Ordinary</p>
+<p><a href="https://example.com">Unvisited HTTPS <strong>Bold</strong></a></p>
+<p><a href="http://example.com">Unvisited HTTP</a></p>
+<p><a href="mailto:test@example.com">Unvisited mail</a></p>
+<p class="narrow"><a href="https://example.com/wrapped">Wrapped anchor keeps underline through several lines</a></p>
+<p><a inert href="https://example.com/held">Inert link visible</a></p>
+<p><a href="https://example.com/split">Active <span inert>held</span> active</a></p>
+<p class="override"><a href="https://example.com/custom">Authored appearance</a></p>
+<p hidden><a href="https://example.com/hidden">Hidden link</a></p>
+<p><a></a>Empty placeholder preserves spacing</p>
+</section>
+
+<!-- html_anonymous_inline_blocks.html; SHA256 2fb879cd4fd14c47b196360499821c9f6b6b092f89a5ab787aab092dae057984; original 264 x 440 pt canvas -->
+<section id="sample_2" style="position:absolute;left:0.0pt;top:600.0pt;width:264.0pt;height:440.0pt;box-sizing:border-box">
+Before <noscript class=fallback>start<p>Default block fallback</p>end</noscript> after
+<p>Following paragraph</p>
+<span>Nested start <span><span class=block>CSS block within neutral spans</span></span> nested end</span>
+<p>Final visible label</p>
+<table style="width:180pt;border-collapse:collapse"><tr><td style="padding:0">Cell before <span><span class=block style="width:50%;background:#eee">Half-width nested block</span></span> cell after</td></tr></table>
+<span style="display:inline-block;width:180pt">Atomic before <span><span class=block>Nested atomic block</span></span> atomic after</span>
+<div style="background:#eee"><span></span><span><span class=block style="margin:6pt 0;width:100%">Margin through inline ancestors</span></span></div>
+<div style="background:#ddd;padding:1pt"><span><span class=block style="margin:6pt 0;width:100%">Padding prevents collapse</span></span></div>
+<p>Complete final label</p>
+</section>
+
+<!-- html_hidden_attribute.html; SHA256 8eda27de86e66598e8088200a5773794051f4ecc300d35815d60f9863a066569; original 264 x 210 pt canvas -->
+<section id="sample_3" style="position:absolute;left:420.0pt;top:600.0pt;width:264.0pt;height:210.0pt;box-sizing:border-box">
+<style hidden>.override{color:#164e63}</style>
+<p>Before hidden elements</p>
+<p hidden>Unused hidden text</p><p hidden=false>Unused invalid keyword</p>
+<x-box hidden><img src=denied.png><p>Unused custom content</p></x-box>
+<p class=override hidden style="display:block">Author display override</p>
+<div class=siblings><span hidden>Unused sibling</span><span>Actual second sibling</span></div>
+<input hidden name=active value=Unused><input name=active value="Active initial field">
+<p hidden=" until-found ">Unused spaced keyword</p>
+<script hidden class=revealed type=application/json>Visible data fallback</script>
+<template hidden style="display:block;height:8pt;border:1px solid #777"><p>Unused template content</p></template>
+<p>After hidden elements</p>
+</section>
+
+<!-- html_script_supporting_parents.html; SHA256 98bbeec317b8508e81dc3ef05ffd0678be5889aa04d324c5ef5d2a960804856b; original 264 x 390 pt canvas -->
+<section id="sample_4" style="position:absolute;left:420.0pt;top:810.0pt;width:264.0pt;height:390.0pt;box-sizing:border-box">
+<h2>List siblings and visible inert boxes</h2>
+<ol reversed><script type="text/plain">Unused data</script><template><li>Unused item</li><img src="denied.png"></template><li>First item</li><script type="text/plain">Unused data</script><template><li>Unused item</li></template><li>Second item</li></ol>
+<ul><li>Before data</li><script class=shown type="text/plain">Visible list data</script><template class=shown><p>Unused content</p></template><li>After data</li></ul>
+<h2>Description groups</h2>
+<dl><script type="application/json">{}</script><template><p>Unused</p></template><dt>Term</dt><script type="text/plain">Unused data</script><template></template><dd>Description</dd></dl>
+<h2>Implicit table ancestry</h2>
+<table><colgroup><col><template><p>Unused</p></template><col></colgroup><tr><script type="text/plain">Unused data</script><template></template><td>First cell</td><td>Other cell</td></tr><script type="application/json">{}</script><template><tr><td>Unused cell</td></tr></template><tr><td>Last row</td><td>Final cell</td></tr></table>
+<h2>Select choices</h2>
+<select><script type="text/plain">Unused choice</script><template><option selected>Unused option</option><img src="denied.png"></template><option>First choice</option><script type="application/json">{}</script><option selected>Selected choice</option></select>
+</section>
+
+<!-- html_password_inputs.html; SHA256 670360e177687f4bbcf0e26f92f1b97af23e1088435d4b1e58d2e36dc0a2142e; original 264 x 300 pt canvas -->
+<section id="sample_5" style="position:absolute;left:0.0pt;top:1041.0pt;width:264.0pt;height:300.0pt;box-sizing:border-box">
+<input type="password" name="ascii" value="ABC">
+<input type="PASSWORD" name="sanitized" value="A&#13;B&#10;C">
+<input type="password" name="spaces" value=" A B ">
+<input type="password" name="unicode" value="Aé🦊">
+<input type="password" name="empty" value="">
+<input type="password" readonly="false" name="readonly" value="Readonly">
+<input type="password" disabled="false" name="disabled" value="Disabled">
+<input type="password" value="👩‍👩‍👧‍👦🇲🇾é">
+<p>All password cases remain masked.</p>
+</section>
+
+</body></html>

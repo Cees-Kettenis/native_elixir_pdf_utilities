@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionBrowserTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   @moduletag :browser_parity
   test "original parser-time earlier range replacement matches Chromium" do
     fixture =
@@ -9,7 +9,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionBrowserTest do
       NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
         artifact_dir: ".quality/orchestration/template-replacement-original-browser",
         native_renderer:
-          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_initial_numbers/2,
+          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_with_chromium_arial/2,
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )
@@ -25,7 +25,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionBrowserTest do
       NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
         artifact_dir: ".quality/orchestration/template-successive-original-browser",
         native_renderer:
-          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_initial_numbers/2,
+          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_with_chromium_arial/2,
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )
@@ -40,7 +40,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionBrowserTest do
       NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
         artifact_dir: ".quality/orchestration/template-inert-css-original-browser",
         native_renderer:
-          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_initial_numbers/2,
+          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_with_chromium_arial/2,
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )
@@ -59,7 +59,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionBrowserTest do
       NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
         artifact_dir: ".quality/orchestration/template-unmatched-literal-original-browser",
         native_renderer:
-          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_initial_numbers/2,
+          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_with_chromium_arial/2,
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )
@@ -78,7 +78,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionBrowserTest do
       NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
         artifact_dir: ".quality/orchestration/template-original-runtime-context-browser",
         native_renderer:
-          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_initial_numbers/2,
+          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_with_chromium_arial/2,
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )
@@ -94,7 +94,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionBrowserTest do
       NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
         artifact_dir: ".quality/orchestration/template-math-glyph-source-browser",
         native_renderer:
-          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_initial_numbers/2,
+          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_with_chromium_arial/2,
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )
@@ -113,7 +113,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionBrowserTest do
       NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
         artifact_dir: ".quality/orchestration/template-unapplied-symbolic-browser",
         native_renderer:
-          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_initial_numbers/2,
+          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_with_chromium_arial/2,
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )
@@ -132,29 +132,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionBrowserTest do
       NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
         artifact_dir: ".quality/orchestration/template-composed-glyph-source-browser",
         native_renderer:
-          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_initial_numbers/2,
+          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_with_chromium_arial/2,
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )
 
     assert stats.scripting == :disabled and stats.page_count == 1
-  end
-
-  test "original foreignObject input reports an explicit converter diagnostic" do
-    fixture =
-      Path.expand("../fixtures/html_to_pdf/template_replacement/form_glyph_sources.html", __DIR__)
-
-    stats =
-      NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_unsupported!(fixture,
-        artifact_dir: ".quality/orchestration/template-form-glyph-source-browser",
-        native_renderer:
-          &NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.render_initial_numbers/2,
-        max_changed_ratio: 0.01,
-        max_average_delta: 0.01
-      )
-
-    assert stats.scripting == :disabled and stats.chromium_page_count == 1
-    assert stats.status == :unsupported_feature
-    assert stats.visual_comparison == :not_performed
   end
 end

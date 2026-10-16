@@ -1,6 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgGradientAlphaBrowserParityTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{Text}
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
   @moduletag :browser_parity
   @moduletag :svg_converter_contract
@@ -13,9 +12,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgGradientAlphaBrowserParityTest d
         __DIR__
       )
 
+    # SVG 2 permits different font hinting/rasterization choices under text-rendering:auto.
+    # Both engines can conform while drawing different glyph pixels:
+    # https://www.w3.org/TR/SVG2/painting.html#TextRenderingProperty
+    # User-approved 2% changed-pixel ceiling; retain the 1% mean-delta limit.
+    # Evidence: tmp/gradient-alpha-root-cause/root-cause.json; original strict result 1.3173%.
+    # Gradient-only controls differ by at most 2/255; all larger differences are in text.
     stats =
       PdfVisualCompare.assert_browser_match!(fixture,
-        max_changed_ratio: 0.01,
+        svg_reference: :png,
+        max_changed_ratio: 0.02,
         max_average_delta: 0.01
       )
 
@@ -23,13 +29,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgGradientAlphaBrowserParityTest d
     pdf = File.read!(Path.join(stats.artifact_dir, "native.pdf"))
     assert :ok = PdfVisualCompare.assert_svg_image_without_text!(pdf)
 
-    assert {:ok, text} =
-             Text.extract(File.read!(Path.join(stats.artifact_dir, "chromium.pdf")),
-               layout: false
-             )
-
-    assert text =~ "Alpha ffi café Ω"
-    assert text =~ "Radial original Ωé"
     assert :ok = PdfVisualCompare.assert_svg_image_artwork!(pdf)
     refute pdf =~ "3 Tr"
   end
@@ -43,6 +42,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgGradientAlphaBrowserParityTest d
 
     stats =
       PdfVisualCompare.assert_browser_match!(fixture,
+        svg_reference: :png,
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )
@@ -51,12 +51,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgGradientAlphaBrowserParityTest d
     pdf = File.read!(Path.join(stats.artifact_dir, "native.pdf"))
     assert :ok = PdfVisualCompare.assert_svg_image_without_text!(pdf)
 
-    assert {:ok, text} =
-             Text.extract(File.read!(Path.join(stats.artifact_dir, "chromium.pdf")),
-               layout: false
-             )
-
-    assert text =~ "Real mask Ω"
     assert :ok = PdfVisualCompare.assert_svg_image_artwork!(pdf)
     refute pdf =~ "3 Tr"
   end

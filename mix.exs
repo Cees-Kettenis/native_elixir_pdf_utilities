@@ -164,7 +164,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
 
   defp aliases do
     [
-      "test.browser_parity": "test --only browser_parity",
+      "test.browser_parity": "test --only browser_parity --max-cases 6",
       "test.performance": "run scripts/performance-regression.exs"
     ]
   end

@@ -1,0 +1,86 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page{size:840pt 1203pt;margin:0}
+html,body{margin:0;padding:0;font-size:12pt}
+#sample_0,#sample_0{margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:14pt}
+#sample_0 select{appearance:base-select;display:block;width:210pt;height:20pt;min-height:0;min-width:0;margin:0 0 6pt;padding:0;border:0;border-radius:0;background:white;font-family:"DejaVu Sans";font-size:10pt;line-height:14pt}
+#sample_0 select::picker-icon{display:none}
+#sample_0 select > button{display:block;width:auto;height:auto;padding:0;margin:0;border:0;background:white;color:black;font-family:"DejaVu Sans";font-size:10pt;font-weight:400;line-height:14pt;text-align:left}
+#sample_0 selectedcontent strong{color:#166534}
+#sample_0 selectedcontent span{color:#1d4ed8}
+#sample_0 p{margin:0}
+#sample_1,#sample_1{margin:0;padding:0}
+#sample_1{font-family:"DejaVu Sans";font-size:9pt;line-height:12pt}
+#sample_1 p{margin:0 0 6pt}
+#sample_1 table{width:180pt;height:84pt;table-layout:fixed;border-collapse:collapse;border:none;background:#fee;margin:0 0 6pt}
+#sample_1 td,#sample_1 th{height:24pt;padding:0;border-style:none}
+#sample_1 col{width:50%}
+#sample_1 a{color:#246;text-decoration:none}
+#sample_2,#sample_2{margin:0;padding:0}
+#sample_2{font-family:"DejaVu Sans";font-size:9pt;line-height:12pt}
+#sample_2 p{margin:0 0 6pt}
+#sample_2 table{width:180pt;table-layout:fixed;border-collapse:separate;margin:0 0 10pt}
+#sample_2 td{height:18pt;padding:0}
+#sample_2 col{width:50%}
+#sample_3,#sample_3{margin:0;padding:0}
+#sample_3{font-family:"DejaVu Sans";font-size:9pt;line-height:12pt}
+#sample_3 p{margin:0 0 4pt}
+#sample_3 table{width:240pt;table-layout:fixed;margin:0 0 8pt}
+#sample_3 td{height:18pt;padding:0}
+#sample_3 col{width:50%}
+#sample_4,#sample_4{margin:0;padding:0}
+#sample_4{font-family:"DejaVu Sans";font-size:9pt;line-height:12pt}
+#sample_4 p{margin:0 0 6pt}
+#sample_4 table{width:180pt;border:0;border-spacing:0}
+#sample_4 td{padding:2pt;line-height:16pt;background:#eef;vertical-align:top}
+#sample_5,#sample_5{margin:0;padding:0;font-family:"DejaVu Sans";font-size:12pt;line-height:15pt}
+#sample_5 table{border-collapse:separate;border-spacing:0;width:220pt;margin:12pt 0}
+#sample_5 td{height:45pt;padding:0;width:110pt;transform:translate(4pt,0);background:#eef4f8}
+#sample_5 .flex{display:flex;width:220pt;height:60pt;margin:12pt 0}
+#sample_5 .grid{display:grid;grid-template-columns:110pt 110pt;width:220pt;height:60pt;margin:12pt 0}
+#sample_5 .track{height:60pt;width:110pt;background:#f1eee5;transform:translate(0,2pt)}
+#sample_5 .absolute{position:absolute;left:25%;top:50%;width:36pt;height:15pt;background:#305e84;color:white}
+#sample_5 p{margin:0}
+</style></head><body>
+<!-- html_selected_content_clones.html; SHA256 4617f373d0396e6aa798e2dd54234ff39134030f7f918c7bbb4fca32bc015321; original 300 x 200 pt canvas -->
+<section id="sample_0" style="position:absolute;left:12.0pt;top:12.0pt;width:276.0pt;height:176.0pt;box-sizing:border-box">
+<select><button><selectedcontent></selectedcontent></button><option label="Plain hidden label"><strong>First rich</strong><span> choice</span></option><option selected disabled><strong>Selected rich</strong><span> child tree</span></option></select>
+<select><button><selectedcontent></selectedcontent></button><option disabled>Skipped</option><option><strong>Enabled default</strong><span> choice</span></option></select>
+<select size="2" style="display:none"><button><selectedcontent></selectedcontent></button><option>Unselected list</option></select>
+<p>After selected content</p>
+</section>
+
+<!-- html_table_zero_edge_grid.html; SHA256 d835dac9217c984211ade8a47bc606b84e50c255000c900d50807764c1131e9b; original 240 x 210 pt canvas -->
+<section id="sample_1" style="position:absolute;left:432.0pt;top:12.0pt;width:216.0pt;height:186.0pt;box-sizing:border-box">
+<p>Collapsed grid without edge candidates</p><table><colgroup><col><col></colgroup><tbody bgcolor="#def"><tr bgcolor="#bdf"><th id="head" scope="col" style="border-width:12pt">Header</th><td headers="head"><a href="https://table.test/no-edges">Linked value</a></td></tr><tr><td colspan="2" bgcolor="white">Spanning transparent edge</td></tr></tbody></table>
+<p>End zero edge grid</p>
+</section>
+
+<!-- html_table_rules_separate_override.html; SHA256 d6f167ac70c0c511ee9758098b2ba7a259f7f349dd02266ef3bc1bc1299999e0; original 240 x 240 pt canvas -->
+<section id="sample_2" style="position:absolute;left:12.0pt;top:213.0pt;width:216.0pt;height:216.0pt;box-sizing:border-box">
+<p>Row rules under authored separation</p><table rules="rows" cellpadding="0"><colgroup><col><col></colgroup><tr><td>Rows retained</td><td style="border:none">Cell override</td></tr><tr><td>Rows retained</td><td>Rows retained</td></tr></table>
+<p>Column rules under authored separation</p><table rules="cols" cellpadding="0"><colgroup><col><col></colgroup><tr><td>Columns retained</td><td>Columns retained</td></tr></table>
+<p>All rules with inherited author color</p><table rules="all" cellpadding="0" style="border-color:#246"><colgroup><col><col></colgroup><tr><td>Author color</td><td style="border-color:red">Cell color</td></tr></table>
+<p>End authored rule override</p>
+</section>
+
+<!-- html_table_legacy_borders.html; SHA256 75d271cd956ac2a07ff4e75420930591069d82cb95c0fbbd0895781d2c68edf2; original 300 x 450 pt canvas -->
+<section id="sample_3" style="position:absolute;left:432.0pt;top:222.0pt;width:276.0pt;height:426.0pt;box-sizing:border-box">
+<p>Magic separate border</p><table border="2" cellspacing="4" cellpadding="0"><colgroup><col><col></colgroup><tr><td>Gray default</td><td>Inset cells</td></tr></table>
+<p>Frame horizontal sides</p><table border="4" frame="HSIDES" bordercolor="#246" cellspacing="4" cellpadding="0"><colgroup><col><col></colgroup><tr><td>Top and bottom</td><td style="border:2pt solid red">CSS wins</td></tr></table>
+<p>Rules rows</p><table rules="ROWS" cellpadding="0"><colgroup><col><col></colgroup><tbody><tr><td>Upper row</td><td>Upper row</td></tr><tr><td>Lower row</td><td>Lower row</td></tr></tbody></table>
+<p>Rules columns</p><table rules="cols" cellpadding="0"><colgroup><col><col></colgroup><tr><td>Left column</td><td>Right column</td></tr><tr><td>Left column</td><td>Right column</td></tr></table>
+<p>Rules all and authored outer edge</p><table rules="all" cellpadding="0" style="border:2pt solid #246"><colgroup><col><col></colgroup><tr><td>All edges</td><td>All edges</td></tr><tr><td>All edges</td><td>All edges</td></tr></table>
+<p>End border presentation</p>
+</section>
+
+<!-- html_table_baseline_override.html; SHA256 dfd608f6632daf023efaea047c23bfdb9fc044c11076c6a6c1fb75f9e210c267; original 240 x 120 pt canvas -->
+<section id="sample_4" style="position:absolute;left:12.0pt;top:795.0pt;width:216.0pt;height:96.0pt;box-sizing:border-box">
+<p>Authored baseline override</p><table><tbody valign="baseline"><tr><td style="font-size:8pt">Small top</td><td valign="baseline" style="font-size:12pt">Large top</td><td valign="baseline" style="display:none">Hidden baseline</td></tr></tbody></table>
+<p>End baseline override</p>
+</section>
+
+<!-- html_css_affine_positioned_tracks.html; SHA256 747f849ad96a8d78d3191f7ed4d9fee9dd89cc31bdbb324403114c810e66123c; original 300 x 300 pt canvas -->
+<section id="sample_5" style="position:absolute;left:12.0pt;top:915.0pt;width:276.0pt;height:276.0pt;box-sizing:border-box"><table><tr><td><p>Cell flow</p><div class="absolute">Cell</div></td><td>Peer</td></tr></table><div class="flex"><div class="track"><p>Flex flow</p><div class="absolute">Flex</div></div><div class="track">Peer</div></div><div class="grid"><div class="track"><p>Grid flow</p><div class="absolute">Grid</div></div><div class="track">Peer</div></div></section>
+
+</body></html>

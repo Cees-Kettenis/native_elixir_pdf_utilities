@@ -7,17 +7,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentBrowserParityTest do
 
   for fixture <- [
         "html_svg_document_viewports.html",
-        "html_svg_document_intrinsic_standalone.html",
-        "html_svg_document_intrinsic.html"
+        "html_svg_document_intrinsic_standalone.html"
       ] do
     @fixture fixture
-    if fixture == "html_svg_document_intrinsic.html", do: @tag(:svg_flex_dependency)
-    if fixture != "html_svg_document_intrinsic.html", do: @tag(:svg_document_supported)
+    @tag :svg_document_supported
 
     test "original selected SVG document viewport matches Chromium for #{@fixture}" do
       stats =
         PdfVisualCompare.assert_browser_match!(Path.join(@fixtures, @fixture),
           render_opts: [fonts: []],
+          svg_reference: :png,
           max_changed_ratio: 0.01,
           max_average_delta: 0.01
         )

@@ -1,0 +1,41 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page{size:840pt 660pt;margin:0}
+html,body{margin:0;padding:0;font-size:12pt}
+#sample_0,#sample_0{margin:0;padding:0}
+#sample_0{padding:12pt;font-family:'DejaVu Sans';font-size:10.5pt;line-height:13.5pt}
+#sample_0 input{display:block;width:240pt;box-sizing:border-box;border:1px solid #777777;background:white;padding:1.5pt 3pt;margin:0 0 6pt;font-family:'DejaVu Sans';font-size:10.5pt;line-height:13.5pt}
+#sample_0 [multiple]{color:#21517b}
+#sample_0 [multiple="false"]{color:#993300}
+#sample_0 [readonly]{background:#f7f7f7}
+#sample_0 [disabled]{color:#666666;background:#f4f4f4}
+#sample_0 [value^=" "]{color:#006600}
+#sample_1,#sample_1{margin:0;padding:0}
+#sample_1 .grid{display:grid;grid-template-columns:40pt 40pt;grid-auto-rows:20pt;margin-bottom:20pt}
+#sample_2,#sample_2{margin:0;padding:0}
+#sample_3,#sample_3{margin:0;padding:0}
+#sample_3 .grid{display:grid;grid-template-columns:100pt 100pt;grid-template-rows:80pt 80pt}
+</style></head><body>
+<!-- html_multiple_email.html; SHA256 0527677d66153e4c2ac3eee3fd4feb2a008a0059f254cf554142620a3f46f6c4; original 264 x 264 pt canvas -->
+<section id="sample_0" style="position:absolute;left:0.0pt;top:0.0pt;width:264.0pt;height:264.0pt;box-sizing:border-box">
+<input type="email" name="single" value="one@example.com">
+<input type="email" multiple name="pair" value=" one@example.com , two@example.com ">
+<input type="EMAIL" MULTIPLE="false" name="boolean" value="A@example.com,B@example.com">
+<input type="email" multiple readonly name="locked" value=" A@example.com ,&#10; B@example.com ">
+<input type="email" multiple readonly disabled name="both" value="  Confirmed  ">
+<input type="email" multiple name="empty">
+<input type="email" multiple name="empty-value" value=" &#9;&#12;&#13;&#10; ">
+<input type="email" multiple name="empty-tokens" value=" , , ">
+<input type="email" multiple name="trailing" value=" A,, B, ">
+</section>
+
+<!-- grid_sparse_placement.html; SHA256 182ea22aa14fe10813156007423541a73a8dcb6fda06e32395531996ec647b62; original 240 x 240 pt canvas -->
+<section id="sample_1" style="position:absolute;left:420.0pt;top:180.0pt;width:240.0pt;height:240.0pt;box-sizing:border-box"><div class="grid"><div style="grid-column:2;background:red"></div><div style="background:blue"></div></div><div class="grid"><div style="background:red"></div><div style="grid-column:1;grid-row:1;background:blue"></div></div><div class="grid"><div style="grid-column:2;background:red"></div><div style="grid-column:span 2;background:blue"></div></div></section>
+
+<!-- grid_span_end.html; SHA256 db9db0b0c45ba57ba1357e2470491f77f1bdb1a5086a7da4cfb0395691561c43; original 240 x 240 pt canvas -->
+<section id="sample_2" style="position:absolute;left:0.0pt;top:264.0pt;width:240.0pt;height:240.0pt;box-sizing:border-box"><div style="display:grid;grid-template-columns:40pt 40pt 40pt;grid-template-rows:40pt 40pt 40pt"><div style="grid-column:span 2 / 4;grid-row:span 2 / 4;background:red"></div></div></section>
+
+<!-- grid_explicit_sizes.html; SHA256 f4e7d07034d57f1790819e18544e2660ee1473be1e781f7e7efcea24494a91b5; original 240 x 240 pt canvas -->
+<section id="sample_3" style="position:absolute;left:420.0pt;top:420.0pt;width:240.0pt;height:240.0pt;box-sizing:border-box"><div class="grid"><div style="width:20pt;height:10pt;background:red"></div><div style="width:50%;height:50%;background:blue"></div><div style="max-width:60pt;max-height:30pt;background:green"></div><div style="background:red"></div></div></section>
+
+</body></html>

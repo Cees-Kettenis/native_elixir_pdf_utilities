@@ -1,15 +1,39 @@
+Code.require_file("../support/browser_fixture_sheets.ex", __DIR__)
+
 defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialChildMimeBrowserParityTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
   @moduletag :browser_parity
   @moduletag :initial_child_mime
-  @fixture Path.expand(
-             "../fixtures/html_to_pdf/browser_parity/html_initial_child_mime.html",
-             __DIR__
-           )
+  @fixtures Path.expand("../fixtures/html_to_pdf/browser_parity", __DIR__)
 
-  test "original plaintext and natural image documents match Chromium without source transforms" do
+  test "initial child MIME transport and legacy iframe geometry match Chromium together" do
+    sheet = %{
+      "size" => [320, 440],
+      "font_size" => "12pt",
+      "regions" => [
+        ["html_iframe_initialization.html", [0, 0, 140, 420]],
+        ["html_initial_child_documents.html", [160, 0, 160, 390]]
+      ]
+    }
+
+    source = NativeElixirPdfUtilities.TestSupport.BrowserFixtureSheets.build!(@fixtures, sheet)
+    source = String.replace(source, "<head>", "<head><base href=\"file://#{@fixtures}/\">")
+    File.mkdir_p!("tmp/browser-fixture-sheets")
+
+    fixture =
+      Path.expand("tmp/browser-fixture-sheets/initial-child-documents-#{System.pid()}.html")
+
+    File.write!(fixture, source)
+    artifacts = "tmp/browser_parity/html_initial_child_documents"
+
+    on_exit(fn ->
+      File.mkdir_p!(artifacts)
+      File.cp!(fixture, Path.join(artifacts, "source.html"))
+      File.rm!(fixture)
+    end)
+
     {output, 0} = System.cmd("fc-match", ["--format=%{file}\n%{family}\n", "monospace"])
     [path, family | _] = String.split(output, "\n")
     bytes = File.read!(path)
@@ -24,11 +48,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialChildMimeBrowserParityTest d
     }
 
     stats =
-      PdfVisualCompare.assert_browser_match!(@fixture,
-        render_opts: [fonts: []],
+      PdfVisualCompare.assert_browser_match!(fixture,
+        artifact_dir: artifacts,
+        regions:
+          Enum.map(sheet["regions"], fn [name, bounds] -> {name, List.to_tuple(bounds)} end),
+        render_opts: [fonts: [], base_url: @fixtures],
         native_renderer: fn html, opts ->
           File.write!(
-            "tmp/browser_parity/html_initial_child_mime/native-monospace-source.exs",
+            Path.join(artifacts, "native-monospace-source.exs"),
             inspect(proof, pretty: true)
           )
 
@@ -44,6 +71,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialChildMimeBrowserParityTest d
     )
 
     assert stats.page_count == 1
+    assert length(hd(stats.pages).regions) == 2
     refute File.exists?(Path.join(stats.artifact_dir, "chromium-input.html"))
   end
 end

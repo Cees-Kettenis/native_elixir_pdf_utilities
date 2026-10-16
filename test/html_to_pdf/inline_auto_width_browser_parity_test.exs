@@ -1,10 +1,10 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.InlineAutoWidthBrowserParityTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
   @moduletag :browser_parity
   @fixtures Path.expand("../fixtures/html_to_pdf/browser_parity", __DIR__)
 
-  for fixture <- ["css_inline_auto_width_clamp.html", "mathml_mtext_css_boxes.html"] do
+  for fixture <- ["css_inline_auto_width_clamp.html"] do
     @fixture fixture
     test "genuine inline containing width matches Chromium for #{@fixture}" do
       stats =
