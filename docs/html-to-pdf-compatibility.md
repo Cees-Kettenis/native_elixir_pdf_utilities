@@ -780,21 +780,31 @@ Open bodies use normal wrapping and pagination. Named groups are case-sensitive;
 a nonempty name allows at most one initially open member and cannot nest within
 another member of that same group. Violations return actionable diagnostics.
 Template fragments have independent groups. Browser toggling is outside the static
-profile. `::details-content`, directional marker layout and complete shadow
-composition remain open. Markers use embedded font symbols with browser-sized
+profile. Initial shadow/slot composition preserves visibility and inertness.
+`::details-content` styling and directional marker layout remain open.
+Markers use embedded font symbols with browser-sized
 advances; Chromium uses geometric artwork, so small shape differences remain.
 
 The global `popover` attribute retains its authored value. Empty means Auto,
 ASCII-insensitive `auto`, `hint` and `manual` select their named states, missing
-means None, and invalid values mean Manual without trimming whitespace. All
-initial popovers are closed in this scripting-disabled profile. `:popover-open`
-never matches; its negation does. Closed popovers omit paint, fields and unused
+means None, and invalid values mean Manual without trimming whitespace.
+`:popover-open` never matches in this scripting-disabled profile; its negation
+does. Popovers initially use `display:none`, except authored-open nonmodal
+dialogs retain their visible initial state. Closed popovers omit paint, fields and unused
 image/background dependencies while retaining DOM sibling positions and initial
 radio-group participation. Their contents still undergo HTML validation.
-Author display overrides receive an actionable diagnostic because native fixed
-positioning and fit-content geometry remain unfinished. The display default
-participates below author CSS; it is not an important rule. Activation, top-layer
-composition, dialog integration and complete popover geometry remain open.
+Author CSS can expose a popover. Its default box uses fixed positioning, centered
+automatic margins, intrinsic width and height, quarter-em padding, a solid
+current-color border and a white background. Supported author dimensions, insets,
+margins, padding, colors and position declarations override those defaults.
+Automatic overflow uses the existing native scrollbars and reflows the client
+area when a gutter appears. Native controls retain their intrinsic sizing, and
+exposed images retain their image-map associations.
+Viewport-fixed artwork repeats on each printed page. Native form appearances
+print on the first page only, matching Chromium. Embedded documents use their
+own client viewport. The display default participates below author CSS.
+Activation, modal state and browser top-layer interactions remain excluded.
+General fixed-position CSS outside popovers remains a 1.2.0 dependency.
 
 Actual HTML/foreign `href`, `src` and `xlink:href` references reject `javascript:` and `vbscript:`
 schemes before hidden content can skip painting. Matching is ASCII-insensitive
@@ -807,8 +817,9 @@ The global boolean `inert` attribute preserves initial artwork and sanitized
 control values while suppressing active fields and link regions through ordinary
 descendants. A value of `false` still means the attribute is present. Actual
 siblings, enabled/disabled selectors and visible resource authorization remain.
-Supplied internal state is cleared and recomputed from the attributes. Applicable
-flat-tree, shadow and dialog composition remain unfinished. PDF text remains
+Supplied internal state is cleared and recomputed from the attributes. Inertness
+follows the flat tree through shadow ancestors and assigned slot content, while
+ordinary active siblings retain their PDF fields and links. PDF text remains
 searchable and extractable.
 
 `mark` defaults to black text on yellow; `ins` underlines; `del` and legacy

@@ -552,6 +552,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
              HtmlParser.parse_detailed("\r\n<div>é\rX\r\n  <span bad=1></span></div>")
 
     assert detail.line == 4 and detail.column == 3 and detail.source == "<span bad=1>"
+
+    for prefix <- [
+          "<p>e\u0301🙂&#13;&#10;</p>",
+          "<p title='e\u0301🙂&#13;&#10;'>Text</p>",
+          "<textarea>e\u0301🙂&#13;&#10;</textarea>",
+          "<script type=text/plain>e\u0301🙂&#13;&#10;</script>",
+          "<template><p>e\u0301🙂&#13;&#10;</p></template>"
+        ] do
+      token = "<span onclick=bad>"
+      html = "<div>\r\n  " <> prefix <> token <> "Bad</span></div>"
+
+      assert {:error, {:unsupported_html, diagnostic}} = HtmlParser.parse_detailed(html)
+      assert diagnostic.stage == :html and diagnostic.reason == :unsupported_html
+      assert diagnostic.source == token and diagnostic.line == 2
+      assert diagnostic.column == 3 + String.length(prefix)
+    end
   end
 
   test "anchors inherit parent content models and buttons accept static phrasing content" do

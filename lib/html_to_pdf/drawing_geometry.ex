@@ -284,7 +284,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
         clip = group.clip
 
         {x, y} = rounded_viewport_origin(clip.x, clip.y, clip.height, parent_height)
-        %{clip | x: x, y: y}
+
+        # A CSS scrollport clip retains the source print matrix's edge ties.
+        if Map.get(group, :css_scrollport, false),
+          do: %{clip | x: x - @raster_boundary_bias, y: y + @raster_boundary_bias},
+          else: %{clip | x: x, y: y}
 
       true ->
         Map.get(group, :clip)

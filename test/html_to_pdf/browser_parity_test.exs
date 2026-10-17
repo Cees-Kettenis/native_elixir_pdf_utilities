@@ -1165,7 +1165,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
        max_average_delta: 0.01
      ]},
     {"css_named_colors.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
-    {"html_popover_initial.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
+    {"html_popover_initial.html",
+     [
+       render_opts: [forms: :static],
+       regions: [
+         {"default popover", {95, 100, 110, 40}},
+         {"overflowing popover", {12, 156, 129, 33}},
+         {"viewport fixed popover", {170, 158, 109, 29}},
+         {"open dialog popover", {12, 204, 206, 20}},
+         {"replaced popovers", {269, 11, 31, 51}},
+         {"grid popover", {170, 11, 89, 38}},
+         {"flex popover", {170, 50, 89, 38}}
+       ],
+       max_changed_ratio: 0.01,
+       max_average_delta: 0.01
+     ]},
     {"html_option_semantics.html",
      [render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"html_selection_state.html",
@@ -4024,7 +4038,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
     end
 
     if fixture_name == "html_popover_initial.html" do
-      assert page_count == 1
+      assert page_count == 2
 
       for name <- ["native.pdf", "chromium.pdf"] do
         pdf = File.read!(Path.join(artifact_dir, name))
@@ -4035,9 +4049,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
               "All initial values remain closed",
               "Actual second sibling",
               "Nested closed content",
-              "After popovers"
+              "After popovers",
+              "Second popover page"
             ] do
           assert text =~ content
+        end
+
+        for content <- [
+              "Exposed default",
+              "Exposed sized content",
+              "Viewport-fixed child",
+              "Open dialog popover"
+            ] do
+          assert length(String.split(text, content)) == 3
         end
 
         refute text =~ "Unused"
@@ -4701,6 +4725,7 @@ for group <- 0..7 do
     end
 
     for {fixture_name, thresholds} <- @fixture_thresholds do
+      if fixture_name == "html_popover_initial.html", do: @tag(:initial_popovers)
       if fixture_name == "html_fragment_link_decoration_fonts.html", do: @tag(:shadow_fragments)
       if fixture_name == "html_shadow_document_fragments.html", do: @tag(:shadow_fragments)
       if fixture_name == "html_math_enclosing_links.html", do: @tag(:math_links)

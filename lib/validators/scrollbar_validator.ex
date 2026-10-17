@@ -98,6 +98,71 @@ defmodule NativeElixirPdfUtilities.Validators.ScrollbarValidator do
     end
   end
 
+  @doc "Settles automatic popover gutters from laid-out content and the previous axis state."
+  @spec popover_geometry([map()], map(), map(), map() | nil) ::
+          {:paint | :relayout, map()}
+  def popover_geometry(boxes, content, padding, previous) do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{DrawingGeometry, PageGeometry}
+
+    vertical = previous != nil and previous.vertical
+    horizontal = previous != nil and previous.horizontal
+    viewport_width = content.width + padding.left + padding.right
+    viewport_height = content.height + padding.top + padding.bottom
+    origin_x = content.x - padding.left
+
+    {right, bottom} =
+      Enum.reduce(boxes, {content.x, content.top}, fn box, {right, bottom} ->
+        if box.type == :page_break do
+          {right, bottom}
+        else
+          geometry =
+            if box.type == :image,
+              do: Map.merge(box, Map.get(box, :clip, %{})),
+              else: box
+
+          {_top, box_bottom} = PageGeometry.box_vertical_bounds(geometry)
+
+          {max(right, geometry.x + geometry.width), min(bottom, box_bottom)}
+        end
+      end)
+
+    scroll_width = max(right - origin_x + padding.right, 0.0)
+
+    scroll_height =
+      max(content.content_height, content.top - bottom) + padding.top + padding.bottom
+
+    # There are only two axes. Freezing an appearing gutter permits at most
+    # two relayouts, including when narrowing content creates more line boxes.
+    next_horizontal =
+      horizontal or
+        DrawingGeometry.snap_css_pixel(scroll_width) >
+          viewport_width - if(vertical, do: 11.25, else: 0.0)
+
+    next_vertical =
+      vertical or
+        DrawingGeometry.snap_css_pixel(scroll_height) >
+          viewport_height - if(horizontal, do: 11.25, else: 0.0)
+
+    client_width = max(viewport_width - if(next_vertical, do: 11.25, else: 0.0), 0.0)
+    client_height = max(viewport_height - if(next_horizontal, do: 11.25, else: 0.0), 0.0)
+
+    geometry = %{
+      viewport_width: viewport_width,
+      viewport_height: viewport_height,
+      client_width: client_width,
+      client_height: client_height,
+      scroll_width: max(scroll_width, client_width),
+      scroll_height: max(scroll_height, client_height),
+      vertical: next_vertical,
+      horizontal: next_horizontal,
+      scroll_offset: %{x: 0.0, y: 0.0}
+    }
+
+    if next_horizontal == horizontal and next_vertical == vertical,
+      do: {:paint, geometry},
+      else: {:relayout, geometry}
+  end
+
   defp invalid_geometry do
     Diagnostics.error(
       :layout,

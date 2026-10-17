@@ -10,6 +10,184 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
   @inline_image "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC"
 
+  test "exposed popovers center their allocated boxes in the viewport beyond positioned ancestors" do
+    for position <- ["static", "relative", "absolute"] do
+      html =
+        "<html><head><style>html,body{margin:0;font-family:DejaVu Sans;font-size:12pt;line-height:15pt}</style></head><body><p>First</p>" <>
+          "<div style='position:#{position};width:100pt;height:50pt;margin-left:20pt'>" <>
+          "<div popover style='display:block;width:60pt;height:20pt;padding:3pt;border:3pt solid;margin:auto;background:red'>Visible</div></div>" <>
+          "<p style='break-before:page'>Second</p></body></html>"
+
+      assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {300, 240}, margin: 0)
+      background = Enum.find(layout.boxes, &(Map.get(&1, :fill_color) == {1.0, 0.0, 0.0}))
+      assert background.x == 114.0 and background.y == 104.0, inspect(background)
+      assert background.width == 72.0 and background.height == 32.0
+
+      assert {:ok, pdf} =
+               NativeElixirPdfUtilities.HtmlToPdf.render(html,
+                 page_size: {300, 240},
+                 margin: 0,
+                 system_font_discovery: false
+               )
+
+      assert {:ok, 2} = NativeElixirPdfUtilities.Info.page_count(pdf)
+      assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+      assert length(String.split(text, "Visible")) == 3
+    end
+  end
+
+  test "fixed popover artwork repeats while nested native control appearances print once" do
+    for transform <- ["", "transform:translate(3pt,3pt);"] do
+      html =
+        "<div popover style='display:block;width:120pt;height:30pt;#{transform}'>" <>
+          "Label<input size=4 value=Native></div><p>First</p>" <>
+          "<p style='break-before:page'>Second</p>"
+
+      assert {:ok, pdf} =
+               NativeElixirPdfUtilities.HtmlToPdf.render(html,
+                 page_size: {300, 240},
+                 margin: 0,
+                 forms: :static,
+                 system_font_discovery: false
+               )
+
+      assert {:ok, 2} = NativeElixirPdfUtilities.Info.page_count(pdf)
+      assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+      assert length(String.split(text, "Label")) == 3
+      assert length(String.split(text, "Native")) == 2
+    end
+  end
+
+  test "popover geometry uses an embedded client viewport instead of its parent page" do
+    html =
+      "<style>html,body{margin:0;font-family:DejaVu Sans;font-size:12pt;line-height:15pt}</style>" <>
+        "<div popover style='display:block;width:60pt;height:20pt;padding:3pt;border:3pt solid;margin:auto;background:red'>Child</div>"
+
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    assert {:ok, surface} = Layout.layout_viewport(styled, 100.0, 80.0)
+    background = Enum.find(surface.boxes, &(Map.get(&1, :fill_color) == {1.0, 0.0, 0.0}))
+    # The existing client viewport rounds its inline size to whole CSS pixels.
+    assert background.x == 14.25 and background.y == 24.0, inspect(background)
+    assert background.width == 72.0 and background.height == 32.0
+  end
+
+  test "automatic popover overflow paints each required scrollbar without changing its outer box" do
+    for {contents, vertical, horizontal} <- [
+          {"<div>One</div><div>Two</div><div>Three</div>", true, false},
+          {"<div style='width:100pt;height:6pt;background:blue'></div>", false, true},
+          {"<div style='width:100pt;height:60pt;background:blue'></div>", true, true},
+          {"Fits", false, false}
+        ] do
+      html =
+        "<style>html,body{margin:0;font-family:DejaVu Sans;font-size:10pt;line-height:12pt}</style>" <>
+          "<div popover style='display:block;width:60pt;height:24pt;margin:0;padding:0;border:0;background:red'>#{contents}</div>"
+
+      assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {120, 100}, margin: 0)
+      background = Enum.find(layout.boxes, &(Map.get(&1, :fill_color) == {1.0, 0.0, 0.0}))
+      assert background.width == 60.0 and background.height == 24.0
+
+      tracks =
+        Enum.filter(layout.boxes, fn box ->
+          Map.get(box, :role) == :scrollbar and
+            Map.get(box, :fill_color) == {252 / 255, 252 / 255, 252 / 255}
+        end)
+
+      assert Enum.any?(tracks, &(&1.width == 11.25)) == vertical
+      assert Enum.any?(tracks, &(&1.height == 11.25)) == horizontal
+    end
+  end
+
+  test "popover scrollbar limits return the actionable layout diagnostic" do
+    html =
+      "<div popover style='display:block;width:1pt;height:1pt;padding:0;border:0;font-size:1pt;line-height:1pt'>" <>
+        "<div style='height:2pt'></div></div>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+    Limits.install(%{original_limits | max_css_numeric_magnitude: 10})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Layout.layout(styled, page_size: "9pt 9pt", margin: 0)
+
+    assert diagnostic.stage == :layout and diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.operation == :prepare_scrollbar
+    assert diagnostic.source == "scrollbar geometry"
+    assert diagnostic.message =~ "max_css_numeric_magnitude"
+    assert diagnostic.message =~ "reduce the viewport dimensions"
+  end
+
+  test "flex and grid popovers settle both overflow gutters through their existing layout" do
+    for display <- ["flex", "grid"], size <- [10, 100] do
+      html =
+        "<div popover style='display:#{display};grid-template-columns:#{size}pt;width:60pt;height:24pt;margin:0;padding:0;border:0'>" <>
+          "<div style='flex-shrink:0;width:#{size}pt;height:#{size}pt;background:blue'></div></div>"
+
+      assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {120, 100}, margin: 0)
+
+      tracks =
+        Enum.filter(
+          layout.boxes,
+          &(Map.get(&1, :role) == :scrollbar and
+              Map.get(&1, :fill_color) == {252 / 255, 252 / 255, 252 / 255})
+        )
+
+      assert Enum.any?(tracks, &(&1.width == 11.25 and &1.height > 11.25)) == (size == 100)
+      assert Enum.any?(tracks, &(&1.height == 11.25 and &1.width > 11.25)) == (size == 100)
+
+      assert Enum.any?(
+               layout.boxes,
+               &(Map.get(&1, :fill_color) == {1.0, 1.0, 1.0} and
+                   &1.width == 60.0 and &1.height == 24.0)
+             )
+    end
+  end
+
+  test "nested fixed popovers paint in document order and transformed ancestors capture their viewport" do
+    for ancestor <- ["", "position:relative;", "transform:translate(6pt,3pt);"] do
+      html =
+        "<div style='#{ancestor}width:120pt;height:80pt'>" <>
+          "<div popover style='display:block;width:60pt;height:30pt;background:red'>Parent" <>
+          "<div popover style='display:block;width:20pt;height:10pt;background:blue'>Child</div></div></div>"
+
+      assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {300, 240}, margin: 0)
+
+      flatten = fn recurse, boxes ->
+        Enum.flat_map(boxes, fn box -> [box | recurse.(recurse, Map.get(box, :boxes, []))] end)
+      end
+
+      boxes = flatten.(flatten, layout.boxes)
+      parent = Enum.find_index(boxes, &(Map.get(&1, :text) == "Parent"))
+      child = Enum.find_index(boxes, &(Map.get(&1, :text) == "Child"))
+      assert is_integer(parent) and is_integer(child) and parent < child
+    end
+  end
+
+  test "a transformed fixed popover clips at the page edge without creating another page" do
+    html =
+      "<html><body><p>Page</p><div popover style='display:block;top:220pt;left:0;right:auto;bottom:auto;margin:0;width:60pt;height:60pt;transform:translate(0,6pt)'>Fixed</div></body></html>"
+
+    assert {:ok, pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(html,
+               page_size: {300, 240},
+               margin: 0,
+               forms: :static,
+               system_font_discovery: false
+             )
+
+    assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(pdf)
+  end
+
   test "zero rowspans preserve empty row height and match positive rowspans within their group" do
     html =
       "<table style='width:120pt;table-layout:fixed;border-collapse:collapse'><tbody><tr style='height:18pt'><td rowspan=0 style='background:red;border:1pt solid'>Span</td><td>A</td></tr><tr style='height:15pt'></tr><tr style='height:18pt'><td>B</td></tr></tbody><tbody><tr><td>C</td><td>D</td></tr></tbody></table><p>After</p>"

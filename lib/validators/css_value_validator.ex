@@ -617,6 +617,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
         style
       end
 
+    style =
+      if Map.get(style, :_popover_default_padding, false) do
+        style
+        |> Map.put(:padding, edges(style.font_size * 0.25))
+        |> Map.delete(:_popover_default_padding)
+      else
+        style
+      end
+
     if Map.get(style, :font_size) == :math,
       do: MathLayoutValidator.compute_font_size(style),
       else: {:ok, style}
@@ -1450,6 +1459,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
       "static" -> {:ok, Map.put(style, :position, :static)}
       "relative" -> {:ok, Map.put(style, :position, :relative)}
       "absolute" -> {:ok, Map.put(style, :position, :absolute)}
+      "fixed" when is_map_key(style, :_popover) -> {:ok, Map.put(style, :position, :fixed)}
       _ -> {:error, :invalid_document}
     end
   end
@@ -1504,6 +1514,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     case value |> String.trim() |> String.downcase() do
       "visible" -> {:ok, Map.put(style, :overflow, :visible)}
       "hidden" -> {:ok, Map.put(style, :overflow, :hidden)}
+      "auto" when is_map_key(style, :_popover) -> {:ok, Map.put(style, :overflow, :auto)}
       _ -> {:error, :invalid_document}
     end
   end

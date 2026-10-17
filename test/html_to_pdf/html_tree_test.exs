@@ -89,6 +89,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
     assert legacy.type == :document and hd(legacy.children).tag == "tr"
   end
 
+  test "omitted table select and ruby fragment tags preserve explicit trees and logical parents" do
+    for {context, omitted, explicit} <- [
+          {"table", "<col><col><tr><td>A<td>B<tr><td>C<td>D",
+           "<colgroup><col><col></colgroup><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></tbody>"},
+          {"select", "<optgroup label=First><option>A<option>B<optgroup label=Next><option>C",
+           "<optgroup label=First><option>A</option><option>B</option></optgroup><optgroup label=Next><option>C</option></optgroup>"},
+          {"ruby", "<rb>A<rtc><rt>a<rt>b<rtc>other",
+           "<rb>A</rb><rtc><rt>a</rt><rt>b</rt></rtc><rtc>other</rtc>"}
+        ] do
+      assert {:ok, fragment} = HtmlParser.parse_fragment_tree_detailed(omitted, context)
+      assert {:ok, expected} = HtmlParser.parse_fragment_tree_detailed(explicit, context)
+      assert tree_content(fragment) == tree_content(expected)
+      assert :ok = HtmlTreeValidator.validate_transport(fragment)
+      assert :ok = HtmlTreeValidator.validate_transport(expected)
+    end
+  end
+
   test "canonical fragment roots preserve tokenizer and foreign integration contexts" do
     for {context, source, expected} <- [
           {"tr", "<td>A<td>B", ["td", "td"]},

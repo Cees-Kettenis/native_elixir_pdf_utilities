@@ -514,10 +514,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
          type in ~w(checkbox radio) and Map.get(style, :appearance, :auto) == :auto do
       # Chromium's native checkbox/radio theme has a 13 CSS-pixel footprint;
       # this is a pinned UA default, not a resource ceiling or font-relative size.
-      {:ok,
-       Enum.reduce([:width, :height], style, fn key, result ->
-         if Map.get(result, key) in [nil, :auto], do: Map.put(result, key, 9.75), else: result
-       end)}
+      style =
+        Enum.reduce([:width, :height], style, fn key, result ->
+          if Map.get(result, key) in [nil, :auto], do: Map.put(result, key, 9.75), else: result
+        end)
+
+      # A native replaced toggle has no scrolling content box. Use its existing
+      # native paint path instead of making its fallback glyph a scrollport.
+      style =
+        if Map.get(style, :_popover, false) and Map.get(style, :overflow) == :auto,
+          do: Map.put(style, :overflow, :visible),
+          else: style
+
+      {:ok, style}
     else
       {:ok, style}
     end
@@ -1653,6 +1662,45 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     Enum.any?(ancestors, fn ancestor ->
       Map.get(ancestor, :tag) == "select" and Map.get(ancestor, :namespace, :html) == :html
     end)
+  end
+
+  @doc "Applies popover defaults while retaining a native control's intrinsic dimensions."
+  @spec prepare_popover_defaults(map(), map()) :: map()
+  def prepare_popover_defaults(defaults, popover_defaults) do
+    merged = Map.merge(defaults, popover_defaults)
+
+    merged =
+      if Map.get(defaults, :form_kind) in [:checkbox, :radio] do
+        # The native toggle UA rules reset border/padding more specifically
+        # than the global popover rule. Preserve their established appearance.
+        merged
+        |> Map.merge(
+          Map.take(defaults, [:padding, :border_widths, :border_styles, :background_color])
+        )
+        |> Map.delete(:_popover_default_padding)
+      else
+        merged
+      end
+
+    if Map.has_key?(defaults, :form_kind),
+      do: Map.put(merged, :_popover_intrinsic_dimensions, Map.take(defaults, [:width, :height])),
+      else: merged
+  end
+
+  @doc "Resolves native popover fit-content dimensions through the existing control sizing rules."
+  @spec resolve_popover_dimensions(map()) :: map()
+  def resolve_popover_dimensions(style) do
+    case Map.pop(style, :_popover_intrinsic_dimensions) do
+      {nil, style} ->
+        style
+
+      {intrinsic, style} ->
+        Enum.reduce([:width, :height], style, fn dimension, style ->
+          if Map.get(style, dimension) == :fit_content,
+            do: Map.put(style, dimension, Map.get(intrinsic, dimension, :auto)),
+            else: style
+        end)
+    end
   end
 
   @doc "Keeps native HTML controls as atomic inline boxes after the actual CSS cascade."

@@ -66,9 +66,9 @@ pixel checks and native-versus-native PDF image comparisons are excluded.
 Chromium and the native renderer load the same bundled DejaVu font files. Two
 font fixtures also use the same bundled Liberation font files. Each run records
 SHA-256 hashes of these files alongside its raster output. The quality matrix
-checks the threshold on every supported Elixir runtime. The current recovery
-source still has failing comparisons. See the
-[current work plan](milestone-1.1.0-work-plan.md) for its acceptance status.
+checks the threshold on every supported Elixir runtime. See the
+[current work plan](milestone-1.1.0-work-plan.md) for the accepted source and
+remaining milestone scope.
 Browser and rasterizer
 updates can change the result, so failures must be investigated and corrected
 when those tools change. The measured bound applies to these representative
@@ -85,6 +85,13 @@ The suite includes invoices, statements, forms, labels, and focused fixtures for
 supported layout behavior. Recent cases cover `white-space: nowrap`, leading
 decimal lengths, letter spacing and ligatures, collapsed table borders across
 pages, and body padding, backgrounds, and grid layout.
+
+The popover fixture combines initial closed states with author-exposed default
+and sized boxes, overflow, relative-ancestor escape, an authored-open dialog,
+a native text control, an intrinsic image, and flex/grid overflow.
+It spans two pages to verify fixed-artwork repetition and first-page native
+control appearances. Seven strict regions compare the cases, with the two
+replaced elements sharing one region and visible-ink check.
 
 Ten small typography and layout fixtures share two comparison pages,
 `compact_typography.html` and `compact_layout.html`. Each original sample keeps
@@ -443,7 +450,7 @@ The `html_popover_initial.html` fixture checks initial closed Auto, Hint, Manual
 and invalid-value popovers, nesting, actual sibling positions and static
 `:popover-open` matching. Both outputs must retain every visible caption, omit
 all closed text and create no fields. The existing pixel thresholds remain.
-Unit tests separately cover CSS-exposed diagnostics, hidden input precedence,
+Unit tests separately cover author-exposed geometry and resource diagnostics, hidden input precedence,
 unused resources, radio-group state, executable markup and active URL failures.
 
 The `css_named_colors.html` fixture retains all 148 named colors in foreground,

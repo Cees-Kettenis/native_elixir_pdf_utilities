@@ -701,7 +701,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
         pages
         |> Enum.with_index()
         |> Enum.flat_map(fn {page, index} ->
-          Enum.filter(page.boxes, &(Map.get(&1, :role) == :css_transform_plane))
+          Enum.filter(
+            page.boxes,
+            &(Map.get(&1, :role) == :css_transform_plane and
+                Map.get(&1, :position_anchor) != :fixed)
+          )
           |> Enum.map(fn group ->
             {group, index, print_paint_bounds(group, {1, 1, 0, 0, nil, elem(page.size, 1)})}
           end)
@@ -1157,6 +1161,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
                 transform: if(scope.matrix == :empty, do: @identity, else: scope.matrix),
                 boxes: children
               }
+
+              group =
+                if Enum.all?(members, &(Map.get(&1, :position_anchor) == :fixed)),
+                  do: Map.put(group, :position_anchor, :fixed),
+                  else: group
 
               group =
                 if scope.matrix == :empty,

@@ -867,7 +867,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             borders = Map.get(style, :border_widths, edges(0.0))
 
             independent? =
-              Map.get(style, :position, :static) == :absolute or
+              Map.get(style, :position, :static) in [:absolute, :fixed] or
                 parent_display in [:flex, :inline_flex, :grid, :inline_grid] or
                 Map.get(style, :overflow, :visible) != :visible or
                 Map.get(style, :_fieldset, false) or Map.get(node, :tag) == "legend"
@@ -953,7 +953,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             %{style: %{display: :none}} ->
               nil
 
-            %{style: %{position: :absolute}} ->
+            %{style: %{position: position}} when position in [:absolute, :fixed] ->
               nil
 
             %{style: %{display: display} = style}
@@ -1002,14 +1002,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           %{type: :element, children: nested_children, style: style} = element ->
             {nested_children, nested_positioned} = collect_positioned_children(nested_children)
 
+            # A relative/absolute ancestor captures absolute descendants only.
+            # A transform establishes the fixed containing block as in CSS.
+            {fixed_children, nested_positioned} =
+              if Map.get(style, :css_transform, :none) == :none,
+                do:
+                  Enum.split_with(
+                    nested_positioned,
+                    &(Map.get(&1.style, :position) == :fixed)
+                  ),
+                else: {[], nested_positioned}
+
+            inherited_positioned = Enum.reverse(fixed_children, positioned)
+
             element =
               element
               |> Map.put(:children, nested_children)
               |> maybe_attach_positioned_children(nested_positioned)
 
             case Map.get(style, :position, :static) do
-              :absolute ->
-                if Map.get(style, :_dialog, false) do
+              position when position in [:absolute, :fixed] ->
+                if position == :absolute and Map.get(style, :_dialog, false) do
                   anchor = make_ref()
 
                   marker = %{
@@ -1019,18 +1032,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                     style: %{display: :block, _dialog_anchor: anchor}
                   }
 
-                  {[marker | normal], [Map.put(element, :_dialog_anchor, anchor) | positioned]}
+                  {[marker | normal],
+                   Enum.reverse(fixed_children, [
+                     Map.put(element, :_dialog_anchor, anchor) | positioned
+                   ])}
                 else
-                  {normal, [element | positioned]}
+                  {normal, Enum.reverse(fixed_children, [element | positioned])}
                 end
 
               :relative ->
-                {[element | normal], positioned}
+                {[element | normal], inherited_positioned}
 
               _ ->
                 if Map.get(style, :css_transform, :none) != :none,
-                  do: {[element | normal], positioned},
-                  else: {[element | normal], Enum.reverse(nested_positioned, positioned)}
+                  do: {[element | normal], inherited_positioned},
+                  else:
+                    {[element | normal], Enum.reverse(nested_positioned, inherited_positioned)}
             end
 
           child ->
@@ -1043,7 +1060,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp maybe_attach_positioned_children(element, positioned_children) do
     case {Map.get(element.style, :position, :static), positioned_children} do
-      {position, positioned_children} when position in [:relative, :absolute] ->
+      {position, positioned_children} when position in [:relative, :absolute, :fixed] ->
         Map.put(element, :positioned_children, positioned_children)
 
       {_position, positioned_children} ->
@@ -1338,7 +1355,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             |> Map.put(:break_before, :auto)
             |> Map.put(:break_after, :auto)
 
-          case layout_block_content(
+          case layout_popover_contents(
                  children,
                  style,
                  content_x,
@@ -1346,7 +1363,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                  content_width,
                  content_metadata
                ) do
-            {:ok, content_boxes, content_height} ->
+            {:ok, content_boxes, content_height, scrollport} ->
               preferred_height =
                 case {Map.get(style, :height), Map.get(style, :aspect_ratio)} do
                   {height, ratio} when height in [nil, :auto] and is_number(ratio) ->
@@ -1423,12 +1440,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 })
 
               content_boxes =
-                clip_overflow_contents(content_boxes, style, %{
-                  x: content_x - padding.left,
-                  y: content_top - content_box_height - padding.bottom,
-                  width: content_width + padding.left + padding.right,
-                  height: content_box_height + padding.top + padding.bottom
-                })
+                clip_overflow_contents(
+                  content_boxes,
+                  style,
+                  %{
+                    x: content_x - padding.left,
+                    y: content_top - content_box_height - padding.bottom,
+                    width: content_width + padding.left + padding.right,
+                    height: content_box_height + padding.top + padding.bottom
+                  },
+                  scrollport
+                )
 
               # Root bodies also fragment in the PDF page surface. Preserve
               # their trailing padding with the last content fragment, as the
@@ -1776,7 +1798,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       Enum.split_while(block.children, fn child ->
         not (Map.get(child, :tag) == "legend" and
                Map.get(Map.get(child, :style, %{}), :display) != :none and
-               Map.get(Map.get(child, :style, %{}), :position, :static) != :absolute)
+               Map.get(Map.get(child, :style, %{}), :position, :static) not in [:absolute, :fixed])
       end)
 
     {legend, children} =
@@ -2117,7 +2139,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   # Reuse ordinary inline/block intrinsic measurement for HTML's fit-content UA width.
   defp resolve_fit_content_style(block, available_width) do
     case block do
-      %{style: %{width: :fit_content} = style, children: children} ->
+      %{style: %{width: :fit_content, display: display} = style, children: children}
+      when display != :image ->
         available = max(available_width - horizontal_box_size(style), 0.0)
         minimum = fieldset_content_width(children, style, :min)
         maximum = fieldset_content_width(children, style, :max)
@@ -2175,7 +2198,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                positioned_child_boxes(positioned_children, containing_block, normal_boxes) do
           positioned_boxes =
             Enum.map(positioned_boxes, fn entry ->
-              %{entry | boxes: Enum.map(entry.boxes, &Map.put(&1, :position_anchor, anchor))}
+              position_anchor = if entry.position == :fixed, do: :fixed, else: anchor
+
+              %{
+                entry
+                | boxes: Enum.map(entry.boxes, &Map.put(&1, :position_anchor, position_anchor))
+              }
             end)
 
           {:ok, stack_positioned_boxes(normal_boxes, positioned_boxes, true)}
@@ -2310,7 +2338,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                z_index: z_index,
                index: index,
                boxes: boxes,
-               dialog_anchor: Map.get(child, :_dialog_anchor)
+               dialog_anchor: Map.get(child, :_dialog_anchor),
+               position: Map.get(style, :position, :static)
              }}
 
           {:error, reason} ->
@@ -2488,6 +2517,59 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp shift_layout_boxes(boxes, delta_x, delta_y) do
     NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.translate_boxes(boxes, delta_x, delta_y)
+  end
+
+  # Reuse block layout for the popover's client area. Gutters narrow its
+  # content width, while the authored outer box keeps the same dimensions.
+  defp layout_popover_contents(children, style, x, top, width, metadata, previous \\ nil) do
+    scrolling? =
+      Map.get(style, :_popover, false) and Map.get(style, :overflow) == :auto and
+        Map.get(style, :form_kind) not in [:text, :textarea, :select, :listbox]
+
+    available_width =
+      if previous != nil and previous.vertical,
+        do: max(width - 11.25, 0.0),
+        else: width
+
+    with {:ok, boxes, content_height} <-
+           layout_block_content(children, style, x, top, available_width, metadata) do
+      if scrolling? do
+        # An intrinsic block height includes an automatic horizontal gutter.
+        preferred_height =
+          content_height + if(previous != nil and previous.horizontal, do: 11.25, else: 0.0)
+
+        height =
+          resolved_content_size(
+            style,
+            :height,
+            Map.get(style, :_containing_height),
+            preferred_height
+          )
+
+        content = %{
+          x: x,
+          top: top,
+          width: width,
+          height: height,
+          content_height: content_height
+        }
+
+        case NativeElixirPdfUtilities.Validators.ScrollbarValidator.popover_geometry(
+               boxes,
+               content,
+               style.padding,
+               previous
+             ) do
+          {:paint, geometry} ->
+            {:ok, boxes, preferred_height, geometry}
+
+          {:relayout, geometry} ->
+            layout_popover_contents(children, style, x, top, width, metadata, geometry)
+        end
+      else
+        {:ok, boxes, content_height, nil}
+      end
+    end
   end
 
   defp layout_block_content(children, style, x, y, width, metadata) do
@@ -3091,7 +3173,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     )
   end
 
-  defp layout_grid(style, children, x, y, width) do
+  defp layout_grid(style, children, x, y, width, previous \\ nil) do
     margin = Map.get(style, :margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
     padding = Map.get(style, :padding, edges(0.0))
     border_widths = Map.get(style, :border_widths, edges(0.0))
@@ -3107,6 +3189,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     box_width =
       content_width + border_widths.left + padding.left + padding.right + border_widths.right
+
+    content_width =
+      if previous != nil and previous.vertical,
+        do: max(content_width - 11.25, 0.0),
+        else: content_width
+
+    horizontal_gutter = if previous != nil and previous.horizontal, do: 11.25, else: 0.0
 
     box_x = x + margin.left
     box_top = y - margin.top
@@ -3142,6 +3231,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       available_height =
         resolved_content_size(style, :height, Map.get(style, :_containing_height), nil)
 
+      available_height =
+        if is_number(available_height),
+          do: max(available_height - horizontal_gutter, 0.0),
+          else: nil
+
       row_sizes =
         resolve_grid_rows(
           row_tracks,
@@ -3159,7 +3253,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         |> Map.put(:flow_id, {:grid, box_x, box_top})
 
       box_height =
-        border_widths.top + padding.top + content_height + padding.bottom +
+        border_widths.top + padding.top + content_height + horizontal_gutter + padding.bottom +
           border_widths.bottom
 
       background_box =
@@ -3179,18 +3273,60 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                row_sizes,
                flow_metadata.flow_id
              ) do
-        next_y = box_top - box_height - margin.bottom
+        content = %{
+          x: content_x,
+          top: content_top,
+          width: box_width - horizontal_box_size(style),
+          height: content_height + horizontal_gutter,
+          content_height: content_height
+        }
 
-        boxes =
-          CssTransformValidator.mark_border_box(style, background_box ++ item_boxes, %{
-            x: box_x,
-            top: box_top,
-            width: box_width,
-            height: box_height
-          })
+        case settle_popover_items(style, item_boxes, content, previous) do
+          {:paint, item_boxes} ->
+            next_y = box_top - box_height - margin.bottom
 
-        {:ok, boxes, next_y}
+            boxes =
+              CssTransformValidator.mark_border_box(style, background_box ++ item_boxes, %{
+                x: box_x,
+                top: box_top,
+                width: box_width,
+                height: box_height
+              })
+
+            {:ok, boxes, next_y}
+
+          {:relayout, geometry} ->
+            layout_grid(style, children, x, y, width, geometry)
+        end
       end
+    end
+  end
+
+  defp settle_popover_items(style, boxes, content, previous) do
+    if Map.get(style, :_popover, false) and Map.get(style, :overflow) == :auto do
+      case NativeElixirPdfUtilities.Validators.ScrollbarValidator.popover_geometry(
+             boxes,
+             content,
+             style.padding,
+             previous
+           ) do
+        {:paint, geometry} ->
+          padding = style.padding
+
+          clip = %{
+            x: content.x - padding.left,
+            y: content.top - content.height - padding.bottom,
+            width: geometry.viewport_width,
+            height: geometry.viewport_height
+          }
+
+          {:paint, clip_overflow_contents(boxes, style, clip, geometry)}
+
+        {:relayout, geometry} ->
+          {:relayout, geometry}
+      end
+    else
+      {:paint, boxes}
     end
   end
 
@@ -4017,7 +4153,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     Map.get(style, :row_gap, 0.0)
   end
 
-  defp layout_flex(style, children, x, y, width) do
+  defp layout_flex(style, children, x, y, width, previous \\ nil) do
     margin = Map.get(style, :margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
     padding = Map.get(style, :padding, edges(0.0))
     border_widths = Map.get(style, :border_widths, edges(0.0))
@@ -4034,6 +4170,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     box_width =
       content_width + border_widths.left + padding.left + padding.right + border_widths.right
 
+    content_width =
+      if previous != nil and previous.vertical,
+        do: max(content_width - 11.25, 0.0),
+        else: content_width
+
+    horizontal_gutter = if previous != nil and previous.horizontal, do: 11.25, else: 0.0
+
     box_x = x + margin.left
     box_top = y - margin.top
     content_x = box_x + border_widths.left + padding.left
@@ -4043,6 +4186,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     containing_height =
       resolved_content_size(style, :height, Map.get(style, :_containing_height), nil)
+
+    containing_height =
+      if is_number(containing_height),
+        do: max(containing_height - horizontal_gutter, 0.0),
+        else: nil
 
     {available_main, available_cross} =
       case main_axis do
@@ -4073,10 +4221,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
         items ->
           lines = flex_lines(items, style, content_width)
-          content_height = flex_content_height(lines, style)
+          natural_height = flex_content_height(lines, style)
+
+          outer_height =
+            if horizontal_gutter > 0 do
+              resolved_content_size(
+                style,
+                :height,
+                Map.get(style, :_containing_height),
+                natural_height + horizontal_gutter
+              )
+            else
+              natural_height
+            end
+
+          content_height = max(outer_height - horizontal_gutter, 0.0)
 
           box_height =
-            border_widths.top + padding.top + content_height + padding.bottom +
+            border_widths.top + padding.top + outer_height + padding.bottom +
               border_widths.bottom
 
           flow_metadata =
@@ -4099,17 +4261,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                    content_height,
                    flow_metadata.flow_id
                  ) do
-            next_y = box_top - box_height - margin.bottom
+            content = %{
+              x: content_x,
+              top: content_top,
+              width: box_width - horizontal_box_size(style),
+              height: outer_height,
+              content_height: content_height
+            }
 
-            boxes =
-              CssTransformValidator.mark_border_box(style, background_box ++ item_boxes, %{
-                x: box_x,
-                top: box_top,
-                width: box_width,
-                height: box_height
-              })
+            case settle_popover_items(style, item_boxes, content, previous) do
+              {:paint, item_boxes} ->
+                next_y = box_top - box_height - margin.bottom
 
-            {:ok, boxes, next_y}
+                boxes =
+                  CssTransformValidator.mark_border_box(style, background_box ++ item_boxes, %{
+                    x: box_x,
+                    top: box_top,
+                    width: box_width,
+                    height: box_height
+                  })
+
+                {:ok, boxes, next_y}
+
+              {:relayout, geometry} ->
+                layout_flex(style, children, x, y, width, geometry)
+            end
           end
       end
     end
@@ -8446,12 +8622,74 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   # Ordinary CSS overflow uses the allocated padding box; native controls keep
   # their separately validated client/scrollbar viewport.
-  defp clip_overflow_contents(boxes, style, clip) do
-    if Map.get(style, :overflow, :visible) == :hidden and
-         Map.get(style, :form_kind) not in [:text, :textarea, :select, :listbox] do
-      NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(boxes, clip)
-    else
-      boxes
+  defp clip_overflow_contents(boxes, style, clip, scrollport \\ nil) do
+    cond do
+      scrollport != nil ->
+        client_clip = %{
+          clip
+          | width: scrollport.client_width,
+            height: scrollport.client_height,
+            y: clip.y + scrollport.viewport_height - scrollport.client_height
+        }
+
+        parts =
+          case NativeElixirPdfUtilities.Validators.ScrollbarValidator.prepare(scrollport) do
+            {:ok, parts} -> parts
+            {:error, _} = error -> throw({:render_resource_limit, error})
+          end
+
+        artwork =
+          parts
+          |> NativeElixirPdfUtilities.HtmlToPdf.ScrollbarPainter.paint()
+          |> shift_layout_boxes(clip.x, clip.y)
+          |> Enum.map(&Map.put(&1, :snap_to_css_pixel_grid, true))
+
+        # Chromium repaints a scrolling element's background in its client
+        # layer after the border, before the clipped scrolling contents.
+        background =
+          if scrollport.vertical or scrollport.horizontal do
+            style
+            |> Map.merge(%{border_widths: edges(0.0), border_radius: 0.0})
+            |> background_box(
+              clip.x - style.border_widths.left,
+              clip.y - style.border_widths.bottom,
+              clip.width + style.border_widths.left + style.border_widths.right,
+              clip.height + style.border_widths.top + style.border_widths.bottom
+            )
+            |> Enum.map(&Map.delete(&1, :paint_layer))
+          else
+            []
+          end
+
+        # Keep the clip in an overflow group so the writer rounds its origin
+        # after positioned layout has placed the box on the printed page.
+        scrolling_contents = %{
+          type: HtmlValidator.reserve_layout_box(:drawing_group),
+          role: :overflow_clip,
+          css_scrollport: true,
+          x: client_clip.x,
+          y: client_clip.y,
+          width: client_clip.width,
+          height: client_clip.height,
+          transform: {1, 0, 0, 1, 0, 0},
+          clip: client_clip,
+          boxes: background ++ boxes
+        }
+
+        background =
+          if background == [], do: [], else: [%{scrolling_contents | boxes: background}]
+
+        background ++
+          NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(boxes, client_clip) ++
+          artwork
+
+      (Map.get(style, :overflow, :visible) == :hidden or
+         (Map.get(style, :_popover, false) and Map.get(style, :overflow) == :auto)) and
+          Map.get(style, :form_kind) not in [:text, :textarea, :select, :listbox] ->
+        NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(boxes, clip)
+
+      true ->
+        boxes
     end
   end
 

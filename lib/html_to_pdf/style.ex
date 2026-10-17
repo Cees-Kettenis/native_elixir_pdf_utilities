@@ -2354,625 +2354,611 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         else: :none
 
     defaults =
-      if popover_state != :none and tag != "input" do
-        %{display: :none}
-      else
-        case if(Map.get(node, :namespace) == :svg, do: nil, else: tag) do
-          "slot" ->
-            %{display: :contents}
+      case if(Map.get(node, :namespace) == :svg, do: nil, else: tag) do
+        "slot" ->
+          %{display: :contents}
 
-          "selectedcontent" ->
-            %{display: :inline}
+        "selectedcontent" ->
+          %{display: :inline}
 
-          "html" ->
-            %{display: :block}
+        "html" ->
+          %{display: :block}
 
-          tag
-          when tag in [
-                 "script",
-                 "template",
-                 "noembed",
-                 "noframes",
-                 "datalist",
-                 "basefont",
-                 "bgsound"
-               ] ->
-            %{display: :none}
+        tag
+        when tag in [
+               "script",
+               "template",
+               "noembed",
+               "noframes",
+               "datalist",
+               "basefont",
+               "bgsound"
+             ] ->
+          %{display: :none}
 
-          "body" ->
-            defaults = block_defaults(inherited_font_size, 400, 0.0)
+        "body" ->
+          defaults = block_defaults(inherited_font_size, 400, 0.0)
 
-            case ResourceContext.current() do
-              %{depth: depth} when depth > 0 ->
-                Map.put(
-                  defaults,
-                  :margin,
-                  Keyword.get(opts, :__frame_body_margins__, CssValueValidator.edges(6.0))
-                )
-
-              _ ->
-                defaults
-            end
-
-          "frameset" ->
-            with {:ok, hints} <-
-                   NativeElixirPdfUtilities.Validators.FramesetValidator.prepare_color_hints(
-                     attributes,
-                     Map.get(inherited_style, :_frameset_parent)
-                   ) do
-              block_defaults(inherited_font_size, 400, 0.0) |> Map.merge(hints)
-            end
-
-          tag
-          when tag in ~w(form article aside div footer header main nav section figcaption hgroup search dt details frame) ->
-            block_defaults(inherited_font_size, 400, 0.0)
-
-          "dialog" ->
-            block_defaults(inherited_font_size, 400, 0.0)
-            |> Map.merge(
-              NativeElixirPdfUtilities.Validators.HtmlDialogValidator.defaults(
-                attributes,
-                inherited_font_size
-              )
-            )
-
-          "fieldset" ->
-            block_defaults(inherited_font_size, 400, 0.0)
-            |> Map.merge(%{
-              margin: CssValueValidator.edges(0.0, 1.5, 0.0, 1.5),
-              border_widths: @control_padding_edges,
-              border_styles: CssValueValidator.edges(:groove),
-              # ThreeDFace in the pinned Chromium print theme is rgb(239,239,239).
-              border_colors: CssValueValidator.edges({239 / 255, 239 / 255, 239 / 255}),
-              _fieldset_default_padding: true,
-              _fieldset: true
-            })
-
-          "legend" ->
-            alignment =
-              case String.downcase(Map.get(attributes, "align", ""), :ascii) do
-                "center" -> :center
-                "right" -> :flex_end
-                _ -> :flex_start
-              end
-
-            block_defaults(inherited_font_size, 400, 0.0)
-            |> Map.merge(%{
-              padding: CssValueValidator.edges(0.0, 1.5, 0.0, 1.5),
-              justify_self: alignment
-            })
-
-          "summary" ->
-            case Map.fetch(node, :_disclosure_open) do
-              {:ok, open?} ->
-                list_item_defaults(inherited_font_size)
-                |> Map.put(:list_style_position, :inside)
-                |> Map.put(
-                  :list_marker_type,
-                  if(open?, do: :disclosure_open, else: :disclosure_closed)
-                )
-
-              :error ->
-                block_defaults(inherited_font_size, 400, 0.0)
-            end
-
-          "address" ->
-            Map.put(block_defaults(inherited_font_size, 400, 0.0), :font_style, :italic)
-
-          "center" ->
-            Map.put(block_defaults(inherited_font_size, 400, 0.0), :text_align, :center)
-
-          tag when tag in ~w(blockquote figure) ->
-            block_defaults(inherited_font_size, 400, inherited_font_size)
-            |> Map.put(
-              :margin,
-              CssValueValidator.edges(inherited_font_size, 30.0, inherited_font_size, 30.0)
-            )
-            |> Map.put(:_margin_before_em, 1.0)
-            |> Map.put(:_margin_after_em, 1.0)
-
-          "dl" ->
-            defaults = block_defaults(inherited_font_size, 400, inherited_font_size)
-
-            if Enum.any?(ancestors, &(&1.tag == "dl")) do
-              defaults
-              |> Map.put(:margin, @zero_edges)
-              |> Map.put(:margin_after, 0.0)
-            else
-              defaults |> Map.put(:_margin_before_em, 1.0) |> Map.put(:_margin_after_em, 1.0)
-            end
-
-          "rp" ->
-            %{display: :none}
-
-          "rt" ->
-            if match?([%{tag: "ruby"} | _], ancestors) do
-              %{
-                display: :inline,
-                font_size: inherited_font_size * 0.5,
-                line_height_normal: true,
-                _ruby_annotation: true
-              }
-            else
-              %{display: :inline}
-            end
-
-          tag when tag in ~w(ruby rb rtc) ->
-            %{display: :inline}
-
-          "dd" ->
-            Map.put(
-              block_defaults(inherited_font_size, 400, 0.0),
-              :margin,
-              CssValueValidator.edges(0.0, 0.0, 0.0, 30.0)
-            )
-
-          tag when tag in ~w(pre listing xmp plaintext) ->
-            block_defaults(inherited_font_size, 400, inherited_font_size)
-            |> Map.put(:white_space, :pre)
-            |> Map.put(:font_families, ["DejaVu Sans Mono"])
-            |> Map.put(:_margin_before_em, 1.0)
-            |> Map.put(:_margin_after_em, 1.0)
-
-          "p" ->
-            inherited_font_size
-            |> block_defaults(400, inherited_font_size)
-            |> Map.put(:_margin_before_em, 1.0)
-            |> Map.put(:_margin_after_em, 1.0)
-
-          "h1" ->
-            block_defaults(inherited_font_size * 2, 700, 0.0)
-            |> Map.put(:_margin_before_em, 0.67)
-            |> Map.put(:_margin_after_em, 0.67)
-
-          "h2" ->
-            block_defaults(inherited_font_size * 1.5, 700, 0.0)
-            |> Map.put(:_margin_before_em, 0.83)
-            |> Map.put(:_margin_after_em, 0.83)
-
-          "h3" ->
-            block_defaults(inherited_font_size * 1.17, 700, 0.0)
-            |> Map.put(:_margin_before_em, 1)
-            |> Map.put(:_margin_after_em, 1)
-
-          "h4" ->
-            block_defaults(inherited_font_size * 1, 700, 0.0)
-            |> Map.put(:_margin_before_em, 1.33)
-            |> Map.put(:_margin_after_em, 1.33)
-
-          "h5" ->
-            block_defaults(inherited_font_size * 0.83, 700, 0.0)
-            |> Map.put(:_margin_before_em, 1.67)
-            |> Map.put(:_margin_after_em, 1.67)
-
-          "h6" ->
-            block_defaults(inherited_font_size * 0.67, 700, 0.0)
-            |> Map.put(:_margin_before_em, 2.33)
-            |> Map.put(:_margin_after_em, 2.33)
-
-          tag when tag in ~w(ul ol menu dir) ->
-            depth = Enum.count(ancestors, &(&1.tag in ~w(ul ol menu dir)))
-
-            marker =
-              HtmlValidator.html_list_marker_type(tag, attributes) ||
-                if(tag == "ol",
-                  do: :decimal,
-                  else: Enum.at([:disc, :circle, :square], min(depth, 2))
-                )
-
-            defaults = list_defaults(marker, inherited_font_size)
-
-            if depth == 0 do
-              defaults
-            else
-              defaults
-              |> Map.put(:margin, @zero_edges)
-              |> Map.put(:margin_after, 0.0)
-              |> Map.delete(:_margin_before_em)
-              |> Map.delete(:_margin_after_em)
-            end
-
-          "li" ->
-            defaults =
-              list_item_defaults(inherited_font_size)
-              |> Map.put(
-                :_list_value,
-                HtmlValidator.parse_html_integer(Map.get(attributes, "value"))
+          case ResourceContext.current() do
+            %{depth: depth} when depth > 0 ->
+              Map.put(
+                defaults,
+                :margin,
+                Keyword.get(opts, :__frame_body_margins__, CssValueValidator.edges(6.0))
               )
 
-            case HtmlValidator.html_list_marker_type(tag, attributes) do
-              nil -> defaults
-              marker -> Map.put(defaults, :list_marker_type, marker)
-            end
+            _ ->
+              defaults
+          end
 
-          "table" ->
-            table_defaults(inherited_font_size)
+        "frameset" ->
+          with {:ok, hints} <-
+                 NativeElixirPdfUtilities.Validators.FramesetValidator.prepare_color_hints(
+                   attributes,
+                   Map.get(inherited_style, :_frameset_parent)
+                 ) do
+            block_defaults(inherited_font_size, 400, 0.0) |> Map.merge(hints)
+          end
 
-          "caption" ->
-            table_caption_defaults(inherited_font_size)
+        tag
+        when tag in ~w(form article aside div footer header main nav section figcaption hgroup search dt details frame) ->
+          block_defaults(inherited_font_size, 400, 0.0)
 
-          "colgroup" ->
-            table_column_defaults(:group, node._table_spans.span)
-
-          "col" ->
-            table_column_defaults(:column, node._table_spans.span)
-
-          "thead" ->
-            table_row_group_defaults(:head)
-
-          "tbody" ->
-            table_row_group_defaults(:body)
-
-          "tfoot" ->
-            table_row_group_defaults(:foot)
-
-          "tr" ->
-            table_row_defaults()
-
-          "th" ->
-            table_cell_defaults(:header, node._table_spans, inherited_font_size)
-
-          "td" ->
-            table_cell_defaults(:data, node._table_spans, inherited_font_size)
-
-          "strong" ->
-            %{display: :inline, font_weight: 700}
-
-          "b" ->
-            %{display: :inline, font_weight: 700}
-
-          "em" ->
-            %{display: :inline, font_style: :italic}
-
-          "i" ->
-            %{display: :inline, font_style: :italic}
-
-          tag when tag in ["u", "ins"] ->
-            %{display: :inline, text_decoration_line: [:underline]}
-
-          tag when tag in ["s", "del", "strike"] ->
-            %{display: :inline, text_decoration_line: [:line_through]}
-
-          "mark" ->
-            %{display: :inline, background_color: {1, 1, 0}, color: {0, 0, 0}}
-
-          tag when tag in ~w(cite dfn var) ->
-            %{display: :inline, font_style: :italic}
-
-          tag when tag in ~w(code samp kbd tt) ->
-            %{display: :inline, font_families: ["DejaVu Sans Mono"]}
-
-          "big" ->
-            %{display: :inline, font_size: inherited_font_size * 1.2}
-
-          "small" ->
-            %{display: :inline, font_size: inherited_font_size / 1.2}
-
-          "q" ->
-            %{display: :inline, _quote_shaping: true}
-
-          tag when tag in ~w(abbr acronym) ->
-            if Map.has_key?(attributes, "title"),
-              do: %{
-                display: :inline,
-                text_decoration_line: [:underline],
-                text_decoration_style: :dotted
-              },
-              else: %{display: :inline}
-
-          tag when tag in ~w(span font blink keygen data time noscript label) ->
-            %{display: :inline}
-
-          "a" ->
-            link_defaults(
+        "dialog" ->
+          block_defaults(inherited_font_size, 400, 0.0)
+          |> Map.merge(
+            NativeElixirPdfUtilities.Validators.HtmlDialogValidator.defaults(
               attributes,
-              opts,
-              Map.has_key?(rules, :source_budget),
-              Map.get(inherited_style, :_body_link_color)
+              inherited_font_size
+            )
+          )
+
+        "fieldset" ->
+          block_defaults(inherited_font_size, 400, 0.0)
+          |> Map.merge(%{
+            margin: CssValueValidator.edges(0.0, 1.5, 0.0, 1.5),
+            border_widths: @control_padding_edges,
+            border_styles: CssValueValidator.edges(:groove),
+            # ThreeDFace in the pinned Chromium print theme is rgb(239,239,239).
+            border_colors: CssValueValidator.edges({239 / 255, 239 / 255, 239 / 255}),
+            _fieldset_default_padding: true,
+            _fieldset: true
+          })
+
+        "legend" ->
+          alignment =
+            case String.downcase(Map.get(attributes, "align", ""), :ascii) do
+              "center" -> :center
+              "right" -> :flex_end
+              _ -> :flex_start
+            end
+
+          block_defaults(inherited_font_size, 400, 0.0)
+          |> Map.merge(%{
+            padding: CssValueValidator.edges(0.0, 1.5, 0.0, 1.5),
+            justify_self: alignment
+          })
+
+        "summary" ->
+          case Map.fetch(node, :_disclosure_open) do
+            {:ok, open?} ->
+              list_item_defaults(inherited_font_size)
+              |> Map.put(:list_style_position, :inside)
+              |> Map.put(
+                :list_marker_type,
+                if(open?, do: :disclosure_open, else: :disclosure_closed)
+              )
+
+            :error ->
+              block_defaults(inherited_font_size, 400, 0.0)
+          end
+
+        "address" ->
+          Map.put(block_defaults(inherited_font_size, 400, 0.0), :font_style, :italic)
+
+        "center" ->
+          Map.put(block_defaults(inherited_font_size, 400, 0.0), :text_align, :center)
+
+        tag when tag in ~w(blockquote figure) ->
+          block_defaults(inherited_font_size, 400, inherited_font_size)
+          |> Map.put(
+            :margin,
+            CssValueValidator.edges(inherited_font_size, 30.0, inherited_font_size, 30.0)
+          )
+          |> Map.put(:_margin_before_em, 1.0)
+          |> Map.put(:_margin_after_em, 1.0)
+
+        "dl" ->
+          defaults = block_defaults(inherited_font_size, 400, inherited_font_size)
+
+          if Enum.any?(ancestors, &(&1.tag == "dl")) do
+            defaults
+            |> Map.put(:margin, @zero_edges)
+            |> Map.put(:margin_after, 0.0)
+          else
+            defaults |> Map.put(:_margin_before_em, 1.0) |> Map.put(:_margin_after_em, 1.0)
+          end
+
+        "rp" ->
+          %{display: :none}
+
+        "rt" ->
+          if match?([%{tag: "ruby"} | _], ancestors) do
+            %{
+              display: :inline,
+              font_size: inherited_font_size * 0.5,
+              line_height_normal: true,
+              _ruby_annotation: true
+            }
+          else
+            %{display: :inline}
+          end
+
+        tag when tag in ~w(ruby rb rtc) ->
+          %{display: :inline}
+
+        "dd" ->
+          Map.put(
+            block_defaults(inherited_font_size, 400, 0.0),
+            :margin,
+            CssValueValidator.edges(0.0, 0.0, 0.0, 30.0)
+          )
+
+        tag when tag in ~w(pre listing xmp plaintext) ->
+          block_defaults(inherited_font_size, 400, inherited_font_size)
+          |> Map.put(:white_space, :pre)
+          |> Map.put(:font_families, ["DejaVu Sans Mono"])
+          |> Map.put(:_margin_before_em, 1.0)
+          |> Map.put(:_margin_after_em, 1.0)
+
+        "p" ->
+          inherited_font_size
+          |> block_defaults(400, inherited_font_size)
+          |> Map.put(:_margin_before_em, 1.0)
+          |> Map.put(:_margin_after_em, 1.0)
+
+        "h1" ->
+          block_defaults(inherited_font_size * 2, 700, 0.0)
+          |> Map.put(:_margin_before_em, 0.67)
+          |> Map.put(:_margin_after_em, 0.67)
+
+        "h2" ->
+          block_defaults(inherited_font_size * 1.5, 700, 0.0)
+          |> Map.put(:_margin_before_em, 0.83)
+          |> Map.put(:_margin_after_em, 0.83)
+
+        "h3" ->
+          block_defaults(inherited_font_size * 1.17, 700, 0.0)
+          |> Map.put(:_margin_before_em, 1)
+          |> Map.put(:_margin_after_em, 1)
+
+        "h4" ->
+          block_defaults(inherited_font_size * 1, 700, 0.0)
+          |> Map.put(:_margin_before_em, 1.33)
+          |> Map.put(:_margin_after_em, 1.33)
+
+        "h5" ->
+          block_defaults(inherited_font_size * 0.83, 700, 0.0)
+          |> Map.put(:_margin_before_em, 1.67)
+          |> Map.put(:_margin_after_em, 1.67)
+
+        "h6" ->
+          block_defaults(inherited_font_size * 0.67, 700, 0.0)
+          |> Map.put(:_margin_before_em, 2.33)
+          |> Map.put(:_margin_after_em, 2.33)
+
+        tag when tag in ~w(ul ol menu dir) ->
+          depth = Enum.count(ancestors, &(&1.tag in ~w(ul ol menu dir)))
+
+          marker =
+            HtmlValidator.html_list_marker_type(tag, attributes) ||
+              if(tag == "ol",
+                do: :decimal,
+                else: Enum.at([:disc, :circle, :square], min(depth, 2))
+              )
+
+          defaults = list_defaults(marker, inherited_font_size)
+
+          if depth == 0 do
+            defaults
+          else
+            defaults
+            |> Map.put(:margin, @zero_edges)
+            |> Map.put(:margin_after, 0.0)
+            |> Map.delete(:_margin_before_em)
+            |> Map.delete(:_margin_after_em)
+          end
+
+        "li" ->
+          defaults =
+            list_item_defaults(inherited_font_size)
+            |> Map.put(
+              :_list_value,
+              HtmlValidator.parse_html_integer(Map.get(attributes, "value"))
             )
 
-          "nobr" ->
-            %{display: :inline, white_space: :nowrap}
+          case HtmlValidator.html_list_marker_type(tag, attributes) do
+            nil -> defaults
+            marker -> Map.put(defaults, :list_marker_type, marker)
+          end
 
-          "wbr" ->
-            if Enum.any?(ancestors, &(&1.tag == "nobr")),
-              do: %{display: :soft_break, white_space: :normal},
-              else: %{display: :soft_break}
+        "table" ->
+          table_defaults(inherited_font_size)
 
-          "br" ->
-            %{display: :line_break}
+        "caption" ->
+          table_caption_defaults(inherited_font_size)
 
-          "hr" ->
-            with {:ok, hints} <- HtmlValidator.horizontal_rule_hints(attributes),
-                 {:ok, gray} <- HtmlValidator.parse_css_color("gray", nil) do
-              block_defaults(inherited_font_size, 400, 0.0)
-              |> Map.merge(%{
-                color: gray,
-                border_styles: CssValueValidator.edges(:inset),
-                border_widths: @cell_padding_edges,
-                margin: %{top: 0.0, right: :auto, bottom: 0.0, left: :auto},
-                _margin_before_em: {:css_layout_em, 0.5},
-                _margin_after_em: {:css_layout_em, 0.5},
-                overflow: :hidden
-              })
-              |> Map.merge(hints)
-            end
+        "colgroup" ->
+          table_column_defaults(:group, node._table_spans.span)
 
-          "picture" ->
-            %{display: :inline}
+        "col" ->
+          table_column_defaults(:column, node._table_spans.span)
 
-          tag when tag in ["source", "area"] ->
-            %{display: :none}
+        "thead" ->
+          table_row_group_defaults(:head)
 
-          tag when tag in ["object", "embed"] ->
-            with {:ok, hints} <-
-                   HtmlValidator.html_dimension_hints(
-                     attributes,
-                     [{"width", :width}, {"height", :height}],
-                     tag
+        "tbody" ->
+          table_row_group_defaults(:body)
+
+        "tfoot" ->
+          table_row_group_defaults(:foot)
+
+        "tr" ->
+          table_row_defaults()
+
+        "th" ->
+          table_cell_defaults(:header, node._table_spans, inherited_font_size)
+
+        "td" ->
+          table_cell_defaults(:data, node._table_spans, inherited_font_size)
+
+        "strong" ->
+          %{display: :inline, font_weight: 700}
+
+        "b" ->
+          %{display: :inline, font_weight: 700}
+
+        "em" ->
+          %{display: :inline, font_style: :italic}
+
+        "i" ->
+          %{display: :inline, font_style: :italic}
+
+        tag when tag in ["u", "ins"] ->
+          %{display: :inline, text_decoration_line: [:underline]}
+
+        tag when tag in ["s", "del", "strike"] ->
+          %{display: :inline, text_decoration_line: [:line_through]}
+
+        "mark" ->
+          %{display: :inline, background_color: {1, 1, 0}, color: {0, 0, 0}}
+
+        tag when tag in ~w(cite dfn var) ->
+          %{display: :inline, font_style: :italic}
+
+        tag when tag in ~w(code samp kbd tt) ->
+          %{display: :inline, font_families: ["DejaVu Sans Mono"]}
+
+        "big" ->
+          %{display: :inline, font_size: inherited_font_size * 1.2}
+
+        "small" ->
+          %{display: :inline, font_size: inherited_font_size / 1.2}
+
+        "q" ->
+          %{display: :inline, _quote_shaping: true}
+
+        tag when tag in ~w(abbr acronym) ->
+          if Map.has_key?(attributes, "title"),
+            do: %{
+              display: :inline,
+              text_decoration_line: [:underline],
+              text_decoration_style: :dotted
+            },
+            else: %{display: :inline}
+
+        tag when tag in ~w(span font blink keygen data time noscript label) ->
+          %{display: :inline}
+
+        "a" ->
+          link_defaults(
+            attributes,
+            opts,
+            Map.has_key?(rules, :source_budget),
+            Map.get(inherited_style, :_body_link_color)
+          )
+
+        "nobr" ->
+          %{display: :inline, white_space: :nowrap}
+
+        "wbr" ->
+          if Enum.any?(ancestors, &(&1.tag == "nobr")),
+            do: %{display: :soft_break, white_space: :normal},
+            else: %{display: :soft_break}
+
+        "br" ->
+          %{display: :line_break}
+
+        "hr" ->
+          with {:ok, hints} <- HtmlValidator.horizontal_rule_hints(attributes),
+               {:ok, gray} <- HtmlValidator.parse_css_color("gray", nil) do
+            block_defaults(inherited_font_size, 400, 0.0)
+            |> Map.merge(%{
+              color: gray,
+              border_styles: CssValueValidator.edges(:inset),
+              border_widths: @cell_padding_edges,
+              margin: %{top: 0.0, right: :auto, bottom: 0.0, left: :auto},
+              _margin_before_em: {:css_layout_em, 0.5},
+              _margin_after_em: {:css_layout_em, 0.5},
+              overflow: :hidden
+            })
+            |> Map.merge(hints)
+          end
+
+        "picture" ->
+          %{display: :inline}
+
+        tag when tag in ["source", "area"] ->
+          %{display: :none}
+
+        tag when tag in ["object", "embed"] ->
+          with {:ok, hints} <-
+                 HtmlValidator.html_dimension_hints(
+                   attributes,
+                   [{"width", :width}, {"height", :height}],
+                   tag
+                 ) do
+            block_defaults(inherited_font_size, 400, 0.0)
+            |> Map.put(:display, :inline)
+            |> Map.merge(hints)
+          end
+
+        "iframe" ->
+          with {:ok, hints} <- HtmlValidator.iframe_hints(attributes) do
+            block_defaults(inherited_font_size, 400, 0.0)
+            |> Map.merge(%{
+              display: :inline_block,
+              width: 225.0,
+              height: 112.5,
+              overflow: :hidden,
+              margin: @zero_edges,
+              padding: @zero_edges,
+              border_widths: @control_padding_edges,
+              border_styles: CssValueValidator.edges(:inset)
+            })
+            |> Map.merge(hints)
+          end
+
+        "img" ->
+          if Map.has_key?(rules, :source_budget) or popover_state != :none do
+            image_box_defaults(attributes, inherited_font_size)
+          else
+            image_defaults(node, ancestors, opts, inherited_font_size)
+          end
+
+        "input" ->
+          input_attributes =
+            NativeElixirPdfUtilities.Validators.HtmlFormValidator.initial_control_attributes(node)
+
+          if HtmlValidator.input_type(Map.get(input_attributes, "type", "text")) == "image" do
+            with {:ok, defaults} <-
+                   if(Map.has_key?(rules, :source_budget) or popover_state != :none,
+                     do: image_box_defaults(input_attributes, inherited_font_size),
+                     else:
+                       image_defaults(
+                         %{node | attributes: input_attributes},
+                         ancestors,
+                         opts,
+                         inherited_font_size
+                       )
                    ) do
-              block_defaults(inherited_font_size, 400, 0.0)
-              |> Map.put(:display, :inline)
-              |> Map.merge(hints)
+              {:ok, Map.put(defaults, :_image_input_state, node._initial_form_state)}
             end
+          else
+            form_control_defaults(
+              HtmlValidator.input_type(Map.get(input_attributes, "type", "text")),
+              inherited_font_size
+            )
+            |> then(fn defaults ->
+              defaults =
+                if Map.has_key?(node._initial_form_state, :temporal),
+                  do:
+                    defaults
+                    |> Map.put(:_temporal_state, node._initial_form_state.temporal)
+                    |> Map.put(:_temporal_disabled, node._initial_form_state.disabled)
+                    |> Map.put(
+                      :background_color,
+                      if(node._initial_form_state.disabled,
+                        do: {239 / 255, 239 / 255, 239 / 255, 0.3},
+                        else: {1.0, 1.0, 1.0}
+                      )
+                    )
+                    |> Map.put(
+                      :color,
+                      if(node._initial_form_state.disabled,
+                        do: {84 / 255, 84 / 255, 84 / 255},
+                        else: {0.0, 0.0, 0.0}
+                      )
+                    ),
+                  else: defaults
 
-          "iframe" ->
-            with {:ok, hints} <- HtmlValidator.iframe_hints(attributes) do
-              block_defaults(inherited_font_size, 400, 0.0)
-              |> Map.merge(%{
-                display: :inline_block,
-                width: 225.0,
-                height: 112.5,
-                overflow: :hidden,
-                margin: @zero_edges,
-                padding: @zero_edges,
-                border_widths: @control_padding_edges,
-                border_styles: CssValueValidator.edges(:inset)
-              })
-              |> Map.merge(hints)
-            end
+              defaults =
+                if Map.has_key?(node._initial_form_state, :files) and
+                     node._initial_form_state.disabled,
+                   do: Map.put(defaults, :color, {84 / 255, 84 / 255, 84 / 255}),
+                   else: defaults
 
-          "img" ->
-            if Map.has_key?(rules, :source_budget) do
-              image_box_defaults(attributes, inherited_font_size)
-            else
-              with {:ok, defaults} <- image_defaults(node, ancestors, opts, inherited_font_size) do
-                model =
-                  NativeElixirPdfUtilities.Validators.ImageMapValidator.associate(
-                    node,
-                    Map.fetch!(rules, :image_maps)
-                  )
+              defaults =
+                if Map.has_key?(node._initial_form_state, :color_input) do
+                  Map.merge(defaults, %{
+                    _color_state: node._initial_form_state.color_input,
+                    _color_disabled: node._initial_form_state.disabled,
+                    background_color:
+                      if(node._initial_form_state.disabled,
+                        do: {239 / 255, 239 / 255, 239 / 255, 0.3},
+                        else: {239 / 255, 239 / 255, 239 / 255}
+                      )
+                  })
+                else
+                  defaults
+                end
 
-                {:ok, if(model == nil, do: defaults, else: Map.put(defaults, :_image_map, model))}
+              defaults =
+                if Map.has_key?(node._initial_form_state, :range),
+                  do:
+                    defaults
+                    |> Map.put(:_range_state, node._initial_form_state.range)
+                    |> Map.put(:_range_disabled, node._initial_form_state.disabled)
+                    |> Map.put(
+                      :height,
+                      if(Map.get(node._initial_form_state, :datalist), do: 16.5, else: 12.0)
+                    )
+                    |> Map.put(
+                      :color,
+                      if(node._initial_form_state.disabled,
+                        do: {197 / 255, 197 / 255, 197 / 255},
+                        else: {16 / 255, 16 / 255, 16 / 255}
+                      )
+                    ),
+                  else: defaults
+
+              case Map.get(node._initial_form_state, :number) do
+                nil ->
+                  defaults
+
+                number ->
+                  Map.merge(defaults, %{
+                    width: {:control_columns, number.columns},
+                    _control_column_count: number.columns,
+                    _number_state: number,
+                    white_space: :pre,
+                    overflow: :hidden
+                  })
               end
-            end
-
-          "input" ->
-            input_attributes =
-              NativeElixirPdfUtilities.Validators.HtmlFormValidator.initial_control_attributes(
-                node
-              )
-
-            if HtmlValidator.input_type(Map.get(input_attributes, "type", "text")) == "image" do
-              with {:ok, defaults} <-
-                     if(Map.has_key?(rules, :source_budget),
-                       do: image_box_defaults(input_attributes, inherited_font_size),
-                       else:
-                         image_defaults(
-                           %{node | attributes: input_attributes},
-                           ancestors,
-                           opts,
-                           inherited_font_size
-                         )
-                     ) do
-                {:ok, Map.put(defaults, :_image_input_state, node._initial_form_state)}
-              end
-            else
-              form_control_defaults(
-                HtmlValidator.input_type(Map.get(input_attributes, "type", "text")),
-                inherited_font_size
-              )
               |> then(fn defaults ->
                 defaults =
-                  if Map.has_key?(node._initial_form_state, :temporal),
-                    do:
-                      defaults
-                      |> Map.put(:_temporal_state, node._initial_form_state.temporal)
-                      |> Map.put(:_temporal_disabled, node._initial_form_state.disabled)
-                      |> Map.put(
-                        :background_color,
-                        if(node._initial_form_state.disabled,
-                          do: {239 / 255, 239 / 255, 239 / 255, 0.3},
-                          else: {1.0, 1.0, 1.0}
-                        )
-                      )
-                      |> Map.put(
-                        :color,
-                        if(node._initial_form_state.disabled,
-                          do: {84 / 255, 84 / 255, 84 / 255},
-                          else: {0.0, 0.0, 0.0}
-                        )
-                      ),
-                    else: defaults
+                  if Map.has_key?(node._initial_form_state, :number) and
+                       node._initial_form_state.disabled do
+                    color = {118 / 255, 118 / 255, 118 / 255, 0.3}
 
-                defaults =
-                  if Map.has_key?(node._initial_form_state, :files) and
-                       node._initial_form_state.disabled,
-                     do: Map.put(defaults, :color, {84 / 255, 84 / 255, 84 / 255}),
-                     else: defaults
-
-                defaults =
-                  if Map.has_key?(node._initial_form_state, :color_input) do
-                    Map.merge(defaults, %{
-                      _color_state: node._initial_form_state.color_input,
-                      _color_disabled: node._initial_form_state.disabled,
-                      background_color:
-                        if(node._initial_form_state.disabled,
-                          do: {239 / 255, 239 / 255, 239 / 255, 0.3},
-                          else: {239 / 255, 239 / 255, 239 / 255}
-                        )
-                    })
+                    defaults
+                    |> Map.put(:border_color, color)
+                    |> Map.put(:border_colors, CssValueValidator.edges(color))
                   else
                     defaults
                   end
 
-                defaults =
-                  if Map.has_key?(node._initial_form_state, :range),
-                    do:
-                      defaults
-                      |> Map.put(:_range_state, node._initial_form_state.range)
-                      |> Map.put(:_range_disabled, node._initial_form_state.disabled)
-                      |> Map.put(
-                        :height,
-                        if(Map.get(node._initial_form_state, :datalist), do: 16.5, else: 12.0)
-                      )
-                      |> Map.put(
-                        :color,
-                        if(node._initial_form_state.disabled,
-                          do: {197 / 255, 197 / 255, 197 / 255},
-                          else: {16 / 255, 16 / 255, 16 / 255}
-                        )
-                      ),
-                    else: defaults
-
-                case Map.get(node._initial_form_state, :number) do
+                case Map.get(node._initial_form_state, :size) do
                   nil ->
                     defaults
 
-                  number ->
+                  size ->
                     Map.merge(defaults, %{
-                      width: {:control_columns, number.columns},
-                      _control_column_count: number.columns,
-                      _number_state: number,
+                      width: {:control_columns, size},
+                      _control_column_count: size,
                       white_space: :pre,
                       overflow: :hidden
                     })
                 end
-                |> then(fn defaults ->
-                  defaults =
-                    if Map.has_key?(node._initial_form_state, :number) and
-                         node._initial_form_state.disabled do
-                      color = {118 / 255, 118 / 255, 118 / 255, 0.3}
-
-                      defaults
-                      |> Map.put(:border_color, color)
-                      |> Map.put(:border_colors, CssValueValidator.edges(color))
-                    else
-                      defaults
-                    end
-
-                  case Map.get(node._initial_form_state, :size) do
-                    nil ->
-                      defaults
-
-                    size ->
-                      Map.merge(defaults, %{
-                        width: {:control_columns, size},
-                        _control_column_count: size,
-                        white_space: :pre,
-                        overflow: :hidden
-                      })
-                  end
-                end)
               end)
-            end
-
-          "select" ->
-            selection = node._initial_form_state.selection
-
-            form_control_defaults("select", inherited_font_size)
-            |> Map.merge(%{
-              width: :auto,
-              height: :auto,
-              box_sizing: :border_box,
-              border_radius: if(selection.listbox, do: 1.5, else: 0.0),
-              border_color: {118 / 255, 118 / 255, 118 / 255},
-              border_colors: CssValueValidator.edges({118 / 255, 118 / 255, 118 / 255}),
-              white_space: :pre,
-              padding: @zero_edges,
-              # Chromium's pinned Linux sheet gives popup selects ButtonFace.
-              # The native unstyled theme supplies its own field background.
-              background_color:
-                if(selection.listbox,
-                  do: {1.0, 1.0, 1.0},
-                  else: {239 / 255, 239 / 255, 239 / 255}
-                ),
-              overflow: :hidden,
-              color:
-                if(node._initial_form_state.disabled,
-                  do: {128 / 255, 128 / 255, 128 / 255},
-                  else: {0, 0, 0}
-                ),
-              _select_state: selection,
-              form_kind: if(selection.listbox, do: :listbox, else: :select),
-              vertical_align: if(selection.listbox, do: :text_bottom, else: :baseline)
-            })
-
-          "option" ->
-            block_defaults(inherited_font_size, 400, 0.0)
-            |> Map.merge(%{
-              _initial_option_id: node._selector_id,
-              _native_select_option:
-                NativeElixirPdfUtilities.Validators.HtmlFormValidator.native_select_option?(
-                  ancestors
-                ),
-              white_space: :pre,
-              padding:
-                CssValueValidator.edges(
-                  0.0,
-                  1.5,
-                  0.75,
-                  if(List.first(ancestors).tag == "optgroup", do: 15.0, else: 1.5)
-                ),
-              min_height: {:css_layout_em, 1.2},
-              background_color:
-                if(node._initial_selected, do: {206 / 255, 206 / 255, 206 / 255}, else: nil)
-            })
-            |> then(fn style ->
-              if node._initial_option_disabled or
-                   Enum.any?(ancestors, &(get_in(&1, [:_initial_form_state, :disabled]) == true)),
-                 do: Map.put(style, :color, {128 / 255, 128 / 255, 128 / 255}),
-                 else:
-                   if(node._initial_selected,
-                     do: Map.put(style, :color, {16 / 255, 16 / 255, 16 / 255}),
-                     else: style
-                   )
             end)
+          end
 
-          "optgroup" ->
-            block_defaults(inherited_font_size, 700, 0.0)
+        "select" ->
+          selection = node._initial_form_state.selection
 
-          "textarea" ->
-            form_control_defaults("textarea", inherited_font_size)
-            |> Map.merge(%{
-              width: {:control_columns, node._initial_form_state.cols},
-              height: {:control_rows, node._initial_form_state.rows},
-              _control_column_count: node._initial_form_state.cols,
-              _control_row_count: node._initial_form_state.rows,
-              white_space: if(node._initial_form_state.wrap == :off, do: :pre, else: :pre_wrap),
-              overflow_wrap:
-                if(node._initial_form_state.wrap == :off, do: :normal, else: :break_word),
-              overflow: :auto
-            })
+          form_control_defaults("select", inherited_font_size)
+          |> Map.merge(%{
+            width: :auto,
+            height: :auto,
+            box_sizing: :border_box,
+            border_radius: if(selection.listbox, do: 1.5, else: 0.0),
+            border_color: {118 / 255, 118 / 255, 118 / 255},
+            border_colors: CssValueValidator.edges({118 / 255, 118 / 255, 118 / 255}),
+            white_space: :pre,
+            padding: @zero_edges,
+            # Chromium's pinned Linux sheet gives popup selects ButtonFace.
+            # The native unstyled theme supplies its own field background.
+            background_color:
+              if(selection.listbox,
+                do: {1.0, 1.0, 1.0},
+                else: {239 / 255, 239 / 255, 239 / 255}
+              ),
+            overflow: :hidden,
+            color:
+              if(node._initial_form_state.disabled,
+                do: {128 / 255, 128 / 255, 128 / 255},
+                else: {0, 0, 0}
+              ),
+            _select_state: selection,
+            form_kind: if(selection.listbox, do: :listbox, else: :select),
+            vertical_align: if(selection.listbox, do: :text_bottom, else: :baseline)
+          })
 
-          "button" ->
-            if Map.get(inherited_style, :_base_select, false),
-              do: %{display: :contents},
-              else: form_control_defaults(:button, inherited_font_size)
+        "option" ->
+          block_defaults(inherited_font_size, 400, 0.0)
+          |> Map.merge(%{
+            _initial_option_id: node._selector_id,
+            _native_select_option:
+              NativeElixirPdfUtilities.Validators.HtmlFormValidator.native_select_option?(
+                ancestors
+              ),
+            white_space: :pre,
+            padding:
+              CssValueValidator.edges(
+                0.0,
+                1.5,
+                0.75,
+                if(List.first(ancestors).tag == "optgroup", do: 15.0, else: 1.5)
+              ),
+            min_height: {:css_layout_em, 1.2},
+            background_color:
+              if(node._initial_selected, do: {206 / 255, 206 / 255, 206 / 255}, else: nil)
+          })
+          |> then(fn style ->
+            if node._initial_option_disabled or
+                 Enum.any?(ancestors, &(get_in(&1, [:_initial_form_state, :disabled]) == true)),
+               do: Map.put(style, :color, {128 / 255, 128 / 255, 128 / 255}),
+               else:
+                 if(node._initial_selected,
+                   do: Map.put(style, :color, {16 / 255, 16 / 255, 16 / 255}),
+                   else: style
+                 )
+          end)
 
-          tag when tag in ~w(progress meter) ->
-            %{
-              display: :inline_block,
-              width: {:gauge_em, if(tag == "progress", do: 10, else: 5)},
-              height: {:gauge_em, 1},
-              vertical_align: {:gauge_em, -0.2},
-              appearance: :auto,
-              _gauge: Map.fetch!(node, :_initial_gauge_state)
-            }
+        "optgroup" ->
+          block_defaults(inherited_font_size, 700, 0.0)
 
-          _ ->
-            %{display: :inline}
-        end
+        "textarea" ->
+          form_control_defaults("textarea", inherited_font_size)
+          |> Map.merge(%{
+            width: {:control_columns, node._initial_form_state.cols},
+            height: {:control_rows, node._initial_form_state.rows},
+            _control_column_count: node._initial_form_state.cols,
+            _control_row_count: node._initial_form_state.rows,
+            white_space: if(node._initial_form_state.wrap == :off, do: :pre, else: :pre_wrap),
+            overflow_wrap:
+              if(node._initial_form_state.wrap == :off, do: :normal, else: :break_word),
+            overflow: :auto
+          })
+
+        "button" ->
+          if Map.get(inherited_style, :_base_select, false),
+            do: %{display: :contents},
+            else: form_control_defaults(:button, inherited_font_size)
+
+        tag when tag in ~w(progress meter) ->
+          %{
+            display: :inline_block,
+            width: {:gauge_em, if(tag == "progress", do: 10, else: 5)},
+            height: {:gauge_em, 1},
+            vertical_align: {:gauge_em, -0.2},
+            appearance: :auto,
+            _gauge: Map.fetch!(node, :_initial_gauge_state)
+          }
+
+        _ ->
+          %{display: :inline}
       end
 
     defaults =
@@ -2995,16 +2981,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       end
 
     defaults =
-      if popover_state == :none do
-        defaults
-      else
-        Map.merge(defaults, %{display: :none, _popover_state: popover_state})
-      end
-
-    defaults =
       case defaults do
         {:ok, defaults} -> defaults
         defaults -> defaults
+      end
+
+    defaults =
+      if popover_state == :none or not is_map(defaults) do
+        defaults
+      else
+        defaults
+        |> Map.drop([:_margin_before_em, :_margin_after_em, :_dialog_default_padding])
+        |> NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare_popover_defaults(
+          HtmlValidator.html_popover_defaults(attributes, tag, inherited_font_size)
+        )
+        |> Map.put(:_popover_state, popover_state)
       end
 
     defaults =
@@ -3156,6 +3147,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                  {:ok,
                   NativeElixirPdfUtilities.Validators.HtmlVisibilityValidator.prepare_style(style)}
 
+        authored =
+          case authored do
+            {:ok, %{_popover_state: _, display: display} = style}
+            when display != :none and tag in ["img", "input"] and
+                   not is_map_key(rules, :source_budget) ->
+              if tag == "img" or Map.has_key?(style, :_image_input_state) do
+                with {:ok, image_defaults} <-
+                       image_defaults(node, ancestors, opts, inherited_font_size) do
+                  style = Map.merge(image_defaults, style)
+
+                  {:ok, style}
+                end
+              else
+                authored
+              end
+
+            _ ->
+              authored
+          end
+
+        authored =
+          case authored do
+            {:ok, %{display: display} = style}
+            when tag == "img" and display != :none and not is_map_key(rules, :source_budget) ->
+              model =
+                NativeElixirPdfUtilities.Validators.ImageMapValidator.associate(
+                  node,
+                  Map.fetch!(rules, :image_maps)
+                )
+
+              {:ok, if(model == nil, do: style, else: Map.put(style, :_image_map, model))}
+
+            _ ->
+              authored
+          end
+
         result =
           if Map.has_key?(rules, :source_budget),
             do: authored,
@@ -3222,6 +3249,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp finalize_element_style(tag, result, image_budget, opts) do
+    result =
+      case result do
+        {:ok, style} ->
+          {:ok,
+           style
+           |> Map.delete(:_popover_state)
+           |> NativeElixirPdfUtilities.Validators.HtmlFormValidator.resolve_popover_dimensions()}
+
+        error ->
+          error
+      end
+
     paint_tag =
       case result do
         {:ok, style} -> if(Map.has_key?(style, :_image_input_state), do: "img", else: tag)
@@ -3248,8 +3287,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         )
 
       {tag, {:ok, style}}
-      when tag in ~w(input textarea) and not is_map_key(style, :_popover_state) and
-             style.form_kind != :hidden ->
+      when tag in ~w(input textarea) and style.form_kind != :hidden ->
         dimensions =
           Enum.reduce_while([:width, :height], {:ok, style}, fn property, {:ok, style} ->
             dimension =
@@ -3314,11 +3352,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       {"input", {:ok, %{form_kind: :hidden} = style}} ->
         # HTML's UA !important rule wins over author display declarations.
         {:ok, style |> Map.put(:display, :none) |> Map.delete(:_popover_state)}
-
-      {tag, {:ok, %{_popover_state: state} = style}} ->
-        with :ok <- HtmlValidator.validate_initial_popover_style(state, style, tag) do
-          {:ok, Map.drop(style, [:_popover_state, :background_image_source])}
-        end
 
       {"source", {:ok, style}} ->
         {:ok, style |> Map.put(:display, :none) |> Map.delete(:background_image_source)}

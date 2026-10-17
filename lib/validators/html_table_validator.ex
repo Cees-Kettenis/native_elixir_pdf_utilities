@@ -635,7 +635,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
 
       case child do
         %{style: %{display: :none}} -> false
-        %{style: %{position: :absolute}} -> false
+        %{style: %{position: position}} when position in [:absolute, :fixed] -> false
         %{style: %{display: :table}} -> true
         %{children: children} -> atomic_flow_table?(children, stage)
         _ -> false

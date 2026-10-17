@@ -1588,8 +1588,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
       assert :ok = HtmlValidator.validate_html_element_attributes("x-box", %{"popover" => value})
     end
 
-    assert :ok = HtmlValidator.validate_initial_popover_style(:none, %{display: :block}, "p")
-    assert :ok = HtmlValidator.validate_initial_popover_style(:hint, %{display: :none}, "p")
+    defaults = HtmlValidator.html_popover_defaults(%{}, "p", 12.0)
+    assert defaults.display == :none and defaults.position == :fixed
+    assert defaults.width == :fit_content and defaults.height == :fit_content
+    assert defaults.offsets == %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+    assert defaults.padding == %{top: 3.0, right: 3.0, bottom: 3.0, left: 3.0}
+
+    assert HtmlValidator.html_popover_defaults(%{"open" => "false"}, "dialog", 12.0).display ==
+             :block
 
     refute HtmlValidator.control_state_matches?(:popover_open, %{
              attributes: %{"popover" => "auto"}

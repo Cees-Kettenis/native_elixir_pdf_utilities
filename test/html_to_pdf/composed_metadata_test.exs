@@ -66,6 +66,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedMetadataTest do
     refute hd(slot.children)._html_translate
   end
 
+  test "inert shadow ancestors preserve slotted artwork and only suppress their own interactions" do
+    html =
+      "<div><template shadowrootmode=open><section inert><slot></slot></section></template>" <>
+        "<a href='https://example.test/inert'>Slotted link</a>" <>
+        "<input name=slotted value='Slotted value'></div><input name=active value=Active>"
+
+    assert {:ok, pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(html,
+               system_font_discovery: false,
+               compress_streams: false
+             )
+
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+    assert text =~ "Slotted link" and text =~ "Slotted value"
+    assert {:ok, [field]} = NativeElixirPdfUtilities.Forms.fields(pdf)
+    assert field.name == "active" and field.value == "Active"
+    refute pdf =~ "/Subtype /Link"
+    refute pdf =~ "https://example.test/inert"
+  end
+
   test "read-write selectors use logical editability of slotted children" do
     for {host_editable, slot_editable, color} <- [
           {"true", "false", {1, 0, 0}},

@@ -1636,10 +1636,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
           "<p popover style='display:block'>Exposed</p>",
           "<style>[popover]{display:block!important}</style><p popover>Exposed</p>"
         ] do
-      assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, opts)
-      assert diagnostic.stage == :style and diagnostic.operation == :render, inspect(diagnostic)
-      assert diagnostic.source == "p"
-      assert diagnostic.message =~ "Remove the display override"
+      assert {:ok, pdf} = HtmlToPdf.render(html, opts)
+      assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+      assert text =~ "Exposed"
+      assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
     end
 
     for html <- [
@@ -1651,6 +1651,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       assert diagnostic.operation == :render
       assert diagnostic.stage in [:html, :css]
       assert diagnostic.message =~ "non-executable reference"
+    end
+  end
+
+  test "exposed popover images retain actionable resource diagnostics" do
+    for html <- [
+          "<img popover src=missing.png style='display:block'>",
+          "<div popover style='display:block;background-image:url(missing.png)'>Visible</div>"
+        ] do
+      assert {:error, {reason, diagnostic}} = HtmlToPdf.render(html)
+      assert reason == diagnostic.reason
+      assert diagnostic.stage == :asset and diagnostic.operation == :render
+      assert diagnostic.source == "missing.png"
+      assert diagnostic.message =~ "not an authorized local file"
     end
   end
 

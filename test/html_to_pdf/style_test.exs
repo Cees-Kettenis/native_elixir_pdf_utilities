@@ -839,21 +839,80 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert visible.style.color == {0, 0.5019607843, 0}
   end
 
-  test "author display overrides diagnose unfinished popover geometry and hidden inputs remain hidden" do
+  test "author-exposed popovers retain UA geometry and hidden inputs remain hidden" do
     alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
-    for tag <- ["div", "x-box", "wbr", "input", "img"] do
-      ending = if tag in ["wbr", "input", "img"], do: "", else: "</#{tag}>"
+    for tag <- ["div", "x-box", "wbr"] do
+      ending = if tag in ["wbr", "input"], do: "", else: "</#{tag}>"
 
       assert {:ok, dom} =
                HtmlParser.parse_detailed(
                  "<#{tag} popover style='display:block!important'>" <> ending
                )
 
-      assert {:error, {:unsupported_html, diagnostic}} = Style.compute_detailed(dom)
-      assert diagnostic.stage == :style and diagnostic.source == tag
-      assert diagnostic.message =~ "fixed positioning"
+      assert {:ok, %{children: [node]}} = Style.compute_detailed(dom)
+      assert node.style.display == if(tag == "wbr", do: :soft_break, else: :block)
+      assert node.style.position == :fixed
+      assert node.style.width == :fit_content and node.style.height == :fit_content
+      assert node.style.overflow == :auto
+
+      assert Enum.all?(node.style.padding, fn {_side, value} ->
+               value == node.style.font_size * 0.25
+             end)
     end
+
+    for markup <- [
+          "<input size=12>",
+          "<input type=checkbox>",
+          "<textarea cols=12 rows=3>Value</textarea>",
+          "<select><option>Choice</option></select>",
+          "<button>Submit</button>"
+        ] do
+      assert {:ok, normal_dom} = HtmlParser.parse_detailed(markup)
+      exposed = String.replace(markup, ">", " popover style='display:block'>", global: false)
+      assert {:ok, exposed_dom} = HtmlParser.parse_detailed(exposed)
+      assert {:ok, %{children: [normal]}} = Style.compute_detailed(normal_dom)
+      assert {:ok, %{children: [popover]}} = Style.compute_detailed(exposed_dom)
+
+      unless String.starts_with?(markup, ["<select", "<button"]) do
+        assert Map.get(popover.style, :width, :auto) == Map.get(normal.style, :width, :auto),
+               markup
+
+        assert Map.get(popover.style, :height, :auto) == Map.get(normal.style, :height, :auto),
+               markup
+      end
+
+      refute Map.has_key?(popover.style, :_popover_intrinsic_dimensions)
+      assert {:ok, _} = NativeElixirPdfUtilities.HtmlToPdf.render(exposed)
+    end
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<input popover style='display:block;width:24pt;height:12pt'>"
+             )
+
+    assert {:ok, %{children: [node]}} = Style.compute_detailed(dom)
+    assert node.style.width == 24.0 and node.style.height == 12.0
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<div popover style='display:block;position:fixed;overflow:auto;font-size:20pt;color:blue'>Visible</div>"
+             )
+
+    assert {:ok, %{children: [node]}} = Style.compute_detailed(dom)
+    assert node.style.padding == %{top: 5.0, right: 5.0, bottom: 5.0, left: 5.0}
+    assert node.style.border_colors.top == node.style.color
+    assert node.style.position == :fixed and node.style.overflow == :auto
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<div popover style='display:block;position:absolute;width:48pt;height:12pt;padding:2pt;margin:1pt;overflow:hidden'>Visible</div>"
+             )
+
+    assert {:ok, %{children: [node]}} = Style.compute_detailed(dom)
+    assert node.style.position == :absolute and node.style.overflow == :hidden
+    assert node.style.width == 48.0 and node.style.height == 12.0
+    assert node.style.padding == %{top: 2.0, right: 2.0, bottom: 2.0, left: 2.0}
 
     assert {:ok, dom} =
              HtmlParser.parse_detailed(
@@ -861,6 +920,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
              )
 
     assert {:ok, %{children: [%{style: %{display: :none}}]}} = Style.compute(dom)
+
+    assert {:ok, dom} = HtmlParser.parse_detailed("<dialog popover open>Visible dialog</dialog>")
+    assert {:ok, %{children: [%{style: %{display: :block}}]}} = Style.compute(dom)
 
     dom = %{
       type: :document,

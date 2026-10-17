@@ -1206,6 +1206,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             rect_paint_stream(box, page_height, graphics_state_resources)
 
           clip ->
+            clip =
+              if Map.get(box, :role) == :scrollbar and
+                   Map.get(box, :snap_to_css_pixel_grid, false),
+                 do: %{
+                   clip
+                   | x: clip.x - @raster_boundary_bias,
+                     y: clip.y + @raster_boundary_bias
+                 },
+                 else: clip
+
             [
               "q ",
               clip_rectangle_stream(clip),

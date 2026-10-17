@@ -56,6 +56,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapTest do
            ]
   end
 
+  test "author-exposed popover images retain their intrinsic artwork and image-map links" do
+    html =
+      "<img popover src='#{@image}' usemap='#visible' style='display:block'>" <>
+        "<map name=visible><area shape=default href='https://example.com/popover-image'></map>"
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(html, system_font_discovery: false, compress_streams: false)
+
+    assert pdf =~ "/Subtype /Image"
+    assert pdf =~ "https://example.com/popover-image"
+    assert pdf =~ "/Subtype /Link"
+  end
+
   test "PDF quadrilaterals remove deliberate holes and clip actual fit geometry" do
     html =
       "<body style='margin:0'><img src='#{@image}' usemap='#regions' style='display:block;width:60pt;height:30pt;object-fit:contain'><map name=regions><area coords='10,10,20,20'><area coords='0,0,40,40' href='https://example.com/rect'><area shape=default href='https://example.com/default'></map></body>"

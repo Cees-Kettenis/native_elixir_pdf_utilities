@@ -573,21 +573,29 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end
   end
 
-  @doc false
-  @spec validate_initial_popover_style(atom(), map(), String.t()) ::
-          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
-  def validate_initial_popover_style(state, style, tag) do
-    if state == :none or style.display == :none do
-      :ok
-    else
-      Diagnostics.error(
-        :style,
-        :unsupported_html,
-        "Author CSS exposes a closed popover, whose native fixed positioning and intrinsic geometry are not implemented yet. Remove the display override to keep it closed, or use an ordinary element with supported authored geometry.",
-        module: __MODULE__,
-        source: tag
-      )
-    end
+  @doc "Returns static popover box defaults without inferring activation or top-layer state."
+  @spec html_popover_defaults(map(), String.t(), number()) :: map()
+  def html_popover_defaults(attributes, tag, font_size) do
+    alias NativeElixirPdfUtilities.Validators.CssValueValidator
+
+    %{
+      display: if(tag == "dialog" and Map.has_key?(attributes, "open"), do: :block, else: :none),
+      position: :fixed,
+      offsets: CssValueValidator.edges(0.0),
+      width: :fit_content,
+      height: :fit_content,
+      margin: CssValueValidator.edges(:auto),
+      padding: CssValueValidator.edges(font_size * 0.25),
+      border_widths: CssValueValidator.edges(2.25),
+      border_styles: CssValueValidator.edges(:solid),
+      border_color: :current_color,
+      border_colors: CssValueValidator.edges(:current_color),
+      background_color: {1.0, 1.0, 1.0},
+      color: {0.0, 0.0, 0.0},
+      overflow: :auto,
+      _popover: true,
+      _popover_default_padding: true
+    }
   end
 
   @doc false
@@ -2212,7 +2220,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     # scope; authored display overrides already remove the annotation role.
     style =
       if Map.get(style, :display) in [:inline_block, :inline_flex, :inline_grid] or
-           Map.get(style, :position) == :absolute or
+           Map.get(style, :position) in [:absolute, :fixed] or
            Map.get(style, :_ruby_annotation, false),
          do: Map.delete(style, :_text_decorations),
          else: style
@@ -7553,7 +7561,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                   )
 
                 parent_display == :inline and Map.get(style, :image_display, :block) == :block and
-                    Map.get(style, :position, :static) != :absolute ->
+                    Map.get(style, :position, :static) not in [:absolute, :fixed] ->
                   :block_flow
 
                 true ->
@@ -7604,7 +7612,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                            :line_break,
                            :soft_break
                          ] and
-                         Map.get(style, :position, :static) != :absolute,
+                         Map.get(style, :position, :static) not in [:absolute, :fixed],
                        do: :block_flow,
                        else: :ok
 

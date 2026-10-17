@@ -6,6 +6,17 @@ p {margin:0 0 6pt;}
 :popover-open {display:block;color:red;}
 [popover]:not(:popover-open) {color:#9a3412;}
 .siblings>span:nth-child(2) {color:#164e63;}
+.exposed {display:block;}
+.sized {left:12pt;top:156pt;width:120pt;height:24pt;margin:0;padding:3pt;border:1.5pt solid #164e63;font-size:9pt;}
+.relative {position:relative;width:50pt;height:0;margin-left:25pt;}
+.viewport {left:170pt;top:158pt;width:100pt;height:20pt;margin:0;padding:3pt;border:1.5pt solid;font-size:9pt;}
+.open-dialog {left:12pt;top:204pt;width:200pt;height:14pt;margin:0;padding:2pt;border:1pt solid;font-size:9pt;}
+input.exposed {font-family:"DejaVu Sans";font-size:6pt;left:270pt;top:12pt;right:auto;bottom:auto;margin:0;}
+img.exposed {left:273pt;top:42pt;right:auto;bottom:auto;margin:0;font-size:12pt;border:3pt solid;}
+.flex-case,.grid-case {left:171pt;right:auto;bottom:auto;width:75pt;height:24pt;margin:0;padding:3pt;border:3pt solid;font-size:9pt;}
+.flex-case {display:flex;top:51pt;}
+.grid-case {display:grid;top:12pt;grid-template-columns:100pt;}
+.overflow-item {flex-shrink:0;width:100pt;height:45pt;background:#e0f2fe;}
 </style></head><body>
 <p>Initial closed popovers</p>
 <div popover><p>Unused auto content</p><input name=closed value=Unused></div>
@@ -18,4 +29,13 @@ p {margin:0 0 6pt;}
 <p>Nested closed content</p>
 <div popover><div popover=hint>Unused nested content</div></div>
 <p>After popovers</p>
+<div popover class=grid-case><div class=overflow-item>Grid content</div></div>
+<div popover class=flex-case><div class=overflow-item>Flex content</div></div>
+<input popover size=1 value=A class=exposed>
+<img popover class=exposed src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC">
+<div popover class=exposed>Exposed default</div>
+<div popover=hint class="exposed sized"><div>Exposed sized content</div><div>Second clipped line</div><div>Overflow line</div></div>
+<div class=relative><div popover=manual class="exposed viewport">Viewport-fixed child</div></div>
+<dialog popover open=false class=open-dialog>Open dialog popover</dialog>
+<p style="break-before:page">Second popover page</p>
 </body></html>

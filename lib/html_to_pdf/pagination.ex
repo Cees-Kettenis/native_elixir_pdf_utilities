@@ -76,7 +76,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     {canvas_boxes, boxes} = Enum.split_with(boxes, &(Map.get(&1, :position_anchor) == :canvas))
 
     {root_positioned_boxes, flow_boxes} =
-      Enum.split_with(boxes, &(Map.get(&1, :position_anchor) == :root))
+      Enum.split_with(boxes, &(Map.get(&1, :position_anchor) in [:root, :fixed]))
 
     {fieldset_paints, spanning_cells?} =
       Enum.reduce(flow_boxes, {[], false}, fn box, {fieldsets, spanning?} ->
@@ -672,6 +672,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
   defp restore_root_positioned_boxes([first_page | remaining_pages], boxes, pagination_order) do
     root_boxes = Enum.reject(boxes, &page_break_box?/1)
+    # Chromium prints native form appearances on their first page only,
+    # while ordinary fixed artwork repeats on subsequent pages.
+    fixed_boxes =
+      root_boxes
+      |> Enum.filter(&(Map.get(&1, :position_anchor) == :fixed))
+      |> repeated_fixed_artwork()
 
     first_page = %{
       first_page
@@ -680,8 +686,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
           |> Enum.sort_by(&Map.fetch!(&1, pagination_order))
     }
 
+    remaining_pages =
+      if fixed_boxes == [] do
+        remaining_pages
+      else
+        Enum.map(remaining_pages, fn page ->
+          HtmlValidator.reserve_render_resource(
+            :max_layout_boxes,
+            length(fixed_boxes),
+            :pagination
+          )
+
+          %{
+            page
+            | boxes:
+                (page.boxes ++ fixed_boxes)
+                |> Enum.sort_by(&Map.fetch!(&1, pagination_order))
+          }
+        end)
+      end
+
     Enum.map([first_page | remaining_pages], fn page ->
       %{page | boxes: Enum.map(page.boxes, &Map.delete(&1, pagination_order))}
+    end)
+  end
+
+  defp repeated_fixed_artwork(boxes) do
+    boxes
+    |> Enum.reject(
+      &(not is_nil(Map.get(&1, :form_control)) or
+          not is_nil(Map.get(&1, :form_owner)))
+    )
+    |> Enum.map(fn box ->
+      case box do
+        %{boxes: children} ->
+          box
+          |> Map.put(:boxes, repeated_fixed_artwork(children))
+          |> Map.delete(:embedded_widgets)
+
+        _ ->
+          box
+      end
     end)
   end
 

@@ -26,6 +26,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarValidatorTest do
     end
   end
 
+  test "popover overflow measures clipped image artwork and ignores page-break markers" do
+    content = %{x: 6.0, top: 90.0, width: 60.0, height: 24.0, content_height: 6.0}
+    padding = %{left: 3.0, right: 3.0, top: 3.0, bottom: 3.0}
+
+    boxes = [
+      %{type: :page_break},
+      %{
+        type: :image,
+        x: 6.0,
+        y: 0.0,
+        width: 100.0,
+        height: 90.0,
+        clip: %{x: 6.0, y: 84.0, width: 12.0, height: 6.0}
+      }
+    ]
+
+    assert {:paint, geometry} = ScrollbarValidator.popover_geometry(boxes, content, padding, nil)
+    refute geometry.vertical or geometry.horizontal
+    assert {:ok, []} = ScrollbarValidator.prepare(geometry)
+  end
+
   test "scroll offsets move the shared thumb through its available track" do
     geometry = %{
       vertical: true,
