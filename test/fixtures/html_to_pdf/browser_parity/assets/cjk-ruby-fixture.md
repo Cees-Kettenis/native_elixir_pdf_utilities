@@ -14,7 +14,7 @@ The subset uses the distinct family name `CJK Ruby Fixture`.
 Rebuild using fonttools 4.66.1 and the exact source revision from the JSON manifest:
 
 ```
-python scripts/build-cjk-ruby-font-fixture.py NotoSansJP\[wght\].ttf --revision REVISION
+python scripts/fixtures/build-cjk-ruby-font-fixture.py NotoSansJP\[wght\].ttf --revision REVISION
 ```
 
 The font is supplied explicitly to native and Chromium test renderers. Production

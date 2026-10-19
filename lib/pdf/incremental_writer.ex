@@ -1,5 +1,10 @@
 defmodule NativeElixirPdfUtilities.Pdf.IncrementalWriter do
-  @moduledoc false
+  @moduledoc """
+  Shared PDF incremental-object representation.
+
+  Reader and appearance APIs return these object entries for prepared PDF
+  revisions. The internal writer consumes validated entries from its owning validators.
+  """
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Pdf.InfoCodec

@@ -1,0 +1,3071 @@
+alias NativeElixirPdfUtilities.TestSupport.Paths
+
+defmodule NativeElixirPdfUtilities.TextTest do
+  use ExUnit.Case
+
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Text
+  alias NativeElixirPdfUtilities.Validators.TextResourceValidator
+  alias NativeElixirPdfUtilities.Validators.TextValidator
+
+  test "file extraction rejects nonregular inputs with requested operation context" do
+    path = Path.join(System.tmp_dir!(), "nonregular-pdf-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(path)
+    on_exit(fn -> File.rm_rf!(path) end)
+    assert {:error, {:invalid_document, diagnostic}} = Text.extract_file_spans(path)
+    assert diagnostic.stage == :file
+    assert diagnostic.operation == :extract_file_spans
+    assert diagnostic.module == Text
+    assert diagnostic.source == path
+    assert diagnostic.message =~ "regular file"
+  end
+
+  test "invalid physical page frames reject nonpositive MediaBox geometry" do
+    source = page_pdf("BT /F1 12 Tf (A) Tj ET")
+    malformed = String.replace(source, "[0 0 612 792]", "[0 0 000 792]")
+    assert {:error, {:invalid_pdf_input, diagnostic}} = Text.extract_spans(malformed)
+    assert diagnostic.stage == :page_tree
+    assert diagnostic.operation == :extract_spans
+    assert diagnostic.module == Text
+    assert diagnostic.message =~ "MediaBox"
+  end
+
+  test "public extraction retains decoded replacement text and stream order" do
+    source =
+      page_pdf("BT /F1 12 Tf (A) Tj /Span << /ActualText (reading) >> BDC (ink) Tj EMC (B) Tj ET")
+
+    assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(source)
+    assert Enum.map(spans, & &1.text) == ["A", "reading", "B"]
+    assert Enum.map(spans, & &1.source_index) == [0, 1, 2]
+    assert {:ok, "AreadingB"} = Text.extract(source, layout: false)
+  end
+
+  test "alias content references reuse decoded bytes and preserve each physical execution" do
+    content = "BT /F1 12 Tf (A) Tj ET"
+
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> >> /Contents [6 0 R 7 0 R] >>"},
+        {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+        {6, stream_object("", content)},
+        {7, "6 0 R"}
+      ])
+
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+    Limits.install(Map.put(previous, :max_text_decoded_content_bytes, byte_size(content)))
+    assert {:ok, "A A"} = Text.extract(source, layout: false)
+    assert {:ok, pdf_context} = Reader.read_validated(source)
+    assert {:ok, prepared} = TextValidator.prepare(pdf_context)
+    assert prepared.preparation_stats.decoded_bytes == byte_size(content)
+
+    assert {:ok, first, preparation} =
+             TextValidator.prepare_content_stream(
+               pdf_context.document,
+               {:ref, {6, 0}},
+               1,
+               TextValidator.new_preparation_context()
+             )
+
+    assert {:ok, ^first, reused} =
+             TextValidator.prepare_content_stream(
+               pdf_context.document,
+               {:ref, {7, 0}},
+               1,
+               preparation
+             )
+
+    assert reused.decoded_bytes == preparation.decoded_bytes
+    assert reused.parsed_instructions == preparation.parsed_instructions
+    [page] = prepared.pages
+    [instructions] = page.contents
+    shown = Enum.filter(instructions, &(&1.operator == "Tj"))
+    assert length(shown) == 2
+    assert Enum.map(shown, & &1.decoded.text) == ["A", "A"]
+  end
+
+  test "non-image non-Form XObjects contribute no invented replacement text" do
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> /XObject << /Program 6 0 R >> >> /Contents 4 0 R >>"},
+        {4, stream_object("", "BT /F1 12 Tf (A) Tj ET /Program Do BT /F1 12 Tf (B) Tj ET")},
+        {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+        {6, stream_object("/Type /XObject /Subtype /PS", "0 0 moveto")}
+      ])
+
+    assert {:ok, "A B"} = Text.extract(source, layout: false)
+    assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(source)
+    assert Enum.map(spans, & &1.text) == ["A", "B"]
+    assert Enum.map(spans, & &1.source_index) == [0, 1]
+  end
+
+  test "image ActualText shares the same emitted-span limit as preceding text" do
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> /XObject << /Ink 6 0 R >> >> /Contents 4 0 R >>"},
+        {4,
+         stream_object(
+           "",
+           "BT /F1 12 Tf (A) Tj ET /Span << /ActualText (image) >> BDC /Ink Do EMC"
+         )},
+        {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+        {6,
+         stream_object(
+           "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8",
+           <<255, 0, 0>>
+         )}
+      ])
+
+    assert {:ok, "A image"} = Text.extract(source, layout: false)
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+    Limits.install(Map.put(previous, :max_text_spans, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract_spans(source)
+    assert diagnostic.stage == :limits
+    assert diagnostic.operation == :extract_spans
+    assert diagnostic.module == Text
+    assert diagnostic.message =~ "text span count"
+    assert diagnostic.message =~ "page 1"
+  end
+
+  test "ordinary extraction tokenizes escaped operands once and retains canonical malformed-stream diagnostics" do
+    content = "BT\n/F1 12 Tf\n% before text\n(A\\)B) Tj\nET"
+    source = page_pdf(content)
+    assert {:ok, pdf_context} = Reader.read_validated(source)
+    assert {:ok, ordinary} = TextValidator.prepare(pdf_context)
+    [page] = ordinary.pages
+    [instructions] = page.contents
+    assert Enum.find(instructions, &(&1.operator == "Tj")).decoded.text == "A)B"
+    assert {:ok, "A)B"} = Text.extract(source, layout: false)
+
+    assert {:ok, %{pages: [%{spans: [%{text: "A)B", source_index: 0}]}]}} =
+             Text.extract_spans(source)
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             TextValidator.instructions("BT (unfinished", 1)
+
+    assert diagnostic.stage == :content
+    assert diagnostic.module == TextValidator
+    assert diagnostic.message =~ "page 1"
+  end
+
+  test "graphics ActualText replaces an image Do with its transformed region" do
+    image = fn content, width ->
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /Ink 5 0 R >> >> /Contents 4 0 R >>"},
+        {4, stream_object("", content)},
+        {5,
+         stream_object(
+           "/Type /XObject /Subtype /Image /Width #{width} /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8",
+           <<255, 0, 0>>
+         )}
+      ])
+    end
+
+    source =
+      image.(
+        "q 40 0 0 20 10 30 cm /Span << /ActualText <FEFF00630061006600E9> >> BDC /Ink Do EMC Q",
+        1
+      )
+
+    assert {:ok, "café"} = Text.extract(source, layout: false)
+    assert {:ok, %{pages: [%{spans: [span]}]}} = Text.extract_spans(source)
+    assert span.image_resource == "Ink"
+    assert span.font_resource == nil
+    assert span.x == 10.0 and span.y == 170.0
+    assert span.end_x == 50.0 and span.end_y == 170.0
+    assert span.font_size == 20.0
+
+    for content <- [
+          "/Ink Do",
+          "/Span << /ActualText () >> BDC /Ink Do EMC",
+          "q 0 0 0 0 10 30 cm /Span << /ActualText (Hidden) >> BDC /Ink Do EMC Q"
+        ] do
+      assert {:error, {:no_extractable_text, _}} = Text.extract(image.(content, 1))
+    end
+
+    assert {:error, {:invalid_pdf_input, %{stage: :content, message: message}}} =
+             Text.extract(image.("/Span << /ActualText (Invalid) >> BDC /Ink Do EMC", 0))
+
+    assert message =~ "positive integer Width and Height"
+  end
+
+  test "ActualText replaces glyph pieces once and preserves their advance" do
+    source =
+      page_pdf(
+        "BT /F1 12 Tf 1 0 0 1 10 20 Tm (A) Tj /Span << /ActualText <FEFF222B> >> BDC [(u) 0 (v)] TJ EMC (B) Tj ET"
+      )
+
+    assert {:ok, "A∫B"} = Text.extract(source, layout: false)
+    assert {:ok, "A∫B"} = Text.extract(source)
+    assert {:ok, %{pages: [%{spans: [a, integral, b]}]}} = Text.extract_spans(source)
+    assert Enum.map([a, integral, b], & &1.source_index) == [0, 1, 2]
+    assert integral.text == "∫"
+    assert integral.x == a.end_x
+    assert integral.end_x == b.x
+    assert integral.end_x - integral.x == 12.0
+    assert integral.font_resource == "F1"
+    assert integral.font_size == 12.0
+  end
+
+  test "adjacent ActualText groups join Unicode replacements without word breaks" do
+    source =
+      page_pdf(
+        "/Span << /ActualText <FEFFD835DC65> >> BDC BT /F1 12 Tf (x) Tj ET EMC /Span << /ActualText (yz) >> BDC BT /F1 12 Tf (a) Tj ET EMC"
+      )
+
+    assert {:ok, "𝑥yz"} = Text.extract(source, layout: false)
+    assert {:ok, %{pages: [%{spans: [first, second]}]}} = Text.extract_spans(source)
+    assert first.text == "𝑥"
+    refute first.joins_previous?
+    assert second.joins_previous?
+  end
+
+  test "nested replacement, transparent marked content and graphics state use one outer string" do
+    source =
+      page_pdf(
+        "BT /F1 12 Tf /Span << /ActualText (outer) >> BDC (a) Tj q /Other BMC /Span << /ActualText (inner) >> BDC 7 Tr (b) Tj EMC EMC Q 3 Tr (c) Tj EMC (d) Tj ET"
+      )
+
+    assert {:ok, %{pages: [%{spans: [outer, d]}]}} = Text.extract_spans(source)
+    assert outer.text == "outer"
+    assert outer.paints_text?
+    assert outer.adds_to_clip_path?
+    refute d.paints_text?
+    assert {:ok, "outer"} = Text.extract(source, layout: false)
+
+    assert {:ok, "AB"} =
+             Text.extract(
+               page_pdf(
+                 "BT /F1 12 Tf (A) Tj /Span << /ActualText () >> BDC (hidden) Tj EMC (B) Tj ET"
+               ),
+               layout: false
+             )
+
+    assert {:ok, "A"} =
+             Text.extract(
+               page_pdf(
+                 "/Other << /Lang (en) /MCID 1 /Unused [true false null << /Key (value) >>] >> BDC BT /F1 12 Tf (A) Tj ET EMC"
+               )
+             )
+
+    assert {:ok, %{pages: [%{spans: []}]}} =
+             Text.extract_spans(page_pdf("/Span << /ActualText () >> BDC EMC"))
+  end
+
+  test "ActualText resolves named property lists and indirect PDF text strings" do
+    for text <- ["<FEFFD835DC65>", "<EFBBBF78>", "(\\200)"] do
+      source =
+        page_pdf("/Span /Replacement BDC BT /F1 12 Tf (a) Tj ET EMC",
+          properties: "<< /Replacement 9 0 R >>",
+          extra_objects: [{9, "<< /ActualText 10 0 R >>"}, {10, text}]
+        )
+
+      assert {:ok, %{pages: [%{spans: [%{text: actual}]}]}} = Text.extract_spans(source)
+      assert actual == %{"<FEFFD835DC65>" => "𝑥", "<EFBBBF78>" => "x", "(\\200)" => "•"}[text]
+    end
+  end
+
+  test "replacement groups collect Form glyphs and keep following span indexes" do
+    source =
+      form_transform_pdf(
+        "/Span << /ActualText (operator) >> BDC /Form Do EMC BT /F1 12 Tf (after) Tj ET",
+        "/Span << /ActualText (inner) >> BDC BT /F1 12 Tf (pieces) Tj ET EMC",
+        "2 0 0 2 10 20"
+      )
+
+    assert {:ok, %{pages: [%{spans: [operator, after_span]}]}} = Text.extract_spans(source)
+    assert operator.text == "operator"
+    assert operator.ctm == [2.0, 0.0, 0.0, 2.0, 10.0, 20.0]
+    assert operator.source_index == 0
+    assert after_span.source_index == 1
+    assert {:ok, "operator after"} = Text.extract(source, layout: false)
+
+    assert {:ok, "inner after"} =
+             Text.extract(
+               form_transform_pdf(
+                 "/Form Do BT /F1 12 Tf (after) Tj ET",
+                 "/Span << /ActualText (inner) >> BDC BT /F1 12 Tf (piece) Tj ET EMC",
+                 "1 0 0 1 0 0"
+               ),
+               layout: false
+             )
+  end
+
+  test "ActualText returns actionable diagnostics for malformed scopes and properties" do
+    for content <- [
+          "EMC",
+          "/Span BMC",
+          "/Span << >> BDC",
+          "1 BMC",
+          "/Span 1 BDC",
+          "/Span << /ActualText 12 >> BDC EMC",
+          "/Span << /ActualText <FEFF00> >> BDC EMC",
+          "/Span << /ActualText <EFBBBFFF> >> BDC EMC",
+          "/Span << /ActualText >> BDC EMC",
+          "/Span << /ActualText (a) foo BDC EMC"
+        ] do
+      for {operation, extract} <- [extract: &Text.extract/1, extract_spans: &Text.extract_spans/1] do
+        assert {:error, {:invalid_pdf_input, diagnostic}} = extract.(page_pdf(content))
+        assert diagnostic.stage == :content
+        assert diagnostic.reason == :invalid_pdf_input
+        assert diagnostic.operation == operation
+        assert diagnostic.module == Text
+        assert diagnostic.message =~ "page 1"
+      end
+    end
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             Text.extract(page_pdf("/Span /Missing BDC EMC", properties: "<< >>"))
+
+    assert diagnostic.message =~ "Missing"
+    assert diagnostic.message =~ "page 1"
+    assert diagnostic.operation == :extract
+  end
+
+  test "marked-content property dictionaries enforce nesting and entry limits" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_pdf_value_depth: 2, max_pdf_container_entries: 1})
+
+    for content <- ["/Span << /A << /B << >> >> >> BDC EMC", "/Span << /A [[[]]] >> BDC EMC"] do
+      assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: message}}} =
+               TextValidator.instructions(content, 4)
+
+      assert message =~ "nesting depth"
+    end
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             TextValidator.instructions("/Span << /A () /B () >> BDC EMC", 4)
+
+    assert message =~ "entry count"
+    assert message =~ "page 4"
+
+    assert {:error, {:invalid_pdf_input, %{message: message}}} =
+             TextValidator.instructions("/Span >> BDC EMC", 4)
+
+    assert message =~ "dictionary"
+    assert message =~ "page 4"
+  end
+
+  test "replacement bytes and hidden glyph pieces retain cumulative extraction limits" do
+    assert {:ok, document} = Reader.read_validated(page_pdf(""))
+    resources = %{"Font" => %{"F1" => %{"Encoding" => {:name, "WinAnsiEncoding"}}}}
+
+    preparation = %{
+      TextValidator.new_preparation_context()
+      | extracted_bytes: Limits.get(:max_extracted_text_bytes) - 1
+    }
+
+    assert {:ok, instructions} =
+             TextValidator.instructions("/Span << /ActualText <FEFF0041> >> BDC EMC", 1)
+
+    assert {:ok, _, preparation} =
+             TextResourceValidator.prepare_contents(
+               document,
+               resources,
+               [instructions],
+               1,
+               preparation
+             )
+
+    assert preparation.extracted_bytes == Limits.get(:max_extracted_text_bytes)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             TextResourceValidator.prepare_contents(
+               document,
+               resources,
+               [instructions],
+               1,
+               preparation
+             )
+
+    assert diagnostic.message =~ "ActualText"
+
+    preparation = %{preparation | extracted_bytes: Limits.get(:max_extracted_text_bytes) - 1}
+
+    assert {:ok, instructions} =
+             TextValidator.instructions("/Span << /ActualText <80> >> BDC EMC", 1)
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             TextResourceValidator.prepare_contents(
+               document,
+               resources,
+               [instructions],
+               1,
+               preparation
+             )
+
+    assert message =~ "decoded ActualText"
+
+    preparation = %{preparation | extracted_bytes: Limits.get(:max_extracted_text_bytes) - 2}
+
+    assert {:ok, instructions} =
+             TextValidator.instructions(
+               "/Span << /ActualText (ab) >> BDC BT /F1 12 Tf (c) Tj ET EMC",
+               1
+             )
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             TextResourceValidator.prepare_contents(
+               document,
+               resources,
+               [instructions],
+               1,
+               preparation
+             )
+
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_text_spans: 2, max_text_marked_content_depth: 2})
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             Text.extract(
+               page_pdf("/Span << /ActualText (one) >> BDC BT /F1 12 Tf [(a) (b) (c)] TJ ET EMC")
+             )
+
+    assert message =~ "span count"
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             Text.extract(page_pdf("/A BMC /B BMC /C BMC EMC EMC EMC"))
+
+    assert message =~ "nesting depth"
+
+    assert {:ok, "one"} =
+             Text.extract(
+               page_pdf("/Span << /ActualText (one) >> BDC BT /F1 12 Tf [(a) (b)] TJ ET EMC")
+             )
+  end
+
+  test "composed graphics transforms return diagnostics instead of overflowing" do
+    scale = "1000000000 0 0 1000000000 0 0 cm "
+
+    for content <- [String.duplicate(scale, 35), "q " <> String.duplicate(scale, 35) <> "Q"],
+        {operation, extract} <- [extract: &Text.extract/1, extract_spans: &Text.extract_spans/1] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = extract.(page_pdf(content))
+      assert diagnostic.reason == :invalid_pdf_input
+      assert diagnostic.stage == :content
+      assert diagnostic.module == Text
+      assert diagnostic.operation == operation
+      assert diagnostic.message =~ "cm"
+      assert diagnostic.message =~ "supported numeric range"
+      assert diagnostic.message =~ "reduce the composed transforms"
+      assert diagnostic.message =~ "page 1"
+    end
+  end
+
+  test "composed transforms persist across page content streams" do
+    scale = "1000000000 0 0 1000000000 0 0 cm "
+
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] >>"},
+        {4, stream_object("", String.duplicate(scale, 20))},
+        {5, stream_object("", String.duplicate(scale, 15))}
+      ])
+
+    assert {:error, {:invalid_pdf_input, %{stage: :content, message: message}}} =
+             Text.extract_spans(source)
+
+    assert message =~ "cm"
+    assert message =~ "page 1"
+  end
+
+  test "graphics restoration and Form return preserve representable accumulated transforms" do
+    scale = "1000000000 0 0 1000000000 0 0 cm "
+    twenty_scales = String.duplicate(scale, 20)
+    text = "BT /F1 12 Tf (A) Tj ET"
+
+    assert {:ok, %{pages: [%{spans: [expected]}]}} =
+             Text.extract_spans(page_pdf(scale <> twenty_scales <> text))
+
+    for source <- [
+          page_pdf(scale <> "q " <> twenty_scales <> "Q " <> twenty_scales <> text),
+          form_transform_pdf(
+            scale <> "/Form Do " <> twenty_scales <> text,
+            twenty_scales,
+            "1 0 0 1 0 0"
+          )
+        ] do
+      assert {:ok, %{pages: [%{spans: [actual]}]}} = Text.extract_spans(source)
+      assert actual.ctm == expected.ctm
+      assert actual.end_x == expected.end_x
+      assert {:ok, "A"} = Text.extract(source)
+    end
+  end
+
+  test "Form matrices and nested content compose with the inherited graphics state" do
+    scale = "1000000000 0 0 1000000000 0 0 cm "
+    matrix = "1000000000 0 0 1000000000 0 0"
+
+    for {page_content, form_content, expected_operator} <- [
+          {String.duplicate(scale, 34) <> "/Form Do", "", "Do Form Matrix"},
+          {String.duplicate(scale, 33) <> "/Form Do", "/Inner Do", "Do Form Matrix"},
+          {String.duplicate(scale, 33) <> "/Form Do", scale, "cm"}
+        ],
+        {operation, extract} <- [extract: &Text.extract/1, extract_spans: &Text.extract_spans/1] do
+      source = form_transform_pdf(page_content, form_content, matrix)
+      assert {:error, {:invalid_pdf_input, diagnostic}} = extract.(source)
+      assert diagnostic.stage == :content
+      assert diagnostic.reason == :invalid_pdf_input
+      assert diagnostic.module == Text
+      assert diagnostic.operation == operation
+      assert diagnostic.message =~ expected_operator
+      assert diagnostic.message =~ "supported numeric range"
+      assert diagnostic.message =~ "page 1"
+    end
+  end
+
+  test "text baseline composition rejects overflow from a representable graphics matrix" do
+    content =
+      String.duplicate("1000000000 0 0 1000000000 0 0 cm ", 34) <>
+        "BT /F1 1000000000 Tf (A) Tj ET"
+
+    for {operation, extract} <- [extract: &Text.extract/1, extract_spans: &Text.extract_spans/1] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = extract.(page_pdf(content))
+      assert diagnostic.stage == :content
+      assert diagnostic.module == Text
+      assert diagnostic.operation == operation
+      assert diagnostic.message =~ "text positioning"
+      assert diagnostic.message =~ "supported numeric range"
+      assert diagnostic.message =~ "page 1"
+    end
+  end
+
+  test "text positioning remains checked when the configured input magnitude increases" do
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+    large = Integer.pow(10, 160)
+    Limits.install(%{original_limits | max_pdf_numeric_magnitude: large})
+
+    for {operators, expected_operator} <- [
+          {"#{large} 0 0 1 0 0 Tm #{large} 0 Td", "Td"},
+          {"#{large} 0 0 1 0 0 Tm #{large} 0 TD", "TD"},
+          {"1 0 0 #{large} 0 0 Tm #{large} TL T*", "T*"},
+          {"/F1 #{large} Tf [#{large}] TJ", "TJ"},
+          {"/F1 #{large} Tf #{large} Tz (A) Tj", "text positioning"}
+        ] do
+      source = page_pdf("BT /F1 12 Tf #{operators} ET")
+
+      for {operation, extract} <- [extract: &Text.extract/1, extract_spans: &Text.extract_spans/1] do
+        assert {:error, {:invalid_pdf_input, diagnostic}} = extract.(source)
+        assert diagnostic.stage == :content
+        assert diagnostic.operation == operation
+        assert diagnostic.module == Text
+        assert diagnostic.message =~ expected_operator
+        assert diagnostic.message =~ "supported numeric range"
+      end
+    end
+  end
+
+  test "oversized text operands return diagnostics before floating-point conversion" do
+    for number <- [
+          String.duplicate("9", 400),
+          "-" <> String.duplicate("9", 400),
+          String.duplicate("9", 308) <> ".0"
+        ],
+        operation <- [
+          "/F1 #{number} Tf",
+          "#{number} 0 0 1 0 0 Tm",
+          "#{number} 0 0 1 0 0 cm",
+          "#{number} 0 Td",
+          "#{number} 0 TD",
+          "#{number} TL",
+          "#{number} Tc",
+          "#{number} Tw",
+          "#{number} Tz",
+          "#{number} Ts",
+          "#{number} Tr",
+          "[(A) #{number}] TJ",
+          "#{number} 0 (A) \""
+        ] do
+      source = page_pdf("BT /F1 12 Tf #{operation} (A) Tj ET")
+
+      for result <- [Text.extract(source), Text.extract_spans(source)] do
+        assert {:error, {:invalid_pdf_input, diagnostic}} = result
+        assert diagnostic.reason == :invalid_pdf_input
+        assert diagnostic.stage == :content
+        assert diagnostic.module == Text
+        assert diagnostic.operation in [:extract, :extract_spans]
+        assert diagnostic.message =~ "invalid operands"
+        assert diagnostic.message =~ "page 1"
+      end
+    end
+
+    assert {:ok, "A"} = Text.extract(page_pdf("BT /F1 12 Tf -10 20 Td (A) Tj ET"))
+  end
+
+  test "oversized font metrics and graphics-state font sizes are rejected" do
+    number = String.duplicate("9", 400)
+
+    for font <- [
+          "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding /FirstChar 65 /Widths [#{number}] >>",
+          "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding /FontDescriptor << /MissingWidth #{number} >> >>",
+          "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] >>"
+        ],
+        descendant <- ["/DW #{number}", "/W [65 [#{number}]]", "/W [65 65 #{number}]"] do
+      source =
+        page_pdf("BT /F1 12 Tf (A) Tj ET",
+          font: font,
+          descendant: "<< /Type /Font /Subtype /CIDFontType2 #{descendant} >>"
+        )
+
+      for result <- [Text.extract(source), Text.extract_spans(source)] do
+        assert {:error, {:invalid_pdf_input, %{stage: :font, module: Text}}} = result
+      end
+    end
+
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /Resources << /ExtGState << /GS1 4 0 R >> >> /Contents 6 0 R >>"},
+        {4, "<< /Font [5 0 R #{number}] >>"},
+        {5, "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>"},
+        {6, stream_object("", "/GS1 gs BT (A) Tj ET")}
+      ])
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} = Text.extract_spans(source)
+    assert diagnostic.stage == :resources
+    assert diagnostic.message =~ "font size exceeds"
+  end
+
+  test "oversized indirect Form matrix values are rejected before interpretation" do
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /Form 4 0 R >> >> /Contents 5 0 R >>"},
+        {4,
+         stream_object(
+           "/Type /XObject /Subtype /Form /Matrix [1 0 0 1 6 0 R 0] /BBox [0 0 10 10]",
+           ""
+         )},
+        {5, stream_object("", "/Form Do")},
+        {6, String.duplicate("9", 400)}
+      ])
+
+    for result <- [Text.extract(source), Text.extract_spans(source)] do
+      assert {:error, {:invalid_pdf_input, %{module: Text}}} = result
+    end
+  end
+
+  test "rejects inline images before interpreting binary pixels as instructions" do
+    for pixels <- [
+          "BT /F1 12 Tf (FAKE) Tj ET",
+          <<255, 0, 40, 60>>,
+          " EI BT /F1 12 Tf (FAKE) Tj ET"
+        ] do
+      content =
+        "BI /W #{byte_size(pixels)} /H 1 /BPC 8 /CS /G ID " <>
+          pixels <> " EI BT /F1 12 Tf (REAL) Tj ET"
+
+      for result <- [Text.extract(page_pdf(content)), Text.extract_spans(page_pdf(content))] do
+        assert {:error, {:unsupported_pdf_feature, diagnostic}} = result
+        assert diagnostic.stage == :content
+        assert diagnostic.reason == :unsupported_pdf_feature
+        assert diagnostic.message =~ "inline images"
+        assert diagnostic.message =~ "page 1"
+        assert diagnostic.module == Text
+      end
+    end
+
+    assert {:ok, "BI ID EI"} =
+             Text.extract(page_pdf("% BI\nBT /F1 12 Tf (BI ID EI) Tj ET"), layout: false)
+  end
+
+  test "extracts a Type0 ToUnicode CMap without mixing it with another font" do
+    cmap =
+      "begincmap\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n2 beginbfchar\n<0001> <0048>\n<0002> <0069>\nendbfchar\nendcmap"
+
+    content = "BT /F1 12 Tf 1 0 0 1 10 20 Tm [<00010002>] TJ ET"
+
+    pdf =
+      page_pdf(content,
+        font:
+          "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>",
+        cmap: cmap
+      )
+
+    assert Text.extract(pdf, layout: false) == {:ok, "Hi"}
+  end
+
+  test "extracts FCI-style WinAnsi text from arbitrary font resource names" do
+    pdf =
+      page_pdf(<<"BT /f-0-0 12 Tf (Caf", 233, ") Tj ET">>,
+        font_name: "f-0-0",
+        font: "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"
+      )
+
+    assert Text.extract(pdf, layout: false) == {:ok, "Café"}
+  end
+
+  test "supports bfrange arrays, escaped literal strings, hex strings, and TJ adjustments" do
+    cmap =
+      "begincmap\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n3 beginbfchar\n<28> <0028>\n<58> <0058>\n<29> <0029>\nendbfchar\n1 beginbfrange\n<01> <03> [<0041> <0042> <0043>]\nendbfrange\nendcmap"
+
+    content = "BT /ABC 10 Tf <01> Tj [<02> -120 <03>] TJ (\\(X\\)) Tj ET"
+
+    pdf =
+      page_pdf(content, font_name: "ABC", font: "<< /Type /Font /ToUnicode 7 0 R >>", cmap: cmap)
+
+    assert Text.extract(pdf, layout: false) == {:ok, "ABC(X)"}
+  end
+
+  test "source-order extraction follows consecutive text-show operator semantics" do
+    contiguous =
+      page_pdf("BT /F1 12 Tf 1 0 0 1 10 20 Tm (Hel) Tj (lo) Tj [( ) -20 (world)] TJ ET")
+
+    assert Text.extract(contiguous, layout: false) == {:ok, "Hello world"}
+
+    assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(contiguous)
+    assert Enum.map(spans, & &1.text) == ["Hel", "lo", " ", "world"]
+    assert Enum.map(spans, & &1.joins_previous?) == [false, true, true, true]
+
+    positioned =
+      page_pdf("BT /F1 12 Tf 1 0 0 1 10 20 Tm (Left) Tj 1 0 0 1 100 20 Tm (Right) Tj ET")
+
+    assert Text.extract(positioned, layout: false) == {:ok, "Left Right"}
+
+    separate_text_objects = page_pdf("BT /F1 12 Tf (One) Tj ET BT /F1 12 Tf (Two) Tj ET")
+    assert Text.extract(separate_text_objects, layout: false) == {:ok, "One Two"}
+  end
+
+  test "source-order extraction separates visible spans around omitted invisible text" do
+    pdf = page_pdf("BT /F1 12 Tf (Before) Tj 3 Tr (Hidden) Tj 0 Tr (After) Tj ET")
+
+    assert Text.extract(pdf, layout: false) == {:ok, "Before After"}
+  end
+
+  test "uses inherited resources, multiple content streams, and Form XObjects" do
+    form =
+      stream_object(
+        "/Type /XObject /Subtype /Form /Resources << /Font << /f-1-0 5 0 R >> >>",
+        "BT /f-1-0 10 Tf (Form) Tj ET"
+      )
+
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] /Resources 4 0 R >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Contents [6 0 R 7 0 R] >>"},
+      {4, "<< /Font << /f-1-0 5 0 R >> /XObject << /x-form 8 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", "BT /f-1-0 10 Tf (First) Tj ET")},
+      {7, stream_object("", "BT /f-1-0 10 Tf (Second) Tj /x-form Do ET")},
+      {8, form}
+    ]
+
+    assert Text.extract(pdf(objects), layout: false) == {:ok, "First Second Form"}
+  end
+
+  test "caches shared decoded content and instructions for one extraction" do
+    pdf = shared_content_pages_pdf(250, "BT /F1 12 Tf (Shared) Tj ET")
+
+    assert {:ok, pdf_context} = Reader.read_validated(pdf)
+    assert {:ok, text_context} = TextValidator.prepare(pdf_context)
+
+    assert text_context.preparation_stats == %{
+             unique_streams: 1,
+             decoded_bytes: 27,
+             parsed_instructions: 4,
+             stream_uses: 250,
+             instruction_uses: 1_000,
+             form_expansions: 0
+           }
+
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    assert length(String.split(text, "\n")) == 250
+  end
+
+  test "caches a referenced font across aliases while charging each stream use" do
+    cmap =
+      "begincmap\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfchar\n<41> <0041>\nendbfchar\nendcmap"
+
+    source =
+      page_pdf("BT /F1 12 Tf <41> Tj /Alias 12 Tf <41> Tj ET",
+        font: "<< /Type /Font /Subtype /TrueType /ToUnicode 7 0 R >>",
+        cmap: cmap
+      )
+
+    assert {:ok, pdf_context} = Reader.read_validated(source)
+
+    assert {:ok, instructions} =
+             TextValidator.instructions("BT /F1 12 Tf <41> Tj /Alias 12 Tf <41> Tj ET", 1)
+
+    resources = %{"Font" => %{"F1" => {:ref, {5, 0}}, "Alias" => {:ref, {5, 0}}}}
+
+    assert {:ok, [prepared], context} =
+             TextResourceValidator.prepare_contents(
+               pdf_context.document,
+               resources,
+               [instructions],
+               1,
+               TextValidator.new_preparation_context()
+             )
+
+    assert context.stream_uses == 2
+    assert map_size(context.prepared_fonts) == 1
+
+    assert prepared |> Enum.filter(&(&1.operator == "Tf")) |> Enum.map(& &1.font.name) ==
+             ["F1", "Alias"]
+
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+    Limits.install(%{original_limits | max_text_stream_uses: 1})
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: message}}} =
+             TextResourceValidator.prepare_contents(
+               pdf_context.document,
+               resources,
+               [instructions],
+               1,
+               TextValidator.new_preparation_context()
+             )
+
+    assert message =~ "page 1"
+    assert message =~ "Alias"
+
+    direct_resources = %{
+      "Font" => %{
+        "Direct" => %{
+          "Type" => {:name, "Font"},
+          "Subtype" => {:name, "TrueType"},
+          "Encoding" => {:name, "WinAnsiEncoding"}
+        }
+      }
+    }
+
+    assert {:ok, direct_instructions} =
+             TextValidator.instructions("BT /Direct 12 Tf (A) Tj ET", 1)
+
+    assert {:ok, [_prepared], direct_context} =
+             TextResourceValidator.prepare_contents(
+               pdf_context.document,
+               direct_resources,
+               [direct_instructions],
+               1,
+               TextValidator.new_preparation_context()
+             )
+
+    assert direct_context.prepared_fonts == %{}
+  end
+
+  test "reuses raw Form instructions while charging every expansion" do
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents 6 0 R >>"},
+      {4, "<< /Font << /F1 5 0 R >> /XObject << /form 7 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", "/form Do /form Do")},
+      {7,
+       stream_object(
+         "/Type /XObject /Subtype /Form /Resources 4 0 R",
+         "BT /F1 12 Tf (Form) Tj ET"
+       )}
+    ]
+
+    assert {:ok, pdf_context} = objects |> pdf() |> Reader.read_validated()
+    assert {:ok, text_context} = TextValidator.prepare(pdf_context)
+
+    assert text_context.preparation_stats.unique_streams == 2
+    assert text_context.preparation_stats.parsed_instructions == 6
+    assert text_context.preparation_stats.stream_uses == 3
+    assert text_context.preparation_stats.instruction_uses == 10
+    assert text_context.preparation_stats.form_expansions == 2
+  end
+
+  test "returns validator diagnostics for aggregate extraction work limits" do
+    assert {:ok, pdf_context} = Reader.read_validated(page_pdf("BT /F1 12 Tf (Limit) Tj ET"))
+    preparation_context = TextValidator.new_preparation_context()
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: stream_message}}} =
+             TextValidator.prepare_content_stream(
+               pdf_context.document,
+               {:ref, {6, 0}},
+               1,
+               %{preparation_context | stream_uses: 100_000}
+             )
+
+    assert stream_message =~ "content stream reference count"
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: byte_message}}} =
+             TextValidator.prepare_content_stream(
+               pdf_context.document,
+               {:ref, {6, 0}},
+               1,
+               %{preparation_context | decoded_bytes: 50_000_000}
+             )
+
+    assert byte_message =~ "aggregate decoded content bytes"
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: parse_message}}} =
+             TextValidator.prepare_content_stream(
+               pdf_context.document,
+               {:ref, {6, 0}},
+               1,
+               %{preparation_context | parsed_instructions: 100_000}
+             )
+
+    assert parse_message =~ "parsed content instruction count"
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: work_message}}} =
+             TextValidator.prepare_content_stream(
+               pdf_context.document,
+               {:ref, {6, 0}},
+               1,
+               %{preparation_context | instruction_uses: 1_000_000}
+             )
+
+    assert work_message =~ "content instruction work"
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: form_message}}} =
+             TextValidator.charge_form_expansion(
+               %{preparation_context | form_expansions: 10_000},
+               1
+             )
+
+    assert form_message =~ "Form XObject expansion count"
+  end
+
+  test "rejects aggregate parsed instruction work through the public extraction API" do
+    oversized_instruction_stream = :binary.copy("x ", 100_001)
+
+    assert_error(
+      Text.extract(page_pdf(oversized_instruction_stream)),
+      :resource_limit_exceeded,
+      :limits
+    )
+  end
+
+  test "balances graphics and text scopes across page content streams" do
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents [6 0 R 7 0 R] >>"},
+      {4, "<< /Font << /F1 5 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", "q BT /F1 12 Tf (Across) Tj")},
+      {7, stream_object("", "ET Q")}
+    ]
+
+    assert Text.extract(pdf(objects), layout: false) == {:ok, "Across"}
+  end
+
+  test "parses operands and operators across page content stream boundaries" do
+    cases = [
+      {["BT /F1 12 Tf (Hello)", "Tj ET"], "Hello"},
+      {["BT /F1 12 Tf [(Hel)", "(lo)] TJ ET"], "Hello"},
+      {["BT /F1 12 Tf 1 0 0", " 1 10 20 Tm (Matrix) Tj ET"], "Matrix"}
+    ]
+
+    for {[first_stream, second_stream], expected} <- cases do
+      objects = [
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents [6 0 R 7 0 R] >>"},
+        {4, "<< /Font << /F1 5 0 R >> >>"},
+        {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+        {6, stream_object("", first_stream)},
+        {7, stream_object("", second_stream)}
+      ]
+
+      assert Text.extract(pdf(objects), layout: false) == {:ok, expected}
+    end
+  end
+
+  test "opens objects stored in an object stream" do
+    path = Paths.fixture("pdf_reader/object-stream.pdf")
+    assert Text.extract(File.read!(path), layout: false) == {:ok, "Reader milestone fixture"}
+  end
+
+  test "layout mode keeps positional columns" do
+    content =
+      "BT /F1 12 Tf 1 0 0 1 10 20 Tm (DESC) Tj 1 0 0 1 240 20 Tm (USE) Tj 1 0 0 1 10 36 Tm (NEXT) Tj ET"
+
+    assert {:ok, text} = Text.extract(page_pdf(content))
+    [first, second] = String.split(text, "\n")
+    assert first == "NEXT"
+    assert second =~ "DESC"
+    assert second =~ "USE"
+  end
+
+  test "limits aggregate whitespace reconstructed from text coordinates" do
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+    Limits.install(%{original_limits | max_text_layout_whitespace_bytes: 5})
+
+    excessive_gaps = [
+      "BT /F1 12 Tf 1 0 0 1 0 20 Tm (A) Tj 1 0 0 1 40 20 Tm (B) Tj ET",
+      "BT /F1 12 Tf 1 0 0 1 -40 20 Tm (A) Tj 1 0 0 1 0 20 Tm (B) Tj ET",
+      "BT /F1 12 Tf " <>
+        "1 0 0 1 0 20 Tm (A) Tj 1 0 0 1 18 20 Tm (B) Tj " <>
+        "1 0 0 1 0 40 Tm (C) Tj 1 0 0 1 18 40 Tm (D) Tj ET"
+    ]
+
+    for content <- excessive_gaps do
+      pdf = page_pdf(content)
+
+      assert {:error,
+              {:resource_limit_exceeded,
+               %{
+                 stage: :limits,
+                 reason: :resource_limit_exceeded,
+                 operation: :extract,
+                 module: Text,
+                 message: message
+               }}} = Text.extract(pdf)
+
+      assert message == "reconstructed layout whitespace exceeds the limit; page 1"
+      assert {:ok, _text} = Text.extract(pdf, layout: false)
+    end
+
+    within_limit =
+      page_pdf("BT /F1 12 Tf 1 0 0 1 0 20 Tm (A) Tj 1 0 0 1 26 20 Tm (B) Tj ET")
+
+    assert {:ok, "A     B"} = Text.extract(within_limit)
+  end
+
+  test "rejects malformed xrefs, bad stream lengths, and encrypted PDFs" do
+    malformed =
+      page_pdf("BT /F1 10 Tf (x) Tj ET")
+      |> String.replace(~r/startxref\n\d+/, "startxref\n999999")
+
+    assert_error(Text.extract(malformed), :invalid_pdf_input, :xref)
+
+    bad_length = page_pdf("BT /F1 10 Tf (x) Tj ET") |> String.replace("/Length 22", "/Length 21")
+    assert_error(Text.extract(bad_length), :invalid_pdf_input, :object)
+
+    encrypted =
+      pdf(
+        [{1, "<< /Type /Catalog /Pages 2 0 R >>"}, {2, "<< /Type /Pages /Kids [] /Count 0 >>"}],
+        "/Root 1 0 R /Encrypt 9 0 R"
+      )
+
+    assert_error(Text.extract(encrypted), :encrypted_pdf, :encryption)
+  end
+
+  test "limits the number of extracted text spans per page" do
+    content = "BT /F1 10 Tf " <> String.duplicate("(A) Tj ", 25_000) <> "[(A)] TJ ET"
+
+    assert_error(
+      Text.extract(page_pdf(content), layout: false),
+      :resource_limit_exceeded,
+      :limits
+    )
+  end
+
+  test "rejects unsupported filters, image-only PDFs, and custom encodings without Unicode" do
+    unsupported =
+      page_pdf("BT /F1 10 Tf (x) Tj ET", content_dictionary: "/Filter /DCTDecode")
+
+    assert_error(Text.extract(unsupported), :unsupported_pdf_feature, :filter)
+
+    image_only =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>"}
+      ])
+
+    assert_error(Text.extract(image_only), :no_extractable_text, :text_extraction)
+
+    custom =
+      page_pdf("BT /F1 10 Tf <01> Tj ET",
+        font: "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] >>"
+      )
+
+    assert_error(Text.extract(custom), :unsupported_text_encoding, :text_encoding)
+  end
+
+  test "reports option, input, and file diagnostics" do
+    assert_error(Text.extract(:not_a_pdf), :invalid_pdf_input, :input)
+    assert_error(Text.extract("%PDF-1.7", [:not_a_keyword]), :invalid_options, :options)
+
+    assert {:error,
+            {:invalid_options,
+             %{
+               stage: :options,
+               reason: :invalid_options,
+               operation: :extract,
+               module: Text,
+               message: "extract options contain unsupported keys: [:layuot]"
+             }}} = Text.extract("%PDF-1.7", layuot: true)
+
+    assert {:error, {:invalid_path, %{stage: :file, operation: :extract_file, module: Text}}} =
+             Text.extract_file(:not_a_path)
+
+    missing = Path.join(System.tmp_dir!(), "native-elixir-pdf-missing.pdf")
+
+    assert {:error, {:enoent, %{source: ^missing, operation: :read, module: Text}}} =
+             Text.extract_file(missing)
+  end
+
+  test "adds source context when extraction from a file fails" do
+    path = Path.join(System.tmp_dir!(), "native-elixir-pdf-encrypted.pdf")
+
+    File.write!(
+      path,
+      pdf(
+        [{1, "<< /Type /Catalog /Pages 2 0 R >>"}, {2, "<< /Type /Pages /Kids [] /Count 0 >>"}],
+        "/Root 1 0 R /Encrypt 9 0 R"
+      )
+    )
+
+    assert {:error, {:encrypted_pdf, %{source: ^path, operation: :extract_file, module: Text}}} =
+             Text.extract_file(path)
+  after
+    File.rm(Path.join(System.tmp_dir!(), "native-elixir-pdf-encrypted.pdf"))
+  end
+
+  test "decodes PNG and TIFF predictors without raising" do
+    decoded = "BT /F1 12 Tf (Predictor) Tj ET"
+    png_data = :zlib.compress(<<0>> <> decoded)
+
+    png_pdf =
+      page_pdf(png_data,
+        content_dictionary:
+          "/Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors 1 /BitsPerComponent 8 /Columns #{byte_size(decoded)} >>"
+      )
+
+    assert Text.extract(png_pdf, layout: false) == {:ok, "Predictor"}
+
+    {tiff_data, _previous} =
+      decoded
+      |> :binary.bin_to_list()
+      |> Enum.map_reduce(0, fn byte, previous -> {Integer.mod(byte - previous, 256), byte} end)
+
+    tiff_data = tiff_data |> :erlang.list_to_binary() |> :zlib.compress()
+
+    tiff_pdf =
+      page_pdf(tiff_data,
+        content_dictionary:
+          "/Filter /FlateDecode /DecodeParms << /Predictor 2 /Colors 1 /BitsPerComponent 8 /Columns #{byte_size(decoded)} >>"
+      )
+
+    assert Text.extract(tiff_pdf, layout: false) == {:ok, "Predictor"}
+  end
+
+  test "returns diagnostics for malformed predictor parameters" do
+    decoded = "BT /F1 12 Tf (Predictor) Tj ET"
+
+    pdf =
+      page_pdf(:zlib.compress(<<0>> <> decoded),
+        content_dictionary:
+          "/Filter /FlateDecode /DecodeParms << /Predictor 15 /Columns /invalid >>"
+      )
+
+    assert_error(Text.extract(pdf), :invalid_pdf_input, :filter)
+  end
+
+  test "text and span extraction preserve tokenizer failures with page context" do
+    input = page_pdf("BT /F1 12 Tf\n(unfinished")
+
+    for operation <- [:extract, :extract_spans] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = apply(Text, operation, [input])
+      assert diagnostic.reason == :invalid_pdf_input
+      assert diagnostic.stage == :content
+      assert diagnostic.module == Text
+      assert diagnostic.operation == operation
+      assert diagnostic.line == 2
+      assert diagnostic.column == 1
+      assert diagnostic.message =~ "closing )"
+      assert diagnostic.message =~ "tokenizer input byte 13"
+      assert diagnostic.message =~ "; page 1"
+    end
+  end
+
+  test "rejects malformed text operations instead of returning partial text" do
+    pdf = page_pdf("BT /F1 12 Tf (OK) Tj (LOST) (EXTRA) Tj ET")
+    assert_error(Text.extract(pdf), :invalid_pdf_input, :content)
+  end
+
+  test "rejects unknown simple-font encodings instead of guessing ASCII" do
+    pdf =
+      page_pdf("BT /F1 12 Tf (ABC) Tj ET",
+        font: "<< /Type /Font /Subtype /Type1 /Encoding /MadeUpEncoding >>"
+      )
+
+    assert {:error, {:unsupported_text_encoding, diagnostic}} = Text.extract(pdf)
+    assert diagnostic.stage == :text_encoding
+    assert diagnostic.message =~ "; page 1"
+    assert diagnostic.message =~ "; font F1"
+    refute Map.has_key?(diagnostic, :page)
+    refute Map.has_key?(diagnostic, :font)
+  end
+
+  test "reports strict decoding failures from strings inside TJ arrays" do
+    custom = "<< /Type /Font /Subtype /Type1 /BaseFont /CustomFont >>"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf [(A)] TJ ET", font: custom)),
+      :unsupported_text_encoding,
+      :text_encoding
+    )
+  end
+
+  test "decodes all supported standard simple-font encodings" do
+    cases = [
+      {"StandardEncoding", <<39>>, "’"},
+      {"WinAnsiEncoding", <<128>>, "€"},
+      {"MacRomanEncoding", <<128>>, "Ä"},
+      {"MacExpertEncoding", <<86>>, "ﬀ"},
+      {"SymbolEncoding", <<65>>, "Α"},
+      {"ZapfDingbatsEncoding", <<33>>, "✁"},
+      {"PDFDocEncoding", <<128>>, "•"}
+    ]
+
+    for {encoding, source, expected} <- cases do
+      pdf =
+        page_pdf(<<"BT /F1 12 Tf (", source::binary, ") Tj ET">>,
+          font: "<< /Type /Font /Subtype /Type1 /Encoding /#{encoding} >>"
+        )
+
+      assert Text.extract(pdf, layout: false) == {:ok, expected}
+    end
+  end
+
+  test "decodes Differences with Adobe glyph names and rejects malformed arrays" do
+    font =
+      "<< /Type /Font /Subtype /Type1 /Encoding << /BaseEncoding /WinAnsiEncoding /Differences [65 /Aacute 66 /f_f_i] >> >>"
+
+    assert Text.extract(page_pdf("BT /F1 12 Tf (AB) Tj ET", font: font), layout: false) ==
+             {:ok, "Áffi"}
+
+    malformed_font =
+      "<< /Type /Font /Subtype /Type1 /Encoding << /BaseEncoding /WinAnsiEncoding /Differences [/Aacute] >> >>"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf (A) Tj ET", font: malformed_font)),
+      :invalid_pdf_input,
+      :text_encoding
+    )
+  end
+
+  test "decodes high-byte bfrange sources without treating bytes as UTF-8 strings" do
+    cmap =
+      "begincmap\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfrange\n<80> <81> <0041>\nendbfrange\nendcmap"
+
+    pdf =
+      page_pdf("BT /F1 12 Tf <8081> Tj ET",
+        font:
+          "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>",
+        cmap: cmap
+      )
+
+    assert Text.extract(pdf, layout: false) == {:ok, "AB"}
+  end
+
+  test "rejects unsupported CMap inheritance and malformed declared counts" do
+    inherited =
+      "/Adobe-Identity-UCS usecmap\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfchar\n<01> <0041>\nendbfchar"
+
+    font =
+      "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf <01> Tj ET", font: font, cmap: inherited)),
+      :unsupported_text_encoding,
+      :cmap
+    )
+
+    malformed =
+      "begincmap\n2 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfchar\n<01> <0041>\nendbfchar"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf <01> Tj ET", font: font, cmap: malformed)),
+      :invalid_pdf_input,
+      :cmap
+    )
+  end
+
+  test "uses page rotation when ordering layout text" do
+    content =
+      "BT /F1 12 Tf 1 0 0 1 10 20 Tm (FIRST) Tj 1 0 0 1 40 20 Tm (SECOND) Tj ET"
+
+    assert {:ok, "FIRST\nSECOND"} = Text.extract(page_pdf(content, rotate: 90))
+  end
+
+  test "TJ and Tj advance text by the same font widths" do
+    font =
+      "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding /FirstChar 65 /Widths [1000 1000] >>"
+
+    tj = page_pdf("BT /F1 20 Tf 1 0 0 1 10 20 Tm (A) Tj (B) Tj ET", font: font)
+    array = page_pdf("BT /F1 20 Tf 1 0 0 1 10 20 Tm [(A)] TJ (B) Tj ET", font: font)
+
+    assert Text.extract(tj) == Text.extract(array)
+  end
+
+  test "returns diagnostics for missing Form resources and malformed Form matrices" do
+    missing = page_pdf("BT /F1 12 Tf (OK) Tj /missing Do ET")
+    assert_error(Text.extract(missing), :invalid_pdf_input, :resolution)
+
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents 6 0 R >>"},
+      {4, "<< /Font << /F1 5 0 R >> /XObject << /form 7 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", "/form Do")},
+      {7,
+       stream_object(
+         "/Type /XObject /Subtype /Form /Matrix [1 0 /bad 1 0 0] /Resources << /Font << /F1 5 0 R >> >>",
+         "BT /F1 12 Tf (Form) Tj ET"
+       )}
+    ]
+
+    assert_error(Text.extract(pdf(objects)), :invalid_pdf_input, :validation)
+  end
+
+  test "does not return text painted with an invisible rendering mode" do
+    pdf = page_pdf("BT /F1 12 Tf (Visible) Tj 3 Tr (Hidden) Tj ET")
+    assert Text.extract(pdf, layout: false) == {:ok, "Visible"}
+  end
+
+  test "extract_spans preserves rendering modes that the string projection excludes" do
+    pdf =
+      page_pdf("BT /F1 12 Tf 1 0 0 1 10 20 Tm (Painted) Tj 3 Tr (Hidden) Tj 7 Tr (Clip) Tj ET")
+
+    assert {:ok, %{page_count: 1, pages: [%{number: 1, spans: spans}]}} =
+             Text.extract_spans(pdf)
+
+    assert Enum.map(spans, & &1.text) == ["Painted", "Hidden", "Clip"]
+    assert Enum.map(spans, & &1.source_index) == [0, 1, 2]
+
+    assert Enum.map(spans, &{&1.render_mode, &1.paints_text?, &1.adds_to_clip_path?}) == [
+             {0, true, false},
+             {3, false, false},
+             {7, false, true}
+           ]
+
+    assert Text.extract(pdf, layout: false) == {:ok, "Painted"}
+    assert Text.extract(pdf, layout: true) == {:ok, "Painted"}
+  end
+
+  test "extract_spans exposes baseline geometry, matrices, font context, and TJ joins" do
+    font =
+      "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding /FirstChar 65 /Widths [1000 1000] >>"
+
+    pdf = page_pdf("BT /F1 20 Tf 1 0 0 1 10 20 Tm [(A) -100 (B)] TJ ET", font: font)
+
+    assert {:ok, %{pages: [%{media_box: [0, 0, 612, 792], rotation: 0, spans: [a, b]}]}} =
+             Text.extract_spans(pdf)
+
+    assert %{
+             text: "A",
+             source_index: 0,
+             font_resource: "F1",
+             joins_previous?: false
+           } = a
+
+    assert {a.x, a.y, a.end_x, a.end_y, a.font_size} == {10.0, 772.0, 30.0, 772.0, 20.0}
+    assert a.text_matrix == [1.0, 0.0, 0.0, 1.0, 10.0, 20.0]
+    assert a.ctm == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    assert b.text == "B"
+    assert b.source_index == 1
+    assert b.x == 32.0
+    assert b.end_x == 52.0
+    assert b.joins_previous?
+  end
+
+  test "q and Q restore nested graphics and text state in LIFO order" do
+    content = """
+    /F1 10 Tf 1 Tc 2 Tw 80 Tz 12 TL 1 Ts 2 Tr
+    q
+      /F2 20 Tf 3 Tc 4 Tw 60 Tz 24 TL 2 Ts 7 Tr
+      q
+        /F1 30 Tf 5 Tc 6 Tw 40 Tz 36 TL 3 Ts 3 Tr
+        2 0 0 2 3 4 cm
+      Q
+      BT 1 0 0 1 10 100 Tm (A A) Tj T* (A) Tj ET
+      1 0 0 1 20 30 cm
+    Q
+    BT 1 0 0 1 10 50 Tm (A A) Tj T* (A) Tj ET
+    """
+
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+      {3,
+       "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources 4 0 R /Contents 6 0 R >>"},
+      {4, "<< /Font << /F1 5 0 R /F2 7 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", content)},
+      {7, "<< /Type /Font /Subtype /Type1 /BaseFont /Symbol >>"}
+    ]
+
+    assert {:ok, %{pages: [%{spans: [inner, inner_next, outer, outer_next]}]}} =
+             Text.extract_spans(pdf(objects))
+
+    assert Enum.map([inner, inner_next, outer, outer_next], & &1.source_index) == [0, 1, 2, 3]
+
+    assert Enum.map([inner, inner_next, outer, outer_next], & &1.font_resource) ==
+             ["F2", "F2", "F1", "F1"]
+
+    assert Enum.map([inner, inner_next, outer, outer_next], & &1.font_size) ==
+             [20.0, 20.0, 10.0, 10.0]
+
+    assert Enum.map([inner, inner_next, outer, outer_next], & &1.text) ==
+             ["Α Α", "Α", "A A", "A"]
+
+    assert Enum.map(
+             [inner, inner_next, outer, outer_next],
+             &{&1.render_mode, &1.paints_text?, &1.adds_to_clip_path?}
+           ) == [
+             {7, false, true},
+             {7, false, true},
+             {2, true, false},
+             {2, true, false}
+           ]
+
+    assert Enum.all?(
+             [inner, inner_next, outer, outer_next],
+             &(&1.ctm == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+           )
+
+    assert {inner.x, inner.y} == {10.0, 690.0}
+    assert_in_delta inner.end_x, 35.8, 0.0001
+    assert inner_next.y == 714.0
+    assert_in_delta inner_next.end_x, 17.8, 0.0001
+
+    assert {outer.x, outer.y} == {10.0, 741.0}
+    assert_in_delta outer.end_x, 26.0, 0.0001
+    assert outer_next.y == 753.0
+    assert_in_delta outer_next.end_x, 14.8, 0.0001
+  end
+
+  test "applies ExtGState fonts and restores them with q and Q" do
+    content = """
+    /F1 10 Tf
+    q
+      /GSFont gs
+      BT (A) Tj ET
+    Q
+    BT (A) Tj ET
+    /GSNoFont gs
+    BT (A) Tj ET
+    """
+
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+      {3,
+       "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources 4 0 R /Contents 6 0 R >>"},
+      {4, "<< /Font << /F1 5 0 R >> /ExtGState << /GSFont 7 0 R /GSNoFont 9 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", content)},
+      {7, "<< /Font [8 0 R 20] >>"},
+      {8, "<< /Type /Font /Subtype /Type1 /BaseFont /Symbol >>"},
+      {9, "<< /LW 2 >>"}
+    ]
+
+    assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(pdf(objects))
+
+    assert Enum.map(spans, &{&1.text, &1.font_resource, &1.font_size}) == [
+             {"Α", "GSFont", 20.0},
+             {"A", "F1", 10.0},
+             {"A", "F1", 10.0}
+           ]
+  end
+
+  test "resolves ExtGState fonts from Form XObject resources" do
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents 6 0 R >>"},
+      {4, "<< /XObject << /form 7 0 R >> >>"},
+      {6, stream_object("", "/form Do")},
+      {7,
+       stream_object(
+         "/Type /XObject /Subtype /Form /Resources 9 0 R",
+         "/GS1 gs BT (A) Tj ET"
+       )},
+      {8, "<< /Type /Font /Subtype /Type1 /BaseFont /Symbol >>"},
+      {9, "<< /ExtGState << /GS1 10 0 R >> >>"},
+      {10, "<< /Font [8 0 R 14] >>"}
+    ]
+
+    assert {:ok, %{pages: [%{spans: [span]}]}} = Text.extract_spans(pdf(objects))
+    assert {span.text, span.font_resource, span.font_size} == {"Α", "GS1", 14.0}
+  end
+
+  test "diagnoses missing and malformed ExtGState resources" do
+    assert_error(Text.extract(page_pdf("/Missing gs")), :invalid_pdf_input, :resources)
+
+    malformed_font_objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents 6 0 R >>"},
+      {4, "<< /ExtGState << /GS1 7 0 R >> >>"},
+      {6, stream_object("", "/GS1 gs")},
+      {7, "<< /Font [8 0 R] >>"},
+      {8, "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>"}
+    ]
+
+    assert_error(Text.extract(pdf(malformed_font_objects)), :invalid_pdf_input, :resources)
+
+    unresolved_font = List.replace_at(malformed_font_objects, 5, {7, "<< /Font 99 0 R >>"})
+    assert_error(Text.extract(pdf(unresolved_font)), :invalid_pdf_input, :resolution)
+
+    invalid_font =
+      malformed_font_objects
+      |> List.replace_at(5, {7, "<< /Font [8 0 R 12] >>"})
+      |> List.replace_at(6, {8, "<< /Type /Font /Subtype /Type0 >>"})
+
+    assert_error(Text.extract(pdf(invalid_font)), :invalid_pdf_input, :font)
+
+    invalid_dictionary = List.replace_at(malformed_font_objects, 5, {7, "42"})
+    assert_error(Text.extract(pdf(invalid_dictionary)), :invalid_pdf_input, :resolution)
+  end
+
+  test "extract_spans keeps source order and can provide best-effort visual order" do
+    content =
+      "BT /F1 12 Tf 1 0 0 1 100 20 Tm (RIGHT) Tj " <>
+        "1 0 0 1 10 20.8 Tm (LEFT) Tj 1 0 0 1 10 40 Tm (TOP) Tj ET"
+
+    pdf = page_pdf(content)
+
+    assert {:ok, %{pages: [%{spans: source}]}} = Text.extract_spans(pdf)
+    assert Enum.map(source, & &1.text) == ["RIGHT", "LEFT", "TOP"]
+    assert Enum.map(source, & &1.source_index) == [0, 1, 2]
+    assert_in_delta Enum.at(source, 0).y, Enum.at(source, 1).y, 1.0
+
+    assert {:ok, %{pages: [%{spans: visual}]}} = Text.extract_spans(pdf, order: :visual)
+    assert Enum.map(visual, & &1.text) == ["TOP", "LEFT", "RIGHT"]
+    assert Enum.map(visual, & &1.source_index) == [2, 1, 0]
+  end
+
+  test "extract_spans preserves multiple pages including an empty page" do
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2,
+       "<< /Type /Pages /Kids [3 0 R 4 0 R 9 0 R] /Count 3 /MediaBox [0 0 612 792] /Resources 5 0 R >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>"},
+      {4, "<< /Type /Page /Parent 2 0 R >>"},
+      {9, "<< /Type /Page /Parent 2 0 R /Contents 8 0 R >>"},
+      {5, "<< /Font << /F1 6 0 R >> >>"},
+      {6, "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>"},
+      {7, stream_object("", "BT /F1 12 Tf (One) Tj ET")},
+      {8, stream_object("", "BT /F1 12 Tf (Two) Tj ET")}
+    ]
+
+    pdf = pdf(objects)
+
+    assert {:ok, %{page_count: 3, pages: pages}} = Text.extract_spans(pdf)
+    assert Enum.map(pages, & &1.number) == [1, 2, 3]
+
+    assert Enum.map(pages, fn page -> Enum.map(page.spans, & &1.text) end) == [
+             ["One"],
+             [],
+             ["Two"]
+           ]
+
+    assert Text.extract(pdf, layout: false) == {:ok, "One\nTwo"}
+  end
+
+  test "extract_spans returns empty pages for a valid PDF without text" do
+    image_only =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>"}
+      ])
+
+    assert Text.extract_spans(image_only) ==
+             {:ok,
+              %{
+                page_count: 1,
+                pages: [%{number: 1, media_box: [0, 0, 612, 792], rotation: 0, spans: []}]
+              }}
+  end
+
+  test "extract_spans applies page rotation to normalized baseline coordinates" do
+    pdf = page_pdf("BT /F1 12 Tf 1 0 0 1 10 20 Tm (A) Tj ET", rotate: 90)
+
+    assert {:ok, %{pages: [%{rotation: 90, spans: [span]}]}} = Text.extract_spans(pdf)
+    assert span.x == 20.0
+    assert span.y == 10.0
+    assert span.end_x == 20.0
+    assert span.end_y == 16.0
+  end
+
+  test "extract_spans resolves an inherited indirect page rotation" do
+    pdf =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2,
+         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] /Rotate 6 0 R /Resources 4 0 R >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>"},
+        {4, "<< /Font << /F1 5 0 R >> >>"},
+        {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+        {6, "90"},
+        {7, stream_object("", "BT /F1 12 Tf 1 0 0 1 10 20 Tm (A) Tj ET")}
+      ])
+
+    assert {:ok, %{pages: [%{rotation: 90, spans: [span]}]}} = Text.extract_spans(pdf)
+    assert span.x == 20.0
+    assert span.y == 10.0
+  end
+
+  test "extract_spans indexes multiple content streams and nested transformed Forms" do
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents [6 0 R 7 0 R] >>"},
+      {4, "<< /Font << /F1 5 0 R >> /XObject << /outer 8 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", "BT /F1 10 Tf (A) Tj ET")},
+      {7, stream_object("", "/outer Do BT /F1 10 Tf (D) Tj ET")},
+      {8,
+       stream_object(
+         "/Type /XObject /Subtype /Form /Matrix [1 0 0 1 20 30] /Resources 10 0 R",
+         "BT /F1 10 Tf (B) Tj ET /inner Do"
+       )},
+      {9,
+       stream_object(
+         "/Type /XObject /Subtype /Form /Matrix [2 0 0 2 3 4] /Resources << /Font << /F1 5 0 R >> >>",
+         "BT /F1 10 Tf (C) Tj ET"
+       )},
+      {10, "<< /Font << /F1 5 0 R >> /XObject << /inner 9 0 R >> >>"}
+    ]
+
+    assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(pdf(objects))
+    assert Enum.map(spans, & &1.text) == ["A", "B", "C", "D"]
+    assert Enum.map(spans, & &1.source_index) == [0, 1, 2, 3]
+    assert Enum.at(spans, 1).ctm == [1.0, 0.0, 0.0, 1.0, 20.0, 30.0]
+    assert Enum.at(spans, 2).ctm == [2.0, 0.0, 0.0, 2.0, 23.0, 34.0]
+    assert {Enum.at(spans, 1).x, Enum.at(spans, 1).y} == {20.0, 762.0}
+    assert {Enum.at(spans, 2).x, Enum.at(spans, 2).y} == {23.0, 758.0}
+  end
+
+  test "extract_spans validates options, input, encoding, and file diagnostics" do
+    assert {:error, {:invalid_pdf_input, input_diagnostic}} = Text.extract_spans(:not_a_pdf)
+    assert input_diagnostic.stage == :input
+    assert input_diagnostic.operation == :extract_spans
+    assert input_diagnostic.module == Text
+
+    assert {:error, {:invalid_options, %{stage: :options, operation: :extract_spans}}} =
+             Text.extract_spans("%PDF-1.7", [:not_a_keyword])
+
+    assert {:error, {:invalid_options, %{stage: :options, operation: :extract_spans}}} =
+             Text.extract_spans("%PDF-1.7", layout: true)
+
+    assert {:error, {:invalid_options, %{stage: :options, operation: :extract_spans}}} =
+             Text.extract_spans("%PDF-1.7", order: :invalid)
+
+    custom =
+      page_pdf("BT /F1 10 Tf <01> Tj ET",
+        font: "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] >>"
+      )
+
+    assert {:error, {:unsupported_text_encoding, encoding_diagnostic}} =
+             Text.extract_spans(custom)
+
+    assert encoding_diagnostic.stage == :text_encoding
+    assert encoding_diagnostic.operation == :extract_spans
+    assert encoding_diagnostic.module == Text
+
+    assert {:error,
+            {:invalid_path, %{stage: :file, operation: :extract_file_spans, module: Text}}} =
+             Text.extract_file_spans(:not_a_path)
+
+    missing = Path.join(System.tmp_dir!(), "native-elixir-pdf-missing-spans.pdf")
+
+    assert {:error, {:enoent, %{source: ^missing, operation: :read, module: Text}}} =
+             Text.extract_file_spans(missing)
+  end
+
+  test "extract_file_spans returns spans and adds source context to extraction errors" do
+    valid_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-spans.pdf")
+    encrypted_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-encrypted-spans.pdf")
+    on_exit(fn -> File.rm(valid_path) end)
+    on_exit(fn -> File.rm(encrypted_path) end)
+
+    File.write!(valid_path, page_pdf("BT /F1 12 Tf (File) Tj ET"))
+
+    assert {:ok, %{pages: [%{spans: [%{text: "File"}]}]}} =
+             Text.extract_file_spans(valid_path)
+
+    File.write!(
+      encrypted_path,
+      pdf(
+        [{1, "<< /Type /Catalog /Pages 2 0 R >>"}, {2, "<< /Type /Pages /Kids [] /Count 0 >>"}],
+        "/Root 1 0 R /Encrypt 9 0 R"
+      )
+    )
+
+    assert {:error,
+            {:encrypted_pdf,
+             %{source: ^encrypted_path, operation: :extract_file_spans, module: Text}}} =
+             Text.extract_file_spans(encrypted_path)
+  end
+
+  test "handles empty text and reports text shown without an active font" do
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf () Tj ET")),
+      :no_extractable_text,
+      :text_extraction
+    )
+
+    assert_error(
+      Text.extract(page_pdf("BT (A) Tj ET")),
+      :unsupported_text_encoding,
+      :text_encoding
+    )
+  end
+
+  test "decodes the supported stream filters and their abbreviations" do
+    decoded = "BT /F1 12 Tf (Filters) Tj ET"
+
+    cases = [
+      {"Fl", :zlib.compress(decoded)},
+      {"ASCIIHexDecode", Base.encode16(decoded) <> ">"},
+      {"AHx", Base.encode16(decoded) <> ">"},
+      {"ASCII85Decode", ascii85(decoded)},
+      {"A85", ascii85(decoded)},
+      {"RunLengthDecode", run_length_encode(decoded)},
+      {"RL", run_length_encode(decoded)},
+      {"LZWDecode", lzw_literal_encode(decoded)},
+      {"LZW", lzw_literal_encode(decoded)}
+    ]
+
+    for {filter, data} <- cases do
+      assert Text.extract(page_pdf(data, content_dictionary: "/Filter /#{filter}"), layout: false) ==
+               {:ok, "Filters"}
+    end
+  end
+
+  test "returns diagnostics for malformed filter data" do
+    cases = [
+      {"ASCIIHexDecode", "41", :invalid_pdf_input},
+      {"ASCIIHexDecode", "GG>", :invalid_pdf_input},
+      {"ASCII85Decode", "!!!!", :invalid_pdf_input},
+      {"ASCII85Decode", "v~>", :invalid_pdf_input},
+      {"ASCII85Decode", "!~>", :invalid_pdf_input},
+      {"ASCII85Decode", "!!z!!~>", :invalid_pdf_input},
+      {"RunLengthDecode", <<0, ?A>>, :invalid_pdf_input},
+      {"RunLengthDecode", <<2, ?A, 128>>, :invalid_pdf_input},
+      {"RunLengthDecode", <<255>>, :invalid_pdf_input},
+      {"LZWDecode", <<0>>, :invalid_pdf_input}
+    ]
+
+    for {filter, data, reason} <- cases do
+      assert_error(
+        Text.extract(page_pdf(data, content_dictionary: "/Filter /#{filter}")),
+        reason,
+        :filter
+      )
+    end
+
+    invalid_early_change =
+      page_pdf(lzw_literal_encode("x"),
+        content_dictionary: "/Filter /LZWDecode /DecodeParms << /EarlyChange 2 >>"
+      )
+
+    assert_error(Text.extract(invalid_early_change), :invalid_pdf_input, :filter)
+  end
+
+  test "decodes every PNG row filter and rejects invalid or truncated rows" do
+    decoded = "BT /F1 12 Tf (PNG) Tj ET"
+
+    for filter <- 0..4 do
+      predicted = png_predict(decoded, filter)
+
+      pdf =
+        page_pdf(:zlib.compress(<<filter>> <> predicted),
+          content_dictionary:
+            "/Filter /FlateDecode /DecodeParms << /Predictor 15 /Columns #{byte_size(decoded)} >>"
+        )
+
+      assert Text.extract(pdf, layout: false) == {:ok, "PNG"}
+    end
+
+    invalid =
+      page_pdf(:zlib.compress(<<5>> <> decoded),
+        content_dictionary:
+          "/Filter /FlateDecode /DecodeParms << /Predictor 15 /Columns #{byte_size(decoded)} >>"
+      )
+
+    assert_error(Text.extract(invalid), :invalid_pdf_input, :filter)
+
+    truncated =
+      page_pdf(:zlib.compress(<<0, 1>>),
+        content_dictionary: "/Filter /FlateDecode /DecodeParms << /Predictor 15 /Columns 10 >>"
+      )
+
+    assert_error(Text.extract(truncated), :invalid_pdf_input, :filter)
+  end
+
+  test "enforces decompression ratio limits through diagnostics" do
+    expanded = :binary.copy(" ", 30_000) <> "BT /F1 12 Tf (Too large) Tj ET"
+    pdf = page_pdf(:zlib.compress(expanded), content_dictionary: "/Filter /FlateDecode")
+    assert_error(Text.extract(pdf), :resource_limit_exceeded, :limits)
+  end
+
+  test "interprets supported text and graphics-state operators" do
+    content =
+      "q 1 0 0 1 2 3 cm Q BT /F1 12 Tf 1 0 0 1 10 40 Tm 1 Tc 2 Tw 90 Tz 14 TL 1 Ts 0 Tr (A) Tj 0 -1 Td (B) Tj 0 -1 TD (C) Tj T* (D) Tj (E) ' 1 2 (F) \" [(G) -100 (H)] TJ ET"
+
+    assert {:ok, text} = Text.extract(page_pdf(content), layout: false)
+    assert text =~ "A"
+    assert text =~ "H"
+  end
+
+  test "rejects invalid operands for supported operators" do
+    invalid_streams = [
+      "1 q",
+      "Q",
+      "1 cm",
+      "/GS1 1 gs",
+      "BT /F1 Tf ET",
+      "BT 1 Tm ET",
+      "BT 1 Td ET",
+      "BT 1 TD ET",
+      "BT /bad TL ET",
+      "BT /bad Tc ET",
+      "BT /bad Tw ET",
+      "BT /bad Tz ET",
+      "BT /bad Ts ET",
+      "BT 8 Tr ET",
+      "BT 1 2 ' ET",
+      "BT 1 2 \" ET",
+      "(outside) Tj",
+      "[(outside)] TJ"
+    ]
+
+    for content <- invalid_streams do
+      result = Text.extract(page_pdf(content))
+
+      assert match?({:error, {:invalid_pdf_input, %{stage: :content}}}, result),
+             "expected invalid content for #{inspect(content)}, got: #{inspect(result)}"
+    end
+  end
+
+  test "rejects unmatched and nested page content scopes" do
+    invalid_streams = [
+      {"q BT /F1 12 Tf (Text) Tj ET", "q has no matching Q"},
+      {"BT /F1 12 Tf (Text) Tj", "BT has no matching ET"},
+      {"ET", "ET has no matching BT"},
+      {"BT BT /F1 12 Tf (Text) Tj ET ET", "BT appears inside a text object"}
+    ]
+
+    for {content, message} <- invalid_streams do
+      assert {:error,
+              {:invalid_pdf_input,
+               %{stage: :content, reason: :invalid_pdf_input, message: diagnostic_message}}} =
+               Text.extract(page_pdf(content))
+
+      assert String.starts_with?(diagnostic_message, message)
+    end
+  end
+
+  test "rejects unclosed graphics and text scopes inside Form XObjects" do
+    for form_content <- [
+          "q BT /F1 12 Tf (Form) Tj ET",
+          "BT /F1 12 Tf (Form) Tj"
+        ] do
+      objects = [
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents 6 0 R >>"},
+        {4, "<< /Font << /F1 5 0 R >> /XObject << /form 7 0 R >> >>"},
+        {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+        {6, stream_object("", "/form Do")},
+        {7,
+         stream_object(
+           "/Type /XObject /Subtype /Form /Resources 4 0 R",
+           form_content
+         )}
+      ]
+
+      assert_error(Text.extract(pdf(objects)), :invalid_pdf_input, :content)
+    end
+  end
+
+  test "rejects malformed content syntax and Contents values" do
+    assert_error(Text.extract(page_pdf("[1 2")), :invalid_pdf_input, :content)
+    assert_error(Text.extract(page_pdf("1")), :invalid_pdf_input, :content)
+    assert_error(Text.extract(page_pdf("(unterminated")), :invalid_pdf_input, :content)
+
+    base = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"}
+    ]
+
+    assert_error(
+      Text.extract(pdf(base ++ [{3, "<< /Type /Page /Parent 2 0 R /Contents [6 0 R 9] >>"}])),
+      :invalid_pdf_input,
+      :content
+    )
+
+    assert_error(
+      Text.extract(pdf(base ++ [{3, "<< /Type /Page /Parent 2 0 R /Contents 9 >>"}])),
+      :invalid_pdf_input,
+      :content
+    )
+  end
+
+  test "uses standard base-font encodings and rejects custom fonts without mappings" do
+    helvetica = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+
+    assert Text.extract(page_pdf("BT /F1 12 Tf (A) Tj ET", font: helvetica), layout: false) ==
+             {:ok, "A"}
+
+    symbol = "<< /Type /Font /Subtype /Type1 /BaseFont /Symbol >>"
+
+    assert Text.extract(page_pdf("BT /F1 12 Tf (A) Tj ET", font: symbol), layout: false) ==
+             {:ok, "Α"}
+
+    zapf = "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>"
+
+    assert Text.extract(page_pdf("BT /F1 12 Tf (!) Tj ET", font: zapf), layout: false) ==
+             {:ok, "✁"}
+
+    custom = "<< /Type /Font /Subtype /Type1 /BaseFont /CustomEmbedded >>"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf (A) Tj ET", font: custom)),
+      :unsupported_text_encoding,
+      :text_encoding
+    )
+  end
+
+  test "validates simple-font width and encoding dictionaries" do
+    invalid_widths =
+      "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding /FirstChar /bad /Widths [500] >>"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf (A) Tj ET", font: invalid_widths)),
+      :invalid_pdf_input,
+      :font
+    )
+
+    invalid_descriptor =
+      "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding /FontDescriptor 9 0 R >>"
+
+    pdf_with_descriptor =
+      page_pdf("BT /F1 12 Tf (A) Tj ET",
+        font: invalid_descriptor,
+        extra_objects: [{9, "<< /MissingWidth /bad >>"}]
+      )
+
+    assert_error(Text.extract(pdf_with_descriptor), :invalid_pdf_input, :font)
+
+    malformed_encoding =
+      "<< /Type /Font /Subtype /Type1 /Encoding << /BaseEncoding 42 >> >>"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf (A) Tj ET", font: malformed_encoding)),
+      :invalid_pdf_input,
+      :text_encoding
+    )
+
+    scalar_differences =
+      "<< /Type /Font /Subtype /Type1 /Encoding << /BaseEncoding /WinAnsiEncoding /Differences 42 >> >>"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf (A) Tj ET", font: scalar_differences)),
+      :invalid_pdf_input,
+      :text_encoding
+    )
+  end
+
+  test "uses CID listed and ranged widths and rejects malformed W arrays" do
+    cmap =
+      "begincmap\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n4 beginbfchar\n<01> <0041>\n<02> <0042>\n<03> <0043>\n<04> <0044>\nendbfchar\nendcmap"
+
+    font =
+      "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    valid =
+      page_pdf("BT /F1 12 Tf <01020304> Tj ET",
+        font: font,
+        cmap: cmap,
+        descendant: "<< /Type /Font /Subtype /CIDFontType2 /DW 500 /W [1 [400 500] 3 4 600] >>"
+      )
+
+    assert Text.extract(valid, layout: false) == {:ok, "ABCD"}
+
+    invalid =
+      page_pdf("BT /F1 12 Tf <01> Tj ET",
+        font: font,
+        cmap: cmap,
+        descendant: "<< /Type /Font /Subtype /CIDFontType2 /DW 500 /W [1 [/bad]] >>"
+      )
+
+    assert_error(Text.extract(invalid), :invalid_pdf_input, :font)
+
+    invalid_range =
+      page_pdf("BT /F1 12 Tf <01> Tj ET",
+        font: font,
+        cmap: cmap,
+        descendant: "<< /Type /Font /Subtype /CIDFontType2 /DW 500 /W [1 2] >>"
+      )
+
+    assert_error(Text.extract(invalid_range), :invalid_pdf_input, :font)
+
+    oversized_range =
+      page_pdf("BT /F1 12 Tf <01> Tj ET",
+        font: font,
+        cmap: cmap,
+        descendant: "<< /Type /Font /Subtype /CIDFontType2 /DW 500 /W [0 1000000000 600] >>"
+      )
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(oversized_range)
+    assert diagnostic.stage == :font
+    assert diagnostic.message == "CID font width entry count exceeds the limit; page 1"
+
+    excessive_aggregate =
+      page_pdf("BT /F1 12 Tf <01> Tj ET",
+        font: font,
+        cmap: cmap,
+        descendant:
+          "<< /Type /Font /Subtype /CIDFontType2 /DW 500 /W [0 40000 500 0 40000 600] >>"
+      )
+
+    assert_error(Text.extract(excessive_aggregate), :resource_limit_exceeded, :font)
+
+    out_of_range =
+      page_pdf("BT /F1 12 Tf <01> Tj ET",
+        font: font,
+        cmap: cmap,
+        descendant: "<< /Type /Font /Subtype /CIDFontType2 /DW 500 /W [65535 [400 500]] >>"
+      )
+
+    assert_error(Text.extract(out_of_range), :invalid_pdf_input, :font)
+  end
+
+  test "maps Type0 source codes through the Encoding CMap before CID width lookup" do
+    to_unicode =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 beginbfrange\n<01> <07> <0041>\nendbfrange"
+
+    encoding =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 begincidchar\n<01> 5\nendcidchar\n" <>
+        "1 begincidrange\n<02> <03> 6\nendcidrange\n" <>
+        "1 beginnotdefchar\n<04> 8\nendnotdefchar\n" <>
+        "1 beginnotdefrange\n<05> <06> 9\nendnotdefrange"
+
+    font =
+      "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    pdf =
+      page_pdf(
+        "BT /F1 10 Tf 1 0 0 1 10 20 Tm <01> Tj 1 0 0 1 30 20 Tm <020304050607> Tj ET",
+        font: font,
+        cmap: to_unicode,
+        descendant:
+          "<< /Type /Font /Subtype /CIDFontType2 /DW 500 /W [0 [200] 5 [1000 800 600 700 400 300]] >>",
+        extra_objects: [{9, stream_object("", encoding)}]
+      )
+
+    assert {:ok, %{pages: [%{spans: [a, rest]}]}} = Text.extract_spans(pdf)
+    assert {a.text, a.x, a.end_x} == {"A", 10.0, 20.0}
+    assert {rest.text, rest.x, rest.end_x} == {"BCDEFG", 30.0, 61.0}
+  end
+
+  test "bounds expanded Unicode text across all text-showing operators" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_extracted_text_bytes: 6})
+
+    cmap =
+      "1 begincodespacerange <00> <FF> endcodespacerange " <>
+        "1 beginbfchar <41> <006600660069> endbfchar"
+
+    font = "<< /Type /Font /ToUnicode 7 0 R >>"
+
+    for content <- ["(AA) Tj", "[(A) 0 (A)] TJ", "(A) Tj (A) '", "(A) Tj 0 0 (A) \""] do
+      source = page_pdf("BT /F1 10 Tf #{content} ET", font: font, cmap: cmap)
+      assert {:ok, _} = Text.extract(source, layout: false)
+      Limits.install(%{original | max_extracted_text_bytes: 5})
+
+      for extract <- [&Text.extract/1, &Text.extract_spans/1] do
+        assert {:error, {:resource_limit_exceeded, diagnostic}} = extract.(source)
+        assert diagnostic.stage == :limits
+        assert diagnostic.reason == :resource_limit_exceeded
+        assert diagnostic.module == Text
+        assert diagnostic.message =~ "extracted text bytes"
+        assert diagnostic.message =~ "page 1"
+        assert diagnostic.message =~ "F1"
+      end
+
+      Limits.install(%{original | max_extracted_text_bytes: 6})
+    end
+  end
+
+  test "bounds simple-font text across pages and repeated Forms" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_extracted_text_bytes: 7})
+    assert {:ok, _} = Text.extract(shared_content_pages_pdf(1, "BT /F1 12 Tf (Form) Tj ET"))
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             Text.extract(shared_content_pages_pdf(2, "BT /F1 12 Tf (Form) Tj ET"))
+
+    assert message =~ "page 2"
+
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents 6 0 R >>"},
+        {4, "<< /Font << /F1 5 0 R >> /XObject << /form 7 0 R >> >>"},
+        {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+        {6, stream_object("", "/form Do /form Do")},
+        {7,
+         stream_object(
+           "/Type /XObject /Subtype /Form /Resources 4 0 R",
+           "BT /F1 12 Tf (Form) Tj ET"
+         )}
+      ])
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: message}}} =
+             Text.extract(source)
+
+    assert message =~ "extracted text bytes"
+  end
+
+  test "bounds mapping allocations for individual, array, sequential and overwritten destinations" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    prefix = "1 begincodespacerange <00> <FF> endcodespacerange "
+    font = "<< /Type /Font /ToUnicode 7 0 R >>"
+
+    for mappings <- [
+          "2 beginbfchar <41> <00660066> <42> <00660067> endbfchar",
+          "1 beginbfrange <41> <42> [<00660066> <00660067>] endbfrange",
+          "1 beginbfrange <41> <42> <00660066> endbfrange",
+          "1 beginbfchar <41> <00660066> endbfchar 1 beginbfchar <41> <00660067> endbfchar"
+        ] do
+      source = page_pdf("BT /F1 10 Tf (A) Tj ET", font: font, cmap: prefix <> mappings)
+      Limits.install(%{original | max_cmap_expanded_bytes: 6})
+      assert {:ok, _} = Text.extract(source)
+      Limits.install(%{original | max_cmap_expanded_bytes: 5})
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(source)
+      assert diagnostic.stage == :limits
+      assert diagnostic.module == Text
+      assert diagnostic.operation == :extract
+      assert diagnostic.message =~ "expanded CMap bytes"
+      assert diagnostic.message =~ "page 1"
+    end
+  end
+
+  test "expanded budgets measure UTF-8 bytes rather than Unicode characters" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
+    source =
+      page_pdf("BT /F1 10 Tf (A) Tj ET",
+        font: "<< /Type /Font /ToUnicode 7 0 R >>",
+        cmap:
+          "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <D83DDE00> endbfchar"
+      )
+
+    Limits.install(%{original | max_extracted_text_bytes: 4, max_cmap_expanded_bytes: 5})
+    assert {:ok, "😀"} = Text.extract(source, layout: false)
+    Limits.install(%{original | max_extracted_text_bytes: 3})
+    assert {:error, {:resource_limit_exceeded, _}} = Text.extract(source)
+    Limits.install(%{original | max_cmap_expanded_bytes: 4})
+    assert {:error, {:resource_limit_exceeded, _}} = Text.extract(source)
+  end
+
+  test "mapping allocation budget spans fonts but cached aliases reuse it" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_cmap_expanded_bytes: 2})
+
+    source =
+      page_pdf("BT /F1 10 Tf (A) Tj ET",
+        font: "<< /Type /Font /ToUnicode 7 0 R >>",
+        cmap:
+          "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0041> endbfchar"
+      )
+
+    assert {:ok, context} = Reader.read_validated(source)
+
+    assert {:ok, instructions} =
+             TextValidator.instructions("BT /F1 10 Tf (A) Tj /Alias 10 Tf (A) Tj ET", 1)
+
+    resources = %{"Font" => %{"F1" => {:ref, {5, 0}}, "Alias" => {:ref, {5, 0}}}}
+
+    assert {:ok, _, preparation} =
+             TextResourceValidator.prepare_contents(
+               context.document,
+               resources,
+               [instructions],
+               1,
+               TextValidator.new_preparation_context()
+             )
+
+    assert preparation.cmap_bytes == 2
+    assert preparation.extracted_bytes == 2
+    resources = put_in(resources, ["Font", "Alias"], %{"ToUnicode" => {:ref, {7, 0}}})
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             TextResourceValidator.prepare_contents(
+               context.document,
+               resources,
+               [instructions],
+               1
+             )
+  end
+
+  test "CMap work counts overwritten ranges before their expansion" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_cmap_work: 20_000})
+    prefix = "1 begincodespacerange <0000> <FFFF> endcodespacerange "
+
+    for operator <- ["bfrange", "cidrange", "notdefrange"] do
+      target = if operator == "bfrange", do: "<0041>", else: "1"
+      section = "1 begin#{operator} <0000> <2710> #{target} end#{operator} "
+      cmap = prefix <> section
+      to_unicode = prefix <> "1 beginbfchar <0000> <0041> endbfchar"
+
+      build = fn mappings ->
+        if operator == "bfrange" do
+          page_pdf("BT /F1 10 Tf <0000> Tj ET",
+            font: "<< /Type /Font /ToUnicode 7 0 R >>",
+            cmap: mappings
+          )
+        else
+          page_pdf("BT /F1 10 Tf <0000> Tj ET",
+            font:
+              "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>",
+            cmap: to_unicode,
+            extra_objects: [{9, stream_object("", mappings)}]
+          )
+        end
+      end
+
+      assert {:ok, "A"} = Text.extract(build.(cmap), layout: false)
+
+      for extract <- [&Text.extract/1, &Text.extract_spans/1] do
+        assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                 extract.(build.(cmap <> section))
+
+        assert diagnostic.stage == :limits
+        assert diagnostic.module == Text
+        assert diagnostic.reason == :resource_limit_exceeded
+        assert diagnostic.message =~ "max_cmap_work"
+        assert diagnostic.message =~ "page 1"
+        assert diagnostic.message =~ "F1"
+      end
+    end
+  end
+
+  test "ignored section wrappers cannot hide expansions from CMap work accounting" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_cmap_work: 1_000})
+    prefix = "1 begincodespacerange <0000> <FFFF> endcodespacerange "
+
+    for wrapper <- ["cidchar", "codespacerange"] do
+      cmap =
+        prefix <> "1 begin#{wrapper} 1 beginbfrange <0000> <2710> <0041> endbfrange end#{wrapper}"
+
+      source =
+        page_pdf("BT /F1 10 Tf <0000> Tj ET",
+          font: "<< /Type /Font /ToUnicode 7 0 R >>",
+          cmap: cmap
+        )
+
+      assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} = Text.extract(source)
+    end
+
+    cmap = prefix <> "1 beginbfchar <0000> <0041> endbfchar"
+    encoding = prefix <> "1 beginbfchar 1 begincidrange <0000> <2710> 0 endcidrange endbfchar"
+
+    source =
+      page_pdf("BT /F1 10 Tf <0000> Tj ET",
+        font:
+          "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>",
+        cmap: cmap,
+        extra_objects: [{9, stream_object("", encoding)}]
+      )
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} = Text.extract(source)
+  end
+
+  test "CMap work charges duplicate char declarations and array destinations" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    prefix = "1 begincodespacerange <00> <FF> endcodespacerange "
+
+    for section <- [
+          "2 beginbfchar <41> <0041> <41> <0042> endbfchar",
+          "1 beginbfrange <41> <42> [<0041> <0042>] endbfrange"
+        ] do
+      cmap = prefix <> section
+
+      source =
+        page_pdf("BT /F1 10 Tf (A) Tj ET", font: "<< /Type /Font /ToUnicode 7 0 R >>", cmap: cmap)
+
+      # Source bytes, three declarations, and two conservative lookup probes.
+      Limits.install(%{original | max_cmap_work: byte_size(cmap) + 5})
+      assert {:ok, _} = Text.extract(source)
+      Limits.install(%{original | max_cmap_work: byte_size(cmap) + 4})
+      assert {:error, {:resource_limit_exceeded, _}} = Text.extract(source)
+    end
+
+    for operator <- ["cidchar", "notdefchar"] do
+      encoding = prefix <> "2 begin#{operator} <41> 1 <41> 2 end#{operator}"
+      cmap = prefix <> "1 beginbfchar <41> <0041> endbfchar"
+
+      source =
+        page_pdf("BT /F1 10 Tf (A) Tj ET",
+          font:
+            "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>",
+          cmap: cmap,
+          extra_objects: [{9, stream_object("", encoding)}]
+        )
+
+      Limits.install(%{original | max_cmap_work: byte_size(cmap) + byte_size(encoding) + 7})
+      assert {:ok, "A"} = Text.extract(source, layout: false)
+      Limits.install(%{original | max_cmap_work: byte_size(cmap) + byte_size(encoding) + 4})
+      assert {:error, {:resource_limit_exceeded, _}} = Text.extract(source)
+    end
+  end
+
+  test "CMap work shares font preparation and charges each codespace lookup" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
+    cmap =
+      "2 begincodespacerange <00> <FF> <0000> <FFFF> endcodespacerange 2 beginbfchar <41> <0041> <4141> <0042> endbfchar"
+
+    source =
+      page_pdf("BT /F1 10 Tf (AA) Tj ET", font: "<< /Type /Font /ToUnicode 7 0 R >>", cmap: cmap)
+
+    assert {:ok, "B"} = Text.extract(source, layout: false)
+    Limits.install(%{original | max_cmap_work: byte_size(cmap) + 15})
+    assert {:error, {:resource_limit_exceeded, _}} = Text.extract(source)
+
+    Limits.install(original)
+    assert {:ok, context} = Reader.read_validated(source)
+    assert {:ok, instructions} = TextValidator.instructions("BT /F1 10 Tf /Alias 10 Tf ET", 1)
+    resources = %{"Font" => %{"F1" => {:ref, {5, 0}}, "Alias" => {:ref, {5, 0}}}}
+    Limits.install(%{original | max_cmap_work: byte_size(cmap) + 4})
+
+    assert {:ok, _} =
+             TextResourceValidator.prepare_contents(
+               context.document,
+               resources,
+               [instructions],
+               1
+             )
+
+    resources = put_in(resources, ["Font", "Alias"], %{"ToUnicode" => {:ref, {7, 0}}})
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             TextResourceValidator.prepare_contents(
+               context.document,
+               resources,
+               [instructions],
+               1
+             )
+  end
+
+  test "ignores comments and preserves mapping order in ToUnicode CMaps" do
+    cmap =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "% /Adobe-Identity-UCS usecmap\n" <>
+        "1 beginbfchar\n<41> <0041>\n% <41> <0058>\nendbfchar\n" <>
+        "% 1 beginbfchar <41> <0059> endbfchar\n" <>
+        "1 beginbfrange\n<41> <41> <0042>\nendbfrange"
+
+    font =
+      "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    pdf =
+      page_pdf("BT /F1 10 Tf <41> Tj ET",
+        font: font,
+        cmap: cmap,
+        descendant: "<< /Type /Font /Subtype /CIDFontType2 /DW 500 >>"
+      )
+
+    assert Text.extract(pdf, layout: false) == {:ok, "B"}
+  end
+
+  test "limits aggregate ToUnicode mappings across ordered sections" do
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+    Limits.install(%{original_limits | max_cmap_entries: 1})
+
+    cmap =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "2 beginbfchar\n<41> <0041>\n<42> <0042>\nendbfchar"
+
+    pdf =
+      page_pdf("BT /F1 10 Tf <41> Tj ET", font: "<< /Type /Font /ToUnicode 7 0 R >>", cmap: cmap)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Text.extract(pdf, layout: false)
+
+    assert %{
+             stage: :cmap,
+             reason: :resource_limit_exceeded,
+             operation: :extract,
+             module: Text,
+             message: "ToUnicode CMap entry count exceeds the limit; page 1"
+           } = diagnostic
+  end
+
+  test "ignores comments and preserves mapping order in Type0 Encoding CMaps" do
+    to_unicode =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 beginbfchar\n<41> <0041>\nendbfchar"
+
+    encoding =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "% /Identity-H usecmap\n" <>
+        "% /WMode 1 def\n" <>
+        "1 begincidchar\n<41> 5\n% <41> 8\nendcidchar\n" <>
+        "% 1 begincidchar <41> 9 endcidchar\n" <>
+        "1 begincidrange\n<41> <41> 6\nendcidrange"
+
+    font =
+      "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    pdf =
+      page_pdf("BT /F1 10 Tf 1 0 0 1 10 20 Tm <41> Tj ET",
+        font: font,
+        cmap: to_unicode,
+        descendant: "<< /Type /Font /Subtype /CIDFontType2 /DW 500 /W [5 [1000 2000]] >>",
+        extra_objects: [{9, stream_object("", encoding)}]
+      )
+
+    assert {:ok, %{pages: [%{spans: [span]}]}} = Text.extract_spans(pdf)
+    assert {span.text, span.x, span.end_x} == {"A", 10.0, 30.0}
+  end
+
+  test "applies Type0 word spacing only to a one-byte code 20" do
+    multibyte_cmap =
+      "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n" <>
+        "1 beginbfchar\n<0020> <0041>\nendbfchar"
+
+    identity_font =
+      "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    multibyte_pdf =
+      page_pdf("BT /F1 10 Tf 1 0 0 1 10 20 Tm 100 Tw <0020> Tj ET",
+        font: identity_font,
+        cmap: multibyte_cmap,
+        descendant: "<< /Type /Font /Subtype /CIDFontType2 /DW 500 >>"
+      )
+
+    assert {:ok, %{pages: [%{spans: [multibyte]}]}} = Text.extract_spans(multibyte_pdf)
+    assert {multibyte.text, multibyte.x, multibyte.end_x} == {"A", 10.0, 15.0}
+
+    one_byte_cmap =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 beginbfchar\n<20> <0041>\nendbfchar"
+
+    encoding =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 begincidchar\n<20> 32\nendcidchar"
+
+    mapped_font =
+      "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    one_byte_pdf =
+      page_pdf("BT /F1 10 Tf 1 0 0 1 10 20 Tm 100 Tw <20> Tj ET",
+        font: mapped_font,
+        cmap: one_byte_cmap,
+        descendant: "<< /Type /Font /Subtype /CIDFontType2 /DW 500 >>",
+        extra_objects: [{9, stream_object("", encoding)}]
+      )
+
+    assert {:ok, %{pages: [%{spans: [one_byte]}]}} = Text.extract_spans(one_byte_pdf)
+    assert {one_byte.text, one_byte.x, one_byte.end_x} == {"A", 10.0, 115.0}
+  end
+
+  test "validates supported Type0 Encoding CMap boundaries" do
+    to_unicode =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 beginbfchar\n<01> <0041>\nendbfchar"
+
+    render = fn encoding_entry, encoding_object ->
+      font =
+        "<< /Type /Font /Subtype /Type0#{encoding_entry} /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+      extra_objects =
+        case encoding_object do
+          nil -> []
+          encoding_object -> [{9, encoding_object}]
+        end
+
+      page_pdf("BT /F1 10 Tf <01> Tj ET",
+        font: font,
+        cmap: to_unicode,
+        extra_objects: extra_objects
+      )
+      |> Text.extract_spans()
+    end
+
+    assert {:error, {:unsupported_text_encoding, %{stage: :cmap}}} =
+             render.(" /Encoding /Identity-V", nil)
+
+    assert {:error, {:invalid_pdf_input, %{stage: :font}}} = render.("", nil)
+
+    encoding = "1 begincodespacerange\n<00> <FF>\nendcodespacerange"
+
+    assert {:error, {:unsupported_text_encoding, %{stage: :cmap}}} =
+             render.(" /Encoding 9 0 R", stream_object("/WMode 1", encoding))
+
+    assert {:error, {:unsupported_text_encoding, %{stage: :cmap}}} =
+             render.(" /Encoding 9 0 R", stream_object("/UseCMap /Identity-H", encoding))
+
+    assert {:error, {:unsupported_text_encoding, %{stage: :cmap}}} =
+             render.(
+               " /Encoding 9 0 R",
+               stream_object("", "/Identity-H usecmap\n" <> encoding)
+             )
+
+    assert {:error, {:unsupported_text_encoding, %{stage: :cmap}}} =
+             render.(
+               " /Encoding 9 0 R",
+               stream_object("", "/WMode 1 def\n" <> encoding)
+             )
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :cmap}}} =
+             render.(" /Encoding 9 0 R", stream_object("", :binary.copy(" ", 1_000_001)))
+
+    malformed_encodings = [
+      "1 begincodespacerange\n<00> <FFFF>\nendcodespacerange",
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "2 begincidchar\n<01> 5\nendcidchar",
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 begincidchar\n<01> 65536\nendcidchar",
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "2 begincidrange\n<01> <02> 5\nendcidrange",
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 begincidrange\n<01> <0002> 5\nendcidrange",
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 begincidrange\n<01> <02> 65535\nendcidrange",
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 beginnotdefrange\n<01> <02> 65536\nendnotdefrange"
+    ]
+
+    for malformed <- malformed_encodings do
+      assert {:error, {:invalid_pdf_input, %{stage: :cmap}}} =
+               render.(" /Encoding 9 0 R", stream_object("", malformed))
+    end
+
+    range_limit =
+      "2 begincodespacerange\n<0000> <FFFF>\n<000000> <00FFFF>\nendcodespacerange\n" <>
+        "1 begincidrange\n<0000> <FFFF> 0\nendcidrange\n" <>
+        "1 beginnotdefrange\n<000000> <00FFFF> 0\nendnotdefrange"
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :cmap}}} =
+             render.(" /Encoding 9 0 R", stream_object("", range_limit))
+
+    notdef_entries =
+      Enum.map_join(0..34_464, "\n", fn source ->
+        "<#{source |> Integer.to_string(16) |> String.pad_leading(6, "0")}> #{source}"
+      end)
+
+    char_limit =
+      "2 begincodespacerange\n<0000> <FFFF>\n<000000> <00FFFF>\nendcodespacerange\n" <>
+        "1 begincidrange\n<0000> <FFFF> 0\nendcidrange\n" <>
+        "34465 beginnotdefchar\n#{notdef_entries}\nendnotdefchar"
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :cmap}}} =
+             render.(" /Encoding 9 0 R", stream_object("", char_limit))
+  end
+
+  test "normalizes 180 and 270 degree page rotation" do
+    content = "BT /F1 12 Tf 1 0 0 1 10 20 Tm (A) Tj ET"
+    assert {:ok, _} = Text.extract(page_pdf(content, rotate: 180))
+    assert {:ok, _} = Text.extract(page_pdf(content, rotate: 270))
+    assert_error(Text.extract(page_pdf(content, rotate: 45)), :invalid_pdf_input, :page_tree)
+  end
+
+  test "covers public option, file-success, and strict content error paths" do
+    assert_error(Text.extract(page_pdf(""), layout: :invalid), :invalid_options, :options)
+
+    path = Path.join(System.tmp_dir!(), "native-elixir-text-success.pdf")
+    File.write!(path, page_pdf("BT /F1 12 Tf (File) Tj ET"))
+    assert Text.extract_file(path, layout: false) == {:ok, "File"}
+    File.rm!(path)
+
+    assert_error(Text.extract(page_pdf("]")), :invalid_pdf_input, :content)
+    assert_error(Text.extract(page_pdf("BT /F1 12 Tf 1 Tj ET")), :invalid_pdf_input, :content)
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf [/Name] TJ ET")),
+      :invalid_pdf_input,
+      :content
+    )
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf /bad 2 (X) \" ET")),
+      :invalid_pdf_input,
+      :content
+    )
+
+    assert Text.extract(page_pdf("0 0 m BT /F1 12 Tf (Known) Tj ET"), layout: false) ==
+             {:ok, "Known"}
+  end
+
+  test "validates missing resources and ignores valid non-Form XObjects" do
+    missing_font = page_pdf("BT /Missing 12 Tf (X) Tj ET")
+    assert_error(Text.extract(missing_font), :invalid_pdf_input, :resources)
+
+    objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents 6 0 R >>"},
+      {4, "<< /Font << /F1 5 0 R >> /XObject << /image 7 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", "BT /F1 12 Tf (Visible) Tj ET /image Do")},
+      {7, stream_object("/Type /XObject /Subtype /Image", "bytes")}
+    ]
+
+    assert Text.extract(pdf(objects), layout: false) == {:ok, "Visible"}
+  end
+
+  test "validates remaining font metric and encoding failure modes" do
+    descriptor =
+      "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding /FontDescriptor 9 0 R >>"
+
+    assert Text.extract(
+             page_pdf("BT /F1 12 Tf (A) Tj ET",
+               font: descriptor,
+               extra_objects: [{9, "<< /MissingWidth 700 >>"}]
+             ),
+             layout: false
+           ) == {:ok, "A"}
+
+    no_descendant =
+      "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /ToUnicode 7 0 R >>"
+
+    cmap =
+      "begincmap\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfchar\n<01> <0041>\nendbfchar"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf <01> Tj ET", font: no_descendant, cmap: cmap)),
+      :invalid_pdf_input,
+      :font
+    )
+
+    scalar_widths =
+      "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    assert_error(
+      Text.extract(
+        page_pdf("BT /F1 12 Tf <01> Tj ET",
+          font: scalar_widths,
+          cmap: cmap,
+          descendant: "<< /Type /Font /Subtype /CIDFontType2 /W 42 >>"
+        )
+      ),
+      :invalid_pdf_input,
+      :font
+    )
+
+    unsupported_base =
+      "<< /Type /Font /Subtype /Type1 /Encoding << /BaseEncoding /Unknown >> >>"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf (A) Tj ET", font: unsupported_base)),
+      :unsupported_text_encoding,
+      :text_encoding
+    )
+
+    implicit_base =
+      "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Differences [65 /Aacute] >> >>"
+
+    assert Text.extract(page_pdf("BT /F1 12 Tf (A) Tj ET", font: implicit_base), layout: false) ==
+             {:ok, "Á"}
+
+    assert_error(
+      Text.extract(
+        page_pdf("BT /F1 12 Tf <00> Tj ET",
+          font: "<< /Type /Font /Subtype /Type1 /Encoding /StandardEncoding >>"
+        )
+      ),
+      :unsupported_text_encoding,
+      :text_encoding
+    )
+
+    no_base_font = "<< /Type /Font /Subtype /Type1 >>"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf (A) Tj ET", font: no_base_font)),
+      :unsupported_text_encoding,
+      :text_encoding
+    )
+
+    invalid_base_font =
+      <<"<< /Type /Font /Subtype /Type1 /BaseFont /", 255, " >>">>
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf (A) Tj ET", font: invalid_base_font)),
+      :invalid_pdf_input,
+      :text_encoding
+    )
+
+    base_without_differences =
+      "<< /Type /Font /Subtype /Type1 /Encoding << /BaseEncoding /WinAnsiEncoding >> >>"
+
+    assert Text.extract(
+             page_pdf("BT /F1 12 Tf (A) Tj ET", font: base_without_differences),
+             layout: false
+           ) == {:ok, "A"}
+  end
+
+  test "validates malformed and oversized CMap sections" do
+    font =
+      "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    cmaps = [
+      {"1 beginbfchar\n<01> <0041>\nendbfchar", :invalid_pdf_input},
+      {"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfchar\n<01> <0>\nendbfchar",
+       :invalid_pdf_input},
+      {"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n2 beginbfchar\n<01> <0041>\nendbfchar",
+       :invalid_pdf_input},
+      {"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfrange\n<01> <02> [<0041>]\nendbfrange",
+       :invalid_pdf_input},
+      {"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n2 beginbfrange\n<01> <02> <0041>\nendbfrange",
+       :invalid_pdf_input},
+      {"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfrange\n<01> <02> <FFFF>\nendbfrange",
+       :invalid_pdf_input},
+      {"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfrange\n<01> <01> [<D800>]\nendbfrange",
+       :invalid_pdf_input},
+      {"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfrange\n<01> <01> <0>\nendbfrange",
+       :invalid_pdf_input},
+      {"1 begincodespacerange\n<00> <FF>\nendcodespacerange", :unsupported_text_encoding}
+    ]
+
+    for {cmap, reason} <- cmaps do
+      assert_error(
+        Text.extract(page_pdf("BT /F1 12 Tf <01> Tj ET", font: font, cmap: cmap)),
+        reason,
+        :cmap
+      )
+    end
+
+    oversized =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfchar\n<01> <0041>\nendbfchar" <>
+        :binary.copy(" ", 1_000_001)
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf <01> Tj ET", font: font, cmap: oversized)),
+      :resource_limit_exceeded,
+      :cmap
+    )
+  end
+
+  test "reports missing and out-of-codespace ToUnicode mappings" do
+    font =
+      "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    missing =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 beginbfchar\n<01> <0041>\nendbfchar"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf <02> Tj ET", font: font, cmap: missing)),
+      :unsupported_text_encoding,
+      :text_encoding
+    )
+
+    outside =
+      "1 begincodespacerange\n<01> <01>\nendcodespacerange\n" <>
+        "1 beginbfchar\n<01> <0041>\nendbfchar"
+
+    assert_error(
+      Text.extract(page_pdf("BT /F1 12 Tf <02> Tj ET", font: font, cmap: outside)),
+      :unsupported_text_encoding,
+      :text_encoding
+    )
+  end
+
+  test "decodes a sequential ToUnicode bfrange" do
+    font =
+      "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    cmap =
+      "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
+        "1 beginbfrange\n<01> <02> <0041>\nendbfrange"
+
+    assert Text.extract(page_pdf("BT /F1 12 Tf <0102> Tj ET", font: font, cmap: cmap),
+             layout: false
+           ) == {:ok, "AB"}
+  end
+
+  test "limits recursive forms and accepts content operands and form matrices" do
+    recursive_objects = [
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents 6 0 R >>"},
+      {4, "<< /Font << /F1 5 0 R >> /XObject << /form 7 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", "/form Do")},
+      {7, stream_object("/Type /XObject /Subtype /Form /Resources 4 0 R", "/form Do")}
+    ]
+
+    assert_error(Text.extract(pdf(recursive_objects)), :resource_limit_exceeded, :limits)
+
+    valid_form_objects =
+      List.replace_at(recursive_objects, 6, {
+        7,
+        stream_object(
+          "/Type /XObject /Subtype /Form /Matrix [1.0 0 0 1 2 3] /Resources 4 0 R",
+          "BT /F1 12 Tf 1.5 0 Td (Form) Tj ET"
+        )
+      })
+
+    assert Text.extract(pdf(valid_form_objects), layout: false) == {:ok, "Form"}
+
+    indirect_matrix_objects =
+      List.replace_at(recursive_objects, 6, {
+        7,
+        stream_object(
+          "/Type /XObject /Subtype /Form /Matrix 9 0 R /Resources 4 0 R",
+          "BT /F1 12 Tf 1.5 0 Td (Form) Tj ET"
+        )
+      }) ++ [{9, "[1 0 0 1 2 3]"}]
+
+    assert {:ok, %{pages: [%{spans: [indirect_span]}]}} =
+             Text.extract_spans(pdf(indirect_matrix_objects))
+
+    assert indirect_span.ctm == [1.0, 0.0, 0.0, 1.0, 2.0, 3.0]
+
+    indirect_matrix_elements =
+      List.replace_at(recursive_objects, 6, {
+        7,
+        stream_object(
+          "/Type /XObject /Subtype /Form /Matrix [9 0 R 0 0 1 2 3] /Resources 4 0 R",
+          "BT /F1 12 Tf (Form) Tj ET"
+        )
+      }) ++ [{9, "1"}]
+
+    assert Text.extract(pdf(indirect_matrix_elements), layout: false) == {:ok, "Form"}
+
+    scalar_matrix_objects =
+      List.replace_at(recursive_objects, 6, {
+        7,
+        stream_object(
+          "/Type /XObject /Subtype /Form /Matrix /bad /Resources 4 0 R",
+          "BT /F1 12 Tf (Form) Tj ET"
+        )
+      })
+
+    assert_error(Text.extract(pdf(scalar_matrix_objects)), :invalid_pdf_input, :validation)
+
+    malformed_indirect_matrix =
+      List.replace_at(indirect_matrix_objects, 6, {
+        7,
+        stream_object(
+          "/Type /XObject /Subtype /Form /Matrix 9 0 R /Resources 4 0 R",
+          "BT /F1 12 Tf (Form) Tj ET"
+        )
+      })
+      |> List.replace_at(7, {9, "[1 0 0 1 2]"})
+
+    assert_error(Text.extract(pdf(malformed_indirect_matrix)), :invalid_pdf_input, :validation)
+  end
+
+  defp form_transform_pdf(page_content, form_content, matrix) do
+    pdf([
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /Resources 4 0 R /Contents 6 0 R >>"},
+      {4, "<< /Font << /F1 5 0 R >> /XObject << /Form 7 0 R /Inner 8 0 R >> >>"},
+      {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+      {6, stream_object("", page_content)},
+      {7, stream_object("/Type /XObject /Subtype /Form /Matrix [#{matrix}]", form_content)},
+      {8,
+       stream_object(
+         "/Type /XObject /Subtype /Form /Matrix [1000000000 0 0 1000000000 0 0]",
+         ""
+       )}
+    ])
+  end
+
+  defp page_pdf(content, options \\ []) do
+    font_name = Keyword.get(options, :font_name, "F1")
+
+    font =
+      Keyword.get(
+        options,
+        :font,
+        "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"
+      )
+
+    cmap = Keyword.get(options, :cmap)
+    content_dictionary = Keyword.get(options, :content_dictionary, "")
+    properties = Keyword.get(options, :properties, "<< >>")
+
+    descendant =
+      Keyword.get(options, :descendant, "<< /Type /Font /Subtype /CIDFontType2 /DW 500 >>")
+
+    extra_objects = Keyword.get(options, :extra_objects, [])
+    rotate = Keyword.get(options, :rotate)
+    rotate_entry = if is_integer(rotate), do: " /Rotate #{rotate}", else: ""
+
+    objects =
+      [
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]#{rotate_entry} /Resources 4 0 R /Contents 6 0 R >>"},
+        {4, "<< /Font << /#{font_name} 5 0 R >> /Properties #{properties} >>"},
+        {5, font},
+        {6, stream_object(content_dictionary, content)},
+        {8, descendant}
+      ] ++ extra_objects
+
+    objects = if cmap, do: objects ++ [{7, stream_object("", cmap)}], else: objects
+    pdf(objects)
+  end
+
+  defp shared_content_pages_pdf(page_count, content) do
+    page_refs = Enum.to_list(3..(page_count + 2))
+    resources_ref = page_count + 3
+    font_ref = page_count + 4
+    content_ref = page_count + 5
+
+    pages =
+      Enum.map(page_refs, fn page_ref ->
+        {page_ref,
+         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources #{resources_ref} 0 R /Contents #{content_ref} 0 R >>"}
+      end)
+
+    pdf(
+      [
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2,
+         "<< /Type /Pages /Kids [#{Enum.map_join(page_refs, " ", &"#{&1} 0 R")}] /Count #{page_count} >>"}
+      ] ++
+        pages ++
+        [
+          {resources_ref, "<< /Font << /F1 #{font_ref} 0 R >> >>"},
+          {font_ref, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+          {content_ref, stream_object("", content)}
+        ]
+    )
+  end
+
+  defp stream_object(dictionary, stream) do
+    "<< #{dictionary} /Length #{byte_size(stream)} >>\nstream\n#{stream}\nendstream"
+  end
+
+  defp ascii85(data) do
+    encoded =
+      data
+      |> :binary.bin_to_list()
+      |> Enum.chunk_every(4)
+      |> Enum.map_join(fn chunk ->
+        size = length(chunk)
+        padded = chunk ++ List.duplicate(0, 4 - size)
+        value = :binary.decode_unsigned(:erlang.list_to_binary(padded))
+
+        if value == 0 and size == 4 do
+          "z"
+        else
+          {digits, _value} =
+            Enum.reduce(1..5, {[], value}, fn _, {digits, value} ->
+              {[rem(value, 85) + 33 | digits], div(value, 85)}
+            end)
+
+          digits |> Enum.take(size + 1) |> :erlang.list_to_binary()
+        end
+      end)
+
+    "<~" <> encoded <> "~>"
+  end
+
+  defp run_length_encode(data) do
+    chunks =
+      data
+      |> :binary.bin_to_list()
+      |> Enum.chunk_every(128)
+      |> Enum.map(fn chunk -> [length(chunk) - 1 | chunk] end)
+
+    IO.iodata_to_binary([chunks, <<128>>])
+  end
+
+  defp lzw_literal_encode(data) do
+    bits =
+      [256 | :binary.bin_to_list(data)]
+      |> Kernel.++([257])
+      |> Enum.reduce(<<>>, fn code, bits -> <<bits::bitstring, code::9>> end)
+
+    padding = Integer.mod(8 - Integer.mod(bit_size(bits), 8), 8)
+    <<bits::bitstring, 0::size(padding)>>
+  end
+
+  defp png_predict(data, filter) do
+    {encoded, _previous} =
+      data
+      |> :binary.bin_to_list()
+      |> Enum.map_reduce(0, fn byte, left ->
+        predictor = if filter in [1, 3, 4], do: left, else: 0
+        predictor = if filter == 3, do: div(left, 2), else: predictor
+        {Integer.mod(byte - predictor, 256), byte}
+      end)
+
+    :erlang.list_to_binary(encoded)
+  end
+
+  defp pdf(objects, trailer \\ "/Root 1 0 R") do
+    header = "%PDF-1.7\n"
+
+    {body, offsets, _position} =
+      Enum.reduce(objects, {header, %{}, byte_size(header)}, fn {object, value},
+                                                                {body, offsets, position} ->
+        rendered = "#{object} 0 obj\n#{value}\nendobj\n"
+        {body <> rendered, Map.put(offsets, object, position), position + byte_size(rendered)}
+      end)
+
+    max_object = max(1, Enum.max(Map.keys(offsets), fn -> 1 end))
+    xref_position = byte_size(body)
+
+    entries =
+      for object <- 0..max_object do
+        if object == 0 do
+          "0000000000 65535 f \n"
+        else
+          offset = Map.get(offsets, object, 0)
+
+          String.pad_leading(Integer.to_string(offset), 10, "0") <>
+            " 00000 " <> if(offset == 0, do: "f \n", else: "n \n")
+        end
+      end
+
+    body <>
+      "xref\n0 #{max_object + 1}\n" <>
+      Enum.join(entries) <>
+      "trailer\n<< /Size #{max_object + 1} #{trailer} >>\nstartxref\n#{xref_position}\n%%EOF\n"
+  end
+
+  defp assert_error({:error, {reason, diagnostic}}, reason, stage) do
+    assert diagnostic.reason == reason
+    assert diagnostic.stage == stage
+    assert diagnostic.operation == :extract
+    assert diagnostic.module == Text
+  end
+end

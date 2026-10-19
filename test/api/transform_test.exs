@@ -1,0 +1,658 @@
+alias NativeElixirPdfUtilities.TestSupport.Paths
+
+defmodule NativeElixirPdfUtilities.TransformTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Info
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Merge
+  alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Split
+  alias NativeElixirPdfUtilities.Text
+  alias NativeElixirPdfUtilities.Transform
+  alias NativeElixirPdfUtilities.Validators.SplitValidator
+  alias NativeElixirPdfUtilities.Validators.TransformValidator
+
+  @fixture_directory Paths.fixture("pdf_transforms")
+
+  setup do
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+    :ok
+  end
+
+  test "assembled outputs enforce byte limits including the xref and trailer" do
+    original = Limits.effective()
+    source = three_page_pdf()
+
+    operations = [
+      {Merge, :merge, fn -> Merge.merge([source]) end},
+      {Transform, :pick_pages, fn -> Transform.pick_pages(source, [1]) end},
+      {Transform, :delete_pages, fn -> Transform.delete_pages(source, [3]) end},
+      {Transform, :rotate_pages, fn -> Transform.rotate_pages(source, 90) end},
+      {Split, :split_by_ranges, fn -> Split.by_ranges(source, [1..3]) end}
+    ]
+
+    for {module, operation, run} <- operations do
+      Limits.install(original)
+      assert {:ok, result} = run.()
+      output = if is_list(result), do: hd(result), else: result
+      Limits.install(%{original | max_assembled_pdf_bytes: byte_size(output)})
+      assert {:ok, ^result} = run.()
+      Limits.install(%{original | max_assembled_pdf_bytes: byte_size(output) - 1})
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = run.()
+      assert diagnostic.stage == :assembly_write
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.module == module
+      assert diagnostic.operation == operation
+      assert diagnostic.message =~ "max_assembled_pdf_bytes"
+    end
+
+    Limits.install(%{original | max_assembled_pdf_bytes: 1})
+    assert {:error, {:resource_limit_exceeded, %{stage: :assembly_write}}} = Merge.merge([source])
+    Limits.install(original)
+    assert {:ok, merged} = Merge.merge([source, source])
+    assert byte_size(merged) > byte_size(source)
+    Limits.install(%{original | max_pdf_input_bytes: byte_size(merged) - 1})
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :assembly_write}}} =
+             Merge.merge([source, source])
+  end
+
+  test "splitting shared-resource pages scales without repeated document preparation" do
+    measurements =
+      for count <- [200, 400] do
+        ids = Enum.to_list(3..(count + 2))
+        font_id = count + 3
+        content_id = count + 4
+
+        objects =
+          [
+            {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+            {2,
+             "<< /Type /Pages /Kids [#{Enum.map_join(ids, " ", &"#{&1} 0 R")}] /Count #{count} /MediaBox [0 0 100 100] /Resources << /Font << /F1 #{font_id} 0 R >> >> >>"}
+          ] ++
+            Enum.map(ids, &{&1, "<< /Type /Page /Parent 2 0 R /Contents #{content_id} 0 R >>"}) ++
+            [
+              {font_id, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"},
+              {content_id, stream("BT /F1 10 Tf 10 50 Td (Shared) Tj ET")}
+            ]
+
+        source = pdf(objects)
+        {:reductions, before_work} = Process.info(self(), :reductions)
+        assert {:ok, outputs} = Split.by_page(source)
+        {:reductions, after_work} = Process.info(self(), :reductions)
+        assert length(outputs) == count
+
+        for output <- [hd(outputs), List.last(outputs)] do
+          assert {:ok, "Shared"} = Text.extract(output, layout: false)
+          assert {:ok, %{pages: [_]}} = Reader.read(output)
+        end
+
+        after_work - before_work
+      end
+
+    [small, large] = measurements
+    assert large < small * 2.8
+  end
+
+  test "rebuilding preserves values in rewritten pages and retained objects" do
+    numbers = "[0.0000000005 -0.0000000005 1.0000000005 1.23456789012345]"
+    expected = [5.0e-10, -5.0e-10, 1.0000000005, 1.23456789012345]
+
+    source =
+      three_page_pdf("/PrecisionValues #{numbers} /PrecisionObject 16 0 R", [{16, numbers}])
+
+    assert {:ok, [split]} = Split.by_ranges(source, [1..3])
+
+    for result <- [
+          Merge.merge([source]),
+          Transform.pick_pages(source, [1]),
+          Transform.rotate_pages(source, 90),
+          {:ok, split}
+        ] do
+      assert {:ok, rebuilt} = result
+      assert {:ok, %{pages: [page | _]} = document} = Reader.read(rebuilt)
+      assert {:ok, dictionary} = Reader.resolve(document, {:ref, page.ref})
+      assert dictionary["PrecisionValues"] === expected
+      assert {:ok, ^expected} = Reader.resolve(document, dictionary["PrecisionObject"])
+    end
+  end
+
+  test "rebuilding preserves text geometry through small Form matrix coefficients" do
+    source = small_matrix_pdf()
+
+    assert {:ok, %{pages: [%{spans: [original]}]}} = Text.extract_spans(source)
+    assert original.text == "Hello"
+    assert_in_delta original.x, 100.0, 1.0e-10
+    assert_in_delta original.end_x, 125.0, 1.0e-10
+
+    for result <- [Merge.merge([source]), Transform.pick_pages(source, [1])] do
+      assert {:ok, rebuilt} = result
+      assert {:ok, %{pages: [%{spans: [actual]}]}} = Text.extract_spans(rebuilt)
+      assert actual == original
+    end
+  end
+
+  test "picks and reorders pages while rebuilding a readable PDF" do
+    source = three_page_pdf()
+
+    assert {:ok, transformed} = Transform.pick_pages(source, [3, 1])
+    assert {:ok, %{pages: pages}} = Reader.read(transformed)
+    assert length(pages) == 2
+    refute transformed =~ "not retained"
+    assert {:ok, "Three\nOne"} = Text.extract(transformed, layout: false)
+    assert transformed =~ "/Dest"
+  end
+
+  test "deletes pages and unreachable page data from the rebuilt PDF" do
+    source = three_page_pdf()
+
+    assert {:ok, transformed} = Transform.delete_pages(source, [2..3])
+    assert {:ok, %{pages: [_page]}} = Reader.read(transformed)
+    assert {:ok, "One"} = Text.extract(transformed, layout: false)
+    refute transformed =~ "Two"
+    refute transformed =~ "Three"
+    refute transformed =~ "/Dest"
+    assert transformed =~ "/URI"
+  end
+
+  test "rotates selected pages relative to their effective rotations" do
+    source = three_page_pdf()
+
+    assert {:ok, transformed} = Transform.rotate_pages(source, -90, pages: [1, 2])
+    assert {:ok, sizes} = Info.page_sizes(transformed)
+    assert Enum.map(sizes, & &1.rotation) == [270, 0, 0]
+
+    assert Enum.map(sizes, &{&1.width, &1.height}) == [
+             {200.0, 300.0},
+             {300.0, 200.0},
+             {300.0, 200.0}
+           ]
+
+    assert {:ok, all_rotated} = Transform.rotate_pages(source, 90)
+    assert {:ok, all_sizes} = Info.page_sizes(all_rotated)
+    assert Enum.map(all_sizes, & &1.rotation) == [90, 180, 90]
+  end
+
+  test "validates picks, deletions, rotations, options, and bounds" do
+    source = three_page_pdf()
+    oversized_range = 1..1_000_000_000_000
+
+    for selection <- [[], [0], [4], [2, 2], [3..1//-1], [:bad], [oversized_range]] do
+      assert {:error, {reason, diagnostic}} = Transform.pick_pages(source, selection)
+      assert reason in [:invalid_page_selection, :page_out_of_bounds]
+      assert diagnostic.operation == :pick_pages
+      assert diagnostic.module == Transform
+    end
+
+    assert {:error, {:invalid_page_selection, deletion}} =
+             Transform.delete_pages(source, [1..3])
+
+    assert deletion.message == "page deletion must leave at least one page"
+
+    assert {:error, {:invalid_rotation, rotation}} = Transform.rotate_pages(source, 45)
+    assert rotation.operation == :rotate_pages
+
+    assert {:error, {:invalid_options, options}} =
+             Transform.rotate_pages(source, 90, unknown: true)
+
+    assert options.stage == :options
+  end
+
+  test "splits every page into independently readable PDFs" do
+    assert {:ok, outputs} = three_page_pdf() |> Split.by_page()
+    assert length(outputs) == 3
+
+    assert Enum.map(outputs, fn output ->
+             assert {:ok, %{pages: [_page]}} = Reader.read(output)
+             assert {:ok, text} = Text.extract(output, layout: false)
+             text
+           end) == ["One", "Two", "Three"]
+  end
+
+  test "splits inclusive and overlapping ranges" do
+    assert {:ok, [first, second]} = Split.by_ranges(three_page_pdf(), [1..2, 2..3])
+    assert {:ok, "One\nTwo"} = Text.extract(first, layout: false)
+    assert {:ok, "Two\nThree"} = Text.extract(second, layout: false)
+  end
+
+  test "splits after a page into exactly two non-empty PDFs" do
+    assert {:ok, {before_pdf, after_pdf}} = Split.after_page(three_page_pdf(), 2)
+    assert {:ok, "One\nTwo"} = Text.extract(before_pdf, layout: false)
+    assert {:ok, "Three"} = Text.extract(after_pdf, layout: false)
+
+    for split_point <- [0, 3, 4, :bad] do
+      assert {:error, {:invalid_page_selection, diagnostic}} =
+               Split.after_page(three_page_pdf(), split_point)
+
+      assert diagnostic.operation == :split_after_page
+    end
+  end
+
+  test "validates split ranges and split resource limits" do
+    source = three_page_pdf()
+    oversized_range = 1..1_000_000_000_000
+
+    for ranges <- [[], :bad, [1], [0..1], [3..1//-1], [1..4], [oversized_range]] do
+      assert {:error, {reason, diagnostic}} = Split.by_ranges(source, ranges)
+      assert reason in [:invalid_page_range, :invalid_page_selection, :page_out_of_bounds]
+      assert diagnostic.operation == :split_by_ranges
+    end
+
+    Limits.install(%{Limits.effective() | max_split_outputs: 2})
+
+    assert {:error, {:resource_limit_exceeded, count_limit}} = Split.by_page(source)
+    assert count_limit.message == "split output count exceeds the limit"
+
+    assert {:error, {:resource_limit_exceeded, range_count_limit}} =
+             Split.by_ranges(source, [1..1, 2..2, oversized_range])
+
+    assert range_count_limit.message == "split output count exceeds the limit"
+
+    Limits.install(%{Limits.effective() | max_split_outputs: 1})
+
+    assert {:error, {:resource_limit_exceeded, after_page_limit}} =
+             Split.after_page(source, 1)
+
+    assert after_page_limit.message == "split output count exceeds the limit"
+  end
+
+  test "rejects malformed PDF inputs through the shared diagnostic contract" do
+    for result <- [
+          Transform.pick_pages(:invalid, [1]),
+          Transform.delete_pages("not a PDF", [1]),
+          Transform.rotate_pages("not a PDF", 90),
+          Split.by_page(:invalid),
+          Split.by_ranges("not a PDF", [1..1]),
+          Split.after_page("not a PDF", 1)
+        ] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = result
+      assert diagnostic.module in [Transform, Split]
+      assert is_atom(diagnostic.operation)
+    end
+  end
+
+  test "handles empty documents and validates internal preparation contexts" do
+    empty =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [] /Count 0 >>"}
+      ])
+
+    assert {:ok, []} = Split.by_page(empty)
+
+    assert {:error, {:invalid_page_selection, %{message: "rotation requires at least one page"}}} =
+             Transform.rotate_pages(empty, 90)
+
+    assert {:error, {:invalid_page_selection, _diagnostic}} = Transform.delete_pages(empty, [])
+
+    assert {:error, {:invalid_pdf_input, %{stage: :validation}}} =
+             TransformValidator.prepare_pick(%{}, [1])
+
+    assert {:error, {:invalid_pdf_input, %{stage: :validation}}} =
+             SplitValidator.prepare_each_page(%{})
+
+    assert {:error, {:invalid_options, _diagnostic}} =
+             Transform.rotate_pages(three_page_pdf(), 90, :invalid)
+
+    assert {:error, {:invalid_page_selection, _diagnostic}} =
+             TransformValidator.expand_page_selection(:invalid, 3, false)
+  end
+
+  test "omits absent rotation and annotations and handles indirect GoTo destinations" do
+    no_optional_entries =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R >>"}
+      ])
+
+    assert {:ok, rebuilt} = Transform.pick_pages(no_optional_entries, [1])
+    assert {:ok, %{pages: [page]}} = Reader.read(rebuilt)
+    assert page.rotate == nil
+
+    named_only =
+      three_page_pdf("/Annots [16 0 R]", [
+        {16, "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest (chapter) >>"}
+      ])
+
+    assert {:ok, without_named_destination} = Transform.pick_pages(named_only, [1])
+    refute without_named_destination =~ "/Annots"
+
+    indirect_goto =
+      three_page_pdf("/Annots [16 0 R]", [
+        {16, "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /GoTo /D 17 0 R >> >>"},
+        {17, "[5 0 R /Fit]"}
+      ])
+
+    assert {:ok, retained_goto} = Transform.pick_pages(indirect_goto, [3, 1])
+    assert retained_goto =~ "/GoTo"
+    assert {:ok, %{pages: [_, _]}} = Reader.read(retained_goto)
+  end
+
+  test "preserves valid legacy and name-tree link destinations across rebuilt PDFs" do
+    source =
+      three_page_pdf(
+        "/Annots [16 0 R 17 0 R]",
+        [
+          {16, "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest /Legacy >>"},
+          {17,
+           "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /GoTo /D (modern) >> >>"},
+          {18, "<< /Names [(modern) 19 0 R] >>"},
+          {19, "<< /D [4 0 R /Fit] >>"}
+        ],
+        "/Dests << /Legacy [5 0 R /Fit] >> /Names << /Dests 18 0 R >>"
+      )
+
+    assert {:ok, merged} = Merge.merge([source, source])
+    assert link_target_pages(merged, 1) == [3, 2]
+    assert link_target_pages(merged, 4) == [6, 5]
+
+    assert {:ok, picked} = Transform.pick_pages(source, [3, 2, 1])
+    assert link_target_pages(picked, 3) == [1, 2]
+
+    assert {:ok, deleted} = Transform.delete_pages(source, [2])
+    assert link_target_pages(deleted, 1) == [2]
+
+    assert {:ok, rotated} = Transform.rotate_pages(source, 90)
+    assert link_target_pages(rotated, 1) == [3, 2]
+
+    assert {:ok, [range]} = Split.by_ranges(source, [1..3])
+    assert link_target_pages(range, 1) == [3, 2]
+
+    assert {:ok, [first, _second, _third]} = Split.by_page(source)
+    assert link_target_pages(first, 1) == []
+  end
+
+  test "preserves direct named annotations in direct and indirect arrays" do
+    annotations =
+      "[<< /Subtype /Link /Rect [0 0 10 10] /Dest /Legacy >> " <>
+        "<< /Subtype /Link /Rect [0 0 10 10] /A << /S /GoTo /D (modern) >> >>]"
+
+    for {entry, extra} <- [{annotations, []}, {"16 0 R", [{16, annotations}]}] do
+      source =
+        three_page_pdf(
+          "/Annots #{entry}",
+          extra ++
+            [
+              {18, "<< /Names [(modern) 19 0 R] >>"},
+              {19, "<< /D [4 0 R /Fit] >>"}
+            ],
+          "/Dests << /Legacy [5 0 R /Fit] >> /Names << /Dests 18 0 R >>"
+        )
+
+      assert {:ok, merged} = Merge.merge([source, source])
+      assert link_target_pages(merged, 1) == [3, 2]
+      assert link_target_pages(merged, 4) == [6, 5]
+      assert {:ok, "One\nTwo\nThree\nOne\nTwo\nThree"} = Text.extract(merged, layout: false)
+      assert {:ok, %{pages: pages, trailer: trailer} = document} = Reader.read(merged)
+      assert {:ok, catalog} = Reader.resolve(document, trailer["Root"])
+      assert Enum.all?(pages, &(document.objects[&1.ref].value["Parent"] == catalog["Pages"]))
+
+      assert {:ok, picked} = Transform.pick_pages(source, [3, 2, 1])
+      assert link_target_pages(picked, 3) == [1, 2]
+      assert {:ok, deleted} = Transform.delete_pages(source, [2])
+      assert link_target_pages(deleted, 1) == [2]
+      assert {:ok, rotated} = Transform.rotate_pages(source, 90)
+      assert link_target_pages(rotated, 1) == [3, 2]
+      assert {:ok, sizes} = Info.page_sizes(rotated)
+      assert Enum.map(sizes, & &1.rotation) == [90, 180, 90]
+      assert {:ok, [range]} = Split.by_ranges(source, [1..3])
+      assert link_target_pages(range, 1) == [3, 2]
+      assert {:ok, [first, _second, _third]} = Split.by_page(source)
+      assert link_target_pages(first, 1) == []
+    end
+  end
+
+  test "direct named annotation errors retain diagnostics and effective page inheritance" do
+    annotation = "<< /Subtype /Link /Rect [0 0 10 10] /Dest /Target >>"
+    source = three_page_pdf("/Annots [#{annotation}]", [], "/Dests << /Target (broken) >>")
+
+    for result <- [Merge.merge([source]), Transform.pick_pages(source, [1])] do
+      assert {:error, {:invalid_pdf_input, %{stage: stage, message: message}}} = result
+      assert stage in [:merge, :annotations]
+      assert message =~ "named destination"
+    end
+
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R /Dests << /Target [3 0 R /Fit] >> >>"},
+        {2,
+         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] /CropBox [10 10 290 190] /Rotate 90 /Resources << /Font << /F1 5 0 R >> >> >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Annots [#{annotation}] >>"},
+        {4, stream("BT /F1 12 Tf (Inherited) Tj ET")},
+        {5, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"}
+      ])
+
+    assert {:ok, merged} = Merge.merge([source])
+    assert {:ok, "Inherited"} = Text.extract(merged)
+    assert {:ok, %{pages: [page]} = document} = Reader.read(merged)
+    assert document.objects[page.ref].value["CropBox"] == [10, 10, 290, 190]
+    assert document.objects[page.ref].value["Rotate"] == 90
+    assert link_target_pages(merged, 1) == [1]
+  end
+
+  test "rejects malformed annotations instead of emitting dangling structures" do
+    malformed_sources = [
+      three_page_pdf("/Annots 42"),
+      three_page_pdf("/Annots [42]"),
+      three_page_pdf("/Annots [16 0 R]", [
+        {16, "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A 42 >>"}
+      ]),
+      three_page_pdf("/Annots [16 0 R]", [
+        {16, "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest [15 0 R /Fit] >>"}
+      ]),
+      three_page_pdf("/Annots [16 0 R]", [
+        {16, "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest 42 >>"}
+      ]),
+      three_page_pdf("/Annots [16 0 R]"),
+      three_page_pdf(
+        "/Annots [16 0 R]",
+        [{16, "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest /Broken >>"}],
+        "/Dests << /Broken (not-an-array) >>"
+      ),
+      three_page_pdf(
+        "/Annots [16 0 R]",
+        [{16, "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest /Broken >>"}],
+        "/Names 42"
+      )
+    ]
+
+    for source <- malformed_sources do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Transform.pick_pages(source, [1])
+      assert diagnostic.stage == :annotations
+    end
+  end
+
+  test "rejects retained non-navigation dependencies on removed pages" do
+    source = three_page_pdf("/Private 4 0 R")
+
+    assert {:error, {:unsupported_pdf_feature, diagnostic}} =
+             Transform.pick_pages(source, [1])
+
+    assert diagnostic.stage == :page_dependencies
+    assert diagnostic.message =~ "page 4"
+
+    assert {:error, {:unsupported_pdf_feature, split_diagnostic}} = Split.by_page(source)
+    assert split_diagnostic.operation == :split_by_page
+  end
+
+  test "returns diagnostics for dangling references reached from retained pages" do
+    source = three_page_pdf("/Private 16 0 R", [{17, "<< /Unused true >>"}])
+
+    assert {:ok, _context} = Reader.read_validated(source)
+
+    assert {:error, {:invalid_pdf_input, transform_diagnostic}} =
+             Transform.pick_pages(source, [1])
+
+    assert transform_diagnostic.stage == :page_dependencies
+    assert transform_diagnostic.operation == :pick_pages
+    assert transform_diagnostic.module == Transform
+    assert transform_diagnostic.message =~ "missing indirect object 16 0"
+
+    assert {:error, {:invalid_pdf_input, split_diagnostic}} = Split.by_page(source)
+    assert split_diagnostic.stage == :page_dependencies
+    assert split_diagnostic.operation == :split_by_page
+    assert split_diagnostic.module == Split
+    assert split_diagnostic.message =~ "missing indirect object 16 0"
+  end
+
+  test "enforces aggregate byte and object-write limits for split outputs" do
+    source = three_page_pdf()
+    original = Limits.effective()
+
+    Limits.install(%{original | max_aggregate_split_output_bytes: 1})
+
+    assert {:error, {:resource_limit_exceeded, bytes}} = Split.after_page(source, 1)
+    assert bytes.message == "aggregate split output bytes exceed the limit"
+
+    Limits.install(%{original | max_split_object_writes: 1})
+
+    assert {:error, {:resource_limit_exceeded, objects}} = Split.by_ranges(source, [1..1])
+    assert objects.message == "split object writes exceed the limit"
+  end
+
+  test "regresses assembled multi-page document content, geometry, and rotation" do
+    source = File.read!(Path.join(@fixture_directory, "assembled-multi-page.pdf"))
+
+    assert {:ok, {packet, final_page}} = Split.after_page(source, 3)
+    assert {:ok, "Invoice\nLabel\nReport"} = Text.extract(packet, layout: false)
+    assert {:ok, "Statement"} = Text.extract(final_page, layout: false)
+
+    assert {:ok, reordered} = Transform.pick_pages(source, [4, 2, 1])
+    assert {:ok, "Statement\nLabel\nInvoice"} = Text.extract(reordered, layout: false)
+    assert {:ok, sizes} = Info.page_sizes(reordered)
+
+    assert Enum.map(sizes, &{&1.width, &1.height, &1.rotation}) == [
+             {612.0, 792.0, 0},
+             {300.0, 200.0, 0},
+             {612.0, 792.0, 0}
+           ]
+  end
+
+  test "regresses transforms applied to realistic merged and nested-page-tree fixtures" do
+    assembled = File.read!(Path.join(@fixture_directory, "assembled-multi-page.pdf"))
+    report = File.read!(Path.join(@fixture_directory, "nested-multi-page-report.pdf"))
+
+    assert {:ok, merged} = Merge.merge([report, assembled])
+    assert {:ok, selected} = Transform.pick_pages(merged, [7, 1..2, 5])
+    assert {:ok, "Statement\nCover\nDetail\nLabel"} = Text.extract(selected, layout: false)
+    refute selected =~ "Summary"
+    refute selected =~ "Invoice"
+    refute selected =~ "Report"
+    assert {:ok, %{pages: pages}} = Reader.read(selected)
+    assert length(pages) == 4
+  end
+
+  defp link_target_pages(pdf, page_number) do
+    assert {:ok, document} = Reader.read(pdf)
+
+    page_lookup =
+      document.pages
+      |> Enum.with_index(1)
+      |> Map.new(fn {page, number} -> {page.ref, number} end)
+
+    page = Enum.at(document.pages, page_number - 1)
+    assert {:ok, dictionary} = Reader.resolve(document, {:ref, page.ref})
+    assert {:ok, annotations} = Reader.resolve(document, Map.get(dictionary, "Annots", []))
+
+    Enum.flat_map(annotations, fn annotation ->
+      assert {:ok, annotation} = Reader.resolve(document, annotation)
+
+      destination =
+        case Map.get(annotation, "Dest") do
+          nil ->
+            case Reader.resolve(document, Map.get(annotation, "A")) do
+              {:ok, %{"S" => {:name, "GoTo"}} = action} -> Map.get(action, "D")
+              _ -> nil
+            end
+
+          destination ->
+            destination
+        end
+
+      case Reader.resolve(document, destination) do
+        {:ok, [{:ref, page_ref}, {:name, _view} | _operands]} ->
+          [Map.fetch!(page_lookup, page_ref)]
+
+        _ ->
+          []
+      end
+    end)
+  end
+
+  defp small_matrix_pdf() do
+    form_content = "1000000000 0 0 1000000000 0 0 cm BT /F1 0.02 Tf 0.1 0.1 Td (Hello) Tj ET"
+
+    pdf([
+      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+      {3,
+       "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /XObject << /Fm 5 0 R >> >> /Contents 4 0 R >>"},
+      {4, stream("1000 0 0 1000 50 50 cm /Fm Do")},
+      {5,
+       "<< /Type /XObject /Subtype /Form /BBox [0 0 1000000000 1000000000] /Matrix [0.0000000005 0 0 0.0000000005 0 0] /Resources << /Font << /F1 6 0 R >> >> /Length #{byte_size(form_content)} >>\nstream\n#{form_content}\nendstream"},
+      {6, "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>"}
+    ])
+  end
+
+  defp three_page_pdf(page_one_extra \\ "", extra_objects \\ [], catalog_extra \\ "") do
+    content = fn text -> "BT /F1 12 Tf 20 100 Td (#{text}) Tj ET" end
+
+    objects =
+      [
+        {1, "<< /Type /Catalog /Pages 2 0 R #{catalog_extra} >>"},
+        {2,
+         "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /Resources << /Font << /F1 15 0 R >> >> /MediaBox [0.0 0 300 200] /Rotate 0 >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Annots [9 0 R 10 0 R 12 0 R 13 0 R 14 0 R] /CustomNull null /CustomTrue true /CustomFalse false /CustomReal 1.5 /CustomString (x) /CustomHex <AB> #{page_one_extra} >>"},
+        {4, "<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Rotate 90 >>"},
+        {5, "<< /Type /Page /Parent 2 0 R /Contents 8 0 R >>"},
+        {6, stream(content.("One"))},
+        {7, stream(content.("Two"))},
+        {8, stream(content.("Three"))},
+        {9, "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest [5 0 R /Fit] >>"},
+        {10,
+         "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (https://example.com) >> >>"},
+        {11, "<< /Unused (not retained) >>"},
+        {12, "<< /Type /Annot /Subtype /Text /Rect [0 0 10 10] /Contents (note) >>"},
+        {13, "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] >>"},
+        {14, "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest /Chapter >>"},
+        {15, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"}
+      ] ++ extra_objects
+
+    pdf(Enum.sort_by(objects, &elem(&1, 0)))
+  end
+
+  defp stream(content) do
+    "<< /Length #{byte_size(content)} >>\nstream\n#{content}\nendstream"
+  end
+
+  defp pdf(objects) do
+    header = "%PDF-1.7\n"
+
+    {body, offsets} =
+      Enum.reduce(objects, {header, %{}}, fn {id, source}, {body, offsets} ->
+        rendered = "#{id} 0 obj\n#{source}\nendobj\n"
+        {body <> rendered, Map.put(offsets, id, byte_size(body))}
+      end)
+
+    maximum = objects |> List.last() |> elem(0)
+    xref_offset = byte_size(body)
+
+    entries =
+      Enum.map_join(0..maximum, fn object ->
+        case Map.get(offsets, object) do
+          nil -> "0000000000 " <> if(object == 0, do: "65535 f \n", else: "00000 f \n")
+          offset -> String.pad_leading(Integer.to_string(offset), 10, "0") <> " 00000 n \n"
+        end
+      end)
+
+    body <>
+      "xref\n0 #{maximum + 1}\n" <>
+      entries <>
+      "trailer\n<< /Size #{maximum + 1} /Root 1 0 R >>\n" <>
+      "startxref\n#{xref_offset}\n%%EOF\n"
+  end
+end

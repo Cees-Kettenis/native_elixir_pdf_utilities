@@ -1,6 +1,6 @@
 [
   {
-    "name": "sheet_math_01.html",
+    "name": "mathml_schema_css_boxes_sheet.html",
     "family": "math",
     "regions": [
       [
@@ -93,7 +93,7 @@
     ]
   },
   {
-    "name": "sheet_math_02.html",
+    "name": "mathml_groups_radicals_defaults_sheet.html",
     "family": "math",
     "regions": [
       [
@@ -186,7 +186,7 @@
     ]
   },
   {
-    "name": "sheet_math_03.html",
+    "name": "mathml_matrix_allocation_sheet.html",
     "family": "math",
     "regions": [
       [
@@ -259,7 +259,7 @@
     ]
   },
   {
-    "name": "sheet_math_04.html",
+    "name": "mathml_matrix_scripts_operators_sheet.html",
     "family": "math",
     "regions": [
       [
@@ -322,7 +322,7 @@
     ]
   },
   {
-    "name": "sheet_svg_02.html",
+    "name": "svg_text_filters_masks_sheet.html",
     "family": "svg",
     "regions": [
       [
@@ -376,7 +376,7 @@
     ]
   },
   {
-    "name": "sheet_math_05.html",
+    "name": "mathml_multiscripts_padding_fonts_sheet.html",
     "family": "math",
     "regions": [
       [
@@ -449,7 +449,7 @@
     ]
   },
   {
-    "name": "sheet_math_06.html",
+    "name": "mathml_operator_stretch_tokens_sheet.html",
     "family": "math",
     "regions": [
       [
@@ -492,7 +492,7 @@
     ]
   },
   {
-    "name": "sheet_html_01.html",
+    "name": "html_tables_links_transforms_sheet.html",
     "family": "html",
     "regions": [
       [
@@ -566,7 +566,7 @@
     ]
   },
   {
-    "name": "sheet_html_02.html",
+    "name": "html_structure_defaults_sheet.html",
     "family": "html",
     "regions": [
       [
@@ -634,7 +634,7 @@
     ]
   },
   {
-    "name": "sheet_html_03.html",
+    "name": "html_controls_images_visibility_sheet.html",
     "family": "html",
     "regions": [
       [
@@ -712,7 +712,7 @@
     ]
   },
   {
-    "name": "sheet_html_04.html",
+    "name": "html_email_grid_placement_sheet.html",
     "family": "html",
     "regions": [
       [

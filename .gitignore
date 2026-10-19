@@ -19,10 +19,14 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 native_elixir_pdf_utilities-*.tar
 
-# Temporary files, for example, from tests.
+# Local development documentation, experiments and temporary test outputs.
+# Never stage, commit, push or package anything under tmp/.
 /tmp/
 
 # Local multi-runtime quality logs and build caches.
 /.quality/
 
 .elixir_ls/
+
+# Temporary sibling inputs used by browser comparisons.
+/test/fixtures/**/.chromium-input-*.html

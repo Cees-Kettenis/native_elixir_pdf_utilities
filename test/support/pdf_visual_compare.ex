@@ -1,4 +1,6 @@
-Code.require_file("chromium_pool.ex", __DIR__)
+alias NativeElixirPdfUtilities.TestSupport.Paths
+
+Code.require_file(Paths.support("chromium_pool.ex"))
 
 defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   @moduledoc false
@@ -413,7 +415,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       |> fixture_page_options()
       |> Keyword.put(:base_url, Path.dirname(fixture_path))
 
-    font_dir = Path.expand("../../priv/fonts/dejavu", __DIR__)
+    font_dir = Paths.project("priv/fonts/dejavu")
 
     fonts = [
       %{family: "DejaVu Sans", path: Path.join(font_dir, "DejaVuSans.ttf"), weight: 400},
@@ -484,7 +486,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
           [
             %{
               family: "STIX Two Math",
-              path: Path.expand("../../priv/fonts/stix/STIXTwoMath-Regular.ttf", __DIR__),
+              path: Paths.project("priv/fonts/stix/STIXTwoMath-Regular.ttf"),
               weight: 400,
               style: :normal
             }
@@ -501,11 +503,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
               family: "Math Glyph Test Reference",
               weight: 400,
               style: :normal,
-              path:
-                Path.expand(
-                  "../fixtures/html_to_pdf/browser_parity/assets/math-glyph-reference.ttf",
-                  __DIR__
-                )
+              path: Paths.fixture("html_to_pdf/browser_parity/assets/math-glyph-reference.ttf")
             }
           ]
       else
@@ -520,11 +518,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
               family: "Math Row Test Reference",
               weight: 400,
               style: :normal,
-              path:
-                Path.expand(
-                  "../fixtures/html_to_pdf/browser_parity/assets/math-row-reference.ttf",
-                  __DIR__
-                )
+              path: Paths.fixture("html_to_pdf/browser_parity/assets/math-row-reference.ttf")
             }
           ]
       else
@@ -539,11 +533,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
               family: "Math Stretch Test Reference",
               weight: 400,
               style: :normal,
-              path:
-                Path.expand(
-                  "../fixtures/html_to_pdf/browser_parity/assets/math-stretch-reference.ttf",
-                  __DIR__
-                )
+              path: Paths.fixture("html_to_pdf/browser_parity/assets/math-stretch-reference.ttf")
             }
           ]
       else
@@ -559,9 +549,8 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
               weight: 400,
               style: :normal,
               path:
-                Path.expand(
-                  "../fixtures/html_to_pdf/browser_parity/assets/math-operator-core-reference.ttf",
-                  __DIR__
+                Paths.fixture(
+                  "html_to_pdf/browser_parity/assets/math-operator-core-reference.ttf"
                 )
             }
           ]

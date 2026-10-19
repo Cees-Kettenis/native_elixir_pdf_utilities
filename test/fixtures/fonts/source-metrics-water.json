@@ -32,5 +32,5 @@
   },
   "license": "OFL-1.1",
   "license_file": "source-metrics-water-LICENSE.txt",
-  "rebuild_script": "scripts/build-source-metrics-water-fixture.py"
+  "rebuild_script": "scripts/fixtures/build-source-metrics-water-fixture.py"
 }

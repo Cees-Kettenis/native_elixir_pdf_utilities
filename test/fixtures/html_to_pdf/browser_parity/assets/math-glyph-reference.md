@@ -5,7 +5,7 @@ tested Chromium did not apply `ssty` on text or MathML.
 Reproduce it from the repository root with Python and fontTools 4.60.1:
 
 ```sh
-python scripts/generate-math-glyph-reference.py
+python scripts/fixtures/generate-math-glyph-reference.py
 ```
 
 The generator checks contours, per-glyph instructions, advances, and global hint

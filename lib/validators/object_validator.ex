@@ -1,5 +1,10 @@
 defmodule NativeElixirPdfUtilities.Validators.ObjectValidator do
-  @moduledoc false
+  @moduledoc """
+  Validation and selection of local object and embedded-document sources.
+
+  The selected-source types describe the values consumed by the embedded
+  viewport pipeline. Resource authorization remains in the owning resource validator.
+  """
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.HtmlValidator

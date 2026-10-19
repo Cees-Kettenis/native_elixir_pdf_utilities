@@ -59,9 +59,9 @@ curl --fail --location --output tmp/references/mathml-core.html \
   https://www.w3.org/TR/2025/CR-mathml-core-20250624/
 printf '%s  %s\n' f61ebea74ba54c489646e6969983ef977f448c26602edff75ec4e3ba77216373 \
   tmp/references/mathml-core.html | sha256sum --check
-tmp/math-reference-env/bin/python scripts/generate-mathml-fraction-reference.py --check
-tmp/math-reference-env/bin/python scripts/generate-mathml-fraction-core-reference.py --check
-tmp/math-reference-env/bin/python scripts/verify-mathml-fraction-core-reference.py
+tmp/math-reference-env/bin/python scripts/fixtures/generate-mathml-fraction-reference.py --check
+tmp/math-reference-env/bin/python scripts/fixtures/generate-mathml-fraction-core-reference.py --check
+tmp/math-reference-env/bin/python scripts/fixtures/verify-mathml-fraction-core-reference.py
 ```
 
 All three scripts accept `--core-source /path/to/verified/mathml-core.html`.

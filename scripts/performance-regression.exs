@@ -175,7 +175,7 @@ measure = fn name, operation, limits ->
   latest_value
 end
 
-fixture_directory = Path.expand("../test/fixtures/html_to_pdf", __DIR__)
+fixture_directory = Path.expand("../test/fixtures/html_to_pdf/documents", __DIR__)
 
 fixtures = [
   {"invoice_012.html", [page_size: :a4], %{"1.19" => 2_470_000, "1.20" => 2_400_000}, 162_436},
@@ -196,8 +196,17 @@ fixtures = [
    %{"1.19" => 3_810_000, "1.20" => 3_720_000}, 163_606}
 ]
 
+# These IDs belong to the fixed pre-milestone capture. File placement can change
+# without changing workload identity, source bytes, thresholds or input hashes.
+fixture_sources = %{
+  "invoice_012.html" => "invoice.html",
+  "statement_012.html" => "statement.html",
+  "multi_page_report_012.html" => "multi_page_report.html"
+}
+
 Enum.each(fixtures, fn {file, opts, baseline_reductions, baseline_bytes} ->
-  html = fixture_directory |> Path.join(file) |> File.read!()
+  source = Map.get(fixture_sources, file, file)
+  html = fixture_directory |> Path.join(source) |> File.read!()
 
   measure.(
     "fixture #{file}",
@@ -390,12 +399,21 @@ if report_path do
       Path.expand("../mix.lock", __DIR__)
     ] ++
       Enum.map(fixtures, fn {file, _opts, _reductions, _bytes} ->
-        Path.join(fixture_directory, file)
+        Path.join(fixture_directory, Map.get(fixture_sources, file, file))
       end) ++ Path.wildcard(Path.expand("../priv/fonts/**/*.ttf", __DIR__))
+
+  input_sources =
+    Map.new(fixtures, fn {file, _opts, _reductions, _bytes} ->
+      {"test/fixtures/html_to_pdf/" <> file,
+       "test/fixtures/html_to_pdf/documents/" <> Map.get(fixture_sources, file, file)}
+    end)
+
+  logical_input_names = Map.new(input_sources, fn {identity, source} -> {source, identity} end)
 
   file_hashes = fn files ->
     Map.new(files, fn path ->
-      {Path.relative_to(path, Path.expand("..", __DIR__)),
+      relative = Path.relative_to(path, Path.expand("..", __DIR__))
+      {Map.get(logical_input_names, relative, relative),
        :crypto.hash(:sha256, File.read!(path)) |> Base.encode16(case: :lower)}
     end)
   end
@@ -409,6 +427,7 @@ if report_path do
     architecture: :erlang.system_info(:system_architecture) |> List.to_string(),
     schedulers: :erlang.system_info(:schedulers_online),
     input_hashes: file_hashes.(evidence_files),
+    input_sources: input_sources,
     library_hashes: file_hashes.(Path.wildcard(Path.expand("../lib/**/*.ex", __DIR__))),
     guard_failures: Enum.reverse(Process.get(:performance_failures)),
     warmups: 2,

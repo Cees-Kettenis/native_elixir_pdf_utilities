@@ -1,5 +1,10 @@
 defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
-  @moduledoc false
+  @moduledoc """
+  Native HTML validation, stage input contracts and shared resource accounting.
+
+  Rendering stages use this internal validator as the source of truth for
+  admitted structures and budgets. Applications should use `NativeElixirPdfUtilities.HtmlToPdf`.
+  """
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlEntities

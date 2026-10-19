@@ -56,7 +56,8 @@ if [[ "${1:-}" == --runtime ]]; then
     'set -e; for tool in chromium pdftoppm pdftotext pdffonts qpdf fc-match; do command -v "$tool"; done; elixir --version; elixir --version | grep -F "Elixir $1."' bash "${version}"
   run_stage dependencies mix deps.get
   run_stage dependency_compile mix deps.compile
-  run_stage compile mix compile --warnings-as-errors
+  # Rebuild this application from source; retain only dependency/tool caches.
+  run_stage compile bash -c 'mix clean && mix compile --warnings-as-errors'
   run_stage format bash -c 'mix format --check-formatted && mix deps.unlock --check-unused'
   run_stage coverage mix test --cover --warnings-as-errors
   run_stage performance mix test.performance
