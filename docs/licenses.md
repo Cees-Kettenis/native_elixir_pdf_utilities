@@ -78,9 +78,9 @@ org.
 The bundled DejaVu Sans Mono files are unmodified files from the
 [official 2.37 release](https://github.com/dejavu-fonts/dejavu-fonts/releases/tag/version_2_37).
 The complete upstream notice is retained in
-[LICENSE-2.37.txt](../priv/fonts/dejavu/LICENSE-2.37.txt), including the Arev glyph
+[LICENSE-2.37.txt](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/fonts/dejavu/LICENSE-2.37.txt), including the Arev glyph
 copyright and permission notice. File hashes and the release download URL are in
-[monospace-provenance.json](../priv/fonts/dejavu/monospace-provenance.json).
+[monospace-provenance.json](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/fonts/dejavu/monospace-provenance.json).
 
 Arev Fonts Copyright
 ------------------------------
@@ -292,14 +292,14 @@ Copyright 2001–2021 The STIX Fonts Project Authors, with Reserved Font Name
 Electronics Engineers, Inc.
 
 The complete copyright and license are in
-[OFL.txt](../priv/fonts/stix/OFL.txt). The font is bundled with the library and
+[OFL.txt](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/fonts/stix/OFL.txt). The font is bundled with the library and
 requires no runtime download. Release, source commit, file sizes, SHA-256 hashes,
 and upstream Git blob hashes are retained in
-[provenance.json](../priv/fonts/stix/provenance.json).
+[provenance.json](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/fonts/stix/provenance.json).
 
 Browser comparison assets contain independently renamed subsets of this face.
-They share the complete [SIL Open Font License](../test/fixtures/html_to_pdf/browser_parity/assets/math-glyph-reference-LICENSE.txt).
-The [reference generator](../scripts/generate-math-glyph-reference.py) records
+They share the complete [SIL Open Font License](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/test/fixtures/html_to_pdf/browser_parity/assets/math-glyph-reference-LICENSE.txt).
+The [reference generator](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/scripts/fixtures/generate-math-glyph-reference.py) records
 source and derivative hashes and verifies retained outlines, advances and hints.
 These subsets are test assets; the library's bundled STIX face is unmodified.
 
@@ -307,17 +307,17 @@ These subsets are test assets; the library's bundled STIX face is unmodified.
 
 The Elixir line-break tables retain the Unicode 15.0 automaton from
 `unicode-linebreak` 0.1.5 under its
-[Apache 2.0 license](../priv/licenses/unicode-linebreak-APACHE-2.0.txt).
+[Apache 2.0 license](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/licenses/unicode-linebreak-APACHE-2.0.txt).
 ECMAScript Unicode string-property tables retain the generated data previously
 provided by `regress` 0.12 under its
-[MIT license](../priv/licenses/unicode-string-properties-MIT.txt).
+[MIT license](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/licenses/unicode-string-properties-MIT.txt).
 Both are immutable data used by Elixir code. Their Rust implementations are not
 included in this library.
 
 Unicode 17 character-property tables and Unicode 16 UTS46 host-admission tables
-retain the [Unicode License v3](../priv/licenses/unicode-character-properties-UNICODE-3.0.txt).
+retain the [Unicode License v3](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/licenses/unicode-character-properties-UNICODE-3.0.txt).
 The generated modules record the original Unicode data URLs and SHA-256 hashes.
 
 Rounded native control contours adapt Skia's conic subdivision and quadratic
-conversion algorithms under its [BSD 3-Clause license](../priv/licenses/skia-BSD-3-Clause.txt).
+conversion algorithms under its [BSD 3-Clause license](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/licenses/skia-BSD-3-Clause.txt).
 Source references and adaptation notes are retained in `DrawingGeometry`.

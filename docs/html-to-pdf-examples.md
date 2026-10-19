@@ -108,7 +108,7 @@ alias NativeElixirPdfUtilities.HtmlToPdf
   )
 ```
 
-[Open PDF](assets/html-to-pdf-examples/invoice.pdf) · [Download HTML](assets/html-to-pdf-examples/invoice.html) · [Download CSS](assets/html-to-pdf-examples/invoice.css)
+[Open PDF](assets/html-to-pdf-examples/invoice.pdf) · [Download HTML](assets/html-to-pdf-examples/invoice.html) · [Download CSS](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/docs/assets/html-to-pdf-examples/invoice.css)
 
 <img src="assets/html-to-pdf-examples/invoice-page-1.png" alt="Native PDF output: Invoice" width="640">
 
@@ -1511,7 +1511,7 @@ See [Diagnostics](diagnostics.md) for the full contract.
 The previews come from the library's PDFs. To regenerate the HTML files, PDFs, and previews from the code above, run this from the repository root:
 
 ```sh
-mix run scripts/generate-html-to-pdf-examples.exs
+mix run scripts/examples/generate-html-to-pdf.exs
 ```
 
 The script executes every Elixir example independently. Preview generation requires Poppler's `pdftoppm`; rendering the PDFs only needs the library. Generated files live in `docs/assets/html-to-pdf-examples` and are included in the published documentation.

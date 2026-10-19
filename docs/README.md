@@ -6,7 +6,6 @@ Choose the task you want to perform.
 | --- | --- |
 | Create a PDF from HTML | [Rendering examples](html-to-pdf-examples.md) |
 | Check which HTML and CSS I can use | [HTML and CSS support](html-to-pdf-compatibility.md) |
-| Compare supported rendering with a browser | [Browser rendering](html-to-pdf-browser-parity-coverage.md) |
 | Read or change a PDF's title, author, or dates | [PDF information](pdf-information.md) |
 | Get page counts and dimensions | [Page geometry](pdf-information.md#page-count-and-geometry) |
 | Extract text or its position on a page | [Text extraction](text-extraction.md) |
@@ -17,7 +16,7 @@ Choose the task you want to perform.
 | Inspect, fill, or flatten form fields | [PDF forms](pdf-forms.md) |
 | Embed files or list attachments | [PDF attachments](pdf-attachments.md) |
 | Check whether a PDF can be read | [PDF validation](pdf-validation.md) |
-| Use PNG/SVG assets and handle image failures | [Image processing](image-processing.md) |
+| Use image assets and handle image failures | [Image processing](image-processing.md) |
 | Handle an error | [Diagnostics](diagnostics.md) |
 | Adjust document size or processing limits | [Resource limits](resource-limits.md) |
 
@@ -45,5 +44,4 @@ Neither is needed for the common tasks above.
 See [Licenses](licenses.md) for the project and bundled-data notices, and the
 [Changelog](../CHANGELOG.md) for released changes.
 
-For the current 1.1.0 development status, see the
-[work plan](milestone-1.1.0-work-plan.md).
+To work on the library, start with the [contributor guide](../CONTRIBUTING.md).

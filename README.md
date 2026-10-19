@@ -24,6 +24,7 @@ bookmarks.
 
 - Package: https://hex.pm/packages/native_elixir_pdf_utilities
 - API docs: https://native-elixir-pdf-utilities.hexdocs.pm/api-reference.html
+- Contributing: [Setup, architecture and testing](CONTRIBUTING.md)
 
 ## What it does
 
@@ -50,23 +51,6 @@ def deps do
   ]
 end
 ```
-
-## Development
-
-Run the complete supported-version quality matrix before contributing:
-
-```bash
-./scripts/quality-matrix
-```
-
-The matrix compiles and tests the supported Elixir versions, enforces formatting
-and 100% coverage, runs Dialyzer, and compares HTML-to-PDF fixtures with
-Chromium. See the
-[contribution guide](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/CONTRIBUTING.md)
-for prerequisites, quicker installed-version checks, and result interpretation.
-
-Milestone 1.1.0 is still under repair. Its current failures, remaining batches and
-acceptance rules are in the [work plan](docs/milestone-1.1.0-work-plan.md).
 
 ## License
 

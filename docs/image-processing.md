@@ -1,4 +1,4 @@
-# PNG and SVG images
+# Images
 
 HTML-to-PDF rendering supports the following PNG formats, including interlaced
 images:
@@ -15,6 +15,14 @@ PNG color and transparency retain their full precision in the PDF, including
 16-bit samples. Animated PNGs render their default image only. Color-profile
 conversion is unsupported.
 
+## JPEG images
+
+The renderer embeds supported 8-bit baseline and progressive JPEGs. Grayscale,
+RGB, YCbCr, CMYK, Adobe CMYK and Adobe YCCK retain their supported color conventions.
+Malformed segments, inconsistent color metadata, empty scans and truncated streams
+return diagnostics. Structural validation does not fully decode JPEG pixels;
+PDF viewers decode the embedded image.
+
 ## SVG images
 
 SVGs appear as PNG artwork in the PDF through the existing Resvg dependency.
@@ -27,8 +35,11 @@ incomplete image. These include `foreignObject`, non-scaling strokes and SVG2
 inline `textPath` path data. SVG text is rasterized and internal SVG links are
 inert. An ordinary HTML anchor around the image remains clickable.
 
-Successful conversion alone does not prove complete SVG conformance. The current
-development baseline still has unresolved Chromium comparisons. See
-[SVG conversion](svg-converter-workflow.md), the
-[current work plan](milestone-1.1.0-work-plan.md) and
-[diagnostics](diagnostics.md).
+SVG conversion does not provide complete browser SVG support. See
+[HTML and CSS support](html-to-pdf-compatibility.md) for the supported rendering
+profile and [diagnostics](diagnostics.md) for handling conversion failures.
+
+Known converter differences include linear-RGB gradient and mask interpolation,
+filter inputs moved from outside their filter region, some automatic marker
+orientations, percentage geometry in marker children and strokes on very small
+canvases. These can affect visible output even when conversion succeeds.
