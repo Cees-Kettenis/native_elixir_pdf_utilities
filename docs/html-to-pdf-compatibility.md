@@ -80,14 +80,26 @@ text and default to hidden. Canvas renders supported authored fallback content.
 
 Declarative shadow roots and slots provide initial static composition. Document
 styles and shadow styles retain their own scope. Initial selected-content copies
-follow the selected option. Registration, custom-element upgrades, scripts and
-later DOM updates are not performed.
+follow the selected option, including clonable shadow roots. Same-named
+`@font-face` families in separate shadow roots select their own authorized font
+bytes. Inherited font families keep the scope where the declaration originated.
+Chromium currently ignores shadow `@font-face` definitions, a
+[documented browser limitation](https://issues.chromium.org/issues/41085401).
+
+Parser-time `<template for="name">` replacement supports earlier named markers
+and ranges. Original content is validated before mutation, including removed
+text, controls, hidden backgrounds, conditional fallback and responsive images.
+Supply authorized resources for that original content as well as the inserted
+tree. Original validation shares the render's resource and work limits.
+Registration, custom-element upgrades, scripts and later DOM updates are not
+performed.
 
 ### Embedded documents and SVG
 
 Use `srcdoc` or authorized local HTML for supported iframe child documents.
-`object`, `embed` and bounded zero-border framesets support their admitted static
-child-document profiles. Child documents share resource limits and remain clipped
+`object`, `embed` and bounded framesets support their admitted static
+child-document profiles, including legacy frame borders, margins and initial
+scrollbars. Child documents share resource limits and remain clipped
 to their viewport. Unsupported MIME types, resource failures and unsupported
 child behavior return diagnostics. Use `forms: :static` for child control artwork.
 Embedded PDF rendering and general browser frameset behavior are unsupported.
@@ -378,7 +390,7 @@ For PDF viewer bookmarks, see [outlines from headings](html-to-pdf-examples.md#c
 
 | Not supported | What to use instead |
 | --- | --- |
-| JavaScript, canvas drawing APIs, video, audio, plugin embeds and general framesets | Static HTML, supported images, authorized local HTML child viewports and bounded zero-border framesets |
+| JavaScript, canvas drawing APIs, video, audio, plugin embeds and general framesets | Static HTML, supported images, authorized local HTML child viewports and bounded framesets |
 | XFA, JavaScript form actions | Use supported AcroForm fields or static artwork |
 | Floats, fixed positioning, transforms, animations | Block, flex, grid, relative, or absolute layout |
 | Named pages and CSS page-margin boxes | Page options and header/footer templates |

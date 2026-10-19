@@ -336,6 +336,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
     with :ok <- HtmlValidator.validate_document_render_options(opts, font_options),
          :ok <- ResourceValidator.validate_preparation_budget(image_budget),
          {:ok, opts} <- font_options,
+         opts <-
+           NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.source_completion_options(
+             dom,
+             opts
+           ),
          {:ok, effective_opts} <- effective_render_options_detailed(dom, opts),
          {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts, image_budget),
          :ok <- HtmlValidator.release_style_input(dom),

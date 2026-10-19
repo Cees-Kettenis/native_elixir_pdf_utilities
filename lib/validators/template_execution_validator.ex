@@ -133,7 +133,6 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                      opts
                    ),
                  :ok <- prepare_original_fragment_contexts(nodes, opts),
-                 :ok <- validate_original_runtime_contexts(nodes),
                  {:ok, prepared} <- prepare_runtime_view(original, opts, image_budget),
                  :ok <- validate_glyph_coverage(original, prepared),
                  :ok <- prepare_original_fragments(opts, image_budget),
@@ -834,115 +833,43 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
     end)
   end
 
-  # Ordinary preparation skips hidden/conditional owners. Generated control text
-  # has no authored text child, so both glyph and resource ownership need this gate.
-  defp validate_original_runtime_contexts(nodes) do
-    frame = Process.get(@key)
+  @doc "Returns whether ordinary original rendering left authored owners unvisited."
+  @spec source_completion_required?(map(), map()) :: boolean()
+  def source_completion_required?(dom, prepared) do
+    actual = MapSet.new(authored_nodes(prepared.styled_tree, false), &Map.get(&1, :node_id))
 
-    Enum.reduce_while(nodes, :ok, fn node, :ok ->
-      style = Map.get(frame.source_styles, node.node_id, %{})
+    Enum.any?(authored_nodes(dom, false), fn node ->
+      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      style = Map.get(Process.get(@key).source_styles, node.node_id, %{})
+      text? = node.type == :text and String.trim(node.text) != ""
 
       resource? =
-        Map.get(node, :tag) in ~w(img iframe frame object embed image use) or
+        Map.get(node, :tag) in ~w(img iframe frame object embed) or
           Map.has_key?(style, :_image_input_state) or
           Enum.any?([:background_image_source, :list_style_image_source], &Map.get(style, &1))
 
       control? = Map.has_key?(style, :form_kind) and style.form_kind != :hidden
 
-      hidden? =
-        if resource? or control? do
-          Stream.unfold(node.node_id, fn id ->
-            case Map.get(frame.original.nodes, id) do
-              nil ->
-                nil
+      dormant_box? =
+        node.type == :element and Map.get(style, :display) == :none and
+          Map.get(node, :tag) not in ~w(base style script title meta link template source) and
+          Map.get(style, :form_kind) != :hidden
 
-              owner ->
-                HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
-                {owner, owner.parent_id}
-            end
-          end)
-          |> Enum.any?(fn owner ->
-            Map.get(Map.get(frame.source_styles, owner.node_id, %{}), :display) == :none or
-              HtmlValidator.html_hidden_state(Map.get(owner, :attributes, %{})) != :not_hidden or
-              (Map.get(owner, :tag) == "details" and not Map.has_key?(owner.attributes, "open"))
-          end)
-        else
-          false
-        end
-
-      conditional? =
-        if resource? or control? do
-          Stream.unfold(node.parent_id, fn id ->
-            case Map.get(frame.original.nodes, id) do
-              nil ->
-                nil
-
-              owner ->
-                HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
-                {owner, owner.parent_id}
-            end
-          end)
-          |> Enum.any?(
-            &(Map.get(&1, :tag) in ~w(object embed iframe select datalist option optgroup))
-          )
-        else
-          false
-        end
-
-      deferred? = NativeElixirPdfUtilities.Validators.ResponsiveImageValidator.allows_auto?(node)
-
-      detached_base? =
-        Map.get(node, :tag) == "base" and
-          Map.get(frame.original.nodes[node.tree_scope_id], :type) == :document_fragment
-
-      if detached_base? do
-        {:halt,
-         Diagnostics.error(
-           :html,
-           :unsupported_html,
-           "template replacement requires the original detached document URL context before activating this base element",
-           module: __MODULE__,
-           operation: :parse,
-           source: node.source.text,
-           line: node.source.line,
-           column: node.source.column
-         )}
-      else
-        if resource? and (hidden? or conditional? or deferred?) do
-          {:halt,
-           Diagnostics.error(
-             :asset,
-             :unsupported_html,
-             "template replacement cannot complete an original hidden, conditional or final-width resource context; authorization and contents remain pending",
-             module: __MODULE__,
-             operation: :parse,
-             source: node.source.text,
-             line: node.source.line,
-             column: node.source.column
-           )}
-        else
-          if control? and (hidden? or conditional?) do
-            {:halt,
-             Diagnostics.error(
-               :font,
-               :unsupported_html,
-               "template replacement has an unprepared original control context; selected glyph and runtime obligations remain pending",
-               module: __MODULE__,
-               operation: :parse,
-               source: node.source.text,
-               line: node.source.line,
-               column: node.source.column
-             )}
-          else
-            {:cont, :ok}
-          end
-        end
-      end
+      dormant_box? or (text? and not MapSet.member?(actual, node.node_id)) or
+        ((resource? or control?) and
+           (not MapSet.member?(actual, node.node_id) or Map.get(style, :display) == :none))
     end)
   end
 
   defp validate_glyph_coverage(original, prepared) do
-    actual = Enum.group_by(authored_nodes(prepared.styled_tree, false), &Map.get(&1, :node_id))
+    views = [
+      prepared.styled_tree
+      | Enum.map(Map.get(prepared, :original_source_views, []), & &1.styled_tree)
+    ]
+
+    actual =
+      Enum.group_by(Enum.flat_map(views, &authored_nodes(&1, false)), &Map.get(&1, :node_id))
+
     math_runs = Map.get(prepared, :original_math_glyph_runs, %{})
     source_tree = HtmlTree.from_document(original)
 
@@ -1071,18 +998,26 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
 
       with {:ok, prepared} <- preparation do
         if frame.original do
-          with {:ok, writer} <-
-                 NativeElixirPdfUtilities.Validators.WriterValidator.prepare(
-                   prepared.pages,
-                   prepared.options
-                 ),
-               {:ok, _, _} <-
-                 NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare(
-                   writer.pages,
-                   prepared.options
-                 ) do
-            {:ok, prepared}
-          end
+          Enum.reduce_while(
+            [prepared | Map.get(prepared, :original_source_views, [])],
+            {:ok, prepared},
+            fn view, result ->
+              with {:ok, writer} <-
+                     NativeElixirPdfUtilities.Validators.WriterValidator.prepare(
+                       view.pages,
+                       view.options
+                     ),
+                   {:ok, _, _} <-
+                     NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare(
+                       writer.pages,
+                       view.options
+                     ) do
+                {:cont, result}
+              else
+                error -> {:halt, error}
+              end
+            end
+          )
         else
           {:ok, prepared}
         end

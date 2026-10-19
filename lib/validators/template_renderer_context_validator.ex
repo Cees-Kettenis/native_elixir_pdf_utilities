@@ -336,18 +336,103 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
 
       try do
         with {:ok, prepared} <- runner.(),
+             {:ok, source_views} <-
+               if(
+                 NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.source_completion_required?(
+                   dom,
+                   prepared
+                 ),
+                 do: complete_original_source(runner),
+                 else: {:ok, []}
+               ),
              {:ok, math_runs} <-
                validate_prepared_math_glyph_runs(
                  prepared.pages,
                  %{tree | nodes: Map.merge(tree.nodes, Process.get(key).clone_nodes)},
                  Process.get(key).cascades
                ) do
-          {:ok, Map.put(prepared, :original_math_glyph_runs, math_runs),
-           Process.get(key).cascades}
+          {:ok,
+           prepared
+           |> Map.put(:original_math_glyph_runs, math_runs)
+           |> Map.put(:original_source_views, source_views), Process.get(key).cascades}
         end
       after
         if previous, do: Process.put(key, previous), else: Process.delete(key)
       end
+    end
+  end
+
+  # This second, discarded view visits dormant authored owners. It retains their
+  # payloads, cascade, inherited metrics and authority; no insertion owns it.
+  defp complete_original_source(runner) do
+    key = {__MODULE__, :preparation}
+    Process.put(key, Map.put(Process.get(key), :source_completion, true))
+
+    try do
+      with {:ok, prepared} <- runner.(), do: {:ok, [prepared]}
+    after
+      Process.put(key, Map.delete(Process.get(key), :source_completion))
+    end
+  end
+
+  @doc "Identifies an exact authored owner in the active dormant-source preparation."
+  @spec source_completion?(map()) :: boolean()
+  def source_completion?(node) do
+    preparation = Process.get({__MODULE__, :preparation})
+
+    if is_map(preparation) and Map.get(preparation, :source_completion, false) and
+         live_preparation?(preparation) do
+      original =
+        Map.get(preparation.logical_nodes, Map.get(node, :node_id)) ||
+          Map.get(preparation.clone_nodes, Map.get(node, :node_id))
+
+      is_map(original) and
+        Map.take(node, @source_identity) == Map.take(original, @source_identity)
+    else
+      false
+    end
+  end
+
+  @doc "Prepares dormant controls as static artwork without issuing fields for invisible source."
+  @spec source_completion_options(map(), keyword()) :: keyword()
+  def source_completion_options(dom, opts) do
+    if source_completion?(dom), do: Keyword.put(opts, :forms, :static), else: opts
+  end
+
+  @doc "Prepares a dormant source box without changing its original node or declaration ownership."
+  @spec prepare_source_completion_style(map(), map()) :: map()
+  def prepare_source_completion_style(node, style) do
+    if source_completion?(node) and Map.get(node, :namespace, :html) == :html and
+         Map.get(node, :tag) not in ~w(base style script title meta link template source) and
+         Map.get(style, :form_kind) != :hidden do
+      style =
+        Map.drop(style, [
+          :content_visibility,
+          :_html_content_skipped
+        ])
+
+      if style.display == :none,
+        do:
+          Map.put(
+            style,
+            :display,
+            if(Map.has_key?(style, :form_kind), do: :inline_block, else: :block)
+          ),
+        else: style
+    else
+      style
+    end
+  end
+
+  @doc "Omits duplicate background painting after dormant source resources have been decoded and observed."
+  @spec prepare_source_completion_paint(map(), [map()]) :: [map()]
+  def prepare_source_completion_paint(node, rendered) do
+    if source_completion?(node) do
+      Enum.map(rendered, fn styled ->
+        %{styled | style: Map.drop(styled.style, [:background_image, :list_style_image])}
+      end)
+    else
+      rendered
     end
   end
 
@@ -439,9 +524,28 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
 
             Process.put({__MODULE__, :preparation}, %{
               preparation
-              | clone_nodes: clones,
-                clone_bindings: bindings
+              | clone_nodes: Map.merge(preparation.clone_nodes, clones),
+                clone_bindings: Map.merge(preparation.clone_bindings, bindings)
             })
+
+            children =
+              if Map.get(preparation, :source_completion, false) do
+                seen =
+                  NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator.prepared_index(
+                    children
+                  )
+
+                children = complete_unassigned_children(children, logical, seen)
+
+                NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare_composed_initial_nodes(
+                  dom,
+                  composition.roots,
+                  children,
+                  registry
+                )
+              else
+                children
+              end
 
             {:ok, composition, children}
           end
@@ -453,6 +557,38 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
         {:ok, composition, children}
       end
     end
+  end
+
+  # Distributed children remain in their actual slots. Only unassigned logical
+  # children are added to this discarded source view under their own host.
+  defp complete_unassigned_children(nodes, logical, seen) do
+    Enum.map(nodes, fn node ->
+      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+
+      case node do
+        %{children: children} ->
+          original = Map.get(logical, Map.get(node, :node_id), %{})
+
+          missing =
+            Enum.filter(Map.get(original, :children, []), fn child ->
+              HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+              Map.get(child, :tag) != "template" and not Map.has_key?(seen, child.node_id)
+            end)
+
+          seen =
+            Map.merge(
+              seen,
+              NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator.prepared_index(
+                missing
+              )
+            )
+
+          %{node | children: complete_unassigned_children(children ++ missing, logical, seen)}
+
+        _ ->
+          node
+      end
+    end)
   end
 
   defp bind_clone_origins(registry, tree) do
@@ -858,7 +994,12 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
         if source == :configured && ordinal >= frame.caller_count,
           do: Enum.at(frame.recipes, ordinal - frame.caller_count)
 
-      candidate = if recipe && recipe.config == config, do: Enum.at(recipe.candidates, selected)
+      # Font option normalization removes declaration-placement metadata. The
+      # registry ordinal still binds this exact recipe and its scoped provider.
+      candidate =
+        if recipe &&
+             Map.drop(recipe.config, [:shadow_scope_id, :shadow_parent_scope_id]) == config,
+           do: Enum.at(recipe.candidates, selected)
 
       if recipe && candidate == nil do
         loaded
@@ -1284,7 +1425,8 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
                   policy: :actual_math_paint_glyph_observed
                 }
 
-                {:cont, {:ok, Map.update(records, original.node_id, [run], &[run | &1])}}
+                {:cont,
+                 {:ok, Map.update(records, run.original_owner.node_id, [run], &[run | &1])}}
               else
                 error -> {:halt, error}
               end

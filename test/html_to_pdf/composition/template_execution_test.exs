@@ -83,13 +83,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
 
     opts =
       Keyword.put(@opts, :asset_resolver, fn request ->
-        flunk("hidden original source fetched #{inspect(request)}")
+        send(self(), {:original_hidden, request.reference})
+        :not_found
       end)
 
-    assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, opts)
-    assert diagnostic.stage == :asset and diagnostic.operation == :parse
-    assert diagnostic.source == "<div style='display:none;background-image:url(hidden.png)'>"
-    assert diagnostic.message =~ "authorization and contents remain pending"
+    assert {:error, {:invalid_document, diagnostic}} = HtmlToPdf.render(html, opts)
+    assert diagnostic.stage == :asset and diagnostic.operation == :render
+    assert diagnostic.source == "hidden.png"
+    assert_received {:original_hidden, "hidden.png"}
     assert Process.get({TemplateExecutionValidator, :execution}) == nil
   end
 
@@ -289,13 +290,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
 
     opts =
       Keyword.put(@opts, :asset_resolver, fn request ->
-        flunk("unproven hidden source was fetched #{inspect(request)}")
+        send(self(), {:original_hidden, request.reference})
+        :not_found
       end)
 
-    assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, opts)
-    assert diagnostic.stage == :asset and diagnostic.operation == :parse
-    assert diagnostic.source == "<img src='hidden.png'>"
-    assert diagnostic.message =~ "authorization and contents remain pending"
+    assert {:error, {:invalid_document, diagnostic}} = HtmlToPdf.render(html, opts)
+    assert diagnostic.stage == :asset and diagnostic.operation == :render
+    assert diagnostic.source == "hidden.png"
+    assert_received {:original_hidden, "hidden.png"}
+    assert Process.get({TemplateExecutionValidator, :execution}) == nil
   end
 
   test "resource callbacks cannot reenter parser action authority during any preparation" do
@@ -423,23 +426,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
     assert diagnostic.message != ""
   end
 
-  test "discarded conditional and final-width resources retain explicit original obligations" do
-    for content <- [
-          "<object data='accepted.png'><img src='fallback.png'></object>",
-          "<img loading='lazy' sizes='auto' src='lazy.png'>"
-        ] do
-      html =
-        "<body><?start name='A'>#{content}<?end?><template for='A'><p>Good</p></template></body>"
+  test "discarded final-width responsive resources complete their original selection" do
+    png = PngFixture.build(1, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
 
-      opts =
-        Keyword.put(@opts, :asset_resolver, fn request ->
-          flunk("pending source fetched #{inspect(request)}")
-        end)
+    html =
+      "<body><?start name='A'><img loading='lazy' sizes='auto' style='width:20px' src='lazy.png'><?end?><template for='A'><p>Good</p></template></body>"
 
-      assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, opts)
-      assert diagnostic.stage == :asset and diagnostic.operation == :parse
-      assert diagnostic.message =~ "conditional or final-width resource context"
-    end
+    assert {:ok, pdf} =
+             HtmlToPdf.render(html, Keyword.put(@opts, :assets, %{"lazy.png" => {:bytes, png}}))
+
+    assert {:ok, "Good"} = Text.extract(pdf)
   end
 
   test "execution reuses the same input charge while charging both parser passes' work" do
@@ -462,10 +458,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
         flunk("unproven base fetched #{inspect(request)}")
       end)
 
-    assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, opts)
-    assert diagnostic.stage == :html and diagnostic.operation == :parse
-    assert diagnostic.source == "<base href='future/'>"
-    assert diagnostic.message =~ "original detached document URL context"
+    assert {:error, {:invalid_document, diagnostic}} = HtmlToPdf.render(html, opts)
+    assert diagnostic.stage == :style and diagnostic.operation == :render
+    assert diagnostic.source == "pixel.png"
+    assert diagnostic.message =~ "URL cannot be resolved"
   end
 
   test "original control glyph failure survives deletion under the error policy" do

@@ -14,9 +14,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
   @type font_style :: :normal | :italic
   @type registry :: %{
-          embedded: [embedded_font()],
-          fallback: [embedded_font()],
-          system_font_discovery: boolean()
+          required(:embedded) => [embedded_font()],
+          required(:fallback) => [embedded_font()],
+          required(:system_font_discovery) => boolean(),
+          optional(:scoped) => %{
+            optional(reference()) => %{embedded: [embedded_font()], fallback: [embedded_font()]}
+          },
+          optional(:active_scope) => reference() | nil
         }
   @type built_in_font :: %{type: :built_in, family: String.t(), pdf_name: String.t()}
   @type embedded_font :: %{
@@ -274,6 +278,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   """
   @spec fallback_faces(registry(), number(), font_style()) :: [embedded_font()]
   def fallback_faces(registry, weight, style) do
+    registry = scoped_registry(registry)
+
     registry
     |> Map.get(:fallback, [])
     |> Enum.group_by(&String.downcase(&1.family))
@@ -1111,10 +1117,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     end
   end
 
+  defp scoped_registry(registry) do
+    case registry do
+      %{scoped: scopes, active_scope: scope} ->
+        case Map.get(scopes, scope) do
+          nil -> registry
+          faces -> Map.merge(registry, faces)
+        end
+
+      _ ->
+        registry
+    end
+  end
+
   defp embedded_family(family, weight, style, registry) do
     normalized_family = String.downcase(family)
 
-    registry.embedded
+    registry
+    |> scoped_registry()
+    |> Map.fetch!(:embedded)
     |> Enum.filter(&(String.downcase(&1.family) == normalized_family))
     |> case do
       [] ->

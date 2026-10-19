@@ -189,6 +189,31 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererCloneOriginTest do
              end)
   end
 
+  test "cloned shadow fonts retain the exact declaration provider in source observations" do
+    mono = File.read!(Paths.project("priv/fonts/dejavu/DejaVuSansMono.ttf"))
+
+    source =
+      "<select style='appearance:base-select'><button><selectedcontent></selectedcontent></button><option selected><span><template shadowrootmode=open shadowrootclonable><style>@font-face{font-family:Scoped;src:url(mono.ttf)}span{font-family:Scoped}</style><span>Scoped choice</span></template></span></option></select>"
+
+    opts = Keyword.put(@opts, :assets, %{"mono.ttf" => {:bytes, mono}})
+
+    assert :checked =
+             prepare(source, opts, fn _plan, _tree, evidence ->
+               {_id, [run]} =
+                 Enum.find(evidence.glyph_runs, fn {_id, runs} ->
+                   hd(runs).authored_text == "Scoped choice" and
+                     Map.has_key?(hd(runs), :clone_origin)
+                 end)
+
+               assert run.font_face.data == mono
+               assert is_map(run.font_source_outcome)
+               assert run.font_source_outcome.basis == :validated_css_candidate
+               assert run.font_source_outcome.shadow_scope_id == run.owner.tree_scope_id
+               assert run.font_source_outcome.encoded_source == mono
+               :checked
+             end)
+  end
+
   defp prepare(authored, opts, consumer) do
     prefix =
       "<head><style>select::picker-icon{display:none}</style></head><body><div><?marker name='A'>#{authored}</div>"
