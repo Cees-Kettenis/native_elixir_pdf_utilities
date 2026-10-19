@@ -703,13 +703,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
 
       assert diagnostic.source =~ "GPOS"
 
-      assert {:error, {:invalid_document, _}} =
+      assert {:error, {:invalid_layout, diagnostic}} =
                MathLayout.measure(%{
                  token
                  | tag: "mspace",
                    children: [],
                    style: Map.put(style, :width, -1)
                })
+
+      assert diagnostic.stage == :layout and diagnostic.reason == :invalid_layout
+      assert diagnostic.source == "mspace" and diagnostic.message =~ "nonnegative"
 
       assert {:error, {_, diagnostic}} =
                MathLayout.measure(%{
@@ -981,13 +984,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
         assert {measured.width, measured.ascent, measured.descent} == {width, ascent, descent}
       end
 
-      assert {:error, {:unsupported_html, _}} =
+      assert {:ok, auto_space} =
                MathLayout.measure(%{
                  token
                  | tag: "mspace",
                    style: Map.put(style, :width, :auto),
                    children: []
                })
+
+      assert auto_space.width == 0 and auto_space.ascent + auto_space.descent == 0
 
       assert {:ok, hidden} = MathLayout.measure(%{token | style: %{style | display: :none}})
       assert hidden.glyphs == []

@@ -572,10 +572,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutScriptsTest do
           "<math><mover style='overflow:hidden'><mn>1</mn><mn>2</mn></mover></math>",
           "<math><msub style='position:absolute'><mn>1</mn><mn>2</mn></msub></math>"
         ] do
-      assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render(html, system_font_discovery: false)
-
-      assert diagnostic.stage == :layout and diagnostic.source != nil
+      assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+      assert {:ok, "12"} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
     end
 
     schema =

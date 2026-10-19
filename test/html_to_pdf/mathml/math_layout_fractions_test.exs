@@ -326,7 +326,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutFractionsTest do
     refute Enum.any?(zero.drawing_items, &(&1.kind == :native))
     assert length(zero.glyphs) == 3
 
-    assert {:error, {:unsupported_html, %{stage: :layout}}} =
+    assert {:error, {:invalid_layout, %{stage: :layout}}} =
              MathLayout.measure(fraction(children, Map.put(style, :width, -1)))
   end
 

@@ -1939,7 +1939,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                               |> Map.put(:display, :inline_block)
                               |> Map.put(:_math_box, measured)
 
-                            atom = %{element | style: atom_style, children: []}
+                            atom = %{
+                              element
+                              | style: atom_style,
+                                children: Map.get(measured, :positioned_nodes, [])
+                            }
 
                             if Map.get(element_style, :_math_display) == :block do
                               block_style =

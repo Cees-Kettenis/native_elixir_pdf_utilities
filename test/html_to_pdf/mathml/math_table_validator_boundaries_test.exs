@@ -2,10 +2,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.Limits
-  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, MathLayout}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, MathLayout, ResourceContext}
 
   alias NativeElixirPdfUtilities.Validators.{
     FontValidator,
+    HtmlValidator,
     MathLayoutValidator,
     MathTableValidator
   }
@@ -421,5 +422,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
              MathTableValidator.prepare_geometry(prepared, [[child]])
 
     assert diagnostic.message =~ "max_table_grid_work" and diagnostic.operation == :measure_math
+  end
+
+  test "shared CSS matrix measurement preserves layout budget diagnostics", %{style: style} do
+    style = Map.put(style, :white_space, :normal)
+    zero = %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+
+    source =
+      matrix([[cell("1", style, zero)]], Map.merge(style, %{table_layout: :fixed, width: 80.0}))
+
+    Limits.install(Map.put(Limits.effective(), :max_layout_boxes, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
+               MathLayout.measure(source, %{resource_context: context})
+             end)
+
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_layout_boxes"
   end
 end

@@ -99,10 +99,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorOwnerCssTest do
   end
 
   test "operator owner constraints use canonical diagnostics" do
-    assert {:error, {:unsupported_html, diagnostic}} =
-             HtmlToPdf.render("<math><mo style='position:absolute'>+</mo></math>")
+    assert {:ok, positioned} =
+             HtmlToPdf.render(
+               "<math><mo style='position:absolute;left:10pt;top:10pt'>+</mo></math>"
+             )
 
-    assert diagnostic.stage == :layout and diagnostic.source == "mo"
-    assert diagnostic.message =~ "static or relative"
+    assert {:ok, "+"} = NativeElixirPdfUtilities.Text.extract(positioned, layout: false)
   end
 end

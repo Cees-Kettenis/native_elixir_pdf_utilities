@@ -40,6 +40,9 @@ bookmarks.
 9. [PDF forms](docs/pdf-forms.md) - generates named AcroForm fields from HTML by default, inspects and fills existing fields, and flattens selected fields.
 10. [Attachments](docs/pdf-attachments.md) - embeds caller-approved file bytes with MIME detection and lists embedded metadata.
 
+HTML rendering includes native [MathML equations](docs/html-to-pdf-compatibility.md#mathml-in-html),
+with the bundled STIX Two Math font, matrices and equation fragment links.
+
 See the [documentation](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/tree/main/docs) for feature guides, configurable resource limits, and quick reference.
 
 ## Installation

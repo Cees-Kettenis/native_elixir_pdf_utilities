@@ -130,9 +130,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathDefaultCssBoxesTest do
 
     assert message =~ "bounded"
 
-    assert {:error, {:unsupported_html, %{stage: :layout, source: "math", message: message}}} =
-             HtmlToPdf.render("<math style='position:absolute'><mn>1</mn></math>")
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<math style='position:absolute;left:10pt;top:10pt'><mn>1</mn></math>"
+             )
 
-    assert message =~ "positioned"
+    assert {:ok, "1"} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
   end
 end

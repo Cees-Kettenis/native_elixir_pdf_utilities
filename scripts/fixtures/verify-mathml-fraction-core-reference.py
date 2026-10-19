@@ -7,6 +7,8 @@ from html.parser import HTMLParser
 import json
 from pathlib import Path
 import re
+import struct
+import zlib
 from fontTools.ttLib import TTFont
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -39,6 +41,16 @@ for name, document in [('fragments',fragments),('complete',reference)]:
         restored=restored.replace(record['reference_fragment'],record['original_fragment'],1)
     assert restored.encode()==original
 source=TTFont(ROOT/'priv/fonts/stix/STIXTwoMath-Regular.ttf',recalcTimestamp=False)
+ink=zlib.decompress((ROOT/'priv/fonts/stix/token-ink-metrics.bin').read_bytes())
+assert ink[:32]==hashlib.sha256((ROOT/'priv/fonts/stix/STIXTwoMath-Regular.ttf').read_bytes()).digest()
+count, maximum=struct.unpack_from('>HH',ink,32)
+profiles=[];offset=36
+for _ in range(count):
+    length=struct.unpack_from('>H',ink,offset)[0];offset+=2
+    profiles.append(list(struct.iter_unpack('>Hhh',ink[offset:offset+length*6])))
+    offset+=length*6
+assert offset==len(ink)
+ordinary=source.getBestCmap()
 for record in manifest['records'].values():
     originals=''.join(re.findall(r'>([^<>]*)</(?:mn|mo)>',record['original_fragment']))
     assert originals==record['original_text']
@@ -46,6 +58,13 @@ for record in manifest['records'].values():
     assert ''.join(g['text'] for g in glyphs)==record['original_text']
     assert all(source.getGlyphID(g['name'])==g['gid'] for g in glyphs)
     assert all(F(g['width']['numerator'],g['width']['denominator'])==source['hmtx'][g['name']][0]*F(g['size']['numerator'],g['size']['denominator'])/source['head'].unitsPerEm for g in glyphs)
+    for g in glyphs:
+        size=round(F(g['size']['numerator'],g['size']['denominator'])*256/3)
+        if g['name']==ordinary[ord(g['text'])] and 64<=size<=maximum:
+            eligible=[r for r in profiles[g['gid']] if r[0]<=size]
+            _,bottom,top=eligible[-1]
+            assert F(g['ascent']['numerator'],g['ascent']['denominator'])==F(top*3,4)
+            assert F(g['descent']['numerator'],g['descent']['denominator'])==F(-bottom*3,4)
     painted=[html.unescape(t) for t in re.findall('data-core-text="([^"]*)"',record['reference_fragment'])]
     assert ''.join(painted)==record['original_text']
     assert record['original_opening'] in record['original_fragment']
@@ -132,5 +151,5 @@ proof=dict(activation=False,original_reproduced_sha256=hashlib.sha256(original).
            independent_prior_nested_geometry_matches=True,source_font_pair_advances_zero=True,
            original_link_markup_and_html_token_tree_retained=True,
            direct_ordinary_fixture_sha256=hashlib.sha256(ordinary.read_bytes()).hexdigest(),
-           native_source_or_algorithm_changed_by_proposal=False,thresholds=manifest['unchanged_thresholds'])
+           source_font_token_ink_verified=True,thresholds=manifest['unchanged_thresholds'])
 print(json.dumps(proof,indent=2))

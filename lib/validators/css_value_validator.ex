@@ -1317,6 +1317,23 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
         {:ok, style |> ensure_box_style() |> Map.put(:display, :inline_block)}
 
+      display
+      when display in ["table", "inline-table", "table-row", "table-cell", "table-row-group"] and
+             is_map_key(style, :_math_context) ->
+        display =
+          Map.fetch!(
+            %{
+              "table" => :table,
+              "inline-table" => :inline_table,
+              "table-row" => :table_row,
+              "table-cell" => :table_cell,
+              "table-row-group" => :table_row_group
+            },
+            display
+          )
+
+        {:ok, style |> ensure_box_style() |> Map.put(:display, display)}
+
       "contents" ->
         {:ok, Map.put(style, :display, :contents)}
 
@@ -1456,11 +1473,20 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
   defp put_position(style, value) do
     case value |> String.trim() |> String.downcase() do
-      "static" -> {:ok, Map.put(style, :position, :static)}
-      "relative" -> {:ok, Map.put(style, :position, :relative)}
-      "absolute" -> {:ok, Map.put(style, :position, :absolute)}
-      "fixed" when is_map_key(style, :_popover) -> {:ok, Map.put(style, :position, :fixed)}
-      _ -> {:error, :invalid_document}
+      "static" ->
+        {:ok, Map.put(style, :position, :static)}
+
+      "relative" ->
+        {:ok, Map.put(style, :position, :relative)}
+
+      "absolute" ->
+        {:ok, Map.put(style, :position, :absolute)}
+
+      "fixed" when is_map_key(style, :_popover) or is_map_key(style, :_math_element) ->
+        {:ok, Map.put(style, :position, :fixed)}
+
+      _ ->
+        {:error, :invalid_document}
     end
   end
 

@@ -25,7 +25,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
       color: {0, 0, 0},
       line_height: 24.0,
       math_style: :compact,
-      text_transform: :none
+      text_transform: :none,
+      font_families: ["math"],
+      font_weight: 400,
+      font_style: :normal,
+      _font_registry: registry,
+      white_space: :normal
     }
 
     {:ok, style: style, font: font}
@@ -155,7 +160,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
              )
 
     for node <- [
-          element("mtable", [ordinary], %{style | display: :inline_table}),
           ordinary,
           element(
             "mtable",
@@ -339,9 +343,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
             %{plain | children: [visible | plain.children]},
             %{plain | children: [%{row | children: [visible | row.children]}]}
           ] do
-        assert {:error, {reason, diagnostic}} = MathLayout.measure(altered)
-        assert diagnostic.reason == reason and diagnostic.stage == :layout
-        assert diagnostic.source in ["mtable", "mtr"]
+        assert {:ok, measured} =
+                 ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
+                   MathLayout.measure(altered, %{resource_context: context})
+                 end)
+
+        assert measured.actual_text == text <> "1"
       end
     end
   end

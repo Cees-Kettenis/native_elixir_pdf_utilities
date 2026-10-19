@@ -1,7 +1,9 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutIntegrationTest do
   use ExUnit.Case, async: false
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Limits, Text}
+  alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.TestSupport.Paths
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, ResourceContext, Style}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, MathLayoutValidator}
 
@@ -171,5 +173,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutIntegrationTest do
              %{namespace: :html, tag: "span"},
              %{namespace: :mathml, tag: "mrow"}
            ])
+  end
+
+  test "caller Math fonts, annotations, controls and child HTML survive mixed page flow" do
+    html = """
+    <style>html,body,p{margin:0}math{font-family:Caller Math;font-size:16pt}</style>
+    <p>Before <math><msubsup><mi>x</mi><mn>1</mn><mn>2</mn></msubsup><mo>+</mo><msqrt><mn>3</mn></msqrt></math> after.</p>
+    <input name='answer' value='Initial'>
+    <div style='break-before:page'>
+      <p>Second <math><semantics><mtable style='table-layout:fixed;width:100pt;border-collapse:collapse'>
+        <mtr><mtd><mfrac><mn>4</mn><mn>5</mn></mfrac></mtd><mtd><mn>6</mn></mtd></mtr>
+      </mtable><annotation>Hidden alternative</annotation></semantics></math> end.</p>
+      <iframe style='width:100pt;height:30pt' srcdoc='&lt;style&gt;html,body{margin:0}&lt;/style&gt;&lt;p&gt;Child content&lt;/p&gt;'></iframe>
+    </div>
+    """
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(html,
+               page_size: {300, 220},
+               margin: 10,
+               system_font_discovery: false,
+               fonts: [
+                 %{
+                   family: "Caller Math",
+                   data: File.read!(Paths.project("priv/fonts/stix/STIXTwoMath-Regular.ttf"))
+                 }
+               ]
+             )
+
+    assert {:ok, document} = Reader.read_validated(pdf)
+    assert length(document.pages) == 2
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    compact = String.replace(text, ~r/\s/u, "")
+    assert compact =~ "Beforex12+3after."
+    assert compact =~ "Second456end.Childcontent"
+    refute text =~ "Hidden alternative"
+    assert {:ok, [field]} = Forms.fields(pdf)
+    assert field.name == "answer" and field.value == "Initial"
   end
 end

@@ -169,31 +169,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutGroupingTest do
     end
   end
 
-  test "grouping leaves unsupported descendants and composition under validator authority" do
-    for tag <- ~w(mstyle merror),
-        suffix <- [
-          "<msup style='position:absolute'><mn>1</mn><mn>2</mn></msup>",
-          "<mpadded style='position:absolute'/>"
-        ] do
-      assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render("<math><#{tag}>#{suffix}</#{tag}></math>")
-
-      assert diagnostic.stage == :layout
-      assert diagnostic.operation == :measure_math
-      assert diagnostic.module == MathLayoutValidator
-      assert diagnostic.source in ["msup", "mpadded"]
-    end
-
-    for tag <- ~w(mstyle merror) do
-      assert {:error, {:unsupported_html, diagnostic}} =
+  test "grouping retains positioned descendants under the shared CSS owner" do
+    for tag <- ~w(mstyle merror), position <- ~w(absolute fixed) do
+      assert {:ok, pdf} =
                HtmlToPdf.render(
-                 "<math><#{tag} style='position:absolute'><mn>1</mn></#{tag}></math>"
+                 "<math><#{tag} style='position:relative;width:100pt;height:40pt'><msup style='position:#{position};left:4pt;top:4pt'><mn>1</mn><mn>2</mn></msup></#{tag}></math>"
                )
 
-      assert diagnostic.stage == :layout and diagnostic.reason == :unsupported_html
-      assert diagnostic.operation == :measure_math
-      assert diagnostic.source == tag
-      assert diagnostic.message =~ "positioned"
+      assert {:ok, "12"} = Text.extract(pdf, layout: false)
     end
   end
 end

@@ -15,6 +15,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
   # nodes. They never issue source receipts or resource permissions.
   @source_fields [
     :type,
+    :anonymous,
+    :positioned_children,
     :namespace,
     :tag,
     :attributes,
@@ -181,7 +183,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
                     style
                   end),
                {:ok, projected} <- prepare_nodes(visible_nodes(children)),
-               {:ok, table} <- HtmlTableValidator.form(projected),
+               {projected, positioned} = Layout.collect_positioned_children(projected),
+               {:ok, table} <- HtmlTableValidator.form(projected, style),
                {:ok, {rows, row_boxes}} <- prepare_cells(table.rows, context),
                :ok <- validate_grid_spacing(rows, style),
                {:ok, metrics} <- Font.math_metrics(font),
@@ -192,7 +195,28 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
 
             {:ok,
              %{
-               kind: :matrix,
+               kind:
+                 if(
+                   positioned != [] or
+                     Map.get(style, :position, :static) != :static or
+                     Enum.any?(table.rows, fn row ->
+                       Map.get(row.row, :positioned_children, []) != [] or
+                         Map.get(row.row.style, :position, :static) != :static
+                     end) or
+                     Map.get(style, :table_layout, :auto) == :fixed or
+                     Map.get(style, :border_collapse, :separate) == :collapse or
+                     Enum.any?(table.rows, fn row ->
+                       Enum.any?(row.cells, fn placement ->
+                         Map.get(placement.cell.style, :position, :static) != :static or
+                           Map.get(placement.cell.style, :overflow, :visible) != :visible
+                       end)
+                     end),
+                   do: :css_matrix,
+                   else: :matrix
+                 ),
+               table_positioned_children: positioned,
+               source_node: node,
+               source_context: context,
                rows: rows,
                row_boxes: row_boxes,
                axis: axis,
@@ -210,8 +234,110 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
     end)
   end
 
+  @doc "Projects actual measured Math cells into the shared CSS table layout and border painter."
+  @spec prepare_css_matrix(map(), [[map()]]) ::
+          {:ok, map()} | {:error, Diagnostics.detailed_error()}
+  def prepare_css_matrix(prepared, measured) do
+    rows =
+      Enum.zip_with(Enum.zip(prepared.rows, measured), prepared.row_boxes, fn {cells, measured},
+                                                                              row ->
+        children =
+          Enum.zip_with(cells, measured, fn cell, content ->
+            atom = %{
+              type: :element,
+              tag: "span",
+              children: [],
+              style:
+                cell.style
+                |> MathLayoutValidator.anonymous_box_style()
+                |> Map.put(:display, :inline_block)
+                |> Map.put(:_math_box, content)
+            }
+
+            Map.merge(cell.source, %{
+              type: :element,
+              tag: "mtd",
+              style: Map.put(cell.style, :_math_flow, true),
+              children: [atom]
+            })
+          end)
+
+        positioned =
+          MathLayout.measure_positioned_children(
+            Map.get(row.source, :positioned_children, []),
+            prepared.source_context
+          )
+
+        row.source
+        |> Map.delete(:positioned_children)
+        |> Map.merge(%{
+          type: :element,
+          tag: "mtr",
+          style: row.style,
+          children: children ++ positioned
+        })
+      end)
+
+    reference = make_ref()
+
+    table = %{
+      prepared.source_node
+      | style:
+          prepared.style
+          |> Map.put(:display, :table)
+          |> Map.put(:_measure_table_reference, reference),
+        children:
+          rows ++
+            MathLayout.measure_positioned_children(
+              prepared.table_positioned_children,
+              prepared.source_context
+            )
+    }
+
+    wrapper = %{
+      type: :element,
+      tag: "span",
+      style:
+        prepared.style
+        |> MathLayoutValidator.anonymous_box_style()
+        |> Map.put(:display, :inline_block)
+        |> Map.put(:_math_flow, true),
+      children: [table]
+    }
+
+    wrapper = %{
+      wrapper
+      | style: HtmlTableValidator.prepare_atomic_flow_style(wrapper.style, wrapper.children)
+    }
+
+    with {:ok, child} <-
+           Layout.measure_child(wrapper, Map.get(prepared.source_context, :resource_context), %{
+             available_width: prepared.available_inline_size,
+             formatting_context: :math,
+             unsupported_glyphs: Map.get(prepared.source_context, :unsupported_glyphs, :replace)
+           }) do
+      {extents, boxes} =
+        Enum.split_with(child.boxes, &(Map.get(&1, :table_measurement) == reference))
+
+      # The shared table painter always emits this private measurement marker.
+      # Its absence is a programmer invariant, not an additional caller rule.
+      [%{table_measured_size: {width, height}} = extent] = extents
+
+      {:ok,
+       %{
+         child
+         | boxes: boxes,
+           width: width,
+           min_content_width: min(child.min_content_width, width),
+           max_content_width: max(child.max_content_width, width),
+           ascent: extent.y + height,
+           descent: -extent.y
+       }}
+    end
+  end
+
   # Repeated table whitespace handling keeps authored rows/cells and their source
-  # identity intact. Anonymous CSS table repair remains outside this profile.
+  # identity intact. The shared table validator creates anonymous formatting wrappers.
   defp visible_nodes(nodes) do
     Enum.reject(nodes, fn node ->
       match?(%{style: %{display: :none}}, node) or
@@ -222,91 +348,47 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
   end
 
   defp prepare_nodes(nodes) do
-    Enum.reduce_while(nodes, {:ok, []}, fn node, {:ok, rows} ->
+    Enum.reduce_while(nodes, {:ok, []}, fn node, {:ok, prepared} ->
       result =
         case node do
-          %{
-            type: :element,
-            namespace: :mathml,
-            tag: "mtr",
-            children: children,
-            style: %{display: :table_row} = style
-          }
-          when is_list(children) ->
-            with :ok <- validate_style(style, "mtr"),
-                 {:ok, cells} <-
-                   Enum.reduce_while(visible_nodes(children), {:ok, []}, fn cell, {:ok, cells} ->
-                     case cell do
-                       %{
-                         type: :element,
-                         namespace: :mathml,
-                         tag: "mtd",
-                         attributes: attributes,
-                         children: content,
-                         style: %{display: :table_cell} = cell_style
-                       }
-                       when is_map(attributes) and is_list(content) ->
-                         aliases =
-                           Map.put(attributes, "colspan", Map.get(attributes, "columnspan"))
+          %{style: %{display: display} = style, children: children}
+          when display in [:table_row, :table_row_group, :table_cell] and is_list(children) ->
+            if display == :table_cell do
+              attributes = Map.get(node, :attributes, %{})
 
-                         # An absent alias must stay absent for the shared attribute grammar.
-                         aliases =
-                           if Map.has_key?(attributes, "columnspan"),
-                             do: aliases,
-                             else: Map.delete(aliases, "colspan")
+              aliases =
+                if Map.has_key?(attributes, "columnspan"),
+                  do: Map.put(attributes, "colspan", attributes["columnspan"]),
+                  else: attributes
 
-                         with :ok <- validate_style(cell_style, "mtd"),
-                              {:ok, colspan} <-
-                                HtmlValidator.validate_table_span_attribute(aliases, "colspan"),
-                              {:ok, rowspan} <-
-                                HtmlValidator.validate_table_span_attribute(attributes, "rowspan") do
-                           {:cont,
-                            {:ok,
-                             [
-                               %{
-                                 cell
-                                 | style:
-                                     Map.merge(cell_style, %{colspan: colspan, rowspan: rowspan})
-                               }
-                               | cells
-                             ]}}
-                         else
-                           :error ->
-                             {:halt,
-                              failure(
-                                "MathML cell span attributes require authored strings",
-                                "mtd"
-                              )}
-
-                           error ->
-                             {:halt, error}
-                         end
-
-                       _ ->
-                         {:halt,
-                          failure(
-                            "MathML rows require mtd cells; anonymous CSS table repair is pending",
-                            "mtr"
-                          )}
-                     end
-                   end) do
-              {:ok, %{node | children: Enum.reverse(cells)}}
+              with :ok <- validate_style(style, "mtd"),
+                   {:ok, colspan} <-
+                     HtmlValidator.validate_table_span_attribute(aliases, "colspan"),
+                   {:ok, rowspan} <-
+                     HtmlValidator.validate_table_span_attribute(attributes, "rowspan") do
+                {:ok, %{node | style: Map.merge(style, %{colspan: colspan, rowspan: rowspan})}}
+              else
+                :error -> failure("MathML cell span attributes require authored strings", "mtd")
+                error -> error
+              end
+            else
+              with :ok <- validate_style(style, "mtr"),
+                   {:ok, children} <- prepare_nodes(visible_nodes(children)) do
+                {:ok, %{node | children: children}}
+              end
             end
 
           _ ->
-            failure(
-              "MathML matrices require mtr rows; anonymous CSS table repair is pending",
-              "mtable"
-            )
+            {:ok, node}
         end
 
       case result do
-        {:ok, row} -> {:cont, {:ok, [row | rows]}}
+        {:ok, node} -> {:cont, {:ok, [node | prepared]}}
         error -> {:halt, error}
       end
     end)
     |> case do
-      {:ok, rows} -> {:ok, Enum.reverse(rows)}
+      {:ok, prepared} -> {:ok, Enum.reverse(prepared)}
       error -> error
     end
   end
@@ -320,7 +402,20 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
           # by the matrix; authored children retain their complete final styles.
           row_style = MathLayoutValidator.anonymous_box_style(cell.style)
 
-          anonymous = %{cell | tag: "mrow", style: row_style}
+          anonymous =
+            Map.merge(cell, %{
+              namespace: :mathml,
+              tag: "mrow",
+              attributes: Map.get(cell, :attributes, %{}),
+              style:
+                row_style
+                |> Map.delete(:html_target)
+                |> then(fn style ->
+                  if Map.get(cell, :anonymous, false) or Map.get(cell, :tag) != "mtd",
+                    do: Map.put(style, :_math_formatting, false),
+                    else: style
+                end)
+            })
 
           content_context =
             Map.drop(context, [
@@ -573,10 +668,10 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
 
     if not is_number(size) or size < 0 or size > Limits.get(:max_css_numeric_magnitude) or
          not bounded_spacing? or not bounded_edges? or not zero_margins? or
-         Map.get(style, :border_collapse, :separate) != :separate or
-         Map.get(style, :table_layout, :auto) != :auto do
+         Map.get(style, :border_collapse, :separate) not in [:separate, :collapse] or
+         Map.get(style, :table_layout, :auto) not in [:auto, :fixed] do
       failure(
-        "MathML matrices require bounded separate-border box edges, continuous spacing, zero margins and automatic table layout",
+        "MathML matrices require bounded box edges, continuous spacing, zero margins and automatic or fixed table layout",
         "mtable"
       )
     else
@@ -612,14 +707,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
       is_map(margin) and Enum.all?([:top, :right, :bottom, :left], &(Map.get(margin, &1) == 0))
 
     if not bounded_padding? or not bounded_border? or not zero_margins? or
-         Map.get(style, :html_target) != nil or
-         Map.get(style, :position, :static) != :static or
-         Map.get(style, :overflow, :visible) != :visible or
+         Map.get(style, :position, :static) not in [:static, :relative, :absolute, :fixed] or
+         Map.get(style, :overflow, :visible) not in [:visible, :hidden] or
          Map.get(style, :box_sizing, :content_box) not in [:content_box, :border_box] or
          Map.get(style, :vertical_align, :baseline) not in [:baseline, :top, :middle, :bottom] or
          Map.get(style, :text_align, :center) not in [:left, :right, :center] do
       failure(
-        "MathML cells require bounded padding/borders and table alignment; positioned/clipped cells remain unsupported",
+        "MathML cells require bounded padding/borders, supported positioning/overflow and table alignment",
         tag
       )
     else
@@ -681,8 +775,12 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
                    :ok <-
                      Enum.reduce_while(row_boxes, :ok, fn row_box, :ok ->
                        case row_box do
-                         %{style: row_style, source: %{namespace: :mathml, tag: "mtr"}}
-                         when is_map(row_style) ->
+                         %{style: row_style, source: source}
+                         when is_map(row_style) and
+                                ((is_map_key(source, :namespace) and
+                                    :erlang.map_get(:namespace, source) == :mathml) or
+                                   (is_map_key(source, :anonymous) and
+                                      :erlang.map_get(:anonymous, source) == true)) ->
                            case validate_style(row_style, "mtr") do
                              :ok -> {:cont, :ok}
                              error -> {:halt, error}
@@ -1355,6 +1453,10 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
         ),
       cells: positioned,
       row_backgrounds: row_backgrounds,
+      row_targets:
+        Enum.with_index(row_boxes, fn row, index ->
+          %{style: row.style, x: background_x, top: ascent - elem(row_offsets, index)}
+        end),
       columns: columns,
       row_sizes: row_sizes
     }
@@ -1374,7 +1476,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
         else: result
 
     numeric =
-      Map.values(Map.drop(result, [:cells, :row_backgrounds, :columns, :row_sizes])) ++
+      Map.values(Map.drop(result, [:cells, :row_backgrounds, :row_targets, :columns, :row_sizes])) ++
         Enum.flat_map(positioned, fn cell ->
           [
             cell.x,

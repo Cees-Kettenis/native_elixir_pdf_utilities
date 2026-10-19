@@ -313,7 +313,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
       group.width == 0 or group.height == 0 ->
         %{x: 0, y: 0, width: 0, height: 0}
 
-      Map.get(group, :role) == :overflow_clip and is_number(parent_height) ->
+      Map.get(group, :role) == :overflow_clip and is_number(parent_height) and
+          Map.get(group, :snap_clip_to_css_pixel_grid, true) ->
         clip = group.clip
 
         {x, y} = rounded_viewport_origin(clip.x, clip.y, clip.height, parent_height)

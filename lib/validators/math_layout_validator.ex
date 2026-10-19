@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, Layout}
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font.MathTokenMetrics
   alias NativeElixirPdfUtilities.Validators.CssValueValidator
   alias NativeElixirPdfUtilities.Validators.WriterValidator
   alias NativeElixirPdfUtilities.Validators.FontValidator
@@ -415,7 +416,10 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
       :position,
       :offsets,
       :overflow,
-      :box_sizing
+      :box_sizing,
+      :html_target,
+      :html_target_source,
+      :_atomic_table_flow
     ])
     |> Map.put(:display, :block)
   end
@@ -423,10 +427,21 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   @doc "Returns the atomic adapter style after the validated source owner has measured its complete box."
   @spec owner_atom_style(map()) :: map()
   def owner_atom_style(%{tag: tag, style: style}) do
-    if grouping_element?(tag) or tag in ~w(msqrt mroot) or
+    if grouping_element?(tag) or
+         tag in ~w(mfrac msqrt mroot mpadded mphantom mspace mmultiscripts) or
+         (tag in ~w(mtable mtr mtd) and Map.get(style, :_math_formatting, true)) or
+         tag in @script_elements or
          (tag in ["mo" | @token_elements] and Map.get(style, :_math_formatting, true)) or
          css_schema?(tag, style),
-       do: anonymous_box_style(style),
+       do:
+         anonymous_box_style(style)
+         |> Map.merge(Map.take(style, [:html_target, :html_target_source]))
+         |> Map.merge(
+           if(Map.get(style, :position) in [:absolute, :fixed],
+             do: Map.take(style, [:position, :offsets]),
+             else: %{}
+           )
+         ),
        else: style
   end
 
@@ -437,7 +452,14 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
       %{source_node: %{style: style} = source, source_context: context}
       when is_map(style) and is_map(context) ->
         with :ok <- validate_measured_geometry(measured) do
-          style = Map.put(style, :_math_flow, true)
+          style =
+            style
+            |> Map.put(:_math_flow, true)
+            |> then(fn style ->
+              if Map.get(style, :position) in [:absolute, :fixed],
+                do: Map.put(style, :position, :static),
+                else: style
+            end)
 
           atom = %{
             type: :element,
@@ -448,16 +470,24 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
               |> anonymous_box_style()
               |> Map.delete(:html_target)
               |> Map.put(:display, :inline_block)
-              |> Map.put(:_math_box, measured)
+              |> Map.put(:_math_box, Map.delete(measured, :positioned_nodes))
           }
 
           context = Map.put(context, :native_formatting_context, :math)
 
           with {:ok, native} <-
-                 prepare_native_token([atom], style, [], context, false, :inline, %{
-                   source
-                   | style: style
-                 }) do
+                 prepare_native_token(
+                   [atom | Map.get(measured, :positioned_nodes, [])],
+                   style,
+                   [],
+                   context,
+                   false,
+                   :inline,
+                   %{
+                     source
+                     | style: style
+                   }
+                 ) do
             {:ok, Map.put(native, :actual_text, measured.actual_text)}
           end
         end
@@ -821,7 +851,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
     width =
       if Map.get(style, :_math_width_set, false) or Map.get(style, :width) != nil do
-        {:ok, Map.get(style, :width)}
+        {:ok, Layout.resolve_content_size(style, :width, row.available_inline_size, nil)}
       else
         case Map.get(attributes, "width") do
           nil ->
@@ -842,16 +872,18 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     with {:ok, parameters} <- parameters,
          {:ok, width} <- width do
       {:ok,
-       %{
+       row
+       |> Map.merge(%{
          kind: :padded,
          inner: %{
            row
-           | style: anonymous_box_style(style)
+           | style: anonymous_box_style(style),
+             css_math_owner: false
          },
          style: style,
          core_operator: row.core_operator,
          parameters: Map.put(parameters, :width, width)
-       }}
+       })}
     end
   end
 
@@ -1144,7 +1176,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
          attributes: attributes,
          style:
            %{
-             display: display,
+             display: _display,
              font_size: size,
              font_face: font,
              color: color,
@@ -1155,6 +1187,16 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
       when is_map(attributes) and is_list(children) and is_map(context) and
              is_number(size) and size >= 0 and is_map(font) and is_tuple(color) and
              is_number(line_height) and line_height >= 0 ->
+        # Out-of-flow table parts use their blockified CSS box, while retaining
+        # the authored MathML node and its mathematical child layout.
+        style =
+          if tag in ["mtr", "mtd"] and Map.get(style, :position) in [:absolute, :fixed],
+            do: Map.put(style, :display, :block),
+            else: style
+
+        node = %{node | style: style}
+        display = style.display
+
         annotation_css? =
           tag in ~w(annotation annotation-xml) and
             (display in [:flex, :inline_flex, :grid, :inline_grid] or
@@ -1166,7 +1208,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
             tag == "mtable" and display in [:inline_table, :table] ->
               MathTableValidator.prepare(node, context)
 
-            tag in ["mtr", "mtd"] and display != :none ->
+            tag in ["mtr", "mtd"] and display in [:table_row, :table_cell] ->
               Diagnostics.error(
                 :layout,
                 :unsupported_html,
@@ -1193,17 +1235,6 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
             display == :none ->
               {:ok, %{kind: :space, width: 0.0, ascent: 0.0, descent: 0.0, style: style}}
 
-            Map.get(style, :background_image) != nil and not css_schema?(tag, style) and
-              not grouping_element?(tag) and tag not in ["mo", "msqrt", "mroot" | @token_elements] ->
-              Diagnostics.error(
-                :layout,
-                :unsupported_html,
-                "MathML background images require the later box composition batch",
-                operation: :render,
-                module: __MODULE__,
-                source: tag
-              )
-
             css_schema?(tag, style) ->
               prepare_css_schema(node, context)
 
@@ -1226,21 +1257,38 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
               with {:ok, [width, requested_ascent, descent]} <- values do
                 ascent = max(requested_ascent, 0.0)
                 width = max(width, 0.0)
-                width = Map.get(style, :width, width)
-                height = Map.get(style, :height, max(requested_ascent + descent, 0.0))
 
-                if is_number(width) and is_number(height) and width >= 0 and height >= 0 do
-                  {:ok,
-                   %{
-                     kind: :space,
-                     width: width,
-                     ascent: ascent,
-                     descent: height - ascent,
-                     style: style
-                   }}
-                else
-                  failure("mspace requires resolved nonnegative width and height")
-                end
+                width =
+                  Layout.resolve_content_size(
+                    style,
+                    :width,
+                    Map.get(
+                      context,
+                      :available_content_width,
+                      Map.get(context, :available_inline_size)
+                    ),
+                    width
+                  )
+
+                height =
+                  Layout.resolve_content_size(
+                    style,
+                    :height,
+                    nil,
+                    max(requested_ascent + descent, 0.0)
+                  )
+
+                {:ok,
+                 %{
+                   kind: :space,
+                   width: width,
+                   ascent: ascent,
+                   descent: height - ascent,
+                   style: style,
+                   css_math_owner: true,
+                   source_node: node,
+                   source_context: context
+                 }}
               end
 
             tag == "mo" ->
@@ -1426,7 +1474,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           end)
 
         {:ok,
-         %{
+         row
+         |> Map.merge(%{
            kind: if(side?, do: :scripts, else: :limits),
            children: row.children,
            lower: lower,
@@ -1440,7 +1489,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
            accent: accent?(attributes, "accent"),
            accentunder: accent?(attributes, "accentunder"),
            inline_stretch_children: stretching
-         }}
+         })}
       end
     else
       failure("scripts require bounded font size and normal or compact math-style/math-shift")
@@ -2294,13 +2343,19 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     available =
       Map.get(context, :available_content_width, Map.get(context, :available_inline_size))
 
-    owner? = grouping_element?(tag) or tag in ~w(msqrt mroot)
+    owner? =
+      grouping_element?(tag) or
+        tag in ~w(mfrac msqrt mroot mpadded mphantom mmultiscripts mtr mtd) or
+        tag in @script_elements
+
     used_width = if owner?, do: Layout.resolve_content_size(style, :width, available, nil)
 
     child_basis = if used_width == nil, do: available, else: used_width
 
-    in_flow =
-      math_block_children(children)
+    {positioned, in_flow} =
+      children
+      |> math_block_children()
+      |> Enum.split_with(&(Map.get(&1.style, :position, :static) in [:absolute, :fixed]))
 
     count = Enum.count(in_flow, &(not space_like?(&1)))
     embellished? = embellished?(node)
@@ -2359,7 +2414,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
              owner? and not (tag == "math" and Map.get(style, :_math_display) == :block),
            available_inline_size: available,
            source_node: node,
-           source_context: context
+           source_context: context,
+           positioned_children: positioned
          }}
 
       error ->
@@ -2485,7 +2541,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   # Flex and grid are unambiguously nonmath displays, including when the
   # CSS parser retains inherited Math context for their descendants.
   defp css_schema?(tag, style) do
-    (tag in ~w(mfrac msqrt mroot mrow mstyle merror) or tag not in @core_elements) and
+    (tag in ~w(mfrac msqrt mroot mrow mstyle merror msub msup msubsup munder mover munderover mmultiscripts mpadded mphantom mspace mtable mtr mtd) or
+       tag not in @core_elements) and
       (not Map.get(style, :_math_formatting, true) or
          Map.get(style, :display) in [:flex, :inline_flex, :grid, :inline_grid])
   end
@@ -2524,7 +2581,12 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                 |> Map.put(:display, :inline_block)
                 |> Map.put(:_math_box, measured)
 
-              atom = %{type: :element, tag: "span", style: atom_style, children: []}
+              atom = %{
+                child
+                | style: atom_style,
+                  children: Map.get(measured, :positioned_nodes, [])
+              }
+
               block? = child_style.display in [:block, :flex, :grid]
               tag = if block?, do: "div", else: "span"
 
@@ -2536,6 +2598,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                   child_style
                   |> anonymous_box_style()
                   |> Map.put(:display, if(block?, do: :block, else: :inline))
+                  |> Map.merge(Map.take(child_style, [:position, :offsets]))
                 else
                   child_style
                 end
@@ -3202,7 +3265,9 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
           (link == nil or HtmlValidator.valid_link_url?(link)) and
             HtmlLinkValidator.valid_prepared_destination?(destination) and
-            (link == nil or destination == nil)
+            (link == nil or destination == nil) and
+            (Map.get(style, :html_target) == nil or
+               HtmlLinkValidator.valid_identity?(style.html_target))
 
         _ ->
           false
@@ -3222,85 +3287,31 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   end
 
   defp validate_box_style(tag, style) do
-    cond do
-      tag in ["mtable", "mtr", "mtd"] ->
-        with :ok <- validate_link_style(style, tag) do
-          MathTableValidator.validate_style(style, tag)
-        end
-
-      css_schema?(tag, style) or grouping_element?(tag) or tag in ~w(msqrt mroot) or
-        (tag in ["mo" | @token_elements] and Map.get(style, :_math_formatting, true)) or
-        tag not in @core_elements or
-          (tag == "mtext" and not Map.get(style, :_math_formatting, true)) ->
-        with :ok <- validate_link_style(style, tag),
-             :ok <- validate_background_style(style, tag),
-             :ok <- validate_math_owner_style(tag, style),
-             :ok <-
-               Enum.reduce_while(
-                 [:width, :height, :min_width, :max_width, :min_height, :max_height],
-                 :ok,
-                 fn property, :ok ->
-                   case HtmlValidator.validate_prepared_css_size(
-                          Map.get(style, property),
-                          property
-                        ) do
-                     :ok -> {:cont, :ok}
-                     error -> {:halt, error}
-                   end
+    if tag in ["mtable", "mtr", "mtd"] and
+         Map.get(style, :display) in [:table, :inline_table, :table_row, :table_cell] do
+      with :ok <- validate_link_style(style, tag) do
+        MathTableValidator.validate_style(style, tag)
+      end
+    else
+      with :ok <- validate_link_style(style, tag),
+           :ok <- validate_background_style(style, tag),
+           :ok <- validate_math_owner_style(tag, style),
+           :ok <-
+             Enum.reduce_while(
+               [:width, :height, :min_width, :max_width, :min_height, :max_height],
+               :ok,
+               fn property, :ok ->
+                 case HtmlValidator.validate_prepared_css_size(Map.get(style, property), property) do
+                   :ok -> {:cont, :ok}
+                   error -> {:halt, error}
                  end
-               ) do
-          :ok
-        else
-          {:error, {reason, diagnostic}} ->
-            {:error, {reason, Diagnostics.with_context(diagnostic, source: tag)}}
-        end
-
-      true ->
-        css_schema? = css_schema?(tag, style)
-
-        unsupported? =
-          ((grouping_element?(tag) or tag in ~w(mspace mpadded) or
-              tag in @script_elements) and
-             not Map.get(style, :_math_formatting, true)) or
-            (tag != "math" and Map.get(style, :html_target) != nil) or
-            (Map.get(style, :position, :static) != :static and
-               (not css_schema? or Map.get(style, :position) != :relative)) or
-            (not css_schema? and Map.get(style, :overflow, :visible) != :visible) or
-            (not css_schema? and Map.get(style, :box_sizing, :content_box) != :content_box) or
-            (not css_schema? and
-               Enum.any?([:width, :height], fn property ->
-                 value = Map.get(style, property)
-
-                 value != nil and
-                   (not is_number(value) or
-                      (tag in ["mfrac", "msqrt", "mroot" | @script_elements] and
-                         (value < 0 or value > Limits.get(:max_css_numeric_magnitude))))
-               end)) or
-            (not css_schema? and
-               Enum.any?(
-                 [:min_width, :max_width, :min_height, :max_height],
-                 &(Map.get(style, &1) != nil)
-               ))
-
-        link_validation = validate_link_style(style, tag)
-
-        cond do
-          link_validation != :ok ->
-            link_validation
-
-          unsupported? ->
-            Diagnostics.error(
-              :layout,
-              :unsupported_html,
-              "MathML ordinary flow schemata, non-root fragment targets, positioned, clipped, constrained or root box sizing requires the later CSS composition batch",
-              operation: :render,
-              module: __MODULE__,
-              source: tag
-            )
-
-          true ->
-            :ok
-        end
+               end
+             ) do
+        :ok
+      else
+        {:error, {reason, diagnostic}} ->
+          {:error, {reason, Diagnostics.with_context(diagnostic, source: tag)}}
+      end
     end
   end
 
@@ -3344,7 +3355,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   defp validate_math_owner_style(tag, style) do
     ordinary? =
       css_schema?(tag, style) or
-        (tag == "mtext" and not Map.get(style, :_math_formatting, true))
+        (tag in ["mo" | @token_elements] and not Map.get(style, :_math_formatting, true))
 
     edges? =
       Enum.all?([:margin, :padding, :border_widths], fn property ->
@@ -3364,7 +3375,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
     if ordinary? or
          (edges? and Map.get(style, :_math_formatting, true) and
-            Map.get(style, :position, :static) in [:static, :relative] and
+            Map.get(style, :position, :static) in [:static, :relative, :absolute, :fixed] and
             Map.get(style, :overflow, :visible) in [:visible, :hidden] and
             Map.get(style, :box_sizing, :content_box) in [:content_box, :border_box]) do
       :ok
@@ -3372,7 +3383,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
       Diagnostics.error(
         :layout,
         :unsupported_html,
-        "Math formatting owner boxes require bounded box edges and CSS box sizing; Math owner placement requires static or relative positioned boxes and visible or hidden overflow",
+        "Math formatting owner boxes require bounded box edges and CSS box sizing; Math owner placement requires static, relative, absolute or fixed positioned boxes and visible or hidden overflow",
         operation: :measure_math,
         module: __MODULE__,
         source: tag
@@ -3558,14 +3569,31 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     end
   end
 
-  # Token layout measures the original characters before math-auto paint
-  # transforms, but retains their selected OpenType script-style substitutions.
-  # Measuring an unsubstituted digit would give its fraction the wrong bounds.
+  # Token layout uses original characters before math-auto. Standard cmap forms
+  # use Linux Chromium's hinted ink. Explicit ssty substitutions retain the
+  # existing design-metric contract, since Chromium's MathML text painter does
+  # not select those forms through ssty.
   defp prepare_token_layout_ink(runs, glyphs, style) do
     if Map.has_key?(style, :_math_element) do
       # Glyph preparation already validated and retained these exact source
       # outlines. Reuse them for the original-character metric request.
       sources = Map.new(glyphs, fn %{glyph: glyph} -> {glyph.font_face.id, glyph.source} end)
+
+      profiles =
+        Map.new(sources, fn {id, source} ->
+          {data, profile} =
+            FontValidator.memo({:math_token_metrics, id}, fn ->
+              {source.font.data,
+               MathTokenMetrics.profile(:crypto.hash(:sha256, source.font.data))}
+            end)
+
+          profile =
+            if data == source.font.data,
+              do: profile,
+              else: MathTokenMetrics.profile(:crypto.hash(:sha256, source.font.data))
+
+          {id, profile}
+        end)
 
       selected =
         Map.new(glyphs, fn %{glyph: glyph} ->
@@ -3589,9 +3617,17 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           {_left, bottom, _right, top} =
             glyph_ink_bounds(elem(source.bounds, glyph), source, glyph)
 
+          {top, depth} =
+            MathTokenMetrics.bounds(
+              if(glyph == Map.get(font.cmap, codepoint, 0), do: profiles[font.id]),
+              glyph,
+              source.size
+            ) ||
+              {top, -bottom}
+
           if bounds == nil,
-            do: {top, -bottom},
-            else: {max(elem(bounds, 0), top), max(elem(bounds, 1), -bottom)}
+            do: {top, depth},
+            else: {max(elem(bounds, 0), top), max(elem(bounds, 1), depth)}
         end)
 
       {:ok, ink}

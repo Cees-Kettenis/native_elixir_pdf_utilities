@@ -1,0 +1,17 @@
+{
+  "font": "STIXTwoMath-Regular.ttf",
+  "font_sha256": "49b22767985171bce579307b21d98f4d35012fa39e316acc4ffcab8644dfb69b",
+  "generator": "scripts/data/math-token-metrics/generate.py",
+  "freetype": "2.15.0",
+  "load_flags": [
+    "FT_LOAD_TARGET_LIGHT",
+    "FT_LOAD_NO_BITMAP"
+  ],
+  "glyph_count": 6760,
+  "minimum_css_px": 1,
+  "maximum_css_px": 128.0,
+  "size_step_css_px": "1/64",
+  "rounding": "outward integer CSS-pixel bounds of the hinted outline control box",
+  "sha256": "07d0d30aa83ded52f48989b81a8f5e3943cf7f6a1ca1e9f26831c2ad3efcf469",
+  "bytes": 1663941
+}

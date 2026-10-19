@@ -88,7 +88,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             end
 
           width =
-            Map.get(prepared.style, :width) ||
+            Layout.resolve_content_size(
+              prepared.style,
+              :width,
+              Map.get(prepared, :available_inline_size),
+              nil
+            ) ||
               if(Map.has_key?(prepared.style, :_math_element),
                 do: max(numerator.max_content_width, denominator.max_content_width),
                 else: max(numerator.width, denominator.width)
@@ -168,8 +173,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             top_accent_attachment: nil,
             glyphs: positioned.(:glyphs),
             drawing_items: rule ++ positioned.(:drawing_items),
+            positioned_nodes:
+              Enum.flat_map([numerator, denominator], &Map.get(&1, :positioned_nodes, [])),
             actual_text: numerator.actual_text <> denominator.actual_text
           }
+
+        %{kind: :css_matrix} ->
+          rows =
+            Enum.map(prepared.rows, fn row -> Enum.map(row, &measure_prepared(&1.content)) end)
+
+          case MathTableValidator.prepare_css_matrix(prepared, rows) do
+            {:ok, child} ->
+              height = child.ascent + child.descent
+              ascent = height / 2 + prepared.axis
+              descent = height / 2 - prepared.axis
+              offset = ascent - child.ascent
+
+              %{
+                width: child.width,
+                min_content_width: child.min_content_width,
+                max_content_width: child.max_content_width,
+                ascent: ascent,
+                descent: descent,
+                ink_ascent: child.ink_ascent + offset,
+                ink_descent: child.ink_descent - offset,
+                italic_correction: 0.0,
+                top_accent_attachment: nil,
+                glyphs: [],
+                positioned_nodes: Map.get(child, :positioned_nodes, []),
+                drawing_items:
+                  Enum.map(child.boxes, &%{kind: :native, box: &1, x: 0.0, y: offset}),
+                actual_text: rows |> List.flatten() |> Enum.map_join(& &1.actual_text)
+              }
+
+            error ->
+              throw({:math_layout_error, error})
+          end
 
         %{kind: :matrix} ->
           rows =
@@ -243,7 +282,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
                   Enum.map(cell.measured.drawing_items, &%{&1 | x: &1.x + cell.inner_x})
                 )
 
-              %{cell | measured: decorate_geometry(inner, allocated_matrix_style(cell.style))}
+              decorated = decorate_geometry(inner, allocated_matrix_style(cell.style))
+              targets = Layout.attach_html_target(cell.style, [], 0.0, decorated.ascent)
+              items = Enum.map(targets, &%{kind: :native, box: &1, x: 0.0, y: 0.0})
+              %{cell | measured: Map.update!(decorated, :drawing_items, &(items ++ &1))}
             end)
 
           row_backgrounds =
@@ -318,7 +360,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             italic_correction: 0.0,
             top_accent_attachment: nil,
             glyphs: positioned.(:glyphs),
-            drawing_items: row_backgrounds ++ positioned.(:drawing_items),
+            drawing_items:
+              Enum.flat_map(placement.row_targets, fn row ->
+                Layout.attach_html_target(row.style, [], row.x, row.top)
+                |> Enum.map(&%{kind: :native, box: &1, x: 0.0, y: 0.0})
+              end) ++ row_backgrounds ++ positioned.(:drawing_items),
             actual_text: Enum.map_join(cells, & &1.measured.actual_text)
           })
 
@@ -469,6 +515,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             top_accent_attachment: nil,
             glyphs: surd_glyphs ++ positioned.(:glyphs),
             drawing_items: rule ++ surd_items ++ positioned.(:drawing_items),
+            positioned_nodes:
+              Enum.flat_map(
+                [base] ++ if(index, do: [index], else: []),
+                &Map.get(&1, :positioned_nodes, [])
+              ),
             actual_text: base.actual_text <> if(index, do: index.actual_text, else: "")
           }
 
@@ -541,6 +592,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             top_accent_attachment: nil,
             glyphs: positioned.(:glyphs),
             drawing_items: positioned.(:drawing_items),
+            positioned_nodes: Enum.flat_map(measured, &Map.get(&1, :positioned_nodes, [])),
             actual_text: Enum.map_join(measured, & &1.actual_text)
           })
 
@@ -620,7 +672,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             italic_correction: 0.0,
             top_accent_attachment: nil,
             glyphs: [],
-            drawing_items: items
+            drawing_items: items,
+            positioned_nodes: Enum.flat_map(children, &Map.get(&1, :positioned_nodes, []))
           }
 
         %{kind: :flow, children: children, baseline_depth: baseline, line_height: height} ->
@@ -725,6 +778,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
                 :max_content_width,
                 measured.width + Enum.sum(Enum.map(children, &(&1.max_content_width - &1.width)))
               )
+              |> Map.put(
+                :positioned_nodes,
+                Enum.flat_map(children, &Map.get(&1, :positioned_nodes, []))
+              )
               |> Map.put(:actual_text, Enum.map_join(children, & &1.actual_text))
               |> Map.put(:drawing_items, items)
               |> Map.put(
@@ -789,6 +846,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
         measured
       end
 
+    positioned =
+      measure_positioned_children(
+        Map.get(prepared, :positioned_children, []),
+        Map.get(prepared, :source_context, %{})
+      )
+
+    measured = Map.update(measured, :positioned_nodes, positioned, &(&1 ++ positioned))
+
     measured =
       if Map.get(prepared, :css_math_owner, false) and
            (Map.get(prepared.style, :position, :static) == :relative or
@@ -820,7 +885,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
       else
         if (Map.get(prepared, :root, false) and not Map.get(prepared, :css_math_owner, false)) or
              Map.get(prepared, :native_owner, false) or
-             Map.get(prepared, :outer_box_measured, false),
+             Map.get(prepared, :outer_box_measured, false) or prepared.kind == :css_matrix,
            do: measured,
            else:
              decorate_geometry(
@@ -844,9 +909,46 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
         do: Map.put(measured, :css_math_owner, true),
         else: measured
 
+    measured =
+      case {Map.get(prepared.style, :html_target),
+            Map.get(prepared, :css_math_owner, false) or prepared.kind == :css_matrix} do
+        {nil, _} ->
+          measured
+
+        {_, true} ->
+          measured
+
+        {_, false} ->
+          targets =
+            Layout.attach_html_target(prepared.style, [], 0.0, measured.ascent)
+            |> Enum.map(&%{kind: :native, box: &1, x: 0.0, y: 0.0})
+
+          Map.update!(measured, :drawing_items, &(targets ++ &1))
+      end
+
     if Map.get(prepared, :hide_paint, false),
       do: %{measured | glyphs: [], drawing_items: [], actual_text: ""},
       else: measured
+  end
+
+  @doc false
+  @spec measure_positioned_children([map()], map()) :: [map()]
+  def measure_positioned_children(children, context) do
+    Enum.map(children, fn child ->
+      case measure(child, context) do
+        {:ok, content} ->
+          style =
+            MathLayoutValidator.owner_atom_style(child)
+            |> Map.put(:display, :inline_block)
+            |> Map.put(:_math_box, content)
+            |> Map.merge(Map.take(child.style, [:position, :offsets]))
+
+          %{child | style: style, children: Map.get(content, :positioned_nodes, [])}
+
+        error ->
+          throw({:math_layout_error, error})
+      end
+    end)
   end
 
   # Core 3.3.1.1 measures an all-stretch row once at zero, then relayouts

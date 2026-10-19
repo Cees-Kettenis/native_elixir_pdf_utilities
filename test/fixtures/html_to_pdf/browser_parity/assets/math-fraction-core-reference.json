@@ -5,11 +5,12 @@
     "tmp/references/mathml-core.html": "f61ebea74ba54c489646e6969983ef977f448c26602edff75ec4e3ba77216373",
     "test/fixtures/html_to_pdf/browser_parity/mathml_fractions.html": "f661e98a620b999f1c1cc0b8e99c4d948c487b43f6d75e233cea365a8b8603ea",
     "test/fixtures/html_to_pdf/browser_parity/assets/math-fraction-script-reference.ttf": "b1eed6017e8ac0976744ddb108c995747bb19d49bfb24fc51ee472922e6e0217",
-    "test/fixtures/html_to_pdf/browser_parity/assets/math-fraction-script-reference.json": "fedc0dcf1b34aa794b7991c8fb2c906ae243489863a29b59d873eff5974e7214"
+    "test/fixtures/html_to_pdf/browser_parity/assets/math-fraction-script-reference.json": "fedc0dcf1b34aa794b7991c8fb2c906ae243489863a29b59d873eff5974e7214",
+    "priv/fonts/stix/token-ink-metrics.bin": "07d0d30aa83ded52f48989b81a8f5e3943cf7f6a1ca1e9f26831c2ad3efcf469"
   },
   "source_url": "https://www.w3.org/TR/2025/CR-mathml-core-20250624/",
   "fonttools_version": "4.60.1",
-  "algorithm": "Core 3.3.1 / 3.3.2; UA depth/style; B.1 dictionary; original selected outlines/MATH/GSUB",
+  "algorithm": "Core 3.3.1 / 3.3.2; UA depth/style; B.1 dictionary; source FreeType cmap ink; selected script outlines/MATH/GSUB",
   "outer_transport_separate": true,
   "empirical_offsets": [],
   "native_or_browser_geometry_inputs": false,
@@ -81,7 +82,8 @@
       "design_advance": 0
     }
   ],
-  "original_source_and_native_path_unchanged": true,
+  "original_source_unchanged": true,
+  "token_metrics": "hinted ordinary cmap ink; design metrics for selected ssty forms",
   "unchanged_thresholds": {
     "max_changed_ratio": 0.01,
     "max_average_delta": 0.01,
@@ -1368,9 +1370,9 @@
               "points": 11.88
             },
             "ascent": {
-              "numerator": 1917,
-              "denominator": 125,
-              "points": 15.336
+              "numerator": 63,
+              "denominator": 4,
+              "points": 15.75
             },
             "descent": {
               "numerator": 0,
@@ -1409,9 +1411,9 @@
               "points": 11.88
             },
             "ascent": {
-              "numerator": 1932,
-              "denominator": 125,
-              "points": 15.456
+              "numerator": 33,
+              "denominator": 2,
+              "points": 16.5
             },
             "descent": {
               "numerator": 0,
@@ -1450,14 +1452,14 @@
               "points": 17.28
             },
             "ascent": {
-              "numerator": 1674,
-              "denominator": 125,
-              "points": 13.392
+              "numerator": 27,
+              "denominator": 2,
+              "points": 13.5
             },
             "descent": {
-              "numerator": 24,
-              "denominator": 25,
-              "points": 0.96
+              "numerator": 3,
+              "denominator": 2,
+              "points": 1.5
             },
             "color": "black",
             "css_transport_ascent": {
@@ -1491,14 +1493,14 @@
               "points": 11.88
             },
             "ascent": {
-              "numerator": 1932,
-              "denominator": 125,
-              "points": 15.456
+              "numerator": 33,
+              "denominator": 2,
+              "points": 16.5
             },
             "descent": {
-              "numerator": 39,
-              "denominator": 125,
-              "points": 0.312
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
             },
             "color": "black",
             "css_transport_ascent": {
@@ -1532,9 +1534,9 @@
               "points": 11.88
             },
             "ascent": {
-              "numerator": 387,
-              "denominator": 25,
-              "points": 15.48
+              "numerator": 33,
+              "denominator": 2,
+              "points": 16.5
             },
             "descent": {
               "numerator": 0,
@@ -1573,14 +1575,14 @@
               "points": 11.88
             },
             "ascent": {
-              "numerator": 378,
-              "denominator": 25,
-              "points": 15.12
+              "numerator": 63,
+              "denominator": 4,
+              "points": 15.75
             },
             "descent": {
-              "numerator": 39,
-              "denominator": 125,
-              "points": 0.312
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
             },
             "color": "black",
             "css_transport_ascent": {
@@ -1650,24 +1652,24 @@
           "points": 0.75
         },
         "ascent": {
-          "numerator": 3852,
-          "denominator": 125,
-          "points": 30.816
+          "numerator": 1593,
+          "denominator": 50,
+          "points": 31.86
         },
         "descent": {
-          "numerator": 1959,
-          "denominator": 125,
-          "points": 15.672
+          "numerator": 384,
+          "denominator": 25,
+          "points": 15.36
         },
         "height": {
-          "numerator": 5811,
-          "denominator": 125,
-          "points": 46.488
+          "numerator": 2361,
+          "denominator": 50,
+          "points": 47.22
         },
         "baseline_witness_height": {
-          "numerator": 3852,
-          "denominator": 125,
-          "points": 30.816
+          "numerator": 1593,
+          "denominator": 50,
+          "points": 31.86
         },
         "html_content_origin_x": {
           "numerator": 3,
@@ -1676,7 +1678,7 @@
         },
         "css_containing_block": "HTML span inside mtext integration point"
       },
-      "reference_fragment": "<mfrac style=\"display:inline-block;width:63.586666666667pt;height:46.488pt;line-height:0;font-size:0\" data-core-fraction-reference=\"fraction-06\"><mtext data-core-html-host=\"fraction-06\" style=\"display:inline-block;line-height:0;font-size:0\"><span data-core-content-box=\"fraction-06\" style=\"display:inline-block;position:relative;width:63.586666666667pt;height:46.488pt;line-height:0;font-size:0\"><span data-core-baseline=\"fraction-06\" style=\"display:inline-block;width:0;height:30.816pt;line-height:0;font-size:0\"></span><span data-core-text=\"1\" style=\"position:absolute;left:0pt;top:-2.544pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">1</span><span data-core-text=\"2\" style=\"position:absolute;left:11.88pt;top:-2.544pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">2</span><span data-core-text=\"+\" style=\"position:absolute;left:29.093333333333pt;top:-2.544pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">+</span><span data-core-text=\"3\" style=\"position:absolute;left:51.706666666667pt;top:-2.544pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">3</span><span data-core-text=\"4\" style=\"position:absolute;left:19.913333333333pt;top:28.176pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">4</span><span data-core-text=\"5\" style=\"position:absolute;left:31.793333333333pt;top:28.176pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">5</span><span data-core-rule=\"fraction-06\" style=\"position:absolute;left:0pt;top:23.808pt;width:63.586666666667pt;height:1.632pt;background:black\"></span></span></mtext></mfrac>"
+      "reference_fragment": "<mfrac style=\"display:inline-block;width:63.586666666667pt;height:47.22pt;line-height:0;font-size:0\" data-core-fraction-reference=\"fraction-06\"><mtext data-core-html-host=\"fraction-06\" style=\"display:inline-block;line-height:0;font-size:0\"><span data-core-content-box=\"fraction-06\" style=\"display:inline-block;position:relative;width:63.586666666667pt;height:47.22pt;line-height:0;font-size:0\"><span data-core-baseline=\"fraction-06\" style=\"display:inline-block;width:0;height:31.86pt;line-height:0;font-size:0\"></span><span data-core-text=\"1\" style=\"position:absolute;left:0pt;top:-1.5pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">1</span><span data-core-text=\"2\" style=\"position:absolute;left:11.88pt;top:-1.5pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">2</span><span data-core-text=\"+\" style=\"position:absolute;left:29.093333333333pt;top:-1.5pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">+</span><span data-core-text=\"3\" style=\"position:absolute;left:51.706666666667pt;top:-1.5pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">3</span><span data-core-text=\"4\" style=\"position:absolute;left:19.913333333333pt;top:29.22pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">4</span><span data-core-text=\"5\" style=\"position:absolute;left:31.793333333333pt;top:29.22pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">5</span><span data-core-rule=\"fraction-06\" style=\"position:absolute;left:0pt;top:24.852pt;width:63.586666666667pt;height:1.632pt;background:black\"></span></span></mtext></mfrac>"
     },
     "fraction-07": {
       "original_fragment": "<mfrac linethickness=\"0\"><mn>6</mn><mn>7</mn></mfrac>",
@@ -1713,14 +1715,14 @@
               "points": 11.88
             },
             "ascent": {
-              "numerator": 1938,
-              "denominator": 125,
-              "points": 15.504
+              "numerator": 33,
+              "denominator": 2,
+              "points": 16.5
             },
             "descent": {
-              "numerator": 36,
-              "denominator": 125,
-              "points": 0.288
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
             },
             "color": "black",
             "css_transport_ascent": {
@@ -1754,14 +1756,14 @@
               "points": 11.88
             },
             "ascent": {
-              "numerator": 378,
-              "denominator": 25,
-              "points": 15.12
+              "numerator": 63,
+              "denominator": 4,
+              "points": 15.75
             },
             "descent": {
-              "numerator": 24,
-              "denominator": 125,
-              "points": 0.192
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
             },
             "color": "black",
             "css_transport_ascent": {
@@ -1807,24 +1809,24 @@
           "points": 0.75
         },
         "ascent": {
-          "numerator": 4278,
-          "denominator": 125,
-          "points": 34.224
+          "numerator": 1761,
+          "denominator": 50,
+          "points": 35.22
         },
         "descent": {
-          "numerator": 2094,
-          "denominator": 125,
-          "points": 16.752
+          "numerator": 414,
+          "denominator": 25,
+          "points": 16.56
         },
         "height": {
-          "numerator": 6372,
-          "denominator": 125,
-          "points": 50.976
+          "numerator": 2589,
+          "denominator": 50,
+          "points": 51.78
         },
         "baseline_witness_height": {
-          "numerator": 4278,
-          "denominator": 125,
-          "points": 34.224
+          "numerator": 1761,
+          "denominator": 50,
+          "points": 35.22
         },
         "html_content_origin_x": {
           "numerator": 3,
@@ -1833,7 +1835,7 @@
         },
         "css_containing_block": "HTML span inside mtext integration point"
       },
-      "reference_fragment": "<mfrac linethickness=\"0\" style=\"display:inline-block;width:11.88pt;height:50.976pt;line-height:0;font-size:0\" data-core-fraction-reference=\"fraction-07\"><mtext data-core-html-host=\"fraction-07\" style=\"display:inline-block;line-height:0;font-size:0\"><span data-core-content-box=\"fraction-07\" style=\"display:inline-block;position:relative;width:11.88pt;height:50.976pt;line-height:0;font-size:0\"><span data-core-baseline=\"fraction-07\" style=\"display:inline-block;width:0;height:34.224pt;line-height:0;font-size:0\"></span><span data-core-text=\"6\" style=\"position:absolute;left:0pt;top:-2.496pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">6</span><span data-core-text=\"7\" style=\"position:absolute;left:0pt;top:32.784pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">7</span></span></mtext></mfrac>"
+      "reference_fragment": "<mfrac linethickness=\"0\" style=\"display:inline-block;width:11.88pt;height:51.78pt;line-height:0;font-size:0\" data-core-fraction-reference=\"fraction-07\"><mtext data-core-html-host=\"fraction-07\" style=\"display:inline-block;line-height:0;font-size:0\"><span data-core-content-box=\"fraction-07\" style=\"display:inline-block;position:relative;width:11.88pt;height:51.78pt;line-height:0;font-size:0\"><span data-core-baseline=\"fraction-07\" style=\"display:inline-block;width:0;height:35.22pt;line-height:0;font-size:0\"></span><span data-core-text=\"6\" style=\"position:absolute;left:0pt;top:-1.5pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">6</span><span data-core-text=\"7\" style=\"position:absolute;left:0pt;top:33.78pt;font-family:'STIX Two Math';font-size:24pt;line-height:24pt;color:black;white-space:nowrap\">7</span></span></mtext></mfrac>"
     },
     "fraction-08": {
       "original_fragment": "<mfrac style=\"width:54pt;padding:0;color:blue\" linethickness=\"1px\"><mn style=\"font-size:12pt;math-depth:0\">89</mn><mn data-script-reference=\"authored-d\">10</mn></mfrac>",
@@ -1871,14 +1873,14 @@
               "points": 5.94
             },
             "ascent": {
-              "numerator": 1941,
-              "denominator": 250,
-              "points": 7.764
+              "numerator": 33,
+              "denominator": 4,
+              "points": 8.25
             },
             "descent": {
-              "numerator": 18,
-              "denominator": 125,
-              "points": 0.144
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
             },
             "color": "blue",
             "css_transport_ascent": {
@@ -1912,14 +1914,14 @@
               "points": 5.94
             },
             "ascent": {
-              "numerator": 969,
-              "denominator": 125,
-              "points": 7.752
+              "numerator": 33,
+              "denominator": 4,
+              "points": 8.25
             },
             "descent": {
-              "numerator": 39,
-              "denominator": 250,
-              "points": 0.156
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
             },
             "color": "blue",
             "css_transport_ascent": {
@@ -2071,9 +2073,9 @@
           "points": 0.0
         },
         "ascent": {
-          "numerator": 9147,
-          "denominator": 500,
-          "points": 18.294
+          "numerator": 939,
+          "denominator": 50,
+          "points": 18.78
         },
         "descent": {
           "numerator": 53469,
@@ -2081,14 +2083,14 @@
           "points": 10.6938
         },
         "height": {
-          "numerator": 144939,
+          "numerator": 147369,
           "denominator": 5000,
-          "points": 28.9878
+          "points": 29.4738
         },
         "baseline_witness_height": {
-          "numerator": 9147,
-          "denominator": 500,
-          "points": 18.294
+          "numerator": 939,
+          "denominator": 50,
+          "points": 18.78
         },
         "html_content_origin_x": {
           "numerator": 0,
@@ -2097,7 +2099,7 @@
         },
         "css_containing_block": "HTML span inside mtext integration point"
       },
-      "reference_fragment": "<mfrac style=\"width:54pt;padding:0;color:blue;display:inline-block;width:54pt;height:28.9878pt;line-height:0;font-size:0\" linethickness=\"1px\" data-core-fraction-reference=\"fraction-08\"><mtext data-core-html-host=\"fraction-08\" style=\"display:inline-block;line-height:0;font-size:0\"><span data-core-content-box=\"fraction-08\" style=\"display:inline-block;position:relative;width:54pt;height:28.9878pt;line-height:0;font-size:0\"><span data-core-baseline=\"fraction-08\" style=\"display:inline-block;width:0;height:18.294pt;line-height:0;font-size:0\"></span><span data-core-text=\"8\" style=\"position:absolute;left:21.06pt;top:-1.236pt;font-family:'STIX Two Math';font-size:12pt;line-height:12pt;color:blue;white-space:nowrap\">8</span><span data-core-text=\"9\" style=\"position:absolute;left:27pt;top:-1.236pt;font-family:'STIX Two Math';font-size:12pt;line-height:12pt;color:blue;white-space:nowrap\">9</span><span data-core-text=\"1\" style=\"position:absolute;left:20.1393pt;top:19.074pt;font-family:'Math Fraction Script Reference';font-size:12.6pt;line-height:12.6pt;color:blue;white-space:nowrap\">\ue301</span><span data-core-text=\"0\" style=\"position:absolute;left:26.5527pt;top:19.074pt;font-family:'Math Fraction Script Reference';font-size:12.6pt;line-height:12.6pt;color:blue;white-space:nowrap\">\ue300</span><span data-core-rule=\"fraction-08\" style=\"position:absolute;left:0pt;top:13.275pt;width:54pt;height:0.75pt;background:blue\"></span></span></mtext></mfrac>"
+      "reference_fragment": "<mfrac style=\"width:54pt;padding:0;color:blue;display:inline-block;width:54pt;height:29.4738pt;line-height:0;font-size:0\" linethickness=\"1px\" data-core-fraction-reference=\"fraction-08\"><mtext data-core-html-host=\"fraction-08\" style=\"display:inline-block;line-height:0;font-size:0\"><span data-core-content-box=\"fraction-08\" style=\"display:inline-block;position:relative;width:54pt;height:29.4738pt;line-height:0;font-size:0\"><span data-core-baseline=\"fraction-08\" style=\"display:inline-block;width:0;height:18.78pt;line-height:0;font-size:0\"></span><span data-core-text=\"8\" style=\"position:absolute;left:21.06pt;top:-0.75pt;font-family:'STIX Two Math';font-size:12pt;line-height:12pt;color:blue;white-space:nowrap\">8</span><span data-core-text=\"9\" style=\"position:absolute;left:27pt;top:-0.75pt;font-family:'STIX Two Math';font-size:12pt;line-height:12pt;color:blue;white-space:nowrap\">9</span><span data-core-text=\"1\" style=\"position:absolute;left:20.1393pt;top:19.56pt;font-family:'Math Fraction Script Reference';font-size:12.6pt;line-height:12.6pt;color:blue;white-space:nowrap\">\ue301</span><span data-core-text=\"0\" style=\"position:absolute;left:26.5527pt;top:19.56pt;font-family:'Math Fraction Script Reference';font-size:12.6pt;line-height:12.6pt;color:blue;white-space:nowrap\">\ue300</span><span data-core-rule=\"fraction-08\" style=\"position:absolute;left:0pt;top:13.761pt;width:54pt;height:0.75pt;background:blue\"></span></span></mtext></mfrac>"
     }
   },
   "browser_packaging": {

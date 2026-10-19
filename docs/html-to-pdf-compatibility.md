@@ -372,6 +372,41 @@ glyphs. Fonts whose license forbids subsetting remain fully embedded. Set
 `subset_fonts: false` or `compress_streams: false` when render time matters more
 than output size.
 
+## MathML in HTML
+
+Inline and block equations support tokens, operators, fractions, radicals,
+scripts, limits and accents, multiscripts, grouping, errors, padding, phantoms,
+semantics and matrices. Use the bundled `STIX Two Math` family or supply a
+static TrueType face with the required MATH metrics. Missing metrics produce a
+diagnostic instead of borrowing another font's mathematical geometry.
+
+Script, padding and spacing elements can use the supported ordinary CSS flow,
+flex and grid displays. Their actual children and selected fonts remain in the
+layout, and CSS dimensions, padding, borders and backgrounds apply once.
+Math owners support relative, absolute and fixed positioning and hidden overflow.
+Absolute descendants use their containing block; fixed descendants use the
+printed viewport unless a supported ancestor establishes their containing block.
+These rules also apply inside local child HTML viewports.
+
+Matrices support anonymous rows and cells, spans, automatic and fixed table
+layout, and separate or collapsed borders. Fixed columns and border conflicts
+use the shared HTML table rules. The matrix aligns with the selected font's
+MATH axis. Positioned cells retain their mathematical content outside column
+allocation. IDs on equation children and matrix rows or cells can be fragment
+link destinations after pagination. Hidden first IDs do not bind to later duplicates.
+
+Equations remain atomic in page flow. An oversized equation that cannot fit
+returns an actionable layout diagnostic. Logical text preserves original Unicode;
+phantoms and unselected annotations contribute no visible text. Complex shaping,
+bidirectional text and vertical writing remain unsupported. Token layout uses
+Linux Chromium's hinted ink metrics for the bundled STIX face at CSS font sizes
+from 1px to 128px for ordinary character forms. Selected OpenType script forms,
+other font contents and other sizes retain design metrics, which can differ
+from hinted browser measurements. PDF glyph paint retains the selected font
+outlines in either case.
+
+See [MathML examples](html-to-pdf-examples.md#mathml-equations).
+
 ## Pagination
 
 Pages break automatically or at supported CSS page breaks. Use
@@ -392,7 +427,7 @@ For PDF viewer bookmarks, see [outlines from headings](html-to-pdf-examples.md#c
 | --- | --- |
 | JavaScript, canvas drawing APIs, video, audio, plugin embeds and general framesets | Static HTML, supported images, authorized local HTML child viewports and bounded framesets |
 | XFA, JavaScript form actions | Use supported AcroForm fields or static artwork |
-| Floats, fixed positioning, transforms, animations | Block, flex, grid, relative, or absolute layout |
+| Floats, general fixed positioning, transforms, animations | Block, flex, grid, relative, or absolute layout; MathML owners also admit fixed positioning |
 | Named pages and CSS page-margin boxes | Page options and header/footer templates |
 | CSS `counter(page)` or `counter(pages)` | `{{page}}` and `{{pages}}` in header/footer templates |
 | Animated PNG playback | The PNG default image is rendered; animation frames are not played. |

@@ -283,7 +283,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
   test "unallocated Math table children and malformed row source return actionable diagnostics",
        %{style: style} do
     for tag <- ~w(mtd mtr) do
-      assert {:error, {_, diagnostic}} = MathLayout.measure(node(tag, [], style))
+      assert {:error, {_, diagnostic}} =
+               MathLayout.measure(
+                 node(
+                   tag,
+                   [],
+                   Map.put(style, :display, if(tag == "mtd", do: :table_cell, else: :table_row))
+                 )
+               )
+
       assert diagnostic.stage == :layout and diagnostic.source == tag
       assert diagnostic.message =~ "containing mtable"
     end
@@ -440,7 +448,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
     assert :error = MathLayoutValidator.parse_display("inline flow")
 
     assert {:error, {_, diagnostic}} =
-             MathLayout.measure(node("mspace", [], Map.put(style, :display, :flex)))
+             MathLayout.measure(node("mspace", [], Map.put(style, :display, :table_column)))
 
     assert diagnostic.stage == :layout and diagnostic.message =~ "display"
 
@@ -489,10 +497,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
       bits_per_component: 8
     }
 
-    assert {:error, {_, diagnostic}} =
+    assert {:ok, space} =
              MathLayout.measure(node("mspace", [], Map.put(style, :background_image, image)))
 
-    assert diagnostic.source == "mspace" and diagnostic.message =~ "background images"
+    assert [%{kind: :background, style: %{background_image: ^image}}] = space.drawing_items
     Limits.install(Map.put(Limits.effective(), :max_layout_boxes, 0))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -589,5 +597,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
       assert diagnostic.stage in [:font, :layout] and diagnostic.message =~ Atom.to_string(limit)
       assert diagnostic.operation == :measure_math
     end
+  end
+
+  test "visible children of mspace report the invalid source content model", %{style: style} do
+    for child <- [token("1", style), %{type: :text, text: "visible", style: style}] do
+      assert {:error, {:unsupported_html, diagnostic}} =
+               MathLayout.measure(node("mspace", [child], style))
+
+      assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
+      assert diagnostic.source == "mspace" and diagnostic.message =~ "content model"
+    end
+  end
+
+  test "invalid positioned math descendants retain the child diagnostic" do
+    assert {:error, {reason, diagnostic}} =
+             HtmlToPdf.render(
+               "<math><mrow style='position:absolute;left:10pt;top:10pt'><mn>à</mn></mrow></math>",
+               system_font_discovery: false
+             )
+
+    assert diagnostic.reason == reason and diagnostic.stage == :layout
+    assert diagnostic.operation == :measure_math and diagnostic.source == "à"
+    assert diagnostic.message =~ "combining"
   end
 end

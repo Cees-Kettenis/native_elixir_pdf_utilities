@@ -130,10 +130,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathRadicalOwnerCssTest do
     assert diagnostic.reason == reason and diagnostic.stage == :layout
     assert diagnostic.operation == :measure_math and diagnostic.message =~ "math boxes"
 
-    assert {:error, {reason, diagnostic}} =
-             HtmlToPdf.render("<math><msqrt style='position:absolute'><mn>2</mn></msqrt></math>")
+    assert {:ok, positioned} =
+             HtmlToPdf.render(
+               "<math><msqrt style='position:absolute;left:10pt;top:10pt'><mn>2</mn></msqrt></math>"
+             )
 
-    assert diagnostic.reason == reason and diagnostic.stage == :layout
-    assert diagnostic.source == "msqrt" and diagnostic.message =~ "positioned"
+    assert {:ok, "2"} = NativeElixirPdfUtilities.Text.extract(positioned, layout: false)
   end
 end

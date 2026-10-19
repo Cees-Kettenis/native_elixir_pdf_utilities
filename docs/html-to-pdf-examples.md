@@ -1927,3 +1927,37 @@ by `max_html_pattern_compile_work`, `max_html_form_value_memory_bytes`,
 returns a shared diagnostic instead of a fabricated mismatch. The GC-triggered
 worker heap cap excludes native regex allocation; see [the memory and work
 contract](resource-limits.md#initial-html-form-values).
+
+
+## MathML equations
+
+Select a MATH font for native equation layout. This example combines a fraction,
+a fixed matrix and a link to one of its cells:
+
+```elixir
+html = """
+<style>
+  html, body { margin: 0; font-family: "DejaVu Sans"; }
+  math { font-family: "STIX Two Math"; font-size: 18pt; }
+  mtable { table-layout: fixed; width: 140pt; border-collapse: collapse; }
+  mtd { padding: 4pt; border: 1pt solid #21517b; }
+</style>
+<p><a href="#result">Jump to the result cell</a></p>
+<math display="block">
+  <mtable>
+    <mtr>
+      <mtd><mfrac><mn>1</mn><mn>2</mn></mfrac></mtd>
+      <mtd id="result"><msup><mi>x</mi><mn>2</mn></msup></mtd>
+    </mtr>
+  </mtable>
+</math>
+"""
+
+{:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html,
+  page_size: :a4, margin: "18mm", system_font_discovery: false)
+```
+
+An ordinary CSS display changes a schema's layout. For example,
+`<msup style="display:inline-flex;gap:3pt"><mn>1</mn><mn>2</mn></msup>`
+places its children in a flex row. Omit that display override for a mathematical
+superscript. See the [MathML support and limits](html-to-pdf-compatibility.md#mathml-in-html).

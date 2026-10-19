@@ -162,11 +162,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTokenOwnerCssTest do
     assert_in_delta measured.width, 60, 0.012
     assert measured.ascent + measured.descent >= 36
 
-    assert {:error, {:unsupported_html, diagnostic}} =
-             HtmlToPdf.render("<math><mtext style='position:absolute'>12</mtext></math>")
+    assert {:ok, positioned} =
+             HtmlToPdf.render(
+               "<math><mtext style='position:absolute;left:10pt;top:10pt'>12</mtext></math>"
+             )
 
-    assert diagnostic.stage == :layout and diagnostic.source == "mtext"
-    assert diagnostic.message =~ "static or relative"
+    assert {:ok, "12"} = NativeElixirPdfUtilities.Text.extract(positioned, layout: false)
 
     html =
       "<math><semantics><mn>1</mn><annotation style='width:min(40pt,60pt);overflow:hidden;background-image:url(https://unselected.invalid/image.png)'>Hidden</annotation></semantics></math>"

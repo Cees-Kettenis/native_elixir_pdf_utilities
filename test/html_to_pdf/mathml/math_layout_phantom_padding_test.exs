@@ -286,10 +286,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPhantomPaddingTest do
                "-2pt"
              )
 
-    assert {:error, {:unsupported_html, diagnostic}} =
+    assert {:ok, pdf} =
              HtmlToPdf.render("<math><mpadded style='width:50%'><mn>2</mn></mpadded></math>")
 
-    assert diagnostic.source == "mpadded" and diagnostic.message =~ "composition"
+    assert {:ok, "2"} = Text.extract(pdf, layout: false)
 
     assert {:error, {:invalid_document, diagnostic}} =
              MathLayoutValidator.compute_style(%{width: {:math_padded_length, "1ex"}})
@@ -373,15 +373,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPhantomPaddingTest do
   test "hidden content still uses semantic validation and selected-font work limits", %{
     style: style
   } do
-    for tag <- ~w(mpadded) do
-      assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render(
-                 "<math><mphantom><#{tag} style='position:absolute'/></mphantom></math>"
-               )
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<math><mphantom><mpadded style='position:absolute'/></mphantom></math>"
+             )
 
-      assert diagnostic.stage == :layout and diagnostic.source == tag
-      assert diagnostic.module == MathLayoutValidator and diagnostic.reason == :unsupported_html
-    end
+    assert {:error, {:no_extractable_text, _}} = Text.extract(pdf, layout: false)
 
     assert {:error, {:invalid_css, diagnostic}} =
              HtmlToPdf.render(

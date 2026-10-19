@@ -1489,7 +1489,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
         [box]
         |> NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(clip)
-        |> Enum.map(&Map.put(&1, pagination_order, Map.fetch!(box, pagination_order)))
+        |> Enum.map(fn sliced ->
+          # A pagination slice is an exact paint boundary, not a CSS viewport.
+          # Snapping its top can clip the source target on that same boundary.
+          sliced =
+            if sliced.type == :drawing_group and Map.get(sliced, :role) == :overflow_clip,
+              do: Map.put(sliced, :snap_clip_to_css_pixel_grid, false),
+              else: sliced
+
+          Map.put(sliced, pagination_order, Map.fetch!(box, pagination_order))
+        end)
       else
         []
       end

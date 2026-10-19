@@ -11,6 +11,8 @@ from html.parser import HTMLParser
 import json
 from pathlib import Path
 import re
+import struct
+import zlib
 
 import fontTools
 from fontTools.ttLib import TTFont
@@ -25,12 +27,14 @@ args = arguments.parse_args()
 CORE = args.core_source
 FIXTURE = ROOT / 'test/fixtures/html_to_pdf/browser_parity/mathml_fractions.html'
 ASSETS = ROOT / 'test/fixtures/html_to_pdf/browser_parity/assets'
+INK = ROOT / 'priv/fonts/stix/token-ink-metrics.bin'
 PINNED = {
     SOURCE: '49b22767985171bce579307b21d98f4d35012fa39e316acc4ffcab8644dfb69b',
     CORE: 'f61ebea74ba54c489646e6969983ef977f448c26602edff75ec4e3ba77216373',
     FIXTURE: 'f661e98a620b999f1c1cc0b8e99c4d948c487b43f6d75e233cea365a8b8603ea',
     ASSETS / 'math-fraction-script-reference.ttf': 'b1eed6017e8ac0976744ddb108c995747bb19d49bfb24fc51ee472922e6e0217',
     ASSETS / 'math-fraction-script-reference.json': 'fedc0dcf1b34aa794b7991c8fb2c906ae243489863a29b59d873eff5974e7214',
+    INK: '07d0d30aa83ded52f48989b81a8f5e3943cf7f6a1ca1e9f26831c2ad3efcf469',
 }
 assert fontTools.__version__ == '4.60.1'
 for path, expected in PINNED.items():
@@ -38,6 +42,17 @@ for path, expected in PINNED.items():
 source_html = FIXTURE.read_text()
 core_html = CORE.read_text()
 font = TTFont(SOURCE, recalcTimestamp=False)
+ink_bytes = zlib.decompress(INK.read_bytes())
+assert ink_bytes[:32] == hashlib.sha256(SOURCE.read_bytes()).digest()
+glyph_count, maximum_size = struct.unpack_from('>HH', ink_bytes, 32)
+ink_profiles = []
+offset = 36
+for _ in range(glyph_count):
+    count = struct.unpack_from('>H', ink_bytes, offset)[0]
+    offset += 2
+    ink_profiles.append([struct.unpack_from('>Hhh', ink_bytes, offset + i * 6) for i in range(count)])
+    offset += count * 6
+assert offset == len(ink_bytes)
 units = font['head'].unitsPerEm
 constants = font['MATH'].table.MathConstants
 cmap = font.getBestCmap()
@@ -235,8 +250,16 @@ def measure(node, inherited=None):
             previous = name
             outline = font['glyf'][name]
             width = F(font['hmtx'][name][0] * size, units)
+            ascent, descent = F(outline.yMax * size, units), -F(outline.yMin * size, units)
+            # Source-derived FreeType ink for ordinary cmap forms. Keep the
+            # approved ssty design metrics, which Chrome does not select.
+            sample_size = round(size / F(3, 4) * 64)
+            if name == cmap[ord(character)] and 64 <= sample_size <= maximum_size:
+                _, bottom, top = next(record for record in reversed(ink_profiles[font.getGlyphID(name)])
+                                      if record[0] <= sample_size)
+                ascent, descent = F(top * 3, 4), F(-bottom * 3, 4)
             glyphs.append(dict(text=character, name=name, gid=font.getGlyphID(name), size=size, x=x, y=F(0), width=width,
-                               ascent=F(outline.yMax * size, units), descent=-F(outline.yMin * size, units), color=st['color']))
+                               ascent=ascent, descent=descent, color=st['color']))
             x += width
         return dict(width=x, ascent=max(g['ascent'] for g in glyphs), descent=max(g['descent'] for g in glyphs), glyphs=glyphs, rules=[])
     assert tag in ['math', 'mrow', 'mfrac'] and not node['text'].strip()
@@ -372,13 +395,14 @@ assert reference.count('data-script-reference="linked-n"') == 1
 assert 'script' not in reference.lower().replace('data-script-reference', '').replace('math fraction script reference', '')
 manifest = dict(activation=False, inputs={('tmp/references/mathml-core.html' if path == CORE else str(path.relative_to(ROOT))):sha for path,sha in PINNED.items()},
                 source_url='https://www.w3.org/TR/2025/CR-mathml-core-20250624/', fonttools_version=fontTools.__version__,
-                algorithm='Core 3.3.1 / 3.3.2; UA depth/style; B.1 dictionary; original selected outlines/MATH/GSUB',
+                algorithm='Core 3.3.1 / 3.3.2; UA depth/style; B.1 dictionary; source FreeType cmap ink; selected script outlines/MATH/GSUB',
                 outer_transport_separate=True, empirical_offsets=[], native_or_browser_geometry_inputs=False,
                 original_input_reproduced_byte_exactly=True, unchanged_linked_fraction=linked,
                 unchanged_stylesheet_sha256=hashlib.sha256(''.join(re.findall(r'<style[^>]*>.*?</style>',source_html,re.S)).encode()).hexdigest(),
                 original_mfrac_count=10, replaced_top_fractions=8, retained_linked_fraction_count=1,
                 selected_source_pair_advances=pair_proofs,
-                original_source_and_native_path_unchanged=True, unchanged_thresholds=dict(max_changed_ratio=.01,max_average_delta=.01,pixel_channel_tolerance=12,dpi=72),
+                original_source_unchanged=True, token_metrics='hinted ordinary cmap ink; design metrics for selected ssty forms',
+                unchanged_thresholds=dict(max_changed_ratio=.01,max_average_delta=.01,pixel_channel_tolerance=12,dpi=72),
                 records=records)
 # A complete read-only browser document uses the same five source faces and
 # the already approved script-artwork face. Relative asset paths reproduce in a
@@ -413,9 +437,9 @@ manifest['browser_packaging'] = dict(font_stylesheet=css,
     no_layout_change_to_linked_tree=True, complete_reference_byte_reversible=True)
 products={OUT/'math-fraction-core-reference-fragments.html':reference.encode(), OUT/'math-fraction-core-reference.html':ready.encode(), OUT/'math-fraction-core-reference.json':(json.dumps(manifest,indent=2,ensure_ascii=True)+'\n').encode()}
 approved_hashes = {
-    'math-fraction-core-reference-fragments.html': 'af4d0ed9659cdab757f92d6c16b69b9b4f9c85a48fa270223f4fb795ebf65cef',
-    'math-fraction-core-reference.html': '3356f56ab4bc49b93c56fe25e2d04caea2aca84e5b2d7d4b376bfa890381a8b5',
-    'math-fraction-core-reference.json': '0201c16d80858e1700a0ca492451d3e179a4a68ac669f98ae1d172cc0755dcc2',
+    'math-fraction-core-reference-fragments.html': '9b799dc08cf10d9599b03c0e868be6daa3fae684fa5b4c0720f30b566fe1e0b2',
+    'math-fraction-core-reference.html': '09ead18e0685639f3d6e26ca123be159d03d8562294403b6dbd3bb2b1fba4182',
+    'math-fraction-core-reference.json': '3cdc13d145b69c5b82e01868aae16a7f8cc9f3b3cedcda4cf30eb74f981f4a11',
 }
 for path,content in products.items():
     assert hashlib.sha256(content).hexdigest() == approved_hashes[path.name]

@@ -22,7 +22,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSchemaCssFlowTest do
     {:ok, one} = MathLayout.glyph("1", font, 20)
     {:ok, two} = MathLayout.glyph("2", font, 20)
 
-    for tag <- ["mfrac", "msqrt", "mroot"], display <- ["inline", "inline-block"] do
+    for tag <-
+          ~w(mfrac msqrt mroot msub msup msubsup munder mover munderover mmultiscripts mpadded mphantom),
+        display <- ["inline", "inline-block"] do
       html =
         "<math style='font-size:20pt'><#{tag} style='display:#{display};padding:0'><mn style='display:inline math;math-depth:0;font-size:20pt'>1</mn><mn style='display:inline math;math-depth:0;font-size:20pt'>2</mn></#{tag}></math>"
 
@@ -45,29 +47,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSchemaCssFlowTest do
   end
 
   test "CSS schema Math items use their issued first line baseline" do
-    for tag <- ["mfrac", "msqrt", "mroot"] do
+    for tag <-
+          ~w(mfrac msqrt mroot msub msup msubsup munder mover munderover mmultiscripts mpadded mphantom) do
       html =
         "<math style='font-size:20pt'><#{tag} style='display:inline-block;padding:0'><mn style='math-depth:0;font-size:20pt'>12</mn><mn style='math-depth:0;font-size:20pt'>34</mn></#{tag}></math>"
 
       assert {:ok, measured} = styled_math(html)
-      {:ok, registry} = Font.load_registry(system_font_discovery: false)
-      {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
-
-      bounds =
-        Enum.map(~c"1234", fn codepoint ->
-          {:ok, outlines} = Font.glyph_bounds(font)
-          {left, bottom, right, top} = elem(outlines, font.cmap[codepoint])
-          scale = 20 / font.units_per_em
-          {left * scale, bottom * scale, right * scale, top * scale}
-        end)
-
-      [one, two, three, four] = bounds
-      first_ascent = max(elem(one, 3), elem(two, 3))
-      first_descent = -min(elem(one, 1), elem(two, 1))
-      second_ascent = max(elem(three, 3), elem(four, 3))
-      second_descent = -min(elem(three, 1), elem(four, 1))
-      assert_in_delta measured.ascent, first_ascent, 1.0e-10
-      assert_in_delta measured.descent, first_descent + second_ascent + second_descent, 1.0e-10
+      # Both original-text lines have Chromium's hinted 18 CSS-pixel height.
+      assert_in_delta measured.ascent, 13.5, 1.0e-10
+      assert_in_delta measured.descent, 13.5, 1.0e-10
       assert measured.actual_text == "1234"
     end
   end
@@ -95,7 +83,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSchemaCssFlowTest do
     children =
       "<mn style='display:inline math;math-depth:0;font-size:20pt'>12</mn><mn style='display:inline math;math-depth:0;font-size:20pt'>34</mn>"
 
-    for tag <- ["mfrac", "msqrt", "mroot"] do
+    for tag <-
+          ~w(mfrac msqrt mroot msub msup msubsup munder mover munderover mmultiscripts mpadded mphantom) do
       html =
         "<math style='font-size:20pt'><#{tag} style='display:inline;padding:2pt'>#{children}</#{tag}></math>"
 
@@ -136,7 +125,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSchemaCssFlowTest do
     children =
       "<mn style='display:inline math;math-depth:0;font-size:20pt'>12</mn><mn style='display:inline math;math-depth:0;font-size:20pt'>34</mn>"
 
-    for tag <- ["mfrac", "msqrt", "mroot"] do
+    for tag <-
+          ~w(mfrac msqrt mroot msub msup msubsup munder mover munderover mmultiscripts mpadded mphantom) do
       assert {:ok, border_box} =
                styled_math(
                  "<math style='font-size:20pt'><#{tag} style='display:inline-block;box-sizing:border-box;width:50pt;height:40pt;padding:4pt;border:1pt solid blue'>#{children}</#{tag}></math>"
@@ -185,7 +175,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSchemaCssFlowTest do
     image =
       File.read!(Paths.fixture("html_to_pdf/browser_parity/assets/iframe-bars.png"))
 
-    for tag <- ["mfrac", "msqrt", "mroot"] do
+    for tag <-
+          ~w(mfrac msqrt mroot msub msup msubsup munder mover munderover mmultiscripts mpadded mphantom) do
       child =
         "<#{tag} style='display:inline-block;max-width:25pt;min-height:40pt;padding:3pt'><mn style='display:inline math;math-depth:0;font-size:20pt'>12</mn></#{tag}>"
 
@@ -219,7 +210,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSchemaCssFlowTest do
   end
 
   test "fraction and radical flex/grid CSS reuse native containers and math children" do
-    for tag <- ["mfrac", "msqrt", "mroot"],
+    for tag <-
+          ~w(mfrac msqrt mroot msub msup msubsup munder mover munderover mmultiscripts mpadded mphantom),
         display <- ["flex", "inline-flex", "grid", "inline-grid"] do
       html =
         "<math style='font-size:20pt'><#{tag} style='display:#{display};padding:0;gap:3pt;grid-template-columns:20pt 20pt'><mn style='math-depth:0;font-size:20pt'>1</mn><mn style='math-depth:0;font-size:20pt'>2</mn></#{tag}></math>"
@@ -251,7 +243,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSchemaCssFlowTest do
   end
 
   test "ordinary CSS schema overflow clips through the published shared native viewport" do
-    for tag <- ["mfrac", "msqrt", "mroot"] do
+    for tag <-
+          ~w(mfrac msqrt mroot msub msup msubsup munder mover munderover mmultiscripts mpadded mphantom) do
       html =
         "<math><#{tag} style='display:inline-block;padding:0;width:15pt;height:12pt;overflow:hidden'><mn style='display:inline math;math-depth:0;font-size:20pt'>1234</mn></#{tag}></math>"
 
@@ -265,7 +258,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSchemaCssFlowTest do
   end
 
   test "ordinary CSS schema relative placement retains the native source box" do
-    for tag <- ["mfrac", "msqrt", "mroot"] do
+    for tag <-
+          ~w(mfrac msqrt mroot msub msup msubsup munder mover munderover mmultiscripts mpadded mphantom) do
       child = "<mn style='display:inline math;math-depth:0;font-size:20pt'>1234</mn>"
 
       plain =
