@@ -111,7 +111,7 @@ defmodule ManualWeb.RouterTest do
     assert schema["anyOf"] == [%{"required" => ["svg_file"]}, %{"required" => ["svg"]}]
   end
 
-  test "converts uploaded and pasted SVGs to PNG with optional dimensions" do
+  test "converts SVG uploads and text using explicit canvas dimensions or a single proportional axis" do
     svg =
       ~s(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10" fill="red"/></svg>)
 
@@ -125,7 +125,7 @@ defmodule ManualWeb.RouterTest do
              "width" => "12",
              "height" => "8",
              "disposition" => "attachment"
-           }, 12, 6, "attachment"}
+           }, 12, 8, "attachment"}
         ] do
       response = post("/svg-to-png", params)
       assert response.status == 200
