@@ -100,15 +100,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidatorTest do
           [%{}],
           [row([]) |> Map.put(:children, :bad)],
           [group([row([])]) |> Map.put(:children, :bad)],
-          [group([%{style: %{display: :block}, children: []}])],
           [
             group([row([])])
             |> Map.put(:style, %{display: :table_row_group, table_section: :invalid})
           ],
-          [row([%{style: %{display: :block}, children: []}])],
           [row([cell() |> Map.put(:children, :bad)])],
-          [%{column_group | children: [%{style: %{display: :block}, children: []}]}],
-          [%{column_group | children: [column_group]}],
+          [group([row([cell() |> Map.put(:children, :bad)])])],
           [%{column_group | style: %{display: :table_column_group, span: :bad}}],
           [row([cell(%{rowspan: -1})])],
           [row([cell(%{colspan: :bad})])]

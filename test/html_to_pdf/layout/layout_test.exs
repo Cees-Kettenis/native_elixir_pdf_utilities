@@ -4206,10 +4206,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert {:ok, dom} = HtmlParser.parse(ordinary)
     assert {:ok, styled} = Style.compute(dom)
 
-    assert {:error, {:invalid_layout, diagnostic}} =
-             Layout.layout(styled, page_size: {200, 100}, margin: 10)
-
-    assert diagnostic.message =~ "anonymous block"
+    assert {:ok, ordinary_layout} = Layout.layout(styled, page_size: {200, 100}, margin: 10)
+    [ordinary_image] = Enum.filter(ordinary_layout.boxes, &(&1.type == :image))
+    assert ordinary_image.link_url == image.link_url
+    assert ordinary_image.link_rect.width == 12.0
   end
 
   test "layout paints sized positioned and repeated backgrounds between color and border" do
@@ -5829,10 +5829,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       children: [%{type: :element, style: %{display: :block}, children: []}]
     }
 
-    assert {:error, {:invalid_layout, diagnostic}} = Layout.layout(document([bad_table]), [])
-    assert diagnostic.stage == :layout and diagnostic.reason == :invalid_layout
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlTableValidator
-    assert diagnostic.operation == :layout and diagnostic.message =~ "table"
+    assert Layout.layout(document([bad_table]), []) == {:error, :invalid_layout}
 
     bad_row_group = %{
       type: :element,
@@ -5846,10 +5843,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       ]
     }
 
-    assert {:error, {:invalid_layout, diagnostic}} = Layout.layout(document([bad_row_group]), [])
-    assert diagnostic.stage == :layout and diagnostic.reason == :invalid_layout
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlTableValidator
-    assert diagnostic.operation == :layout and diagnostic.message =~ "table"
+    assert Layout.layout(document([bad_row_group]), []) == {:error, :invalid_layout}
 
     bad_row = %{
       type: :element,
@@ -5863,10 +5857,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       ]
     }
 
-    assert {:error, {:invalid_layout, diagnostic}} = Layout.layout(document([bad_row]), [])
-    assert diagnostic.stage == :layout and diagnostic.reason == :invalid_layout
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlTableValidator
-    assert diagnostic.operation == :layout and diagnostic.message =~ "table"
+    assert Layout.layout(document([bad_row]), []) == {:error, :invalid_layout}
 
     empty_table = %{
       type: :element,
@@ -6002,12 +5993,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       ]
     }
 
-    assert {:error, {:invalid_layout, diagnostic}} =
-             Layout.layout(document([bad_table_after_error]), [])
-
-    assert diagnostic.stage == :layout and diagnostic.reason == :invalid_layout
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlTableValidator
-    assert diagnostic.operation == :layout and diagnostic.message =~ "table"
+    assert Layout.layout(document([bad_table_after_error]), []) == {:error, :invalid_layout}
   end
 
   test "layout positions right-aligned table cell text" do
@@ -6379,7 +6365,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     refute Enum.any?(layout_tree.boxes, &(Map.get(&1, :role) == :table_border))
   end
 
-  test "layout fills collapsed table borders for rows with missing trailing cells" do
+  test "layout resolves collapsed edges without inventing borders on missing cells" do
     assert {:ok, styled_tree} =
              Style.compute(%{
                type: :document,
@@ -6441,11 +6427,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {140, 120}, margin: 10)
 
     border_boxes = Enum.filter(layout_tree.boxes, &(Map.get(&1, :role) == :table_border))
-    [last_declared, filler] = Enum.take(border_boxes, -2)
+    # The missing slot has no authored border. Its top and left edges are
+    # painted by C and E; anonymous formation must not invent a sixth outline.
+    assert length(border_boxes) == 5
+    [table] = styled_tree.children
 
-    assert length(border_boxes) == 6
-    assert filler.x > last_declared.x
-    assert filler.width > 0.0
+    assert {:ok, %{rows: [_first, second], collapsed_edges: edges}} =
+             NativeElixirPdfUtilities.Validators.HtmlTableValidator.form(
+               table.children,
+               table.style
+             )
+
+    assert List.last(second.cells).cell.anonymous
+    assert edges[{:horizontal, 1, 2}].width == 0.75
+    assert edges[{:vertical, 1, 3}].width == 0.0
   end
 
   test "layout inherits text alignment through nested flex block content" do

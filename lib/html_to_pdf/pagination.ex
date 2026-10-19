@@ -78,6 +78,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     {root_positioned_boxes, flow_boxes} =
       Enum.split_with(boxes, &(Map.get(&1, :position_anchor) in [:root, :fixed]))
 
+    {inline_positioned, flow_boxes} =
+      Enum.split_with(flow_boxes, &Map.has_key?(&1, :inline_positioned_anchor))
+
     {fieldset_paints, spanning_cells?} =
       Enum.reduce(flow_boxes, {[], false}, fn box, {fieldsets, spanning?} ->
         fieldsets =
@@ -112,10 +115,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         end)
       end
 
-    groups =
+    atomic_anchor = make_ref()
+
+    {groups, atomic_overflow} =
       flow_boxes
       |> flow_groups()
       |> Enum.flat_map(&fragment_flow_group(&1, content_height))
+      |> Enum.map_reduce([], fn group, overflow ->
+        case Enum.find(group.boxes, &(Map.get(&1, :role) == :atomic_table_line)) do
+          %{y: bottom, height: height} = marker ->
+            paint_bottom =
+              Enum.reduce(group.boxes, bottom, fn box, lowest ->
+                {paint_top, paint_bottom} = atomic_box_bounds(box)
+                if paint_top > paint_bottom, do: min(lowest, paint_bottom), else: lowest
+              end)
+
+            allocated = %{group | top: bottom + height, bottom: bottom, height: height}
+
+            if paint_bottom < bottom do
+              id = make_ref()
+              marker = Map.put(marker, atomic_anchor, id)
+              source = %{id: id, top: bottom + height, bottom: paint_bottom, boxes: group.boxes}
+              {%{allocated | boxes: [marker]}, [source | overflow]}
+            else
+              {allocated, overflow}
+            end
+
+          _ ->
+            {group, overflow}
+        end
+      end)
+
+    groups =
+      groups
+      |> Enum.flat_map(
+        &slice_oversized_atomic_group(&1, content_height, elem(page_size, 0), pagination_order)
+      )
 
     headers = repeated_table_headers(groups)
 
@@ -123,10 +158,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       groups
       |> keep_table_groups(headers, content_height)
       |> groups_to_pages(headers, page_size, margins)
+      |> restore_atomic_overflow(
+        Enum.reverse(atomic_overflow),
+        atomic_anchor,
+        margins,
+        pagination_order
+      )
       |> close_table_fragments()
       |> paint_spanning_cell_fragments(spanning_cells?, margins)
       |> align_table_fragment_text()
       |> paint_fieldset_fragments(fieldset_paints, margins, pagination_order, opts)
+      |> restore_inline_positioned_boxes(inline_positioned, pagination_order)
       |> restore_root_positioned_boxes(root_positioned_boxes, pagination_order)
       |> paint_table_outlines()
       |> Enum.map(fn page ->
@@ -156,6 +198,85 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
          end)}
       end
     end
+  end
+
+  # Positioned children of a split inline follow its first real source fragment,
+  # independently of a later trailing fragment's page placement and paint order.
+  defp restore_inline_positioned_boxes(pages, sources, pagination_order) do
+    if sources == [] do
+      pages
+    else
+      locations =
+        pages
+        |> Enum.with_index()
+        |> Enum.reduce(%{}, fn {page, index}, locations ->
+          inline_fragment_locations(
+            page.boxes,
+            index,
+            {1, 1, 0, 0, nil, elem(page.size, 1)},
+            locations
+          )
+        end)
+
+      placed =
+        Enum.group_by(sources, fn box ->
+          elem(Map.fetch!(locations, box.inline_positioned_anchor.id), 0)
+        end)
+
+      pages
+      |> Enum.with_index()
+      |> Enum.map(fn {page, index} ->
+        boxes =
+          Enum.map(Map.get(placed, index, []), fn box ->
+            anchor = box.inline_positioned_anchor
+            {_index, target_y} = Map.fetch!(locations, anchor.id)
+
+            box
+            |> Map.delete(:inline_positioned_anchor)
+            |> NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.translate_box(
+              0.0,
+              target_y - anchor.source_y
+            )
+          end)
+
+        %{page | boxes: Enum.sort_by(page.boxes ++ boxes, &Map.fetch!(&1, pagination_order))}
+      end)
+    end
+  end
+
+  defp inline_fragment_locations(boxes, page, composition, locations) do
+    alias NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry
+
+    Enum.reduce(boxes, locations, fn box, locations ->
+      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :pagination)
+
+      locations =
+        case Map.get(box, :inline_fragment_anchors, []) do
+          [] ->
+            locations
+
+          ids ->
+            {matrix, _clip, _height} = DrawingGeometry.composition_parts(composition)
+            {_x, y} = DrawingGeometry.transform_point(box.x, box.y, matrix)
+            Enum.reduce(ids, locations, &Map.put_new(&2, &1, {page, y}))
+        end
+
+      case box do
+        %{type: :drawing_group, boxes: children} ->
+          inline_fragment_locations(
+            children,
+            page,
+            DrawingGeometry.compose_group(box, composition),
+            locations
+          )
+
+        %{boxes: children} ->
+          inline_fragment_locations(children, page, composition, locations)
+
+        _ ->
+          locations
+      end
+    end)
   end
 
   # Fieldset decoration is sliced at page boundaries, while legend artwork and
@@ -949,10 +1070,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
               margins
             )
 
+          # A repeated heading introduces a real collapsed row edge. A bare
+          # spanning-cell continuation has no new row border to reserve.
           inset =
-            if Enum.any?(group.boxes, &Map.has_key?(&1, :table_span_fragment)),
-              do: 0.0,
-              else: Map.get(hd(boxes), :table_fragment_inset, 0.0)
+            if Enum.any?(group.boxes, &Map.has_key?(&1, :table_span_fragment)) and
+                 not Map.has_key?(headers, group.table_id),
+               do: 0.0,
+               else: Map.get(hd(boxes), :table_fragment_inset, 0.0)
 
           next = %{next | current_y: next.current_y - inset}
           source_gap = Map.get(hd(boxes), :table_fragment_source_gap, 0.0)
@@ -1223,6 +1347,166 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
       false ->
         [group]
+    end
+  end
+
+  # CSS Fragmentation 3 sections 4.1/4.4 permit slicing monolithic inline
+  # boxes when a complete page cannot contain them. Preserve their continuous
+  # source geometry, including captions and spans, without repeating headers.
+  defp slice_oversized_atomic_group(group, content_height, page_width, pagination_order) do
+    if group.height > content_height and
+         Enum.any?(group.boxes, &(Map.get(&1, :role) == :atomic_table_line)) do
+      count = ceil(group.height / content_height)
+      HtmlValidator.check_render_resource(:max_rendered_pages, count, :pagination)
+
+      HtmlValidator.reserve_render_resource(
+        :max_table_grid_work,
+        count * length(group.boxes),
+        :pagination
+      )
+
+      Enum.map(0..(count - 1), fn index ->
+        top = group.top - index * content_height
+        bottom = max(top - content_height, group.bottom)
+
+        boxes = atomic_slice_boxes(group.boxes, top, bottom, page_width, pagination_order)
+
+        # The zero-width outer marker carries placement, never artwork.
+        marker =
+          hd(group.boxes)
+          |> Map.merge(%{
+            type: :flow_marker,
+            role: :atomic_table_slice,
+            y: bottom,
+            width: 0.0,
+            height: top - bottom
+          })
+          |> Map.put(pagination_order, Map.fetch!(hd(group.boxes), pagination_order))
+
+        HtmlValidator.reserve_render_resource(:max_layout_boxes, length(boxes) + 1, :pagination)
+
+        %{
+          group
+          | boxes: [marker | boxes],
+            top: top,
+            bottom: bottom,
+            height: top - bottom,
+            break_before: if(index == 0, do: group.break_before, else: :auto),
+            break_after: if(index == count - 1, do: group.break_after, else: :auto)
+        }
+        |> Map.delete(:placement_height)
+      end)
+    else
+      [group]
+    end
+  end
+
+  # Visible overflow paints in parallel with following normal flow. Its source
+  # allocation, rather than its descendant ink, decides where the owner fits.
+  defp restore_atomic_overflow(pages, sources, anchor_key, margins, pagination_order) do
+    if sources == [] do
+      pages
+    else
+      anchors =
+        pages
+        |> Enum.with_index()
+        |> Enum.reduce(%{}, fn {page, index}, anchors ->
+          Enum.reduce(page.boxes, anchors, fn box, anchors ->
+            case Map.get(box, anchor_key) do
+              nil -> anchors
+              id -> Map.put_new(anchors, id, {index, box.y + box.height})
+            end
+          end)
+        end)
+
+      {page_width, page_height} = hd(pages).size
+      content_top = page_height - margins.top
+      content_height = content_top - margins.bottom
+
+      {paint, total} =
+        Enum.reduce(sources, {%{}, length(pages)}, fn source, {paint, total} ->
+          {first_page, target_top} = Map.fetch!(anchors, source.id)
+          # The first slice uses the remaining capacity of the owner's actual page.
+          count =
+            max(
+              ceil(
+                (source.top - source.bottom - (target_top - margins.bottom)) /
+                  content_height
+              ) + 1,
+              1
+            )
+
+          total = max(total, first_page + count)
+          HtmlValidator.check_render_resource(:max_rendered_pages, total, :pagination)
+          HtmlValidator.check_render_resource(:max_pdf_pages, total, :pagination)
+
+          HtmlValidator.reserve_render_resource(
+            :max_table_grid_work,
+            count * length(source.boxes),
+            :pagination
+          )
+
+          paint =
+            Enum.reduce(0..(count - 1), paint, fn offset, paint ->
+              delta = target_top - source.top + offset * content_height
+              top = if offset == 0, do: source.top, else: content_top - delta
+              bottom = margins.bottom - delta
+
+              boxes =
+                source.boxes
+                |> atomic_slice_boxes(top, bottom, page_width, pagination_order)
+                |> shift_boxes(delta)
+
+              HtmlValidator.reserve_render_resource(:max_layout_boxes, length(boxes), :pagination)
+              Map.update(paint, first_page + offset, boxes, &(boxes ++ &1))
+            end)
+
+          {paint, total}
+        end)
+
+      (pages ++ List.duplicate(%{size: hd(pages).size, boxes: []}, total - length(pages)))
+      |> Enum.with_index()
+      |> Enum.map(fn {page, index} ->
+        %{
+          page
+          | boxes:
+              Enum.sort_by(
+                page.boxes ++ Map.get(paint, index, []),
+                &Map.fetch!(&1, pagination_order)
+              )
+        }
+      end)
+    end
+  end
+
+  defp atomic_slice_boxes(boxes, top, bottom, page_width, pagination_order) do
+    Enum.flat_map(boxes, fn box ->
+      {box_top, box_bottom} = atomic_box_bounds(box)
+
+      if Map.get(box, :role) != :atomic_table_line and box_top > box_bottom and
+           box_top > bottom and box_bottom < top do
+        clip = %{x: 0.0, y: bottom, width: page_width, height: top - bottom}
+
+        [box]
+        |> NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(clip)
+        |> Enum.map(&Map.put(&1, pagination_order, Map.fetch!(box, pagination_order)))
+      else
+        []
+      end
+    end)
+  end
+
+  defp atomic_box_bounds(box) do
+    {top, bottom} = PageGeometry.box_vertical_bounds(box)
+
+    clip =
+      if box.type != :drawing_group or Map.get(box, :role) == :overflow_clip,
+        do:
+          NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.box_clip_bounds(Map.get(box, :clip))
+
+    case clip do
+      {_left, clip_bottom, _right, clip_top} -> {min(top, clip_top), max(bottom, clip_bottom)}
+      nil -> {top, bottom}
     end
   end
 

@@ -607,14 +607,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     end
   end
 
-  test "transparent block anchors retain actionable diagnostics for unsupported inline link geometry" do
-    assert {:error, {:invalid_layout, diagnostic}} =
+  test "transparent block anchors retain prose and its PDF link" do
+    assert {:ok, pdf} =
              HtmlToPdf.render(
                "<div><a href='https://example.com'><p>Retained prose</p></a></div>"
              )
 
-    assert diagnostic.stage == :layout and diagnostic.operation == :layout
-    assert diagnostic.source == "a" and diagnostic.message =~ "display:block"
+    assert_pdf_text(pdf, "Retained prose")
+    assert pdf =~ "/Subtype /Link" and pdf =~ "https://example.com"
   end
 
   test "public newline diagnostics preserve original caller tokens and locations" do
@@ -2135,23 +2135,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              HtmlToPdf.render(html, stylesheets: [{:css, css}], system_font_discovery: false)
   end
 
-  test "decorated inline noscript block contents return the anonymous-formatting diagnostic" do
+  test "decorated inline noscript block contents retain complete fallback text" do
     for html <- [
           "<body><noscript style='background:red'><p>Block fallback</p></noscript></body>",
           "<body>Before<noscript style='position:relative'><span><span style='display:block'>Block fallback</span></span></noscript>After</body>"
         ] do
-      assert {:error,
-              {:invalid_layout,
-               %{
-                 stage: :layout,
-                 reason: :invalid_layout,
-                 operation: :layout,
-                 source: "noscript",
-                 message: message
-               }}} = HtmlToPdf.render(html)
-
-      assert message =~ "anonymous block formatting"
-      assert message =~ "display:block"
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:ok, text} = Text.extract(pdf)
+      assert text =~ "Block fallback"
+      assert length(Regex.scan(~r/Block fallback/, text)) == 1
     end
   end
 
@@ -2232,7 +2224,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     end
   end
 
-  test "anonymous fragments reject unsupported ancestor painting and positioning" do
+  test "anonymous fragments preserve text through ancestor painting and positioning" do
     for style <- [
           "background:red",
           "padding:1pt",
@@ -2245,18 +2237,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       html =
         "<body><span style='#{style}'>Before<span><span style='display:block'>Block</span></span>After</span></body>"
 
-      assert {:error, {:invalid_layout, diagnostic}} = HtmlToPdf.render(html)
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:ok, text} = Text.extract(pdf)
 
-      assert %{stage: :layout, reason: :invalid_layout, operation: :layout, source: "span"} =
-               diagnostic
-
-      assert diagnostic.message =~ "decoration or positioning"
+      for label <- ["Before", "Block", "After"],
+          do: assert(length(Regex.scan(Regex.compile!(label), text)) == 1)
     end
 
-    assert {:error, {:invalid_layout, %{source: "a"}}} =
+    assert {:ok, linked} =
              HtmlToPdf.render(
                "<body><a href='https://example.test'><span style='display:block'>Linked block</span></a></body>"
              )
+
+    assert_pdf_text(linked, "Linked block")
+    assert linked =~ "https://example.test"
   end
 
   test "head noscript metadata preserves source order and caller precedence" do
@@ -2383,7 +2377,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     refute_received {:unexpected_specialized_resource, _}
   end
 
-  test "visible list script data and template boxes preserve layout while unsupported table boxes diagnose" do
+  test "visible script data and inert templates retain content through list and table formation" do
     html =
       "<body><ul><li>Before</li><script type='text/plain' style='display:block'>Visible data</script><template style='display:block;border:1px solid blue;padding:2pt'><p>Unused</p></template><li>After</li></ul></body>"
 
@@ -2407,14 +2401,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
         not (tag == "script" and prefix == "<table><colgroup>") do
       type = if tag == "script", do: "type='text/plain'", else: ""
 
-      assert {:error,
-              {:invalid_layout,
-               %{stage: :layout, reason: :invalid_layout, source: ^tag, message: message}}} =
+      assert {:ok, table_pdf} =
                HtmlToPdf.render(
                  prefix <> "<#{tag} #{type} style='display:block'>Visible</#{tag}>" <> suffix
                )
 
-      assert message =~ "anonymous table"
+      assert_pdf_text(table_pdf, "Cell")
+      if tag == "script", do: assert_pdf_text(table_pdf, "Visible")
     end
   end
 

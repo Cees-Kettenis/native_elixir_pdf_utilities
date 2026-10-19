@@ -7499,18 +7499,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                 )
               end
 
-            %{type: :element, tag: tag, style: %{display: display}}
-            when tag in ~w(script template) and display != :none and
-                   parent_display in [:table, :table_column_group, :table_row_group, :table_row] ->
-              Diagnostics.error(
-                :layout,
-                :invalid_layout,
-                "visible #{tag} boxes in table structures require anonymous table formatting that is not implemented yet; use display:none or place the visible box outside the table",
-                module: __MODULE__,
-                operation: :layout,
-                source: tag
-              )
-
             %{type: :element, style: %{display: :image} = style} ->
               maximum = Limits.get(:max_css_numeric_magnitude)
 
@@ -7610,13 +7598,34 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                        atomic_context or display == :inline_block
                      ) do
                   :block_flow when display == :inline ->
-                    if valid_anonymous_inline_fragment?(node) do
+                    alignment = Map.get(style, :vertical_align, :baseline)
+
+                    if Map.get(node, :positioned_children, []) == [] and
+                         (alignment in [:baseline, :top, :middle, :bottom] or
+                            (is_number(alignment) and
+                               abs(alignment) <= Limits.get(:max_css_numeric_magnitude))) and
+                         Enum.all?([:padding, :margin, :border_widths], fn key ->
+                           case Map.fetch(style, key) do
+                             :error ->
+                               true
+
+                             {:ok, %{top: top, right: right, bottom: bottom, left: left}} ->
+                               Enum.all?([top, right, bottom, left], fn value ->
+                                 is_number(value) and
+                                   abs(value) <= Limits.get(:max_css_numeric_magnitude) and
+                                   (key == :margin or value >= 0)
+                               end)
+
+                             _ ->
+                               false
+                           end
+                         end) do
                       if parent_display == :inline, do: :block_flow, else: :ok
                     else
                       Diagnostics.error(
                         :layout,
                         :invalid_layout,
-                        "inline #{Map.get(node, :tag, "element")} with block descendants requires anonymous block formatting with decoration or positioning that is not implemented yet; use display:block or retain inline contents",
+                        "interrupted inline box edges require bounded numeric top, right, bottom and left values and uncollected positioned descendants; recompute styles",
                         module: __MODULE__,
                         operation: :layout,
                         source: Map.get(node, :tag, "element")
@@ -7676,44 +7685,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         error -> {:halt, error}
       end
     end)
-  end
-
-  defp valid_anonymous_inline_fragment?(node) do
-    style = node.style
-
-    # Real Math block atoms already carry the enclosing link on their actual
-    # glyph/native/paint contributions. Keep other anonymous linked block
-    # formatting held, and retain the existing positioning/box restrictions.
-    linked_math? =
-      Map.get(node, :tag) == "a" and
-        Enum.any?(node.children, fn child ->
-          match?(%{namespace: :mathml, tag: "math", style: %{_math_flow: true}}, child)
-        end) and
-        Enum.all?(node.children, fn child ->
-          match?(%{type: :text}, child) or
-            match?(%{namespace: :mathml, tag: "math"}, child)
-        end) and
-        NativeElixirPdfUtilities.Validators.MathLayoutValidator.validate_link_style(style, "a") ==
-          :ok
-
-    Map.get(style, :position, :static) == :static and
-      Map.get(style, :background_color) == nil and Map.get(style, :background_image) == nil and
-      Map.get(style, :overflow, :visible) == :visible and
-      Map.get(style, :vertical_align, :baseline) == :baseline and
-      ((Map.get(style, :link_url) == nil and Map.get(style, :link_destination) == nil) or
-         linked_math?) and
-      Map.get(style, :_form_control) == nil and
-      Map.get(node, :positioned_children, []) == [] and
-      Enum.all?([:padding, :margin, :border_widths], fn property ->
-        case Map.get(style, property, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}) do
-          %{top: top, right: right, bottom: bottom, left: left}
-          when top == 0 and right == 0 and bottom == 0 and left == 0 ->
-            true
-
-          _ ->
-            false
-        end
-      end)
   end
 
   defp validate_layout_metadata(node) do
@@ -8013,22 +7984,77 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           end
       end)
 
-    if valid? do
-      NativeElixirPdfUtilities.Validators.HtmlTableValidator.validate_atomic_pagination(
-        boxes,
-        Enum.reverse(atomic_markers),
-        printable_height
-      )
-    else
+    inline_sources = Enum.filter(boxes, &Map.has_key?(&1, :inline_positioned_anchor))
+
+    inline_valid? =
+      if inline_sources == [] do
+        true
+      else
+        case inline_fragment_anchor_ids(boxes, MapSet.new()) do
+          {:ok, ids} ->
+            Enum.all?(inline_sources, fn box ->
+              case box.inline_positioned_anchor do
+                %{id: id, source_y: y} when is_reference(id) and is_number(y) ->
+                  Map.get(box, :out_of_flow, false) == true and MapSet.member?(ids, id) and
+                    abs(y) <= Limits.get(:max_pdf_numeric_magnitude)
+
+                _ ->
+                  false
+              end
+            end)
+
+          :invalid ->
+            false
+        end
+      end
+
+    if not inline_valid? do
       Diagnostics.error(
         :pagination,
         :invalid_layout,
-        "fragment decoration requires reference IDs with matching paint boxes, numeric coordinates and ordered top/bottom bounds; image paints require a clip rectangle and captions require a table ID with a top or bottom side",
+        "positioned inline fragments require matching reference anchors and bounded source coordinates",
         operation: :paginate,
         module: __MODULE__,
-        source: "fieldset_paint_id"
+        source: "inline_positioned_anchor"
       )
+    else
+      if valid? do
+        NativeElixirPdfUtilities.Validators.HtmlTableValidator.validate_atomic_pagination(
+          boxes,
+          Enum.reverse(atomic_markers),
+          printable_height
+        )
+      else
+        Diagnostics.error(
+          :pagination,
+          :invalid_layout,
+          "fragment decoration requires reference IDs with matching paint boxes, numeric coordinates and ordered top/bottom bounds; image paints require a clip rectangle and captions require a table ID with a top or bottom side",
+          operation: :paginate,
+          module: __MODULE__,
+          source: "fieldset_paint_id"
+        )
+      end
     end
+  end
+
+  defp inline_fragment_anchor_ids(boxes, ids) do
+    # HtmlLinkValidator already validated native group structure. This pass
+    # owns only the optional inline fragment references consumed by pagination.
+    Enum.reduce_while(boxes, {:ok, ids}, fn box, {:ok, ids} ->
+      anchors = Map.get(box, :inline_fragment_anchors, [])
+
+      if is_list(anchors) and Enum.all?(anchors, &is_reference/1) do
+        children =
+          if box.type in [:drawing_group, :glyph_group], do: box.boxes, else: []
+
+        case inline_fragment_anchor_ids(children, Enum.reduce(anchors, ids, &MapSet.put(&2, &1))) do
+          {:ok, ids} -> {:cont, {:ok, ids}}
+          :invalid -> {:halt, :invalid}
+        end
+      else
+        {:halt, :invalid}
+      end
+    end)
   end
 
   defp valid_fieldset_pagination_metadata?(box) do

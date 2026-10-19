@@ -340,23 +340,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
              )
   end
 
-  test "ordinary print is admitted while atomic allocation dependencies remain explicit" do
-    for content <- ["<div style='height:50%'>Percent</div>"] do
+  test "ordinary and atomic percentage baseline descendants render" do
+    for wrapper <- ["block", "inline-block"] do
       html =
-        "<div style='display:inline-block'><table style='width:120pt'><tr><td style='vertical-align:baseline'>#{content}</td></tr></table></div>"
+        "<div style='display:#{wrapper}'><table style='width:120pt;height:80pt'><tr><td style='vertical-align:baseline'><div style='height:50%'>Percent</div></td><td style='vertical-align:baseline'>Peer</td></tr></table></div>"
 
-      assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render("<body>" <> html <> "</body>")
-
-      assert diagnostic.stage == :layout and diagnostic.module == HtmlTableValidator
-      assert diagnostic.message =~ "geometry"
-      assert diagnostic.message =~ "vertical-align:top"
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+      assert text =~ "Percent" and text =~ "Peer"
     end
-
-    assert {:ok, _pdf} =
-             HtmlToPdf.render(
-               "<table><tr><td style='vertical-align:baseline'>Ordinary</td></tr></table>"
-             )
   end
 
   test "nested table baselines use their first row and exclude captions" do
@@ -512,22 +504,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
     assert diagnostic.stage == :layout and diagnostic.message =~ "actual inline-block ancestor"
   end
 
-  test "oversized original atomic table diagnoses unavailable continuation before rows are lost" do
+  test "oversized original atomic table retains all rows captions and links across physical slices" do
     html =
       File.read!(
         Paths.fixture("html_to_pdf/browser_parity/atomic_table_oversized_pagination.html")
       )
 
-    assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html)
-    assert diagnostic.stage == :pagination
-    assert diagnostic.reason == :unsupported_html
-    assert diagnostic.operation == :paginate
-    assert diagnostic.module == HtmlTableValidator
-    assert diagnostic.source =~ "atomic table flow"
-    assert diagnostic.message =~ "printable page height"
-    assert diagnostic.message =~ "continuation"
-    assert diagnostic.message =~ "reduce the table allocation"
-    assert diagnostic.message =~ "block table"
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert {:ok, pages} = NativeElixirPdfUtilities.Split.by_page(pdf)
+    assert length(pages) == 3
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+
+    for label <- [
+          "Before oversized",
+          "Oversized atomic",
+          "Heading",
+          "Span A",
+          "Span B",
+          "Span C",
+          "First row",
+          "Second row",
+          "Third row",
+          "After oversized"
+        ] do
+      assert length(Regex.scan(Regex.compile!(label), text)) == 1
+    end
+
+    assert pdf =~ "/Subtype /Link"
   end
 
   test "atomic allocation uses one outer fragment and includes visible child overflow" do
@@ -545,16 +548,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
 
     large_marker = %{marker | height: 200.0}
 
-    assert {:error, {:unsupported_html, duplicate_diagnostic}} =
+    assert :ok =
              HtmlTableValidator.validate_atomic_pagination(
                [marker],
                [large_marker, marker],
                100.0
              )
-
-    assert duplicate_diagnostic.stage == :pagination
-    assert duplicate_diagnostic.module == HtmlTableValidator
-    assert duplicate_diagnostic.source =~ "atomic table flow"
 
     next_line = %{marker | y: -100.0, fragment_id: {:line, marker.flow_id, 1}}
     unfragmented = marker |> Map.put(:fragment_lines, false) |> Map.delete(:fragment_id)
@@ -569,11 +568,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
                100.0
              )
 
-    assert {:error, {:unsupported_html, diagnostic}} =
-             HtmlTableValidator.validate_atomic_pagination([marker], [marker], 99.0)
-
-    assert diagnostic.stage == :pagination and diagnostic.operation == :paginate
-    assert diagnostic.module == HtmlTableValidator
+    assert :ok = HtmlTableValidator.validate_atomic_pagination([marker], [marker], 99.0)
 
     overflow = %{
       type: :rect,
@@ -589,7 +584,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
       border_radius: 0.0
     }
 
-    assert {:error, {:unsupported_html, _}} =
+    assert :ok =
              HtmlTableValidator.validate_atomic_pagination([marker, overflow], [marker], 100.0)
 
     assert :ok =

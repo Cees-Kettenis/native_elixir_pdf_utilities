@@ -199,7 +199,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableBorderPresentationTest do
     end
   end
 
-  test "table-part borders diagnose uncovered slots while sparse table and cell borders still render" do
+  test "table-part borders resolve uncovered slots while retaining anonymous cell identity" do
     html =
       "<table style='width:120pt;table-layout:fixed;border-collapse:collapse;border:2pt solid red'><colgroup><col><col></colgroup><tr><td style='height:18pt;border:1px solid black'>Cell</td></tr></table>"
 
@@ -212,13 +212,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableBorderPresentationTest do
             String.replace(html, "<colgroup>", "<colgroup style='border-right:1px solid black'>"),
           else: String.replace(html, "<tr>", table_part)
 
-      assert {:error, {:unsupported_html, diagnostic}} = Layout.layout(styled(html))
-      assert diagnostic.stage == :layout and diagnostic.reason == :unsupported_html
-      assert diagnostic.module == HtmlTableValidator and diagnostic.operation == :layout
-      assert diagnostic.source == "tr uncovered table slots"
+      tree = styled(html)
+      [table] = tree.children
 
-      assert diagnostic.message =~ "anonymous cell formation" and
-               diagnostic.message =~ "authored cells"
+      assert {:ok, %{rows: [row], collapsed_edges: edges}} =
+               HtmlTableValidator.form(table.children, table.style)
+
+      assert length(row.cells) == 2
+      assert List.last(row.cells).cell.anonymous
+      assert edges[{:vertical, 0, 2}].width > 0
+      assert {:ok, _layout} = Layout.layout(tree)
     end
   end
 

@@ -472,7 +472,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
     end
   end
 
-  @doc "Validates measured atomic table line allocations against the printable page height."
+  @doc "Validates measured atomic table line geometry before print placement and oversized graphical slicing."
   @spec validate_atomic_pagination([map()], [map()], number()) ::
           :ok | {:error, Diagnostics.detailed_error()}
   def validate_atomic_pagination(boxes, markers, printable_height) do
@@ -539,41 +539,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                      NativeElixirPdfUtilities.Validators.WriterValidator.validate_native_boxes(
                        in_flow
                      ) do
-                bounds =
-                  Enum.reduce(markers ++ in_flow, %{}, fn box, bounds ->
-                    key = {box.flow_id, Map.get(box, :fragment_id)}
-
-                    {top, bottom} =
-                      NativeElixirPdfUtilities.HtmlToPdf.PageGeometry.box_vertical_bounds(box)
-
-                    Map.update(bounds, key, {top, bottom}, fn {previous_top, previous_bottom} ->
-                      {max(top, previous_top), min(bottom, previous_bottom)}
-                    end)
-                  end)
-
-                oversized =
-                  Enum.find(markers, fn marker ->
-                    {top, bottom} =
-                      Map.fetch!(bounds, {marker.flow_id, Map.get(marker, :fragment_id)})
-
-                    top - bottom > height
-                  end)
-
-                if oversized == nil do
-                  :ok
-                else
-                  Diagnostics.error(
-                    :pagination,
-                    :unsupported_html,
-                    "atomic table line allocation exceeds the printable page height; continuation of oversized atomic tables is not implemented; reduce the table allocation or use a block table with authored top, middle or bottom cell alignment",
-                    operation: :paginate,
-                    module: __MODULE__,
-                    source:
-                      "atomic table flow " <>
-                        inspect(oversized.flow_id) <>
-                        " fragment " <> inspect(Map.get(oversized, :fragment_id))
-                  )
-                end
+                :ok
               else
                 {:error, {reason, diagnostic}} ->
                   Diagnostics.error(
@@ -2608,7 +2574,26 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
     end)
   end
 
-  # Percentage descendants need a second allocation-dependent baseline pass.
+  @doc "Identifies cells whose baseline must be measured again against the allocated row height."
+  @spec allocation_dependent_baseline?(map()) :: boolean()
+  def allocation_dependent_baseline?(node) do
+    Enum.any?(Map.get(node, :children, []), &percentage_baseline_descendant?/1)
+  end
+
+  defp percentage_baseline_descendant?(node) do
+    HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, :layout)
+
+    if get_in(node, [:style, :display]) == :none do
+      false
+    else
+      Enum.any?([:height, :min_height, :max_height], fn property ->
+        value = get_in(node, [:style, property])
+        match?({:percent, _}, value) or match?({:css_size_math, {_, true}}, value)
+      end) or Enum.any?(Map.get(node, :children, []), &percentage_baseline_descendant?/1)
+    end
+  end
+
+  # Prepared geometry still validates direct callers' active descendant trees.
   defp validate_baseline_dependencies(placements) do
     Enum.reduce_while(placements, :ok, fn {_key, placement}, :ok ->
       result =
@@ -2641,18 +2626,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
           descendant,
           "active table baseline descendants require maps and a list of children when supplied; correct the prepared cell tree or recompute styles"
         )
-
-      pending ->
-        Diagnostics.error(
-          :layout,
-          :unsupported_html,
-          "table baseline #{pending} requires allocation-dependent baseline geometry, which is not implemented; use authored vertical-align:top, middle or bottom",
-          Keyword.merge(source_context(node),
-            operation: :layout,
-            module: __MODULE__,
-            source: Map.get(node, :tag, "table cell") <> " baseline #{pending}"
-          )
-        )
     end
   end
 
@@ -2668,13 +2641,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
 
         case table_collection_size(children) do
           {:ok, _count} ->
-            case node do
-              %{style: %{height: {:percent, _}}} ->
-                "percentage-height descendant"
-
-              _ ->
-                Enum.find_value(children, &baseline_dependency/1)
-            end
+            Enum.find_value(children, &baseline_dependency/1)
 
           :error ->
             {:invalid_descendant, node}
@@ -3476,13 +3443,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
       case {children, table_style} do
         {children, table_style} when is_list(children) and is_map(table_style) ->
           result =
-            children
+            table_wrappers(children, table_style, :table)
+            |> Enum.map(fn child ->
+              if match?(%{style: %{display: :table_column}}, child),
+                do: anonymous_table_box(table_style, :table_column_group, [child]),
+                else: child
+            end)
             |> Enum.with_index()
             |> Enum.reduce_while({:ok, [], [], 0}, fn {child, index},
                                                       {:ok, rows, columns, implicit_group} ->
               next =
                 case child do
-                  %{style: %{display: display}} when display in [:none, :table_caption] ->
+                  %{style: %{display: :table_caption}} ->
                     {:ok, [], [], implicit_group}
 
                   %{style: %{display: :table_row}} ->
@@ -3494,18 +3466,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                     section = Map.get(style, :table_section, :body)
 
                     if section in [:head, :body, :foot] do
-                      Enum.reduce_while(group_rows, {:ok, []}, fn row, {:ok, prepared} ->
-                        case row do
-                          %{style: %{display: :none}} ->
-                            {:cont, {:ok, prepared}}
-
-                          _ ->
-                            case prepare_row(row, section, index, style) do
-                              {:ok, row} -> {:cont, {:ok, [row | prepared]}}
-                              error -> {:halt, error}
-                            end
+                      Enum.reduce_while(
+                        table_wrappers(group_rows, style, :table_row_group),
+                        {:ok, []},
+                        fn row, {:ok, prepared} ->
+                          case prepare_row(row, section, index, style) do
+                            {:ok, row} -> {:cont, {:ok, [row | prepared]}}
+                            error -> {:halt, error}
+                          end
                         end
-                      end)
+                      )
                       |> case do
                         {:ok, prepared} -> {:ok, Enum.reverse(prepared), [], index + 1}
                         error -> error
@@ -3516,59 +3486,52 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
 
                   %{style: %{display: :table_column_group} = style, children: column_nodes}
                   when is_list(column_nodes) ->
-                    visible = Enum.reject(column_nodes, &match?(%{style: %{display: :none}}, &1))
+                    visible =
+                      Enum.filter(column_nodes, &match?(%{style: %{display: :table_column}}, &1))
+
                     nodes = if visible == [], do: [child], else: visible
 
                     nodes
                     |> Enum.with_index()
                     |> Enum.reduce_while({:ok, []}, fn {column, column_index}, {:ok, prepared} ->
-                      case column do
-                        %{style: %{display: display} = column_style}
-                        when display == :table_column or column == child ->
-                          with {:ok, span} <- validated_span(column, "span") do
-                            HtmlValidator.reserve_render_resource(
-                              :max_table_grid_work,
-                              span,
-                              :layout
-                            )
+                      column_style = column.style
 
-                            hint = %{
-                              width: Map.get(column_style, :width) || Map.get(style, :width),
-                              presentation: %{
-                                style:
-                                  if(column == child,
-                                    do: %{},
-                                    else:
-                                      Map.take(column_style, [
-                                        :border_widths,
-                                        :border_styles,
-                                        :border_colors,
-                                        :border_color
-                                      ])
-                                  ),
-                                group_style:
-                                  Map.take(style, [
+                      with {:ok, span} <- validated_span(column, "span") do
+                        HtmlValidator.reserve_render_resource(
+                          :max_table_grid_work,
+                          span,
+                          :layout
+                        )
+
+                        hint = %{
+                          width: Map.get(column_style, :width) || Map.get(style, :width),
+                          presentation: %{
+                            style:
+                              if(column == child,
+                                do: %{},
+                                else:
+                                  Map.take(column_style, [
                                     :border_widths,
                                     :border_styles,
                                     :border_colors,
                                     :border_color
-                                  ]),
-                                group: index,
-                                column: {index, column_index}
-                              }
-                            }
+                                  ])
+                              ),
+                            group_style:
+                              Map.take(style, [
+                                :border_widths,
+                                :border_styles,
+                                :border_colors,
+                                :border_color
+                              ]),
+                            group: index,
+                            column: {index, column_index}
+                          }
+                        }
 
-                            {:cont, {:ok, Enum.reverse(List.duplicate(hint, span), prepared)}}
-                          else
-                            error -> {:halt, error}
-                          end
-
-                        _ ->
-                          {:halt,
-                           invalid_table(
-                             column,
-                             "column groups require column children; anonymous table formatting is not implemented"
-                           )}
+                        {:cont, {:ok, Enum.reverse(List.duplicate(hint, span), prepared)}}
+                      else
+                        error -> {:halt, error}
                       end
                     end)
                     |> case do
@@ -3579,7 +3542,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                   _ ->
                     invalid_table(
                       child,
-                      "tables require row, row group, column group or caption boxes; anonymous table formatting is not implemented"
+                      "table formatting requires styled row, row group, column group or caption boxes with list children"
                     )
                 end
 
@@ -3598,25 +3561,25 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                {:ok, rows, spanning_cells?} <- form_grid(Enum.reverse(rows)) do
             columns = Enum.reverse(columns)
 
-            with :ok <- validate_border_grid_support(rows, columns, table_style) do
-              {:ok,
-               %{
-                 rows: rows,
-                 has_spanning_cells: spanning_cells?,
-                 columns: Enum.map(columns, &Map.take(&1, [:width])),
-                 column_presentation: Enum.map(columns, & &1.presentation),
-                 collapsed_edges:
-                   if(Map.get(table_style, :border_collapse) == :collapse,
-                     do:
-                       collapsed_table_edges(
-                         rows,
-                         Enum.map(columns, & &1.presentation),
-                         table_style
-                       ),
-                     else: %{}
-                   )
-               }}
-            end
+            rows = complete_collapsed_slots(rows, columns, table_style)
+
+            {:ok,
+             %{
+               rows: rows,
+               has_spanning_cells: spanning_cells?,
+               columns: Enum.map(columns, &Map.take(&1, [:width])),
+               column_presentation: Enum.map(columns, & &1.presentation),
+               collapsed_edges:
+                 if(Map.get(table_style, :border_collapse) == :collapse,
+                   do:
+                     collapsed_table_edges(
+                       rows,
+                       Enum.map(columns, & &1.presentation),
+                       table_style
+                     ),
+                   else: %{}
+                 )
+             }}
           end
 
         _ ->
@@ -3625,59 +3588,109 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
     end)
   end
 
-  # Table-part borders need a complete authored or span-covered visible grid.
-  # Empty slot formation remains a separate, unsupported formatting prerequisite.
-  defp validate_border_grid_support(rows, columns, table_style) do
+  # CSS 2.2 section 17.2.1 forms boxes after selector matching. The authored
+  # nodes remain children of generated boxes, retaining their source identities.
+  defp table_wrappers(children, parent_style, context) do
+    proper =
+      case context do
+        :table ->
+          [:table_row, :table_row_group, :table_column, :table_column_group, :table_caption]
+
+        :table_row_group ->
+          [:table_row]
+
+        :table_row ->
+          [:table_cell]
+      end
+
+    display = if context == :table_row, do: :table_cell, else: :table_row
+
+    Enum.each(children, fn child ->
+      case child do
+        %{style: %{display: _}} ->
+          :ok
+
+        %{type: :text, text: text, style: style} when is_binary(text) and is_map(style) ->
+          :ok
+
+        _ ->
+          throw(
+            {:render_resource_limit,
+             invalid_table(child, "table formatting requires styled child boxes")}
+          )
+      end
+    end)
+
+    visible = Enum.reject(children, &match?(%{style: %{display: :none}}, &1))
+    neighbours = Enum.zip([nil | visible], Enum.drop(visible, 1) ++ [nil])
+    internal = if context == :table_row, do: [:table_cell], else: [:table_cell | proper]
+
+    visible
+    |> Enum.zip(neighbours)
+    |> Enum.reject(fn {child, {before, after_node}} ->
+      match?(%{type: :text}, child) and HtmlValidator.trim_ascii_whitespace(child.text) == "" and
+        Enum.all?([before, after_node], fn neighbour ->
+          neighbour == nil or Map.get(neighbour.style, :display) in internal
+        end)
+    end)
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.chunk_by(&(Map.get(Map.get(&1, :style, %{}), :display) in proper))
+    |> Enum.flat_map(fn siblings ->
+      if Map.get(Map.get(hd(siblings), :style, %{}), :display) in proper do
+        siblings
+      else
+        HtmlValidator.reserve_render_resource(:max_table_grid_work, length(siblings), :layout)
+        [anonymous_table_box(parent_style, display, siblings)]
+      end
+    end)
+  end
+
+  defp anonymous_table_box(parent_style, display, children) do
+    %{
+      type: :element,
+      tag: "anonymous",
+      attributes: %{},
+      anonymous: true,
+      style: NativeElixirPdfUtilities.HtmlToPdf.Style.anonymous_box_style(parent_style, display),
+      children: children
+    }
+  end
+
+  # Empty slots take part in collapsed border conflict resolution without
+  # inventing HTML cells or header associations in the authored table model.
+  defp complete_collapsed_slots(rows, columns, table_style) do
     if Map.get(table_style, :border_collapse) == :collapse do
       count = max(Enum.reduce(rows, 0, &max(&1.consumed_columns, &2)), length(columns))
 
-      case Enum.find(rows, &(&1.consumed_columns < count)) do
-        nil ->
-          :ok
-
-        incomplete ->
-          styles =
-            Enum.flat_map(rows, &[&1.row.style, &1.group_style || %{}]) ++
-              Enum.flat_map(columns, &[&1.presentation.style, &1.presentation.group_style])
-
-          wide_borders? =
-            Enum.any?(styles, fn style ->
-              widths =
-                Map.get(
-                  style,
-                  :border_widths,
-                  NativeElixirPdfUtilities.Validators.CssValueValidator.edges(0.0)
-                )
-
-              styles =
-                Map.get(
-                  style,
-                  :border_styles,
-                  NativeElixirPdfUtilities.Validators.CssValueValidator.edges(:none)
-                )
-
-              Enum.any?(widths, fn {side, width} ->
-                width > 0 and Map.fetch!(styles, side) not in [:none, :hidden]
-              end)
-            end)
-
-          if wide_borders? do
-            Diagnostics.error(
-              :layout,
-              :unsupported_html,
-              "row, row-group, column or column-group borders over uncovered table slots require anonymous cell formation, which is not implemented; add authored cells covering the missing slots or remove table-part borders",
-              Keyword.merge(source_context(incomplete.row),
-                operation: :layout,
-                module: __MODULE__,
-                source: "tr uncovered table slots"
-              )
+      Enum.map(rows, fn row ->
+        covered =
+          Enum.reduce(row.cells, MapSet.new(row.active_columns), fn cell, covered ->
+            Enum.reduce(
+              cell.column..(cell.column + cell.colspan - 1),
+              covered,
+              &MapSet.put(&2, &1)
             )
-          else
-            :ok
-          end
-      end
+          end)
+
+        missing =
+          if count == 0, do: [], else: Enum.reject(0..(count - 1), &MapSet.member?(covered, &1))
+
+        HtmlValidator.reserve_render_resource(:max_table_grid_work, length(missing), :layout)
+
+        cells =
+          Enum.map(missing, fn column ->
+            %{
+              cell: anonymous_table_box(row.row.style, :table_cell, []),
+              column: column,
+              colspan: 1,
+              rowspan: 1
+            }
+          end)
+
+        %{row | cells: Enum.sort_by(row.cells ++ cells, & &1.column), consumed_columns: count}
+      end)
     else
-      :ok
+      rows
     end
   end
 
@@ -3898,7 +3911,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   defp prepare_row(node, section, group, group_style) do
     case node do
       %{style: %{display: :table_row}, children: cells} when is_list(cells) ->
-        cells = Enum.reject(cells, &match?(%{style: %{display: :none}}, &1))
+        cells = table_wrappers(cells, node.style, :table_row)
 
         Enum.reduce_while(cells, :ok, fn cell, :ok ->
           case cell do

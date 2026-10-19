@@ -3538,6 +3538,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   @spec normal_line_height(map()) :: number()
   def normal_line_height(style), do: HtmlValidator.normal_line_height(style)
 
+  @doc "Builds an anonymous formatting box with inherited text and initial box properties."
+  @spec anonymous_box_style(map(), atom()) :: map()
+  def anonymous_box_style(parent, display) do
+    block_defaults(Map.get(parent, :font_size, 12.0), 400, 0.0)
+    |> Map.merge(text_style(parent))
+    |> Map.merge(%{
+      display: display,
+      border_widths: @zero_edges,
+      border_color: Map.get(parent, :color, {0, 0, 0}),
+      border_colors: CssValueValidator.edges(Map.get(parent, :color, {0, 0, 0})),
+      vertical_align: :baseline
+    })
+  end
+
   defp text_style(style) do
     inherited =
       :maps.with(

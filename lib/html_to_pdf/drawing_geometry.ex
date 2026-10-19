@@ -146,6 +146,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
           )
       end
 
+    box =
+      case Map.get(box, :inline_positioned_anchor) do
+        nil ->
+          box
+
+        anchor ->
+          Map.put(box, :inline_positioned_anchor, %{anchor | source_y: anchor.source_y + delta_y})
+      end
+
     case Map.get(box, :link_rect) do
       %{x: x, y: y} = region ->
         Map.put(box, :link_rect, %{region | x: x + delta_x, y: y + delta_y})

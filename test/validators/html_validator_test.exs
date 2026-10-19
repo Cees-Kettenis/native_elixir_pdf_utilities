@@ -2159,18 +2159,39 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
       assert :ok = validate.(%{block | style: Map.put(block.style, :margin_inline_auto, auto)})
     end
 
-    for altered <- [
-          Map.put(inline, :positioned_children, [block]),
-          %{inline | style: Map.put(inline.style, :padding, :invalid)},
-          %{
-            inline
-            | style:
-                Map.put(inline.style, :border_widths, %{top: 1, right: 0, bottom: 0, left: 0})
-          }
+    assert {:error, {:invalid_layout, %{source: "span"}}} =
+             validate.(Map.put(inline, :positioned_children, [block]))
+
+    assert :ok =
+             validate.(%{
+               inline
+               | style:
+                   Map.put(inline.style, :border_widths, %{top: 1, right: 0, bottom: 0, left: 0})
+             })
+
+    assert {:error, {:invalid_layout, diagnostic}} =
+             validate.(%{inline | style: Map.put(inline.style, :padding, :invalid)})
+
+    assert diagnostic.source == "span" and diagnostic.message =~ "box edges"
+
+    for {key, edge} <- [
+          {:padding, :bad},
+          {:padding, -1},
+          {:border_widths, -1},
+          {:margin, NativeElixirPdfUtilities.Limits.get(:max_css_numeric_magnitude) + 1}
         ] do
-      assert {:error, {:invalid_layout, %{stage: :layout, operation: :layout, source: "span"}}} =
-               validate.(altered)
+      edges = %{top: edge, right: 0, bottom: 0, left: 0}
+
+      assert {:error, {:invalid_layout, invalid}} =
+               validate.(%{inline | style: Map.put(inline.style, key, edges)})
+
+      assert invalid.stage == :layout and invalid.reason == :invalid_layout
+      assert invalid.operation == :layout and invalid.source == "span"
+      assert invalid.message =~ "bounded numeric"
     end
+
+    assert diagnostic.stage == :layout and diagnostic.reason == :invalid_layout and
+             diagnostic.operation == :layout
 
     image = %{
       type: :element,

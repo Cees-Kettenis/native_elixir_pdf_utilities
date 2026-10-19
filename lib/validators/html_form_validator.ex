@@ -2083,6 +2083,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
             |> Enum.flat_map(fn {page, number} ->
               page.boxes
               |> Enum.filter(&is_map(Map.get(&1, :form_control)))
+              |> Enum.flat_map(&visible_control_box/1)
               |> Enum.uniq_by(& &1.form_control.id)
               |> Enum.sort_by(& &1.form_control.order)
               |> Enum.with_index(1)
@@ -2308,7 +2309,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                 {page_width, page_height} = page.size
 
                 original_page_appearance? =
-                  item.type == "choice" or
+                  is_map(Map.get(item.box, :clip)) or item.type == "choice" or
                     Map.has_key?(item.control.initial_state, :temporal) or
                     Map.has_key?(item.control.initial_state, :color_input) or
                     (item.control.tag == "input" and
@@ -2767,6 +2768,26 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
         do: Map.update!(field, :flags, &Bitwise.bor(&1, 2)),
         else: field
     end)
+  end
+
+  # PDF annotations have no ancestor overflow clip. Their real visible rectangle
+  # must be intersected before allocating an appearance or an interactive field.
+  defp visible_control_box(box) do
+    case Map.get(box, :clip) do
+      nil ->
+        [box]
+
+      clip ->
+        {left, bottom, right, top} =
+          DrawingGeometry.intersect_clip(
+            {box.x, box.y, box.x + box.width, box.y + box.height},
+            DrawingGeometry.box_clip_bounds(clip)
+          )
+
+        if right > left and top > bottom,
+          do: [%{box | x: left, y: bottom, width: right - left, height: top - bottom}],
+          else: []
+    end
   end
 
   defp validate_initial_controls(pages) do

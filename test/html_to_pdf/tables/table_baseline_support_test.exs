@@ -107,23 +107,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableBaselineSupportTest do
     assert hd(hd(hd(altered.children).children).children).style.vertical_align == :baseline
   end
 
-  test "allocation-dependent baseline descendants retain actionable shared failure and authored override" do
+  test "percentage-height baseline descendants resolve after row allocation" do
     html =
-      "<table><tr><td style='vertical-align:baseline'><div style='height:50%'>Pending</div></td></tr></table>"
+      "<table style='height:80pt'><tr><td style='vertical-align:baseline;padding:0'><div style='height:50%'>Allocated</div></td><td style='vertical-align:baseline;padding:0'>Peer</td></tr></table>"
 
-    assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html)
-    assert diagnostic.stage == :layout
-    assert diagnostic.reason == :unsupported_html
-    assert diagnostic.operation == :layout
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlTableValidator
-    assert diagnostic.source == "td baseline percentage-height descendant"
-    assert diagnostic.message =~ "allocation-dependent baseline geometry"
-    assert diagnostic.message =~ "vertical-align:top"
-    assert is_integer(diagnostic.line) and is_integer(diagnostic.column)
-
-    assert {:ok, _pdf} =
-             HtmlToPdf.render(
-               String.replace(html, "vertical-align:baseline", "vertical-align:top")
-             )
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 200}, margin: 0)
+    allocated = Enum.find(layout.boxes, &(Map.get(&1, :text) == "Allocated"))
+    peer = Enum.find(layout.boxes, &(Map.get(&1, :text) == "Peer"))
+    assert_in_delta allocated.y, peer.y, 0.000001
+    assert {:ok, _pdf} = HtmlToPdf.render(html, system_font_discovery: false)
   end
 end

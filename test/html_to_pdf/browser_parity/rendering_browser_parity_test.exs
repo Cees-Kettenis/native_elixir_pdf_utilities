@@ -2140,10 +2140,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     svg_nested_text_lengths.html
   )
 
-  # These fixtures have dedicated coverage in this module or sibling test modules.
+  # These fixtures have dedicated browser cases in this module or sibling test modules.
   # Keep the inventory explicit so an unassigned new fixture still fails this check.
   @dedicated_fixtures ~w(
     atomic_table_oversized_pagination.html
+    atomic_table_hidden_overflow.html
+    atomic_table_nested_pagination.html
+    atomic_table_visible_overflow.html
+    table_percentage_baselines.html
+    table_empty_percentage_baselines.html
+    clipped_form_controls.html
+    list_ruby_table_pagination.html
+    interrupted_inline_decoration.html
+    interrupted_inline_vertical_alignment.html
+    interrupted_inline_empty_fragments.html
+    interrupted_inline_images_and_backgrounds.html
+    interrupted_inline_nested_positioning.html
+    interrupted_inline_pagination.html
+    anonymous_table_cells_and_borders.html
     html_tables_links_transforms_sheet.html
     html_structure_defaults_sheet.html
     html_controls_images_visibility_sheet.html
